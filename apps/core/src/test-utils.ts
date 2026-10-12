@@ -8,6 +8,7 @@ import { type OpenedDb, openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
 import { buildServer } from './server.js';
+import { TicketService } from './tickets/service.js';
 
 export interface TestApp {
   app: FastifyInstance;
@@ -15,6 +16,7 @@ export interface TestApp {
   dir: string;
   ptyd: PtydBridge;
   runs: RunService;
+  tickets: TicketService;
   close(): Promise<void>;
 }
 
@@ -39,13 +41,15 @@ export async function createTestApp(overrides: Partial<CoreConfig> = {}): Promis
   const opened: OpenedDb = openDb(':memory:');
   const ptyd = new PtydBridge(config.ptydSocket);
   const runs = new RunService(opened.db, config, ptyd);
-  const app = await buildServer({ config, db: opened.db, ptyd, runs });
+  const tickets = new TicketService(opened.db, runs);
+  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets });
   return {
     app,
     config,
     dir,
     ptyd,
     runs,
+    tickets,
     async close() {
       await app.close();
       runs.dispose();

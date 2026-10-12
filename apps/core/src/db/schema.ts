@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /** Free-form key/value settings (JSON values). */
 export const settings = sqliteTable('settings', {
@@ -25,7 +25,29 @@ export const projects = sqliteTable('projects', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
-/** One agent session working on a project. Ticket linkage arrives with the board (M4). */
+/** Board tickets (PROJECT.md §5.4). The column mirrors the latest run while one is active. */
+export const tickets = sqliteTable(
+  'tickets',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Per-project sequence number behind the key (EMB-<number>). */
+    number: integer('number').notNull(),
+    key: text('key').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull().default(''),
+    status: text('status').notNull(),
+    priority: integer('priority').notNull().default(1),
+    position: real('position').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [uniqueIndex('tickets_project_number_idx').on(t.projectId, t.number)],
+);
+
+/** One agent session working on a project, optionally for a ticket. */
 export const runs = sqliteTable(
   'runs',
   {
@@ -33,6 +55,7 @@ export const runs = sqliteTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
+    ticketId: text('ticket_id').references(() => tickets.id, { onDelete: 'set null' }),
     agent: text('agent').notNull(),
     state: text('state').notNull(),
     prompt: text('prompt').notNull().default(''),

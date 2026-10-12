@@ -12,11 +12,11 @@ import {
   type RunEvent,
   type RunState,
 } from '@emberline/protocol';
-import { asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
-import { HttpError, notFound } from '../errors.js';
+import { conflict, HttpError, notFound } from '../errors.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { prepareWorkspace } from './git.js';
 
@@ -24,9 +24,21 @@ type RunRow = typeof runs.$inferSelect;
 type EventSource = RunEvent['source'];
 
 interface RunServiceEvents {
-  run: [run: Run];
+  /** `stateChanged` is true when this update moved the run to a new state. */
+  run: [run: Run, stateChanged: boolean];
   removed: [id: string];
 }
+
+/** Extra context when a run is started for a ticket. */
+export interface RunOrigin {
+  ticketId: string;
+  /** Branch name to use (made unique if taken). */
+  branch: string;
+  title: string;
+}
+
+/** Delay between pasting a prompt and pressing Enter, so the TUI has consumed the paste. */
+const SUBMIT_DELAY_MS = 150;
 
 const RECONCILE_INTERVAL_MS = 3_000;
 const MAX_EVENTS_IN_DETAIL = 200;
@@ -38,6 +50,7 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest('hex
 export const toRun = (row: RunRow): Run => ({
   id: row.id,
   projectId: row.projectId,
+  ticketId: row.ticketId,
   agent: row.agent,
   state: row.state as RunState,
   prompt: row.prompt,
@@ -116,7 +129,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { ...toRun(row), events };
   }
 
-  async create(input: CreateRunBody): Promise<Run> {
+  async create(input: CreateRunBody, origin?: RunOrigin): Promise<Run> {
     const body = CreateRunBodySchema.parse(input);
     const project = this.db.select().from(projects).where(eq(projects.id, body.projectId)).get();
     if (!project) throw notFound('no such project');
@@ -127,7 +140,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const workspace = await prepareWorkspace(
       project.path,
       path.join(this.config.workspacesDir, '.worktrees', project.slug, short),
-      `emberline/run-${short}`,
+      origin?.branch ?? `emberline/run-${short}`,
     );
 
     const hookToken = randomBytes(32).toString('base64url');
@@ -137,6 +150,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .values({
         id,
         projectId: project.id,
+        ticketId: origin?.ticketId ?? null,
         agent: CLAUDE_ADAPTER_ID,
         state: 'starting',
         prompt: body.prompt,
@@ -165,7 +179,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         args: spec.args,
         cwd: workspace.path,
         env: spec.env,
-        meta: { kind: 'agent', runId: id, projectId: project.id, title: `Claude · ${project.name}` },
+        meta: {
+          kind: 'agent',
+          runId: id,
+          projectId: project.id,
+          title: origin ? `Claude · ${origin.title}` : `Claude · ${project.name}`,
+        },
       });
       return this.record(id, { source: 'system', type: 'spawned', patch: { ptydSessionId: session.id } });
     } catch (error) {
@@ -217,6 +236,33 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const run = this.record(id, { source: 'user', type: 'stop_requested' });
     void this.reconcile();
     return run;
+  }
+
+  /** The newest run of a ticket whose agent process is still alive, if any. */
+  activeRunForTicket(ticketId: string): Run | undefined {
+    const row = this.db
+      .select()
+      .from(runs)
+      .where(and(eq(runs.ticketId, ticketId), isNull(runs.endedAt)))
+      .orderBy(desc(runs.createdAt))
+      .get();
+    return row ? toRun(row) : undefined;
+  }
+
+  /**
+   * Types a follow-up prompt into the live agent session and submits it. Multi-line text is
+   * sent as a bracketed paste so embedded newlines don't submit early. The resulting
+   * `UserPromptSubmit` hook moves the run back to `working`.
+   */
+  async sendPrompt(id: string, text: string): Promise<Run> {
+    const row = this.row(id);
+    if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
+    const ptyd = this.ptyd.get();
+    const input = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
+    await ptyd.write(row.ptydSessionId, input);
+    await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS));
+    await ptyd.write(row.ptydSessionId, '\r');
+    return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
   }
 
   /** Forgets the run and its terminal. The worktree and branch are kept on purpose. */
@@ -275,10 +321,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     event: { source: EventSource; type: string; state?: AgentState; payload?: unknown; patch?: Partial<RunRow> },
   ): Run {
     const now = new Date();
+    let changed = false;
     const updated = this.db.transaction((tx) => {
       const current = tx.select().from(runs).where(eq(runs.id, id)).get();
       if (!current) throw notFound('no such run');
-      const changed = event.state !== undefined && event.state !== current.state;
+      changed = event.state !== undefined && event.state !== current.state;
       tx.insert(runEvents)
         .values({
           runId: id,
@@ -294,7 +341,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       return tx.update(runs).set(set).where(eq(runs.id, id)).returning().get();
     });
     const run = toRun(updated);
-    this.emit('run', run);
+    this.emit('run', run, changed);
     return run;
   }
 }

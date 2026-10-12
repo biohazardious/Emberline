@@ -15,6 +15,13 @@
       "when": 1791847877495,
       "tag": "0001_huge_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791848740871,
+      "tag": "0002_motionless_nuke",
+      "breakpoints": true
     }
   ]
 }

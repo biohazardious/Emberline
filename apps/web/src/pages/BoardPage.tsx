@@ -1,0 +1,511 @@
+import type { PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
+import { type DragEvent, type FormEvent, useEffect, useMemo, useState } from 'react';
+import { Link } from 'wouter';
+import { api, errorMessage } from '../api';
+import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
+import { RunStatePill } from '../components/RunStatePill';
+import { usePoll } from '../hooks/usePoll';
+import { useRuns } from '../hooks/useRuns';
+import { useTickets } from '../hooks/useTickets';
+import { timeAgo } from '../time';
+
+const COLUMNS: { status: TicketStatus; label: string; hint: string }[] = [
+  { status: 'backlog', label: 'Backlog', hint: 'Ideas and not-yet-ready work' },
+  { status: 'ready', label: 'Ready', hint: 'Specified and ready to hand to Claude' },
+  { status: 'in_progress', label: 'In progress', hint: 'Claude is on it (or waiting for you)' },
+  { status: 'review', label: 'Review', hint: 'Claude finished its turn; review or send a follow-up' },
+  { status: 'done', label: 'Done', hint: 'Accepted; runs never move tickets out of here' },
+];
+
+const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent'] as const;
+
+const POSITION_STEP = 1024;
+
+const byPosition = (a: Ticket, b: Ticket) => a.position - b.position;
+
+/** Position that slots a ticket in front of `beforeId` (or at the end) of an ordered column. */
+function slotPosition(column: Ticket[], beforeId: string | null): number {
+  const index = beforeId ? column.findIndex((t) => t.id === beforeId) : -1;
+  const next = index === -1 ? undefined : column[index];
+  const prev = index === -1 ? column.at(-1) : column[index - 1];
+  if (prev && next) return (prev.position + next.position) / 2;
+  if (next) return next.position - POSITION_STEP;
+  if (prev) return prev.position + POSITION_STEP;
+  return POSITION_STEP;
+}
+
+interface DropTarget {
+  status: TicketStatus;
+  beforeId: string | null;
+}
+
+export function BoardPage({ projectId }: { projectId: string }) {
+  const projects = usePoll(() => api<Project[]>('/api/projects'), 30_000);
+  const project = projects.data?.find((p) => p.id === projectId);
+  const { tickets, patchLocal } = useTickets(projectId);
+  const { runs } = useRuns();
+  const [openId, setOpenId] = useState<string>();
+  const [dragId, setDragId] = useState<string>();
+  const [drop, setDrop] = useState<DropTarget>();
+  const [error, setError] = useState<string>();
+
+  /** Newest run per ticket (runs arrive newest-first). */
+  const latestRun = useMemo(() => {
+    const map = new Map<string, Run>();
+    for (const run of runs ?? []) {
+      if (!run.ticketId) continue;
+      const seen = map.get(run.ticketId);
+      if (!seen || Date.parse(run.createdAt) > Date.parse(seen.createdAt)) map.set(run.ticketId, run);
+    }
+    return map;
+  }, [runs]);
+
+  const columns = useMemo(() => {
+    const grouped = new Map<TicketStatus, Ticket[]>(COLUMNS.map((c) => [c.status, []]));
+    for (const ticket of tickets ?? []) grouped.get(ticket.status)?.push(ticket);
+    for (const list of grouped.values()) list.sort(byPosition);
+    return grouped;
+  }, [tickets]);
+
+  const move = async (ticket: Ticket, target: DropTarget) => {
+    const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
+    const position = slotPosition(column, target.beforeId);
+    if (ticket.status === target.status && ticket.position === position) return;
+    patchLocal({ ...ticket, status: target.status, position });
+    setError(undefined);
+    try {
+      patchLocal(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position }));
+    } catch (e) {
+      patchLocal(ticket);
+      setError(errorMessage(e));
+    }
+  };
+
+  const onDrop = (event: DragEvent) => {
+    event.preventDefault();
+    const ticket = tickets?.find((t) => t.id === dragId);
+    if (ticket && drop) void move(ticket, drop);
+    setDragId(undefined);
+    setDrop(undefined);
+  };
+
+  const open = tickets?.find((t) => t.id === openId);
+
+  return (
+    <div className="board-page">
+      <header className="board-head">
+        <div className="board-title">
+          <Link href="/" className="btn btn-ghost btn-sm" aria-label="Back to dashboard">
+            ←
+          </Link>
+          <div>
+            <p className="eyebrow">{project?.name ?? 'Project'}</p>
+            <h1>Board</h1>
+          </div>
+        </div>
+        <QuickAdd projectId={projectId} onCreated={patchLocal} onError={setError} />
+      </header>
+
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+      )}
+
+      <div
+        className="board"
+        onDragEnd={() => {
+          setDragId(undefined);
+          setDrop(undefined);
+        }}
+      >
+        {COLUMNS.map((col) => {
+          const list = columns.get(col.status) ?? [];
+          const isTarget = drop?.status === col.status;
+          return (
+            <section
+              key={col.status}
+              id={`col-${col.status}`}
+              className={`board-col board-col-${col.status}${isTarget ? ' drop-target' : ''}`}
+              aria-label={col.label}
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                // Over the column background (not a card): drop at the end.
+                if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('board-cards')) {
+                  setDrop({ status: col.status, beforeId: null });
+                }
+              }}
+              onDrop={onDrop}
+            >
+              <header className="board-col-head" title={col.hint}>
+                <span className="board-col-dot" aria-hidden="true" />
+                <h2>{col.label}</h2>
+                <span className="board-count">{list.length}</span>
+              </header>
+              <ol className="board-cards">
+                {list.map((ticket) => (
+                  <TicketCard
+                    key={ticket.id}
+                    ticket={ticket}
+                    run={latestRun.get(ticket.id)}
+                    dragging={dragId === ticket.id}
+                    dropBefore={drop?.beforeId === ticket.id && dragId !== ticket.id}
+                    onOpen={() => setOpenId(ticket.id)}
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', ticket.key);
+                      setDragId(ticket.id);
+                    }}
+                    onDragOver={(e) => {
+                      if (!dragId) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const after = e.clientY > rect.top + rect.height / 2;
+                      const beforeId = after ? (list[list.indexOf(ticket) + 1]?.id ?? null) : ticket.id;
+                      setDrop({ status: col.status, beforeId });
+                    }}
+                  />
+                ))}
+                {isTarget && drop?.beforeId === null && <li className="drop-marker" aria-hidden="true" />}
+              </ol>
+              {list.length === 0 && !isTarget && <p className="board-empty">{col.hint}</p>}
+            </section>
+          );
+        })}
+      </div>
+
+      {open && (
+        <TicketDrawer
+          key={open.id}
+          ticket={open}
+          run={latestRun.get(open.id)}
+          onClose={() => setOpenId(undefined)}
+          onChanged={patchLocal}
+          onMove={(status) => {
+            if (status !== open.status) void move(open, { status, beforeId: null });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuickAdd({
+  projectId,
+  onCreated,
+  onError,
+}: {
+  projectId: string;
+  onCreated: (ticket: Ticket) => void;
+  onError: (message: string | undefined) => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!title.trim()) return;
+    setBusy(true);
+    onError(undefined);
+    try {
+      onCreated(await api<Ticket>(`/api/projects/${projectId}/tickets`, 'POST', { title }));
+      setTitle('');
+    } catch (e) {
+      onError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="quick-add" onSubmit={(e) => void submit(e)}>
+      <input
+        id="ticket-title"
+        className="input"
+        placeholder="New ticket title…"
+        maxLength={200}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+      />
+      <button id="ticket-add" className="btn btn-primary" disabled={busy || !title.trim()}>
+        Add
+      </button>
+    </form>
+  );
+}
+
+function TicketCard({
+  ticket,
+  run,
+  dragging,
+  dropBefore,
+  onOpen,
+  onDragStart,
+  onDragOver,
+}: {
+  ticket: Ticket;
+  run: Run | undefined;
+  dragging: boolean;
+  dropBefore: boolean;
+  onOpen: () => void;
+  onDragStart: (e: DragEvent<HTMLLIElement>) => void;
+  onDragOver: (e: DragEvent<HTMLLIElement>) => void;
+}) {
+  const live = run && !run.endedAt;
+  return (
+    <>
+      {dropBefore && <li className="drop-marker" aria-hidden="true" />}
+      <li
+        id={`ticket-${ticket.key}`}
+        className={`card prio-${ticket.priority}${dragging ? ' dragging' : ''}${live ? ` card-live card-${run.state}` : ''}`}
+        draggable
+        tabIndex={0}
+        aria-label={`${ticket.key} ${ticket.title}`}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+      >
+        <div className="card-top">
+          <span className="card-key mono">{ticket.key}</span>
+          <span className="prio-dot" title={`${PRIORITIES[ticket.priority]} priority`} />
+        </div>
+        <p className="card-title">{ticket.title}</p>
+        {run && (
+          <div className="card-foot">
+            <RunStatePill state={run.state} />
+            <span className="card-meta">{timeAgo(run.stateChangedAt)}</span>
+          </div>
+        )}
+      </li>
+    </>
+  );
+}
+
+function TicketDrawer({
+  ticket,
+  run,
+  onClose,
+  onChanged,
+  onMove,
+}: {
+  ticket: Ticket;
+  run: Run | undefined;
+  onClose: () => void;
+  onChanged: (ticket: Ticket) => void;
+  onMove: (status: TicketStatus) => void;
+}) {
+  const [title, setTitle] = useState(ticket.title);
+  const [body, setBody] = useState(ticket.body);
+  const [priority, setPriority] = useState(ticket.priority);
+  const [mode, setMode] = useState<PermissionMode>('default');
+  const [followUp, setFollowUp] = useState('');
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState<string>();
+  const live = run && !run.endedAt;
+  const dirty = title.trim() !== ticket.title || body !== ticket.body || priority !== ticket.priority;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const act = async (name: string, fn: () => Promise<void>) => {
+    setBusy(name);
+    setError(undefined);
+    try {
+      await fn();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const save = () =>
+    act('save', async () => {
+      onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority }));
+    });
+
+  const start = () =>
+    act('start', async () => {
+      if (dirty) await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority });
+      const res = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
+        permissionMode: mode,
+      });
+      onChanged(res.ticket);
+    });
+
+  const send = () =>
+    act('send', async () => {
+      const res = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/prompt`, 'POST', {
+        text: followUp,
+      });
+      setFollowUp('');
+      onChanged(res.ticket);
+    });
+
+  const remove = () =>
+    act('delete', async () => {
+      if (!confirm(`Delete ${ticket.key}? Its runs, branch and worktree are kept.`)) return;
+      await api(`/api/tickets/${ticket.id}`, 'DELETE');
+      onClose();
+    });
+
+  return (
+    <div className="drawer-backdrop" onClick={onClose}>
+      <aside
+        className="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="drawer-key"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="drawer-head">
+          <span id="drawer-key" className="card-key mono">
+            {ticket.key}
+          </span>
+          <span className="muted small">updated {timeAgo(ticket.updatedAt)}</span>
+          <button id="drawer-close" className="icon-btn" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </header>
+
+        <input
+          id="drawer-title"
+          className="input drawer-title"
+          value={title}
+          maxLength={200}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <textarea
+          id="drawer-body"
+          className="input drawer-body"
+          rows={6}
+          placeholder="Details, acceptance criteria, files to look at… (sent to Claude with the title)"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+        />
+        <div className="drawer-row">
+          <div className="segmented" role="radiogroup" aria-label="Priority">
+            {PRIORITIES.map((label, value) => (
+              <button
+                key={label}
+                type="button"
+                role="radio"
+                aria-checked={priority === value}
+                className={priority === value ? 'active' : ''}
+                onClick={() => setPriority(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button id="drawer-save" className="btn btn-sm" disabled={!dirty || !!busy || !title.trim()} onClick={save}>
+            {busy === 'save' ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+
+        <label className="drawer-label" htmlFor="drawer-status">
+          Column
+        </label>
+        <div id="drawer-status" className="segmented segmented-wrap" role="radiogroup" aria-label="Column">
+          {COLUMNS.map((c) => (
+            <button
+              key={c.status}
+              type="button"
+              role="radio"
+              aria-checked={ticket.status === c.status}
+              className={ticket.status === c.status ? 'active' : ''}
+              onClick={() => onMove(c.status)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+
+        <section className="drawer-agent" aria-label="Agent">
+          <h2>Agent</h2>
+          {run && (
+            <div className="agent-run">
+              <RunStatePill state={run.state} />
+              {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
+              {run.terminalId && (
+                <Link id="drawer-terminal" href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost">
+                  Open terminal →
+                </Link>
+              )}
+            </div>
+          )}
+          {live ? (
+            <div className="run-form drawer-form">
+              <textarea
+                id="drawer-followup"
+                className="input"
+                rows={3}
+                placeholder={
+                  run.state === 'waiting_input' ? 'Claude is waiting for you…' : 'Follow-up for Claude (sent to the live session)'
+                }
+                value={followUp}
+                onChange={(e) => setFollowUp(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && followUp.trim()) void send();
+                }}
+              />
+              <div className="run-form-foot">
+                <span className="muted small">Permission prompts are answered in the terminal.</span>
+                <button
+                  id="drawer-send"
+                  className="btn btn-sm btn-primary"
+                  disabled={!followUp.trim() || !!busy}
+                  onClick={() => void send()}
+                >
+                  {busy === 'send' ? 'Sending…' : 'Send'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="run-form drawer-form">
+              <PermissionModePicker value={mode} onChange={setMode} />
+              <p className="muted small">
+                {modeHint(mode)}. Works on its own branch and worktree; the card follows the run.
+              </p>
+              <div className="run-form-foot">
+                <span />
+                <button
+                  id="drawer-start"
+                  className="btn btn-sm btn-primary"
+                  disabled={!!busy || !title.trim()}
+                  onClick={() => void start()}
+                >
+                  {busy === 'start' ? 'Starting…' : run ? 'Start new run' : 'Start with Claude'}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {error && <p className="form-error">{error}</p>}
+
+        <footer className="drawer-foot">
+          <button id="drawer-delete" className="btn btn-sm btn-ghost danger" disabled={!!busy} onClick={() => void remove()}>
+            Delete
+          </button>
+          {ticket.status !== 'done' && (
+            <button id="drawer-done" className="btn btn-sm" disabled={!!busy} onClick={() => onMove('done')}>
+              Mark done ✓
+            </button>
+          )}
+        </footer>
+      </aside>
+    </div>
+  );
+}

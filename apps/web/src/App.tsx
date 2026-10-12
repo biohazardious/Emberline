@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard';
 
 // xterm.js is the bulk of the bundle; only load it when a terminal is opened.
 const TerminalPage = lazy(() => import('./pages/TerminalPage').then((m) => ({ default: m.TerminalPage })));
+const BoardPage = lazy(() => import('./pages/BoardPage').then((m) => ({ default: m.BoardPage })));
 
 export function App() {
   return (
@@ -46,6 +47,13 @@ function Shell() {
             {(params) => (
               <Suspense fallback={<div className="term-shell" aria-busy="true" />}>
                 <TerminalPage id={params.id} />
+              </Suspense>
+            )}
+          </Route>
+          <Route path="/projects/:id/board">
+            {(params) => (
+              <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                <BoardPage key={params.id} projectId={params.id} />
               </Suspense>
             )}
           </Route>

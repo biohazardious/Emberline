@@ -7,7 +7,7 @@ Self-hosted orchestrator for AI coding agents: a ticket board drives the **real 
 > Emberline is not a SaaS and has no account sharing or rotation features.
 > Emberline is an independent project and is **not affiliated with or endorsed by Anthropic**.
 
-Status: early development (MVP milestones M0–M3 done: PTY host, web terminal, Claude runs with hook-driven state). See [PROJECT.md](PROJECT.md) for the design.
+Status: early development (MVP milestones M0–M4 done: PTY host, web terminal, Claude runs with hook-driven state, ticket board). See [PROJECT.md](PROJECT.md) for the design.
 
 ## Layout
 
@@ -42,6 +42,15 @@ Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinne
 - Git projects get an isolated worktree at `/workspaces/.worktrees/<project>/<id>` on a new branch `emberline/run-<id>`; plain directories run in place.
 - Claude Code hooks are wired per run via `--settings`. `emberline-hook` posts them to core (`EMBERLINE_HOOK_URL`, default `http://core:7420` in compose) with a per-run token, and the UI shows live state: `starting` → `working` / `needs you` → `done` (or `failed` if the process exits non-zero).
 - Removing a run keeps its worktree and branch.
+
+### Board
+
+Each project has a Kanban board (**Board** on the dashboard): Backlog → Ready → In progress → Review → Done.
+
+- Tickets get a key from the project name (`Demo Project` → `DP-1`). Drag cards to reorder or move them; on touch devices use the column picker in the ticket drawer.
+- **Start with Claude** launches a run on branch `emberline/<key>-<title-slug>` with the title + description as the prompt. The card then follows the run live: working / needs you → *In progress*, turn finished → *Review*.
+- From *Review*, a follow-up prompt is typed into the same live Claude session and the card moves back to *In progress*. Permission prompts are answered in the run's terminal.
+- Runs never move a ticket out of *Done*. Deleting a ticket keeps its runs, branches and worktrees.
 
 ## Development
 

@@ -139,6 +139,8 @@ export type PermissionMode = z.infer<typeof PermissionMode>;
 export const Run = z.object({
   id: z.string(),
   projectId: z.string(),
+  /** Ticket this run works on; null for ad-hoc runs. */
+  ticketId: z.string().nullable(),
   agent: z.string(),
   state: RunState,
   prompt: z.string(),
@@ -177,11 +179,67 @@ export type RunEvent = z.infer<typeof RunEvent>;
 export const RunDetail = Run.extend({ events: z.array(RunEvent) });
 export type RunDetail = z.infer<typeof RunDetail>;
 
+// --- tickets / board --------------------------------------------------------
+
+/**
+ * Board columns. A ticket with an active run sits in `in_progress` and shows the run's live
+ * state (working / needs you / failed); `queued` arrives with the quota scheduler (M5).
+ */
+export const TicketStatus = z.enum(['backlog', 'ready', 'in_progress', 'review', 'done']);
+export type TicketStatus = z.infer<typeof TicketStatus>;
+
+/** 0 = low ... 3 = urgent. */
+export const TicketPriority = z.number().int().min(0).max(3);
+
+export const Ticket = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  /** Human key, e.g. "EMB-12"; stable once assigned. */
+  key: z.string(),
+  title: z.string(),
+  body: z.string(),
+  status: TicketStatus,
+  priority: TicketPriority,
+  /** Sort order inside a column (ascending). */
+  position: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Ticket = z.infer<typeof Ticket>;
+
+export const CreateTicketBody = z.object({
+  title: z.string().trim().min(1).max(200),
+  body: z.string().max(20_000).default(''),
+  priority: TicketPriority.default(1),
+  status: TicketStatus.default('backlog'),
+});
+export type CreateTicketBody = z.input<typeof CreateTicketBody>;
+
+export const UpdateTicketBody = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    body: z.string().max(20_000),
+    priority: TicketPriority,
+    status: TicketStatus,
+    position: z.number().finite(),
+  })
+  .partial();
+export type UpdateTicketBody = z.input<typeof UpdateTicketBody>;
+
+export const StartTicketBody = z.object({ permissionMode: PermissionMode.default('default') });
+export type StartTicketBody = z.input<typeof StartTicketBody>;
+
+/** Follow-up prompt typed into the ticket's live run. */
+export const TicketPromptBody = z.object({ text: z.string().trim().min(1).max(20_000) });
+export type TicketPromptBody = z.input<typeof TicketPromptBody>;
+
 // --- live events (`/api/events` WebSocket) ----------------------------------
 
 /** Core -> browser push channel. */
 export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run'), run: Run }),
   z.object({ type: z.literal('run_removed'), id: z.string() }),
+  z.object({ type: z.literal('ticket'), ticket: Ticket }),
+  z.object({ type: z.literal('ticket_removed'), id: z.string(), projectId: z.string() }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;

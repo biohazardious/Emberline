@@ -1,7 +1,7 @@
 # Project Brief — Self-Hosted AI Coding Orchestrator
 
 > Working name: Emberline
-> Status: design locked for MVP. Implementation starting with M0.
+> Status: design locked for MVP. M0–M4 implemented; next is M5 (quota scheduler).
 > Last updated: 2026-10-12
 
 ---
@@ -190,6 +190,8 @@ stateDiagram-v2
 ```
 
 A ticket can have many runs; the ticket column mirrors its latest run.
+
+**As implemented in M4:** ticket columns are `backlog / ready / in_progress / review / done`; the run's live state (working, needs you, failed) is shown as a pill on the card instead of separate columns. Start goes straight to `in_progress` (no `queued` yet), a `Stop` hook moves the ticket to `review`, a follow-up prompt moves it back, and runs never pull a ticket out of `done`. `queued`, `rate_limited` handling and `--resume` of ended sessions arrive with M5.
 
 ### 5.5 Quota scheduler
 - One global lane (one subscription). Max concurrent runs is configurable.

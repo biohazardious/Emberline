@@ -1,4 +1,4 @@
-import { HookEnvelope, type Run, type RunDetail, type ServerEvent } from '@emberline/protocol';
+import { HookEnvelope, type Run, type RunDetail } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { RunService } from '../runs/service.js';
 
@@ -33,20 +33,5 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService): void 
     const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
     const run = runs.ingestHook(envelope, token);
     return { ok: true, state: run.state };
-  });
-
-  /** Live push channel for the UI. */
-  app.get('/api/events', { websocket: true }, (socket) => {
-    const send = (event: ServerEvent) => {
-      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
-    };
-    const onRun = (run: Run) => send({ type: 'run', run });
-    const onRemoved = (id: string) => send({ type: 'run_removed', id });
-    runs.on('run', onRun);
-    runs.on('removed', onRemoved);
-    socket.on('close', () => {
-      runs.off('run', onRun);
-      runs.off('removed', onRemoved);
-    });
   });
 }

@@ -11,7 +11,7 @@ export class ApiRequestError extends Error {
   }
 }
 
-type Method = 'GET' | 'POST' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
 /** JSON fetch against core. Mutating requests carry the CSRF header core requires. */
 export async function api<T>(path: string, method: Method = 'GET', body?: unknown): Promise<T> {

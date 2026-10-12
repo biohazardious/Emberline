@@ -9,9 +9,11 @@ import type {
 import { type FormEvent, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { RunStatePill } from '../components/RunStatePill';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
+import { timeAgo } from '../time';
 
 const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   shell: 'shell',
@@ -19,14 +21,6 @@ const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   clone: 'git clone',
   agent: 'agent',
 };
-
-function timeAgo(iso: string): string {
-  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86_400)}d ago`;
-}
 
 export function Dashboard({ system }: { system: SystemStatus | undefined }) {
   const [, navigate] = useLocation();
@@ -180,6 +174,9 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
                 <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
               </div>
               <div className="actions">
+                <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
+                  Board
+                </Link>
                 <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
                   Shell
                 </button>
@@ -233,6 +230,7 @@ function RunRow({
     <>
       <RunStatePill state={run.state} />
       <span className="row-title">{projectName ?? 'project'}</span>
+      {run.ticketId && <span className="badge">ticket</span>}
       {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
       <span className="row-prompt">{run.prompt || <em className="muted">interactive</em>}</span>
       <span className="row-meta">
@@ -266,13 +264,6 @@ function RunRow({
     </li>
   );
 }
-
-const MODES: { value: PermissionMode; label: string; hint: string }[] = [
-  { value: 'default', label: 'Ask', hint: 'Claude asks before edits and commands' },
-  { value: 'acceptEdits', label: 'Accept edits', hint: 'File edits auto-approved; commands still ask' },
-  { value: 'plan', label: 'Plan only', hint: 'Read-only planning, no changes' },
-  { value: 'bypassPermissions', label: 'Unattended', hint: 'No prompts at all, only inside the isolated runner' },
-];
 
 function StartRunForm({
   project,
@@ -315,21 +306,7 @@ function StartRunForm({
         }}
       />
       <div className="run-form-foot">
-        <div className="segmented" role="radiogroup" aria-label="Permission mode">
-          {MODES.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              role="radio"
-              aria-checked={mode === m.value}
-              className={mode === m.value ? 'active' : ''}
-              title={m.hint}
-              onClick={() => setMode(m.value)}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
+        <PermissionModePicker value={mode} onChange={setMode} />
         <div className="actions">
           <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>
             Cancel
@@ -339,7 +316,7 @@ function StartRunForm({
           </button>
         </div>
       </div>
-      <p className="muted small">{MODES.find((m) => m.value === mode)?.hint}. Runs on a new branch in its own worktree.</p>
+      <p className="muted small">{modeHint(mode)}. Runs on a new branch in its own worktree.</p>
       {error && <p className="form-error">{error}</p>}
     </form>
   );

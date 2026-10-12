@@ -40,11 +40,25 @@ export async function prepareWorkspace(projectPath: string, worktreePath: string
   }
 
   await mkdir(path.dirname(worktreePath), { recursive: true });
+  const unique = await uniqueBranch(projectPath, branch);
   try {
-    await git(projectPath, ['worktree', 'add', '-b', branch, worktreePath, 'HEAD']);
+    await git(projectPath, ['worktree', 'add', '-b', unique, worktreePath, 'HEAD']);
   } catch (error) {
     const stderr = (error as { stderr?: string }).stderr?.trim();
     throw new HttpError(500, 'worktree_failed', `git worktree add failed${stderr ? `: ${stderr}` : ''}`);
   }
-  return { path: worktreePath, branch };
+  return { path: worktreePath, branch: unique };
+}
+
+/** `branch`, or `branch-2`, `branch-3`, ... if it already exists. */
+async function uniqueBranch(repo: string, branch: string): Promise<string> {
+  for (let n = 1; n < 100; n++) {
+    const candidate = n === 1 ? branch : `${branch}-${n}`;
+    try {
+      await git(repo, ['show-ref', '--verify', '--quiet', `refs/heads/${candidate}`]);
+    } catch {
+      return candidate; // ref does not exist
+    }
+  }
+  throw conflict(`too many branches named ${branch}-*`);
 }
