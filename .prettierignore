@@ -1,0 +1,7 @@
+dist/
+coverage/
+pnpm-lock.yaml
+.wolf/
+.claude/
+.codex/
+.opencode/

@@ -1,0 +1,84 @@
+# Development stack: `make dev`. Source is bind-mounted; all node_modules and the
+# pnpm store live in named volumes, so the host never gets Node packages.
+#
+# When adding a new workspace package, add its node_modules volume here AND in the
+# Dockerfile `dev` stage.
+name: emberline-dev
+
+x-dev-volumes: &dev-volumes
+  - .:/workspace
+  - nm-root:/workspace/node_modules
+  - nm-core:/workspace/apps/core/node_modules
+  - nm-web:/workspace/apps/web/node_modules
+  - nm-ptyd:/workspace/apps/ptyd/node_modules
+  - nm-protocol:/workspace/packages/protocol/node_modules
+  - nm-adapter-sdk:/workspace/packages/adapter-sdk/node_modules
+  - nm-adapter-claude:/workspace/packages/adapter-claude/node_modules
+  - nm-hook:/workspace/packages/hook/node_modules
+  - pnpm-store:/pnpm-store
+  - ptyd-socket:/run/emberline
+
+x-dev: &dev
+  build:
+    context: .
+    target: dev
+  image: emberline/dev:local
+  init: true
+  volumes: *dev-volumes
+
+x-after-install: &after-install
+  install:
+    condition: service_completed_successfully
+
+services:
+  # One-shot dependency install; every other service waits for it.
+  install:
+    <<: *dev
+    command: pnpm install --frozen-lockfile
+
+  ptyd:
+    <<: *dev
+    command: pnpm --filter @emberline/ptyd dev
+    environment:
+      EMBERLINE_PTYD_SOCKET: /run/emberline/ptyd.sock
+    depends_on: *after-install
+
+  core:
+    <<: *dev
+    command: pnpm --filter @emberline/core dev
+    environment:
+      EMBERLINE_HOST: 0.0.0.0
+      EMBERLINE_PORT: "7420"
+      EMBERLINE_PTYD_SOCKET: /run/emberline/ptyd.sock
+    ports:
+      - "127.0.0.1:7420:7420"
+    depends_on: *after-install
+
+  web:
+    <<: *dev
+    command: pnpm --filter @emberline/web dev --host 0.0.0.0
+    environment:
+      EMBERLINE_CORE_URL: http://core:7420
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on: *after-install
+
+  # Ad-hoc commands: `make test`, `make shell`, ...
+  tools:
+    <<: *dev
+    profiles: [tools]
+    environment:
+      EMBERLINE_PTYD_SOCKET: /run/emberline/ptyd.sock
+    depends_on: *after-install
+
+volumes:
+  nm-root:
+  nm-core:
+  nm-web:
+  nm-ptyd:
+  nm-protocol:
+  nm-adapter-sdk:
+  nm-adapter-claude:
+  nm-hook:
+  pnpm-store:
+  ptyd-socket:

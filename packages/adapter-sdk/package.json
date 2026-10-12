@@ -1,0 +1,19 @@
+{
+  "name": "@emberline/adapter-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent adapter contract shared by core and every agent adapter.",
+  "exports": {
+    ".": {
+      "@emberline/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

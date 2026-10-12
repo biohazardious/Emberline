@@ -1,0 +1,157 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PtydClient, PtydClientError } from './client.js';
+import { PtydServer } from './server.js';
+
+let dir: string;
+let socketPath: string;
+let server: PtydServer;
+const clients: PtydClient[] = [];
+
+async function connect(): Promise<PtydClient> {
+  const client = await PtydClient.connect(socketPath);
+  clients.push(client);
+  return client;
+}
+
+/** Collects output for one session and lets tests wait for a substring. */
+function collect(client: PtydClient, sessionId: () => string) {
+  let text = '';
+  client.on('output', (id, data) => {
+    if (id === sessionId()) text += data;
+  });
+  return {
+    get text() {
+      return text;
+    },
+    waitFor(needle: string, timeoutMs = 5_000): Promise<void> {
+      const started = Date.now();
+      return new Promise((resolve, reject) => {
+        const tick = () => {
+          if (text.includes(needle)) return resolve();
+          if (Date.now() - started > timeoutMs) {
+            return reject(new Error(`timed out waiting for ${JSON.stringify(needle)}; got ${JSON.stringify(text)}`));
+          }
+          setTimeout(tick, 20);
+        };
+        tick();
+      });
+    },
+  };
+}
+
+const spawnShell = (client: PtydClient) =>
+  client.spawn({ file: '/bin/sh', args: [], cwd: dir, env: { PS1: '$ ' }, cols: 80, rows: 24 });
+
+// `$((40+2))` makes the expected text differ from the echoed input.
+const MARK_CMD = 'echo ember-$((40+2))\r';
+const MARK = 'ember-42';
+
+beforeEach(async () => {
+  dir = mkdtempSync(path.join(tmpdir(), 'ptyd-'));
+  socketPath = path.join(dir, 'ptyd.sock');
+  server = new PtydServer({ socketPath, logDir: path.join(dir, 'logs') });
+  await server.listen();
+});
+
+afterEach(async () => {
+  for (const client of clients.splice(0)) client.close();
+  await server.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe('ptyd', () => {
+  it('streams output of one session to multiple attached clients', async () => {
+    const a = await connect();
+    const b = await connect();
+    const session = await spawnShell(a);
+    const outA = collect(a, () => session.id);
+    const outB = collect(b, () => session.id);
+
+    await a.attach(session.id);
+    await b.attach(session.id);
+    await a.write(session.id, MARK_CMD);
+
+    await outA.waitFor(MARK);
+    await outB.waitFor(MARK);
+  });
+
+  it('restores the screen from a snapshot after a client reconnects', async () => {
+    const a = await connect();
+    const session = await spawnShell(a);
+    const out = collect(a, () => session.id);
+    await a.attach(session.id);
+    await a.write(session.id, MARK_CMD);
+    await out.waitFor(MARK);
+    a.close();
+
+    const b = await connect();
+    const { session: info, snapshot } = await b.attach(session.id);
+    expect(info.status).toBe('running');
+    expect(snapshot.data).toContain(MARK);
+    expect(snapshot.cols).toBe(80);
+  });
+
+  it('keeps sessions alive while no client is connected', async () => {
+    const a = await connect();
+    const session = await spawnShell(a);
+    await a.write(session.id, MARK_CMD);
+    a.close();
+
+    const b = await connect();
+    const { sessions } = await b.list();
+    expect(sessions.map((s) => s.id)).toContain(session.id);
+    await expect.poll(async () => (await b.snapshot(session.id)).data, { timeout: 5_000 }).toContain(MARK);
+  });
+
+  it('emits an exit event when a session is killed', async () => {
+    const a = await connect();
+    const session = await spawnShell(a);
+    await a.attach(session.id);
+    const exited = new Promise<string>((resolve) => a.on('exit', (id) => resolve(id)));
+    await a.kill(session.id, 'SIGKILL');
+    expect(await exited).toBe(session.id);
+
+    const { sessions } = await a.list();
+    expect(sessions.find((s) => s.id === session.id)?.status).toBe('exited');
+    await a.remove(session.id);
+    expect((await a.list()).sessions).toHaveLength(0);
+  });
+
+  it('resizes the session', async () => {
+    const a = await connect();
+    const session = await spawnShell(a);
+    await a.resize(session.id, 100, 30);
+    const snapshot = await a.snapshot(session.id);
+    expect([snapshot.cols, snapshot.rows]).toEqual([100, 30]);
+  });
+
+  it('returns typed errors for bad requests', async () => {
+    const a = await connect();
+    await expect(a.write('missing', 'x')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(a.spawn({ file: '/bin/sh', cwd: path.join(dir, 'nope') })).rejects.toBeInstanceOf(
+      PtydClientError,
+    );
+    const session = await spawnShell(a);
+    await expect(spawnShellWithId(a, session.id)).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('refuses to start a second server on a live socket', async () => {
+    const second = new PtydServer({ socketPath });
+    await expect(second.listen()).rejects.toThrow(/already listening/);
+  });
+
+  it('replaces a stale socket path', async () => {
+    const stalePath = path.join(dir, 'stale.sock');
+    writeFileSync(stalePath, '');
+    const other = new PtydServer({ socketPath: stalePath });
+    await other.listen();
+    await other.close();
+  });
+});
+
+function spawnShellWithId(client: PtydClient, id: string) {
+  return client.spawn({ id, file: '/bin/sh', cwd: dir });
+}

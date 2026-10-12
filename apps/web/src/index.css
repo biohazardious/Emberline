@@ -1,0 +1,230 @@
+:root {
+  --bg: hsl(15 30% 5%);
+  --surface: hsl(15 18% 9% / 0.72);
+  --border: hsl(20 30% 30% / 0.35);
+  --text: hsl(30 25% 92%);
+  --muted: hsl(25 12% 62%);
+  --ember-1: hsl(14 92% 58%);
+  --ember-2: hsl(32 98% 60%);
+  --ember-3: hsl(350 80% 55%);
+  --ok: hsl(150 60% 52%);
+  --bad: hsl(355 75% 62%);
+  --radius: 16px;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  color-scheme: dark;
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.shell {
+  position: relative;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 72px 24px 48px;
+  display: grid;
+  gap: 32px;
+}
+
+.glow {
+  position: fixed;
+  inset: -20vh -20vw auto;
+  height: 70vh;
+  background:
+    radial-gradient(40% 50% at 30% 30%, hsl(14 92% 50% / 0.28), transparent 70%),
+    radial-gradient(35% 45% at 70% 20%, hsl(32 98% 55% / 0.18), transparent 70%);
+  filter: blur(40px);
+  pointer-events: none;
+  z-index: -1;
+  animation: drift 14s ease-in-out infinite alternate;
+}
+
+@keyframes drift {
+  to {
+    transform: translate3d(4vw, 3vh, 0) scale(1.08);
+  }
+}
+
+.hero {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--ember-2), var(--ember-1) 55%, var(--ember-3));
+  box-shadow: 0 0 32px hsl(14 92% 55% / 0.55);
+  animation: pulse 3.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 48px hsl(20 95% 58% / 0.8);
+  }
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.4rem, 6vw, 3.4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  background: linear-gradient(90deg, var(--text), var(--ember-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  max-width: 52ch;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  transition: border-color 0.3s;
+}
+
+.status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-online .dot {
+  background: var(--ok);
+  box-shadow: 0 0 10px var(--ok);
+}
+
+.status-offline .dot {
+  background: var(--bad);
+}
+
+.status-checking .dot {
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.card {
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 60px hsl(15 40% 2% / 0.6);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.progress-label {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.progress {
+  height: 6px;
+  margin: 16px 0 20px;
+  border-radius: 999px;
+  background: hsl(20 20% 18%);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--ember-3), var(--ember-1), var(--ember-2));
+  transition: width 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.milestones {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.milestones li {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--muted);
+  transition:
+    background 0.2s,
+    transform 0.2s;
+}
+
+.milestones li:hover {
+  background: hsl(20 25% 14% / 0.7);
+  transform: translateX(4px);
+}
+
+.milestones li.done {
+  color: var(--text);
+}
+
+.milestone-id {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.milestones li.done .milestone-id {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--ember-1), var(--ember-2));
+  color: hsl(15 40% 8%);
+  font-weight: 600;
+}
+
+.notice {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}

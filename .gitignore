@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# Local runtime data
+/data/
+/.emberline/
+
+# OpenWolf runtime files
+.wolf/daemon.log

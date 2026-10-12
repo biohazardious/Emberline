@@ -1,0 +1,46 @@
+# Production-style stack: `make up` (or `docker compose up -d --build`).
+#
+# core   — API + web UI. Safe to rebuild/restart at any time: `make upgrade-core`.
+# runner — ptyd + Claude Code CLI. Hosts running agents; restart only when idle.
+name: emberline
+
+services:
+  core:
+    build:
+      context: .
+      target: core
+    image: emberline/core:local
+    restart: unless-stopped
+    ports:
+      - "${EMBERLINE_BIND:-127.0.0.1}:${EMBERLINE_PORT:-7420}:7420"
+    volumes:
+      - ptyd-socket:/run/emberline
+      - data:/data
+      - workspaces:/workspaces
+    depends_on:
+      runner:
+        condition: service_healthy
+        restart: false
+
+  runner:
+    build:
+      context: .
+      target: runner
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.296}
+    image: emberline/runner:local
+    restart: unless-stopped
+    init: true
+    volumes:
+      - ptyd-socket:/run/emberline
+      - workspaces:/workspaces
+      # Persists `claude login` credentials (~/.claude, ~/.claude.json) and shell history.
+      - runner-home:/home/node
+      - runner-logs:/var/log/emberline
+
+volumes:
+  ptyd-socket:
+  data:
+  workspaces:
+  runner-home:
+  runner-logs:

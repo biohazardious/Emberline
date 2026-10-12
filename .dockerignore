@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+.git
+.github
+.wolf
+.claude
+.codex
+.opencode
+.env
+.env.*
+data
+compose*.yaml
+Dockerfile
+Makefile

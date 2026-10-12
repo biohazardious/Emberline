@@ -1,0 +1,35 @@
+{
+  "name": "@emberline/ptyd",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PTY holder daemon: hosts agent CLI processes independently of core.",
+  "exports": {
+    "./client": {
+      "@emberline/source": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    }
+  },
+  "bin": {
+    "emberline-ptyd": "./dist/main.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch --conditions=@emberline/source src/main.ts",
+    "start": "node dist/main.js",
+    "attach": "tsx --conditions=@emberline/source scripts/attach.ts"
+  },
+  "dependencies": {
+    "@emberline/protocol": "workspace:*",
+    "@xterm/addon-serialize": "^0.13.0",
+    "@xterm/headless": "^5.5.0",
+    "node-pty": "^1.0.0",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@xterm/xterm": "^5.5.0"
+  }
+}
