@@ -17,6 +17,8 @@ x-dev-volumes: &dev-volumes
   - nm-hook:/workspace/packages/hook/node_modules
   - pnpm-store:/pnpm-store
   - ptyd-socket:/run/emberline
+  - dev-data:/data
+  - dev-workspaces:/workspaces
 
 x-dev: &dev
   build:
@@ -50,6 +52,8 @@ services:
       EMBERLINE_HOST: 0.0.0.0
       EMBERLINE_PORT: "7420"
       EMBERLINE_PTYD_SOCKET: /run/emberline/ptyd.sock
+      EMBERLINE_DATA_DIR: /data
+      EMBERLINE_WORKSPACES_DIR: /workspaces
     ports:
       - "127.0.0.1:7420:7420"
     depends_on: *after-install
@@ -82,3 +86,5 @@ volumes:
   nm-hook:
   pnpm-store:
   ptyd-socket:
+  dev-data:
+  dev-workspaces:

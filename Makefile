@@ -4,7 +4,7 @@ PROD := docker compose
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach ci up down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci up down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -31,6 +31,9 @@ test lint typecheck build format: ## Run the pnpm script of the same name
 
 check: ## lint + typecheck + test + build
 	$(RUN) sh -c "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+
+db-generate: ## Generate a Drizzle migration after editing apps/core/src/db/schema.ts
+	$(RUN) pnpm --filter @emberline/core db:generate
 
 attach: ## Interactive shell inside the dev ptyd (Ctrl-] detaches)
 	$(DEV) exec ptyd pnpm --filter @emberline/ptyd attach

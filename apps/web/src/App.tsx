@@ -1,86 +1,67 @@
-import { useEffect, useState } from 'react';
+import type { SystemStatus } from '@emberline/protocol';
+import { lazy, Suspense } from 'react';
+import { Link, Route, Switch } from 'wouter';
+import { api } from './api';
+import { AuthGate, useAuth } from './auth';
+import { usePoll } from './hooks/usePoll';
+import { Dashboard } from './pages/Dashboard';
 
-type CoreStatus =
-  | { kind: 'checking' }
-  | { kind: 'online'; version: string; uptimeSeconds: number }
-  | { kind: 'offline' };
-
-const MILESTONES = [
-  { id: 'M0', title: 'Monorepo scaffold', done: true },
-  { id: 'M1', title: 'ptyd — persistent PTY holder', done: true },
-  { id: 'M2', title: 'Core + web terminal', done: false },
-  { id: 'M3', title: 'Claude adapter + hooks', done: false },
-  { id: 'M4', title: 'Ticket board', done: false },
-  { id: 'M5', title: 'Quota scheduler + auto-resume', done: false },
-  { id: 'M6', title: 'Diff review + compose deploy', done: false },
-];
-
-function useCoreStatus(): CoreStatus {
-  const [status, setStatus] = useState<CoreStatus>({ kind: 'checking' });
-  useEffect(() => {
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const res = await fetch('/api/health');
-        if (!res.ok) throw new Error(String(res.status));
-        const body = (await res.json()) as { version: string; uptimeSeconds: number };
-        if (!cancelled) setStatus({ kind: 'online', ...body });
-      } catch {
-        if (!cancelled) setStatus({ kind: 'offline' });
-      }
-    };
-    void check();
-    const timer = setInterval(check, 5_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-  return status;
-}
+// xterm.js is the bulk of the bundle; only load it when a terminal is opened.
+const TerminalPage = lazy(() => import('./pages/TerminalPage').then((m) => ({ default: m.TerminalPage })));
 
 export function App() {
-  const status = useCoreStatus();
-  const doneCount = MILESTONES.filter((m) => m.done).length;
+  return (
+    <AuthGate>
+      <Shell />
+    </AuthGate>
+  );
+}
+
+function Shell() {
+  const { logout } = useAuth();
+  const system = usePoll(() => api<SystemStatus>('/api/system'), 5_000);
+  const ptyd = system.data?.ptyd ?? 'connecting';
 
   return (
-    <main className="shell">
+    <div className="app">
       <div className="glow" aria-hidden="true" />
-      <header className="hero">
-        <span className="brand-mark" aria-hidden="true" />
-        <h1>Emberline</h1>
-        <p className="tagline">Tickets in, commits out — AI coding agents on your own server and subscription.</p>
-        <div id="core-status" className={`status status-${status.kind}`}>
-          <span className="dot" />
-          {status.kind === 'checking' && 'Checking core…'}
-          {status.kind === 'online' && `Core online · v${status.version} · up ${status.uptimeSeconds}s`}
-          {status.kind === 'offline' && 'Core offline — run `pnpm --filter @emberline/core dev`'}
+      <header className="topbar">
+        <Link href="/" className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">Emberline</span>
+        </Link>
+        <div className="topbar-right">
+          <span id="runner-status" className={`pill pill-runner-${ptyd}`} title="Runner (ptyd) connection">
+            <span className="dot" />
+            runner {ptyd}
+          </span>
+          <button id="logout" className="btn btn-ghost btn-sm" onClick={() => void logout()}>
+            Sign out
+          </button>
         </div>
       </header>
-
-      <section className="card" aria-labelledby="roadmap-title">
-        <div className="card-head">
-          <h2 id="roadmap-title">MVP roadmap</h2>
-          <span className="progress-label">
-            {doneCount}/{MILESTONES.length}
-          </span>
-        </div>
-        <div className="progress" role="progressbar" aria-valuenow={doneCount} aria-valuemax={MILESTONES.length}>
-          <div className="progress-fill" style={{ width: `${(doneCount / MILESTONES.length) * 100}%` }} />
-        </div>
-        <ol className="milestones">
-          {MILESTONES.map((m) => (
-            <li key={m.id} className={m.done ? 'done' : ''}>
-              <span className="milestone-id">{m.id}</span>
-              <span>{m.title}</span>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <footer className="notice">
-        One installation = one user = your own Claude subscription. Not affiliated with Anthropic.
-      </footer>
-    </main>
+      <main className="content">
+        <Switch>
+          <Route path="/terminals/:id">
+            {(params) => (
+              <Suspense fallback={<div className="term-shell" aria-busy="true" />}>
+                <TerminalPage id={params.id} />
+              </Suspense>
+            )}
+          </Route>
+          <Route path="/">
+            <h1 className="sr-only">Emberline dashboard</h1>
+            <Dashboard system={system.data} />
+          </Route>
+          <Route>
+            <div className="empty">
+              <p>Page not found.</p>
+              <Link href="/">Back to dashboard</Link>
+            </div>
+          </Route>
+        </Switch>
+      </main>
+      <footer className="footer">One installation = one user = your own Claude subscription. Not affiliated with Anthropic.</footer>
+    </div>
   );
 }

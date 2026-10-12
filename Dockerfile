@@ -30,7 +30,7 @@ ENV npm_config_store_dir=/pnpm-store
 # The directories are pre-created here so the volumes inherit `node` ownership.
 # ---------------------------------------------------------------------------
 FROM base AS dev
-RUN mkdir -p /pnpm-store /run/emberline \
+RUN mkdir -p /pnpm-store /run/emberline /data /workspaces \
     /workspace/node_modules \
     /workspace/apps/core/node_modules \
     /workspace/apps/web/node_modules \
@@ -39,7 +39,7 @@ RUN mkdir -p /pnpm-store /run/emberline \
     /workspace/packages/adapter-sdk/node_modules \
     /workspace/packages/adapter-claude/node_modules \
     /workspace/packages/hook/node_modules \
-  && chown -R node:node /pnpm-store /run/emberline /workspace
+  && chown -R node:node /pnpm-store /run/emberline /data /workspaces /workspace
 USER node
 WORKDIR /workspace
 CMD ["bash"]

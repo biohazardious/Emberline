@@ -1,28 +1,35 @@
 /**
- * Core entrypoint.
- *
- * Env:
- *   EMBERLINE_HOST  bind address (default 127.0.0.1; use 0.0.0.0 inside Docker)
- *   EMBERLINE_PORT  port (default 7420)
+ * Core entrypoint. Configuration comes from EMBERLINE_* env vars (see config.ts).
  */
+import path from 'node:path';
+import { loadConfig } from './config.js';
+import { openDb } from './db/index.js';
+import { PtydBridge } from './ptyd-bridge.js';
 import { buildServer } from './server.js';
 
-const host = process.env.EMBERLINE_HOST ?? '127.0.0.1';
-const port = Number(process.env.EMBERLINE_PORT ?? 7420);
+const config = loadConfig();
+const { db, close: closeDb } = openDb(path.join(config.dataDir, 'emberline.db'));
+const ptyd = new PtydBridge(config.ptydSocket);
 
-const app = buildServer(
-  { logger: { level: process.env.EMBERLINE_LOG_LEVEL ?? 'info' } },
-  { webDir: process.env.EMBERLINE_WEB_DIR },
-);
+const app = await buildServer({ config, db, ptyd }, { logger: { level: config.logLevel } });
+ptyd.on('status', (status) => app.log.info({ socket: config.ptydSocket }, `ptyd ${status}`));
+ptyd.start();
 
+let stopping = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    void app.close().then(() => process.exit(0));
+    if (stopping) return;
+    stopping = true;
+    void app.close().finally(() => {
+      ptyd.stop();
+      closeDb();
+      process.exit(0);
+    });
   });
 }
 
 try {
-  await app.listen({ host, port });
+  await app.listen({ host: config.host, port: config.port });
 } catch (error) {
   app.log.error(error);
   process.exit(1);
