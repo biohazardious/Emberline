@@ -257,8 +257,8 @@ docs/
 
 ## 7. Open questions
 
-- **Name.** "Emberline" is the working name.
-- **License.** AGPL-3.0 (protects self-hosted spirit) vs MIT/Apache-2.0 (adoption).
+- ~~**Name.**~~ Decided: **Emberline**.
+- ~~**License.**~~ Decided: **AGPL-3.0-or-later** for the application. `packages/protocol` and `packages/adapter-sdk` are **Apache-2.0** so out-of-process plugins/adapters can choose any license.
 - Plugin model details: confirm transport and permission model (§4) before Phase 2.
 - Preview environment design: port range, CPU/RAM limits, cleanup policy.
 - How multi-user maps onto "one installation = one subscription" (separate runners per user?).
