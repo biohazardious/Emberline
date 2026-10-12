@@ -87,6 +87,8 @@ export const TerminalInfo = z.object({
   title: z.string(),
   kind: TerminalKind,
   projectId: z.string().nullable(),
+  /** Set when the terminal hosts an agent run. */
+  runId: z.string().nullable(),
   status: z.enum(['running', 'exited']),
   exitCode: z.number().int().nullable(),
   createdAt: z.string(),
@@ -123,3 +125,63 @@ export const TerminalServerMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type TerminalServerMessage = z.infer<typeof TerminalServerMessage>;
+
+// --- runs -------------------------------------------------------------------
+
+/** Mirrors `AgentState` in @emberline/adapter-sdk. */
+export const RunState = z.enum(['starting', 'working', 'waiting_input', 'rate_limited', 'done', 'failed']);
+export type RunState = z.infer<typeof RunState>;
+
+/** Claude Code `--permission-mode`. `bypassPermissions` is only sane inside the isolated runner. */
+export const PermissionMode = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
+export type PermissionMode = z.infer<typeof PermissionMode>;
+
+export const Run = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  agent: z.string(),
+  state: RunState,
+  prompt: z.string(),
+  permissionMode: PermissionMode,
+  /** Null when the project is not a git repository (the run works in the project directory). */
+  branch: z.string().nullable(),
+  worktreePath: z.string(),
+  terminalId: z.string().nullable(),
+  agentSessionId: z.string().nullable(),
+  /** Last hook / system event type, for display. */
+  lastEvent: z.string().nullable(),
+  stateChangedAt: z.string(),
+  createdAt: z.string(),
+  endedAt: z.string().nullable(),
+});
+export type Run = z.infer<typeof Run>;
+
+export const CreateRunBody = z.object({
+  projectId: z.string().min(1),
+  prompt: z.string().trim().max(20_000).default(''),
+  permissionMode: PermissionMode.default('default'),
+});
+export type CreateRunBody = z.input<typeof CreateRunBody>;
+
+export const RunEvent = z.object({
+  id: z.number().int(),
+  runId: z.string(),
+  ts: z.string(),
+  source: z.enum(['hook', 'transcript', 'screen', 'user', 'system']),
+  type: z.string(),
+  state: RunState.nullable(),
+  payload: z.unknown(),
+});
+export type RunEvent = z.infer<typeof RunEvent>;
+
+export const RunDetail = Run.extend({ events: z.array(RunEvent) });
+export type RunDetail = z.infer<typeof RunDetail>;
+
+// --- live events (`/api/events` WebSocket) ----------------------------------
+
+/** Core -> browser push channel. */
+export const ServerEvent = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('run'), run: Run }),
+  z.object({ type: z.literal('run_removed'), id: z.string() }),
+]);
+export type ServerEvent = z.infer<typeof ServerEvent>;

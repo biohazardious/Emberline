@@ -13,6 +13,9 @@ services:
     restart: unless-stopped
     ports:
       - "${EMBERLINE_BIND:-127.0.0.1}:${EMBERLINE_PORT:-7420}:7420"
+    environment:
+      # emberline-hook runs in the runner and posts agent hooks back to core.
+      EMBERLINE_HOOK_URL: http://core:7420
     volumes:
       - ptyd-socket:/run/emberline
       - data:/data

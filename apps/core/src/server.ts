@@ -10,7 +10,9 @@ import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { registerRunRoutes } from './routes/runs.js';
 import { registerTerminalRoutes } from './routes/terminals.js';
+import type { RunService } from './runs/service.js';
 
 export const VERSION = '0.0.0';
 
@@ -18,6 +20,7 @@ export interface CoreDeps {
   config: CoreConfig;
   db: Db;
   ptyd: PtydBridge;
+  runs: RunService;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -39,6 +42,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   app.get('/api/system', async (): Promise<SystemStatus> => ({ version: VERSION, ptyd: deps.ptyd.status }));
   registerProjectRoutes(app, deps);
   registerTerminalRoutes(app, deps);
+  registerRunRoutes(app, deps.runs);
 
   const { webDir } = deps.config;
   if (webDir && existsSync(webDir)) {

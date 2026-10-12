@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { CoreConfig } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
+import { RunService } from './runs/service.js';
 import { buildServer } from './server.js';
 
 export interface TestApp {
@@ -13,6 +14,7 @@ export interface TestApp {
   config: CoreConfig;
   dir: string;
   ptyd: PtydBridge;
+  runs: RunService;
   close(): Promise<void>;
 }
 
@@ -29,18 +31,24 @@ export async function createTestApp(overrides: Partial<CoreConfig> = {}): Promis
     trustProxy: false,
     sessionTtlMs: 60_000,
     logLevel: 'silent',
+    hookUrl: 'http://127.0.0.1:0',
+    hookCommand: 'emberline-hook',
+    claudeCommand: 'claude',
     ...overrides,
   };
   const opened: OpenedDb = openDb(':memory:');
   const ptyd = new PtydBridge(config.ptydSocket);
-  const app = await buildServer({ config, db: opened.db, ptyd });
+  const runs = new RunService(opened.db, config, ptyd);
+  const app = await buildServer({ config, db: opened.db, ptyd, runs });
   return {
     app,
     config,
     dir,
     ptyd,
+    runs,
     async close() {
       await app.close();
+      runs.dispose();
       ptyd.stop();
       opened.close();
       rmSync(dir, { recursive: true, force: true });

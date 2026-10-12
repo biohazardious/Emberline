@@ -65,3 +65,14 @@ export interface AgentAdapter {
 
 /** States after which a run never transitions on its own. */
 export const TERMINAL_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['done', 'failed']);
+
+/**
+ * How to start an agent CLI. Core hands this to ptyd unchanged, which keeps adapters free of
+ * any transport dependency (and lets out-of-process adapters return it over RPC later).
+ */
+export interface LaunchSpec {
+  file: string;
+  args: string[];
+  /** Merged over ptyd's minimal base environment. */
+  env: Record<string, string>;
+}

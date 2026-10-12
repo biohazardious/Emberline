@@ -10,6 +10,8 @@ export const SESSION_COOKIE = 'emberline_session';
 const PASSWORD_KEY = 'auth.passwordHash';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/state', '/api/auth/setup', '/api/auth/login']);
+/** Machine-to-machine routes (runner -> core) that carry their own credentials. */
+const INTERNAL_PREFIX = '/api/internal/';
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW_MS = 15 * 60_000;
@@ -45,6 +47,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   app.addHook('onRequest', async (request, reply) => {
     const url = request.url.split('?')[0] ?? '';
     if (!url.startsWith('/api/')) return;
+    if (url.startsWith(INTERNAL_PREFIX)) return;
 
     const origin = request.headers.origin;
     if (origin && !sameHost(origin, request.host)) {

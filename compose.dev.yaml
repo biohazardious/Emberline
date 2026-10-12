@@ -54,6 +54,7 @@ services:
       EMBERLINE_PTYD_SOCKET: /run/emberline/ptyd.sock
       EMBERLINE_DATA_DIR: /data
       EMBERLINE_WORKSPACES_DIR: /workspaces
+      EMBERLINE_HOOK_URL: http://core:7420
     ports:
       - "127.0.0.1:7420:7420"
     depends_on: *after-install

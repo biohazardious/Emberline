@@ -41,6 +41,12 @@ importers:
 
   apps/core:
     dependencies:
+      '@emberline/adapter-claude':
+        specifier: workspace:*
+        version: link:../../packages/adapter-claude
+      '@emberline/adapter-sdk':
+        specifier: workspace:*
+        version: link:../../packages/adapter-sdk
       '@emberline/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

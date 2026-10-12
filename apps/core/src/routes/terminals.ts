@@ -19,6 +19,7 @@ export const toTerminal = (s: SessionInfo): TerminalInfo => ({
   title: s.meta.title ?? [s.file, ...s.args].join(' '),
   kind: TerminalKind.safeParse(s.meta.kind).data ?? 'shell',
   projectId: s.meta.projectId ?? null,
+  runId: s.meta.runId ?? null,
   status: s.status,
   exitCode: s.exitCode,
   createdAt: s.createdAt,

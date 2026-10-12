@@ -7,7 +7,7 @@ Self-hosted orchestrator for AI coding agents: a ticket board drives the **real 
 > Emberline is not a SaaS and has no account sharing or rotation features.
 > Emberline is an independent project and is **not affiliated with or endorsed by Anthropic**.
 
-Status: early development (MVP milestones M0–M1 done). See [PROJECT.md](PROJECT.md) for the design.
+Status: early development (MVP milestones M0–M3 done: PTY host, web terminal, Claude runs with hook-driven state). See [PROJECT.md](PROJECT.md) for the design.
 
 ## Layout
 
@@ -34,6 +34,14 @@ make logs / make down
 ```
 
 Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinned Claude Code CLI, hosts the agents). They share only the ptyd socket and the workspaces volume.
+
+### Runs
+
+**Start run** on a project launches Claude Code in the runner:
+
+- Git projects get an isolated worktree at `/workspaces/.worktrees/<project>/<id>` on a new branch `emberline/run-<id>`; plain directories run in place.
+- Claude Code hooks are wired per run via `--settings`. `emberline-hook` posts them to core (`EMBERLINE_HOOK_URL`, default `http://core:7420` in compose) with a per-run token, and the UI shows live state: `starting` → `working` / `needs you` → `done` (or `failed` if the process exits non-zero).
+- Removing a run keeps its worktree and branch.
 
 ## Development
 
