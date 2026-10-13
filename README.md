@@ -7,7 +7,7 @@ Self-hosted orchestrator for AI coding agents: a ticket board drives the **real 
 > Emberline is not a SaaS and has no account sharing or rotation features.
 > Emberline is an independent project and is **not affiliated with or endorsed by Anthropic**.
 
-Status: early development (MVP milestones M0–M4 done: PTY host, web terminal, Claude runs with hook-driven state, ticket board). See [PROJECT.md](PROJECT.md) for the design.
+Status: early development (MVP milestones M0–M5 done: PTY host, web terminal, Claude runs with hook-driven state, ticket board, quota scheduler). See [PROJECT.md](PROJECT.md) for the design.
 
 ## Layout
 
@@ -51,6 +51,17 @@ Each project has a Kanban board (**Board** on the dashboard): Backlog → Ready 
 - **Start with Claude** launches a run on branch `emberline/<key>-<title-slug>` with the title + description as the prompt. The card then follows the run live: working / needs you → *In progress*, turn finished → *Review*.
 - From *Review*, a follow-up prompt is typed into the same live Claude session and the card moves back to *In progress*. Permission prompts are answered in the run's terminal.
 - Runs never move a ticket out of *Done*. Deleting a ticket keeps its runs, branches and worktrees.
+
+### Quota scheduler
+
+Every new run (from the dashboard or a ticket) is **queued** and dispatched by the scheduler:
+
+- At most *N* agents run at once (default 2; picker on the dashboard, 1–4 there, API allows up to 8). Waiting for a prompt doesn't hold a slot.
+- When any run hits the usage limit (Claude Code's `StopFailure` hook with `rate_limit`, or a "limit reached" banner on `Stop`), the run turns **rate limited**, a quota window opens and dispatch pauses.
+- The reset time comes from the hook message or the terminal banner (`resets 2pm (Europe/Istanbul)`, `resets in 2h 5m`, …), read in `TZ` / `EMBERLINE_TIMEZONE`. If none can be read, it probes again every 15 minutes.
+- At reset plus 30–120 s jitter, rate-limited runs get *"Continue where you left off."* (ended sessions are resumed with `claude --resume`), then the queue continues, in ticket priority order. If the limit hits again within 5 minutes, the same window reopens.
+- **Resume now** (dashboard or ticket drawer) ends the pause early. Windows are stored in SQLite, so a core restart keeps the timer.
+- Notifications (ntfy/webhook) on limit and resume are not implemented yet.
 
 ## Development
 

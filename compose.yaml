@@ -16,6 +16,8 @@ services:
     environment:
       # emberline-hook runs in the runner and posts agent hooks back to core.
       EMBERLINE_HOOK_URL: http://core:7420
+      # Zone used to read wall-clock reset times such as "resets 2pm" (quota scheduler).
+      TZ: ${TZ:-UTC}
     volumes:
       - ptyd-socket:/run/emberline
       - data:/data
@@ -34,6 +36,9 @@ services:
     image: emberline/runner:local
     restart: unless-stopped
     init: true
+    environment:
+      # Same zone as core, so Claude's limit banners and core's parser agree.
+      TZ: ${TZ:-UTC}
     volumes:
       - ptyd-socket:/run/emberline
       - workspaces:/workspaces

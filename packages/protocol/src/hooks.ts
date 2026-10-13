@@ -14,6 +14,8 @@ export const HookEventName = z.enum([
   'PostToolUse',
   'Notification',
   'Stop',
+  /** Replaces `Stop` when the turn ended on an API error; `error` is e.g. `rate_limit`. */
+  'StopFailure',
   'SubagentStop',
   'PreCompact',
   'SessionEnd',

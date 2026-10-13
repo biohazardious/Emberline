@@ -127,6 +127,7 @@ describe('runs', () => {
     const pre = detail.events.find((e) => e.type === 'PreToolUse');
     expect(pre?.payload).toEqual({ tool_name: 'Bash' }); // tool input is not stored
     expect(detail.events.filter((e) => e.state).map((e) => e.state)).toEqual([
+      'starting',
       'waiting_input',
       'working',
       'waiting_input',

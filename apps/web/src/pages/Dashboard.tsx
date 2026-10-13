@@ -10,6 +10,7 @@ import { type FormEvent, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
+import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
@@ -51,10 +52,11 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
     }
   };
 
-  const runAction = async (id: string, action: 'stop' | 'remove') => {
+  const runAction = async (id: string, action: 'stop' | 'remove' | 'resume') => {
     setActionError(undefined);
     try {
       if (action === 'stop') await api(`/api/runs/${id}/stop`, 'POST');
+      else if (action === 'resume') await api(`/api/runs/${id}/resume`, 'POST', {});
       else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
       setActionError(errorMessage(e));
@@ -75,6 +77,8 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
           {actionError}
         </div>
       )}
+
+      <QuotaPanel />
 
       <section className="panel" aria-labelledby="runs-title">
         <header className="panel-head">
@@ -98,6 +102,7 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
               run={run}
               projectName={projectName(run.projectId)}
               onStop={() => void runAction(run.id, 'stop')}
+              onResume={() => void runAction(run.id, 'resume')}
               onRemove={() => void runAction(run.id, 'remove')}
             />
           ))}
@@ -219,11 +224,13 @@ function RunRow({
   run,
   projectName,
   onStop,
+  onResume,
   onRemove,
 }: {
   run: Run;
   projectName: string | undefined;
   onStop: () => void;
+  onResume: () => void;
   onRemove: () => void;
 }) {
   const body = (
@@ -248,9 +255,26 @@ function RunRow({
       ) : (
         <div className="row-main">{body}</div>
       )}
+      {(run.state === 'rate_limited' || run.resumable) && (
+        <button
+          className="btn btn-sm"
+          onClick={onResume}
+          title={
+            run.state === 'rate_limited'
+              ? 'Try now instead of waiting for the reset'
+              : 'Continue this Claude session (claude --resume)'
+          }
+        >
+          Resume
+        </button>
+      )}
       {!run.endedAt && (
-        <button className="btn btn-sm btn-ghost" onClick={onStop} title="Terminate the agent process">
-          Stop
+        <button
+          className="btn btn-sm btn-ghost"
+          onClick={onStop}
+          title={run.state === 'queued' ? 'Remove from the queue' : 'Terminate the agent process'}
+        >
+          {run.state === 'queued' ? 'Cancel' : 'Stop'}
         </button>
       )}
       <button

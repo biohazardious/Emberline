@@ -1,0 +1,131 @@
+import { describe, expect, it } from 'vitest';
+import { nextStateFromHook, stateAfterExit } from './index.js';
+import { isLimitText, parseResetTime, rateLimitFromHook, rateLimitFromScreen, stripAnsi } from './ratelimit.js';
+
+// 2026-10-13 09:30 UTC (12:30 in Istanbul, UTC+3; 05:30 in New York, UTC-4).
+const NOW = new Date('2026-10-13T09:30:00Z');
+
+describe('parseResetTime', () => {
+  const cases: [string, string, string | undefined][] = [
+    ['5-hour limit reached ∙ resets 2pm', 'UTC', '2026-10-13T14:00:00.000Z'],
+    ['5-hour limit reached ∙ resets 2:30pm', 'UTC', '2026-10-13T14:30:00.000Z'],
+    // Already past today -> tomorrow.
+    ['5-hour limit reached ∙ resets 8am', 'UTC', '2026-10-14T08:00:00.000Z'],
+    ["You've hit your limit · resets 3pm (Europe/Istanbul)", 'UTC', '2026-10-13T12:00:00.000Z'],
+    // Zone missing from the text: read in the runner's zone.
+    ['5-hour limit reached ∙ resets 3pm', 'Europe/Istanbul', '2026-10-13T12:00:00.000Z'],
+    [
+      'Claude usage limit reached. Your limit will reset at 5pm (America/New_York).',
+      'UTC',
+      '2026-10-13T21:00:00.000Z',
+    ],
+    ['Weekly limit reached ∙ resets Oct 14, 9am (UTC)', 'UTC', '2026-10-14T09:00:00.000Z'],
+    ['Weekly limit reached ∙ resets Jan 2 at 9am (UTC)', 'UTC', '2027-01-02T09:00:00.000Z'],
+    ['resets 12am', 'UTC', '2026-10-14T00:00:00.000Z'],
+    ['resets 12pm', 'UTC', '2026-10-13T12:00:00.000Z'],
+    ['limit reached, resets 14:15 (Europe/Istanbul)', 'UTC', '2026-10-13T11:15:00.000Z'],
+    ['Claude AI usage limit reached|1760356800', 'UTC', '2025-10-13T12:00:00.000Z'],
+    ['usage limit reached, resets in 2h 15m', 'UTC', '2026-10-13T11:45:00.000Z'],
+    ['usage limit reached, resets in 45 minutes', 'UTC', '2026-10-13T10:15:00.000Z'],
+    // Unknown zone falls back to the default.
+    ['resets 3pm (Mars/Olympus)', 'UTC', '2026-10-13T15:00:00.000Z'],
+    ['API Error: Rate limit reached', 'UTC', undefined],
+    ['resets 3', 'UTC', undefined],
+    ['resets 13pm', 'UTC', undefined],
+  ];
+  it.each(cases)('%s (%s)', (text, zone, expected) => {
+    expect(parseResetTime(text, NOW, zone)?.toISOString()).toBe(expected);
+  });
+
+  it('handles DST transitions', () => {
+    // US DST ends 2026-11-01; at 2026-10-31 20:00 UTC New York is UTC-4, the next day UTC-5.
+    const now = new Date('2026-10-31T20:00:00Z');
+    expect(parseResetTime('resets 9am (America/New_York)', now)?.toISOString()).toBe('2026-11-01T14:00:00.000Z');
+  });
+});
+
+describe('rateLimitFromHook', () => {
+  it('reads StopFailure rate_limit with the reset time', () => {
+    const info = rateLimitFromHook(
+      'StopFailure',
+      { error: 'rate_limit', error_details: '429', last_assistant_message: "You've hit your limit · resets 2pm (UTC)" },
+      NOW,
+    );
+    expect(info).toEqual({
+      message: "You've hit your limit · resets 2pm (UTC) — 429",
+      resetsAt: new Date('2026-10-13T14:00:00Z'),
+    });
+  });
+
+  it('reads StopFailure rate_limit without a reset time', () => {
+    const info = rateLimitFromHook('StopFailure', { error: 'rate_limit' }, NOW);
+    expect(info).toEqual({ message: 'rate limit reached', resetsAt: undefined });
+  });
+
+  it('ignores other API errors and normal answers', () => {
+    expect(rateLimitFromHook('StopFailure', { error: 'overloaded', last_assistant_message: 'Overloaded' })).toBe(
+      undefined,
+    );
+    expect(rateLimitFromHook('Stop', { last_assistant_message: 'Done, tests pass.' })).toBe(undefined);
+    const essay = `I added a rate limiter. When the usage limit reached state occurs we back off. ${'x'.repeat(300)}`;
+    expect(rateLimitFromHook('Stop', { last_assistant_message: essay })).toBe(undefined);
+    expect(rateLimitFromHook('Notification', { message: 'usage limit reached' })).toBe(undefined);
+  });
+
+  it('accepts a banner delivered through Stop', () => {
+    const info = rateLimitFromHook('Stop', { last_assistant_message: 'Claude AI usage limit reached|1760356800' }, NOW);
+    expect(info?.resetsAt?.toISOString()).toBe('2025-10-13T12:00:00.000Z');
+  });
+});
+
+describe('rateLimitFromScreen', () => {
+  it('finds the last banner in a serialized snapshot', () => {
+    const screen = [
+      '\x1b[2J\x1b[H\x1b[38;5;246m> fix the tests\x1b[0m\r\n',
+      '\x1b[1m⏺\x1b[0m Running tests…\r\n',
+      '  \x1b[31m⎿  5-hour limit reached ∙ resets 4pm\x1b[0m\r\n',
+      '\x1b]0;claude\x07\r\n',
+      '╭──────────╮\r\n│ >        │\r\n╰──────────╯\r\n',
+    ].join('');
+    expect(rateLimitFromScreen(screen, NOW, 'UTC')).toEqual({
+      message: '5-hour limit reached ∙ resets 4pm',
+      resetsAt: new Date('2026-10-13T16:00:00Z'),
+    });
+  });
+
+  it('returns undefined when no banner is visible', () => {
+    expect(rateLimitFromScreen('\x1b[1mhello\x1b[0m\r\nall good', NOW)).toBe(undefined);
+  });
+
+  it('strips escape sequences', () => {
+    expect(stripAnsi('\x1b[1;31mred\x1b[0m \x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\')).toBe('red link');
+  });
+});
+
+describe('limit-aware state machine', () => {
+  it('moves to rate_limited on StopFailure rate_limit and waits through idle reminders', () => {
+    expect(nextStateFromHook('working', 'StopFailure', { error: 'rate_limit' })).toBe('rate_limited');
+    expect(nextStateFromHook('rate_limited', 'Notification', { notification_type: 'idle_prompt' })).toBe(undefined);
+    expect(nextStateFromHook('rate_limited', 'SessionEnd')).toBe(undefined);
+    expect(nextStateFromHook('rate_limited', 'UserPromptSubmit')).toBe('working');
+  });
+
+  it('other API errors need the user', () => {
+    expect(nextStateFromHook('working', 'StopFailure', { error: 'overloaded' })).toBe('waiting_input');
+  });
+
+  it('keeps rate_limited after the process exits', () => {
+    expect(stateAfterExit('rate_limited', 0)).toBe('rate_limited');
+  });
+
+  it('recognises the banners', () => {
+    for (const text of [
+      '5-hour limit reached ∙ resets 2pm',
+      'Weekly limit reached',
+      "You've hit your limit · resets 3pm",
+      'Claude usage limit reached.',
+    ]) {
+      expect(isLimitText(text), text).toBe(true);
+    }
+  });
+});

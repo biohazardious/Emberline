@@ -12,9 +12,11 @@ import type { PtydBridge } from './ptyd-bridge.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerRunRoutes } from './routes/runs.js';
+import { registerSchedulerRoutes } from './routes/scheduler.js';
 import { registerTerminalRoutes } from './routes/terminals.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import type { RunService } from './runs/service.js';
+import type { Scheduler } from './scheduler/service.js';
 import type { TicketService } from './tickets/service.js';
 
 export const VERSION = '0.0.0';
@@ -25,6 +27,7 @@ export interface CoreDeps {
   ptyd: PtydBridge;
   runs: RunService;
   tickets: TicketService;
+  scheduler: Scheduler;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -46,9 +49,10 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   app.get('/api/system', async (): Promise<SystemStatus> => ({ version: VERSION, ptyd: deps.ptyd.status }));
   registerProjectRoutes(app, deps);
   registerTerminalRoutes(app, deps);
-  registerRunRoutes(app, deps.runs);
+  registerRunRoutes(app, deps.runs, deps.scheduler);
   registerTicketRoutes(app, deps.tickets);
-  registerEventRoutes(app, deps.runs, deps.tickets);
+  registerSchedulerRoutes(app, deps.scheduler);
+  registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler);
 
   const { webDir } = deps.config;
   if (webDir && existsSync(webDir)) {

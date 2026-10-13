@@ -62,6 +62,8 @@ export const runs = sqliteTable(
     permissionMode: text('permission_mode').notNull().default('default'),
     branch: text('branch'),
     worktreePath: text('worktree_path').notNull(),
+    /** Display title for the agent terminal (e.g. "DP-1 Fix login"); null uses the project name. */
+    title: text('title'),
     ptydSessionId: text('ptyd_session_id'),
     agentSessionId: text('agent_session_id'),
     transcriptPath: text('transcript_path'),
@@ -91,3 +93,22 @@ export const runEvents = sqliteTable(
   },
   (t) => [index('run_events_run_idx').on(t.runId, t.id)],
 );
+
+/**
+ * Exhausted usage windows of the (single) subscription. A window with `resumedAt` null pauses
+ * dispatch until `resumeAt`; timers are derived from these rows, so they survive restarts.
+ */
+export const quotaWindows = sqliteTable('quota_windows', {
+  id: text('id').primaryKey(),
+  /** Approximate window start (reset - 5h) when the reset time is known. */
+  startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+  exhaustedAt: integer('exhausted_at', { mode: 'timestamp_ms' }).notNull(),
+  resetsAt: integer('resets_at', { mode: 'timestamp_ms' }),
+  resumeAt: integer('resume_at', { mode: 'timestamp_ms' }).notNull(),
+  /** hook | screen | probe */
+  source: text('source').notNull(),
+  message: text('message'),
+  /** Run whose limit opened the window. */
+  runId: text('run_id'),
+  resumedAt: integer('resumed_at', { mode: 'timestamp_ms' }),
+});

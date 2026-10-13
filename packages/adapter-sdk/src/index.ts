@@ -7,6 +7,8 @@
  */
 
 export type AgentState =
+  /** Waiting for a free slot and available quota; no process yet. */
+  | 'queued'
   | 'starting'
   | 'working'
   /** The agent needs a prompt or a permission decision from the user. */

@@ -310,6 +310,8 @@ function TicketDrawer({
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const live = run && !run.endedAt;
+  const queued = run?.state === 'queued';
+  const canFollowUp = (live && !queued) || run?.resumable === true;
   const dirty = title.trim() !== ticket.title || body !== ticket.body || priority !== ticket.priority;
 
   useEffect(() => {
@@ -358,6 +360,12 @@ function TicketDrawer({
       if (!confirm(`Delete ${ticket.key}? Its runs, branch and worktree are kept.`)) return;
       await api(`/api/tickets/${ticket.id}`, 'DELETE');
       onClose();
+    });
+
+  const runAction = (name: 'resume' | 'stop') =>
+    act(name, async () => {
+      if (!run) return;
+      await api(`/api/runs/${run.id}/${name}`, 'POST', name === 'resume' ? {} : undefined);
     });
 
   return (
@@ -445,14 +453,44 @@ function TicketDrawer({
               )}
             </div>
           )}
-          {live ? (
+          {queued && (
+            <div className="agent-note">
+              <span>Queued: starts as soon as a slot and quota are free.</span>
+              <button
+                id="drawer-cancel"
+                className="btn btn-sm btn-ghost"
+                disabled={!!busy}
+                onClick={() => void runAction('stop')}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {run?.state === 'rate_limited' && (
+            <div className="agent-note agent-note-limit">
+              <span>Paused by the usage limit. Claude continues automatically when the window resets.</span>
+              <button
+                id="drawer-resume"
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => void runAction('resume')}
+              >
+                Resume now
+              </button>
+            </div>
+          )}
+          {canFollowUp && (
             <div className="run-form drawer-form">
               <textarea
                 id="drawer-followup"
                 className="input"
                 rows={3}
                 placeholder={
-                  run.state === 'waiting_input' ? 'Claude is waiting for you…' : 'Follow-up for Claude (sent to the live session)'
+                  !live
+                    ? 'Continue the ended session (claude --resume)…'
+                    : run.state === 'waiting_input'
+                      ? 'Claude is waiting for you…'
+                      : 'Follow-up for Claude (sent to the live session)'
                 }
                 value={followUp}
                 onChange={(e) => setFollowUp(e.target.value)}
@@ -461,28 +499,32 @@ function TicketDrawer({
                 }}
               />
               <div className="run-form-foot">
-                <span className="muted small">Permission prompts are answered in the terminal.</span>
+                <span className="muted small">
+                  {live ? 'Permission prompts are answered in the terminal.' : 'Resumes the same branch and conversation.'}
+                </span>
                 <button
                   id="drawer-send"
                   className="btn btn-sm btn-primary"
                   disabled={!followUp.trim() || !!busy}
                   onClick={() => void send()}
                 >
-                  {busy === 'send' ? 'Sending…' : 'Send'}
+                  {busy === 'send' ? 'Sending…' : live ? 'Send' : 'Continue'}
                 </button>
               </div>
             </div>
-          ) : (
+          )}
+          {!live && (
             <div className="run-form drawer-form">
               <PermissionModePicker value={mode} onChange={setMode} />
               <p className="muted small">
-                {modeHint(mode)}. Works on its own branch and worktree; the card follows the run.
+                {modeHint(mode)}. Works on its own branch and worktree; queued if all slots are busy or the quota is
+                exhausted.
               </p>
               <div className="run-form-foot">
                 <span />
                 <button
                   id="drawer-start"
-                  className="btn btn-sm btn-primary"
+                  className={`btn btn-sm ${run?.resumable ? '' : 'btn-primary'}`}
                   disabled={!!busy || !title.trim()}
                   onClick={() => void start()}
                 >

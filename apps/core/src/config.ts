@@ -22,6 +22,8 @@ export interface CoreConfig {
   hookCommand: string;
   /** Claude Code executable inside the runner. */
   claudeCommand: string;
+  /** IANA zone for limit reset times printed without one (should match the runner's TZ). */
+  timeZone: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
@@ -40,5 +42,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     hookUrl: env.EMBERLINE_HOOK_URL ?? `http://127.0.0.1:${port}`,
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
+    timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
   };
 }

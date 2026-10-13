@@ -128,8 +128,11 @@ export type TerminalServerMessage = z.infer<typeof TerminalServerMessage>;
 
 // --- runs -------------------------------------------------------------------
 
-/** Mirrors `AgentState` in @emberline/adapter-sdk. */
-export const RunState = z.enum(['starting', 'working', 'waiting_input', 'rate_limited', 'done', 'failed']);
+/**
+ * Mirrors `AgentState` in @emberline/adapter-sdk. `queued` waits for a free slot (and quota);
+ * `rate_limited` waits for the usage window to reset.
+ */
+export const RunState = z.enum(['queued', 'starting', 'working', 'waiting_input', 'rate_limited', 'done', 'failed']);
 export type RunState = z.infer<typeof RunState>;
 
 /** Claude Code `--permission-mode`. `bypassPermissions` is only sane inside the isolated runner. */
@@ -155,6 +158,8 @@ export const Run = z.object({
   stateChangedAt: z.string(),
   createdAt: z.string(),
   endedAt: z.string().nullable(),
+  /** True when an ended run can be continued with `claude --resume` (a session id is known). */
+  resumable: z.boolean(),
 });
 export type Run = z.infer<typeof Run>;
 
@@ -178,6 +183,48 @@ export type RunEvent = z.infer<typeof RunEvent>;
 
 export const RunDetail = Run.extend({ events: z.array(RunEvent) });
 export type RunDetail = z.infer<typeof RunDetail>;
+
+/** Continue a rate-limited or ended run; defaults to a generic "continue" prompt. */
+export const ResumeRunBody = z.object({ text: z.string().trim().max(20_000).optional() });
+export type ResumeRunBody = z.input<typeof ResumeRunBody>;
+
+// --- quota scheduler --------------------------------------------------------
+
+/** How the reset time of an exhausted window was determined. */
+export const ResetSource = z.enum(['hook', 'screen', 'probe']);
+export type ResetSource = z.infer<typeof ResetSource>;
+
+export const QuotaWindow = z.object({
+  id: z.string(),
+  exhaustedAt: z.string(),
+  /** When the usage window resets; null while unknown (probing). */
+  resetsAt: z.string().nullable(),
+  /** When the scheduler resumes work (reset + jitter, or the next probe). */
+  resumeAt: z.string(),
+  resetSource: ResetSource,
+  /** The limit message as shown by the CLI. */
+  message: z.string().nullable(),
+  resumedAt: z.string().nullable(),
+});
+export type QuotaWindow = z.infer<typeof QuotaWindow>;
+
+export const MAX_CONCURRENCY = 8;
+
+export const SchedulerState = z.object({
+  maxConcurrentRuns: z.number().int().min(1).max(MAX_CONCURRENCY),
+  /** Runs currently holding a slot (starting / working). */
+  busy: z.number().int(),
+  queued: z.number().int(),
+  rateLimited: z.number().int(),
+  /** The exhausted window while dispatch is paused; null when quota is available. */
+  window: QuotaWindow.nullable(),
+});
+export type SchedulerState = z.infer<typeof SchedulerState>;
+
+export const UpdateSchedulerBody = z.object({
+  maxConcurrentRuns: z.number().int().min(1).max(MAX_CONCURRENCY),
+});
+export type UpdateSchedulerBody = z.input<typeof UpdateSchedulerBody>;
 
 // --- tickets / board --------------------------------------------------------
 
@@ -241,5 +288,6 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run_removed'), id: z.string() }),
   z.object({ type: z.literal('ticket'), ticket: Ticket }),
   z.object({ type: z.literal('ticket_removed'), id: z.string(), projectId: z.string() }),
+  z.object({ type: z.literal('scheduler'), scheduler: SchedulerState }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;

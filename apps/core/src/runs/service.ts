@@ -2,7 +2,15 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import type { AgentState } from '@emberline/adapter-sdk';
-import { buildLaunchSpec, CLAUDE_ADAPTER_ID, nextStateFromHook, stateAfterExit } from '@emberline/adapter-claude';
+import {
+  buildLaunchSpec,
+  CLAUDE_ADAPTER_ID,
+  CONTINUE_PROMPT,
+  nextStateFromHook,
+  type RateLimitInfo,
+  rateLimitFromHook,
+  stateAfterExit,
+} from '@emberline/adapter-claude';
 import {
   type CreateRunBody,
   CreateRunBody as CreateRunBodySchema,
@@ -27,6 +35,8 @@ interface RunServiceEvents {
   /** `stateChanged` is true when this update moved the run to a new state. */
   run: [run: Run, stateChanged: boolean];
   removed: [id: string];
+  /** A hook put the run into `rate_limited`; `info` is what the hook revealed about the limit. */
+  rateLimited: [run: Run, info: RateLimitInfo | undefined];
 }
 
 /** Extra context when a run is started for a ticket. */
@@ -43,7 +53,21 @@ const SUBMIT_DELAY_MS = 150;
 const RECONCILE_INTERVAL_MS = 3_000;
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
-const PAYLOAD_KEYS = ['session_id', 'tool_name', 'notification_type', 'message', 'source', 'reason', 'prompt'];
+const PAYLOAD_KEYS = [
+  'session_id',
+  'tool_name',
+  'notification_type',
+  'message',
+  'source',
+  'reason',
+  'prompt',
+  'error',
+  'error_details',
+  'last_assistant_message',
+];
+
+/** Scrollback lines read when looking for a limit banner on screen. */
+const SCREEN_SCROLLBACK = 200;
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -63,6 +87,7 @@ export const toRun = (row: RunRow): Run => ({
   stateChangedAt: row.stateChangedAt.toISOString(),
   createdAt: row.createdAt.toISOString(),
   endedAt: row.endedAt?.toISOString() ?? null,
+  resumable: row.endedAt !== null && row.agentSessionId !== null,
 });
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -89,6 +114,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     private readonly ptyd: PtydBridge,
   ) {
     super();
+    this.setMaxListeners(0); // one listener per open UI socket
   }
 
   /** Starts periodic reconciliation with ptyd. */
@@ -129,11 +155,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { ...toRun(row), events };
   }
 
-  async create(input: CreateRunBody, origin?: RunOrigin): Promise<Run> {
+  /** Plain run (no slot/quota checks); `queued` until {@link launch}. The scheduler owns dispatch. */
+  getRun(id: string): Run {
+    return toRun(this.row(id));
+  }
+
+  /**
+   * Prepares the worktree and records the run as `queued`. Nothing is spawned yet; the
+   * scheduler calls {@link launch} once a slot and quota are available.
+   */
+  async enqueue(input: CreateRunBody, origin?: RunOrigin): Promise<Run> {
     const body = CreateRunBodySchema.parse(input);
     const project = this.db.select().from(projects).where(eq(projects.id, body.projectId)).get();
     if (!project) throw notFound('no such project');
-    const ptyd = this.ptyd.get(); // fail fast (503) before touching git
+    this.ptyd.get(); // fail fast (503) before touching git
 
     const id = randomUUID();
     const short = id.slice(0, 8);
@@ -143,7 +178,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       origin?.branch ?? `emberline/run-${short}`,
     );
 
-    const hookToken = randomBytes(32).toString('base64url');
     const now = new Date();
     this.db
       .insert(runs)
@@ -152,43 +186,115 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         projectId: project.id,
         ticketId: origin?.ticketId ?? null,
         agent: CLAUDE_ADAPTER_ID,
-        state: 'starting',
+        state: 'queued',
         prompt: body.prompt,
         permissionMode: body.permissionMode,
         branch: workspace.branch,
         worktreePath: workspace.path,
-        hookTokenHash: sha256(hookToken),
+        title: origin?.title ?? null,
+        // Replaced with the real token's hash at launch; nothing can authenticate before that.
+        hookTokenHash: sha256(randomBytes(32).toString('base64url')),
         stateChangedAt: now,
         createdAt: now,
       })
       .run();
+    return this.record(id, { source: 'system', type: 'queued', state: 'queued' });
+  }
+
+  /** Spawns a queued run's agent with its initial prompt. */
+  async launch(id: string): Promise<Run> {
+    const row = this.row(id);
+    if (row.state !== 'queued') throw conflict(`run is ${row.state}, not queued`);
+    return this.spawnAgent(row, { prompt: row.prompt || undefined, type: 'spawned' });
+  }
+
+  /**
+   * Continues a run after a limit reset (or on the user's request): types `text` into the live
+   * session, or respawns `claude --resume <session>` in the same worktree when the process is
+   * gone. The run counts as `starting` until the agent's next hook arrives.
+   */
+  async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
+    const row = this.row(id);
+    if (row.state === 'queued') return this.launch(id);
+    if (row.ptydSessionId && !row.endedAt) {
+      await this.typePrompt(row.ptydSessionId, text);
+      return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
+    }
+    if (!row.agentSessionId) {
+      this.record(id, { source: 'system', type: 'resume_failed', state: 'failed', payload: { reason: 'no session' } });
+      throw conflict('this run has no agent session to resume; start a new run');
+    }
+    const previous = row.ptydSessionId;
+    const run = await this.spawnAgent(row, { prompt: text, resumeSessionId: row.agentSessionId, type: 'resumed' });
+    if (previous) {
+      // The exited terminal is superseded by the new one.
+      await this.ptyd
+        .get()
+        .remove(previous)
+        .catch(() => undefined);
+    }
+    return run;
+  }
+
+  /** Visible screen + recent scrollback of a run's terminal (serialized ANSI), if it has one. */
+  async screen(id: string): Promise<string | undefined> {
+    const row = this.row(id);
+    if (!row.ptydSessionId || this.ptyd.status !== 'connected') return undefined;
+    try {
+      return (await this.ptyd.get().snapshot(row.ptydSessionId, SCREEN_SCROLLBACK)).data;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async spawnAgent(
+    row: RunRow,
+    options: { prompt?: string; resumeSessionId?: string; type: 'spawned' | 'resumed' },
+  ): Promise<Run> {
+    const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
+    if (!project) throw notFound('no such project');
+    const ptyd = this.ptyd.get();
+    const hookToken = randomBytes(32).toString('base64url');
+    // Mark as starting first so concurrent ticks never launch the same run twice.
+    this.record(row.id, {
+      source: 'system',
+      type: options.type === 'spawned' ? 'launching' : 'respawning',
+      state: 'starting',
+      patch: { hookTokenHash: sha256(hookToken), endedAt: null },
+    });
 
     const spec = buildLaunchSpec({
-      runId: id,
+      runId: row.id,
       hookToken,
       coreUrl: this.config.hookUrl,
       claudeCommand: this.config.claudeCommand,
       hookCommand: this.config.hookCommand,
-      permissionMode: body.permissionMode,
-      prompt: body.prompt || undefined,
+      permissionMode: row.permissionMode as Run['permissionMode'],
+      prompt: options.prompt,
+      resumeSessionId: options.resumeSessionId,
     });
 
     try {
       const session = await ptyd.spawn({
         file: spec.file,
         args: spec.args,
-        cwd: workspace.path,
+        cwd: row.worktreePath,
         env: spec.env,
         meta: {
           kind: 'agent',
-          runId: id,
-          projectId: project.id,
-          title: origin ? `Claude · ${origin.title}` : `Claude · ${project.name}`,
+          runId: row.id,
+          projectId: row.projectId,
+          title: `Claude · ${row.title ?? project.name}`,
         },
       });
-      return this.record(id, { source: 'system', type: 'spawned', patch: { ptydSessionId: session.id } });
+      return this.record(row.id, {
+        source: 'system',
+        type: options.type,
+        payload: options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : undefined,
+        patch: { ptydSessionId: session.id },
+      });
     } catch (error) {
-      this.record(id, {
+      this.record(row.id, {
         source: 'system',
         type: 'spawn_failed',
         state: 'failed',
@@ -213,18 +319,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (typeof payload.transcript_path === 'string' && payload.transcript_path !== row.transcriptPath) {
       patch.transcriptPath = payload.transcript_path;
     }
-    return this.record(row.id, {
+    const next = nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload);
+    const run = this.record(row.id, {
       source: 'hook',
       type: envelope.event,
-      state: nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload),
+      state: next,
       payload: summarizePayload(payload),
       patch,
     });
+    if (next === 'rate_limited') {
+      this.emit('rateLimited', run, rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone));
+    }
+    return run;
   }
 
-  /** Terminates the agent process; reconciliation then records the final state. */
+  /** Terminates the agent process (or cancels a queued run); reconciliation records the end. */
   async stop(id: string): Promise<Run> {
     const row = this.row(id);
+    if (row.state === 'queued') {
+      return this.record(id, { source: 'user', type: 'cancelled', state: 'failed', patch: { endedAt: new Date() } });
+    }
     if (row.ptydSessionId && !row.endedAt) {
       await this.ptyd
         .get()
@@ -249,6 +363,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return row ? toRun(row) : undefined;
   }
 
+  latestRunForTicket(ticketId: string): Run | undefined {
+    const row = this.db.select().from(runs).where(eq(runs.ticketId, ticketId)).orderBy(desc(runs.createdAt)).get();
+    return row ? toRun(row) : undefined;
+  }
+
   /**
    * Types a follow-up prompt into the live agent session and submits it. Multi-line text is
    * sent as a bracketed paste so embedded newlines don't submit early. The resulting
@@ -257,12 +376,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async sendPrompt(id: string, text: string): Promise<Run> {
     const row = this.row(id);
     if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
+    await this.typePrompt(row.ptydSessionId, text);
+    return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
+  }
+
+  private async typePrompt(sessionId: string, text: string): Promise<void> {
     const ptyd = this.ptyd.get();
     const input = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
-    await ptyd.write(row.ptydSessionId, input);
+    await ptyd.write(sessionId, input);
     await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS));
-    await ptyd.write(row.ptydSessionId, '\r');
-    return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
+    await ptyd.write(sessionId, '\r');
   }
 
   /** Forgets the run and its terminal. The worktree and branch are kept on purpose. */

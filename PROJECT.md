@@ -1,7 +1,7 @@
 # Project Brief — Self-Hosted AI Coding Orchestrator
 
 > Working name: Emberline
-> Status: design locked for MVP. M0–M4 implemented; next is M5 (quota scheduler).
+> Status: design locked for MVP. M0–M5 implemented; next is M6 (review + deploy).
 > Last updated: 2026-10-12
 
 ---
@@ -191,7 +191,7 @@ stateDiagram-v2
 
 A ticket can have many runs; the ticket column mirrors its latest run.
 
-**As implemented in M4:** ticket columns are `backlog / ready / in_progress / review / done`; the run's live state (working, needs you, failed) is shown as a pill on the card instead of separate columns. Start goes straight to `in_progress` (no `queued` yet), a `Stop` hook moves the ticket to `review`, a follow-up prompt moves it back, and runs never pull a ticket out of `done`. `queued`, `rate_limited` handling and `--resume` of ended sessions arrive with M5.
+**As implemented in M4:** ticket columns are `backlog / ready / in_progress / review / done`; the run's live state (working, needs you, failed) is shown as a pill on the card instead of separate columns. Start goes straight to `in_progress` (no `queued` yet), a `Stop` hook moves the ticket to `review`, a follow-up prompt moves it back, and runs never pull a ticket out of `done`. `queued`, `rate_limited` handling and `--resume` of ended sessions arrive with M5. Since M5 a started ticket stays `in_progress` while its run is `queued` or `rate_limited`, and a follow-up on a ticket whose session ended resumes it with `--resume`.
 
 ### 5.5 Quota scheduler
 - One global lane (one subscription). Max concurrent runs is configurable.
@@ -200,6 +200,13 @@ A ticket can have many runs; the ticket column mirrors its latest run.
 - At reset + small jitter: resume runs in priority order, then continue the queue.
 - Records every window (start, exhaustion, reset) to learn usage patterns and to plan long jobs into windows later.
 - All scheduled work is persisted in SQLite, so a core restart doesn't lose timers.
+
+**As implemented in M5:**
+- Every run is created `queued`; the scheduler launches it when a slot is free and no quota window is open. Slots count `starting`/`working` runs (plus a run whose initial prompt hasn't been submitted yet); `waiting_input` doesn't hold a slot. Default concurrency 2, max 8.
+- Detection: Claude Code's `StopFailure` hook (`error: rate_limit`) is the primary signal; a short limit banner as `last_assistant_message` on `Stop` also counts. The reset time comes from the hook message, else from the terminal screen ~1.5 s later (`resets 2pm (Zone)`, `resets Oct 13, 2pm`, `resets in Xh Ym`, epoch). Wall-clock times without a zone use `EMBERLINE_TIMEZONE` / `TZ`.
+- Windows live in `quota_windows` (`exhausted_at`, `resets_at`, `resume_at`, `source` = hook/screen/probe, `resumed_at`). Resume time = reset + 30–120 s jitter, or now + 15 min when unknown (the probe is simply a resume attempt). A limit within 5 min of a resume reopens the same window.
+- Resume: a live PTY gets "Continue where you left off." typed in; an ended session is respawned with `claude --resume <session>`. Rate-limited runs go first, then the queue, each ordered by ticket priority then age.
+- Not yet: ntfy/webhook notifications and usage-pattern planning.
 
 ### 5.6 Git layer
 - Each project has a bare clone; each run gets a **git worktree** on branch `emberline/<ticket-key>-<slug>`.

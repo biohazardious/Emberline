@@ -17,6 +17,7 @@ import { projects, tickets } from '../db/schema.js';
 import { conflict, notFound } from '../errors.js';
 import { slugify } from '../routes/projects.js';
 import type { RunService } from '../runs/service.js';
+import type { Scheduler } from '../scheduler/service.js';
 
 type TicketRow = typeof tickets.$inferSelect;
 
@@ -57,7 +58,13 @@ export function ticketPrompt(ticket: Pick<Ticket, 'key' | 'title' | 'body'>): st
 /** Where a ticket belongs while its run is in `state`; null leaves it where it is. */
 export function statusForRunState(state: Run['state']): TicketStatus | null {
   if (state === 'done') return 'review';
-  if (state === 'starting' || state === 'working' || state === 'waiting_input' || state === 'rate_limited') {
+  if (
+    state === 'queued' ||
+    state === 'starting' ||
+    state === 'working' ||
+    state === 'waiting_input' ||
+    state === 'rate_limited'
+  ) {
     return 'in_progress';
   }
   return null; // failed: stays put and shows the failed run
@@ -72,8 +79,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
+    private readonly scheduler: Scheduler,
   ) {
     super();
+    this.setMaxListeners(0);
     runs.on('run', (run, stateChanged) => {
       if (stateChanged && run.ticketId) this.followRun(run.ticketId, run.state);
     });
@@ -143,13 +152,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.emit('removed', { id, projectId: row.projectId });
   }
 
-  /** Starts a run for the ticket on branch `emberline/<key>-<slug>`. One live run per ticket. */
+  /**
+   * Queues a run for the ticket on branch `emberline/<key>-<slug>`; the scheduler starts it when
+   * a slot and quota are available. One live run per ticket.
+   */
   async start(id: string, input: StartTicketBody): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
     if (this.runs.activeRunForTicket(id)) throw conflict('this ticket already has a running agent');
     const { permissionMode } = StartTicketBodySchema.parse(input);
     const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
-    const run = await this.runs.create(
+    const run = await this.scheduler.submit(
       { projectId: ticket.projectId, prompt: ticketPrompt(ticket), permissionMode },
       {
         ticketId: id,
@@ -160,12 +172,23 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return { ticket: this.moveToTop(id, 'in_progress'), run };
   }
 
-  /** Sends a follow-up prompt to the ticket's live run (Review -> In progress). */
+  /**
+   * Sends a follow-up prompt (Review -> In progress): typed into the live session, or, when the
+   * latest run's process has ended, delivered by resuming its Claude session.
+   */
   async prompt(id: string, text: string): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
     const active = this.runs.activeRunForTicket(id);
-    if (!active) throw conflict('no live agent session for this ticket; start a new run');
-    const run = await this.runs.sendPrompt(active.id, text);
+    let run: Run;
+    if (active && active.state !== 'queued') {
+      run = await this.runs.sendPrompt(active.id, text);
+    } else if (active) {
+      throw conflict('the agent has not started yet; it is queued');
+    } else {
+      const latest = this.runs.latestRunForTicket(id);
+      if (!latest?.resumable) throw conflict('no agent session to continue for this ticket; start a new run');
+      run = await this.runs.resume(latest.id, text);
+    }
     return { ticket: ticket.status === 'in_progress' ? ticket : this.moveToTop(id, 'in_progress'), run };
   }
 

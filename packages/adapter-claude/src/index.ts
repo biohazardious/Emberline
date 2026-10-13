@@ -6,10 +6,13 @@
  * - {@link buildLaunchSpec}: the full command line + env for a run.
  * - {@link nextStateFromHook}: the hook -> {@link AgentState} state machine (PROJECT.md §3.3).
  *
- * Rate-limit screen parsing (M5) also lands here, isolated behind fixture tests.
+ * Rate-limit detection and reset-time parsing live in ./ratelimit.ts, behind fixture tests.
  */
 import type { AgentState, LaunchSpec } from '@emberline/adapter-sdk';
 import type { HookEventName, HookPayload } from '@emberline/protocol';
+import { rateLimitFromHook } from './ratelimit.js';
+
+export * from './ratelimit.js';
 
 export const CLAUDE_ADAPTER_ID = 'claude';
 
@@ -21,6 +24,7 @@ export const WATCHED_HOOKS: readonly HookEventName[] = [
   'PostToolUse',
   'Notification',
   'Stop',
+  'StopFailure',
   'SessionEnd',
 ];
 
@@ -111,8 +115,10 @@ function isPermissionNotification(payload: HookPayload): boolean {
  * - SessionStart: interactive session is up and idle until a prompt arrives.
  * - UserPromptSubmit / Pre/PostToolUse: the agent is working.
  * - Notification: permission prompts always need the user; idle reminders only matter while
- *   the agent has not finished (after `Stop` the run is already `done`).
+ *   the agent has not finished (after `Stop` the run is already `done`) or hit a limit.
  * - Stop / SessionEnd: turn or session finished.
+ * - StopFailure: the turn died on an API error. `rate_limit` -> `rate_limited` (the scheduler
+ *   resumes it); anything else needs the user.
  */
 export function nextStateFromHook(
   current: AgentState,
@@ -132,11 +138,16 @@ export function nextStateFromHook(
       break;
     case 'Notification':
       if (isPermissionNotification(payload)) next = 'waiting_input';
-      else next = current === 'done' ? undefined : 'waiting_input';
+      else next = current === 'done' || current === 'rate_limited' ? undefined : 'waiting_input';
       break;
     case 'Stop':
+      next = rateLimitFromHook(event, payload) ? 'rate_limited' : 'done';
+      break;
+    case 'StopFailure':
+      next = rateLimitFromHook(event, payload) ? 'rate_limited' : 'waiting_input';
+      break;
     case 'SessionEnd':
-      next = 'done';
+      next = current === 'rate_limited' ? undefined : 'done';
       break;
     default:
       next = undefined;
@@ -146,6 +157,10 @@ export function nextStateFromHook(
 
 /** State after the PTY process exited (hooks may not have fired, e.g. on a crash). */
 export function stateAfterExit(current: AgentState, exitCode: number | null): AgentState {
-  if (current === 'done' || current === 'failed') return current;
+  // A rate-limited run whose process went away stays rate-limited: it resumes via --resume.
+  if (current === 'done' || current === 'failed' || current === 'rate_limited') return current;
   return exitCode === 0 ? 'done' : 'failed';
 }
+
+/** Prompt typed into a session to pick up after a limit reset. */
+export const CONTINUE_PROMPT = 'Continue where you left off.';
