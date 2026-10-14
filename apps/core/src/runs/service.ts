@@ -144,6 +144,16 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
     }
     const text = parts.length > 0 ? parts.join(' · ') : JSON.stringify(input);
     summary.tool_input_summary = text.length > 240 ? `${text.slice(0, 240)}…` : text;
+  } else if (
+    payload.tool_name === 'Bash' &&
+    payload.tool_input &&
+    typeof payload.tool_input === 'object'
+  ) {
+    const input = payload.tool_input as Record<string, unknown>;
+    const cmd = typeof input.command === 'string' ? input.command : '';
+    if (/(?:playwright|chromium|chrome|e2e|bot\.tmp)/i.test(cmd)) {
+      summary.tool_input_summary = cmd.length > 240 ? `${cmd.slice(0, 240)}…` : cmd;
+    }
   }
   return summary;
 }
@@ -369,12 +379,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             : 'Claude';
     const personaPrefix =
       persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
+    const hookFile = path.join(path.dirname(this.config.ptydSocket), 'playwright-hook.cjs');
+    const playwrightEnv: Record<string, string> =
+      enablePlaywrightMcp && isRealClaude
+        ? { NODE_OPTIONS: `--require ${hookFile}` }
+        : {};
     try {
       const session = await ptyd.spawn({
         file: spec.file,
         args: spec.args,
         cwd: row.worktreePath,
-        env: { ...spec.env, ...extraEnv, EMBERLINE_DEMO_URL: demoUrl },
+        env: { ...spec.env, ...extraEnv, ...playwrightEnv, EMBERLINE_DEMO_URL: demoUrl },
         meta: {
           kind: 'agent',
           runId: row.id,
@@ -400,7 +415,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
   }
 
-  /** Lists recent Playwright MCP browser actions across runs for a project. */
+  /** Lists recent Playwright MCP and Bash Playwright browser actions across runs for a project. */
   listBrowserAgentActions(projectId: string): {
     actions: BrowserAgentAction[];
     agentActive: boolean;
@@ -431,9 +446,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         if (e.type !== 'PreToolUse' && e.type !== 'PostToolUse') continue;
         const p = (e.payload ?? {}) as Record<string, unknown>;
         const toolName = typeof p.tool_name === 'string' ? p.tool_name : '';
-        if (!toolName.startsWith('mcp__playwright__')) continue;
-        const shortTool = toolName.replace(/^mcp__playwright__/, '');
         const detail = typeof p.tool_input_summary === 'string' ? p.tool_input_summary : '';
+        const isPlaywrightMcp = toolName.startsWith('mcp__playwright__');
+        const isPlaywrightBash = toolName === 'Bash' && Boolean(detail);
+        if (!isPlaywrightMcp && !isPlaywrightBash) continue;
+
+        const shortTool = isPlaywrightMcp
+          ? toolName.replace(/^mcp__playwright__/, '')
+          : 'playwright_cli';
         const ageMs = nowMs - e.ts.getTime();
         if (r.state === 'working' && ageMs < 60_000) {
           agentActive = true;

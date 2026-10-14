@@ -9,7 +9,43 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.0.0';
+export const BROWSER_DAEMON_VERSION = '1.1.0';
+
+/**
+ * Preload hook (`NODE_OPTIONS="--require /run/emberline/playwright-hook.cjs"`) injected into
+ * agent processes so any custom Playwright script (`chromium.launch()`) or `npx playwright test`
+ * executed via `Bash` automatically exposes `--remote-debugging-port=9223` for live streaming!
+ */
+const PLAYWRIGHT_HOOK_SCRIPT = `'use strict';
+try {
+  const cp = require('node:child_process');
+  const fs = require('node:fs');
+  const origSpawn = cp.spawn;
+  cp.spawn = function patchedSpawn(file, args, options) {
+    try {
+      if (
+        typeof file === 'string' &&
+        /(?:^|\\/|\\\\)(?:chrome|chromium|chromium-browser|headless_shell|google-chrome)$/i.test(file) &&
+        Array.isArray(args) &&
+        !args.some((a) => String(a).startsWith('--remote-debugging-port='))
+      ) {
+        args = [...args, '--remote-debugging-port=9223'];
+        try {
+          fs.appendFileSync(
+            '/run/emberline/agent-browser-events.jsonl',
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              toolName: 'playwright_launch',
+              summary: 'Agent spawned headless Chromium via Playwright (streaming on CDP :9223)',
+            }) + '\\n',
+          );
+        } catch {}
+      }
+    } catch {}
+    return origSpawn.call(this, file, args, options);
+  };
+} catch {}
+`;
 
 /**
  * Self-contained Node 22 ESM script executed inside the `runner` container.
@@ -17,10 +53,11 @@ export const BROWSER_DAEMON_VERSION = '1.0.0';
  * Responsibilities:
  * 1. Bridges `127.0.0.1:7420 -> core:7420` inside `runner` so `http://localhost:7420/...`
  *    works seamlessly inside Chromium and Playwright MCP.
- * 2. Launches and supervises a shared Chromium instance on `127.0.0.1:9222` (`1280x720`).
- *    Playwright MCP (`--cdp-endpoint http://127.0.0.1:9222`) connects to this exact browser!
- * 3. Exposes `/health`, `/state`, `/action`, and `/shutdown` over `/run/emberline/browser.sock`
- *    so `core` can stream live viewports, console logs, open tabs, and interactive clicks/keys.
+ * 2. Launches and supervises a shared Chromium instance on `127.0.0.1:9222` (`1280x720`),
+ *    and also detects any ephemeral Playwright Chromium instance on `127.0.0.1:9223`.
+ * 3. Runs the built-in Live AI Playtest Bot (`start_playtest` / `stop_playtest`) so users and
+ *    agents can watch an autonomous AI playtest games and web apps live in the browser.
+ * 4. Exposes `/health`, `/state`, `/action`, and `/shutdown` over `/run/emberline/browser.sock`.
  */
 const BROWSER_DAEMON_SCRIPT = `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
@@ -32,13 +69,62 @@ const DAEMON_VERSION = '${BROWSER_DAEMON_VERSION}';
 const SOCKET_PATH = process.env.EMBERLINE_BROWSER_SOCKET || '/run/emberline/browser.sock';
 const CDP_PORT = 9222;
 const CDP_BASE = 'http://127.0.0.1:' + CDP_PORT;
+const EPHEMERAL_CDP_BASE = 'http://127.0.0.1:9223';
 const PROFILE_DIR = '/tmp/emberline-chrome-profile';
+const AGENT_EVENTS_FILE = '/run/emberline/agent-browser-events.jsonl';
 
 let selectedTabId = null;
 let knownTabIds = new Set();
 const consoleLogs = [];
+const daemonActions = [];
+let nextActionId = 900000;
 const attachedTabs = new Set();
 let launchingBrowser = null;
+let playtestTimer = null;
+let playtestEndsAt = 0;
+let playtestTickCount = 0;
+
+function pushDaemonAction(toolName, summary, persona = 'qa') {
+  daemonActions.push({
+    id: nextActionId++,
+    runId: 'live-browser',
+    runTitle: 'Live Browser AI Bot',
+    persona,
+    toolName,
+    summary,
+    timestamp: new Date().toISOString(),
+  });
+  if (daemonActions.length > 40) {
+    daemonActions.splice(0, daemonActions.length - 40);
+  }
+}
+
+function readHookEvents() {
+  try {
+    if (!fs.existsSync(AGENT_EVENTS_FILE)) return [];
+    const lines = fs.readFileSync(AGENT_EVENTS_FILE, 'utf8').trim().split('\\n').slice(-15);
+    return lines
+      .map((line, idx) => {
+        try {
+          const item = JSON.parse(line);
+          return {
+            id: 800000 + idx,
+            runId: 'playwright-script',
+            runTitle: 'Playwright Script',
+            persona: 'qa',
+            toolName: item.toolName || 'playwright',
+            summary: item.summary || 'Playwright browser session',
+            timestamp: item.ts || new Date().toISOString(),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 
 function pushConsole(level, text) {
   if (!text) return;
@@ -66,9 +152,9 @@ try {
   bridge.listen(7420, '127.0.0.1');
 } catch {}
 
-async function isCdpAlive() {
+async function isCdpAlive(baseUrl = CDP_BASE, timeoutMs = 1200) {
   try {
-    const res = await fetch(CDP_BASE + '/json/version', { signal: AbortSignal.timeout(1200) });
+    const res = await fetch(baseUrl + '/json/version', { signal: AbortSignal.timeout(timeoutMs) });
     return res.ok;
   } catch {
     return false;
@@ -174,6 +260,30 @@ function attachConsoleListener(tab) {
 }
 
 async function listPageTargets() {
+  // 1. Check if an agent's custom Playwright script is currently running a browser on :9223
+  try {
+    const ephRes = await fetch(EPHEMERAL_CDP_BASE + '/json/list', {
+      signal: AbortSignal.timeout(350),
+    });
+    if (ephRes.ok) {
+      const ephAll = await ephRes.json();
+      const ephPages = ephAll.filter(
+        (t) =>
+          t.type === 'page' &&
+          typeof t.url === 'string' &&
+          !t.url.startsWith('chrome://') &&
+          !t.url.startsWith('devtools://') &&
+          !t.url.startsWith('chrome-extension://'),
+      );
+      if (ephPages.length > 0) {
+        for (const p of ephPages) attachConsoleListener(p);
+        const real = ephPages.find((p) => p.url && p.url !== 'about:blank') || ephPages[0];
+        return { pages: ephPages, active: real, ephemeralActive: true, cdpBase: EPHEMERAL_CDP_BASE };
+      }
+    }
+  } catch {}
+
+  // 2. Otherwise use the persistent shared Chromium on :9222
   const res = await fetch(CDP_BASE + '/json/list', { signal: AbortSignal.timeout(2000) });
   const all = await res.json();
   let pages = all.filter(
@@ -196,7 +306,6 @@ async function listPageTargets() {
   }
   for (const p of pages) attachConsoleListener(p);
 
-  // If a newly created non-blank tab appeared (e.g. opened by Playwright MCP), auto-select it
   for (const p of pages) {
     if (!knownTabIds.has(p.id) && p.url && p.url !== 'about:blank') {
       selectedTabId = p.id;
@@ -205,14 +314,13 @@ async function listPageTargets() {
   knownTabIds = new Set(pages.map((p) => p.id));
 
   let active = pages.find((p) => p.id === selectedTabId);
-  // If selected tab is about:blank and another tab has a real URL (agent navigated it), prefer the real tab
   if ((!active || active.url === 'about:blank') && pages.some((p) => p.url && p.url !== 'about:blank')) {
     active = pages.find((p) => p.url && p.url !== 'about:blank') || pages[0];
   }
   if (!active) active = pages[0];
   if (active) selectedTabId = active.id;
 
-  return { pages, active };
+  return { pages, active, ephemeralActive: false, cdpBase: CDP_BASE };
 }
 
 async function withCdpPage(tab, fn) {
@@ -272,6 +380,113 @@ const KEY_MAP = {
   ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
 };
 
+function stopPlaytestLoop(reason = 'Stopped Live AI Playtest Bot') {
+  if (playtestTimer) {
+    clearInterval(playtestTimer);
+    playtestTimer = null;
+    playtestEndsAt = 0;
+    pushDaemonAction('ai_playtest_stop', reason);
+  }
+}
+
+async function runPlaytestTick() {
+  if (Date.now() > playtestEndsAt) {
+    stopPlaytestLoop('Completed 45s Live AI Playtest session');
+    return;
+  }
+  playtestTickCount++;
+  try {
+    const { active } = await listPageTargets();
+    if (!active) return;
+    await withCdpPage(active, async (call) => {
+      // 1. Evaluate smart DOM/Canvas helper inside the page
+      const evalRes = await call(
+        'Runtime.evaluate',
+        {
+          expression: \`(() => {
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"], .btn'));
+            // Click start / play / retry / restart buttons if visible
+            for (const b of buttons) {
+              const txt = (b.textContent || '').trim().toLowerCase();
+              const style = window.getComputedStyle(b);
+              if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+              if (/^(start|play|play again|restart|retry|try again|new game|launch)/i.test(txt)) {
+                b.click();
+                return { action: 'clicked_button', label: (b.textContent || '').trim() };
+              }
+            }
+            // Enable built-in autopilot button if the game has one and it's not active yet
+            const autoBtn = document.querySelector('#autopilot-btn, [data-autopilot], .autopilot-btn');
+            if (autoBtn && autoBtn.getAttribute('aria-pressed') !== 'true' && !autoBtn.classList.contains('active')) {
+              autoBtn.click();
+              return { action: 'enabled_autopilot', label: (autoBtn.textContent || 'Autopilot').trim() };
+            }
+            const scoreEl = document.querySelector('#hud-score, .score, [data-score], #score');
+            const scoreText = scoreEl ? (scoreEl.textContent || '').trim() : null;
+            return { action: 'flap', score: scoreText };
+          })()\`,
+          returnByValue: true,
+        },
+        1200,
+      ).catch(() => null);
+
+      const info = evalRes?.result?.value;
+      if (info?.action === 'clicked_button') {
+        pushDaemonAction('ai_playtest_click', 'Clicked "' + info.label + '" button');
+      } else if (info?.action === 'enabled_autopilot') {
+        pushDaemonAction('ai_playtest_autopilot', 'Activated in-game Autopilot (' + info.label + ')');
+      }
+
+      // 2. Dispatch Space key & canvas click rhythmically so Flappy Bird / arcade games fly actively
+      const shouldFlap = playtestTickCount % 2 === 0;
+      if (shouldFlap) {
+        const k = KEY_MAP.Space;
+        await call('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: k.key,
+          code: k.code,
+          text: k.text,
+          unmodifiedText: k.text,
+          windowsVirtualKeyCode: k.keyCode,
+          nativeVirtualKeyCode: k.keyCode,
+        });
+        await call('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: k.key,
+          code: k.code,
+          windowsVirtualKeyCode: k.keyCode,
+          nativeVirtualKeyCode: k.keyCode,
+        });
+        if (playtestTickCount % 8 === 0) {
+          const scoreNote = info?.score ? ' · Score: ' + info.score : '';
+          pushDaemonAction('ai_playtest_flap', 'Pressed Space (Flap/Jump)' + scoreNote);
+        }
+      }
+    });
+  } catch {}
+}
+
+async function startPlaytestLoop(targetUrl) {
+  stopPlaytestLoop();
+  await ensureChromium();
+  let { active } = await listPageTargets();
+  if (active && targetUrl && (!active.url || active.url === 'about:blank')) {
+    const navUrl = normalizeNavigateUrl(targetUrl);
+    await withCdpPage(active, async (call) => {
+      await call('Page.enable');
+      await call('Page.navigate', { url: navUrl });
+      await new Promise((r) => setTimeout(r, 500));
+    }).catch(() => {});
+  }
+  playtestEndsAt = Date.now() + 45_000;
+  playtestTickCount = 0;
+  pushDaemonAction('ai_playtest_start', 'Started Live AI Playtest Bot (45s autonomous gameplay)');
+  await runPlaytestTick();
+  playtestTimer = setInterval(() => {
+    void runPlaytestTick();
+  }, 260);
+}
+
 async function captureState(defaultUrl) {
   const nowIso = new Date().toISOString();
   const ok = await ensureChromium();
@@ -286,7 +501,7 @@ async function captureState(defaultUrl) {
     };
   }
 
-  let { pages, active } = await listPageTargets();
+  let { pages, active, ephemeralActive } = await listPageTargets();
   if (!active) {
     return {
       available: false,
@@ -300,6 +515,7 @@ async function captureState(defaultUrl) {
 
   // Auto-open defaultUrl if all tabs are currently at about:blank
   if (
+    !ephemeralActive &&
     defaultUrl &&
     pages.every((p) => !p.url || p.url === 'about:blank')
   ) {
@@ -347,6 +563,10 @@ async function captureState(defaultUrl) {
     active: p.id === active.id,
   }));
 
+  const isPlaytestRunning = Boolean(playtestTimer && Date.now() < playtestEndsAt);
+  const hookEvents = readHookEvents();
+  const combinedDaemonActions = [...hookEvents, ...daemonActions].slice(-25).reverse();
+
   return {
     available: Boolean(imageDataUrl),
     source: 'cdp_live',
@@ -355,22 +575,39 @@ async function captureState(defaultUrl) {
     activeTabId: active.id,
     tabs,
     consoleLogs: consoleLogs.slice(-30),
+    agentActions: combinedDaemonActions,
+    agentActive: Boolean(ephemeralActive || isPlaytestRunning),
+    playtestActive: isPlaytestRunning,
     imageDataUrl,
     capturedAt: nowIso,
-    message: imageDataUrl
-      ? 'Live Chromium CDP stream (1280×720) · Shared with Playwright MCP'
-      : 'Waiting for browser frame…',
+    message: isPlaytestRunning
+      ? '🎮 AI Playtest Bot is actively playing in the browser!'
+      : ephemeralActive
+        ? '⚡ Streaming Agent Playwright session (:9223) live!'
+        : imageDataUrl
+          ? 'Live Chromium CDP stream (1280×720) · Shared with Playwright MCP'
+          : 'Waiting for browser frame…',
   };
 }
 
 async function handleAction(body, defaultUrl) {
   await ensureChromium();
-  const { pages, active } = await listPageTargets();
+  const { pages, active, cdpBase } = await listPageTargets();
   const action = body?.action;
+
+  if (action === 'start_playtest') {
+    await startPlaytestLoop(body.url || defaultUrl);
+    return captureState(defaultUrl);
+  }
+
+  if (action === 'stop_playtest') {
+    stopPlaytestLoop('Stopped by user');
+    return captureState(defaultUrl);
+  }
 
   if (action === 'select_tab' && body.tabId) {
     selectedTabId = body.tabId;
-    await fetch(CDP_BASE + '/json/activate/' + encodeURIComponent(body.tabId)).catch(() => {});
+    await fetch(cdpBase + '/json/activate/' + encodeURIComponent(body.tabId)).catch(() => {});
     return captureState(defaultUrl);
   }
 
@@ -387,7 +624,7 @@ async function handleAction(body, defaultUrl) {
 
   if (action === 'close_tab' && body.tabId) {
     if (pages.length > 1) {
-      await fetch(CDP_BASE + '/json/close/' + encodeURIComponent(body.tabId)).catch(() => {});
+      await fetch(cdpBase + '/json/close/' + encodeURIComponent(body.tabId)).catch(() => {});
       if (selectedTabId === body.tabId) selectedTabId = null;
       await new Promise((r) => setTimeout(r, 150));
     }
@@ -402,6 +639,7 @@ async function handleAction(body, defaultUrl) {
     if (action === 'navigate') {
       const url = normalizeNavigateUrl(body.url || defaultUrl || 'about:blank');
       await call('Page.navigate', { url });
+      pushDaemonAction('browser_navigate', 'Navigated to ' + url, 'coder');
       await new Promise((r) => setTimeout(r, 450));
     } else if (action === 'reload') {
       await call('Page.reload', { ignoreCache: true });
@@ -431,7 +669,7 @@ async function handleAction(body, defaultUrl) {
         button,
         clickCount: 1,
       });
-      await new Promise((r) => setTimeout(r, 220));
+      await new Promise((r) => setTimeout(r, 180));
     } else if (action === 'type') {
       const text = String(body.text ?? '');
       if (text) {
@@ -460,7 +698,7 @@ async function handleAction(body, defaultUrl) {
           nativeVirtualKeyCode: k.keyCode,
         });
       }
-      await new Promise((r) => setTimeout(r, 220));
+      await new Promise((r) => setTimeout(r, 180));
     } else if (action === 'key') {
       const rawKey = String(body.key || 'Space');
       const mapped = KEY_MAP[rawKey] || {
@@ -485,7 +723,7 @@ async function handleAction(body, defaultUrl) {
         windowsVirtualKeyCode: mapped.keyCode,
         nativeVirtualKeyCode: mapped.keyCode,
       });
-      await new Promise((r) => setTimeout(r, 180));
+      await new Promise((r) => setTimeout(r, 150));
     }
   }).catch(() => {});
 
@@ -503,6 +741,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST' && u.pathname === '/shutdown') {
+      stopPlaytestLoop();
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
       setTimeout(() => {
@@ -592,8 +831,8 @@ function socketRequest<T>(
 let ensuringPromise: Promise<string | null> | null = null;
 
 /**
- * Ensures `/run/emberline/browser-daemon.mjs` is written and running inside the `runner`
- * container (speaking on `/run/emberline/browser.sock` and hosting Chromium CDP on `:9222`).
+ * Ensures `/run/emberline/browser-daemon.mjs` and `/run/emberline/playwright-hook.cjs`
+ * are written and running inside the `runner` container.
  */
 export async function ensureRunnerBrowserDaemon(
   ptyd: PtydBridge,
@@ -601,8 +840,13 @@ export async function ensureRunnerBrowserDaemon(
 ): Promise<string | null> {
   const browserSock = path.join(socketDir, 'browser.sock');
   const scriptPath = path.join(socketDir, 'browser-daemon.mjs');
+  const hookPath = path.join(socketDir, 'playwright-hook.cjs');
 
   try {
+    if (!existsSync(hookPath)) {
+      await mkdir(socketDir, { recursive: true });
+      await writeFile(hookPath, PLAYWRIGHT_HOOK_SCRIPT, { encoding: 'utf8', mode: 0o644 });
+    }
     if (existsSync(browserSock)) {
       const health = await socketRequest<{ ok?: boolean; version?: string }>(
         browserSock,
@@ -614,7 +858,6 @@ export async function ensureRunnerBrowserDaemon(
       if (health.ok && health.version === BROWSER_DAEMON_VERSION) {
         return browserSock;
       }
-      // Outdated daemon version: request clean shutdown before respawning
       await socketRequest(browserSock, 'POST', '/shutdown', {}, 1_000).catch(() => undefined);
     }
   } catch {
@@ -626,6 +869,7 @@ export async function ensureRunnerBrowserDaemon(
   ensuringPromise = (async () => {
     try {
       await mkdir(socketDir, { recursive: true });
+      await writeFile(hookPath, PLAYWRIGHT_HOOK_SCRIPT, { encoding: 'utf8', mode: 0o644 });
       await writeFile(scriptPath, BROWSER_DAEMON_SCRIPT, { encoding: 'utf8', mode: 0o755 });
 
       if (ptyd.status !== 'connected') return null;
@@ -639,7 +883,6 @@ export async function ensureRunnerBrowserDaemon(
         cwd: '/workspaces',
       });
 
-      // Wait up to 3.5s for the Unix socket to start accepting connections
       for (let i = 0; i < 25; i++) {
         await new Promise((r) => setTimeout(r, 140));
         try {
@@ -677,6 +920,15 @@ export async function ensureRunnerBrowserDaemon(
   return ensuringPromise;
 }
 
+function mergeActions(
+  daemonList: BrowserAgentAction[] | undefined,
+  runList: BrowserAgentAction[] | undefined,
+): BrowserAgentAction[] {
+  const combined = [...(daemonList ?? []), ...(runList ?? [])];
+  combined.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  return combined.slice(0, 30);
+}
+
 export async function getRunnerBrowserState(params: {
   ptyd: PtydBridge;
   socketDir: string;
@@ -693,8 +945,8 @@ export async function getRunnerBrowserState(params: {
     const snap = await socketRequest<BrowserViewportSnapshot>(sock, 'GET', `/state${query}`);
     return {
       ...snap,
-      agentActions: params.agentActions ?? [],
-      agentActive: params.agentActive ?? false,
+      agentActions: mergeActions(snap.agentActions, params.agentActions),
+      agentActive: Boolean(snap.agentActive || params.agentActive),
     };
   } catch {
     return null;
@@ -722,7 +974,7 @@ export async function performRunnerBrowserAction(params: {
   );
   return {
     ...snap,
-    agentActions: params.agentActions ?? [],
-    agentActive: params.agentActive ?? false,
+    agentActions: mergeActions(snap.agentActions, params.agentActions),
+    agentActive: Boolean(snap.agentActive || params.agentActive),
   };
 }

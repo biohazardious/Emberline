@@ -219,7 +219,35 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (hasActive) return null;
 
     const fSettings = getFactorySettings(this.db);
+    const projectRow = this.project(projectId);
     const allTickets = this.list(projectId);
+
+    // Finalize any tickets left in 'review' with a completed run (e.g. if core restarted mid-pipeline)
+    if (fSettings.autoMoveToDone) {
+      for (const reviewTicket of allTickets.filter((t) => t.status === 'review')) {
+        const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
+        if (latestRun && latestRun.state === 'done') {
+          if (
+            fSettings.autoSyncToMain &&
+            latestRun.worktreePath &&
+            latestRun.worktreePath !== projectRow.path
+          ) {
+            await syncWorktreeToMainWorkspace({
+              worktreePath: latestRun.worktreePath,
+              mainWorkspacePath: projectRow.path,
+              ticketKey: reviewTicket.key,
+              runId: latestRun.id,
+            }).catch(() => undefined);
+          }
+          try {
+            this.moveToTop(reviewTicket.id, 'done');
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
     const readyTickets = allTickets
       .filter((t) => t.status === 'ready')
       .sort((a, b) => b.priority - a.priority || a.position - b.position);
@@ -302,11 +330,26 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return;
     }
 
+    const fSettings = getFactorySettings(this.db);
+    const projectTickets = this.db
+      .select()
+      .from(tickets)
+      .where(eq(tickets.projectId, run.projectId))
+      .all();
+    const hasFactoryPipeline =
+      fSettings.autoPickupReady &&
+      projectTickets.some((t) => t.title.startsWith('[Factory]') || t.status === 'ready');
+
     const isFactoryRun =
-      this.autoChainProjects.has(run.projectId) || Boolean(ingested) || isFactoryOrchestratorTicket;
+      this.autoChainProjects.has(run.projectId) ||
+      Boolean(ingested) ||
+      isFactoryOrchestratorTicket ||
+      hasFactoryPipeline;
     if (!isFactoryRun) return;
 
-    const fSettings = getFactorySettings(this.db);
+    if (fSettings.autoPickupReady) {
+      this.autoChainProjects.add(run.projectId);
+    }
 
     // 2. Self-Healing Build Gate: if enabled and package.json has a build script, verify the build
     //    before syncing or moving to Done. If the build fails and the run hasn't been self-healed yet,

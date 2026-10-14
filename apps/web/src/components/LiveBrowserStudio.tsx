@@ -79,11 +79,12 @@ export function LiveBrowserStudio({
 
   useEffect(() => {
     if (!liveFollow) return;
+    const intervalMs = snap?.agentActive || snap?.playtestActive ? 750 : 1_400;
     const timer = setInterval(() => {
       void fetchSnapshot(true);
-    }, 1_600);
+    }, intervalMs);
     return () => clearInterval(timer);
-  }, [liveFollow, fetchSnapshot]);
+  }, [liveFollow, snap?.agentActive, snap?.playtestActive, fetchSnapshot]);
 
   const sendAction = async (body: BrowserActionBody) => {
     setActing(true);
@@ -128,6 +129,23 @@ export function LiveBrowserStudio({
     }
   };
 
+  const handleTogglePlaytest = async () => {
+    setBanner(undefined);
+    const isRunning = Boolean(snap?.playtestActive);
+    if (isRunning) {
+      await sendAction({ action: 'stop_playtest' });
+      return;
+    }
+    setLiveFollow(true);
+    setSideTab('activity');
+    const demoUrl = `http://localhost:7420/api/projects/${project.id}/demo/${targetId}/`;
+    await sendAction({ action: 'start_playtest', url: demoUrl });
+    setBanner({
+      kind: 'ok',
+      text: '🎮 Live AI Playtest Bot started! Watch the viewport and Agent Activity stream as the AI plays in real time.',
+    });
+  };
+
   const handleCanvasClick = async (e: MouseEvent<HTMLImageElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
@@ -152,6 +170,7 @@ export function LiveBrowserStudio({
     setBanner(undefined);
     try {
       const demoUrl = `http://localhost:7420/api/projects/${project.id}/demo/${targetId}/`;
+      await sendAction({ action: 'start_playtest', url: demoUrl }).catch(() => null);
       const res = await api<FactoryRequestResponse>(
         `/api/projects/${project.id}/factory-request`,
         'POST',
@@ -166,7 +185,7 @@ export function LiveBrowserStudio({
       setSideTab('activity');
       setBanner({
         kind: 'ok',
-        text: `QA Agent (${res.ticket.key}) dispatched to inspect and interact with the app in this Live Browser! Watch the viewport and Agent Activity feed.`,
+        text: `QA Agent (${res.ticket.key}) dispatched + Live AI Playtest started in this browser! Watch the viewport and Agent Activity feed.`,
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
@@ -296,6 +315,15 @@ export function LiveBrowserStudio({
             title="Continuously stream the shared Chromium viewport so you can watch agent actions in real time"
           >
             {liveFollow ? '🔴 Live Follow: ON' : '⏸ Live Follow: Paused'}
+          </button>
+          <button
+            type="button"
+            className={snap?.playtestActive ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-primary'}
+            disabled={acting}
+            onClick={() => void handleTogglePlaytest()}
+            title="Watch the built-in AI Playtest Bot autonomously play and test the application live inside this browser"
+          >
+            {snap?.playtestActive ? '⏹ Stop AI Playtest' : '🎮 Watch AI Play Live'}
           </button>
           <button
             type="button"
@@ -768,14 +796,16 @@ export function LiveBrowserStudio({
                           {act.toolName}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        style={{ padding: '1px 6px', fontSize: '0.68rem' }}
-                        onClick={() => navigate(`/runs/${act.runId}`)}
-                      >
-                        Terminal →
-                      </button>
+                      {act.runId !== 'live-browser' && act.runId !== 'playwright-script' && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          style={{ padding: '1px 6px', fontSize: '0.68rem' }}
+                          onClick={() => navigate(`/runs/${act.runId}`)}
+                        >
+                          Terminal →
+                        </button>
+                      )}
                     </div>
                     <div
                       className="mono muted"
