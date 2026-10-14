@@ -4,10 +4,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActiveProjectPreference,
+  AgentCreateTicketsPayload,
   BuildDemoBody,
   type BuildDemoResponse,
   CreateProjectBody,
   type CreateProjectResponse,
+  FactoryRequestBody,
+  type FactoryRequestResponse,
   type Project,
   type ProjectAppType,
   type ProjectBlueprintResponse,
@@ -231,7 +234,47 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const project = toProject(row);
       const projectTickets = tickets.list(project.id);
       const projectRuns = runs.list().filter((r) => r.projectId === project.id);
-      return computeProjectStatusSummary({ project, tickets: projectTickets, runs: projectRuns });
+      return computeProjectStatusSummary({
+        project,
+        tickets: projectTickets,
+        runs: projectRuns,
+        autoChainActive: tickets.isAutoChainActive(project.id),
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/factory-request',
+    async (request, reply): Promise<FactoryRequestResponse> => {
+      const body = FactoryRequestBody.parse(request.body);
+      const result = await tickets.submitFactoryRequest(request.params.id, body);
+      reply.code(201);
+      return result;
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/delegate-tickets',
+    async (request, reply): Promise<Ticket[]> => {
+      const body = AgentCreateTicketsPayload.parse(request.body);
+      const created = await tickets.createDelegatedTickets(request.params.id, body);
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/run-pipeline',
+    async (request) => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      tickets.setAutoChain(row.id, true);
+      const started = await tickets.dispatchNextReadyTicket(row.id);
+      return {
+        ok: true,
+        autoChainActive: tickets.isAutoChainActive(row.id),
+        started,
+      };
     },
   );
 

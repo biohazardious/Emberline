@@ -216,5 +216,34 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(demoJsRes.statusCode).toBe(200);
     expect(demoJsRes.headers['content-type']).toContain('application/javascript');
     expect(demoJsRes.body).toContain('flappy ready');
+
+    // Verify agent self-task delegation (PO creating specialist tickets for coder & ui_ux)
+    const delegateRes = await t.app.inject({
+      method: 'POST',
+      url: `/api/projects/${p2.id}/delegate-tickets`,
+      headers,
+      payload: {
+        autoDispatch: false,
+        tickets: [
+          {
+            title: 'Backend: Implement score counter engine & persistence',
+            persona: 'coder',
+            priority: 3,
+            body: 'Track score increments when passing pipes.',
+          },
+          {
+            title: 'UI/UX: Design score counter HUD overlay',
+            persona: 'ui_ux',
+            priority: 2,
+            body: 'Render score badge and animations.',
+          },
+        ],
+      },
+    });
+    expect(delegateRes.statusCode).toBe(201);
+    const delegated = delegateRes.json() as Ticket[];
+    expect(delegated).toHaveLength(2);
+    expect(delegated.map((tk) => tk.persona)).toEqual(['coder', 'ui_ux']);
+    expect(delegated.every((tk) => tk.status === 'ready')).toBe(true);
   });
 });

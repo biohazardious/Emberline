@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
+  type AgentCreateTicketsPayload,
+  AgentCreateTicketsPayload as AgentCreateTicketsPayloadSchema,
   type AgentPersona,
   type CreateTicketBody,
   CreateTicketBody as CreateTicketBodySchema,
+  type FactoryRequestBody,
+  FactoryRequestBody as FactoryRequestBodySchema,
+  type FactoryRequestResponse,
   type Run,
   type StartTicketBody,
   StartTicketBody as StartTicketBodySchema,
@@ -16,6 +21,11 @@ import { and, asc, eq, max, min } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projects, tickets } from '../db/schema.js';
 import { conflict, notFound } from '../errors.js';
+import {
+  buildFactoryOrchestratorPrompt,
+  ingestAgentTicketsFile,
+  syncWorktreeToMainWorkspace,
+} from '../factory/service.js';
 import { slugify } from '../routes/projects.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -78,6 +88,8 @@ export function statusForRunState(state: Run['state']): TicketStatus | null {
  * already moved it to Done.
  */
 export class TicketService extends EventEmitter<TicketServiceEvents> {
+  private readonly autoChainProjects = new Set<string>();
+
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
@@ -86,10 +98,160 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     super();
     this.setMaxListeners(0);
     runs.on('run', (run, stateChanged) => {
-      if (!run.ticketId) return;
-      if (stateChanged) this.followRun(run.ticketId, run.state);
-      else if (run.lastEvent === 'prompt_sent') this.followRun(run.ticketId, 'working');
+      if (run.ticketId) {
+        if (stateChanged) this.followRun(run.ticketId, run.state);
+        else if (run.lastEvent === 'prompt_sent') this.followRun(run.ticketId, 'working');
+      }
+      if (stateChanged && run.state === 'done' && run.projectId) {
+        void this.handleRunCompleted(run);
+      }
     });
+  }
+
+  isAutoChainActive(projectId: string): boolean {
+    return this.autoChainProjects.has(projectId);
+  }
+
+  setAutoChain(projectId: string, enabled: boolean): void {
+    if (enabled) this.autoChainProjects.add(projectId);
+    else this.autoChainProjects.delete(projectId);
+  }
+
+  /**
+   * High-level AI Coding Factory request: creates a Lead Persona (e.g. Product Owner) ticket
+   * that refines the user's request, writes `.emberline/new-tickets.json` for specialist personas
+   * (`coder`, `ui_ux`, `dba`, `qa`), and chains them automatically.
+   */
+  async submitFactoryRequest(projectId: string, input: FactoryRequestBody): Promise<FactoryRequestResponse> {
+    this.project(projectId);
+    const body = FactoryRequestBodySchema.parse(input);
+    const firstLine = body.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Feature Request';
+    const ticket = this.create(projectId, {
+      title: `[Factory] ${firstLine}`,
+      body: buildFactoryOrchestratorPrompt(body.prompt, body.autoDispatch),
+      persona: body.leadPersona,
+      priority: 3,
+      status: 'ready',
+    });
+    if (body.autoDispatch) {
+      this.autoChainProjects.add(projectId);
+    }
+    return this.start(ticket.id, {
+      permissionMode: body.permissionMode,
+      persona: body.leadPersona,
+    });
+  }
+
+  /**
+   * Creates 1..N specialist tickets delegated by an agent (via `.emberline/new-tickets.json`
+   * or `POST /api/internal/agent/tickets`) and optionally starts the sequential pipeline.
+   */
+  async createDelegatedTickets(projectId: string, payload: AgentCreateTicketsPayload): Promise<Ticket[]> {
+    this.project(projectId);
+    const parsed = AgentCreateTicketsPayloadSchema.parse(payload);
+    const created: Ticket[] = [];
+    for (const draft of parsed.tickets) {
+      created.push(
+        this.create(projectId, {
+          title: draft.title,
+          body: draft.body,
+          persona: draft.persona,
+          priority: draft.priority,
+          status: 'ready',
+        }),
+      );
+    }
+    if (parsed.autoDispatch && created.length > 0) {
+      this.autoChainProjects.add(projectId);
+      await this.dispatchNextReadyTicket(projectId);
+    }
+    return created;
+  }
+
+  /**
+   * Starts the highest-priority `ready` ticket for `projectId` if no run is currently active on the project.
+   */
+  async dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
+    const projectRuns = this.runs.list().filter((r) => r.projectId === projectId);
+    const hasActive = projectRuns.some(
+      (r) =>
+        r.state === 'queued' ||
+        r.state === 'starting' ||
+        r.state === 'working' ||
+        r.state === 'waiting_input' ||
+        r.state === 'rate_limited',
+    );
+    if (hasActive) return null;
+
+    const readyTickets = this.list(projectId)
+      .filter((t) => t.status === 'ready')
+      .sort((a, b) => b.priority - a.priority || a.position - b.position);
+
+    const next = readyTickets[0];
+    if (!next) {
+      this.autoChainProjects.delete(projectId);
+      return null;
+    }
+
+    this.autoChainProjects.add(projectId);
+    return this.start(next.id, {
+      permissionMode: 'acceptEdits',
+      persona: next.persona,
+    });
+  }
+
+  private async handleRunCompleted(run: Run): Promise<void> {
+    if (!run.projectId) return;
+    let projectRow;
+    try {
+      projectRow = this.project(run.projectId);
+    } catch {
+      return;
+    }
+
+    // 1. Check if the agent wrote `.emberline/new-tickets.json` in its worktree or main workspace
+    const fromWorktree = run.worktreePath ? await ingestAgentTicketsFile(run.worktreePath) : null;
+    const fromMain =
+      !fromWorktree && projectRow.path !== run.worktreePath
+        ? await ingestAgentTicketsFile(projectRow.path)
+        : null;
+    const ingested = fromWorktree ?? fromMain;
+
+    if (ingested && ingested.tickets.length > 0) {
+      for (const draft of ingested.tickets) {
+        this.create(run.projectId, {
+          title: draft.title,
+          body: draft.body,
+          persona: draft.persona,
+          priority: draft.priority,
+          status: 'ready',
+        });
+      }
+      if (ingested.autoDispatch) {
+        this.autoChainProjects.add(run.projectId);
+      }
+    }
+
+    // 2. If auto-chaining is active (or agent spawned sub-tickets), sync worktree into main workspace
+    //    so subsequent specialist personas branch off the updated codebase and Live Demo stays current!
+    if (this.autoChainProjects.has(run.projectId) || Boolean(ingested)) {
+      if (run.worktreePath && run.worktreePath !== projectRow.path) {
+        const ticketRow = run.ticketId
+          ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
+          : undefined;
+        await syncWorktreeToMainWorkspace({
+          worktreePath: run.worktreePath,
+          mainWorkspacePath: projectRow.path,
+          ticketKey: ticketRow?.key ?? null,
+          runId: run.id,
+        }).catch(() => undefined);
+      }
+    }
+
+    // 3. Dispatch the next specialist ticket in the project's Ready queue if auto-chaining is active
+    if (this.autoChainProjects.has(run.projectId)) {
+      await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+    }
   }
 
   list(projectId: string): Ticket[] {

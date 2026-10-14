@@ -1,21 +1,23 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type {
-  BuildDemoResponse,
-  Project,
-  ProjectAppType,
-  ProjectBlueprintResponse,
-  ProjectRecommendation,
-  ProjectStatusSummary,
-  ProjectTechStack,
-  Run,
-  SyncWorktreeResponse,
-  TaskTemplate,
-  Ticket,
-  WorkspaceDemoTarget,
+import {
+  AgentCreateTicketsPayload,
+  type AgentTicketDraft,
+  type BuildDemoResponse,
+  type Project,
+  type ProjectAppType,
+  type ProjectBlueprintResponse,
+  type ProjectRecommendation,
+  type ProjectStatusSummary,
+  type ProjectTechStack,
+  type Run,
+  type SyncWorktreeResponse,
+  type TaskTemplate,
+  type Ticket,
+  type WorkspaceDemoTarget,
 } from '@emberline/protocol';
 import type { TicketService } from '../tickets/service.js';
 
@@ -230,8 +232,36 @@ export function generateClaudeInstructions(name: string): string {
 
 1. **Always read \`PROJECT.md\` first** before planning or making changes. It is the living source of truth for product vision, tech stack, architecture rules, and milestones.
 2. **Respect your assigned Persona role** (Product Owner, Architect, UI/UX, Coder, DBA, QA, or Security) when executing a task.
-3. **Verify your work:** Run relevant typechecks, linters, and tests before concluding your turn.
-4. **Keep \`PROJECT.md\` up to date** whenever architectural boundaries, commands, or milestones evolve.
+3. **Self-Task Delegation (\`.emberline/new-tickets.json\`):**
+   - When acting as \`product_owner\` or \`architect\` (or whenever a request requires multiple specialist personas such as \`coder\` for backend/engine logic, \`ui_ux\` for frontend UI/HUD/design, \`dba\` for database changes, and \`qa\` for test & build verification), create delegated tickets by writing \`.emberline/new-tickets.json\`:
+   \`\`\`json
+   {
+     "autoDispatch": true,
+     "tickets": [
+       {
+         "title": "Backend & Engine: ...",
+         "persona": "coder",
+         "priority": 3,
+         "body": "Detailed specification, target files, and acceptance criteria..."
+       },
+       {
+         "title": "UI/UX: ...",
+         "persona": "ui_ux",
+         "priority": 2,
+         "body": "Detailed UI/UX design & frontend component specification..."
+       },
+       {
+         "title": "QA: ...",
+         "persona": "qa",
+         "priority": 1,
+         "body": "Write/run tests and run npm run build to update the playable demo bundle."
+       }
+     ]
+   }
+   \`\`\`
+   - Emberline Core automatically reads \`.emberline/new-tickets.json\` when your turn finishes, creates the tickets on the Kanban Board, syncs your work to \`main\`, and dispatches each specialist persona sequentially!
+4. **Verify your work & Demo Bundle:** Run relevant typechecks, linters, and tests (\`npm run build\` if present) before concluding your turn.
+5. **Keep \`PROJECT.md\` up to date** whenever architectural boundaries, commands, or milestones evolve.
 `;
 }
 
@@ -598,8 +628,9 @@ export async function computeProjectStatusSummary(params: {
   project: Project;
   tickets: readonly Ticket[];
   runs: readonly Run[];
+  autoChainActive?: boolean;
 }): Promise<ProjectStatusSummary> {
-  const { project, tickets, runs } = params;
+  const { project, tickets, runs, autoChainActive = false } = params;
   const projectTickets = tickets.filter((t) => t.projectId === project.id);
   const projectRuns = runs
     .filter((r) => r.projectId === project.id)
@@ -696,8 +727,80 @@ export async function computeProjectStatusSummary(params: {
     ticketCounts: counts,
     completionPercent: Math.min(100, Math.max(0, completionPercent)),
     activeRunCount,
+    autoChainActive,
     targets,
   };
+}
+
+export function buildFactoryOrchestratorPrompt(userRequest: string, autoDispatch = true): string {
+  return `## AI Coding Factory — Feature Request & Specialist Persona Delegation
+
+User Request:
+"""
+${userRequest.trim()}
+"""
+
+### Your Mission (as Lead Product Owner & Factory Orchestrator):
+1. **Inspect Context:** Read \`PROJECT.md\` and inspect the existing project files in the repository so you know the exact directory structure, frontend components, backend/engine modules, and build setup.
+2. **Refine Specification:** Translate the user's request into a clear, well-structured engineering specification and update \`PROJECT.md\` if needed.
+3. **Delegate to Specialist Personas (DO NOT implement the entire feature yourself):**
+   Break the work down into concrete, non-overlapping sub-tasks for the appropriate specialist personas so each specialist handles its domain:
+   - \`coder\` (Priority 3 - High): Backend services, game engine / business logic, counters/state management, and API endpoints.
+   - \`dba\` (Priority 3 - High, if applicable): Database schema or persistence updates.
+   - \`ui_ux\` (Priority 2 - Normal): Frontend UI components, HUD overlays, visual styling, layout, animations, and user interactions.
+   - \`qa\` (Priority 1 - Low): Unit/component tests verifying the new feature AND running \`npm run build\` so the compiled Live Demo bundle (\`dist/\`) is updated.
+4. **Write Delegated Tickets to \`.emberline/new-tickets.json\`:**
+   Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below:
+   \`\`\`json
+   {
+     "autoDispatch": ${autoDispatch ? 'true' : 'false'},
+     "tickets": [
+       {
+         "title": "Backend/Engine: <concise title>",
+         "persona": "coder",
+         "priority": 3,
+         "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..."
+       },
+       {
+         "title": "UI/UX: <concise title>",
+         "persona": "ui_ux",
+         "priority": 2,
+         "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..."
+       },
+       {
+         "title": "QA & Build: <concise title>",
+         "persona": "qa",
+         "priority": 1,
+         "body": "## Objective\\nAdd tests for the new changes and run \`npm run build\` to refresh the production demo bundle."
+       }
+     ]
+   }
+   \`\`\`
+   *(Keep \`.emberline/new-tickets.json\` on disk when you finish; Emberline Core will automatically ingest it, create the tickets on the Kanban Board, sync your \`PROJECT.md\` update to \`main\`, and dispatch each specialist persona in priority order!)*`;
+}
+
+export async function ingestAgentTicketsFile(
+  workspacePath: string,
+): Promise<{ autoDispatch: boolean; tickets: AgentTicketDraft[] } | null> {
+  const candidates = [
+    path.join(workspacePath, '.emberline', 'new-tickets.json'),
+    path.join(workspacePath, '.emberline', 'tickets.json'),
+  ];
+  for (const filePath of candidates) {
+    if (!existsSync(filePath)) continue;
+    try {
+      const raw = await readFile(filePath, 'utf-8');
+      await rm(filePath, { force: true });
+      const json = JSON.parse(raw) as unknown;
+      const parsed = AgentCreateTicketsPayload.parse(
+        Array.isArray(json) ? { autoDispatch: true, tickets: json } : json,
+      );
+      return parsed;
+    } catch {
+      await rm(filePath, { force: true }).catch(() => undefined);
+    }
+  }
+  return null;
 }
 
 export async function syncWorktreeToMainWorkspace(params: {

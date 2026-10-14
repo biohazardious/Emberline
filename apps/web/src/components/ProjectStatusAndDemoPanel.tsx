@@ -1,21 +1,28 @@
 import type {
   BuildDemoResponse,
+  FactoryRequestResponse,
   Project,
   ProjectStatusSummary,
   SyncWorktreeResponse,
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
-import { useState } from 'react';
+import { type FormEvent, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { usePoll } from '../hooks/usePoll';
 import { PersonaBadge } from './PersonaBadge';
 
+const FACTORY_EXAMPLES = [
+  'Oyuna score counter ve en yüksek skor (high score) göstergesi ekle',
+  'Oyundaki görsel tasarımı, renk paletini ve HUD arayüzünü modernleştir',
+  'Oyun bittiğinde skor kaydetme ekranı ve liderlik tablosu (leaderboard) ekle',
+] as const;
+
 export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
   const statusPoll = usePoll(
     () => api<ProjectStatusSummary>(`/api/projects/${project.id}/status`),
-    5_000,
+    4_000,
   );
 
   const [selectedTargetId, setSelectedTargetId] = useState<string>('main');
@@ -24,6 +31,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [iframeNonce, setIframeNonce] = useState(0);
   const [syncingRunId, setSyncingRunId] = useState<string>();
   const [buildingTargetId, setBuildingTargetId] = useState<string>();
+  const [factoryPrompt, setFactoryPrompt] = useState('');
+  const [autoDispatch, setAutoDispatch] = useState(true);
+  const [submittingFactory, setSubmittingFactory] = useState(false);
+  const [startingPipeline, setStartingPipeline] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
 
   const summary = statusPoll.data;
@@ -37,6 +48,53 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
   const playableTargets = targets.filter((t) => Boolean(t.demoUrl));
   const bestPlayableTarget = playableTargets[0] ?? targets.find((t) => t.hasBuildScript) ?? targets[0];
+
+  const handleSubmitFactoryRequest = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = factoryPrompt.trim();
+    if (!trimmed) return;
+    setSubmittingFactory(true);
+    setBanner(undefined);
+    try {
+      const res = await api<FactoryRequestResponse>(
+        `/api/projects/${project.id}/factory-request`,
+        'POST',
+        {
+          prompt: trimmed,
+          leadPersona: 'product_owner',
+          permissionMode: 'acceptEdits',
+          autoDispatch,
+        },
+      );
+      setFactoryPrompt('');
+      await statusPoll.refresh();
+      setBanner({
+        kind: 'ok',
+        text: `Factory request dispatched to Product Owner (${res.ticket.key}). PO will refine the spec, create specialist tickets (Coder, UI/UX, QA), and ${autoDispatch ? 'auto-dispatch them sequentially' : 'place them in Ready'}.`,
+      });
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+    } finally {
+      setSubmittingFactory(false);
+    }
+  };
+
+  const handleRunPipeline = async () => {
+    setStartingPipeline(true);
+    setBanner(undefined);
+    try {
+      await api(`/api/projects/${project.id}/run-pipeline`, 'POST', {});
+      await statusPoll.refresh();
+      setBanner({
+        kind: 'ok',
+        text: 'Sequential multi-persona pipeline activated for Ready tickets.',
+      });
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+    } finally {
+      setStartingPipeline(false);
+    }
+  };
 
   const handleSyncToMain = async (runId: string) => {
     setSyncingRunId(runId);
@@ -142,6 +200,24 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           >
             ◈ Project Status & Live Demo
           </span>
+          {summary.autoChainActive && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '2px 8px',
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 600,
+                background: 'rgba(59, 130, 246, 0.16)',
+                color: '#60a5fa',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+              }}
+            >
+              ⟳ Multi-Persona Auto-Pipeline Active
+            </span>
+          )}
           <span
             className="mono"
             style={{
@@ -162,6 +238,23 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {ticketCounts.ready > 0 && (
+            <button
+              type="button"
+              className="ghost"
+              style={{
+                fontSize: 12,
+                padding: '5px 10px',
+                borderColor: 'rgba(59, 130, 246, 0.4)',
+                color: '#60a5fa',
+              }}
+              disabled={startingPipeline}
+              onClick={() => void handleRunPipeline()}
+              title="Sequentially run all Ready tickets across their assigned personas and sync each to Main"
+            >
+              {startingPipeline ? 'Starting…' : `⚡ Run Ready Pipeline (${ticketCounts.ready})`}
+            </button>
+          )}
           {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
             <button
               type="button"
@@ -262,6 +355,106 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           </span>
         </div>
       </div>
+
+      {/* Autonomous AI Factory Request Bar (PO -> Coder / UI-UX / QA Delegation) */}
+      <form
+        onSubmit={(e) => void handleSubmitFactoryRequest(e)}
+        style={{
+          marginBottom: 14,
+          padding: '12px 14px',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--bg-elevated)',
+          border: '1px solid rgba(245, 158, 11, 0.28)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24' }}>
+              ⚡ Ask AI Factory (PO Orchestrator → Specialist Personas)
+            </span>
+            <PersonaBadge persona="product_owner" />
+            <span className="muted" style={{ fontSize: 11 }}>
+              → spawns &amp; delegates tickets to
+            </span>
+            <PersonaBadge persona="coder" />
+            <PersonaBadge persona="ui_ux" />
+            <PersonaBadge persona="qa" />
+          </div>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 11,
+              cursor: 'pointer',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={autoDispatch}
+              onChange={(e) => setAutoDispatch(e.target.checked)}
+            />
+            Auto-dispatch &amp; sync specialist tickets sequentially
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={factoryPrompt}
+            onChange={(e) => setFactoryPrompt(e.target.value)}
+            placeholder='Describe what you want (e.g. "Oyuna score counter ekle" or "Oyundaki tasarımı değiştir") — PO will refine & delegate to UI/UX, Backend & QA…'
+            style={{
+              flex: '1 1 360px',
+              fontSize: 12.5,
+              padding: '8px 11px',
+            }}
+          />
+          <button
+            type="submit"
+            className="primary"
+            disabled={submittingFactory || !factoryPrompt.trim()}
+            style={{ fontSize: 12, padding: '8px 14px', whiteSpace: 'nowrap' }}
+          >
+            {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+            marginTop: 8,
+          }}
+        >
+          <span className="muted" style={{ fontSize: 10.5 }}>
+            Quick examples:
+          </span>
+          {FACTORY_EXAMPLES.map((ex) => (
+            <button
+              key={ex}
+              type="button"
+              className="ghost"
+              style={{ fontSize: 10.5, padding: '2px 7px' }}
+              onClick={() => setFactoryPrompt(ex)}
+            >
+              + {ex}
+            </button>
+          ))}
+        </div>
+      </form>
 
       {banner && (
         <div
