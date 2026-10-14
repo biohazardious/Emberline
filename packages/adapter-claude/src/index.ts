@@ -125,6 +125,63 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   };
 }
 
+export interface SecondaryCliLaunchOptions {
+  agent: 'codex' | 'aider';
+  runId: string;
+  hookToken: string;
+  coreUrl: string;
+  hookCommand?: string;
+  permissionMode?: ClaudePermissionMode;
+  prompt?: string;
+}
+
+/**
+ * Builds a launch spec for secondary CLI coding agents (`codex` or `aider`), wrapping
+ * execution with `emberline-hook` lifecycle signals so core tracks `working` -> `done` / `failed`.
+ */
+export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
+  const hook = options.hookCommand ?? 'emberline-hook';
+  const autoApprove =
+    options.permissionMode === 'acceptEdits' || options.permissionMode === 'bypassPermissions';
+
+  let cliCmd: string;
+  if (options.agent === 'codex') {
+    const bin = process.env.EMBERLINE_CODEX_COMMAND?.trim() || 'codex';
+    const flags = autoApprove ? '--full-auto ' : '';
+    cliCmd = options.prompt ? `${bin} ${flags}"$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
+  } else {
+    const bin = process.env.EMBERLINE_AIDER_COMMAND?.trim() || 'aider';
+    const flags = autoApprove ? '--yes-always ' : '';
+    cliCmd = options.prompt
+      ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"`
+      : `${bin} ${flags}`.trim();
+  }
+
+  const script = [
+    `echo '{"session_id":"'${options.agent}-${options.runId.slice(0, 8)}'"}' | ${hook} SessionStart >/dev/null 2>&1 || true`,
+    options.prompt
+      ? `echo '{"prompt":"started"}' | ${hook} UserPromptSubmit >/dev/null 2>&1 || true`
+      : '',
+    cliCmd,
+    `STATUS=$?`,
+    `if [ "$STATUS" -eq 0 ]; then echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; fi`,
+    `exit $STATUS`,
+  ]
+    .filter(Boolean)
+    .join('; ');
+
+  return {
+    file: 'sh',
+    args: ['-c', script],
+    env: {
+      EMBERLINE_RUN_ID: options.runId,
+      EMBERLINE_HOOK_TOKEN: options.hookToken,
+      EMBERLINE_CORE_URL: options.coreUrl,
+      EMBERLINE_PROMPT: options.prompt ?? '',
+    },
+  };
+}
+
 /** Notification hooks that mean "a human must act now" rather than "idle for a while". */
 function isPermissionNotification(payload: HookPayload): boolean {
   const type = typeof payload.notification_type === 'string' ? payload.notification_type : undefined;

@@ -407,7 +407,66 @@ describe('M6 review, git commit/push, and artifacts', () => {
     const listAfter: ScheduledJob[] = (await api('GET', '/api/cron')).json();
     expect(listAfter).toHaveLength(0);
   });
+
+  it('starts/stops per-worktree preview environments and supports secondary CLI adapters (codex/aider)', async () => {
+    const { buildSecondaryCliLaunchSpec } = await import('@emberline/adapter-claude');
+    const codexSpec = buildSecondaryCliLaunchSpec({
+      agent: 'codex',
+      runId: 'run-codex-1234',
+      hookToken: 'tok',
+      coreUrl: 'http://127.0.0.1:7420',
+      permissionMode: 'acceptEdits',
+      prompt: 'Fix lint',
+    });
+    expect(codexSpec.file).toBe('sh');
+    expect(codexSpec.args[1]).toContain('--full-auto');
+    expect(codexSpec.env.EMBERLINE_PROMPT).toBe('Fix lint');
+
+    const { project } = await createGitProjectWithBareRemote('Preview App');
+    const run: Run = (
+      await api('POST', '/api/runs', {
+        projectId: project.id,
+        agent: 'codex',
+        prompt: 'build preview',
+      })
+    ).json();
+    expect(run.agent).toBe('codex');
+
+    writeFileSync(
+      path.join(run.worktreePath, 'package.json'),
+      JSON.stringify({ name: 'preview-app', scripts: { dev: 'node -e "setInterval(()=>{},1000)"' } }),
+    );
+
+    const statusBefore = (await api('GET', `/api/runs/${run.id}/preview`)).json();
+    expect(statusBefore).toMatchObject({
+      runId: run.id,
+      status: 'stopped',
+      detectedCommand: 'npm run dev',
+    });
+
+    const startRes = await api('POST', `/api/runs/${run.id}/preview/start`, {
+      command: 'sleep 10',
+      port: 3456,
+    });
+    expect(startRes.statusCode).toBe(200);
+    expect(startRes.json()).toMatchObject({
+      runId: run.id,
+      status: 'running',
+      command: 'sleep 10',
+      port: 3456,
+      url: 'http://localhost:3456',
+    });
+
+    const stopRes = await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+    expect(stopRes.statusCode).toBe(200);
+    expect(stopRes.json()).toMatchObject({
+      runId: run.id,
+      status: 'stopped',
+      terminalId: null,
+    });
+  });
 });
+
 
 
 

@@ -135,6 +135,10 @@ export type TerminalServerMessage = z.infer<typeof TerminalServerMessage>;
 export const RunState = z.enum(['queued', 'starting', 'working', 'waiting_input', 'rate_limited', 'done', 'failed']);
 export type RunState = z.infer<typeof RunState>;
 
+/** Supported CLI coding agent adapters. */
+export const AgentId = z.enum(['claude', 'codex', 'aider']);
+export type AgentId = z.infer<typeof AgentId>;
+
 /** Claude Code `--permission-mode`. `bypassPermissions` is only sane inside the isolated runner. */
 export const PermissionMode = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
 export type PermissionMode = z.infer<typeof PermissionMode>;
@@ -167,6 +171,7 @@ export type Run = z.infer<typeof Run>;
 
 export const CreateRunBody = z.object({
   projectId: z.string().min(1),
+  agent: AgentId.default('claude'),
   prompt: z.string().trim().max(20_000).default(''),
   permissionMode: PermissionMode.default('default'),
 });
@@ -521,6 +526,25 @@ export const UpdateScheduledJobBody = z
   .partial();
 export type UpdateScheduledJobBody = z.input<typeof UpdateScheduledJobBody>;
 
+// --- per-worktree preview environments (Phase 2.3) --------------------------
+
+export const RunPreviewStatus = z.object({
+  runId: z.string(),
+  status: z.enum(['stopped', 'running', 'exited']),
+  terminalId: z.string().nullable(),
+  command: z.string().nullable(),
+  port: z.number().int().nullable(),
+  url: z.string().nullable(),
+  detectedCommand: z.string().nullable(),
+});
+export type RunPreviewStatus = z.infer<typeof RunPreviewStatus>;
+
+export const StartPreviewBody = z.object({
+  command: z.string().trim().min(1).max(500).optional(),
+  port: z.number().int().min(1024).max(65535).optional(),
+});
+export type StartPreviewBody = z.input<typeof StartPreviewBody>;
+
 // --- live events (`/api/events` WebSocket) ----------------------------------
 
 /** Core -> browser push channel. */
@@ -532,6 +556,7 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('scheduler'), scheduler: SchedulerState }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
+
 
 
 

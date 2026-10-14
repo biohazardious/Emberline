@@ -1,4 +1,5 @@
 import type {
+  AgentId,
   CreateProjectResponse,
   PermissionMode,
   Project,
@@ -391,6 +392,7 @@ function StartRunForm({
   onStarted: (run: Run) => void;
   onCancel: () => void;
 }) {
+  const [agent, setAgent] = useState<AgentId>('claude');
   const [prompt, setPrompt] = useState('');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [error, setError] = useState<string>();
@@ -401,7 +403,14 @@ function StartRunForm({
     setBusy(true);
     setError(undefined);
     try {
-      onStarted(await api<Run>('/api/runs', 'POST', { projectId: project.id, prompt, permissionMode: mode }));
+      onStarted(
+        await api<Run>('/api/runs', 'POST', {
+          projectId: project.id,
+          agent,
+          prompt,
+          permissionMode: mode,
+        }),
+      );
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
@@ -415,14 +424,28 @@ function StartRunForm({
         className="input"
         rows={3}
         autoFocus
-        placeholder={`What should Claude do in ${project.name}? (optional, leave empty for an interactive session)`}
+        placeholder={`What should ${agent === 'codex' ? 'Codex' : agent === 'aider' ? 'Aider' : 'Claude'} do in ${project.name}? (optional, leave empty for an interactive session)`}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit(e);
         }}
       />
-      <div className="run-form-foot">
+      <div className="run-form-foot" style={{ flexWrap: 'wrap', gap: '8px' }}>
+        <div className="segmented" role="radiogroup" aria-label="CLI Agent">
+          {(['claude', 'codex', 'aider'] as const).map((a) => (
+            <button
+              key={a}
+              type="button"
+              role="radio"
+              aria-checked={agent === a}
+              className={agent === a ? 'active' : ''}
+              onClick={() => setAgent(a)}
+            >
+              {a === 'claude' ? 'Claude' : a === 'codex' ? 'Codex' : 'Aider'}
+            </button>
+          ))}
+        </div>
         <PermissionModePicker value={mode} onChange={setMode} />
         <div className="actions">
           <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>

@@ -9,7 +9,9 @@ import type {
   RunDiffSummary,
   RunFileDiff,
   RunForgeStatus,
+  RunPreviewStatus,
 } from '@emberline/protocol';
+import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { MonacoDiff, type DiffAnnotation } from './MonacoDiff';
 
@@ -93,6 +95,13 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   const [prDraft, setPrDraft] = useState(false);
   const [prCreating, setPrCreating] = useState(false);
 
+  // Per-worktree Preview Server state
+  const [previewStatus, setPreviewStatus] = useState<RunPreviewStatus | null>(null);
+  const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
+  const [previewCmd, setPreviewCmd] = useState('');
+  const [previewPort, setPreviewPort] = useState('');
+  const [previewBusy, setPreviewBusy] = useState(false);
+
   // Artifacts state
   const [artifacts, setArtifacts] = useState<RunArtifact[]>([]);
   const [loadingArtifacts, setLoadingArtifacts] = useState(false);
@@ -166,11 +175,22 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   }, [run.id]);
 
+  const loadPreview = useCallback(async () => {
+    try {
+      const status = await api<RunPreviewStatus>(`/api/runs/${run.id}/preview`);
+      setPreviewStatus(status);
+      setPreviewCmd((prev) => prev || status.command || status.detectedCommand || 'npm run dev');
+    } catch {
+      // Ignore
+    }
+  }, [run.id]);
+
   useEffect(() => {
     void loadSummary(scope, false);
     void loadArtifacts();
     void loadForge();
-  }, [scope, loadSummary, loadArtifacts, loadForge]);
+    void loadPreview();
+  }, [scope, loadSummary, loadArtifacts, loadForge, loadPreview]);
 
   useEffect(() => {
     if (selectedFile) {
@@ -314,6 +334,41 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   };
 
+  const handleStartPreview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPreviewBusy(true);
+    setError(null);
+    setGitNotice(null);
+    try {
+      const parsedPort = previewPort.trim() ? Number(previewPort.trim()) : undefined;
+      const res = await api<RunPreviewStatus>(`/api/runs/${run.id}/preview/start`, 'POST', {
+        command: previewCmd.trim() || undefined,
+        port: parsedPort && Number.isInteger(parsedPort) ? parsedPort : undefined,
+      });
+      setPreviewStatus(res);
+      setPreviewDrawerOpen(false);
+      setGitNotice(`Preview dev server running on ${res.url ?? `port ${res.port}`}`);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  const handleStopPreview = async () => {
+    setPreviewBusy(true);
+    setError(null);
+    try {
+      const res = await api<RunPreviewStatus>(`/api/runs/${run.id}/preview/stop`, 'POST', {});
+      setPreviewStatus(res);
+      setGitNotice('Stopped worktree preview dev server.');
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
   const totalAdditions = summary?.totalAdditions ?? 0;
   const totalDeletions = summary?.totalDeletions ?? 0;
 
@@ -392,6 +447,48 @@ export function ReviewView({ run, onRunUpdated }: Props) {
         </div>
 
         <div className="review-toolbar-group">
+          {previewStatus?.status === 'running' ? (
+            <>
+              {previewStatus.url && (
+                <a
+                  href={previewStatus.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="badge badge-soft mono"
+                  title={`Preview running (${previewStatus.command ?? 'dev'})`}
+                >
+                  Preview :{previewStatus.port} ↗
+                </a>
+              )}
+              {previewStatus.terminalId && (
+                <Link
+                  href={`/terminals/${previewStatus.terminalId}`}
+                  className="btn btn-sm btn-ghost"
+                  title="View live preview server logs"
+                >
+                  Logs
+                </Link>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={previewBusy}
+                onClick={() => void handleStopPreview()}
+              >
+                Stop Preview
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setPreviewDrawerOpen((v) => !v)}
+              title="Start an isolated preview dev server for this worktree"
+            >
+              {previewDrawerOpen ? 'Cancel Preview' : 'Preview Server'}
+            </button>
+          )}
+
           {forgeStatus?.pullRequest ? (
             <a
               href={forgeStatus.pullRequest.url}
@@ -447,6 +544,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               void loadSummary(scope, true);
               void loadArtifacts();
               void loadForge();
+              void loadPreview();
             }}
             disabled={loadingDiff || loadingArtifacts}
           >
@@ -454,6 +552,36 @@ export function ReviewView({ run, onRunUpdated }: Props) {
           </button>
         </div>
       </div>
+
+      {previewDrawerOpen && (
+        <form className="review-actions-bar" onSubmit={(e) => void handleStartPreview(e)}>
+          <div className="review-commit-form" style={{ flex: 1 }}>
+            <input
+              type="text"
+              className="input mono"
+              value={previewCmd}
+              onChange={(e) => setPreviewCmd(e.target.value)}
+              placeholder="Dev server command (e.g. pnpm dev or npm run dev)"
+              required
+            />
+            <input
+              type="number"
+              className="input mono"
+              value={previewPort}
+              onChange={(e) => setPreviewPort(e.target.value)}
+              placeholder="Port (auto 3100–3899)"
+              style={{ maxWidth: '170px' }}
+            />
+            <button
+              type="submit"
+              className="btn btn-sm btn-primary"
+              disabled={previewBusy || !previewCmd.trim()}
+            >
+              {previewBusy ? 'Starting…' : 'Start Preview Server'}
+            </button>
+          </div>
+        </form>
+      )}
 
       {prDrawerOpen && (
         <form className="review-actions-bar" onSubmit={(e) => void handleCreatePr(e)}>

@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentState } from '@emberline/adapter-sdk';
 import {
   buildLaunchSpec,
+  buildSecondaryCliLaunchSpec,
   CLAUDE_ADAPTER_ID,
   CONTINUE_PROMPT,
   nextStateFromHook,
@@ -27,13 +29,16 @@ import {
   type RunDiffSummary,
   type RunEvent,
   type RunFileDiff,
+  type RunPreviewStatus,
   type RunState,
+  type StartPreviewBody,
+  StartPreviewBody as StartPreviewBodySchema,
 } from '@emberline/protocol';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
-import { conflict, HttpError, notFound } from '../errors.js';
+import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
@@ -205,7 +210,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         id,
         projectId: project.id,
         ticketId: origin?.ticketId ?? null,
-        agent: CLAUDE_ADAPTER_ID,
+        agent: body.agent ?? CLAUDE_ADAPTER_ID,
         state: 'queued',
         prompt: body.prompt,
         permissionMode: body.permissionMode,
@@ -283,19 +288,31 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       patch: { hookTokenHash: sha256(hookToken), endedAt: null },
     });
 
-    const spec = buildLaunchSpec({
-      runId: row.id,
-      hookToken,
-      coreUrl: this.config.hookUrl,
-      claudeCommand: this.config.claudeCommand,
-      hookCommand: this.config.hookCommand,
-      permissionMode: row.permissionMode as Run['permissionMode'],
-      prompt: options.prompt,
-      resumeSessionId: options.resumeSessionId,
-      playwrightMcp:
-        process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' || process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true',
-    });
+    const isSecondary = row.agent === 'codex' || row.agent === 'aider';
+    const spec = isSecondary
+      ? buildSecondaryCliLaunchSpec({
+          agent: row.agent as 'codex' | 'aider',
+          runId: row.id,
+          hookToken,
+          coreUrl: this.config.hookUrl,
+          hookCommand: this.config.hookCommand,
+          permissionMode: row.permissionMode as Run['permissionMode'],
+          prompt: options.prompt,
+        })
+      : buildLaunchSpec({
+          runId: row.id,
+          hookToken,
+          coreUrl: this.config.hookUrl,
+          claudeCommand: this.config.claudeCommand,
+          hookCommand: this.config.hookCommand,
+          permissionMode: row.permissionMode as Run['permissionMode'],
+          prompt: options.prompt,
+          resumeSessionId: options.resumeSessionId,
+          playwrightMcp:
+            process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' || process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true',
+        });
 
+    const agentLabel = row.agent === 'codex' ? 'Codex' : row.agent === 'aider' ? 'Aider' : 'Claude';
     try {
       const session = await ptyd.spawn({
         file: spec.file,
@@ -306,7 +323,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           kind: 'agent',
           runId: row.id,
           projectId: row.projectId,
-          title: `Claude · ${row.title ?? project.name}`,
+          title: `${agentLabel} · ${row.title ?? project.name}`,
         },
       });
       return this.record(row.id, {
@@ -502,6 +519,170 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     return { runId: id, worktreePath: row.worktreePath, removed };
+  }
+
+  private detectPreviewCommand(worktreePath: string): string | null {
+    const pkgFile = path.join(worktreePath, 'package.json');
+    if (!existsSync(pkgFile)) return null;
+    try {
+      const pkg = JSON.parse(readFileSync(pkgFile, 'utf8')) as {
+        scripts?: Record<string, string>;
+      };
+      const hasPnpmLock = existsSync(path.join(worktreePath, 'pnpm-lock.yaml'));
+      const runner = hasPnpmLock ? 'pnpm' : 'npm run';
+      if (pkg.scripts?.dev) return `${runner} dev`;
+      if (pkg.scripts?.start) return `${runner} start`;
+      if (pkg.scripts?.preview) return `${runner} preview`;
+    } catch {
+      // ignore invalid package.json
+    }
+    return null;
+  }
+
+  private defaultPreviewPort(runId: string): number {
+    let hash = 0;
+    for (let i = 0; i < runId.length; i++) {
+      hash = (hash * 31 + runId.charCodeAt(i)) >>> 0;
+    }
+    return 3100 + (hash % 800);
+  }
+
+  async previewStatus(id: string): Promise<RunPreviewStatus> {
+    const row = this.row(id);
+    const detectedCommand = this.detectPreviewCommand(row.worktreePath);
+    const events = this.db
+      .select()
+      .from(runEvents)
+      .where(eq(runEvents.runId, id))
+      .orderBy(desc(runEvents.id))
+      .all();
+    const lastPreview = events.find((e) => e.type === 'preview_started' || e.type === 'preview_stopped');
+    if (!lastPreview || lastPreview.type === 'preview_stopped' || typeof lastPreview.payload !== 'object' || !lastPreview.payload) {
+      return {
+        runId: id,
+        status: 'stopped',
+        terminalId: null,
+        command: null,
+        port: null,
+        url: null,
+        detectedCommand,
+      };
+    }
+
+    const p = lastPreview.payload as { terminalId?: string; command?: string; port?: number; url?: string };
+    const terminalId = typeof p.terminalId === 'string' ? p.terminalId : null;
+    const command = typeof p.command === 'string' ? p.command : null;
+    const port = typeof p.port === 'number' ? p.port : null;
+    const url = typeof p.url === 'string' ? p.url : port ? `http://localhost:${port}` : null;
+
+    let status: RunPreviewStatus['status'] = 'exited';
+    if (terminalId && this.ptyd.status === 'connected') {
+      try {
+        const { sessions } = await this.ptyd.get().list();
+        const found = sessions.find((s) => s.id === terminalId);
+        if (found?.status === 'running') status = 'running';
+      } catch {
+        // fallback to exited
+      }
+    }
+
+    return {
+      runId: id,
+      status,
+      terminalId,
+      command,
+      port,
+      url,
+      detectedCommand,
+    };
+  }
+
+  async startPreview(id: string, rawBody: unknown): Promise<RunPreviewStatus> {
+    const row = this.row(id);
+    if (!existsSync(row.worktreePath)) {
+      throw conflict('worktree directory does not exist (was it pruned?)');
+    }
+    const parsed = StartPreviewBodySchema.safeParse(rawBody ?? {});
+    if (!parsed.success) {
+      throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+    const body: StartPreviewBody = parsed.data;
+
+    // Stop any existing preview session first
+    const current = await this.previewStatus(id);
+    if (current.terminalId) {
+      await this.ptyd
+        .get()
+        .remove(current.terminalId)
+        .catch(() => undefined);
+    }
+
+    const detectedCommand = this.detectPreviewCommand(row.worktreePath);
+    const command = body.command?.trim() || detectedCommand || 'npm run dev';
+    const port = body.port ?? this.defaultPreviewPort(id);
+    const hostBase = process.env.EMBERLINE_PREVIEW_HOST?.trim() || 'http://localhost';
+    const url = `${hostBase.replace(/\/+$/, '')}:${port}`;
+
+    const session = await this.ptyd.get().spawn({
+      file: 'sh',
+      args: ['-c', command],
+      cwd: row.worktreePath,
+      env: {
+        PORT: String(port),
+        HOST: '0.0.0.0',
+      },
+      meta: {
+        kind: 'shell',
+        runId: row.id,
+        projectId: row.projectId,
+        title: `Preview :${port} · ${row.branch ?? row.id.slice(0, 8)}`,
+      },
+    });
+
+    this.record(id, {
+      source: 'user',
+      type: 'preview_started',
+      payload: {
+        terminalId: session.id,
+        command,
+        port,
+        url,
+      },
+    });
+
+    return {
+      runId: id,
+      status: 'running',
+      terminalId: session.id,
+      command,
+      port,
+      url,
+      detectedCommand,
+    };
+  }
+
+  async stopPreview(id: string): Promise<RunPreviewStatus> {
+    const current = await this.previewStatus(id);
+    if (current.terminalId) {
+      await this.ptyd
+        .get()
+        .remove(current.terminalId)
+        .catch(() => undefined);
+    }
+    this.record(id, {
+      source: 'user',
+      type: 'preview_stopped',
+      payload: { terminalId: current.terminalId },
+    });
+    return {
+      runId: id,
+      status: 'stopped',
+      terminalId: null,
+      command: null,
+      port: null,
+      url: null,
+      detectedCommand: current.detectedCommand,
+    };
   }
 
   /** Forgets the run and its terminal. The worktree and branch are kept on purpose. */

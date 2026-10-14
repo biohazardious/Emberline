@@ -102,6 +102,21 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     async (request): Promise<PruneWorktreeResponse> => runs.pruneWorktree(request.params.id),
   );
 
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/preview',
+    async (request) => runs.previewStatus(request.params.id),
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/preview/start',
+    async (request) => runs.startPreview(request.params.id, request.body ?? {}),
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/preview/stop',
+    async (request) => runs.stopPreview(request.params.id),
+  );
+
   app.delete<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
     await runs.remove(request.params.id);
     return { ok: true };
