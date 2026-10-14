@@ -93,6 +93,14 @@ export function CommandPalette({
         badge: 'G F',
         run: () => navigate('/fleet'),
       },
+      {
+        id: 'nav-settings',
+        group: 'Navigation',
+        label: 'Go to Factory Settings',
+        meta: 'Auto-pilot, AI providers (Claude/Gemini/Codex), theme & quota',
+        badge: 'G S',
+        run: () => navigate('/settings'),
+      },
     ];
 
     for (const p of projects) {
@@ -103,6 +111,14 @@ export function CommandPalette({
         meta: p.repoUrl ?? p.path,
         badge: p.slug,
         run: () => navigate(`/projects/${p.id}/board`),
+      });
+      list.push({
+        id: `code-${p.id}`,
+        group: 'Project Code Explorer',
+        label: `Code Explorer · ${p.name}`,
+        meta: p.path,
+        badge: '</>',
+        run: () => navigate(`/projects/${p.id}/code`),
       });
     }
 

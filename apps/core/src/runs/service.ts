@@ -43,6 +43,7 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
+import { getProviderEnvFromSettings, resolveAgentForPersona } from '../factory/service.js';
 import {
   commitWorktree,
   inspectDiff,
@@ -207,6 +208,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       origin?.branch ?? `emberline/run-${short}`,
     );
 
+    const persona = body.persona ?? 'coder';
+    const resolvedAgent = input.agent ?? resolveAgentForPersona(this.db, persona) ?? CLAUDE_ADAPTER_ID;
     const now = new Date();
     this.db
       .insert(runs)
@@ -214,8 +217,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         id,
         projectId: project.id,
         ticketId: origin?.ticketId ?? null,
-        agent: body.agent ?? CLAUDE_ADAPTER_ID,
-        persona: body.persona ?? 'coder',
+        agent: resolvedAgent,
+        persona,
         state: 'queued',
         prompt: body.prompt,
         permissionMode: body.permissionMode,
@@ -297,16 +300,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const effectivePrompt =
       options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
 
-    const isSecondary = row.agent === 'codex' || row.agent === 'aider';
+    const extraEnv = getProviderEnvFromSettings(this.db);
+    const isSecondary = row.agent === 'gemini' || row.agent === 'codex' || row.agent === 'aider';
     const spec = isSecondary
       ? buildSecondaryCliLaunchSpec({
-          agent: row.agent as 'codex' | 'aider',
+          agent: row.agent as 'gemini' | 'codex' | 'aider',
           runId: row.id,
           hookToken,
           coreUrl: this.config.hookUrl,
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
           prompt: effectivePrompt,
+          extraEnv,
         })
       : buildLaunchSpec({
           runId: row.id,
@@ -321,7 +326,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' || process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true',
         });
 
-    const agentLabel = row.agent === 'codex' ? 'Codex' : row.agent === 'aider' ? 'Aider' : 'Claude';
+    const agentLabel =
+      row.agent === 'gemini'
+        ? 'Gemini'
+        : row.agent === 'codex'
+          ? 'Codex'
+          : row.agent === 'aider'
+            ? 'Aider'
+            : 'Claude';
     const personaPrefix =
       persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
     try {
@@ -329,7 +341,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         file: spec.file,
         args: spec.args,
         cwd: row.worktreePath,
-        env: spec.env,
+        env: { ...spec.env, ...extraEnv },
         meta: {
           kind: 'agent',
           runId: row.id,

@@ -5,23 +5,32 @@ import path from 'node:path';
 import {
   ActiveProjectPreference,
   AgentCreateTicketsPayload,
+  type BrowserViewportSnapshot,
   BuildDemoBody,
   type BuildDemoResponse,
   CreateProjectBody,
   type CreateProjectResponse,
+  DeleteWorkspaceFileBody,
   FactoryRequestBody,
   type FactoryRequestResponse,
+  type FactorySettings,
   type Project,
   type ProjectAppType,
   type ProjectBlueprintResponse,
+  type ProjectCheckpoint,
   type ProjectRecommendation,
   type ProjectStatusSummary,
   type ProjectTechStack,
+  RollbackCheckpointBody,
   SyncWorktreeBody,
   type SyncWorktreeResponse,
   type TaskTemplate,
   type Ticket,
+  UpdateFactorySettingsBody,
   UpdateProjectBlueprintBody,
+  type WorkspaceFileContentResponse,
+  type WorkspaceFileListResponse,
+  WriteWorkspaceFileBody,
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -29,17 +38,27 @@ import { projects, settings } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import {
   buildWorkspaceDemo,
+  captureBrowserViewportSnapshot,
   computeProjectRecommendations,
   computeProjectStatusSummary,
+  deleteWorkspaceFileEntry,
+  exportProjectTarGz,
   generateClaudeInstructions,
   generateProjectBlueprint,
+  getFactorySettings,
   initLocalGitRepository,
+  listProjectCheckpoints,
+  listWorkspaceFilesFlat,
   readProjectBlueprint,
+  readWorkspaceFileContent,
+  rollbackProjectCheckpoint,
   seedStarterTickets,
   serveWorkspaceDemoAsset,
   syncWorktreeToMainWorkspace,
   TASK_TEMPLATES,
+  updateFactorySettings,
   writeProjectBlueprint,
+  writeWorkspaceFileContent,
 } from '../factory/service.js';
 import type { CoreDeps } from '../server.js';
 
@@ -353,6 +372,127 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     '/api/projects/:id/demo/:targetId/*',
     async (request, reply) => {
       return handleDemoRequest(request.params.id, request.params.targetId, request.params['*'] ?? '', reply);
+    },
+  );
+
+  app.get('/api/factory/settings', async (): Promise<FactorySettings> => getFactorySettings(db));
+
+  app.patch('/api/factory/settings', async (request): Promise<FactorySettings> => {
+    const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
+    return updateFactorySettings(db, patch);
+  });
+
+  const resolveProjectTargetPath = (projectId: string, targetId = 'main'): { project: Project; workspacePath: string } => {
+    const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
+    if (!row) throw notFound('no such project');
+    const project = toProject(row);
+    if (!targetId || targetId === 'main') {
+      return { project, workspacePath: project.path };
+    }
+    const run = runs.get(targetId);
+    if (!run || run.projectId !== project.id) throw notFound('no such run target for this project');
+    return { project, workspacePath: run.worktreePath };
+  };
+
+  app.get<{ Params: { id: string }; Querystring: { targetId?: string } }>(
+    '/api/projects/:id/files',
+    async (request): Promise<WorkspaceFileListResponse> => {
+      const targetId = request.query.targetId ?? 'main';
+      const { workspacePath } = resolveProjectTargetPath(request.params.id, targetId);
+      const entries = await listWorkspaceFilesFlat(workspacePath);
+      return {
+        targetId,
+        workspacePath,
+        entries,
+      };
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { targetId?: string; path?: string } }>(
+    '/api/projects/:id/files/content',
+    async (request): Promise<WorkspaceFileContentResponse> => {
+      const targetId = request.query.targetId ?? 'main';
+      const relPath = request.query.path;
+      if (!relPath) throw badRequest('missing path query parameter');
+      const { workspacePath } = resolveProjectTargetPath(request.params.id, targetId);
+      try {
+        return await readWorkspaceFileContent(workspacePath, targetId, relPath);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.put<{ Params: { id: string } }>(
+    '/api/projects/:id/files/content',
+    async (request): Promise<WorkspaceFileContentResponse> => {
+      const body = WriteWorkspaceFileBody.parse(request.body);
+      const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+      try {
+        return await writeWorkspaceFileContent(workspacePath, body.targetId, body.path, body.content);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/projects/:id/files',
+    async (request) => {
+      const body = DeleteWorkspaceFileBody.parse(request.body);
+      const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+      try {
+        await deleteWorkspaceFileEntry(workspacePath, body.path);
+        return { ok: true };
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/checkpoints',
+    async (request): Promise<ProjectCheckpoint[]> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      return listProjectCheckpoints(row.path);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/rollback',
+    async (request) => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = RollbackCheckpointBody.parse(request.body);
+      try {
+        return await rollbackProjectCheckpoint(row.path, body.sha);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/export.tar.gz',
+    async (request, reply) => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const archive = await exportProjectTarGz(row.path);
+      return reply
+        .header('content-type', 'application/gzip')
+        .header('content-disposition', `attachment; filename="${row.slug}.tar.gz"`)
+        .send(archive);
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { targetId?: string } }>(
+    '/api/projects/:id/browser-viewport',
+    async (request): Promise<BrowserViewportSnapshot> => {
+      const targetId = request.query.targetId ?? 'main';
+      const { project } = resolveProjectTargetPath(request.params.id, targetId);
+      const demoUrl = `http://127.0.0.1:${config.port}/api/projects/${project.id}/demo/${targetId}/`;
+      return captureBrowserViewportSnapshot({ targetUrl: demoUrl });
     },
   );
 

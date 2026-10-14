@@ -1,15 +1,21 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import {
   AgentCreateTicketsPayload,
+  type AgentId,
+  type AgentPersona,
   type AgentTicketDraft,
+  type BrowserViewportSnapshot,
   type BuildDemoResponse,
+  FactorySettings,
   type Project,
   type ProjectAppType,
   type ProjectBlueprintResponse,
+  type ProjectCheckpoint,
   type ProjectRecommendation,
   type ProjectStatusSummary,
   type ProjectTechStack,
@@ -17,8 +23,14 @@ import {
   type SyncWorktreeResponse,
   type TaskTemplate,
   type Ticket,
+  UpdateFactorySettingsBody,
   type WorkspaceDemoTarget,
+  type WorkspaceFileContentResponse,
+  type WorkspaceFileEntry,
 } from '@emberline/protocol';
+import { eq } from 'drizzle-orm';
+import type { Db } from '../db/index.js';
+import { settings } from '../db/schema.js';
 import type { TicketService } from '../tickets/service.js';
 
 const execFileAsync = promisify(execFile);
@@ -1012,10 +1024,11 @@ export async function serveWorkspaceDemoAsset(params: {
 
   if (ext === '.html' || ext === '.htm') {
     let html = await readFile(targetFile, 'utf-8');
+    const errorBridgeScript = `<script>(function(){function send(msg,stack){try{window.parent.postMessage({type:'emberline:demo-error',message:String(msg||'Runtime error'),stack:String(stack||'')},'*');}catch(_){}}window.addEventListener('error',function(e){send(e.message,e.error&&e.error.stack||e.filename+':'+e.lineno);});window.addEventListener('unhandledrejection',function(e){var r=e.reason;send(r&&r.message||String(r),r&&r.stack||'');});var origErr=console.error;console.error=function(){origErr.apply(console,arguments);try{var msg=Array.prototype.slice.call(arguments).map(function(a){return a instanceof Error?a.message:typeof a==='string'?a:JSON.stringify(a);}).join(' ');send(msg,'');}catch(_){}};})();</script>`;
     // Rewrite root-relative Vite/static asset URLs so they resolve under demoBaseHref
     html = html
       .replace(/\b(src|href)=["']\/(?!\/)/g, '$1="./')
-      .replace(/<head([^>]*)>/i, `<head$1><base href="${demoBaseHref}">`);
+      .replace(/<head([^>]*)>/i, `<head$1><base href="${demoBaseHref}">${errorBridgeScript}`);
     return {
       status: 200,
       contentType,
@@ -1030,4 +1043,366 @@ export async function serveWorkspaceDemoAsset(params: {
     body: buf,
   };
 }
+
+// --- F7 & F10: Unified Factory Settings & Multi-Provider Routing ------------
+
+const FACTORY_SETTINGS_KEY = 'factory.settings';
+const FACTORY_KEYS_KEY = 'factory.providerKeys';
+
+interface StoredProviderKeys {
+  anthropicApiKey?: string | null;
+  openaiApiKey?: string | null;
+  geminiApiKey?: string | null;
+}
+
+const DEFAULT_PERSONA_AGENTS: Record<AgentPersona, AgentId> = {
+  product_owner: 'claude',
+  architect: 'claude',
+  ui_ux: 'claude',
+  coder: 'claude',
+  dba: 'claude',
+  qa: 'claude',
+  security: 'claude',
+};
+
+export function getFactorySettings(db: Db): FactorySettings {
+  const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
+  const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
+  const raw = (row?.value ?? {}) as Partial<FactorySettings>;
+  const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
+
+  return FactorySettings.parse({
+    theme: raw.theme ?? 'dark',
+    defaultAgent: raw.defaultAgent ?? 'claude',
+    personaAgents: {
+      ...DEFAULT_PERSONA_AGENTS,
+      ...(raw.personaAgents ?? {}),
+    },
+    autoPickupReady: raw.autoPickupReady ?? true,
+    autoPickupBacklog: raw.autoPickupBacklog ?? false,
+    autoSyncToMain: raw.autoSyncToMain ?? true,
+    selfHealingBuildGate: raw.selfHealingBuildGate ?? true,
+    autoMoveToDone: raw.autoMoveToDone ?? true,
+    anthropicKeyConfigured: Boolean(keys.anthropicApiKey || process.env.ANTHROPIC_API_KEY),
+    openaiKeyConfigured: Boolean(keys.openaiApiKey || process.env.OPENAI_API_KEY),
+    geminiKeyConfigured: Boolean(keys.geminiApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+  });
+}
+
+export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody): FactorySettings {
+  const body = UpdateFactorySettingsBody.parse(input);
+  const current = getFactorySettings(db);
+
+  const nextValue = {
+    theme: body.theme ?? current.theme,
+    defaultAgent: body.defaultAgent ?? current.defaultAgent,
+    personaAgents: {
+      ...current.personaAgents,
+      ...(body.personaAgents ?? {}),
+    },
+    autoPickupReady: body.autoPickupReady ?? current.autoPickupReady,
+    autoPickupBacklog: body.autoPickupBacklog ?? current.autoPickupBacklog,
+    autoSyncToMain: body.autoSyncToMain ?? current.autoSyncToMain,
+    selfHealingBuildGate: body.selfHealingBuildGate ?? current.selfHealingBuildGate,
+    autoMoveToDone: body.autoMoveToDone ?? current.autoMoveToDone,
+  };
+
+  db.insert(settings)
+    .values({ key: FACTORY_SETTINGS_KEY, value: nextValue })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value: nextValue },
+    })
+    .run();
+
+  if (
+    body.anthropicApiKey !== undefined ||
+    body.openaiApiKey !== undefined ||
+    body.geminiApiKey !== undefined
+  ) {
+    const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
+    const prevKeys = (keysRow?.value ?? {}) as StoredProviderKeys;
+    const nextKeys: StoredProviderKeys = {
+      anthropicApiKey:
+        body.anthropicApiKey === undefined ? prevKeys.anthropicApiKey : body.anthropicApiKey || null,
+      openaiApiKey:
+        body.openaiApiKey === undefined ? prevKeys.openaiApiKey : body.openaiApiKey || null,
+      geminiApiKey:
+        body.geminiApiKey === undefined ? prevKeys.geminiApiKey : body.geminiApiKey || null,
+    };
+    db.insert(settings)
+      .values({ key: FACTORY_KEYS_KEY, value: nextKeys })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value: nextKeys },
+      })
+      .run();
+  }
+
+  return getFactorySettings(db);
+}
+
+export function getProviderEnvFromSettings(db: Db): Record<string, string> {
+  const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
+  const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
+  const env: Record<string, string> = {};
+  if (keys.anthropicApiKey) env.ANTHROPIC_API_KEY = keys.anthropicApiKey;
+  if (keys.openaiApiKey) env.OPENAI_API_KEY = keys.openaiApiKey;
+  if (keys.geminiApiKey) {
+    env.GEMINI_API_KEY = keys.geminiApiKey;
+    env.GOOGLE_API_KEY = keys.geminiApiKey;
+  }
+  return env;
+}
+
+export function resolveAgentForPersona(
+  db: Db,
+  persona: AgentPersona,
+  explicitAgent?: AgentId,
+): AgentId {
+  if (explicitAgent) return explicitAgent;
+  const cfg = getFactorySettings(db);
+  return cfg.personaAgents[persona] ?? cfg.defaultAgent ?? 'claude';
+}
+
+// --- F8: VS Code-like Code Explorer & File Editor ---------------------------
+
+const EXPLORER_IGNORED = new Set([
+  '.git',
+  'node_modules',
+  '.emberline',
+  '.turbo',
+  '.next',
+  'coverage',
+]);
+
+function resolveSafeWorkspaceFile(workspacePath: string, relPath: string): string {
+  const cleanRel = relPath.replace(/^\/+/, '');
+  if (!cleanRel) throw new Error('File path cannot be empty');
+  const absRoot = path.resolve(workspacePath);
+  const resolved = path.resolve(absRoot, cleanRel);
+  if (!resolved.startsWith(absRoot + path.sep)) {
+    throw new Error('Path traversal outside workspace is forbidden');
+  }
+  return resolved;
+}
+
+export async function listWorkspaceFilesFlat(workspacePath: string): Promise<WorkspaceFileEntry[]> {
+  if (!existsSync(workspacePath)) return [];
+  const entries: WorkspaceFileEntry[] = [];
+  const absRoot = path.resolve(workspacePath);
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > 6 || entries.length >= 800) return;
+    let items;
+    try {
+      items = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    items.sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const item of items) {
+      if (EXPLORER_IGNORED.has(item.name)) continue;
+      const fullPath = path.join(dir, item.name);
+      const relPath = path.relative(absRoot, fullPath);
+      try {
+        const st = await stat(fullPath);
+        if (item.isDirectory()) {
+          entries.push({
+            path: relPath,
+            name: item.name,
+            kind: 'directory',
+            sizeBytes: 0,
+            mtime: st.mtime.toISOString(),
+          });
+          await walk(fullPath, depth + 1);
+        } else if (item.isFile()) {
+          entries.push({
+            path: relPath,
+            name: item.name,
+            kind: 'file',
+            sizeBytes: st.size,
+            mtime: st.mtime.toISOString(),
+          });
+        }
+      } catch {
+        // ignore broken symlink
+      }
+      if (entries.length >= 800) return;
+    }
+  }
+
+  await walk(absRoot, 0);
+  return entries;
+}
+
+export async function readWorkspaceFileContent(
+  workspacePath: string,
+  targetId: string,
+  relPath: string,
+): Promise<WorkspaceFileContentResponse> {
+  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  if (!existsSync(absFile)) {
+    throw new Error(`File not found: ${relPath}`);
+  }
+  const st = await stat(absFile);
+  if (st.isDirectory()) {
+    throw new Error(`Cannot read directory as file: ${relPath}`);
+  }
+  const buf = await readFile(absFile);
+  const sample = buf.subarray(0, 4096);
+  const binary = sample.includes(0);
+  return {
+    targetId,
+    path: relPath,
+    content: binary ? '' : buf.toString('utf-8'),
+    binary,
+    sizeBytes: st.size,
+  };
+}
+
+export async function writeWorkspaceFileContent(
+  workspacePath: string,
+  targetId: string,
+  relPath: string,
+  content: string,
+): Promise<WorkspaceFileContentResponse> {
+  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  await mkdir(path.dirname(absFile), { recursive: true });
+  await writeFile(absFile, content, 'utf-8');
+  const st = await stat(absFile);
+  return {
+    targetId,
+    path: relPath,
+    content,
+    binary: false,
+    sizeBytes: st.size,
+  };
+}
+
+export async function deleteWorkspaceFileEntry(workspacePath: string, relPath: string): Promise<void> {
+  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  await rm(absFile, { recursive: true, force: true });
+}
+
+// --- F9: Checkpoints, Rollback & Project Archive Export ---------------------
+
+export async function listProjectCheckpoints(workspacePath: string): Promise<ProjectCheckpoint[]> {
+  if (!existsSync(path.join(workspacePath, '.git'))) return [];
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['log', '-n', '25', '--pretty=format:%H%x09%h%x09%s%x09%an%x09%cI'],
+      { cwd: workspacePath },
+    );
+    return stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [sha = '', shortSha = '', subject = '', author = '', createdAt = ''] = line.split('\t');
+        return { sha, shortSha, subject, author, createdAt };
+      })
+      .filter((c) => Boolean(c.sha));
+  } catch {
+    return [];
+  }
+}
+
+export async function rollbackProjectCheckpoint(
+  workspacePath: string,
+  sha: string,
+): Promise<{ ok: boolean; sha: string; summary: string }> {
+  if (!/^[0-9a-f]{4,64}$/i.test(sha.trim())) {
+    throw new Error('Invalid commit SHA');
+  }
+  await execFileAsync('git', ['reset', '--hard', sha.trim()], { cwd: workspacePath });
+  return {
+    ok: true,
+    sha: sha.trim(),
+    summary: `Main workspace rolled back to checkpoint ${sha.trim().slice(0, 8)}.`,
+  };
+}
+
+export async function exportProjectTarGz(workspacePath: string): Promise<Buffer> {
+  const tmpFile = path.join(os.tmpdir(), `emberline-export-${Date.now()}.tar.gz`);
+  try {
+    await execFileAsync(
+      'tar',
+      [
+        '-czf',
+        tmpFile,
+        '--exclude=.git',
+        '--exclude=node_modules',
+        '--exclude=.emberline',
+        '.',
+      ],
+      { cwd: workspacePath, timeout: 60_000 },
+    );
+    return await readFile(tmpFile);
+  } finally {
+    await rm(tmpFile, { force: true }).catch(() => undefined);
+  }
+}
+
+// --- F11: Live Browser / X11 & Headless Chromium Viewport Stream ------------
+
+export async function captureBrowserViewportSnapshot(params: {
+  targetUrl: string | null;
+}): Promise<BrowserViewportSnapshot> {
+  const nowIso = new Date().toISOString();
+  const tmpPng = path.join(os.tmpdir(), `emberline-viewport-${Date.now()}.png`);
+
+  try {
+    // 1. If a demo or preview URL is available, capture live Chromium screenshot
+    if (params.targetUrl) {
+      const bins = ['chromium', 'chromium-browser', 'google-chrome'];
+      for (const bin of bins) {
+        try {
+          await execFileAsync(
+            bin,
+            [
+              '--headless',
+              '--no-sandbox',
+              '--disable-gpu',
+              '--hide-scrollbars',
+              '--window-size=1280,720',
+              `--screenshot=${tmpPng}`,
+              params.targetUrl,
+            ],
+            { timeout: 15_000 },
+          );
+          if (existsSync(tmpPng)) {
+            const buf = await readFile(tmpPng);
+            return {
+              available: true,
+              source: 'headless_browser',
+              targetUrl: params.targetUrl,
+              imageDataUrl: `data:image/png;base64,${buf.toString('base64')}`,
+              capturedAt: nowIso,
+              message: `Captured live Chromium frame from ${params.targetUrl}`,
+            };
+          }
+        } catch {
+          // try next binary
+        }
+      }
+    }
+
+    return {
+      available: false,
+      source: 'none',
+      targetUrl: params.targetUrl,
+      imageDataUrl: null,
+      capturedAt: nowIso,
+      message: 'Use the embedded Live Demo Player above or start a Playwright/Preview session.',
+    };
+  } finally {
+    await rm(tmpPng, { force: true }).catch(() => undefined);
+  }
+}
+
 

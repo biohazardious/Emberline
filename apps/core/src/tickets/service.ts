@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   type AgentCreateTicketsPayload,
   AgentCreateTicketsPayload as AgentCreateTicketsPayloadSchema,
@@ -23,7 +25,10 @@ import { projects, tickets } from '../db/schema.js';
 import { conflict, notFound } from '../errors.js';
 import {
   buildFactoryOrchestratorPrompt,
+  buildWorkspaceDemo,
+  getFactorySettings,
   ingestAgentTicketsFile,
+  resolveAgentForPersona,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
 import { slugify } from '../routes/projects.js';
@@ -82,6 +87,17 @@ export function statusForRunState(state: Run['state']): TicketStatus | null {
   return null; // failed: stays put and shows the failed run
 }
 
+function hasNpmBuildScript(workspacePath: string): boolean {
+  const pkgPath = path.join(workspacePath, 'package.json');
+  if (!existsSync(pkgPath)) return false;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
+    return Boolean(pkg.scripts?.build);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Board tickets. Starting a ticket creates a run on its own branch; afterwards the ticket's
  * column follows the run (working -> In progress, turn finished -> Review) unless the user
@@ -89,6 +105,7 @@ export function statusForRunState(state: Run['state']): TicketStatus | null {
  */
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly autoChainProjects = new Set<string>();
+  private readonly selfHealedRuns = new Set<string>();
 
   constructor(
     private readonly db: Db,
@@ -169,7 +186,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * Starts the highest-priority `ready` ticket for `projectId` if no run is currently active on the project.
+   * Starts the highest-priority `ready` (or `backlog` when `autoPickupBacklog` is enabled) ticket
+   * for `projectId` if no run is currently active on the project.
    */
   async dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
     const projectRuns = this.runs.list().filter((r) => r.projectId === projectId);
@@ -183,11 +201,20 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     );
     if (hasActive) return null;
 
-    const readyTickets = this.list(projectId)
+    const fSettings = getFactorySettings(this.db);
+    const allTickets = this.list(projectId);
+    const readyTickets = allTickets
       .filter((t) => t.status === 'ready')
       .sort((a, b) => b.priority - a.priority || a.position - b.position);
 
-    const next = readyTickets[0];
+    let next = readyTickets[0];
+    if (!next && fSettings.autoPickupBacklog) {
+      const backlogTickets = allTickets
+        .filter((t) => t.status === 'backlog')
+        .sort((a, b) => b.priority - a.priority || a.position - b.position);
+      next = backlogTickets[0];
+    }
+
     if (!next) {
       this.autoChainProjects.delete(projectId);
       return null;
@@ -232,24 +259,64 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
 
-    // 2. If auto-chaining is active (or agent spawned sub-tickets), sync worktree into main workspace
-    //    so subsequent specialist personas branch off the updated codebase and Live Demo stays current!
-    if (this.autoChainProjects.has(run.projectId) || Boolean(ingested)) {
-      if (run.worktreePath && run.worktreePath !== projectRow.path) {
-        const ticketRow = run.ticketId
-          ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
-          : undefined;
-        await syncWorktreeToMainWorkspace({
-          worktreePath: run.worktreePath,
-          mainWorkspacePath: projectRow.path,
-          ticketKey: ticketRow?.key ?? null,
-          runId: run.id,
-        }).catch(() => undefined);
+    const isFactoryRun = this.autoChainProjects.has(run.projectId) || Boolean(ingested);
+    if (!isFactoryRun) return;
+
+    const fSettings = getFactorySettings(this.db);
+
+    // 2. Self-Healing Build Gate: if enabled and package.json has a build script, verify the build
+    //    before syncing or moving to Done. If the build fails and the run hasn't been self-healed yet,
+    //    resume the agent with the build error log so it fixes its own mistake automatically.
+    if (
+      fSettings.selfHealingBuildGate &&
+      !this.selfHealedRuns.has(run.id) &&
+      run.resumable &&
+      run.worktreePath &&
+      hasNpmBuildScript(run.worktreePath)
+    ) {
+      this.selfHealedRuns.add(run.id);
+      const buildRes = await buildWorkspaceDemo({
+        projectId: run.projectId,
+        targetId: run.id,
+        workspacePath: run.worktreePath,
+      }).catch(() => null);
+      if (buildRes && !buildRes.ok) {
+        const errorExcerpt = buildRes.output.slice(-2_000);
+        await this.runs
+          .resume(
+            run.id,
+            `[Self-Healing Build Gate] The project build (\`npm run build\`) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the build/compile errors above and verify the build succeeds before finishing.`,
+          )
+          .catch(() => undefined);
+        return;
       }
     }
 
-    // 3. Dispatch the next specialist ticket in the project's Ready queue if auto-chaining is active
-    if (this.autoChainProjects.has(run.projectId)) {
+    // 3. Auto-sync worktree into main workspace so subsequent specialist personas branch off the
+    //    updated codebase and Live Demo stays current!
+    if (fSettings.autoSyncToMain && run.worktreePath && run.worktreePath !== projectRow.path) {
+      const ticketRow = run.ticketId
+        ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
+        : undefined;
+      await syncWorktreeToMainWorkspace({
+        worktreePath: run.worktreePath,
+        mainWorkspacePath: projectRow.path,
+        ticketKey: ticketRow?.key ?? null,
+        runId: run.id,
+      }).catch(() => undefined);
+    }
+
+    // 4. Auto-move completed factory ticket to Done when enabled
+    if (fSettings.autoMoveToDone && run.ticketId) {
+      try {
+        this.moveToTop(run.ticketId, 'done');
+      } catch {
+        // ignore if ticket was removed
+      }
+    }
+
+    // 5. Dispatch the next specialist ticket in the project's queue if auto-chaining is active
+    if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     }
   }
@@ -327,13 +394,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const ticket = this.get(id);
     if (this.runs.activeRunForTicket(id)) throw conflict('this ticket already has a running agent');
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
+    const effectivePersona = persona ?? ticket.persona;
     const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
     const run = await this.scheduler.submit(
       {
         projectId: ticket.projectId,
         prompt: ticketPrompt(ticket),
         permissionMode,
-        persona: persona ?? ticket.persona,
+        persona: effectivePersona,
+        agent: resolveAgentForPersona(this.db, effectivePersona),
       },
       {
         ticketId: id,

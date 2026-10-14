@@ -4,11 +4,15 @@ import { decoratePromptWithPersona, PERSONA_CATALOG } from '@emberline/adapter-c
 import type {
   ActiveProjectPreference,
   CreateProjectResponse,
+  FactorySettings,
   ProjectBlueprintResponse,
+  ProjectCheckpoint,
   ProjectRecommendation,
   ProjectStatusSummary,
   TaskTemplate,
   Ticket,
+  WorkspaceFileContentResponse,
+  WorkspaceFileListResponse,
 } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -119,6 +123,16 @@ describe('AI Coding Factory (F1–F4)', () => {
     const recs = recsRes.json() as ProjectRecommendation[];
     expect(recs.length).toBeGreaterThan(0);
     expect(recs.some((r) => r.id === 'dispatch-next-ticket')).toBe(true);
+
+    // Faz F9: Checkpoints list on git-initialized wizard project
+    const checkpointsRes = await t.app.inject({
+      url: `/api/projects/${project.id}/checkpoints`,
+      headers: { cookie },
+    });
+    expect(checkpointsRes.statusCode).toBe(200);
+    const checkpoints = checkpointsRes.json() as ProjectCheckpoint[];
+    expect(checkpoints.length).toBeGreaterThanOrEqual(1);
+    expect(checkpoints[0]?.subject).toContain('chore: initialize project blueprint');
   });
 
   it('serves ready-made task templates and supports manual project seeding & switching', async () => {
@@ -208,6 +222,7 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(demoHtmlRes.headers['content-type']).toContain('text/html');
     expect(demoHtmlRes.body).toContain(`<base href="/api/projects/${p1.id}/demo/main/">`);
     expect(demoHtmlRes.body).toContain('src="./assets/app.js"');
+    expect(demoHtmlRes.body).toContain('emberline:demo-error');
 
     const demoJsRes = await t.app.inject({
       url: `/api/projects/${p1.id}/demo/main/assets/app.js`,
@@ -245,5 +260,72 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(delegated).toHaveLength(2);
     expect(delegated.map((tk) => tk.persona)).toEqual(['coder', 'ui_ux']);
     expect(delegated.every((tk) => tk.status === 'ready')).toBe(true);
+
+    // Faz F7 & F10: Factory Settings (Theme, Auto-Pilot, Multi-Provider Persona Routing)
+    const getSettingsRes = await t.app.inject({
+      url: '/api/factory/settings',
+      headers: { cookie },
+    });
+    expect(getSettingsRes.statusCode).toBe(200);
+    const initialSettings = getSettingsRes.json() as FactorySettings;
+    expect(initialSettings.theme).toBe('dark');
+    expect(initialSettings.autoPickupReady).toBe(true);
+
+    const patchSettingsRes = await t.app.inject({
+      method: 'PATCH',
+      url: '/api/factory/settings',
+      headers,
+      payload: {
+        theme: 'light',
+        autoPickupBacklog: true,
+        personaAgents: {
+          ui_ux: 'gemini',
+          coder: 'claude',
+        },
+        geminiApiKey: 'test-gemini-key-123',
+      },
+    });
+    expect(patchSettingsRes.statusCode).toBe(200);
+    const updatedSettings = patchSettingsRes.json() as FactorySettings;
+    expect(updatedSettings.theme).toBe('light');
+    expect(updatedSettings.autoPickupBacklog).toBe(true);
+    expect(updatedSettings.personaAgents.ui_ux).toBe('gemini');
+    expect(updatedSettings.geminiKeyConfigured).toBe(true);
+
+    // Faz F8: VS Code Explorer file tree, read, write, and delete APIs
+    const writeFileRes = await t.app.inject({
+      method: 'PUT',
+      url: `/api/projects/${p1.id}/files/content`,
+      headers,
+      payload: {
+        targetId: 'main',
+        path: 'src/scoreCounter.ts',
+        content: 'export const incrementScore = (s: number) => s + 1;\n',
+      },
+    });
+    expect(writeFileRes.statusCode).toBe(200);
+
+    const readFileRes = await t.app.inject({
+      url: `/api/projects/${p1.id}/files/content?targetId=main&path=src%2FscoreCounter.ts`,
+      headers: { cookie },
+    });
+    expect(readFileRes.statusCode).toBe(200);
+    expect((readFileRes.json() as WorkspaceFileContentResponse).content).toContain('incrementScore');
+
+    const listFilesRes = await t.app.inject({
+      url: `/api/projects/${p1.id}/files?targetId=main`,
+      headers: { cookie },
+    });
+    expect(listFilesRes.statusCode).toBe(200);
+    const fileList = listFilesRes.json() as WorkspaceFileListResponse;
+    expect(fileList.entries.some((f) => f.path === 'src/scoreCounter.ts')).toBe(true);
+
+    const deleteFileRes = await t.app.inject({
+      method: 'DELETE',
+      url: `/api/projects/${p1.id}/files`,
+      headers,
+      payload: { targetId: 'main', path: 'src/scoreCounter.ts' },
+    });
+    expect(deleteFileRes.statusCode).toBe(200);
   });
 });

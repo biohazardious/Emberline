@@ -227,7 +227,7 @@ export const RunState = z.enum(['queued', 'starting', 'working', 'waiting_input'
 export type RunState = z.infer<typeof RunState>;
 
 /** Supported CLI coding agent adapters. */
-export const AgentId = z.enum(['claude', 'codex', 'aider']);
+export const AgentId = z.enum(['claude', 'gemini', 'codex', 'aider']);
 export type AgentId = z.infer<typeof AgentId>;
 
 export const Run = z.object({
@@ -754,4 +754,114 @@ export const FactoryRequestResponse = z.object({
   run: Run,
 });
 export type FactoryRequestResponse = z.infer<typeof FactoryRequestResponse>;
+
+// --- unified factory settings, theme, code explorer, checkpoints & browser (F7-F11) ---
+
+export const ThemeMode = z.enum(['dark', 'light']);
+export type ThemeMode = z.infer<typeof ThemeMode>;
+
+export const PersonaAgentMap = z.object({
+  product_owner: AgentId.default('claude'),
+  architect: AgentId.default('claude'),
+  ui_ux: AgentId.default('claude'),
+  coder: AgentId.default('claude'),
+  dba: AgentId.default('claude'),
+  qa: AgentId.default('claude'),
+  security: AgentId.default('claude'),
+});
+export type PersonaAgentMap = z.infer<typeof PersonaAgentMap>;
+
+export const FactorySettings = z.object({
+  theme: ThemeMode.default('dark'),
+  defaultAgent: AgentId.default('claude'),
+  personaAgents: PersonaAgentMap,
+  autoPickupReady: z.boolean().default(true),
+  autoPickupBacklog: z.boolean().default(false),
+  autoSyncToMain: z.boolean().default(true),
+  selfHealingBuildGate: z.boolean().default(true),
+  autoMoveToDone: z.boolean().default(true),
+  anthropicKeyConfigured: z.boolean().default(false),
+  openaiKeyConfigured: z.boolean().default(false),
+  geminiKeyConfigured: z.boolean().default(false),
+});
+export type FactorySettings = z.infer<typeof FactorySettings>;
+
+export const UpdateFactorySettingsBody = z
+  .object({
+    theme: ThemeMode,
+    defaultAgent: AgentId,
+    personaAgents: PersonaAgentMap.partial(),
+    autoPickupReady: z.boolean(),
+    autoPickupBacklog: z.boolean(),
+    autoSyncToMain: z.boolean(),
+    selfHealingBuildGate: z.boolean(),
+    autoMoveToDone: z.boolean(),
+    anthropicApiKey: z.string().trim().max(500).nullable(),
+    openaiApiKey: z.string().trim().max(500).nullable(),
+    geminiApiKey: z.string().trim().max(500).nullable(),
+  })
+  .partial();
+export type UpdateFactorySettingsBody = z.input<typeof UpdateFactorySettingsBody>;
+
+export const WorkspaceFileEntry = z.object({
+  path: z.string(),
+  name: z.string(),
+  kind: z.enum(['file', 'directory']),
+  sizeBytes: z.number().int().nonnegative(),
+  mtime: z.string(),
+});
+export type WorkspaceFileEntry = z.infer<typeof WorkspaceFileEntry>;
+
+export const WorkspaceFileListResponse = z.object({
+  targetId: z.string(),
+  workspacePath: z.string(),
+  entries: z.array(WorkspaceFileEntry),
+});
+export type WorkspaceFileListResponse = z.infer<typeof WorkspaceFileListResponse>;
+
+export const WorkspaceFileContentResponse = z.object({
+  targetId: z.string(),
+  path: z.string(),
+  content: z.string(),
+  binary: z.boolean(),
+  sizeBytes: z.number().int().nonnegative(),
+});
+export type WorkspaceFileContentResponse = z.infer<typeof WorkspaceFileContentResponse>;
+
+export const WriteWorkspaceFileBody = z.object({
+  targetId: z.string().default('main'),
+  path: z.string().trim().min(1).max(1024),
+  content: z.string().max(2_000_000),
+});
+export type WriteWorkspaceFileBody = z.input<typeof WriteWorkspaceFileBody>;
+
+export const DeleteWorkspaceFileBody = z.object({
+  targetId: z.string().default('main'),
+  path: z.string().trim().min(1).max(1024),
+});
+export type DeleteWorkspaceFileBody = z.input<typeof DeleteWorkspaceFileBody>;
+
+export const ProjectCheckpoint = z.object({
+  sha: z.string(),
+  shortSha: z.string(),
+  subject: z.string(),
+  author: z.string(),
+  createdAt: z.string(),
+});
+export type ProjectCheckpoint = z.infer<typeof ProjectCheckpoint>;
+
+export const RollbackCheckpointBody = z.object({
+  sha: z.string().trim().min(4).max(64),
+});
+export type RollbackCheckpointBody = z.input<typeof RollbackCheckpointBody>;
+
+export const BrowserViewportSnapshot = z.object({
+  available: z.boolean(),
+  source: z.enum(['x11', 'headless_browser', 'none']),
+  targetUrl: z.string().nullable(),
+  imageDataUrl: z.string().nullable(),
+  capturedAt: z.string(),
+  message: z.string().nullable(),
+});
+export type BrowserViewportSnapshot = z.infer<typeof BrowserViewportSnapshot>;
 

@@ -204,17 +204,18 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
 }
 
 export interface SecondaryCliLaunchOptions {
-  agent: 'codex' | 'aider';
+  agent: 'gemini' | 'codex' | 'aider';
   runId: string;
   hookToken: string;
   coreUrl: string;
   hookCommand?: string;
   permissionMode?: ClaudePermissionMode;
   prompt?: string;
+  extraEnv?: Record<string, string>;
 }
 
 /**
- * Builds a launch spec for secondary CLI coding agents (`codex` or `aider`), wrapping
+ * Builds a launch spec for secondary CLI coding agents (`gemini`, `codex`, or `aider`), wrapping
  * execution with `emberline-hook` lifecycle signals so core tracks `working` -> `done` / `failed`.
  */
 export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
@@ -223,7 +224,13 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     options.permissionMode === 'acceptEdits' || options.permissionMode === 'bypassPermissions';
 
   let cliCmd: string;
-  if (options.agent === 'codex') {
+  if (options.agent === 'gemini') {
+    const bin = process.env.EMBERLINE_GEMINI_COMMAND?.trim() || 'gemini';
+    const flags = autoApprove ? '--yolo ' : '';
+    cliCmd = options.prompt
+      ? `${bin} ${flags}-p "$EMBERLINE_PROMPT"`
+      : `${bin} ${flags}`.trim();
+  } else if (options.agent === 'codex') {
     const bin = process.env.EMBERLINE_CODEX_COMMAND?.trim() || 'codex';
     const flags = autoApprove ? '--full-auto ' : '';
     cliCmd = options.prompt ? `${bin} ${flags}"$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
@@ -252,6 +259,7 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     file: 'sh',
     args: ['-c', script],
     env: {
+      ...options.extraEnv,
       EMBERLINE_RUN_ID: options.runId,
       EMBERLINE_HOOK_TOKEN: options.hookToken,
       EMBERLINE_CORE_URL: options.coreUrl,

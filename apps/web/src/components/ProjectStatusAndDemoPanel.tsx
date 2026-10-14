@@ -1,12 +1,15 @@
 import type {
+  BrowserViewportSnapshot,
   BuildDemoResponse,
   FactoryRequestResponse,
   Project,
+  ProjectCheckpoint,
   ProjectStatusSummary,
   SyncWorktreeResponse,
+  Ticket,
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { usePoll } from '../hooks/usePoll';
@@ -18,11 +21,25 @@ const FACTORY_EXAMPLES = [
   'Oyun bittiğinde skor kaydetme ekranı ve liderlik tablosu (leaderboard) ekle',
 ] as const;
 
+interface DemoRuntimeError {
+  message: string;
+  stack?: string;
+  timestamp: string;
+}
+
 export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
   const statusPoll = usePoll(
     () => api<ProjectStatusSummary>(`/api/projects/${project.id}/status`),
     4_000,
+  );
+  const ticketsPoll = usePoll(
+    () => api<Ticket[]>(`/api/projects/${project.id}/tickets`),
+    5_000,
+  );
+  const checkpointsPoll = usePoll(
+    () => api<ProjectCheckpoint[]>(`/api/projects/${project.id}/checkpoints`),
+    10_000,
   );
 
   const [selectedTargetId, setSelectedTargetId] = useState<string>('main');
@@ -37,6 +54,51 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [startingPipeline, setStartingPipeline] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
 
+  // Faz F9: Demo Runtime Error Catcher + Quick Tweak + Checkpoints
+  const [demoErrors, setDemoErrors] = useState<DemoRuntimeError[]>([]);
+  const [quickTweakPrompt, setQuickTweakPrompt] = useState('');
+  const [submittingTweak, setSubmittingTweak] = useState(false);
+  const [checkpointsOpen, setCheckpointsOpen] = useState(false);
+  const [rollingBackSha, setRollingBackSha] = useState<string>();
+
+  // Faz F11: Live Browser / Headless Chromium Viewport Stream
+  const [viewportOpen, setViewportOpen] = useState(false);
+  const [viewportSnap, setViewportSnap] = useState<BrowserViewportSnapshot | null>(null);
+  const [viewportLoading, setViewportLoading] = useState(false);
+
+  // Listen for runtime errors forwarded by the injected errorBridgeScript inside the Demo iframe
+  useEffect(() => {
+    const onMessage = (ev: MessageEvent) => {
+      const data = ev.data as { type?: string; message?: string; stack?: string } | undefined;
+      if (data && data.type === 'emberline:demo-error' && typeof data.message === 'string') {
+        setDemoErrors((prev) => [
+          {
+            message: data.message!,
+            stack: data.stack,
+            timestamp: new Date().toLocaleTimeString(),
+          },
+          ...prev.slice(0, 4),
+        ]);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  const fetchViewportSnapshot = async (targetId: string) => {
+    setViewportLoading(true);
+    try {
+      const snap = await api<BrowserViewportSnapshot>(
+        `/api/projects/${project.id}/browser-viewport?targetId=${encodeURIComponent(targetId)}`,
+      );
+      setViewportSnap(snap);
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+    } finally {
+      setViewportLoading(false);
+    }
+  };
+
   const summary = statusPoll.data;
   if (!summary) return null;
 
@@ -47,7 +109,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     targets[0]!;
 
   const playableTargets = targets.filter((t) => Boolean(t.demoUrl));
-  const bestPlayableTarget = playableTargets[0] ?? targets.find((t) => t.hasBuildScript) ?? targets[0];
+  const bestPlayableTarget =
+    playableTargets[0] ?? targets.find((t) => t.hasBuildScript) ?? targets[0];
 
   const handleSubmitFactoryRequest = async (e: FormEvent) => {
     e.preventDefault();
@@ -68,6 +131,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       );
       setFactoryPrompt('');
       await statusPoll.refresh();
+      await ticketsPoll.refresh();
       setBanner({
         kind: 'ok',
         text: `Factory request dispatched to Product Owner (${res.ticket.key}). PO will refine the spec, create specialist tickets (Coder, UI/UX, QA), and ${autoDispatch ? 'auto-dispatch them sequentially' : 'place them in Ready'}.`,
@@ -79,15 +143,95 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     }
   };
 
+  const handleQuickDemoTweak = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = quickTweakPrompt.trim();
+    if (!trimmed) return;
+    setSubmittingTweak(true);
+    setBanner(undefined);
+    try {
+      const res = await api<FactoryRequestResponse>(
+        `/api/projects/${project.id}/factory-request`,
+        'POST',
+        {
+          prompt: `[Live Demo Quick Tweak] ${trimmed}`,
+          leadPersona: 'coder',
+          permissionMode: 'acceptEdits',
+          autoDispatch: true,
+        },
+      );
+      setQuickTweakPrompt('');
+      await statusPoll.refresh();
+      await ticketsPoll.refresh();
+      setBanner({
+        kind: 'ok',
+        text: `Quick demo tweak dispatched (${res.ticket.key}). Workspace will auto-sync when finished.`,
+      });
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+    } finally {
+      setSubmittingTweak(false);
+    }
+  };
+
+  const handleFixDemoErrorWithCoder = async (errItem: DemoRuntimeError) => {
+    setSubmittingTweak(true);
+    setBanner(undefined);
+    try {
+      const res = await api<FactoryRequestResponse>(
+        `/api/projects/${project.id}/factory-request`,
+        'POST',
+        {
+          prompt: `[Runtime Error Fix] The Live Demo threw the following runtime error in the browser:\n\nError: ${errItem.message}\n${errItem.stack ? `Stack:\n\`\`\`\n${errItem.stack.slice(0, 1200)}\n\`\`\`\n` : ''}\nPlease diagnose and fix the root cause in the codebase and rebuild the bundle.`,
+          leadPersona: 'coder',
+          permissionMode: 'acceptEdits',
+          autoDispatch: true,
+        },
+      );
+      setDemoErrors([]);
+      await statusPoll.refresh();
+      await ticketsPoll.refresh();
+      setBanner({
+        kind: 'ok',
+        text: `Runtime error sent to Coder Agent (${res.ticket.key}) for automatic self-healing.`,
+      });
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+    } finally {
+      setSubmittingTweak(false);
+    }
+  };
+
+  const handleRollbackCheckpoint = async (sha: string) => {
+    if (!window.confirm(`Roll back main workspace to checkpoint ${sha.slice(0, 8)}?`)) return;
+    setRollingBackSha(sha);
+    setBanner(undefined);
+    try {
+      await api(`/api/projects/${project.id}/rollback`, 'POST', { sha });
+      await checkpointsPoll.refresh();
+      await statusPoll.refresh();
+      setIframeNonce((n) => n + 1);
+      setBanner({
+        kind: 'ok',
+        text: `Rolled back main workspace to checkpoint ${sha.slice(0, 8)}.`,
+      });
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+    } finally {
+      setRollingBackSha(undefined);
+    }
+  };
+
   const handleRunPipeline = async () => {
     setStartingPipeline(true);
     setBanner(undefined);
     try {
       await api(`/api/projects/${project.id}/run-pipeline`, 'POST', {});
       await statusPoll.refresh();
+      await ticketsPoll.refresh();
       setBanner({
         kind: 'ok',
-        text: 'Sequential multi-persona pipeline activated for Ready tickets.',
+        text: 'Sequential multi-persona pipeline activated for Ready/Backlog tickets.',
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
@@ -106,6 +250,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         { runId },
       );
       await statusPoll.refresh();
+      await checkpointsPoll.refresh();
       setSelectedTargetId('main');
       setBanner({ kind: 'ok', text: res.summary });
     } catch (e) {
@@ -128,6 +273,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       if (res.ok && res.demoUrl) {
         setSelectedTargetId(target.id);
         setIframeNonce((n) => n + 1);
+        setDemoErrors([]);
         if (autoOpen) setPreviewOpen(true);
         setBanner({
           kind: 'ok',
@@ -148,6 +294,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
   const handleOpenDemo = async (target: WorkspaceDemoTarget) => {
     setSelectedTargetId(target.id);
+    setDemoErrors([]);
     if (target.demoUrl) {
       setPreviewOpen(true);
       setIframeNonce((n) => n + 1);
@@ -159,6 +306,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   };
 
   const { ticketCounts } = summary;
+  const pipelineTickets = (ticketsPoll.data ?? []).slice(0, 10);
+  const checkpoints = checkpointsPoll.data ?? [];
 
   return (
     <section
@@ -237,8 +386,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {ticketCounts.ready > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {(ticketCounts.ready > 0 || ticketCounts.backlog > 0) && (
             <button
               type="button"
               className="ghost"
@@ -250,9 +399,11 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               }}
               disabled={startingPipeline}
               onClick={() => void handleRunPipeline()}
-              title="Sequentially run all Ready tickets across their assigned personas and sync each to Main"
+              title="Sequentially run Ready/Backlog tickets across their assigned personas and sync each to Main"
             >
-              {startingPipeline ? 'Starting…' : `⚡ Run Ready Pipeline (${ticketCounts.ready})`}
+              {startingPipeline
+                ? 'Starting…'
+                : `⚡ Run Pipeline (${ticketCounts.ready || ticketCounts.backlog})`}
             </button>
           )}
           {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
@@ -270,24 +421,45 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   : `▶ Launch Live Demo (${bestPlayableTarget.ticketKey ?? (bestPlayableTarget.kind === 'main' ? 'Main' : 'Worktree')})`}
             </button>
           )}
-          {activeTarget.demoUrl && (
-            <a
-              href={activeTarget.demoUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="btn"
-              style={{
-                fontSize: 12,
-                padding: '5px 10px',
-                textDecoration: 'none',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--text-primary)',
-              }}
-            >
-              ↗ Open Demo in New Tab
-            </a>
-          )}
+          <button
+            type="button"
+            className="ghost"
+            style={{ fontSize: 12, padding: '5px 10px' }}
+            onClick={() => navigate(`/projects/${project.id}/code`)}
+            title="Open integrated VS Code Explorer & Monaco Editor"
+          >
+            &lt;/&gt; Code Explorer
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            style={{ fontSize: 12, padding: '5px 10px' }}
+            onClick={() => {
+              const next = !viewportOpen;
+              setViewportOpen(next);
+              if (next) void fetchViewportSnapshot(activeTarget.id);
+            }}
+            title="Capture and stream headless Chromium / X11 viewport snapshot"
+          >
+            🌐 Live Browser
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            style={{ fontSize: 12, padding: '5px 10px' }}
+            onClick={() => setCheckpointsOpen((v) => !v)}
+            title="View Git checkpoints & roll back with 1 click"
+          >
+            🕓 Checkpoints ({checkpoints.length})
+          </button>
+          <a
+            href={`/api/projects/${project.id}/export.tar.gz`}
+            className="btn ghost"
+            style={{ fontSize: 12, padding: '5px 10px', textDecoration: 'none' }}
+            title="Download project workspace as .tar.gz archive"
+          >
+            📦 .tar.gz
+          </a>
           <button
             type="button"
             className="ghost"
@@ -299,7 +471,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
       </div>
 
-      {/* Progress Bar & Ticket Pipeline Pills */}
+      {/* Progress Bar & Live Factory Pipeline Stepper */}
       <div style={{ marginBottom: 14 }}>
         <div
           style={{
@@ -320,39 +492,102 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             }}
           />
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
-          <span className="badge">Backlog: {ticketCounts.backlog}</span>
-          <span className="badge">Ready: {ticketCounts.ready}</span>
-          <span
-            className="badge"
-            style={
-              ticketCounts.in_progress > 0
-                ? { borderColor: 'var(--accent)', color: 'var(--accent)' }
-                : undefined
-            }
-          >
-            In Progress: {ticketCounts.in_progress}
-          </span>
-          <span
-            className="badge"
-            style={
-              ticketCounts.review > 0
-                ? { borderColor: '#f59e0b', color: '#fbbf24' }
-                : undefined
-            }
-          >
-            In Review: {ticketCounts.review}
-          </span>
-          <span
-            className="badge"
-            style={
-              ticketCounts.done > 0
-                ? { borderColor: '#10b981', color: '#34d399' }
-                : undefined
-            }
-          >
-            Done: {ticketCounts.done}
-          </span>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
+            fontSize: 11,
+          }}
+        >
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <span className="badge">Backlog: {ticketCounts.backlog}</span>
+            <span className="badge">Ready: {ticketCounts.ready}</span>
+            <span
+              className="badge"
+              style={
+                ticketCounts.in_progress > 0
+                  ? { borderColor: 'var(--accent)', color: 'var(--accent)' }
+                  : undefined
+              }
+            >
+              In Progress: {ticketCounts.in_progress}
+            </span>
+            <span
+              className="badge"
+              style={
+                ticketCounts.review > 0
+                  ? { borderColor: '#f59e0b', color: '#fbbf24' }
+                  : undefined
+              }
+            >
+              In Review: {ticketCounts.review}
+            </span>
+            <span
+              className="badge"
+              style={
+                ticketCounts.done > 0
+                  ? { borderColor: '#10b981', color: '#34d399' }
+                  : undefined
+              }
+            >
+              Done: {ticketCounts.done}
+            </span>
+          </div>
+
+          {/* Live Factory Pipeline Stepper */}
+          {pipelineTickets.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                overflowX: 'auto',
+                padding: '3px 6px',
+                borderRadius: 6,
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-subtle)',
+              }}
+              title="Live Specialist Persona Pipeline Stepper"
+            >
+              <span className="mono muted" style={{ fontSize: 10 }}>
+                Pipeline:
+              </span>
+              {pipelineTickets.map((t, idx) => {
+                const icon =
+                  t.status === 'done'
+                    ? '✓'
+                    : t.status === 'in_progress'
+                      ? '●'
+                      : t.status === 'review'
+                        ? '◐'
+                        : '○';
+                const color =
+                  t.status === 'done'
+                    ? '#34d399'
+                    : t.status === 'in_progress'
+                      ? '#60a5fa'
+                      : t.status === 'review'
+                        ? '#fbbf24'
+                        : 'var(--muted)';
+                return (
+                  <span
+                    key={t.id}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title={`${t.key}: ${t.title} (${t.status})`}
+                  >
+                    {idx > 0 && <span className="muted">→</span>}
+                    <span className="mono" style={{ color, fontWeight: 600, fontSize: 10.5 }}>
+                      {icon} {t.key}
+                    </span>
+                    <PersonaBadge persona={t.persona} />
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -484,6 +719,167 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
       )}
 
+      {/* Checkpoints & 1-Click Rollback Drawer (Faz F9) */}
+      {checkpointsOpen && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: '12px 14px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 8,
+            }}
+          >
+            <strong style={{ fontSize: 12 }}>
+              🕓 Workspace Git Checkpoints ({checkpoints.length})
+            </strong>
+            <button
+              type="button"
+              className="ghost"
+              style={{ fontSize: 11, padding: '2px 6px' }}
+              onClick={() => setCheckpointsOpen(false)}
+            >
+              ✕ Close
+            </button>
+          </div>
+          {checkpoints.length === 0 ? (
+            <p className="muted small">No commits recorded yet in main workspace.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 190, overflowY: 'auto' }}>
+              {checkpoints.map((cp, index) => (
+                <div
+                  key={cp.sha}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    padding: '6px 8px',
+                    borderRadius: 6,
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    fontSize: 11.5,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span className="badge mono">{cp.shortSha}</span>
+                    {index === 0 && (
+                      <span className="badge mono" style={{ color: '#34d399' }}>
+                        HEAD
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {cp.subject}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="mono muted" style={{ fontSize: 10.5 }}>
+                      {new Date(cp.createdAt).toLocaleString()}
+                    </span>
+                    {index > 0 && (
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ fontSize: 11, padding: '2px 8px' }}
+                        disabled={rollingBackSha === cp.sha}
+                        onClick={() => void handleRollbackCheckpoint(cp.sha)}
+                      >
+                        {rollingBackSha === cp.sha ? 'Rolling back…' : '⏪ Rollback here'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Live Browser / Headless Chromium Viewport Stream Drawer (Faz F11) */}
+      {viewportOpen && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: '12px 14px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 8,
+              flexWrap: 'wrap',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <strong style={{ fontSize: 12 }}>
+                🌐 Live Browser / Headless Chromium Viewport ({activeTarget.label})
+              </strong>
+              {viewportSnap?.source && (
+                <span className="badge mono">source: {viewportSnap.source}</span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                className="ghost"
+                style={{ fontSize: 11, padding: '3px 8px' }}
+                disabled={viewportLoading}
+                onClick={() => void fetchViewportSnapshot(activeTarget.id)}
+              >
+                {viewportLoading ? 'Capturing…' : '📸 Capture Screenshot'}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                style={{ fontSize: 11, padding: '3px 8px' }}
+                onClick={() => setViewportOpen(false)}
+              >
+                ✕ Close
+              </button>
+            </div>
+          </div>
+          {viewportSnap?.imageDataUrl ? (
+            <div style={{ textAlign: 'center', background: '#000', borderRadius: 6, padding: 8 }}>
+              <img
+                src={viewportSnap.imageDataUrl}
+                alt="Live Browser Viewport"
+                style={{ maxWidth: '100%', maxHeight: 420, borderRadius: 4 }}
+              />
+              <div className="mono muted" style={{ fontSize: 10.5, marginTop: 4 }}>
+                Captured at {viewportSnap.capturedAt} · {viewportSnap.message}
+              </div>
+            </div>
+          ) : (
+            <div className="muted small" style={{ padding: '8px 0' }}>
+              {viewportLoading
+                ? 'Rendering live browser viewport via Headless Chromium…'
+                : viewportSnap?.message ??
+                  'Click "Capture Screenshot" to render the current workspace or Playwright/X11 session.'}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Embedded Live Demo & Preview Player */}
       {previewOpen && activeTarget.demoUrl && (
         <div
@@ -530,6 +926,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 onChange={(e) => {
                   setSelectedTargetId(e.target.value);
                   setIframeNonce((n) => n + 1);
+                  setDemoErrors([]);
                 }}
                 style={{ fontSize: 12, padding: '3px 8px' }}
               >
@@ -548,7 +945,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 type="button"
                 className="ghost"
                 style={{ fontSize: 11, padding: '3px 8px' }}
-                onClick={() => setIframeNonce((n) => n + 1)}
+                onClick={() => {
+                  setDemoErrors([]);
+                  setIframeNonce((n) => n + 1);
+                }}
               >
                 ↻ Reload
               </button>
@@ -587,6 +987,93 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               </button>
             </div>
           </div>
+
+          {/* Live Demo Runtime Error Catcher Banner (Faz F9) */}
+          {demoErrors.length > 0 && (
+            <div
+              style={{
+                padding: '8px 12px',
+                background: 'rgba(239, 68, 68, 0.16)',
+                borderBottom: '1px solid rgba(239, 68, 68, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <strong style={{ fontSize: 11.5, color: '#f87171' }}>
+                  🐛 Runtime Error Detected in Live Demo ({demoErrors[0]!.timestamp}):
+                </strong>
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: 11,
+                    color: '#fca5a5',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={demoErrors[0]!.message}
+                >
+                  {demoErrors[0]!.message}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  className="primary"
+                  style={{ fontSize: 11, padding: '4px 10px' }}
+                  disabled={submittingTweak}
+                  onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
+                >
+                  🔧 Fix Error with Coder Agent
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  style={{ fontSize: 11, padding: '4px 8px' }}
+                  onClick={() => setDemoErrors([])}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Quick Demo Tweak Bar (Faz F9) */}
+          <form
+            onSubmit={(e) => void handleQuickDemoTweak(e)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 12px',
+              background: 'var(--surface-2)',
+              borderBottom: '1px solid var(--border-subtle)',
+            }}
+          >
+            <span className="mono muted" style={{ fontSize: 11 }}>
+              💬 Quick Demo Tweak:
+            </span>
+            <input
+              type="text"
+              value={quickTweakPrompt}
+              onChange={(e) => setQuickTweakPrompt(e.target.value)}
+              placeholder='Type an instant change while playing (e.g. "Make bird jump slightly gentler" or "Add sound effect on score")…'
+              style={{ flex: 1, fontSize: 11.5, padding: '4px 8px' }}
+            />
+            <button
+              type="submit"
+              className="primary"
+              style={{ fontSize: 11, padding: '4px 10px' }}
+              disabled={submittingTweak || !quickTweakPrompt.trim()}
+            >
+              {submittingTweak ? 'Sending…' : '✨ Apply Tweak'}
+            </button>
+          </form>
+
           <iframe
             key={`${activeTarget.id}-${iframeNonce}`}
             src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
@@ -594,7 +1081,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             style={{
               width: '100%',
               height: fullscreen ? '100%' : 520,
-               flex: fullscreen ? 1 : undefined,
+              flex: fullscreen ? 1 : undefined,
               border: 'none',
               background: '#fff',
             }}

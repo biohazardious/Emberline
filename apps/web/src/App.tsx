@@ -1,4 +1,4 @@
-import type { ActiveProjectPreference, Project, SystemStatus } from '@emberline/protocol';
+import type { ActiveProjectPreference, FactorySettings, Project, SystemStatus } from '@emberline/protocol';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api } from './api';
@@ -18,8 +18,15 @@ const TerminalPage = lazy(() => import('./pages/TerminalPage').then((m) => ({ de
 const BoardPage = lazy(() => import('./pages/BoardPage').then((m) => ({ default: m.BoardPage })));
 const FleetPage = lazy(() => import('./pages/FleetPage').then((m) => ({ default: m.FleetPage })));
 const ReviewPage = lazy(() => import('./pages/ReviewPage').then((m) => ({ default: m.ReviewPage })));
+const CodeExplorerPage = lazy(() =>
+  import('./pages/CodeExplorerPage').then((m) => ({ default: m.CodeExplorerPage })),
+);
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+);
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'emberline.activeProjectId';
+const THEME_STORAGE_KEY = 'emberline.theme';
 
 export function App() {
   return (
@@ -36,6 +43,42 @@ function Shell() {
   const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
   const { runs } = useRuns();
   const { scheduler } = useScheduler();
+
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {
+      // ignore storage errors
+    }
+    return 'dark';
+  });
+
+  const applyTheme = useCallback((next: 'dark' | 'light') => {
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      // ignore storage errors
+    }
+    void api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    void api<FactorySettings>('/api/factory/settings')
+      .then((res) => {
+        if (res.theme === 'light' || res.theme === 'dark') {
+          setTheme(res.theme);
+          document.documentElement.dataset.theme = res.theme;
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
     try {
@@ -84,9 +127,9 @@ function Shell() {
       });
   }, [projects.data, activeProjectId, selectProject]);
 
-  // If the user navigates directly to /projects/:id/board, sync activeProjectId
+  // If the user navigates directly to /projects/:id/board or /projects/:id/code, sync activeProjectId
   useEffect(() => {
-    const match = /^\/projects\/([^/]+)\/board/.exec(location);
+    const match = /^\/projects\/([^/]+)\/(board|code)/.exec(location);
     if (match?.[1] && match[1] !== activeProjectId) {
       selectProject(match[1]);
     }
@@ -134,9 +177,11 @@ function Shell() {
     }
     const targetId = nextId || null;
     selectProject(targetId);
-    // When currently viewing a project board, switch directly to the new project's board!
+    // When currently viewing a project board or code explorer, switch directly to the new project's view!
     if (targetId && /^\/projects\/[^/]+\/board/.test(location)) {
       navigate(`/projects/${targetId}/board`);
+    } else if (targetId && /^\/projects\/[^/]+\/code/.test(location)) {
+      navigate(`/projects/${targetId}/code`);
     }
   };
 
@@ -225,6 +270,15 @@ function Shell() {
               <span className="nav-label">Kanban Board</span>
             </Link>
           )}
+          {activeProject && (
+            <Link
+              href={`/projects/${activeProject.id}/code`}
+              className={`nav-item${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
+            >
+              <span className="nav-icon mono">&lt;/&gt;</span>
+              <span className="nav-label">Code Explorer</span>
+            </Link>
+          )}
           <Link id="nav-fleet" href="/fleet" className={`nav-item${location === '/fleet' ? ' active' : ''}`}>
             <span className="nav-icon mono">⊞</span>
             <span className="nav-label">Fleet Multiplexer</span>
@@ -233,6 +287,10 @@ function Shell() {
                 {activeRuns.length}
               </span>
             )}
+          </Link>
+          <Link id="nav-settings" href="/settings" className={`nav-item${location === '/settings' ? ' active' : ''}`}>
+            <span className="nav-icon mono">⚙</span>
+            <span className="nav-label">Factory Settings</span>
           </Link>
         </nav>
 
@@ -304,9 +362,20 @@ function Shell() {
                   Board
                 </Link>
               )}
+              {activeProject && (
+                <Link
+                  href={`/projects/${activeProject.id}/code`}
+                  className={`topbar-tab${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
+                >
+                  &lt;/&gt; Code
+                </Link>
+              )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
                 Fleet
                 {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
+              </Link>
+              <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`}>
+                ⚙ Settings
               </Link>
             </div>
           </div>
@@ -319,6 +388,15 @@ function Shell() {
               onClick={() => setWizardOpen(true)}
             >
               + New Project
+            </button>
+            <button
+              id="theme-toggle"
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => applyTheme(theme === 'dark' ? 'light' : 'dark')}
+              title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
+            >
+              {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
             </button>
             {waitingRuns[0] && (
               <button
@@ -373,6 +451,18 @@ function Shell() {
                     <BoardPage key={params.id} projectId={params.id} />
                   </Suspense>
                 )}
+              </Route>
+              <Route path="/projects/:id/code">
+                {(params) => (
+                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                    <CodeExplorerPage key={params.id} projectId={params.id} />
+                  </Suspense>
+                )}
+              </Route>
+              <Route path="/settings">
+                <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                  <SettingsPage theme={theme} onChangeTheme={applyTheme} />
+                </Suspense>
               </Route>
               <Route path="/fleet">
                 <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
