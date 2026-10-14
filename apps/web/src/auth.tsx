@@ -1,6 +1,7 @@
 import { type AuthState, MIN_PASSWORD_LENGTH } from '@emberline/protocol';
 import { createContext, type FormEvent, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
 import { api, errorMessage } from './api';
+import { BrandLogo } from './components/BrandLogo';
 
 interface AuthContextValue {
   logout: () => Promise<void>;
@@ -57,7 +58,7 @@ function AuthShell({ title, children }: { title: string; children: ReactNode }) 
       <div className="glow" aria-hidden="true" />
       <section className="auth-card">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true" />
+          <BrandLogo size={26} />
           <span className="brand-name">Emberline</span>
         </div>
         <h1>{title}</h1>

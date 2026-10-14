@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="ember-bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#151822" />
+      <stop offset="100%" stop-color="#090a0d" />
+    </linearGradient>
+    <linearGradient id="ember-stroke" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fb923c" stop-opacity="0.65" />
+      <stop offset="50%" stop-color="#f97316" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#e11d48" stop-opacity="0.5" />
+    </linearGradient>
+    <linearGradient id="ember-flame" x1="6" y1="5" x2="26" y2="27" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fde047" />
+      <stop offset="38%" stop-color="#fb923c" />
+      <stop offset="72%" stop-color="#f97316" />
+      <stop offset="100%" stop-color="#e11d48" />
+    </linearGradient>
+    <linearGradient id="ember-line" x1="8" y1="23" x2="25" y2="23" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fb923c" />
+      <stop offset="100%" stop-color="#f43f5e" />
+    </linearGradient>
+  </defs>
+  <!-- Precision Dark Squircle Base -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#ember-bg)" stroke="url(#ember-stroke)" stroke-width="1.25" />
+  <!-- Subtle Forge Core Glow -->
+  <circle cx="16" cy="15" r="9.5" fill="#f97316" fill-opacity="0.1" />
+  <!-- Geometric Terminal Chevron + Isometric Forge Spark -->
+  <path
+    d="M8.5 9.25L16.25 15.25L8.5 21.25"
+    stroke="url(#ember-flame)"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Glowing Ember Core Diamond -->
+  <path
+    d="M19.5 7.5L23.75 12.25L19.5 17L15.25 12.25L19.5 7.5Z"
+    fill="url(#ember-flame)"
+  />
+  <path
+    d="M19.5 9.6L21.7 12.25L19.5 14.9L17.3 12.25L19.5 9.6Z"
+    fill="#fff7ed"
+    fill-opacity="0.9"
+  />
+  <!-- The "Emberline" Baseline Pulse -->
+  <rect x="16" y="20" width="8.5" height="2.6" rx="1.3" fill="url(#ember-line)" />
+</svg>

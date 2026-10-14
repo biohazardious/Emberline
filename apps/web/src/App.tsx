@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api } from './api';
 import { AuthGate, useAuth } from './auth';
+import { BrandLogo } from './components/BrandLogo';
 import { CommandPalette } from './components/CommandPalette';
 import { PersonaBadge } from './components/PersonaBadge';
 import { ProjectWizardModal } from './components/ProjectWizardModal';
@@ -193,8 +194,8 @@ function Shell() {
     <div className={`app workbench${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <aside className={`sidebar${mobileNavOpen ? ' sidebar-open' : ''}`} aria-label="Workspace navigation">
         <div className="sidebar-top">
-          <Link href="/" className="brand">
-            <span className="brand-mark" aria-hidden="true" />
+          <Link href="/" className="brand" title="Emberline — AI Coding Factory">
+            <BrandLogo size={24} />
             <span className="brand-name">Emberline</span>
           </Link>
           <button
@@ -256,12 +257,13 @@ function Shell() {
           onClick={() => setCmdOpen(true)}
           title="Open command palette (⌘K / Ctrl+K)"
         >
+          <span className="cmd-trigger-icon mono" aria-hidden="true">⌕</span>
           <span className="cmd-trigger-text">Search or jump…</span>
           <kbd className="kbd">⌘K</kbd>
         </button>
 
         <nav className="sidebar-nav" aria-label="Main views">
-          <Link href="/" className={`nav-item${location === '/' ? ' active' : ''}`}>
+          <Link href="/" className={`nav-item${location === '/' ? ' active' : ''}`} title="Factory Overview">
             <span className="nav-icon mono">◈</span>
             <span className="nav-label">Factory Overview</span>
           </Link>
@@ -269,6 +271,7 @@ function Shell() {
             <Link
               href={`/projects/${activeProject.id}/board`}
               className={`nav-item${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
+              title="Kanban Board"
             >
               <span className="nav-icon mono">▤</span>
               <span className="nav-label">Kanban Board</span>
@@ -278,12 +281,18 @@ function Shell() {
             <Link
               href={`/projects/${activeProject.id}/code`}
               className={`nav-item${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
+              title="Code Explorer"
             >
               <span className="nav-icon mono">◫</span>
               <span className="nav-label">Code Explorer</span>
             </Link>
           )}
-          <Link id="nav-fleet" href="/fleet" className={`nav-item${location === '/fleet' ? ' active' : ''}`}>
+          <Link
+            id="nav-fleet"
+            href="/fleet"
+            className={`nav-item${location === '/fleet' ? ' active' : ''}`}
+            title="Fleet Multiplexer"
+          >
             <span className="nav-icon mono">⊞</span>
             <span className="nav-label">Fleet Multiplexer</span>
             {activeRuns.length > 0 && (
@@ -292,7 +301,12 @@ function Shell() {
               </span>
             )}
           </Link>
-          <Link id="nav-settings" href="/settings" className={`nav-item${location === '/settings' ? ' active' : ''}`}>
+          <Link
+            id="nav-settings"
+            href="/settings"
+            className={`nav-item${location === '/settings' ? ' active' : ''}`}
+            title="Factory Settings"
+          >
             <span className="nav-icon mono">⚙</span>
             <span className="nav-label">Factory Settings</span>
           </Link>

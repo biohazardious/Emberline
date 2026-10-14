@@ -129,12 +129,9 @@ a {
 }
 
 .brand-mark {
-  width: 22px;
-  height: 22px;
+  display: block;
   flex: none;
-  border-radius: 5px;
-  background: linear-gradient(135deg, var(--ember-2), var(--ember-1) 65%, var(--ember-3));
-  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.25);
+  filter: drop-shadow(0 2px 6px hsl(20 92% 55% / 0.24));
 }
 
 .brand-name {
@@ -515,8 +512,9 @@ a {
 }
 
 .sidebar-collapsed .sidebar {
-  width: 56px;
+  width: 60px;
   padding: 10px 8px;
+  overflow-x: hidden;
 }
 
 .sidebar-collapsed .brand-name,
@@ -525,10 +523,42 @@ a {
 .sidebar-collapsed .nav-label,
 .sidebar-collapsed .nav-badge,
 .sidebar-collapsed .sidebar-section-head,
+.sidebar-collapsed .sidebar-empty,
 .sidebar-collapsed .sidebar-foot .footer,
 .sidebar-collapsed .sidebar-quota span:not(.dot),
-.sidebar-collapsed .nav-run .run-pill {
+.sidebar-collapsed .nav-run .run-pill,
+.sidebar-collapsed .nav-run .persona-badge {
   display: none;
+}
+
+.sidebar-collapsed .sidebar-top {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.sidebar-collapsed .brand {
+  justify-content: center;
+  gap: 0;
+}
+
+.sidebar-collapsed .cmd-trigger {
+  justify-content: center;
+  padding: 7px 0;
+  gap: 0;
+}
+
+.sidebar-collapsed .nav-item {
+  justify-content: center;
+  padding: 8px 0;
+  gap: 0;
+}
+
+.sidebar-collapsed .sidebar-quota {
+  justify-content: center;
+  padding: 7px 0;
 }
 
 .sidebar-top {
@@ -554,6 +584,22 @@ a {
   font-size: 0.78rem;
   cursor: pointer;
   transition: border-color 0.15s;
+}
+
+.cmd-trigger-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+  flex: none;
+  color: var(--muted);
+}
+
+.cmd-trigger-text {
+  flex: 1;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cmd-trigger:hover {
