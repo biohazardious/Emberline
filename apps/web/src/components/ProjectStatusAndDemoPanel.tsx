@@ -27,6 +27,8 @@ interface DemoRuntimeError {
   timestamp: string;
 }
 
+type StudioTab = 'factory' | 'demo' | 'browser' | 'worktrees' | 'checkpoints';
+
 export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
   const statusPoll = usePoll(
@@ -42,8 +44,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     10_000,
   );
 
+  const [activeTab, setActiveTab] = useState<StudioTab>('factory');
   const [selectedTargetId, setSelectedTargetId] = useState<string>('main');
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [iframeNonce, setIframeNonce] = useState(0);
   const [syncingRunId, setSyncingRunId] = useState<string>();
@@ -54,15 +56,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [startingPipeline, setStartingPipeline] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
 
-  // Faz F9: Demo Runtime Error Catcher + Quick Tweak + Checkpoints
+  // Demo Runtime Error Catcher + Quick Tweak + Checkpoints
   const [demoErrors, setDemoErrors] = useState<DemoRuntimeError[]>([]);
   const [quickTweakPrompt, setQuickTweakPrompt] = useState('');
   const [submittingTweak, setSubmittingTweak] = useState(false);
-  const [checkpointsOpen, setCheckpointsOpen] = useState(false);
   const [rollingBackSha, setRollingBackSha] = useState<string>();
 
-  // Faz F11: Live Browser / Shared Chromium CDP Studio
-  const [viewportOpen, setViewportOpen] = useState(false);
+  // Worktrees filter: hide completed worktrees by default to avoid clutter
+  const [hideCompletedWorktrees, setHideCompletedWorktrees] = useState(true);
 
   // Listen for runtime errors forwarded by the injected errorBridgeScript inside the Demo iframe
   useEffect(() => {
@@ -95,6 +96,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const playableTargets = targets.filter((t) => Boolean(t.demoUrl));
   const bestPlayableTarget =
     playableTargets[0] ?? targets.find((t) => t.hasBuildScript) ?? targets[0];
+
+  const isTargetCompleted = (t: WorkspaceDemoTarget) =>
+    t.kind === 'worktree' && (t.runStatus === 'done' || t.runStatus === 'failed');
+
+  const completedWorktreesCount = targets.filter(isTargetCompleted).length;
+  const visibleTargets = hideCompletedWorktrees
+    ? targets.filter((t) => !isTargetCompleted(t))
+    : targets;
 
   const handleSubmitFactoryRequest = async (e: FormEvent) => {
     e.preventDefault();
@@ -258,7 +267,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         setSelectedTargetId(target.id);
         setIframeNonce((n) => n + 1);
         setDemoErrors([]);
-        if (autoOpen) setPreviewOpen(true);
+        if (autoOpen) setActiveTab('demo');
         setBanner({
           kind: 'ok',
           text: `Demo built (${res.demoEntryRelPath}) for ${target.label}.`,
@@ -280,7 +289,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     setSelectedTargetId(target.id);
     setDemoErrors([]);
     if (target.demoUrl) {
-      setPreviewOpen(true);
+      setActiveTab('demo');
       setIframeNonce((n) => n + 1);
       return;
     }
@@ -290,12 +299,17 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   };
 
   const { ticketCounts } = summary;
-  const pipelineTickets = (ticketsPoll.data ?? []).slice(0, 10);
+  const allTickets = ticketsPoll.data ?? [];
+  const activeOrRecentTickets = [
+    ...allTickets.filter((t) => t.status === 'in_progress' || t.status === 'ready' || t.status === 'review'),
+    ...allTickets.filter((t) => t.status === 'done').slice(-4),
+  ].slice(0, 8);
   const checkpoints = checkpointsPoll.data ?? [];
+  const mainTarget = targets.find((t) => t.kind === 'main') ?? targets[0];
 
   return (
     <section className="panel" aria-label="Project status and live demo">
-      {/* Top Header: Project Status & Quick Demo Launch */}
+      {/* Top Header: Project Status & Quick Actions */}
       <div className="panel-head">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span
@@ -308,17 +322,11 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             }}
           >
             <span className="dot" />
-            Project Status &amp; Live Demo
+            {project.name}
           </span>
           {summary.autoChainActive && (
-            <span className="badge badge-soft mono">⟳ Multi-Persona Auto-Pipeline Active</span>
+            <span className="badge badge-soft mono">⟳ Auto-Pipeline Active</span>
           )}
-          <span
-            className="badge mono"
-            title="Host bind-mount directory mapped to container /workspaces"
-          >
-            Host Mount: {summary.hostBindHint} ↔ {summary.workspaceRoot}
-          </span>
           <span className="muted small">
             {summary.completionPercent}% complete · {ticketCounts.done}/{ticketCounts.total} tickets done
           </span>
@@ -338,20 +346,6 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 : `⚡ Run Pipeline (${ticketCounts.ready || ticketCounts.backlog})`}
             </button>
           )}
-          {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={buildingTargetId === bestPlayableTarget.id}
-              onClick={() => void handleOpenDemo(bestPlayableTarget)}
-            >
-              {buildingTargetId === bestPlayableTarget.id
-                ? 'Building Demo…'
-                : previewOpen
-                  ? '↻ Refresh Live Demo'
-                  : `▶ Launch Live Demo (${bestPlayableTarget.ticketKey ?? (bestPlayableTarget.kind === 'main' ? 'Main' : 'Worktree')})`}
-            </button>
-          )}
           <button
             type="button"
             className="btn btn-sm"
@@ -359,22 +353,6 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             title="Open integrated Code Explorer & Monaco Editor"
           >
             ◫ Code Explorer
-          </button>
-          <button
-            type="button"
-            className={viewportOpen ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
-            onClick={() => setViewportOpen((v) => !v)}
-            title="Open shared Live Browser Studio (Playwright MCP + Chromium CDP stream)"
-          >
-            🌐 Live Browser
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setCheckpointsOpen((v) => !v)}
-            title="View Git checkpoints & roll back with 1 click"
-          >
-            🕓 Checkpoints ({checkpoints.length})
           </button>
           <a
             href={`/api/projects/${project.id}/export.tar.gz`}
@@ -447,8 +425,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             </span>
           </div>
 
-          {/* Live Factory Pipeline Stepper */}
-          {pipelineTickets.length > 0 && (
+          {activeOrRecentTickets.length > 0 && (
             <div
               style={{
                 display: 'flex',
@@ -465,7 +442,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               <span className="mono muted" style={{ fontSize: '0.68rem' }}>
                 Pipeline:
               </span>
-              {pipelineTickets.map((t, idx) => {
+              {activeOrRecentTickets.map((t, idx) => {
                 const icon =
                   t.status === 'done'
                     ? '✓'
@@ -501,98 +478,79 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
       </div>
 
-      {/* Autonomous AI Factory Request Bar (PO -> Coder / UI-UX / QA Delegation) */}
-      <form
-        onSubmit={(e) => void handleSubmitFactoryRequest(e)}
+      {/* Studio Sub-Navigation Tabs */}
+      <div
         style={{
-          padding: '12px 14px',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--surface-2)',
-          border: '1px solid color-mix(in hsl, var(--ember-1) 35%, var(--border))',
           display: 'flex',
-          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'space-between',
           gap: 8,
+          borderBottom: '1px solid var(--border)',
+          paddingBottom: 10,
+          flexWrap: 'wrap',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 8,
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <strong style={{ fontSize: '0.8rem', color: 'var(--ember-2)' }}>
-              ⚡ Ask AI Factory (PO Orchestrator → Specialist Personas)
-            </strong>
-            <PersonaBadge persona="product_owner" />
-            <span className="muted small">→ spawns &amp; delegates tickets to</span>
-            <PersonaBadge persona="coder" />
-            <PersonaBadge persona="ui_ux" />
-            <PersonaBadge persona="qa" />
-          </div>
-          <label
-            className="small muted"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              cursor: 'pointer',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={autoDispatch}
-              onChange={(e) => setAutoDispatch(e.target.checked)}
-            />
-            Auto-dispatch &amp; sync specialist tickets sequentially
-          </label>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input
-            type="text"
-            className="input"
-            value={factoryPrompt}
-            onChange={(e) => setFactoryPrompt(e.target.value)}
-            placeholder='Describe a feature or change (e.g. "Add a score counter and high-score HUD" or "Redesign the main screen") — PO will refine & delegate to specialists…'
-            style={{
-              width: 'auto',
-              flex: '1 1 360px',
-            }}
-          />
+        <div className="segmented" role="tablist" aria-label="Project studio sections">
           <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={submittingFactory || !factoryPrompt.trim()}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'factory'}
+            className={activeTab === 'factory' ? 'active' : ''}
+            onClick={() => setActiveTab('factory')}
           >
-            {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
+            ⚡ AI Factory Prompt
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'demo'}
+            className={activeTab === 'demo' ? 'active' : ''}
+            onClick={() => {
+              if (bestPlayableTarget && !bestPlayableTarget.demoUrl && bestPlayableTarget.hasBuildScript) {
+                void handleBuildAndPlay(bestPlayableTarget, true);
+              } else {
+                setActiveTab('demo');
+              }
+            }}
+          >
+            ▶ Live Demo
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'browser'}
+            className={activeTab === 'browser' ? 'active' : ''}
+            onClick={() => setActiveTab('browser')}
+          >
+            🌐 Live Browser
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'worktrees'}
+            className={activeTab === 'worktrees' ? 'active' : ''}
+            onClick={() => setActiveTab('worktrees')}
+          >
+            🌿 Worktrees ({visibleTargets.length}/{targets.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'checkpoints'}
+            className={activeTab === 'checkpoints' ? 'active' : ''}
+            onClick={() => setActiveTab('checkpoints')}
+          >
+            🕓 Checkpoints ({checkpoints.length})
           </button>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            flexWrap: 'wrap',
-          }}
+        <span
+          className="badge mono hide-sm"
+          title="Host bind-mount directory mapped to container /workspaces"
         >
-          <span className="muted small">Quick examples:</span>
-          {FACTORY_EXAMPLES.map((ex) => (
-            <button
-              key={ex}
-              type="button"
-              className="chip-btn"
-              onClick={() => setFactoryPrompt(ex)}
-            >
-              + {ex}
-            </button>
-          ))}
-        </div>
-      </form>
+          {summary.hostBindHint} ↔ {summary.workspaceRoot}
+        </span>
+      </div>
 
       {banner && (
         <div
@@ -615,8 +573,572 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
       )}
 
-      {/* Checkpoints & 1-Click Rollback Drawer (Faz F9) */}
-      {checkpointsOpen && (
+      {/* TAB 1: AI Factory Prompt + Compact Main Workspace Card */}
+      {activeTab === 'factory' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <form
+            onSubmit={(e) => void handleSubmitFactoryRequest(e)}
+            style={{
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface-2)',
+              border: '1px solid color-mix(in hsl, var(--ember-1) 35%, var(--border))',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: '0.8rem', color: 'var(--ember-2)' }}>
+                  ⚡ Ask AI Factory (PO Orchestrator → Specialist Personas)
+                </strong>
+                <PersonaBadge persona="product_owner" />
+                <span className="muted small">→ delegates to</span>
+                <PersonaBadge persona="coder" />
+                <PersonaBadge persona="ui_ux" />
+                <PersonaBadge persona="qa" />
+              </div>
+              <label
+                className="small muted"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoDispatch}
+                  onChange={(e) => setAutoDispatch(e.target.checked)}
+                />
+                Auto-dispatch &amp; sync specialist tickets sequentially
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                className="input"
+                value={factoryPrompt}
+                onChange={(e) => setFactoryPrompt(e.target.value)}
+                placeholder='Describe a feature or change (e.g. "Add a score counter and high-score HUD" or "Redesign the main screen") — PO will refine & delegate to specialists…'
+                style={{
+                  width: 'auto',
+                  flex: '1 1 360px',
+                }}
+              />
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={submittingFactory || !factoryPrompt.trim()}
+              >
+                {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+              }}
+            >
+              <span className="muted small">Quick examples:</span>
+              {FACTORY_EXAMPLES.map((ex) => (
+                <button
+                  key={ex}
+                  type="button"
+                  className="chip-btn"
+                  onClick={() => setFactoryPrompt(ex)}
+                >
+                  + {ex}
+                </button>
+              ))}
+            </div>
+          </form>
+
+          {mainTarget && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-soft mono">MAIN WORKSPACE</span>
+                <span className="mono small">{mainTarget.workspacePath}</span>
+                <span className="muted small">· {mainTarget.fileCount} files</span>
+                {mainTarget.demoEntryRelPath && (
+                  <span className="small" style={{ color: 'var(--ok)' }}>
+                    ● Bundle ready (<span className="mono">{mainTarget.demoEntryRelPath}</span>)
+                  </span>
+                )}
+              </div>
+              <div className="actions">
+                {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={buildingTargetId === bestPlayableTarget.id}
+                    onClick={() => void handleOpenDemo(bestPlayableTarget)}
+                  >
+                    {buildingTargetId === bestPlayableTarget.id
+                      ? 'Building…'
+                      : '▶ Open Live Demo'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setActiveTab('browser')}
+                >
+                  🌐 Open Live Browser Studio
+                </button>
+                {mainTarget.hasBuildScript && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={buildingTargetId === mainTarget.id}
+                    onClick={() => void handleBuildAndPlay(mainTarget, false)}
+                  >
+                    {buildingTargetId === mainTarget.id ? 'Building…' : '🔨 Rebuild Bundle'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: Embedded Live Demo & Preview Player */}
+      {activeTab === 'demo' && (
+        <div>
+          {activeTarget.demoUrl ? (
+            <div
+              style={
+                fullscreen
+                  ? {
+                      position: 'fixed',
+                      inset: 16,
+                      zIndex: 1000,
+                      background: 'var(--bg)',
+                      border: '1px solid var(--ember-1)',
+                      borderRadius: 'var(--radius)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      boxShadow: '0 24px 64px rgba(0,0,0,0.75)',
+                    }
+                  : {
+                      border: '1px solid var(--ember-1)',
+                      borderRadius: 'var(--radius-sm)',
+                      overflow: 'hidden',
+                      background: 'var(--bg)',
+                    }
+              }
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  padding: '8px 12px',
+                  background: 'var(--bg-elevated)',
+                  borderBottom: '1px solid var(--border)',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ok)' }}>
+                    ● Live Interactive Preview
+                  </span>
+                  <select
+                    className="input"
+                    value={activeTarget.id}
+                    onChange={(e) => {
+                      setSelectedTargetId(e.target.value);
+                      setIframeNonce((n) => n + 1);
+                      setDemoErrors([]);
+                    }}
+                    style={{ width: 'auto', fontSize: '0.78rem', padding: '4px 8px' }}
+                  >
+                    {targets.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : '(no bundle)'}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mono muted small">{activeTarget.demoEntryRelPath}</span>
+                </div>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      setDemoErrors([]);
+                      setIframeNonce((n) => n + 1);
+                    }}
+                  >
+                    ↻ Reload
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setFullscreen((f) => !f)}
+                  >
+                    {fullscreen ? '🗗 Exit Fullscreen' : '⛶ Fullscreen'}
+                  </button>
+                  <a
+                    href={activeTarget.demoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-sm"
+                  >
+                    ↗ New Tab
+                  </a>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => {
+                      setFullscreen(false);
+                      setActiveTab('factory');
+                    }}
+                  >
+                    ✕ Close
+                  </button>
+                </div>
+              </div>
+
+              {demoErrors.length > 0 && (
+                <div
+                  className="banner banner-error"
+                  style={{
+                    borderRadius: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <strong>
+                      🐛 Runtime Error Detected in Live Demo ({demoErrors[0]!.timestamp}):
+                    </strong>
+                    <div
+                      className="mono small"
+                      style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={demoErrors[0]!.message}
+                    >
+                      {demoErrors[0]!.message}
+                    </div>
+                  </div>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      disabled={submittingTweak}
+                      onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
+                    >
+                      🔧 Fix Error with Coder Agent
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setDemoErrors([])}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => void handleQuickDemoTweak(e)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 12px',
+                  background: 'var(--surface-2)',
+                  borderBottom: '1px solid var(--border)',
+                }}
+              >
+                <span className="mono muted small">💬 Quick Demo Tweak:</span>
+                <input
+                  type="text"
+                  className="input"
+                  value={quickTweakPrompt}
+                  onChange={(e) => setQuickTweakPrompt(e.target.value)}
+                  placeholder='Type an instant change while playing (e.g. "Make jump physics gentler" or "Add sound effect on score")…'
+                  style={{ width: 'auto', flex: 1, fontSize: '0.78rem', padding: '4px 8px' }}
+                />
+                <button
+                  type="submit"
+                  className="btn btn-sm btn-primary"
+                  disabled={submittingTweak || !quickTweakPrompt.trim()}
+                >
+                  {submittingTweak ? 'Sending…' : '✨ Apply Tweak'}
+                </button>
+              </form>
+
+              <iframe
+                key={`${activeTarget.id}-${iframeNonce}`}
+                src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
+                title={`Live Demo - ${activeTarget.label}`}
+                style={{
+                  width: '100%',
+                  height: fullscreen ? '100%' : 520,
+                  flex: fullscreen ? 1 : undefined,
+                  border: 'none',
+                  background: '#fff',
+                }}
+              />
+            </div>
+          ) : (
+            <div className="empty">
+              <p>No playable HTML bundle built for {activeTarget.label} yet.</p>
+              {activeTarget.hasBuildScript && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={buildingTargetId === activeTarget.id}
+                  onClick={() => void handleBuildAndPlay(activeTarget, true)}
+                >
+                  {buildingTargetId === activeTarget.id ? 'Building Demo…' : '🔨 Build & Launch Demo'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: Live Browser Studio */}
+      {activeTab === 'browser' && (
+        <LiveBrowserStudio
+          project={project}
+          targetId={activeTarget.id}
+          onClose={() => setActiveTab('factory')}
+        />
+      )}
+
+      {/* TAB 4: Workspaces & Agent Worktrees */}
+      {activeTab === 'worktrees' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span className="muted small">
+              Showing {visibleTargets.length} of {targets.length} workspace targets.
+            </span>
+            {completedWorktreesCount > 0 && (
+              <label
+                className="small"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  cursor: 'pointer',
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={hideCompletedWorktrees}
+                  onChange={() => setHideCompletedWorktrees((v) => !v)}
+                />
+                <span>Hide Completed Worktrees ({completedWorktreesCount})</span>
+              </label>
+            )}
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gap: 10,
+            }}
+          >
+            {visibleTargets.map((target) => {
+              const isSelected = target.id === activeTarget.id;
+              const isSyncing = syncingRunId === target.id;
+              const isBuilding = buildingTargetId === target.id;
+
+              return (
+                <div
+                  key={target.id}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--surface-2)',
+                    border: isSelected ? '1px solid var(--ember-1)' : '1px solid var(--border)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 6,
+                        marginBottom: 4,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span className="badge badge-soft mono">
+                          {target.kind === 'main' ? 'MAIN' : target.ticketKey ?? 'WORKTREE'}
+                        </span>
+                        {target.persona && <PersonaBadge persona={target.persona} />}
+                      </div>
+                      <span className="mono muted small">{target.fileCount} files</span>
+                    </div>
+
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: '0.84rem',
+                        marginBottom: 3,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={target.label}
+                    >
+                      {target.label}
+                    </div>
+
+                    <div
+                      className="mono muted small"
+                      style={{
+                        marginBottom: 6,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={target.workspacePath}
+                    >
+                      {target.workspacePath}
+                    </div>
+
+                    {target.demoEntryRelPath ? (
+                      <div className="small" style={{ color: 'var(--ok)', marginBottom: 6 }}>
+                        ● Playable bundle: <span className="mono">{target.demoEntryRelPath}</span>
+                      </div>
+                    ) : target.hasBuildScript ? (
+                      <div className="small" style={{ color: 'var(--warn)', marginBottom: 6 }}>
+                        ◐ Build script ready (<span className="mono">npm run build</span>)
+                      </div>
+                    ) : null}
+
+                    {target.topFiles.length > 0 && (
+                      <div
+                        className="mono muted small"
+                        style={{
+                          lineHeight: 1.45,
+                          padding: '5px 7px',
+                          borderRadius: 4,
+                          background: 'var(--bg)',
+                          border: '1px solid var(--border)',
+                          maxHeight: 54,
+                          overflowY: 'auto',
+                        }}
+                      >
+                        {target.topFiles.slice(0, 8).join(' · ')}
+                        {target.topFiles.length > 8 ? ` +${target.topFiles.length - 8} more` : ''}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="actions" style={{ marginTop: 4 }}>
+                    {(target.demoUrl || target.hasBuildScript) && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        disabled={isBuilding}
+                        onClick={() => void handleOpenDemo(target)}
+                      >
+                        {isBuilding
+                          ? 'Building…'
+                          : target.demoUrl
+                            ? '▶ Play Demo'
+                            : '🔨 Build & Play'}
+                      </button>
+                    )}
+                    {target.hasBuildScript && target.demoUrl && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        disabled={isBuilding}
+                        onClick={() => void handleBuildAndPlay(target, false)}
+                      >
+                        {isBuilding ? 'Building…' : '🔨 Rebuild'}
+                      </button>
+                    )}
+                    {target.kind === 'worktree' && target.fileCount > 2 && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        disabled={isSyncing}
+                        onClick={() => void handleSyncToMain(target.id)}
+                        title="Copy/sync this worktree's files & compiled bundle into the Main Project Workspace on host"
+                      >
+                        {isSyncing ? 'Syncing…' : '⇄ Sync to Main'}
+                      </button>
+                    )}
+                    {target.kind === 'worktree' && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => navigate(`/runs/${target.id}/review`)}
+                      >
+                        Diff →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: Git Checkpoints & 1-Click Rollback */}
+      {activeTab === 'checkpoints' && (
         <div
           style={{
             padding: '12px 14px',
@@ -636,18 +1158,11 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             <strong style={{ fontSize: '0.82rem' }}>
               🕓 Workspace Git Checkpoints ({checkpoints.length})
             </strong>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={() => setCheckpointsOpen(false)}
-            >
-              ✕ Close
-            </button>
           </div>
           {checkpoints.length === 0 ? (
             <p className="muted small">No commits recorded yet in main workspace.</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 190, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
               {checkpoints.map((cp, index) => (
                 <div
                   key={cp.sha}
@@ -665,9 +1180,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <span className="badge mono">{cp.shortSha}</span>
-                    {index === 0 && (
-                      <span className="badge badge-soft mono">HEAD</span>
-                    )}
+                    {index === 0 && <span className="badge badge-soft mono">HEAD</span>}
                     <span
                       style={{
                         overflow: 'hidden',
@@ -699,367 +1212,6 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           )}
         </div>
       )}
-
-      {/* Live Browser Studio Drawer (Faz F11) */}
-      {viewportOpen && (
-        <LiveBrowserStudio
-          project={project}
-          targetId={activeTarget.id}
-          onClose={() => setViewportOpen(false)}
-        />
-      )}
-
-      {/* Embedded Live Demo & Preview Player */}
-      {previewOpen && activeTarget.demoUrl && (
-        <div
-          style={
-            fullscreen
-              ? {
-                  position: 'fixed',
-                  inset: 16,
-                  zIndex: 1000,
-                  background: 'var(--bg)',
-                  border: '1px solid var(--ember-1)',
-                  borderRadius: 'var(--radius)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  boxShadow: '0 24px 64px rgba(0,0,0,0.75)',
-                }
-              : {
-                  border: '1px solid var(--ember-1)',
-                  borderRadius: 'var(--radius-sm)',
-                  overflow: 'hidden',
-                  background: 'var(--bg)',
-                }
-          }
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 10,
-              padding: '8px 12px',
-              background: 'var(--bg-elevated)',
-              borderBottom: '1px solid var(--border)',
-              flexWrap: 'wrap',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ok)' }}>
-                ● Live Interactive Preview
-              </span>
-              <select
-                className="input"
-                value={activeTarget.id}
-                onChange={(e) => {
-                  setSelectedTargetId(e.target.value);
-                  setIframeNonce((n) => n + 1);
-                  setDemoErrors([]);
-                }}
-                style={{ width: 'auto', fontSize: '0.78rem', padding: '4px 8px' }}
-              >
-                {targets.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : '(no bundle)'}
-                  </option>
-                ))}
-              </select>
-              <span className="mono muted small">{activeTarget.demoEntryRelPath}</span>
-            </div>
-            <div className="actions">
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  setDemoErrors([]);
-                  setIframeNonce((n) => n + 1);
-                }}
-              >
-                ↻ Reload
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setFullscreen((f) => !f)}
-              >
-                {fullscreen ? '🗗 Exit Fullscreen' : '⛶ Fullscreen'}
-              </button>
-              <a
-                href={activeTarget.demoUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="btn btn-sm"
-              >
-                ↗ New Tab
-              </a>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => {
-                  setFullscreen(false);
-                  setPreviewOpen(false);
-                }}
-              >
-                ✕ Close
-              </button>
-            </div>
-          </div>
-
-          {/* Live Demo Runtime Error Catcher Banner (Faz F9) */}
-          {demoErrors.length > 0 && (
-            <div
-              className="banner banner-error"
-              style={{
-                borderRadius: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                flexWrap: 'wrap',
-              }}
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <strong>
-                  🐛 Runtime Error Detected in Live Demo ({demoErrors[0]!.timestamp}):
-                </strong>
-                <div
-                  className="mono small"
-                  style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={demoErrors[0]!.message}
-                >
-                  {demoErrors[0]!.message}
-                </div>
-              </div>
-              <div className="actions">
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={submittingTweak}
-                  onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
-                >
-                  🔧 Fix Error with Coder Agent
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => setDemoErrors([])}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Quick Demo Tweak Bar (Faz F9) */}
-          <form
-            onSubmit={(e) => void handleQuickDemoTweak(e)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '6px 12px',
-              background: 'var(--surface-2)',
-              borderBottom: '1px solid var(--border)',
-            }}
-          >
-            <span className="mono muted small">💬 Quick Demo Tweak:</span>
-            <input
-              type="text"
-              className="input"
-              value={quickTweakPrompt}
-              onChange={(e) => setQuickTweakPrompt(e.target.value)}
-              placeholder='Type an instant change while playing (e.g. "Make jump physics gentler" or "Add sound effect on score")…'
-              style={{ width: 'auto', flex: 1, fontSize: '0.78rem', padding: '4px 8px' }}
-            />
-            <button
-              type="submit"
-              className="btn btn-sm btn-primary"
-              disabled={submittingTweak || !quickTweakPrompt.trim()}
-            >
-              {submittingTweak ? 'Sending…' : '✨ Apply Tweak'}
-            </button>
-          </form>
-
-          <iframe
-            key={`${activeTarget.id}-${iframeNonce}`}
-            src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
-            title={`Live Demo - ${activeTarget.label}`}
-            style={{
-              width: '100%',
-              height: fullscreen ? '100%' : 520,
-              flex: fullscreen ? 1 : undefined,
-              border: 'none',
-              background: '#fff',
-            }}
-          />
-        </div>
-      )}
-
-      {/* Workspace & Agent Worktrees Grid */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          gap: 10,
-        }}
-      >
-        {targets.map((target) => {
-          const isSelected = target.id === activeTarget.id;
-          const isSyncing = syncingRunId === target.id;
-          const isBuilding = buildingTargetId === target.id;
-
-          return (
-            <div
-              key={target.id}
-              style={{
-                padding: '12px 14px',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--surface-2)',
-                border: isSelected
-                  ? '1px solid var(--ember-1)'
-                  : '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                gap: 8,
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 6,
-                    marginBottom: 4,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    <span className="badge badge-soft mono">
-                      {target.kind === 'main' ? 'MAIN' : target.ticketKey ?? 'WORKTREE'}
-                    </span>
-                    {target.persona && <PersonaBadge persona={target.persona} />}
-                  </div>
-                  <span className="mono muted small">{target.fileCount} files</span>
-                </div>
-
-                <div
-                  style={{
-                    fontWeight: 600,
-                    fontSize: '0.84rem',
-                    marginBottom: 3,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={target.label}
-                >
-                  {target.label}
-                </div>
-
-                <div
-                  className="mono muted small"
-                  style={{
-                    marginBottom: 6,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={target.workspacePath}
-                >
-                  {target.workspacePath}
-                </div>
-
-                {target.demoEntryRelPath ? (
-                  <div
-                    className="small"
-                    style={{
-                      color: 'var(--ok)',
-                      marginBottom: 6,
-                    }}
-                  >
-                    ● Playable bundle: <span className="mono">{target.demoEntryRelPath}</span>
-                  </div>
-                ) : target.hasBuildScript ? (
-                  <div className="small" style={{ color: 'var(--warn)', marginBottom: 6 }}>
-                    ◐ Build script ready (<span className="mono">npm run build</span>)
-                  </div>
-                ) : null}
-
-                {target.topFiles.length > 0 && (
-                  <div
-                    className="mono muted small"
-                    style={{
-                      lineHeight: 1.45,
-                      padding: '5px 7px',
-                      borderRadius: 4,
-                      background: 'var(--bg)',
-                      border: '1px solid var(--border)',
-                      maxHeight: 54,
-                      overflowY: 'auto',
-                    }}
-                  >
-                    {target.topFiles.slice(0, 8).join(' · ')}
-                    {target.topFiles.length > 8 ? ` +${target.topFiles.length - 8} more` : ''}
-                  </div>
-                )}
-              </div>
-
-              <div className="actions" style={{ marginTop: 4 }}>
-                {(target.demoUrl || target.hasBuildScript) && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    disabled={isBuilding}
-                    onClick={() => void handleOpenDemo(target)}
-                  >
-                    {isBuilding
-                      ? 'Building…'
-                      : target.demoUrl
-                        ? '▶ Play Demo'
-                        : '🔨 Build & Play'}
-                  </button>
-                )}
-                {target.hasBuildScript && target.demoUrl && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={isBuilding}
-                    onClick={() => void handleBuildAndPlay(target, false)}
-                  >
-                    {isBuilding ? 'Building…' : '🔨 Rebuild'}
-                  </button>
-                )}
-                {target.kind === 'worktree' && target.fileCount > 2 && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={isSyncing}
-                    onClick={() => void handleSyncToMain(target.id)}
-                    title="Copy/sync this worktree's files & compiled bundle into the Main Project Workspace on host"
-                  >
-                    {isSyncing ? 'Syncing…' : '⇄ Sync to Main'}
-                  </button>
-                )}
-                {target.kind === 'worktree' && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => navigate(`/runs/${target.id}/review`)}
-                  >
-                    Diff →
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </section>
   );
 }

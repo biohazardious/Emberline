@@ -31,6 +31,8 @@ const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   agent: 'agent',
 };
 
+type OverviewTab = 'studio' | 'runs' | 'automation' | 'system';
+
 export function Dashboard({
   system,
   activeProjectId,
@@ -48,6 +50,8 @@ export function Dashboard({
   const terminals = usePoll(() => api<TerminalInfo[]>('/api/terminals'), 3_000);
   const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
   const { runs } = useRuns();
+  const [overviewTab, setOverviewTab] = useState<OverviewTab>('studio');
+  const [hideCompletedRuns, setHideCompletedRuns] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string>();
   const [runFormFor, setRunFormFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
@@ -80,6 +84,11 @@ export function Dashboard({
     }
     return list;
   }, [runs, activeProject]);
+
+  const filteredRuns = useMemo(() => {
+    if (!hideCompletedRuns) return visibleRuns;
+    return visibleRuns.filter((r) => !r.endedAt && r.state !== 'done' && r.state !== 'failed');
+  }, [visibleRuns, hideCompletedRuns]);
 
   const stats = useMemo(() => {
     const all = visibleRuns;
@@ -137,238 +146,427 @@ export function Dashboard({
         </div>
       )}
 
-      <div className="stat-strip" aria-label="Fleet telemetry">
-        <div className="stat-card">
-          <span className="stat-label">Active Agents</span>
-          <strong className="stat-value mono">{stats.working}</strong>
+      {/* Top Telemetry Strip + Overview Section Tabs */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        <div className="stat-strip" aria-label="Fleet telemetry">
+          <div
+            className="stat-card"
+            style={{ cursor: 'pointer' }}
+            onClick={() => setOverviewTab('runs')}
+            title="View active agent runs"
+          >
+            <span className="stat-label">Active Agents</span>
+            <strong className="stat-value mono">{stats.working}</strong>
+          </div>
+          <div
+            className={`stat-card${stats.attention > 0 ? ' stat-card-warn' : ''}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => setOverviewTab('runs')}
+            title="View agents waiting for input"
+          >
+            <span className="stat-label">Needs Your Input</span>
+            <strong className="stat-value mono">{stats.attention}</strong>
+          </div>
+          <div
+            className="stat-card"
+            style={{ cursor: 'pointer' }}
+            onClick={() => setOverviewTab('runs')}
+            title="View queued or rate-limited runs"
+          >
+            <span className="stat-label">Queued / Paused</span>
+            <strong className="stat-value mono">{stats.queuedOrPaused}</strong>
+          </div>
+          <div
+            className="stat-card"
+            style={{ cursor: 'pointer' }}
+            onClick={() => setOverviewTab('runs')}
+            title="View completed runs"
+          >
+            <span className="stat-label">Completed Runs</span>
+            <strong className="stat-value mono">{stats.completed}</strong>
+          </div>
         </div>
-        <div className={`stat-card${stats.attention > 0 ? ' stat-card-warn' : ''}`}>
-          <span className="stat-label">Needs Your Input</span>
-          <strong className="stat-value mono">{stats.attention}</strong>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Queued / Paused</span>
-          <strong className="stat-value mono">{stats.queuedOrPaused}</strong>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Completed Runs</span>
-          <strong className="stat-value mono">{stats.completed}</strong>
+
+        {/* Factory Overview Navigation Tabs */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            padding: '8px 12px',
+            borderRadius: 'var(--radius)',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div className="segmented" role="tablist" aria-label="Factory Overview Sections">
+            <button
+              id="overview-tab-studio"
+              type="button"
+              role="tab"
+              aria-selected={overviewTab === 'studio'}
+              className={overviewTab === 'studio' ? 'active' : ''}
+              onClick={() => setOverviewTab('studio')}
+            >
+              🚀 Command Center
+            </button>
+            <button
+              id="overview-tab-runs"
+              type="button"
+              role="tab"
+              aria-selected={overviewTab === 'runs'}
+              className={overviewTab === 'runs' ? 'active' : ''}
+              onClick={() => setOverviewTab('runs')}
+            >
+              🤖 Runs &amp; Terminals ({stats.working + stats.attention + stats.queuedOrPaused} active / {visibleRuns.length} total)
+            </button>
+            <button
+              id="overview-tab-automation"
+              type="button"
+              role="tab"
+              aria-selected={overviewTab === 'automation'}
+              className={overviewTab === 'automation' ? 'active' : ''}
+              onClick={() => setOverviewTab('automation')}
+            >
+              ⏱ Automation &amp; Cron
+            </button>
+            <button
+              id="overview-tab-system"
+              type="button"
+              role="tab"
+              aria-selected={overviewTab === 'system'}
+              className={overviewTab === 'system' ? 'active' : ''}
+              onClick={() => setOverviewTab('system')}
+            >
+              📊 Quota &amp; Alerts
+            </button>
+          </div>
+
+          <div className="actions">
+            {activeProject && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => setBlueprintFor(activeProject)}
+                  title="Open PROJECT.md Blueprint"
+                >
+                  📄 PROJECT.md
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={runnerDown}
+                  onClick={() => void openTerminal('shell', activeProject.id)}
+                >
+                  &gt;_ Shell
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={runnerDown}
+                  onClick={() => {
+                    setRunFormPersona('coder');
+                    setRunFormPrompt('');
+                    setRunFormFor(activeProject.id);
+                    setOverviewTab('runs');
+                  }}
+                >
+                  + Start Run
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
-      {activeProject && (
+      {/* TAB 1: Command Center (Project Status, AI Factory, Live Demo/Browser, AI Advisor) */}
+      {overviewTab === 'studio' && (
         <>
-          <ProjectStatusAndDemoPanel key={`status-${activeProject.id}`} project={activeProject} />
-          <ProjectAdvisorPanel
-            key={activeProject.id}
-            project={activeProject}
-            runnerDown={runnerDown}
-            onOpenBlueprint={() => setBlueprintFor(activeProject)}
-            onStartPersonaRun={(persona, defaultPrompt) => {
-              setRunFormPersona(persona);
-              setRunFormPrompt(defaultPrompt ?? '');
-              setRunFormFor(activeProject.id);
-            }}
-            onRunStarted={(run) => {
-              if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
-              else onInspectRun?.(run.id);
-            }}
-          />
+          {activeProject ? (
+            <>
+              <ProjectStatusAndDemoPanel key={`status-${activeProject.id}`} project={activeProject} />
+              <ProjectAdvisorPanel
+                key={activeProject.id}
+                project={activeProject}
+                runnerDown={runnerDown}
+                onOpenBlueprint={() => setBlueprintFor(activeProject)}
+                onStartPersonaRun={(persona, defaultPrompt) => {
+                  setRunFormPersona(persona);
+                  setRunFormPrompt(defaultPrompt ?? '');
+                  setRunFormFor(activeProject.id);
+                  setOverviewTab('runs');
+                }}
+                onRunStarted={(run) => {
+                  if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+                  else onInspectRun?.(run.id);
+                }}
+              />
+            </>
+          ) : (
+            <section className="panel">
+              <header className="panel-head">
+                <div>
+                  <h2>Create Your First Project</h2>
+                  <p className="muted">Start the AI Coding Factory by creating or cloning a project.</p>
+                </div>
+                {onOpenWizard && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={onOpenWizard}
+                  >
+                    + AI Factory Wizard
+                  </button>
+                )}
+              </header>
+              <NewProjectForm
+                disabled={runnerDown}
+                onCreated={async (res) => {
+                  await projects.refresh();
+                  onSelectProject?.(res.project.id);
+                  if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
+                }}
+              />
+            </section>
+          )}
         </>
       )}
 
-      <QuotaPanel />
-      <NotificationsPanel />
-      <ScheduledJobsPanel projects={visibleProjects} />
+      {/* TAB 2: Runs & Terminals */}
+      {overviewTab === 'runs' && (
+        <>
+          <div className="dashboard-grid">
+            <section className="panel" aria-labelledby="projects-title">
+              <header className="panel-head">
+                <div>
+                  <h2 id="projects-title">{activeProject ? 'Workspace Controls' : 'Projects'}</h2>
+                  <p className="muted">
+                    {activeProject
+                      ? `Repository path and quick actions for ${activeProject.name}.`
+                      : 'Create your first project to start the AI Coding Factory.'}
+                  </p>
+                </div>
+                {onOpenWizard && (
+                  <div className="actions">
+                    <button
+                      id="open-project-wizard"
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={onOpenWizard}
+                    >
+                      + AI Factory Wizard
+                    </button>
+                  </div>
+                )}
+              </header>
+              <ul className="list">
+                {visibleProjects.map((p) => (
+                  <li key={p.id} className="row row-wrap">
+                    <div className="row-main">
+                      <span className="row-title">{p.name}</span>
+                      {p.appType && p.appType !== 'custom' && (
+                        <span className="badge badge-soft">{p.appType.replace('_', ' ')}</span>
+                      )}
+                      <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
+                    </div>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => setBlueprintFor(p)}
+                        title="Open PROJECT.md Blueprint"
+                      >
+                        PROJECT.md
+                      </button>
+                      <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
+                        Board
+                      </Link>
+                      <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
+                        Shell
+                      </button>
+                      <button
+                        id={`start-run-${p.slug}`}
+                        className="btn btn-sm btn-primary"
+                        disabled={runnerDown}
+                        aria-expanded={runFormFor === p.id}
+                        onClick={() => {
+                          setRunFormPersona('coder');
+                          setRunFormPrompt('');
+                          setRunFormFor(runFormFor === p.id ? undefined : p.id);
+                        }}
+                      >
+                        Start run
+                      </button>
+                    </div>
+                    {runFormFor === p.id && (
+                      <StartRunForm
+                        key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}
+                        project={p}
+                        initialPersona={runFormPersona}
+                        initialPrompt={runFormPrompt}
+                        onCancel={() => setRunFormFor(undefined)}
+                        onStarted={(run) => {
+                          setRunFormFor(undefined);
+                          if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+                          else onInspectRun?.(run.id);
+                        }}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <NewProjectForm
+                disabled={runnerDown}
+                onCreated={async (res) => {
+                  await projects.refresh();
+                  onSelectProject?.(res.project.id);
+                  if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
+                }}
+              />
+            </section>
 
-      <div className="dashboard-grid">
-        <section className="panel" aria-labelledby="projects-title">
-          <header className="panel-head">
-            <div>
-              <h2 id="projects-title">{activeProject ? 'Workspace Controls' : 'Projects'}</h2>
-              <p className="muted">
-                {activeProject
-                  ? `Repository path and quick actions for ${activeProject.name}.`
-                  : 'Create your first project to start the AI Coding Factory.'}
-              </p>
-            </div>
-            {onOpenWizard && (
-              <div className="actions">
-                <button
-                  id="open-project-wizard"
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  onClick={onOpenWizard}
-                >
-                  + AI Factory Wizard
-                </button>
-              </div>
-            )}
-          </header>
-          <ul className="list">
-            {visibleProjects.map((p) => (
-              <li key={p.id} className="row row-wrap">
-                <div className="row-main">
-                  <span className="row-title">{p.name}</span>
-                  {p.appType && p.appType !== 'custom' && (
-                    <span className="badge badge-soft">{p.appType.replace('_', ' ')}</span>
-                  )}
-                  <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
+            <section className="panel" aria-labelledby="terminals-title">
+              <header className="panel-head">
+                <div>
+                  <h2 id="terminals-title">Terminals</h2>
+                  <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
                 </div>
                 <div className="actions">
                   <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => setBlueprintFor(p)}
-                    title="Open PROJECT.md Blueprint"
+                    id="new-shell"
+                    className="btn btn-sm"
+                    disabled={runnerDown}
+                    onClick={() => void openTerminal('shell', activeProject?.id)}
                   >
-                    PROJECT.md
-                  </button>
-                  <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
-                    Board
-                  </Link>
-                  <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
-                    Shell
+                    New shell
                   </button>
                   <button
-                    id={`start-run-${p.slug}`}
+                    id="new-claude"
                     className="btn btn-sm btn-primary"
                     disabled={runnerDown}
-                    aria-expanded={runFormFor === p.id}
-                    onClick={() => {
-                      setRunFormPersona('coder');
-                      setRunFormPrompt('');
-                      setRunFormFor(runFormFor === p.id ? undefined : p.id);
-                    }}
+                    onClick={() => void openTerminal('claude', activeProject?.id)}
+                    title="Starts Claude Code; on first run it walks you through logging in with your subscription"
                   >
-                    Start run
+                    Claude
                   </button>
                 </div>
-                {runFormFor === p.id && (
-                  <StartRunForm
-                    key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}
-                    project={p}
-                    initialPersona={runFormPersona}
-                    initialPrompt={runFormPrompt}
-                    onCancel={() => setRunFormFor(undefined)}
-                    onStarted={(run) => {
-                      setRunFormFor(undefined);
-                      if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
-                      else onInspectRun?.(run.id);
-                    }}
-                  />
-                )}
-              </li>
-            ))}
-          </ul>
-          <NewProjectForm
-            disabled={runnerDown}
-            onCreated={async (res) => {
-              await projects.refresh();
-              onSelectProject?.(res.project.id);
-              if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
-            }}
-          />
-        </section>
+              </header>
 
-        <section className="panel" aria-labelledby="terminals-title">
-          <header className="panel-head">
-            <div>
-              <h2 id="terminals-title">Terminals</h2>
-              <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
-            </div>
-            <div className="actions">
-              <button
-                id="new-shell"
-                className="btn btn-sm"
-                disabled={runnerDown}
-                onClick={() => void openTerminal('shell', activeProject?.id)}
-              >
-                New shell
-              </button>
-              <button
-                id="new-claude"
-                className="btn btn-sm btn-primary"
-                disabled={runnerDown}
-                onClick={() => void openTerminal('claude', activeProject?.id)}
-                title="Starts Claude Code; on first run it walks you through logging in with your subscription"
-              >
-                Claude
-              </button>
-            </div>
-          </header>
+              {plainTerminals?.length === 0 && (
+                <div className="empty">
+                  <p>No terminals yet.</p>
+                  <p className="muted">
+                    First time here? Open <strong>Claude</strong> and log in with your own subscription.
+                  </p>
+                </div>
+              )}
+              <ul className="list">
+                {plainTerminals?.map((t) => (
+                  <li key={t.id} className="row">
+                    <Link href={`/terminals/${t.id}`} className="row-main">
+                      <span className={`dot dot-${t.status}`} aria-label={t.status} />
+                      <span className="row-title">{t.title}</span>
+                      <span className="badge">{KIND_LABEL[t.kind]}</span>
+                      {t.projectId && <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>}
+                      <span className="row-meta mono">
+                        {t.status === 'exited' ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · ` : ''}
+                        {timeAgo(t.createdAt)}
+                      </span>
+                    </Link>
+                    <button
+                      className="icon-btn"
+                      aria-label={`Close ${t.title}`}
+                      title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
+                      onClick={() => void removeTerminal(t.id)}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </div>
 
-          {plainTerminals?.length === 0 && (
-            <div className="empty">
-              <p>No terminals yet.</p>
-              <p className="muted">
-                First time here? Open <strong>Claude</strong> and log in with your own subscription.
-              </p>
-            </div>
-          )}
-          <ul className="list">
-            {plainTerminals?.map((t) => (
-              <li key={t.id} className="row">
-                <Link href={`/terminals/${t.id}`} className="row-main">
-                  <span className={`dot dot-${t.status}`} aria-label={t.status} />
-                  <span className="row-title">{t.title}</span>
-                  <span className="badge">{KIND_LABEL[t.kind]}</span>
-                  {t.projectId && <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>}
-                  <span className="row-meta mono">
-                    {t.status === 'exited' ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · ` : ''}
-                    {timeAgo(t.createdAt)}
-                  </span>
-                </Link>
-                <button
-                  className="icon-btn"
-                  aria-label={`Close ${t.title}`}
-                  title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
-                  onClick={() => void removeTerminal(t.id)}
+          <section className="panel" aria-labelledby="runs-title">
+            <header className="panel-head">
+              <div>
+                <h2 id="runs-title">Runs ({filteredRuns.length})</h2>
+                <p className="muted">Agent sessions on their own branch and worktree. State comes live from hooks.</p>
+              </div>
+              <div className="actions">
+                <label
+                  className="small"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                    padding: '4px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                  }}
                 >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+                  <input
+                    type="checkbox"
+                    checked={hideCompletedRuns}
+                    onChange={() => setHideCompletedRuns((v) => !v)}
+                  />
+                  <span>Hide Completed ({stats.completed})</span>
+                </label>
+                <Link href="/fleet" className="btn btn-sm">
+                  Open Fleet Multiplexer →
+                </Link>
+              </div>
+            </header>
+            {filteredRuns.length === 0 && (
+              <div className="empty">
+                <p>{hideCompletedRuns ? 'No active runs right now.' : 'No runs yet.'}</p>
+                <p className="muted">
+                  Pick a project above and press <strong>Start run</strong>, or dispatch a ticket from its{' '}
+                  <strong>Board</strong>.
+                </p>
+              </div>
+            )}
+            <ul className="list">
+              {filteredRuns.map((run) => (
+                <RunRow
+                  key={run.id}
+                  run={run}
+                  projectName={projectName(run.projectId)}
+                  onInspect={onInspectRun ? () => onInspectRun(run.id) : undefined}
+                  onStop={() => void runAction(run.id, 'stop')}
+                  onResume={() => void runAction(run.id, 'resume')}
+                  onPrune={() => void runAction(run.id, 'prune')}
+                  onRemove={() => void runAction(run.id, 'remove')}
+                />
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
 
-      <section className="panel" aria-labelledby="runs-title">
-        <header className="panel-head">
-          <div>
-            <h2 id="runs-title">Runs</h2>
-            <p className="muted">Claude sessions on their own branch and worktree. State comes live from hooks.</p>
-          </div>
-          <div className="actions">
-            <Link href="/fleet" className="btn btn-sm">
-              Open Fleet Multiplexer →
-            </Link>
-          </div>
-        </header>
-        {visibleRuns.length === 0 && (
-          <div className="empty">
-            <p>No runs yet.</p>
-            <p className="muted">
-              Pick a project above and press <strong>Start run</strong>, or dispatch a ticket from its{' '}
-              <strong>Board</strong>.
-            </p>
-          </div>
-        )}
-        <ul className="list">
-          {visibleRuns.map((run) => (
-            <RunRow
-              key={run.id}
-              run={run}
-              projectName={projectName(run.projectId)}
-              onInspect={onInspectRun ? () => onInspectRun(run.id) : undefined}
-              onStop={() => void runAction(run.id, 'stop')}
-              onResume={() => void runAction(run.id, 'resume')}
-              onPrune={() => void runAction(run.id, 'prune')}
-              onRemove={() => void runAction(run.id, 'remove')}
-            />
-          ))}
-        </ul>
-      </section>
+      {/* TAB 3: Automation & Cron */}
+      {overviewTab === 'automation' && (
+        <ScheduledJobsPanel projects={visibleProjects} />
+      )}
+
+      {/* TAB 4: Quota & Alerts */}
+      {overviewTab === 'system' && (
+        <>
+          <QuotaPanel />
+          <NotificationsPanel />
+        </>
+      )}
 
       {blueprintFor && (
         <BlueprintModal

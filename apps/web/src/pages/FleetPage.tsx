@@ -2,6 +2,7 @@ import type { Project, Run } from '@emberline/protocol';
 import { type FormEvent, lazy, Suspense, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { PersonaBadge } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { STAGE_TEMPLATES } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
@@ -11,8 +12,14 @@ import { timeAgo } from '../time';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
 
-type FleetFilter = 'active' | 'attention' | 'queued' | 'all';
+type FleetFilter = 'all' | 'active' | 'attention' | 'queued' | 'completed';
 type GridLayout = 'grid' | 'cols' | 'single';
+
+const HIDE_COMPLETED_STORAGE_KEY = 'emberline.fleet.hideCompleted';
+
+function isRunCompleted(r: Run): boolean {
+  return Boolean(r.endedAt) || r.state === 'done' || r.state === 'failed';
+}
 
 export function FleetPage({
   activeProjectId,
@@ -24,8 +31,30 @@ export function FleetPage({
   const { runs } = useRuns();
   const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
   const [filter, setFilter] = useState<FleetFilter>('all');
+  const [hideCompleted, setHideCompleted] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(HIDE_COMPLETED_STORAGE_KEY);
+      if (saved === 'false') return false;
+      if (saved === 'true') return true;
+    } catch {
+      // ignore storage errors
+    }
+    return true;
+  });
   const [layout, setLayout] = useState<GridLayout>('grid');
   const [error, setError] = useState<string>();
+
+  const toggleHideCompleted = () => {
+    setHideCompleted((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(HIDE_COMPLETED_STORAGE_KEY, String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
 
@@ -36,28 +65,37 @@ export function FleetPage({
 
   const counts = useMemo(() => {
     const all = scopedRuns;
+    const completed = all.filter((r) => isRunCompleted(r)).length;
+    const nonCompleted = all.length - completed;
     return {
-      active: all.filter((r) => !r.endedAt && r.state !== 'queued' && r.state !== 'done' && r.state !== 'failed').length,
+      active: all.filter((r) => !isRunCompleted(r) && r.state !== 'queued').length,
       attention: all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed')
         .length,
       queued: all.filter((r) => r.state === 'queued').length,
-      all: all.length,
+      completed,
+      all: hideCompleted ? nonCompleted : all.length,
+      total: all.length,
     };
-  }, [scopedRuns]);
+  }, [scopedRuns, hideCompleted]);
 
   const visibleRuns = useMemo(() => {
-    const all = scopedRuns;
+    let list = scopedRuns;
+    if (hideCompleted && filter !== 'completed') {
+      list = list.filter((r) => !isRunCompleted(r));
+    }
     switch (filter) {
       case 'active':
-        return all.filter((r) => !r.endedAt && r.state !== 'queued' && r.state !== 'done' && r.state !== 'failed');
+        return list.filter((r) => !isRunCompleted(r) && r.state !== 'queued');
       case 'attention':
-        return all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed');
+        return list.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed');
       case 'queued':
-        return all.filter((r) => r.state === 'queued');
+        return list.filter((r) => r.state === 'queued');
+      case 'completed':
+        return scopedRuns.filter((r) => isRunCompleted(r));
       case 'all':
-        return all;
+        return list;
     }
-  }, [scopedRuns, filter]);
+  }, [scopedRuns, filter, hideCompleted]);
 
   return (
     <div className="fleet-page">
@@ -65,10 +103,40 @@ export function FleetPage({
         <div className="workspace-bar-title">
           <h1>Fleet Multiplexer</h1>
           <span className="muted small">
-            Supervise and steer parallel Claude Code sessions side-by-side
+            Supervise and steer parallel agent sessions side-by-side
           </span>
         </div>
-        <div className="workspace-bar-controls">
+        <div className="workspace-bar-controls" style={{ flexWrap: 'wrap', gap: 8 }}>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '5px 10px',
+              borderRadius: 'var(--radius-sm)',
+              background: hideCompleted
+                ? 'color-mix(in hsl, var(--ember-1) 14%, var(--surface))'
+                : 'var(--surface)',
+              border: hideCompleted
+                ? '1px solid color-mix(in hsl, var(--ember-1) 45%, var(--border))'
+                : '1px solid var(--border)',
+              fontSize: '0.78rem',
+              fontWeight: 500,
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+            title="Hide finished or exited runs so only live and queued sessions appear in the multiplexer"
+          >
+            <input
+              id="fleet-hide-completed"
+              type="checkbox"
+              checked={hideCompleted}
+              onChange={toggleHideCompleted}
+              style={{ margin: 0 }}
+            />
+            <span>Hide Completed ({counts.completed})</span>
+          </label>
+
           <div className="segmented" role="tablist" aria-label="Fleet filter">
             <button
               id="fleet-filter-all"
@@ -110,7 +178,20 @@ export function FleetPage({
             >
               Queued ({counts.queued})
             </button>
+            {!hideCompleted && (
+              <button
+                id="fleet-filter-completed"
+                type="button"
+                role="tab"
+                aria-selected={filter === 'completed'}
+                className={filter === 'completed' ? 'active' : ''}
+                onClick={() => setFilter('completed')}
+              >
+                Completed ({counts.completed})
+              </button>
+            )}
           </div>
+
           <div className="segmented hide-sm" role="radiogroup" aria-label="Grid layout">
             <button
               type="button"
@@ -156,10 +237,25 @@ export function FleetPage({
 
       {visibleRuns.length === 0 ? (
         <div className="empty fleet-empty">
-          <p>No agent sessions match the selected filter.</p>
-          <p className="muted small">
-            Start a ticket from a project board or launch a run from the{' '}
-            <Link href="/">Workbench Overview</Link>.
+          <p>
+            {hideCompleted && counts.completed > 0
+              ? `No active agent sessions right now (${counts.completed} completed run${counts.completed === 1 ? '' : 's'} hidden).`
+              : 'No agent sessions match the selected filter.'}
+          </p>
+          <p className="muted small" style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span>
+              Start a ticket from a project board or launch a run from the{' '}
+              <Link href="/">Factory Overview</Link>.
+            </span>
+            {hideCompleted && counts.completed > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={toggleHideCompleted}
+              >
+                Show Completed Runs ({counts.completed})
+              </button>
+            )}
           </p>
         </div>
       ) : (
@@ -192,7 +288,7 @@ function FleetPane({
 }) {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState<string>();
-  const live = !run.endedAt;
+  const live = !run.endedAt && run.state !== 'done' && run.state !== 'failed';
   const canPrompt = (live && run.state !== 'queued') || run.resumable;
 
   const act = async (name: string, fn: () => Promise<void>) => {
@@ -220,6 +316,7 @@ function FleetPane({
     <article id={`fleet-pane-${run.id}`} className={`fleet-pane fleet-pane-${run.state}`}>
       <header className="fleet-pane-head">
         <RunStatePill state={run.state} />
+        <PersonaBadge persona={run.persona} />
         <button type="button" className="fleet-pane-title" onClick={onInspect} title="Open run inspector & timeline">
           {run.title ?? project?.name ?? 'Agent Run'}
         </button>
@@ -259,7 +356,7 @@ function FleetPane({
               disabled={!!busy}
               onClick={() => void act('stop', () => api(`/api/runs/${run.id}/stop`, 'POST'))}
             >
-              {run.state === 'queued' ? 'Cancel' : run.state === 'done' ? 'Close' : 'Stop'}
+              {run.state === 'queued' ? 'Cancel' : 'Stop'}
             </button>
           )}
           {run.terminalId && (
@@ -308,7 +405,7 @@ function FleetPane({
             className="input fleet-input"
             placeholder={
               run.state === 'waiting_input'
-                ? 'Claude is waiting for input — reply here…'
+                ? 'Agent is waiting for input — reply here…'
                 : !live
                   ? 'Resume session with prompt…'
                   : 'Steer this agent…'
