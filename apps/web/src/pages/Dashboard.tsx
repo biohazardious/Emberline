@@ -13,6 +13,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
+import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
 import { timeAgo } from '../time';
@@ -117,6 +118,7 @@ export function Dashboard({
 
       <QuotaPanel />
       <NotificationsPanel />
+      <ScheduledJobsPanel projects={projects.data ?? []} />
 
       <div className="dashboard-grid">
         <section className="panel" aria-labelledby="projects-title">

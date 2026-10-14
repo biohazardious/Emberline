@@ -8,9 +8,13 @@ import type {
   RunArtifact,
   RunDiffSummary,
   RunFileDiff,
+  RunForgeStatus,
+  ScheduledJob,
 } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { computeNextCronDate } from './cron/service.js';
+import { parseForgeRemote } from './forge/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -254,5 +258,156 @@ describe('M6 review, git commit/push, and artifacts', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('parses forge remotes, builds compare URLs, and creates a PR with CI status via ForgeService', async () => {
+    const gh = parseForgeRemote('git@github.com:acme/emberline.git', 'auto', null, 'main', 'emberline/run-1');
+    expect(gh).toMatchObject({
+      provider: 'github',
+      repoPath: 'acme/emberline',
+      repoWebUrl: 'https://github.com/acme/emberline',
+      apiBaseUrl: 'https://api.github.com',
+      compareUrl: 'https://github.com/acme/emberline/compare/main...emberline%2Frun-1?expand=1',
+    });
+
+    const gl = parseForgeRemote('https://gitlab.example.com/group/sub/app.git', 'auto', null, 'main', 'feat/x');
+    expect(gl).toMatchObject({
+      provider: 'gitlab',
+      repoPath: 'group/sub/app',
+      compareUrl:
+        'https://gitlab.example.com/group/sub/app/-/merge_requests/new?merge_request[source_branch]=feat%2Fx&merge_request[target_branch]=main',
+    });
+
+    const { createServer } = await import('node:http');
+    const server = createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/repos/acme/widget/pulls') {
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            number: 42,
+            title: 'Add widget feature',
+            html_url: 'https://github.com/acme/widget/pull/42',
+            state: 'open',
+            draft: false,
+            head: { sha: 'abc1234' },
+          }),
+        );
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/repos/acme/widget/commits/abc1234/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ state: 'success' }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as { port: number };
+    const apiBase = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const { project } = await createGitProjectWithBareRemote('Forge App');
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
+      execFileSync('git', ['-C', run.worktreePath, 'remote', 'set-url', 'origin', 'git@github.com:acme/widget.git']);
+
+      const patchForge = await t.app.inject({
+        method: 'PATCH',
+        url: '/api/forge',
+        headers: { ...CSRF, cookie },
+        payload: {
+          provider: 'github',
+          apiUrl: apiBase,
+          token: 'ghp_test_token_123',
+        },
+      });
+      expect(patchForge.statusCode).toBe(200);
+      expect(patchForge.json()).toEqual({
+        provider: 'github',
+        apiUrl: apiBase,
+        tokenConfigured: true,
+      });
+
+      const statusBefore: RunForgeStatus = (await api('GET', `/api/runs/${run.id}/forge`)).json();
+      expect(statusBefore.provider).toBe('github');
+      expect(statusBefore.repoPath).toBe('acme/widget');
+      expect(statusBefore.compareUrl).toContain('https://github.com/acme/widget/compare/');
+      expect(statusBefore.pullRequest).toBeNull();
+
+      const createPrRes = await api('POST', `/api/runs/${run.id}/forge/pr`, {
+        title: 'Add widget feature',
+        body: 'Implements widget',
+        draft: false,
+        pushFirst: false,
+      });
+      expect(createPrRes.statusCode).toBe(200);
+      const statusAfter: RunForgeStatus = createPrRes.json();
+      expect(statusAfter.pullRequest).toMatchObject({
+        provider: 'github',
+        number: 42,
+        title: 'Add widget feature',
+        url: 'https://github.com/acme/widget/pull/42',
+        state: 'open',
+        ciStatus: 'success',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('creates, updates, triggers, and deletes scheduled cron agent jobs', async () => {
+    const base = new Date('2026-10-14T01:30:00.000Z');
+    const nextDaily = computeNextCronDate('0 2 * * *', base);
+    expect(nextDaily.toISOString()).toBe('2026-10-14T02:00:00.000Z');
+
+    const { project } = await createGitProjectWithBareRemote('Cron App');
+
+    // Invalid cron expression should return 400
+    const badRes = await api('POST', '/api/cron', {
+      projectId: project.id,
+      name: 'Bad Job',
+      cronExpr: 'not a cron',
+      prompt: 'test',
+    });
+    expect(badRes.statusCode).toBe(400);
+
+    // Create valid scheduled job
+    const createRes = await api('POST', '/api/cron', {
+      projectId: project.id,
+      name: 'Nightly Test Suite',
+      cronExpr: '0 2 * * *',
+      prompt: 'Run tests and fix failures',
+      permissionMode: 'acceptEdits',
+    });
+    expect(createRes.statusCode).toBe(201);
+    const job: ScheduledJob = createRes.json();
+    expect(job.name).toBe('Nightly Test Suite');
+    expect(job.enabled).toBe(true);
+    expect(job.lastRunId).toBeNull();
+
+    // Pause and re-enable job
+    const patchRes = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/cron/${job.id}`,
+      headers: { ...CSRF, cookie },
+      payload: { enabled: false },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    expect((patchRes.json() as ScheduledJob).enabled).toBe(false);
+
+    // Trigger job manually ("Run Now")
+    const triggerRes = await api('POST', `/api/cron/${job.id}/trigger`, {});
+    expect(triggerRes.statusCode).toBe(200);
+    const triggered = triggerRes.json() as { job: ScheduledJob; run: Run };
+    expect(triggered.run.projectId).toBe(project.id);
+    expect(triggered.job.lastRunId).toBe(triggered.run.id);
+    expect(triggered.job.lastRunAt).toBeTruthy();
+
+    // Delete job
+    const delRes = await api('DELETE', `/api/cron/${job.id}`);
+    expect(delRes.statusCode).toBe(204);
+    const listAfter: ScheduledJob[] = (await api('GET', '/api/cron')).json();
+    expect(listAfter).toHaveLength(0);
+  });
 });
+
+
 

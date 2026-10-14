@@ -112,3 +112,25 @@ export const quotaWindows = sqliteTable('quota_windows', {
   runId: text('run_id'),
   resumedAt: integer('resumed_at', { mode: 'timestamp_ms' }),
 });
+
+/** Recurring cron jobs that automatically spawn agent runs on a schedule (Phase 2.2). */
+export const scheduledJobs = sqliteTable(
+  'scheduled_jobs',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    cronExpr: text('cron_expr').notNull(),
+    prompt: text('prompt').notNull(),
+    permissionMode: text('permission_mode').notNull().default('acceptEdits'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    lastRunId: text('last_run_id').references(() => runs.id, { onDelete: 'set null' }),
+    lastRunAt: integer('last_run_at', { mode: 'timestamp_ms' }),
+    nextRunAt: integer('next_run_at', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [index('scheduled_jobs_project_idx').on(t.projectId)],
+);
+

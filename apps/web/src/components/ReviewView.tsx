@@ -8,6 +8,7 @@ import type {
   RunArtifact,
   RunDiffSummary,
   RunFileDiff,
+  RunForgeStatus,
 } from '@emberline/protocol';
 import { api, errorMessage } from '../api';
 import { MonacoDiff, type DiffAnnotation } from './MonacoDiff';
@@ -84,6 +85,14 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   const [gitBusy, setGitBusy] = useState(false);
   const [gitNotice, setGitNotice] = useState<string | null>(null);
 
+  // Forge PR / MR state
+  const [forgeStatus, setForgeStatus] = useState<RunForgeStatus | null>(null);
+  const [prDrawerOpen, setPrDrawerOpen] = useState(false);
+  const [prTitle, setPrTitle] = useState(run.title ?? `Changes on ${run.branch ?? 'branch'}`);
+  const [prBody, setPrBody] = useState('');
+  const [prDraft, setPrDraft] = useState(false);
+  const [prCreating, setPrCreating] = useState(false);
+
   // Artifacts state
   const [artifacts, setArtifacts] = useState<RunArtifact[]>([]);
   const [loadingArtifacts, setLoadingArtifacts] = useState(false);
@@ -148,10 +157,20 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   }, [run.id]);
 
+  const loadForge = useCallback(async () => {
+    try {
+      const status = await api<RunForgeStatus>(`/api/runs/${run.id}/forge`);
+      setForgeStatus(status);
+    } catch {
+      // Ignore if forge status endpoint unavailable
+    }
+  }, [run.id]);
+
   useEffect(() => {
     void loadSummary(scope, false);
     void loadArtifacts();
-  }, [scope, loadSummary, loadArtifacts]);
+    void loadForge();
+  }, [scope, loadSummary, loadArtifacts, loadForge]);
 
   useEffect(() => {
     if (selectedFile) {
@@ -263,10 +282,35 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       const res = await api<GitPushResponse>(`/api/runs/${run.id}/git/push`, 'POST', {});
       setGitNotice(`Pushed ${res.branch} → ${res.remote}`);
       await loadSummary(scope, true);
+      await loadForge();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
       setGitBusy(false);
+    }
+  };
+
+  const handleCreatePr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPrCreating(true);
+    setError(null);
+    setGitNotice(null);
+    try {
+      const res = await api<RunForgeStatus>(`/api/runs/${run.id}/forge/pr`, 'POST', {
+        title: prTitle.trim() || undefined,
+        body: prBody.trim() || undefined,
+        draft: prDraft,
+        pushFirst: true,
+      });
+      setForgeStatus(res);
+      setPrDrawerOpen(false);
+      if (res.pullRequest) {
+        setGitNotice(`Created PR #${res.pullRequest.number}: ${res.pullRequest.title}`);
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setPrCreating(false);
     }
   };
 
@@ -348,6 +392,45 @@ export function ReviewView({ run, onRunUpdated }: Props) {
         </div>
 
         <div className="review-toolbar-group">
+          {forgeStatus?.pullRequest ? (
+            <a
+              href={forgeStatus.pullRequest.url}
+              target="_blank"
+              rel="noreferrer"
+              className="badge badge-soft mono"
+              title={forgeStatus.pullRequest.title}
+            >
+              {forgeStatus.provider === 'gitlab' ? 'MR !' : 'PR #'}
+              {forgeStatus.pullRequest.number} · {forgeStatus.pullRequest.state}
+              {forgeStatus.pullRequest.ciStatus !== 'unknown'
+                ? ` · CI: ${forgeStatus.pullRequest.ciStatus}`
+                : ''}{' '}
+              ↗
+            </a>
+          ) : (
+            <>
+              {forgeStatus?.compareUrl && (
+                <a
+                  href={forgeStatus.compareUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-sm btn-ghost"
+                  title="Open branch comparison / new PR page in browser"
+                >
+                  Compare ↗
+                </a>
+              )}
+              {run.branch && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setPrDrawerOpen((v) => !v)}
+                >
+                  {prDrawerOpen ? 'Cancel PR' : 'Create PR / MR'}
+                </button>
+              )}
+            </>
+          )}
           {subTab === 'diff' && (
             <button
               type="button"
@@ -363,6 +446,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             onClick={() => {
               void loadSummary(scope, true);
               void loadArtifacts();
+              void loadForge();
             }}
             disabled={loadingDiff || loadingArtifacts}
           >
@@ -370,6 +454,48 @@ export function ReviewView({ run, onRunUpdated }: Props) {
           </button>
         </div>
       </div>
+
+      {prDrawerOpen && (
+        <form className="review-actions-bar" onSubmit={(e) => void handleCreatePr(e)}>
+          <div className="review-commit-form" style={{ flex: 1 }}>
+            <input
+              type="text"
+              className="input"
+              value={prTitle}
+              onChange={(e) => setPrTitle(e.target.value)}
+              placeholder="Pull request title…"
+              required
+            />
+            <input
+              type="text"
+              className="input"
+              value={prBody}
+              onChange={(e) => setPrBody(e.target.value)}
+              placeholder="Optional description / summary…"
+            />
+            <label className="review-checkbox-label">
+              <input
+                type="checkbox"
+                checked={prDraft}
+                onChange={(e) => setPrDraft(e.target.checked)}
+              />
+              Draft
+            </label>
+            <button
+              type="submit"
+              className="btn btn-sm btn-primary"
+              disabled={prCreating || !prTitle.trim()}
+            >
+              {prCreating ? 'Creating PR…' : `Push & Create ${forgeStatus?.provider === 'gitlab' ? 'MR' : 'PR'}`}
+            </button>
+          </div>
+          {!forgeStatus?.tokenConfigured && (
+            <span className="muted small">
+              Configure a Forge Personal Access Token on the Overview page (or use Compare ↗).
+            </span>
+          )}
+        </form>
+      )}
 
       {error && <p className="form-error" style={{ margin: '0.5rem 0.75rem' }}>{error}</p>}
       {gitNotice && (
