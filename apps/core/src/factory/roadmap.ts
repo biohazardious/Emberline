@@ -6,6 +6,8 @@ import {
   type AgentId,
   type AgentModelId,
   type AgentPersona,
+  type AutoGenerateRoadmapBody,
+  type AutoGenerateRoadmapResponse,
   type BrainstormRequestBody,
   type BrainstormResponse,
   type BrainstormSuggestion,
@@ -35,6 +37,7 @@ interface StoredRoadmapFile {
 
 const ROADMAP_REL_PATH = '.emberline/roadmap.json';
 const BRAINSTORM_OUT_REL_PATH = '.emberline/brainstorm-suggestions.json';
+const ROADMAP_GEN_OUT_REL_PATH = '.emberline/roadmap-generated.json';
 
 function defaultRoutingForPersona(
   persona: AgentPersona,
@@ -82,6 +85,57 @@ function categoryForPersona(persona: AgentPersona): RoadmapCategory {
   if (persona === 'architect' || persona === 'product_owner' || persona === 'dba') return 'architecture';
   if (persona === 'qa' || persona === 'security') return 'qa_security';
   return 'feature';
+}
+
+export function inferPersonaAndCategoryFromText(text: string): {
+  persona: AgentPersona;
+  category: RoadmapCategory;
+  priority: 1 | 2 | 3;
+} {
+  const lower = text.toLowerCase();
+  const priority: 1 | 2 | 3 = /\b(urgent|critical|core|blocker|security|crash|acil|kritik)\b/.test(lower)
+    ? 3
+    : 2;
+
+  if (
+    /\b(test|qa|e2e|playwright|vitest|pytest|regression|coverage|assertion|verify|doğrulama)\b/.test(
+      lower,
+    )
+  ) {
+    return { persona: 'qa', category: 'qa_security', priority };
+  }
+  if (
+    /\b(security|auth|oauth|jwt|rbac|permission|csrf|xss|encryption|audit|checksum|sha256|güvenlik|yetki)\b/.test(
+      lower,
+    )
+  ) {
+    return { persona: 'security', category: 'qa_security', priority: 3 };
+  }
+  if (
+    /\b(database|sql|sqlite|postgres|schema|migration|query|table|drizzle|prisma|redis|veritabanı|tablo)\b/.test(
+      lower,
+    )
+  ) {
+    return { persona: 'dba', category: 'architecture', priority };
+  }
+  if (
+    /\b(ui|ux|css|layout|theme|dark mode|responsive|modal|animation|canvas|hud|menu|screen|widget|design|polish|arayüz|tasarım|ekran|görsel)\b/.test(
+      lower,
+    )
+  ) {
+    return { persona: 'ui_ux', category: 'ui_ux', priority };
+  }
+  if (
+    /\b(architecture|blueprint|refactor|protocol|contract|openapi|pipeline|dag|router|orchestrator|sdk|mimari|altyapı)\b/.test(
+      lower,
+    )
+  ) {
+    return { persona: 'architect', category: 'architecture', priority };
+  }
+  if (/\b(performance|optimize|fps|latency|memory|cache|speed|performans|hız)\b/.test(lower)) {
+    return { persona: 'coder', category: 'performance', priority };
+  }
+  return { persona: 'coder', category: 'feature', priority };
 }
 
 function milestoneIndexForPersona(persona: AgentPersona): number {
@@ -528,6 +582,215 @@ export async function synthesizeBrainstormSuggestions(
   });
 }
 
+const GENERIC_LEGACY_MS_TITLES = new Set([
+  'foundation, blueprint & system architecture',
+  'core domain, services & primary workflows',
+  'user interface, api/cli surface & experience',
+  'qa verification, security & release readiness',
+]);
+
+function buildDomainMilestones(
+  project: Project,
+  blueprintContent: string,
+  fileNamesLower = '',
+): Array<{ id: string; code: string; title: string; description: string }> {
+  const domain = detectPrimaryProjectDomain(project, blueprintContent, fileNamesLower);
+  if (domain === 'game_interactive') {
+    return [
+      {
+        id: 'ms-m1',
+        code: 'M1',
+        title: `${project.name} — Game Loop, Physics & Core Architecture`,
+        description: 'Canvas/WebGL rendering loop, input handling, entity state machine, and core physics.',
+      },
+      {
+        id: 'ms-m2',
+        code: 'M2',
+        title: 'Gameplay Mechanics, Obstacles, Progression & Scoring',
+        description: 'Core gameplay challenges, collision detection, scoring multipliers, and progression.',
+      },
+      {
+        id: 'ms-m3',
+        code: 'M3',
+        title: 'HUD, Visual Juice, Audio SFX & Menus',
+        description: 'Start/pause/game-over screens, particle effects, WebAudio SFX, and high-score UI.',
+      },
+      {
+        id: 'ms-m4',
+        code: 'M4',
+        title: 'Responsive Controls, Playtest & Release Verification',
+        description: 'Desktop/mobile viewport scaling, 60 FPS optimization, and automated playtest verification.',
+      },
+    ];
+  }
+  if (domain === 'embedded_iot') {
+    return [
+      {
+        id: 'ms-m1',
+        code: 'M1',
+        title: `${project.name} — Hardware Pinout, Bus & Firmware Architecture`,
+        description: 'MCU/board configuration, I2C/SPI/UART bus initialization, and protocol framing.',
+      },
+      {
+        id: 'ms-m2',
+        code: 'M2',
+        title: 'Driver Logic, Sensor/Memory I/O & State Machine',
+        description: 'Register read/write workflows, non-blocking state machines, and buffer management.',
+      },
+      {
+        id: 'ms-m3',
+        code: 'M3',
+        title: 'Serial Telemetry, Diagnostic CLI & Status Indicators',
+        description: 'Interactive serial console, status LED/OLED feedback, and diagnostic commands.',
+      },
+      {
+        id: 'ms-m4',
+        code: 'M4',
+        title: 'CRC/Safety Verification, Watchdog & Firmware Build',
+        description: 'Read-after-write verification, fault recovery, and clean firmware compilation.',
+      },
+    ];
+  }
+  if (domain === 'cli_tool') {
+    return [
+      {
+        id: 'ms-m1',
+        code: 'M1',
+        title: `${project.name} — CLI Argument Parser & Pre-Flight Architecture`,
+        description: 'Subcommand structure, configuration loading, and environment/OS compatibility checks.',
+      },
+      {
+        id: 'ms-m2',
+        code: 'M2',
+        title: 'Core Execution Engine, Automation & Dry-Run Workflow',
+        description: 'Primary command execution, idempotent operations, and non-destructive --dry-run mode.',
+      },
+      {
+        id: 'ms-m3',
+        code: 'M3',
+        title: 'Terminal UX, ANSI Progress Telemetry & Structured Output',
+        description: 'Clear progress indicators, human-readable & --json output modes, and actionable error messages.',
+      },
+      {
+        id: 'ms-m4',
+        code: 'M4',
+        title: 'Rollback Safety, Checksum Verification & Test Suite',
+        description: 'Backup/restore safety, checksum validation, and automated CLI integration tests.',
+      },
+    ];
+  }
+  if (domain === 'mobile_desktop') {
+    return [
+      {
+        id: 'ms-m1',
+        code: 'M1',
+        title: `${project.name} — Native Shell, Windowing & State Architecture`,
+        description: 'Application shell, IPC/bridge contracts, and persistent configuration storage.',
+      },
+      {
+        id: 'ms-m2',
+        code: 'M2',
+        title: 'Core Desktop/Mobile Features & System Integration',
+        description: 'Primary functional modules, native OS integration, and background worker flows.',
+      },
+      {
+        id: 'ms-m3',
+        code: 'M3',
+        title: 'Responsive Interface, Tray/Shortcuts & Theme Polish',
+        description: 'Polished native-feeling UI, global keyboard shortcuts, and smooth animations.',
+      },
+      {
+        id: 'ms-m4',
+        code: 'M4',
+        title: 'Cross-Platform Packaging, Performance & QA Suite',
+        description: 'Startup performance, memory footprint optimization, and build packaging verification.',
+      },
+    ];
+  }
+  if (domain === 'ai_agents') {
+    return [
+      {
+        id: 'ms-m1',
+        code: 'M1',
+        title: `${project.name} — Agent Protocol, Tooling & Router Architecture`,
+        description: 'Model/provider contracts, capability routing, and context/prompt orchestration.',
+      },
+      {
+        id: 'ms-m2',
+        code: 'M2',
+        title: 'Execution Pipeline, Memory Store & Tool Dispatch',
+        description: 'Multi-step task execution, tool call handlers, and state persistence.',
+      },
+      {
+        id: 'ms-m3',
+        code: 'M3',
+        title: 'Control Console, Live Telemetry & Trace Inspector',
+        description: 'Interactive operator UI/CLI, live run telemetry, and token/cost visibility.',
+      },
+      {
+        id: 'ms-m4',
+        code: 'M4',
+        title: 'Guardrails, Fallback Resilience & Evaluation Suite',
+        description: 'Rate-limit fallbacks, output validation, and automated end-to-end verification.',
+      },
+    ];
+  }
+  if (domain === 'api_service') {
+    return [
+      {
+        id: 'ms-m1',
+        code: 'M1',
+        title: `${project.name} — Service Schema, Contracts & Data Layer`,
+        description: 'API contracts, request/response schemas, and database models/migrations.',
+      },
+      {
+        id: 'ms-m2',
+        code: 'M2',
+        title: 'Core Endpoints, Domain Services & Business Logic',
+        description: 'Primary REST/RPC handlers, domain workflows, and background processing.',
+      },
+      {
+        id: 'ms-m3',
+        code: 'M3',
+        title: 'OpenAPI Docs, Developer Ergonomics & Status Dashboard',
+        description: 'Interactive API documentation, health/metrics endpoints, and client ergonomics.',
+      },
+      {
+        id: 'ms-m4',
+        code: 'M4',
+        title: 'Auth Hardening, Rate Limiting & Integration Tests',
+        description: 'Authentication/authorization checks, boundary validation, and automated API tests.',
+      },
+    ];
+  }
+  return [
+    {
+      id: 'ms-m1',
+      code: 'M1',
+      title: `${project.name} — Architecture, Data Schema & Core Setup`,
+      description: 'Project blueprint (PROJECT.md), data models, API contracts, and build pipeline.',
+    },
+    {
+      id: 'ms-m2',
+      code: 'M2',
+      title: 'Core Domain Logic, Services & Primary Workflows',
+      description: 'End-to-end business logic, persistence layer, and primary application features.',
+    },
+    {
+      id: 'ms-m3',
+      code: 'M3',
+      title: 'Interactive UI/UX, Views & Responsive Polish',
+      description: 'User-facing views, interactive forms/controls, filtering, and visual ergonomics.',
+    },
+    {
+      id: 'ms-m4',
+      code: 'M4',
+      title: 'Automated QA, Security Hardening & Release Readiness',
+      description: 'End-to-end verification, edge-case handling, and zero-error production build.',
+    },
+  ];
+}
+
 async function seedInitialRoadmap(
   project: Project,
   blueprintContent: string,
@@ -535,43 +798,26 @@ async function seedInitialRoadmap(
   fSettings?: FactorySettings,
 ): Promise<StoredRoadmapFile> {
   const now = new Date().toISOString();
-  const milestones: RoadmapMilestone[] = [
-    {
-      id: 'ms-m1',
-      code: 'M1',
-      title: 'Foundation, Blueprint & System Architecture',
-      description: 'Project specification (PROJECT.md), repository structure, build pipeline, and core contracts.',
-      status: 'planned',
-      items: [],
-    },
-    {
-      id: 'ms-m2',
-      code: 'M2',
-      title: 'Core Domain, Services & Primary Workflows',
-      description: 'Core business/system logic, data models, services, and primary functional workflows.',
-      status: 'planned',
-      items: [],
-    },
-    {
-      id: 'ms-m3',
-      code: 'M3',
-      title: 'User Interface, API/CLI Surface & Experience',
-      description: 'Web/Desktop UI views, forms, CLI/API ergonomics, reporting, and user experience polish.',
-      status: 'planned',
-      items: [],
-    },
-    {
-      id: 'ms-m4',
-      code: 'M4',
-      title: 'QA Verification, Security & Release Readiness',
-      description: 'Automated test suites, security hardening, performance optimization, and packaging.',
-      status: 'planned',
-      items: [],
-    },
-  ];
+  const files = await listWorkspaceFilesFlat(project.path).catch(() => []);
+  const fileNamesLower = files.map((f) => f.path.toLowerCase()).join(' ');
+  const defs = buildDomainMilestones(project, blueprintContent, fileNamesLower);
+  const milestones: RoadmapMilestone[] = defs.map((d) => ({
+    ...d,
+    status: 'planned',
+    items: [],
+  }));
 
-  // Map existing Kanban tickets into milestones so the roadmap immediately reflects real work
+  const seenTitles = new Set<string>();
+
+  // 1. Map existing Kanban tickets into milestones so the roadmap immediately reflects real work
   for (const t of projectTickets) {
+    if (
+      t.title.startsWith('[Factory] Brainstorm & Roadmap Expansion') ||
+      t.title.startsWith('[Brainstorm]') ||
+      t.title.startsWith('[Roadmap]')
+    ) {
+      continue;
+    }
     const msIdx = milestoneIndexForPersona(t.persona);
     const ms = milestones[msIdx] ?? milestones[1]!;
     const routing = defaultRoutingForPersona(t.persona, fSettings);
@@ -581,6 +827,7 @@ async function seedInitialRoadmap(
         : t.status === 'in_progress' || t.status === 'review'
           ? 'in_progress'
           : 'planned';
+    seenTitles.add(t.title.trim().toLowerCase());
     ms.items.push({
       id: `item-${t.id.slice(0, 8)}`,
       milestoneId: ms.id,
@@ -598,7 +845,36 @@ async function seedInitialRoadmap(
     });
   }
 
-  // Start with an empty suggestions array (`[]`) — suggestions are populated only when the user triggers Brainstorm!
+  // 2. Also extract any markdown checklist items (`- [ ] ...` or `- [x] ...`) from PROJECT.md
+  const checklistRegex = /^[\t ]*[-*]\s+\[([ xX])\]\s+(.+)$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = checklistRegex.exec(blueprintContent)) !== null) {
+    const isChecked = (match[1] ?? '').toLowerCase() === 'x';
+    const rawLine = (match[2] ?? '').replace(/\*\*/g, '').trim();
+    if (rawLine.length < 6 || rawLine.length > 150) continue;
+    if (seenTitles.has(rawLine.toLowerCase())) continue;
+    seenTitles.add(rawLine.toLowerCase());
+    const inferred = inferPersonaAndCategoryFromText(rawLine);
+    const msIdx = milestoneIndexForPersona(inferred.persona);
+    const ms = milestones[msIdx] ?? milestones[1]!;
+    const routing = defaultRoutingForPersona(inferred.persona, fSettings);
+    ms.items.push({
+      id: `item-${randomUUID().slice(0, 8)}`,
+      milestoneId: ms.id,
+      title: rawLine.slice(0, 110),
+      description: `Specification item from PROJECT.md: "${rawLine}". Implement and verify against the project build gate.`,
+      category: inferred.category,
+      persona: inferred.persona,
+      preferredAgent: routing.preferredAgent,
+      preferredModel: routing.preferredModel,
+      priority: inferred.priority,
+      status: isChecked ? 'done' : 'planned',
+      ticketId: null,
+      ticketKey: null,
+      createdAt: now,
+    });
+  }
+
   return {
     visionSummary: extractVisionFromBlueprint(project, blueprintContent),
     milestones,
@@ -630,6 +906,24 @@ async function readOrInitRoadmapFile(
   if (!stored || !Array.isArray(stored.milestones) || stored.milestones.length === 0) {
     stored = await seedInitialRoadmap(project, blueprint.content, projectTickets, fSettings);
     dirty = true;
+  } else {
+    // Automatically upgrade legacy generic milestone titles to domain-tailored titles
+    const hasLegacyGenericTitles = stored.milestones.some((m) =>
+      GENERIC_LEGACY_MS_TITLES.has(m.title.trim().toLowerCase()),
+    );
+    if (hasLegacyGenericTitles) {
+      const files = await listWorkspaceFilesFlat(project.path).catch(() => []);
+      const fileNamesLower = files.map((f) => f.path.toLowerCase()).join(' ');
+      const defs = buildDomainMilestones(project, blueprint.content, fileNamesLower);
+      for (const def of defs) {
+        const ms = stored.milestones.find((m) => m.code === def.code);
+        if (ms && GENERIC_LEGACY_MS_TITLES.has(ms.title.trim().toLowerCase())) {
+          ms.title = def.title;
+          ms.description = def.description;
+          dirty = true;
+        }
+      }
+    }
   }
 
   // Purge any legacy pre-seeded static template suggestions so projects start clean/empty until user brainstorms
@@ -646,6 +940,81 @@ async function readOrInitRoadmapFile(
   const enabledProviders = fSettings.enabledProviders?.length
     ? fSettings.enabledProviders
     : (['claude'] as AgentId[]);
+
+  // Check if an AI Architect agent wrote `.emberline/roadmap-generated.json`
+  const agentRoadmapGenPath = path.join(project.path, ROADMAP_GEN_OUT_REL_PATH);
+  if (existsSync(agentRoadmapGenPath)) {
+    try {
+      const raw = await readFile(agentRoadmapGenPath, 'utf8');
+      const parsed = JSON.parse(raw) as {
+        visionSummary?: string;
+        milestones?: Array<{
+          code?: string;
+          title?: string;
+          description?: string;
+          items?: Array<Partial<RoadmapItem>>;
+        }>;
+      };
+      if (parsed.visionSummary?.trim()) {
+        stored.visionSummary = parsed.visionSummary.trim();
+        dirty = true;
+      }
+      if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
+        const existingTitles = new Set(
+          stored.milestones.flatMap((m) => m.items.map((i) => i.title.trim().toLowerCase())),
+        );
+        for (let idx = 0; idx < parsed.milestones.length; idx++) {
+          const genMs = parsed.milestones[idx]!;
+          const code = genMs.code?.trim() || `M${idx + 1}`;
+          let targetMs = stored.milestones.find((m) => m.code === code);
+          if (!targetMs) {
+            targetMs = {
+              id: `ms-${randomUUID().slice(0, 8)}`,
+              code,
+              title: genMs.title?.trim() || `Milestone ${code}`,
+              description: genMs.description?.trim() ?? '',
+              status: 'planned',
+              items: [],
+            };
+            stored.milestones.push(targetMs);
+          } else {
+            if (genMs.title?.trim()) targetMs.title = genMs.title.trim();
+            if (genMs.description?.trim()) targetMs.description = genMs.description.trim();
+          }
+          for (const rawItem of genMs.items ?? []) {
+            if (!rawItem.title?.trim()) continue;
+            const normTitle = rawItem.title.trim().toLowerCase();
+            if (existingTitles.has(normTitle)) continue;
+            existingTitles.add(normTitle);
+            const inferred = inferPersonaAndCategoryFromText(
+              `${rawItem.title} ${rawItem.description ?? ''}`,
+            );
+            const persona: AgentPersona = rawItem.persona ?? inferred.persona;
+            const routing = defaultRoutingForPersona(persona, fSettings);
+            targetMs.items.push({
+              id: `item-${randomUUID().slice(0, 8)}`,
+              milestoneId: targetMs.id,
+              title: rawItem.title.trim(),
+              description: rawItem.description?.trim() || rawItem.title.trim(),
+              category: rawItem.category ?? inferred.category,
+              persona,
+              preferredAgent: routing.preferredAgent,
+              preferredModel: routing.preferredModel,
+              priority: rawItem.priority ?? inferred.priority,
+              status: 'planned',
+              ticketId: null,
+              ticketKey: null,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+        dirty = true;
+      }
+      await rm(agentRoadmapGenPath, { force: true });
+    } catch {
+      // Ignore malformed agent output
+    }
+  }
 
   // Normalize any suggestion/item routes that point to a disabled provider or a mismatched cross-provider model
   for (const sug of stored.suggestions ?? []) {
@@ -730,12 +1099,13 @@ async function readOrInitRoadmapFile(
   const linkedTicketIds = new Set<string>();
 
   for (const ms of stored.milestones) {
-    // Strip any accidental brainstorm meta-tickets that may have been imported earlier
+    // Strip any accidental brainstorm/roadmap meta-tickets that may have been imported earlier
     const beforeLen = ms.items.length;
     ms.items = ms.items.filter(
       (i) =>
         !i.title.startsWith('[Factory] Brainstorm & Roadmap Expansion') &&
-        !i.title.startsWith('[Brainstorm]'),
+        !i.title.startsWith('[Brainstorm]') &&
+        !i.title.startsWith('[Roadmap]'),
     );
     if (ms.items.length !== beforeLen) dirty = true;
     for (const item of ms.items) {
@@ -764,12 +1134,13 @@ async function readOrInitRoadmapFile(
     }
   }
 
-  // Import any Kanban tickets not yet represented in the roadmap (excluding brainstorm meta-tickets)
+  // Import any Kanban tickets not yet represented in the roadmap (excluding brainstorm/roadmap meta-tickets)
   for (const t of projectTickets) {
     if (linkedTicketIds.has(t.id)) continue;
     if (
       t.title.startsWith('[Factory] Brainstorm & Roadmap Expansion') ||
-      t.title.startsWith('[Brainstorm]')
+      t.title.startsWith('[Brainstorm]') ||
+      t.title.startsWith('[Roadmap]')
     ) {
       continue;
     }
@@ -875,10 +1246,37 @@ export async function addRoadmapMilestone(
     id: `ms-${randomUUID().slice(0, 8)}`,
     code,
     title: input.title.trim(),
-    description: input.description?.trim() ?? '',
+    description:
+      input.description?.trim() ||
+      `Delivery milestone ${code} for ${project.name}: ${input.title.trim()}.`,
     status: 'planned',
     items: [],
   });
+  await saveRoadmapFile(project, stored);
+  return toRoadmapState(project, stored);
+}
+
+export async function deleteRoadmapMilestone(
+  project: Project,
+  ticketService: TicketService,
+  milestoneId: string,
+): Promise<ProjectRoadmapState> {
+  const stored = await readOrInitRoadmapFile(project, ticketService);
+  if (stored.milestones.length <= 1) {
+    throw new Error('Cannot delete the only remaining milestone');
+  }
+  const idx = stored.milestones.findIndex((m) => m.id === milestoneId || m.code === milestoneId);
+  if (idx === -1) {
+    throw new Error('Milestone not found');
+  }
+  const [removed] = stored.milestones.splice(idx, 1);
+  if (removed && removed.items.length > 0) {
+    const fallbackMs = stored.milestones[Math.max(0, idx - 1)] ?? stored.milestones[0]!;
+    for (const item of removed.items) {
+      item.milestoneId = fallbackMs.id;
+      fallbackMs.items.push(item);
+    }
+  }
   await saveRoadmapFile(project, stored);
   return toRoadmapState(project, stored);
 }
@@ -889,15 +1287,22 @@ export async function addRoadmapItem(
   input: CreateRoadmapItemBody,
 ): Promise<ProjectRoadmapState> {
   const stored = await readOrInitRoadmapFile(project, ticketService);
+  const inferred = inferPersonaAndCategoryFromText(`${input.title} ${input.description ?? ''}`);
+  const persona: AgentPersona = input.persona ?? inferred.persona;
+  const category: RoadmapCategory = input.category ?? inferred.category;
+  const priority = input.priority ?? inferred.priority;
+
+  const autoMsIdx = milestoneIndexForPersona(persona);
   const targetMs =
-    stored.milestones.find((m) => m.id === input.milestoneId || m.code === input.milestoneId) ??
+    (!input.milestoneId || input.milestoneId === 'auto'
+      ? (stored.milestones[autoMsIdx] ?? stored.milestones[0])
+      : stored.milestones.find((m) => m.id === input.milestoneId || m.code === input.milestoneId)) ??
     stored.milestones[0];
   if (!targetMs) {
     throw new Error('No milestone found in project roadmap');
   }
 
   const fSettings = ticketService.factorySettings();
-  const persona = input.persona ?? 'coder';
   const routing = defaultRoutingForPersona(persona, fSettings);
   const chosenAgent = input.preferredAgent ?? routing.preferredAgent;
   const chosenModel = coerceModelForProvider(
@@ -907,16 +1312,21 @@ export async function addRoadmapItem(
       : routing.preferredModel,
     persona,
   );
+  const cleanTitle = input.title.trim();
+  const autoDescription =
+    input.description?.trim() ||
+    `Read PROJECT.md and implement "${cleanTitle}" in ${project.name}. Ensure clean module boundaries and verify the project's build/test gate passes.`;
+
   const newItem: RoadmapItem & { routeCustomized?: boolean } = {
     id: `item-${randomUUID().slice(0, 8)}`,
     milestoneId: targetMs.id,
-    title: input.title.trim(),
-    description: input.description?.trim() || input.title.trim(),
-    category: input.category ?? categoryForPersona(persona),
+    title: cleanTitle,
+    description: autoDescription,
+    category,
     persona,
     preferredAgent: chosenAgent,
     preferredModel: chosenModel,
-    priority: input.priority ?? 2,
+    priority,
     status: input.status ?? 'planned',
     ticketId: null,
     ticketKey: null,
@@ -927,6 +1337,132 @@ export async function addRoadmapItem(
   targetMs.items.push(newItem);
   await saveRoadmapFile(project, stored);
   return toRoadmapState(project, stored);
+}
+
+export async function autoGenerateProjectRoadmap(
+  project: Project,
+  ticketService: TicketService,
+  input: AutoGenerateRoadmapBody,
+): Promise<AutoGenerateRoadmapResponse> {
+  const stored = await readOrInitRoadmapFile(project, ticketService);
+  const blueprint = await readProjectBlueprint(project);
+  const fSettings = ticketService.factorySettings();
+  const files = await listWorkspaceFilesFlat(project.path).catch(() => []);
+  const fileNamesLower = files.map((f) => f.path.toLowerCase()).join(' ');
+
+  if (input.mode === 'agent') {
+    const focusClause = input.instructions?.trim()
+      ? `User focus / instructions: "${input.instructions.trim()}".`
+      : `Design a structured, project-specific 4-milestone roadmap (M1..M4) for **${project.name}**.`;
+    const prompt = [
+      `[Roadmap] Auto-Generate Structured Milestones & Roadmap for **${project.name}**:`,
+      focusClause,
+      `1. Read \`PROJECT.md\` and inspect the files in \`${project.path}\`.`,
+      `2. Write a comprehensive, project-tailored roadmap JSON file to \`${project.path}/.emberline/roadmap-generated.json\` with the exact structure:`,
+      `{"visionSummary": "1-2 sentence executive summary of ${project.name}", "milestones": [{"code": "M1", "title": "...", "description": "...", "items": [{"title": "...", "description": "Detailed implementation spec", "persona": "architect|coder|ui_ux|dba|qa|security", "category": "architecture|feature|ui_ux|performance|qa_security", "priority": 2}]}]}`,
+      `3. Include 4 clear milestones (M1..M4) with 2-4 concrete, non-duplicate tasks per milestone tailored strictly to **${project.name}**. Do NOT modify application source files in this run.`,
+    ].join('\n');
+
+    const agentRun = await ticketService.startBrainstormRun(project.id, {
+      prompt,
+      persona: 'architect',
+    });
+
+    return {
+      roadmap: toRoadmapState(project, stored),
+      agentRun,
+    };
+  }
+
+  // Instant mode: refresh milestone definitions + extract PROJECT.md checklists + synthesize domain tasks
+  const defs = buildDomainMilestones(project, blueprint.content, fileNamesLower);
+  for (const def of defs) {
+    let ms = stored.milestones.find((m) => m.code === def.code);
+    if (!ms) {
+      ms = {
+        ...def,
+        status: 'planned',
+        items: [],
+      };
+      stored.milestones.push(ms);
+    } else {
+      ms.title = def.title;
+      ms.description = def.description;
+    }
+  }
+
+  const existingTitles = new Set(
+    stored.milestones.flatMap((m) => m.items.map((i) => i.title.trim().toLowerCase())),
+  );
+
+  // 1. Extract any markdown checklist items (`- [ ] ...`) from PROJECT.md
+  const checklistRegex = /^[\t ]*[-*]\s+\[([ xX])\]\s+(.+)$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = checklistRegex.exec(blueprint.content)) !== null) {
+    const isChecked = (match[1] ?? '').toLowerCase() === 'x';
+    const rawLine = (match[2] ?? '').replace(/\*\*/g, '').trim();
+    if (rawLine.length < 6 || rawLine.length > 150) continue;
+    if (existingTitles.has(rawLine.toLowerCase())) continue;
+    existingTitles.add(rawLine.toLowerCase());
+    const inferred = inferPersonaAndCategoryFromText(rawLine);
+    const ms = stored.milestones[milestoneIndexForPersona(inferred.persona)] ?? stored.milestones[0]!;
+    const routing = defaultRoutingForPersona(inferred.persona, fSettings);
+    ms.items.push({
+      id: `item-${randomUUID().slice(0, 8)}`,
+      milestoneId: ms.id,
+      title: rawLine.slice(0, 110),
+      description: `Specification item from PROJECT.md: "${rawLine}".`,
+      category: inferred.category,
+      persona: inferred.persona,
+      preferredAgent: routing.preferredAgent,
+      preferredModel: routing.preferredModel,
+      priority: inferred.priority,
+      status: isChecked ? 'done' : 'planned',
+      ticketId: null,
+      ticketKey: null,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // 2. Synthesize domain-specific roadmap items and place them directly into their target milestones
+  const synthesized = await synthesizeBrainstormSuggestions(
+    project,
+    blueprint.content,
+    existingTitles,
+    input.instructions ?? '',
+    new Set(),
+    fSettings,
+  );
+  for (const sug of synthesized) {
+    if (existingTitles.has(sug.title.toLowerCase())) continue;
+    existingTitles.add(sug.title.toLowerCase());
+    const targetMs =
+      stored.milestones.find((m) => m.code === sug.suggestedMilestoneCode) ??
+      stored.milestones[milestoneIndexForPersona(sug.persona)] ??
+      stored.milestones[0]!;
+    targetMs.items.push({
+      id: `item-${randomUUID().slice(0, 8)}`,
+      milestoneId: targetMs.id,
+      title: sug.title,
+      description: `${sug.rationale}\n\n---\nImplementation Spec:\n${sug.implementationPrompt}`,
+      category: sug.category,
+      persona: sug.persona,
+      preferredAgent: sug.preferredAgent,
+      preferredModel: sug.preferredModel,
+      priority: sug.impact === 'high' ? 3 : 2,
+      status: 'planned',
+      ticketId: null,
+      ticketKey: null,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  await saveRoadmapFile(project, stored);
+  const refreshed = await readOrInitRoadmapFile(project, ticketService);
+  return {
+    roadmap: toRoadmapState(project, refreshed),
+    agentRun: null,
+  };
 }
 
 export async function updateRoadmapItem(

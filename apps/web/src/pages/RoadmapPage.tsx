@@ -2,6 +2,7 @@ import {
   type AgentId,
   type AgentModelId,
   type AgentPersona,
+  type AutoGenerateRoadmapResponse,
   type BrainstormResponse,
   type BrainstormSuggestion,
   coerceModelForProvider,
@@ -18,7 +19,7 @@ import {
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
-import { PersonaBadge, PersonaPicker } from '../components/PersonaBadge';
+import { PersonaBadge } from '../components/PersonaBadge';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
 
@@ -248,6 +249,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         r.state !== 'failed' &&
         (r.id === pendingBrainstormRunId ||
           Boolean(r.title?.includes('[Brainstorm]')) ||
+          Boolean(r.title?.includes('[Roadmap]')) ||
           Boolean(r.title?.includes('Brainstorm & Roadmap'))),
     );
   }, [runs, projectId, pendingBrainstormRunId]);
@@ -261,21 +263,10 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     }
   }, [runs, pendingBrainstormRunId, roadmapPoll]);
 
-  // Add Item Form state
-  const [showAddItem, setShowAddItem] = useState(false);
-  const [newItemMilestoneId, setNewItemMilestoneId] = useState('');
-  const [newItemTitle, setNewItemTitle] = useState('');
-  const [newItemDesc, setNewItemDesc] = useState('');
-  const [newItemCategory, setNewItemCategory] = useState<RoadmapCategory>('feature');
-  const [newItemPersona, setNewItemPersona] = useState<AgentPersona>('coder');
-  const [newItemAgent, setNewItemAgent] = useState<AgentId>('claude');
-  const [newItemModel, setNewItemModel] = useState<AgentModelId>('opus');
-
-  // Add Milestone Form state
-  const [showAddMilestone, setShowAddMilestone] = useState(false);
-  const [newMsCode, setNewMsCode] = useState('');
-  const [newMsTitle, setNewMsTitle] = useState('');
-  const [newMsDesc, setNewMsDesc] = useState('');
+  // Smart 1-line Quick-Add state (replaces tedious multi-field forms)
+  const [quickAddText, setQuickAddText] = useState('');
+  const [quickAddTarget, setQuickAddTarget] = useState<string>('auto');
+  const [inlineMsInputs, setInlineMsInputs] = useState<Record<string, string>>({});
 
   const project = useMemo(
     () => projects.data?.find((p) => p.id === projectId),
@@ -567,29 +558,32 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     }
   };
 
-  const handleCreateItem = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!newItemTitle.trim()) return;
-    setBusy('create-item');
+  const handleAutoGenerateRoadmap = async (mode: 'instant' | 'agent') => {
+    if (busy !== null) return;
+    if (mode === 'agent' && isAgentBrainstorming) return;
+    setBusy(mode === 'agent' ? 'autogen-agent' : 'autogen-instant');
     setError(null);
+    setBanner(null);
     try {
-      const targetMsId = newItemMilestoneId || roadmap?.milestones[0]?.id || 'M1';
-      const next = await api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items`, 'POST', {
-        milestoneId: targetMsId,
-        title: newItemTitle.trim(),
-        description: newItemDesc.trim(),
-        category: newItemCategory,
-        persona: newItemPersona,
-        preferredAgent: newItemAgent,
-        preferredModel: newItemModel,
-        priority: 2,
-        status: 'planned',
-      });
-      setLocalRoadmap(next);
-      setNewItemTitle('');
-      setNewItemDesc('');
-      setShowAddItem(false);
-      setBanner(`✅ Added roadmap item "${newItemTitle.trim()}".`);
+      const res = await api<AutoGenerateRoadmapResponse>(
+        `/api/projects/${projectId}/roadmap/auto-generate`,
+        'POST',
+        {
+          mode,
+          instructions: quickAddText.trim() || brainstormFocus.trim(),
+        },
+      );
+      setLocalRoadmap(res.roadmap);
+      if (mode === 'agent' && res.agentRun) {
+        setPendingBrainstormRunId(res.agentRun.id);
+        setBanner(
+          `🏛 System Architect (${res.agentRun.agent}) is inspecting ${project?.name ?? 'the repository'} to generate a tailored milestone roadmap…`,
+        );
+      } else {
+        setBanner(
+          `✨ Auto-generated project-tailored milestones & tasks from PROJECT.md and repository context!`,
+        );
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -597,27 +591,78 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     }
   };
 
-  const handleCreateMilestone = async (e: FormEvent) => {
+  const handleSmartQuickAdd = async (e: FormEvent) => {
     e.preventDefault();
-    if (!newMsTitle.trim()) return;
-    setBusy('create-ms');
+    const raw = quickAddText.trim();
+    if (!raw) return;
+    setBusy('quick-add');
+    setError(null);
+    setBanner(null);
+    try {
+      if (quickAddTarget === '__new_milestone__') {
+        const next = await api<ProjectRoadmapState>(
+          `/api/projects/${projectId}/roadmap/milestones`,
+          'POST',
+          {
+            title: raw,
+          },
+        );
+        setLocalRoadmap(next);
+        setQuickAddText('');
+        setQuickAddTarget('auto');
+        setBanner(`✅ Created new milestone "${raw}".`);
+      } else {
+        const next = await api<ProjectRoadmapState>(
+          `/api/projects/${projectId}/roadmap/items`,
+          'POST',
+          {
+            milestoneId: quickAddTarget || 'auto',
+            title: raw,
+          },
+        );
+        setLocalRoadmap(next);
+        setQuickAddText('');
+        setBanner(
+          `✅ Auto-routed "${raw}" to the right milestone, specialist persona & AI model!`,
+        );
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleInlineMilestoneAdd = async (msId: string, msCode: string) => {
+    const raw = (inlineMsInputs[msId] ?? '').trim();
+    if (!raw) return;
+    setBusy(`inline-add-${msId}`);
+    setError(null);
+    try {
+      const next = await api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items`, 'POST', {
+        milestoneId: msId,
+        title: raw,
+      });
+      setLocalRoadmap(next);
+      setInlineMsInputs((prev) => ({ ...prev, [msId]: '' }));
+      setBanner(`✅ Added "${raw}" to ${msCode} (auto-assigned specialist & model).`);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleDeleteMilestone = async (msId: string, msCode: string) => {
+    setBusy(`del-ms-${msId}`);
     setError(null);
     try {
       const next = await api<ProjectRoadmapState>(
-        `/api/projects/${projectId}/roadmap/milestones`,
-        'POST',
-        {
-          code: newMsCode.trim() || undefined,
-          title: newMsTitle.trim(),
-          description: newMsDesc.trim(),
-        },
+        `/api/projects/${projectId}/roadmap/milestones/${msId}`,
+        'DELETE',
       );
       setLocalRoadmap(next);
-      setNewMsCode('');
-      setNewMsTitle('');
-      setNewMsDesc('');
-      setShowAddMilestone(false);
-      setBanner(`✅ Created milestone "${newMsTitle.trim()}".`);
+      setBanner(`🗑 Removed milestone ${msCode} (any remaining items were preserved).`);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -664,23 +709,28 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
 
           <div className="actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
+              id="roadmap-autogen-instant-btn"
               type="button"
               className="btn btn-sm"
-              onClick={() => setShowAddMilestone((v) => !v)}
+              disabled={busy !== null}
+              onClick={() => void handleAutoGenerateRoadmap('instant')}
+              title="Automatically synthesize domain-tailored milestones & roadmap tasks from PROJECT.md and codebase"
             >
-              + New Milestone
+              {busy === 'autogen-instant' ? 'Generating…' : '✨ Auto-Generate Roadmap'}
             </button>
             <button
+              id="roadmap-autogen-agent-btn"
               type="button"
               className="btn btn-sm btn-primary"
-              onClick={() => {
-                if (!newItemMilestoneId && roadmap.milestones[0]) {
-                  setNewItemMilestoneId(roadmap.milestones[0].id);
-                }
-                setShowAddItem((v) => !v);
-              }}
+              disabled={busy !== null || isAgentBrainstorming}
+              onClick={() => void handleAutoGenerateRoadmap('agent')}
+              title="Dispatch the System Architect agent to inspect the repository and generate a full custom milestone roadmap"
             >
-              + Add Roadmap Item
+              {busy === 'autogen-agent'
+                ? 'Launching…'
+                : isAgentBrainstorming
+                  ? '🏛 Architect Working…'
+                  : '🤖 AI Architect Roadmap'}
             </button>
             <button
               type="button"
@@ -743,6 +793,62 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             })}
           </div>
         </div>
+
+        {/* Smart 1-Line Quick-Add Bar (Auto-Routes Milestone, Persona & Model) */}
+        <form
+          onSubmit={(e) => void handleSmartQuickAdd(e)}
+          style={{
+            marginTop: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            padding: '8px 10px',
+            borderRadius: 'var(--radius)',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          <select
+            aria-label="Quick Add Target"
+            className="input mono"
+            style={{ width: 230, fontSize: '0.78rem', padding: '6px 8px' }}
+            value={quickAddTarget}
+            onChange={(e) => setQuickAddTarget(e.target.value)}
+            title="Choose where to add: Smart Auto-Route automatically selects the milestone, specialist persona, and model!"
+          >
+            <option value="auto">⚡ Smart Auto-Route (Recommended)</option>
+            {roadmap.milestones.map((m) => (
+              <option key={m.id} value={m.id}>
+                🎯 {m.code} — {m.title.slice(0, 32)}
+              </option>
+            ))}
+            <option value="__new_milestone__">➕ Create as New Milestone Phase</option>
+          </select>
+          <input
+            id="roadmap-quick-add-input"
+            className="input grow"
+            style={{ minWidth: 240 }}
+            placeholder={
+              quickAddTarget === '__new_milestone__'
+                ? 'Type new milestone title (e.g. "Multiplayer & Cloud Sync") and press Enter…'
+                : 'Type any feature or task in plain language and press Enter — AI auto-assigns Milestone, Persona & Model…'
+            }
+            value={quickAddText}
+            onChange={(e) => setQuickAddText(e.target.value)}
+          />
+          <button
+            type="submit"
+            className="btn btn-sm btn-primary"
+            disabled={busy !== null || !quickAddText.trim()}
+          >
+            {busy === 'quick-add'
+              ? 'Adding…'
+              : quickAddTarget === '__new_milestone__'
+                ? '+ Add Milestone'
+                : '+ Quick Add'}
+          </button>
+        </form>
 
         {/* Multi-Select Batch Action Bar */}
         {totalSelected > 0 && (
@@ -807,198 +913,6 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
           <div className="banner banner-error" style={{ marginTop: 10 }}>
             {error}
           </div>
-        )}
-
-        {/* Inline Add Milestone Form */}
-        {showAddMilestone && (
-          <form
-            onSubmit={(e) => void handleCreateMilestone(e)}
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 'var(--radius)',
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            <strong style={{ fontSize: '0.85rem' }}>Create New Milestone</strong>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                className="input mono"
-                style={{ width: 90 }}
-                placeholder="Code (e.g. M5)"
-                value={newMsCode}
-                onChange={(e) => setNewMsCode(e.target.value)}
-              />
-              <input
-                className="input grow"
-                placeholder="Milestone title (e.g. Multi-Tenant RBAC, Hardware I2C Protocol, or Production Hardening)"
-                required
-                value={newMsTitle}
-                onChange={(e) => setNewMsTitle(e.target.value)}
-              />
-            </div>
-            <input
-              className="input"
-              placeholder="Milestone description / delivery goal (optional)"
-              value={newMsDesc}
-              onChange={(e) => setNewMsDesc(e.target.value)}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAddMilestone(false)}>
-                Cancel
-              </button>
-              <button type="submit" className="btn btn-sm btn-primary" disabled={busy !== null}>
-                Save Milestone
-              </button>
-            </div>
-          </form>
-        )}
-
-        {/* Inline Add Roadmap Item Form */}
-        {showAddItem && (
-          <form
-            onSubmit={(e) => void handleCreateItem(e)}
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 'var(--radius)',
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-            }}
-          >
-            <strong style={{ fontSize: '0.85rem' }}>Add Custom Feature / Roadmap Item</strong>
-            <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 160px', gap: 8 }}>
-              <select
-                className="input"
-                value={newItemMilestoneId}
-                onChange={(e) => setNewItemMilestoneId(e.target.value)}
-              >
-                {roadmap.milestones.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.code} — {m.title}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="input"
-                placeholder="Feature or milestone task title…"
-                required
-                value={newItemTitle}
-                onChange={(e) => setNewItemTitle(e.target.value)}
-              />
-              <select
-                className="input"
-                value={newItemCategory}
-                onChange={(e) => setNewItemCategory(e.target.value as RoadmapCategory)}
-              >
-                {Object.entries(CATEGORY_META).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v.icon} {v.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <textarea
-              className="input"
-              rows={2}
-              placeholder="Specification, acceptance criteria, or implementation notes…"
-              value={newItemDesc}
-              onChange={(e) => setNewItemDesc(e.target.value)}
-            />
-
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                flexWrap: 'wrap',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span className="muted small mono">Specialist:</span>
-                <PersonaPicker
-                  compact
-                  value={newItemPersona}
-                  onChange={(p) => {
-                    setNewItemPersona(p);
-                    const cfgAgent =
-                      factorySettingsPoll.data?.personaAgents?.[p] ??
-                      enabledProviders[0] ??
-                      'claude';
-                    const validAgent = enabledProviders.includes(cfgAgent)
-                      ? cfgAgent
-                      : (enabledProviders[0] ?? 'claude');
-                    const cfgModel =
-                      factorySettingsPoll.data?.personaModels?.[p] ??
-                      (p === 'product_owner' || p === 'architect'
-                        ? 'fable'
-                        : p === 'qa'
-                          ? 'sonnet'
-                          : 'opus');
-                    setNewItemAgent(validAgent);
-                    setNewItemModel(coerceModelForProvider(validAgent, cfgModel, p));
-                  }}
-                />
-                {enabledProviders.length > 1 && (
-                  <select
-                    className="input mono"
-                    style={{ fontSize: '0.78rem', padding: '4px 8px' }}
-                    value={enabledProviders.includes(newItemAgent) ? newItemAgent : enabledProviders[0]}
-                    onChange={(e) => {
-                      const nextAgent = e.target.value as AgentId;
-                      setNewItemAgent(nextAgent);
-                      setNewItemModel((prev) => coerceModelForProvider(nextAgent, prev, newItemPersona));
-                    }}
-                    title="Preferred CLI Agent"
-                  >
-                    {enabledProviders.map((a) => (
-                      <option key={a} value={a}>
-                        {PROVIDER_REGISTRY[a].icon} {PROVIDER_REGISTRY[a].label}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <select
-                  className="input mono"
-                  style={{ fontSize: '0.78rem', padding: '4px 8px' }}
-                  value={coerceModelForProvider(
-                    enabledProviders.includes(newItemAgent) ? newItemAgent : (enabledProviders[0] ?? 'claude'),
-                    newItemModel,
-                    newItemPersona,
-                  )}
-                  onChange={(e) => setNewItemModel(e.target.value as AgentModelId)}
-                  title="Preferred Model Tier"
-                >
-                  {getModelsForProvider(
-                    enabledProviders.includes(newItemAgent) ? newItemAgent : (enabledProviders[0] ?? 'claude'),
-                  ).map((m) => (
-                    <option key={m.id} value={m.id}>
-                      ★{m.rank} [{m.tier.toUpperCase()}] {m.label}
-                    </option>
-                  ))}
-                  <option value="auto">Auto (Match Persona Rank)</option>
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAddItem(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-sm btn-primary" disabled={busy !== null}>
-                  Add to Roadmap
-                </button>
-              </div>
-            </div>
-          </form>
         )}
       </section>
 
@@ -1365,17 +1279,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                       )}
                     </div>
 
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        onClick={() => {
-                          setNewItemMilestoneId(ms.id);
-                          setShowAddItem(true);
-                        }}
-                      >
-                        + Item
-                      </button>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                       {undispatchedIds.length > 0 && (
                         <button
                           type="button"
@@ -1407,6 +1311,17 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                           {busy === `ms-${ms.id}` ? 'Starting…' : `🚀 Run ${ms.code}`}
                         </button>
                       )}
+                      {roadmap.milestones.length > 1 && (
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          disabled={busy !== null}
+                          onClick={() => void handleDeleteMilestone(ms.id, ms.code)}
+                          title={`Remove milestone ${ms.code}`}
+                        >
+                          ×
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1431,8 +1346,8 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
 
                   {/* Milestone Items */}
                   {ms.items.length === 0 ? (
-                    <p className="muted small" style={{ margin: '4px 0' }}>
-                      No items in {ms.code} yet. Promote an AI suggestion from the left or click <strong>+ Item</strong>.
+                    <p className="muted small" style={{ margin: '2px 0' }}>
+                      No items in {ms.code} yet. Click <strong>✨ Auto-Generate Roadmap</strong> above, promote a brainstorm idea, or type below.
                     </p>
                   ) : (
                     <ul className="list" style={{ margin: 0 }}>
@@ -1529,6 +1444,36 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                       })}
                     </ul>
                   )}
+
+                  {/* Inline 1-Line Quick-Add Input inside Milestone Card */}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
+                    <input
+                      className="input"
+                      style={{ flex: 1, fontSize: '0.78rem', padding: '5px 8px' }}
+                      placeholder={`+ Add task to ${ms.code} and press Enter (auto-routes persona & model)…`}
+                      value={inlineMsInputs[ms.id] ?? ''}
+                      onChange={(e) =>
+                        setInlineMsInputs((prev) => ({ ...prev, [ms.id]: e.target.value }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleInlineMilestoneAdd(ms.id, ms.code);
+                        }
+                      }}
+                    />
+                    {(inlineMsInputs[ms.id] ?? '').trim() && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{ padding: '4px 10px', fontSize: '0.74rem' }}
+                        disabled={busy !== null}
+                        onClick={() => void handleInlineMilestoneAdd(ms.id, ms.code)}
+                      >
+                        Add
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}

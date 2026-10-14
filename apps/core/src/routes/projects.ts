@@ -5,6 +5,8 @@ import path from 'node:path';
 import {
   ActiveProjectPreference,
   AgentCreateTicketsPayload,
+  AutoGenerateRoadmapBody,
+  type AutoGenerateRoadmapResponse,
   BrainstormRequestBody,
   type BrainstormResponse,
   BrowserActionBody,
@@ -55,7 +57,9 @@ import { getRunnerBrowserState, getRunnerClaudeUsage, performRunnerBrowserAction
 import {
   addRoadmapItem,
   addRoadmapMilestone,
+  autoGenerateProjectRoadmap,
   deleteRoadmapItem,
+  deleteRoadmapMilestone,
   dispatchRoadmapItems,
   getProjectRoadmap,
   runProjectBrainstorm,
@@ -708,6 +712,16 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   );
 
   app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/roadmap/auto-generate',
+    async (request): Promise<AutoGenerateRoadmapResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = AutoGenerateRoadmapBody.parse(request.body ?? {});
+      return autoGenerateProjectRoadmap(toProject(row), tickets, body);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
     '/api/projects/:id/roadmap/milestones',
     async (request, reply): Promise<ProjectRoadmapState> => {
       const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
@@ -716,6 +730,19 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const state = await addRoadmapMilestone(toProject(row), tickets, body);
       reply.code(201);
       return state;
+    },
+  );
+
+  app.delete<{ Params: { id: string; milestoneId: string } }>(
+    '/api/projects/:id/roadmap/milestones/:milestoneId',
+    async (request): Promise<ProjectRoadmapState> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      try {
+        return await deleteRoadmapMilestone(toProject(row), tickets, request.params.milestoneId);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
     },
   );
 

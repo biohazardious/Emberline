@@ -1638,17 +1638,29 @@ export const CreateMilestoneBody = z.object({
 export type CreateMilestoneBody = z.input<typeof CreateMilestoneBody>;
 
 export const CreateRoadmapItemBody = z.object({
-  milestoneId: z.string().min(1),
+  milestoneId: z.string().min(1).default('auto'),
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(10_000).default(''),
-  category: RoadmapCategory.default('feature'),
-  persona: AgentPersona.default('coder'),
-  preferredAgent: AgentId.default('claude'),
-  preferredModel: AgentModelId.default('auto'),
-  priority: TicketPriority.default(2),
+  category: RoadmapCategory.optional(),
+  persona: AgentPersona.optional(),
+  preferredAgent: AgentId.optional(),
+  preferredModel: AgentModelId.optional(),
+  priority: TicketPriority.optional(),
   status: RoadmapItemStatus.default('planned'),
 });
 export type CreateRoadmapItemBody = z.input<typeof CreateRoadmapItemBody>;
+
+export const AutoGenerateRoadmapBody = z.object({
+  mode: z.enum(['instant', 'agent']).default('instant'),
+  instructions: z.string().trim().max(2000).default(''),
+});
+export type AutoGenerateRoadmapBody = z.input<typeof AutoGenerateRoadmapBody>;
+
+export const AutoGenerateRoadmapResponse = z.object({
+  roadmap: ProjectRoadmapState,
+  agentRun: Run.nullable().default(null),
+});
+export type AutoGenerateRoadmapResponse = z.infer<typeof AutoGenerateRoadmapResponse>;
 
 export const UpdateRoadmapItemBody = z
   .object({
