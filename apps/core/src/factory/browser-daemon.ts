@@ -1161,6 +1161,12 @@ export async function performRunnerBrowserAction(params: {
   };
 }
 
+let lastKnownClaudeUtilizationPercent = 0;
+
+export function getLastKnownClaudeUtilizationPercent(): number {
+  return lastKnownClaudeUtilizationPercent;
+}
+
 export async function getRunnerClaudeUsage(params: {
   ptyd: PtydBridge;
   socketDir: string;
@@ -1193,9 +1199,14 @@ export async function getRunnerClaudeUsage(params: {
   if (!sock) return fallback;
   try {
     const query = params.forceRefresh ? '?refresh=1' : '';
-    return await socketRequest<ClaudeUsageTelemetry>(sock, 'GET', `/claude-usage${query}`, undefined, 6_000);
+    const res = await socketRequest<ClaudeUsageTelemetry>(sock, 'GET', `/claude-usage${query}`, undefined, 6_000);
+    const fivePct = res.fiveHour?.utilizationPercent ?? 0;
+    const sevenPct = res.sevenDay?.utilizationPercent ?? 0;
+    lastKnownClaudeUtilizationPercent = Math.max(fivePct, sevenPct);
+    return res;
   } catch {
     return fallback;
   }
 }
+
 

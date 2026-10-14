@@ -34,6 +34,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
 import type { TicketService } from '../tickets/service.js';
+import { getLastKnownClaudeUtilizationPercent } from './browser-daemon.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -879,6 +880,28 @@ export async function ingestAgentTicketsFile(
   return null;
 }
 
+const SYNC_PRESERVED_NAMES = new Set(['.git', 'node_modules', '.emberline', 'dist', 'build', '.next']);
+
+async function pruneDeletedFromMain(worktreeDir: string, mainDir: string, depth = 0): Promise<void> {
+  if (depth > 6 || !existsSync(mainDir)) return;
+  let mainEntries;
+  try {
+    mainEntries = await readdir(mainDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of mainEntries) {
+    if (SYNC_PRESERVED_NAMES.has(entry.name)) continue;
+    const wtTarget = path.join(worktreeDir, entry.name);
+    const mainTarget = path.join(mainDir, entry.name);
+    if (!existsSync(wtTarget)) {
+      await rm(mainTarget, { recursive: true, force: true }).catch(() => undefined);
+    } else if (entry.isDirectory()) {
+      await pruneDeletedFromMain(wtTarget, mainTarget, depth + 1);
+    }
+  }
+}
+
 export async function syncWorktreeToMainWorkspace(params: {
   worktreePath: string;
   mainWorkspacePath: string;
@@ -890,6 +913,9 @@ export async function syncWorktreeToMainWorkspace(params: {
     throw new Error(`Worktree path does not exist: ${worktreePath}`);
   }
   await mkdir(mainWorkspacePath, { recursive: true });
+
+  // Remove files/directories in mainWorkspacePath that were deleted or renamed in worktreePath
+  await pruneDeletedFromMain(worktreePath, mainWorkspacePath);
 
   const entries = await readdir(worktreePath, { withFileTypes: true });
   let syncedTopEntries = 0;
@@ -966,10 +992,15 @@ export async function buildWorkspaceDemo(params: {
 
   const logs: string[] = [];
   const hasNodeModules = existsSync(path.join(workspacePath, 'node_modules'));
+  const hasPnpmLock = existsSync(path.join(workspacePath, 'pnpm-lock.yaml'));
+  const hasYarnLock = existsSync(path.join(workspacePath, 'yarn.lock'));
+  const pkgManager = hasPnpmLock ? 'pnpm' : hasYarnLock ? 'yarn' : 'npm';
+  const installArgs =
+    pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
 
   try {
     if (!hasNodeModules && existsSync(path.join(workspacePath, 'package.json'))) {
-      const { stdout, stderr } = await execFileAsync('npm', ['install', '--no-audit', '--no-fund'], {
+      const { stdout, stderr } = await execFileAsync(pkgManager, installArgs, {
         cwd: workspacePath,
         timeout: 120_000,
       });
@@ -977,7 +1008,7 @@ export async function buildWorkspaceDemo(params: {
       if (stderr) logs.push(stderr);
     }
 
-    const { stdout, stderr } = await execFileAsync('npm', ['run', 'build'], {
+    const { stdout, stderr } = await execFileAsync(pkgManager, ['run', 'build'], {
       cwd: workspacePath,
       timeout: 120_000,
     });
@@ -1132,7 +1163,7 @@ const DEFAULT_PERSONA_AGENTS: Record<AgentPersona, AgentId> = {
 const DEFAULT_PERSONA_MODELS: Record<AgentPersona, AgentModelId> = {
   product_owner: 'fable',
   architect: 'fable',
-  ui_ux: 'argon',
+  ui_ux: 'opus',
   coder: 'opus',
   dba: 'opus',
   qa: 'sonnet',
@@ -1254,9 +1285,19 @@ export function resolveModelForPersona(
   persona: AgentPersona,
   explicitModel?: AgentModelId,
 ): AgentModelId {
-  if (explicitModel && explicitModel !== 'auto') return explicitModel;
   const cfg = getFactorySettings(db);
-  return cfg.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona] ?? 'opus';
+  const candidate =
+    explicitModel && explicitModel !== 'auto'
+      ? explicitModel
+      : (cfg.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona] ?? 'opus');
+  if (
+    cfg.quotaAutoDowngrade &&
+    getLastKnownClaudeUtilizationPercent() >= 80 &&
+    (candidate === 'fable' || candidate === 'opus')
+  ) {
+    return 'sonnet';
+  }
+  return candidate;
 }
 
 // --- F8: VS Code-like Code Explorer & File Editor ---------------------------

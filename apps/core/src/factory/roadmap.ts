@@ -13,6 +13,7 @@ import type {
   CreateRoadmapItemBody,
   DispatchRoadmapItemsBody,
   DispatchRoadmapItemsResponse,
+  FactorySettings,
   Project,
   ProjectRoadmapState,
   RoadmapCategory,
@@ -34,16 +35,29 @@ interface StoredRoadmapFile {
 const ROADMAP_REL_PATH = '.emberline/roadmap.json';
 const BRAINSTORM_OUT_REL_PATH = '.emberline/brainstorm-suggestions.json';
 
-function defaultRoutingForPersona(persona: AgentPersona): {
+function defaultRoutingForPersona(
+  persona: AgentPersona,
+  fSettings?: FactorySettings,
+): {
   preferredAgent: AgentId;
   preferredModel: AgentModelId;
 } {
+  if (fSettings) {
+    const preferredAgent = fSettings.personaAgents[persona] ?? fSettings.defaultAgent ?? 'claude';
+    const preferredModel =
+      fSettings.personaModels?.[persona] ??
+      (persona === 'product_owner' || persona === 'architect'
+        ? 'fable'
+        : persona === 'qa'
+          ? 'sonnet'
+          : 'opus');
+    return { preferredAgent, preferredModel };
+  }
   switch (persona) {
     case 'product_owner':
     case 'architect':
       return { preferredAgent: 'claude', preferredModel: 'fable' };
     case 'ui_ux':
-      return { preferredAgent: 'antigravity', preferredModel: 'argon' };
     case 'coder':
     case 'dba':
     case 'security':
@@ -90,6 +104,7 @@ export async function synthesizeBrainstormSuggestions(
   existingTitles: Set<string>,
   focus = '',
   currentSuggestionTitles = new Set<string>(),
+  fSettings?: FactorySettings,
 ): Promise<BrainstormSuggestion[]> {
   const files = await listWorkspaceFilesFlat(project.path).catch(() => []);
   const fileNamesLower = files.map((f) => f.path.toLowerCase()).join(' ');
@@ -403,16 +418,22 @@ export async function synthesizeBrainstormSuggestions(
   const alreadyShown = notInRoadmap.filter((c) => currentSuggestionTitles.has(c.title.toLowerCase()));
   const ordered = [...unseen, ...alreadyShown];
 
-  return ordered.slice(0, 6).map((c) => ({
-    ...c,
-    id: `sug-${randomUUID().slice(0, 8)}`,
-  }));
+  return ordered.slice(0, 6).map((c) => {
+    const route = defaultRoutingForPersona(c.persona, fSettings);
+    return {
+      ...c,
+      preferredAgent: route.preferredAgent,
+      preferredModel: route.preferredModel,
+      id: `sug-${randomUUID().slice(0, 8)}`,
+    };
+  });
 }
 
 async function seedInitialRoadmap(
   project: Project,
   blueprintContent: string,
   projectTickets: Ticket[],
+  fSettings?: FactorySettings,
 ): Promise<StoredRoadmapFile> {
   const now = new Date().toISOString();
   const milestones: RoadmapMilestone[] = [
@@ -454,7 +475,7 @@ async function seedInitialRoadmap(
   for (const t of projectTickets) {
     const msIdx = milestoneIndexForPersona(t.persona);
     const ms = milestones[msIdx] ?? milestones[1]!;
-    const routing = defaultRoutingForPersona(t.persona);
+    const routing = defaultRoutingForPersona(t.persona, fSettings);
     const itemStatus =
       t.status === 'done'
         ? 'done'
@@ -481,7 +502,14 @@ async function seedInitialRoadmap(
   const existingTitles = new Set(
     milestones.flatMap((m) => m.items.map((i) => i.title.toLowerCase())),
   );
-  const suggestions = await synthesizeBrainstormSuggestions(project, blueprintContent, existingTitles);
+  const suggestions = await synthesizeBrainstormSuggestions(
+    project,
+    blueprintContent,
+    existingTitles,
+    '',
+    new Set(),
+    fSettings,
+  );
 
   return {
     visionSummary: extractVisionFromBlueprint(project, blueprintContent),
@@ -498,8 +526,10 @@ async function readOrInitRoadmapFile(
   const filePath = path.join(project.path, ROADMAP_REL_PATH);
   const blueprint = await readProjectBlueprint(project);
   const projectTickets = ticketService.list(project.id);
+  const fSettings = ticketService.factorySettings();
 
   let stored: StoredRoadmapFile | null = null;
+  let dirty = false;
   if (existsSync(filePath)) {
     try {
       const raw = await readFile(filePath, 'utf8');
@@ -510,7 +540,40 @@ async function readOrInitRoadmapFile(
   }
 
   if (!stored || !Array.isArray(stored.milestones) || stored.milestones.length === 0) {
-    stored = await seedInitialRoadmap(project, blueprint.content, projectTickets);
+    stored = await seedInitialRoadmap(project, blueprint.content, projectTickets, fSettings);
+    dirty = true;
+  }
+
+  // Normalize any uncustomized suggestion/item routes that still point to an unconfigured secondary agent
+  // (e.g., `antigravity · argon` when the user's Settings route for that persona is `claude`).
+  for (const sug of stored.suggestions ?? []) {
+    const customFlag = (sug as BrainstormSuggestion & { routeCustomized?: boolean }).routeCustomized;
+    const configuredRoute = defaultRoutingForPersona(sug.persona, fSettings);
+    if (
+      !customFlag &&
+      sug.preferredAgent === 'antigravity' &&
+      configuredRoute.preferredAgent !== 'antigravity'
+    ) {
+      sug.preferredAgent = configuredRoute.preferredAgent;
+      sug.preferredModel = configuredRoute.preferredModel;
+      dirty = true;
+    }
+  }
+  for (const ms of stored.milestones) {
+    for (const item of ms.items) {
+      const customFlag = (item as RoadmapItem & { routeCustomized?: boolean }).routeCustomized;
+      const configuredRoute = defaultRoutingForPersona(item.persona, fSettings);
+      if (
+        !customFlag &&
+        !item.ticketId &&
+        item.preferredAgent === 'antigravity' &&
+        configuredRoute.preferredAgent !== 'antigravity'
+      ) {
+        item.preferredAgent = configuredRoute.preferredAgent;
+        item.preferredModel = configuredRoute.preferredModel;
+        dirty = true;
+      }
+    }
   }
 
   // Check if an AI agent wrote `.emberline/brainstorm-suggestions.json`
@@ -524,7 +587,10 @@ async function readOrInitRoadmapFile(
         for (const s of parsed.suggestions) {
           if (!s.title || existingSuggestionTitles.has(s.title.toLowerCase())) continue;
           const persona: AgentPersona = s.persona ?? 'coder';
-          const routing = defaultRoutingForPersona(persona);
+          const routing = defaultRoutingForPersona(persona, fSettings);
+          const requestedAgent = s.preferredAgent ?? routing.preferredAgent;
+          const useConfigured =
+            requestedAgent === 'antigravity' && routing.preferredAgent !== 'antigravity';
           stored.suggestions.unshift({
             id: `sug-${randomUUID().slice(0, 8)}`,
             title: s.title,
@@ -534,11 +600,12 @@ async function readOrInitRoadmapFile(
             impact: s.impact ?? 'high',
             effort: s.effort ?? 'medium',
             persona,
-            preferredAgent: s.preferredAgent ?? routing.preferredAgent,
-            preferredModel: s.preferredModel ?? routing.preferredModel,
+            preferredAgent: useConfigured ? routing.preferredAgent : requestedAgent,
+            preferredModel: useConfigured ? routing.preferredModel : (s.preferredModel ?? routing.preferredModel),
             suggestedMilestoneCode: s.suggestedMilestoneCode ?? 'M2',
           });
           existingSuggestionTitles.add(s.title.toLowerCase());
+          dirty = true;
         }
       }
       await rm(agentBrainstormPath, { force: true });
@@ -553,20 +620,34 @@ async function readOrInitRoadmapFile(
 
   for (const ms of stored.milestones) {
     // Strip any accidental brainstorm meta-tickets that may have been imported earlier
+    const beforeLen = ms.items.length;
     ms.items = ms.items.filter(
       (i) =>
         !i.title.startsWith('[Factory] Brainstorm & Roadmap Expansion') &&
         !i.title.startsWith('[Brainstorm]'),
     );
+    if (ms.items.length !== beforeLen) dirty = true;
     for (const item of ms.items) {
       if (item.ticketId) {
         linkedTicketIds.add(item.ticketId);
         const t = ticketById.get(item.ticketId);
         if (t) {
-          item.ticketKey = t.key;
-          if (t.status === 'done') item.status = 'done';
-          else if (t.status === 'in_progress' || t.status === 'review') item.status = 'in_progress';
-          else if (item.status === 'done') item.status = 'planned';
+          if (item.ticketKey !== t.key) {
+            item.ticketKey = t.key;
+            dirty = true;
+          }
+          const targetStatus =
+            t.status === 'done'
+              ? 'done'
+              : t.status === 'in_progress' || t.status === 'review'
+                ? 'in_progress'
+                : item.status === 'done'
+                  ? 'planned'
+                  : item.status;
+          if (item.status !== targetStatus) {
+            item.status = targetStatus;
+            dirty = true;
+          }
         }
       }
     }
@@ -584,7 +665,10 @@ async function readOrInitRoadmapFile(
     const msIdx = milestoneIndexForPersona(t.persona);
     const ms = stored.milestones[msIdx] ?? stored.milestones[0];
     if (!ms) continue;
-    const routing = defaultRoutingForPersona(t.persona);
+    const routing = defaultRoutingForPersona(t.persona, fSettings);
+    const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
+      t.body ?? '',
+    );
     ms.items.push({
       id: `item-${t.id.slice(0, 8)}`,
       milestoneId: ms.id,
@@ -592,8 +676,8 @@ async function readOrInitRoadmapFile(
       description: t.body || t.title,
       category: categoryForPersona(t.persona),
       persona: t.persona,
-      preferredAgent: routing.preferredAgent,
-      preferredModel: routing.preferredModel,
+      preferredAgent: (routeTagMatch?.[1] as AgentId | undefined) ?? routing.preferredAgent,
+      preferredModel: (routeTagMatch?.[2] as AgentModelId | undefined) ?? routing.preferredModel,
       priority: t.priority,
       status:
         t.status === 'done'
@@ -605,26 +689,33 @@ async function readOrInitRoadmapFile(
       ticketKey: t.key,
       createdAt: t.createdAt,
     });
+    dirty = true;
   }
 
   // Update each milestone's derived status
   for (const ms of stored.milestones) {
+    let nextMsStatus: RoadmapMilestone['status'] = 'planned';
     if (ms.items.length === 0) {
-      ms.status = 'planned';
+      nextMsStatus = 'planned';
     } else if (ms.items.every((i) => i.status === 'done')) {
-      ms.status = 'completed';
+      nextMsStatus = 'completed';
     } else if (ms.items.some((i) => i.status === 'in_progress' || i.status === 'done')) {
-      ms.status = 'active';
-    } else {
-      ms.status = 'planned';
+      nextMsStatus = 'active';
+    }
+    if (ms.status !== nextMsStatus) {
+      ms.status = nextMsStatus;
+      dirty = true;
     }
   }
 
   if (!stored.visionSummary) {
     stored.visionSummary = extractVisionFromBlueprint(project, blueprint.content);
+    dirty = true;
   }
 
-  await saveRoadmapFile(project, stored);
+  if (dirty) {
+    await saveRoadmapFile(project, stored);
+  }
   return stored;
 }
 
@@ -694,9 +785,10 @@ export async function addRoadmapItem(
     throw new Error('No milestone found in project roadmap');
   }
 
+  const fSettings = ticketService.factorySettings();
   const persona = input.persona ?? 'coder';
-  const routing = defaultRoutingForPersona(persona);
-  const newItem: RoadmapItem = {
+  const routing = defaultRoutingForPersona(persona, fSettings);
+  const newItem: RoadmapItem & { routeCustomized?: boolean } = {
     id: `item-${randomUUID().slice(0, 8)}`,
     milestoneId: targetMs.id,
     title: input.title.trim(),
@@ -713,6 +805,7 @@ export async function addRoadmapItem(
     ticketId: null,
     ticketKey: null,
     createdAt: new Date().toISOString(),
+    routeCustomized: Boolean(input.preferredAgent || input.preferredModel),
   };
 
   targetMs.items.push(newItem);
@@ -727,13 +820,39 @@ export async function updateRoadmapItem(
   patch: UpdateRoadmapItemBody,
 ): Promise<ProjectRoadmapState> {
   const stored = await readOrInitRoadmapFile(project, ticketService);
-  let found: RoadmapItem | undefined;
+
+  // 1. Check if itemId refers to a Brainstorm Suggestion (`sug-*`) so users can customize routes on suggestions too!
+  const sug = stored.suggestions.find((s) => s.id === itemId) as
+    | (BrainstormSuggestion & { routeCustomized?: boolean })
+    | undefined;
+  if (sug) {
+    if (patch.title !== undefined) sug.title = patch.title.trim();
+    if (patch.description !== undefined) sug.rationale = patch.description.trim();
+    if (patch.category !== undefined) sug.category = patch.category;
+    if (patch.persona !== undefined) sug.persona = patch.persona;
+    if (patch.preferredAgent !== undefined) {
+      sug.preferredAgent = patch.preferredAgent;
+      sug.routeCustomized = true;
+    }
+    if (patch.preferredModel !== undefined) {
+      sug.preferredModel = patch.preferredModel;
+      sug.routeCustomized = true;
+    }
+    if (patch.milestoneId !== undefined) {
+      sug.suggestedMilestoneCode = patch.milestoneId;
+    }
+    await saveRoadmapFile(project, stored);
+    return toRoadmapState(project, stored);
+  }
+
+  // 2. Otherwise update a Milestone RoadmapItem (`item-*`)
+  let found: (RoadmapItem & { routeCustomized?: boolean }) | undefined;
   let sourceMs: RoadmapMilestone | undefined;
 
   for (const ms of stored.milestones) {
     const idx = ms.items.findIndex((i) => i.id === itemId);
     if (idx !== -1) {
-      found = ms.items[idx];
+      found = ms.items[idx] as RoadmapItem & { routeCustomized?: boolean };
       sourceMs = ms;
       break;
     }
@@ -746,17 +865,44 @@ export async function updateRoadmapItem(
   if (patch.description !== undefined) found.description = patch.description.trim();
   if (patch.category !== undefined) found.category = patch.category;
   if (patch.persona !== undefined) found.persona = patch.persona;
-  if (patch.preferredAgent !== undefined) found.preferredAgent = patch.preferredAgent;
-  if (patch.preferredModel !== undefined) found.preferredModel = patch.preferredModel;
+  if (patch.preferredAgent !== undefined) {
+    found.preferredAgent = patch.preferredAgent;
+    found.routeCustomized = true;
+  }
+  if (patch.preferredModel !== undefined) {
+    found.preferredModel = patch.preferredModel;
+    found.routeCustomized = true;
+  }
   if (patch.priority !== undefined) found.priority = patch.priority;
+
+  // Sync updated route or persona to the linked Kanban ticket if one exists
+  if (
+    found.ticketId &&
+    (patch.preferredAgent !== undefined || patch.preferredModel !== undefined || patch.persona !== undefined)
+  ) {
+    try {
+      const existingTicket = ticketService.get(found.ticketId);
+      const cleanBody = existingTicket.body
+        .replace(/\n*\[Preferred Agent:\s*[a-z0-9_-]+\s*·\s*Model:\s*[a-z0-9_-]+\]/gi, '')
+        .trim();
+      const updatedBody = `${cleanBody}\n\n[Preferred Agent: ${found.preferredAgent} · Model: ${found.preferredModel}]`.trim();
+      ticketService.update(found.ticketId, {
+        persona: found.persona,
+        body: updatedBody,
+      });
+    } catch {
+      // Ignore if ticket was deleted
+    }
+  }
+
   if (patch.status !== undefined) {
     found.status = patch.status;
     if (found.ticketId) {
       try {
         if (patch.status === 'done') {
-          await ticketService.update(found.ticketId, { status: 'done' });
+          ticketService.update(found.ticketId, { status: 'done' });
         } else if (patch.status === 'planned') {
-          await ticketService.update(found.ticketId, { status: 'ready' });
+          ticketService.update(found.ticketId, { status: 'ready' });
         }
       } catch {
         // Ignore if linked ticket was removed
@@ -801,6 +947,7 @@ export async function runProjectBrainstorm(
 ): Promise<BrainstormResponse> {
   const stored = await readOrInitRoadmapFile(project, ticketService);
   const blueprint = await readProjectBlueprint(project);
+  const fSettings = ticketService.factorySettings();
   const existingTitles = new Set(
     stored.milestones.flatMap((m) => m.items.map((i) => i.title.toLowerCase())),
   );
@@ -812,6 +959,7 @@ export async function runProjectBrainstorm(
     existingTitles,
     input.focus ?? '',
     currentSuggestionTitles,
+    fSettings,
   );
 
   // Merge fresh suggestions at the top while deduplicating by title
@@ -836,7 +984,7 @@ export async function runProjectBrainstorm(
       `${focusClause}`,
       `1. Read PROJECT.md and inspect the codebase structure.`,
       `2. Write 4 to 6 creative, concrete, high-value feature suggestions to \`${project.path}/.emberline/brainstorm-suggestions.json\` with the exact JSON format:`,
-      `{"suggestions": [{"title": "...", "rationale": "Why this makes the project great", "implementationPrompt": "Detailed instructions for the coding agent", "category": "feature|ui_ux|architecture|performance|qa_security", "impact": "high|medium", "effort": "small|medium|large", "persona": "coder|ui_ux|architect|dba|qa|security", "preferredAgent": "claude|antigravity|copilot", "preferredModel": "fable|opus|sonnet|argon", "suggestedMilestoneCode": "M2|M3|M4"}]}`,
+      `{"suggestions": [{"title": "...", "rationale": "Why this makes the project great", "implementationPrompt": "Detailed instructions for the coding agent", "category": "feature|ui_ux|architecture|performance|qa_security", "impact": "high|medium", "effort": "small|medium|large", "persona": "coder|ui_ux|architect|dba|qa|security", "preferredAgent": "claude", "preferredModel": "fable|opus|sonnet", "suggestedMilestoneCode": "M2|M3|M4"}]}`,
       `3. IMPORTANT: Do NOT create or modify \`.emberline/new-tickets.json\` and do NOT start implementation changes. Only write \`${project.path}/.emberline/brainstorm-suggestions.json\` so the user can review and select suggestions in the Roadmap Studio.`,
     ].join('\n');
 

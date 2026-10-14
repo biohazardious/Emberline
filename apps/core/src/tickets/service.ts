@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
+import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type AgentCreateTicketsPayload,
   AgentCreateTicketsPayload as AgentCreateTicketsPayloadSchema,
+  type AgentId,
+  type AgentModelId,
   type AgentPersona,
   type CreateTicketBody,
   CreateTicketBody as CreateTicketBodySchema,
   type FactoryRequestBody,
   FactoryRequestBody as FactoryRequestBodySchema,
   type FactoryRequestResponse,
+  type FactorySettings,
   type Run,
   type StartTicketBody,
   StartTicketBody as StartTicketBodySchema,
@@ -141,6 +145,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         void this.handleRunCompleted(run);
       }
     });
+  }
+
+  factorySettings(): FactorySettings {
+    return getFactorySettings(this.db);
   }
 
   isAutoChainActive(projectId: string): boolean {
@@ -327,6 +335,23 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return;
     }
 
+    // 0. If this was a standalone Brainstorming run, copy any worktree brainstorm output to main,
+    //    close the idle CLI process, and return immediately without triggering Kanban ticket pipelines.
+    if (run.title?.includes('[Brainstorm]')) {
+      if (run.worktreePath && run.worktreePath !== projectRow.path) {
+        const wtBrainstorm = path.join(run.worktreePath, '.emberline', 'brainstorm-suggestions.json');
+        const mainBrainstorm = path.join(projectRow.path, '.emberline', 'brainstorm-suggestions.json');
+        if (existsSync(wtBrainstorm) && !existsSync(mainBrainstorm)) {
+          await mkdir(path.dirname(mainBrainstorm), { recursive: true }).catch(() => undefined);
+          await cp(wtBrainstorm, mainBrainstorm, { force: true }).catch(() => undefined);
+        }
+      }
+      if (!run.endedAt) {
+        await this.runs.stop(run.id).catch(() => undefined);
+      }
+      return;
+    }
+
     const ticketRow = run.ticketId
       ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
       : undefined;
@@ -341,9 +366,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     if (ingested && ingested.tickets.length > 0) {
       for (const draft of ingested.tickets) {
+        let body = draft.body ?? '';
+        if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
+          const agentStr = draft.preferredAgent ?? 'claude';
+          const modelStr = draft.preferredModel ?? 'auto';
+          body = `${body}\n\n[Preferred Agent: ${agentStr} · Model: ${modelStr}]`.trim();
+        }
         this.create(run.projectId, {
           title: draft.title,
-          body: draft.body,
+          body,
           persona: draft.persona,
           priority: draft.priority,
           status: 'ready',
@@ -531,6 +562,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (this.runs.activeRunForTicket(id)) throw conflict('this ticket already has a running agent');
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
     const effectivePersona = persona ?? ticket.persona;
+    const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
+      ticket.body ?? '',
+    );
+    const preferredAgent = routeTagMatch?.[1] as AgentId | undefined;
+    const preferredModel = routeTagMatch?.[2] as AgentModelId | undefined;
     const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
     const run = await this.scheduler.submit(
       {
@@ -538,7 +574,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         prompt: ticketPrompt(ticket),
         permissionMode,
         persona: effectivePersona,
-        agent: resolveAgentForPersona(this.db, effectivePersona),
+        agent: resolveAgentForPersona(this.db, effectivePersona, preferredAgent),
+        model: preferredModel,
       },
       {
         ticketId: id,

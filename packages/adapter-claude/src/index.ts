@@ -295,10 +295,7 @@ export interface SecondaryCliLaunchOptions {
  */
 export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
   const hook = options.hookCommand ?? 'emberline-hook';
-  const autoApprove =
-    options.permissionMode === 'acceptEdits' ||
-    options.permissionMode === 'auto' ||
-    options.permissionMode === 'bypassPermissions';
+  const autoApprove = options.permissionMode !== 'plan';
   const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
   const claudeFallback = `claude --permission-mode auto --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
 

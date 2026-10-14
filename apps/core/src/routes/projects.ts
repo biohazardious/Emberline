@@ -653,7 +653,14 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   /** Removes the project record only; files in the workspace are left untouched on purpose. */
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (request) => {
-    const result = db.delete(projects).where(eq(projects.id, request.params.id)).run();
+    const projectId = request.params.id;
+    tickets.setAutoChain(projectId, false);
+    for (const run of runs.list()) {
+      if (run.projectId === projectId && !run.endedAt && run.state !== 'done' && run.state !== 'failed') {
+        await runs.stop(run.id).catch(() => {});
+      }
+    }
+    const result = db.delete(projects).where(eq(projects.id, projectId)).run();
     if (result.changes === 0) throw notFound('no such project');
     return { ok: true };
   });

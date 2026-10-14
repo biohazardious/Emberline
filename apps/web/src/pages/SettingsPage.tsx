@@ -54,7 +54,7 @@ export function SettingsPage({
   const [personaAgents, setPersonaAgents] = useState<PersonaAgentMap>({
     product_owner: 'claude',
     architect: 'claude',
-    ui_ux: 'antigravity',
+    ui_ux: 'claude',
     coder: 'claude',
     dba: 'claude',
     qa: 'claude',
@@ -63,7 +63,7 @@ export function SettingsPage({
   const [personaModels, setPersonaModels] = useState<PersonaModelMap>({
     product_owner: 'fable',
     architect: 'fable',
-    ui_ux: 'argon',
+    ui_ux: 'opus',
     coder: 'opus',
     dba: 'opus',
     qa: 'sonnet',

@@ -78,6 +78,128 @@ export function AgentModelBadge({ agent, model }: { agent: AgentId; model: Agent
   );
 }
 
+const COMPACT_AGENT_OPTIONS: Array<{ id: AgentId; short: string }> = [
+  { id: 'claude', short: '✦ claude' },
+  { id: 'antigravity', short: '⚡ agy' },
+  { id: 'copilot', short: '🤖 copilot' },
+  { id: 'gemini', short: '✦ gemini' },
+  { id: 'codex', short: '✦ codex' },
+  { id: 'aider', short: '✦ aider' },
+];
+
+const COMPACT_MODEL_OPTIONS: Array<{ id: AgentModelId; short: string }> = [
+  { id: 'opus', short: 'opus' },
+  { id: 'sonnet', short: 'sonnet' },
+  { id: 'fable', short: 'fable' },
+  { id: 'haiku', short: 'haiku' },
+  { id: 'argon', short: 'argon' },
+  { id: 'gemini-pro', short: 'gemini-pro' },
+  { id: 'gpt-4o', short: 'gpt-4o' },
+  { id: 'auto', short: 'auto' },
+];
+
+export function RouteBadgeSelect({
+  agent,
+  model,
+  disabled,
+  onChange,
+}: {
+  agent: AgentId;
+  model: AgentModelId;
+  disabled?: boolean;
+  onChange: (nextAgent: AgentId, nextModel: AgentModelId) => void;
+}) {
+  const isAntigravity = agent === 'antigravity' || model === 'argon';
+  const isCopilot = agent === 'copilot';
+  const isFable = model === 'fable';
+  const isSonnet = model === 'sonnet' || model === 'haiku';
+
+  const color = isAntigravity
+    ? '#38bdf8'
+    : isCopilot
+      ? '#a78bfa'
+      : isFable
+        ? '#f59e0b'
+        : isSonnet
+          ? '#34d399'
+          : 'var(--accent)';
+
+  const handleAgentChange = (nextAgent: AgentId) => {
+    let nextModel = model;
+    if (nextAgent === 'claude' && (model === 'argon' || model === 'gemini-pro' || model === 'gpt-4o')) {
+      nextModel = 'opus';
+    } else if (nextAgent === 'antigravity' && model !== 'argon') {
+      nextModel = 'argon';
+    } else if (nextAgent === 'gemini' && model !== 'gemini-pro') {
+      nextModel = 'gemini-pro';
+    } else if ((nextAgent === 'codex' || nextAgent === 'copilot') && model !== 'gpt-4o') {
+      nextModel = 'gpt-4o';
+    }
+    onChange(nextAgent, nextModel);
+  };
+
+  return (
+    <span
+      className="badge mono"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
+        padding: '1px 6px',
+        fontSize: '0.7rem',
+        color,
+        borderColor: 'var(--border)',
+        background: 'var(--bg)',
+      }}
+      title={`Click to change route (${AGENT_LABELS[agent] ?? agent} · ${MODEL_LABELS[model] ?? model})`}
+    >
+      <select
+        aria-label="Preferred Agent"
+        disabled={disabled}
+        value={agent}
+        onChange={(e) => handleAgentChange(e.target.value as AgentId)}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'inherit',
+          font: 'inherit',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          padding: '1px 2px',
+          outline: 'none',
+        }}
+      >
+        {COMPACT_AGENT_OPTIONS.map((a) => (
+          <option key={a.id} value={a.id} style={{ background: 'var(--bg-elevated)', color: 'var(--text)' }}>
+            {a.short}
+          </option>
+        ))}
+      </select>
+      <span style={{ opacity: 0.6 }}>·</span>
+      <select
+        aria-label="Preferred Model"
+        disabled={disabled}
+        value={model}
+        onChange={(e) => onChange(agent, e.target.value as AgentModelId)}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'inherit',
+          font: 'inherit',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          padding: '1px 2px',
+          outline: 'none',
+        }}
+      >
+        {COMPACT_MODEL_OPTIONS.map((m) => (
+          <option key={m.id} value={m.id} style={{ background: 'var(--bg-elevated)', color: 'var(--text)' }}>
+            {m.short}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
 export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [, navigate] = useLocation();
   const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
@@ -281,6 +403,77 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     } finally {
       setBusy(null);
     }
+  };
+
+  const handleChangeRoute = async (id: string, preferredAgent: AgentId, preferredModel: AgentModelId) => {
+    setError(null);
+    // Optimistically update localRoadmap so dropdowns respond immediately
+    setLocalRoadmap((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        suggestions: prev.suggestions.map((s) =>
+          s.id === id ? { ...s, preferredAgent, preferredModel } : s,
+        ),
+        milestones: prev.milestones.map((m) => ({
+          ...m,
+          items: m.items.map((it) =>
+            it.id === id ? { ...it, preferredAgent, preferredModel } : it,
+          ),
+        })),
+      };
+    });
+    try {
+      const next = await api<ProjectRoadmapState>(
+        `/api/projects/${projectId}/roadmap/items/${id}`,
+        'PATCH',
+        { preferredAgent, preferredModel },
+      );
+      setLocalRoadmap(next);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
+
+  const handleBuildAllSuggestions = async () => {
+    if (filteredSuggestions.length === 0 || busy !== null) return;
+    setBusy('build-all-suggestions');
+    setError(null);
+    setBanner(null);
+    try {
+      const res = await api<DispatchRoadmapItemsResponse>(
+        `/api/projects/${projectId}/roadmap/dispatch`,
+        'POST',
+        {
+          suggestionIds: filteredSuggestions.map((s) => s.id),
+          autoStart: true,
+        },
+      );
+      setLocalRoadmap(res.roadmap);
+      setSelectedSuggestions(new Set());
+      setBanner(
+        `🚀 Promoted all ${res.createdTickets.length} Brainstorming idea(s) to the Roadmap & Kanban Board and started the autonomous multi-agent pipeline!`,
+      );
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleToggleSelectAllSuggestions = () => {
+    const visibleIds = filteredSuggestions.map((s) => s.id);
+    if (visibleIds.length === 0) return;
+    const allSelected = visibleIds.every((id) => selectedSuggestions.has(id));
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return next;
+    });
   };
 
   const handleDismissSuggestion = async (sugId: string) => {
@@ -707,10 +900,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   value={newItemPersona}
                   onChange={(p) => {
                     setNewItemPersona(p);
-                    if (p === 'ui_ux') {
-                      setNewItemAgent('antigravity');
-                      setNewItemModel('argon');
-                    } else if (p === 'product_owner' || p === 'architect') {
+                    if (p === 'product_owner' || p === 'architect') {
                       setNewItemAgent('claude');
                       setNewItemModel('fable');
                     } else if (p === 'qa') {
@@ -778,10 +968,40 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             <div>
               <h2>🧠 AI Brainstorming &amp; Feature Suggestions</h2>
               <p className="muted">
-                Explore what to build next, generate tailored feature sets, and assign each to the best CLI agent &amp; model.
+                Explore what to build next, customize each idea&apos;s CLI agent &amp; model route inline, or launch all ideas at once.
               </p>
             </div>
-            <span className="badge mono">{filteredSuggestions.length} ideas</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span className="badge mono">{filteredSuggestions.length} ideas</span>
+              {filteredSuggestions.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    style={{ fontSize: '0.74rem', padding: '3px 8px' }}
+                    onClick={handleToggleSelectAllSuggestions}
+                    title="Select or deselect all visible brainstorming suggestions"
+                  >
+                    {filteredSuggestions.every((s) => selectedSuggestions.has(s.id))
+                      ? '☐ Deselect All'
+                      : '☑ Select All'}
+                  </button>
+                  <button
+                    id="brainstorm-build-all-btn"
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    style={{ fontSize: '0.74rem', padding: '3px 10px' }}
+                    disabled={busy !== null}
+                    onClick={() => void handleBuildAllSuggestions()}
+                    title="Create Kanban tickets for all visible suggestions and start autonomous execution"
+                  >
+                    {busy === 'build-all-suggestions'
+                      ? 'Starting All…'
+                      : `🚀 Build All (${filteredSuggestions.length})`}
+                  </button>
+                </>
+              )}
+            </div>
           </header>
 
           {/* Interactive Brainstorm Prompt Box */}
@@ -962,7 +1182,14 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                         Target: {sug.suggestedMilestoneCode}
                       </span>
                       <PersonaBadge persona={sug.persona} />
-                      <AgentModelBadge agent={sug.preferredAgent} model={sug.preferredModel} />
+                      <RouteBadgeSelect
+                        agent={sug.preferredAgent}
+                        model={sug.preferredModel}
+                        disabled={busy !== null}
+                        onChange={(nextAgent, nextModel) =>
+                          void handleChangeRoute(sug.id, nextAgent, nextModel)
+                        }
+                      />
                       <span className="badge mono" style={{ fontSize: '0.68rem' }}>
                         Impact: {sug.impact.toUpperCase()}
                       </span>
@@ -1175,7 +1402,14 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               <PersonaBadge persona={item.persona} />
-                              <AgentModelBadge agent={item.preferredAgent} model={item.preferredModel} />
+                              <RouteBadgeSelect
+                                agent={item.preferredAgent}
+                                model={item.preferredModel}
+                                disabled={busy !== null}
+                                onChange={(nextAgent, nextModel) =>
+                                  void handleChangeRoute(item.id, nextAgent, nextModel)
+                                }
+                              />
                               {item.ticketKey ? (
                                 <Link
                                   href={`/projects/${projectId}/board`}

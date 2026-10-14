@@ -238,8 +238,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     );
 
     const persona = body.persona ?? 'coder';
-    const resolvedAgent = input.agent ?? resolveAgentForPersona(this.db, persona) ?? CLAUDE_ADAPTER_ID;
-    const explicitModel = body.model && body.model !== 'auto' ? body.model : undefined;
+    const promptRouteMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
+      body.prompt ?? '',
+    );
+    const preferredAgentFromPrompt = promptRouteMatch?.[1];
+    const resolvedAgent =
+      preferredAgentFromPrompt ??
+      input.agent ??
+      resolveAgentForPersona(this.db, persona) ??
+      CLAUDE_ADAPTER_ID;
+    const explicitModel =
+      (body.model && body.model !== 'auto' ? body.model : undefined) ??
+      (promptRouteMatch?.[2] as AgentModelId | undefined);
     const promptWithRoute =
       explicitModel && !/\[Preferred Agent:/i.test(body.prompt)
         ? `${body.prompt}${body.prompt ? '\n\n' : ''}[Preferred Agent: ${resolvedAgent} · Model: ${explicitModel}]`
