@@ -10,11 +10,12 @@ import type {
   RoadmapCategory,
   RoadmapItem,
 } from '@emberline/protocol';
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge, PersonaPicker } from '../components/PersonaBadge';
 import { usePoll } from '../hooks/usePoll';
+import { useRuns } from '../hooks/useRuns';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   claude: 'Claude Code',
@@ -80,15 +81,46 @@ export function AgentModelBadge({ agent, model }: { agent: AgentId; model: Agent
 export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [, navigate] = useLocation();
   const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
-  const roadmapPoll = usePoll(() => api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap`), 8_000);
+  const roadmapPoll = usePoll(() => api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap`), 6_000);
+  const { runs } = useRuns();
   const [localRoadmap, setLocalRoadmap] = useState<ProjectRoadmapState | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<RoadmapCategory | 'all'>('all');
   const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [brainstormFocus, setBrainstormFocus] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [pendingBrainstormRunId, setPendingBrainstormRunId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (roadmapPoll.data) {
+      setLocalRoadmap(roadmapPoll.data);
+    }
+  }, [roadmapPoll.data]);
+
+  const activeBrainstormRun = useMemo(() => {
+    const list = runs ?? [];
+    return list.find(
+      (r) =>
+        r.projectId === projectId &&
+        !r.endedAt &&
+        r.state !== 'done' &&
+        r.state !== 'failed' &&
+        (r.id === pendingBrainstormRunId ||
+          Boolean(r.title?.includes('[Brainstorm]')) ||
+          Boolean(r.title?.includes('Brainstorm & Roadmap'))),
+    );
+  }, [runs, projectId, pendingBrainstormRunId]);
+
+  useEffect(() => {
+    if (!pendingBrainstormRunId) return;
+    const matched = (runs ?? []).find((r) => r.id === pendingBrainstormRunId);
+    if (matched && (matched.endedAt || matched.state === 'done' || matched.state === 'failed')) {
+      setPendingBrainstormRunId(null);
+      void roadmapPoll.refresh();
+    }
+  }, [runs, pendingBrainstormRunId, roadmapPoll]);
 
   // Add Item Form state
   const [showAddItem, setShowAddItem] = useState(false);
@@ -136,24 +168,34 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     });
   };
 
+  const isAgentBrainstorming = Boolean(activeBrainstormRun || pendingBrainstormRunId);
+
   const handleBrainstorm = async (mode: 'instant' | 'agent') => {
+    if (busy !== null) return;
+    if (mode === 'agent' && isAgentBrainstorming) return;
     setBusy(mode === 'agent' ? 'brainstorm-agent' : 'brainstorm-instant');
     setError(null);
     setBanner(null);
     try {
+      const startedAt = Date.now();
       const res = await api<BrainstormResponse>(`/api/projects/${projectId}/roadmap/brainstorm`, 'POST', {
         focus: brainstormFocus.trim(),
         mode,
         leadPersona: 'product_owner',
       });
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 550) {
+        await new Promise((r) => setTimeout(r, 550 - elapsed));
+      }
       setLocalRoadmap(res.roadmap);
       if (mode === 'agent' && res.agentRun) {
+        setPendingBrainstormRunId(res.agentRun.id);
         setBanner(
-          `🧠 Deep Brainstorming Agent (${res.agentRun.agent} · fable) started! New suggestions will appear automatically when it finishes.`,
+          `🧠 Deep Brainstorming Agent (${res.agentRun.agent} · fable) is analyzing your codebase. New suggestions will appear automatically when it finishes.`,
         );
       } else {
         setBanner(
-          `✨ Generated fresh codebase-aware feature & architecture suggestions${brainstormFocus.trim() ? ` for "${brainstormFocus.trim()}"` : ''}.`,
+          `✨ Synthesized fresh codebase-aware feature & architecture suggestions${brainstormFocus.trim() ? ` for "${brainstormFocus.trim()}"` : ''}.`,
         );
       }
     } catch (e) {
@@ -788,14 +830,14 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                 ))}
               </div>
 
-              <div style={{ display: 'flex', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <button
                   id="brainstorm-instant-btn"
                   type="button"
                   className="btn btn-sm"
                   disabled={busy !== null}
                   onClick={() => void handleBrainstorm('instant')}
-                  title="Analyze codebase & topic to synthesize instant suggestions"
+                  title="Analyze codebase & topic to synthesize instant suggestions (rotates unseen ideas)"
                 >
                   {busy === 'brainstorm-instant' ? 'Synthesizing…' : '⚡ Synthesize Ideas'}
                 </button>
@@ -803,14 +845,53 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   id="brainstorm-agent-btn"
                   type="button"
                   className="btn btn-sm btn-primary"
-                  disabled={busy !== null}
+                  disabled={busy !== null || isAgentBrainstorming}
                   onClick={() => void handleBrainstorm('agent')}
-                  title="Launch a Product Owner (Claude Fable) agent to deeply inspect the codebase and write new suggestions"
+                  title={
+                    isAgentBrainstorming
+                      ? 'A Deep Brainstorming Agent is already running for this project'
+                      : 'Launch a Product Owner (Claude Fable) agent to deeply inspect the codebase and write new suggestions'
+                  }
                 >
-                  {busy === 'brainstorm-agent' ? 'Launching…' : '🤖 Deep Agent Brainstorm'}
+                  {busy === 'brainstorm-agent'
+                    ? 'Launching…'
+                    : isAgentBrainstorming
+                      ? '🧠 Brainstorming in Progress…'
+                      : '🤖 Deep Agent Brainstorm'}
                 </button>
               </div>
             </div>
+
+            {activeBrainstormRun && (
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: '6px 10px',
+                  borderRadius: 'var(--radius)',
+                  background: 'rgba(168, 85, 247, 0.12)',
+                  border: '1px solid rgba(168, 85, 247, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  fontSize: '0.78rem',
+                }}
+              >
+                <span className="mono">
+                  <span className="dot run-working" style={{ marginRight: 6 }} />
+                  Deep Brainstorming Agent ({activeBrainstormRun.agent} · fable) is inspecting the repository…
+                </span>
+                {activeBrainstormRun.terminalId && (
+                  <Link
+                    href={`/terminals/${activeBrainstormRun.terminalId}`}
+                    className="btn btn-sm btn-ghost mono"
+                    style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                  >
+                    View Terminal →
+                  </Link>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Brainstorm Suggestion Cards */}

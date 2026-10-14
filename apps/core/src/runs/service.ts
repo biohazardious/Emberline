@@ -70,12 +70,12 @@ interface RunServiceEvents {
   rateLimited: [run: Run, info: RateLimitInfo | undefined];
 }
 
-/** Extra context when a run is started for a ticket. */
+/** Extra context when a run is started for a ticket or specialized background job. */
 export interface RunOrigin {
-  ticketId: string;
+  ticketId?: string;
   /** Branch name to use (made unique if taken). */
-  branch: string;
-  title: string;
+  branch?: string;
+  title?: string;
 }
 
 /** Delay between pasting a prompt and pressing Enter, so the TUI has consumed the paste. */

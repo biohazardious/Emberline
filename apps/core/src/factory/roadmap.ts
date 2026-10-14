@@ -89,15 +89,20 @@ export async function synthesizeBrainstormSuggestions(
   blueprintContent: string,
   existingTitles: Set<string>,
   focus = '',
+  currentSuggestionTitles = new Set<string>(),
 ): Promise<BrainstormSuggestion[]> {
   const files = await listWorkspaceFilesFlat(project.path).catch(() => []);
   const fileNamesLower = files.map((f) => f.path.toLowerCase()).join(' ');
   const combinedContext = `${project.name} ${project.description} ${blueprintContent} ${fileNamesLower}`.toLowerCase();
 
+  const isFlappyOrArcade = /flappy|bird|jump|flap|obstacle|pipe|endless|runner|arcade|cat|petiqa|paw/.test(
+    combinedContext,
+  );
+  const isTowerOrStrategy = /tower|defen[cs]e|wave|turret/.test(combinedContext);
   const isGameOrInteractive =
-    /tower|defen[cs]e|game|canvas|phaser|pixi|three|webgl|enemy|wave|turret|sprite|arcade|player|score/.test(
-      combinedContext,
-    );
+    isFlappyOrArcade ||
+    isTowerOrStrategy ||
+    /game|canvas|phaser|pixi|three|webgl|enemy|sprite|player|score/.test(combinedContext);
   const isApiOrBackend = /fastify|express|nest|prisma|drizzle|postgres|sqlite|graphql|endpoint|webhook/.test(
     combinedContext,
   );
@@ -146,14 +151,136 @@ export async function synthesizeBrainstormSuggestions(
     );
   }
 
+  if (isFlappyOrArcade) {
+    candidates.push(
+      {
+        title: 'Power-Up Collectibles (Shield Bubble, Coin Magnet, Slow-Mo & Score 2x)',
+        rationale:
+          'Spawns collectible power-up orbs between obstacle gaps that grant temporary invulnerability, magnet attraction, or double points with HUD timers.',
+        implementationPrompt:
+          'Read PROJECT.md and implement collectible Power-Ups (Shield Bubble that absorbs 1 hit, Magnet that pulls nearby collectibles, Slow-Mo Feather, and 2x Score Multiplier) with visual aura effects and active duration bars in the HUD. Run npm run build.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+      {
+        title: 'Unlockable Character Skins, Particle Trails & Pet Shop Modal',
+        rationale:
+          'Gives players a compelling reason to collect coins/points by unlocking custom character skins, rainbow/paw particle trails, and accessories persisted in localStorage.',
+        implementationPrompt:
+          'Implement an interactive Character & Trail Customization Shop accessible from the title/game-over screen: let players spend collected currency to unlock and equip character skins and particle trails, persisted in localStorage. Run npm run build.',
+        category: 'ui_ux',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'ui_ux',
+        preferredAgent: 'antigravity',
+        preferredModel: 'argon',
+        suggestedMilestoneCode: 'M3',
+      },
+      {
+        title: 'Dynamic Day/Sunset/Night Parallax Biomes & Weather Effects',
+        rationale:
+          'Smoothly transitions the sky, clouds, and background scenery every 15 points (Sunny Day -> Golden Sunset -> Starry Night -> Sakura/Snowfall) to make long runs visually rewarding.',
+        implementationPrompt:
+          'Add dynamic biome & time-of-day transitions as the player score increases (Day, Sunset, Starry Night) with multi-layer parallax scrolling and subtle ambient weather particles. Run npm run build.',
+        category: 'ui_ux',
+        impact: 'high',
+        effort: 'small',
+        persona: 'ui_ux',
+        preferredAgent: 'antigravity',
+        preferredModel: 'argon',
+        suggestedMilestoneCode: 'M3',
+      },
+      {
+        title: 'Near-Miss Combo Multiplier, Fever Mode & Floating Score Popups',
+        rationale:
+          'Rewards skillful close passes through obstacle centers ("PERFECT +2", "FEVER x3!") with juicy floating text and combo streak feedback.',
+        implementationPrompt:
+          'Implement a Near-Miss / Sweet-Spot Combo system: passing through the center of an obstacle gap increments a combo streak with floating "+2 PERFECT!" popups and triggers Fever Mode visual glow at 5x streak. Run npm run build.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'small',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+      {
+        title: 'Daily Seeded Challenge Mode, Ghost Replay & Shareable Score Card',
+        rationale:
+          'Adds a deterministic Daily Challenge seed so every player faces the exact same obstacle layout each day, plus a Ghost silhouette of their personal best run.',
+        implementationPrompt:
+          'Implement a Daily Challenge mode using a date-seeded PRNG for obstacle generation, record the player best run trajectory to render a semi-transparent Ghost replay, and add a Share Score Card summary on Game Over. Run npm run build.',
+        category: 'feature',
+        impact: 'medium',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+    );
+  }
+
   if (isGameOrInteractive) {
+    candidates.push(
+      {
+        title: 'WebAudio Synthesizer Sound Effects, Particle Explosions & Screen Shake',
+        rationale:
+          'Zero-dependency procedural WebAudio SFX (jump/flap chime, score ding, power-up synth, collision thud) plus floating score popups make gameplay feel visceral and alive.',
+        implementationPrompt:
+          'Add a procedural WebAudio API sound synthesizer (with Mute/Volume toggle in HUD), floating score numbers, particle burst effects, and subtle screen shake on collision. Run npm run build and verify in $EMBERLINE_DEMO_URL.',
+        category: 'ui_ux',
+        impact: 'high',
+        effort: 'small',
+        persona: 'ui_ux',
+        preferredAgent: 'antigravity',
+        preferredModel: 'argon',
+        suggestedMilestoneCode: 'M3',
+      },
+      {
+        title: 'Persistent Meta-Progression, Achievements & LocalStorage Leaderboard',
+        rationale:
+          'Tracks lifetime statistics, top 10 local high scores, and 8 unlockable achievement badges with animated toast notifications.',
+        implementationPrompt:
+          'Implement a High Score Leaderboard & Stats modal and 8 unlockable Achievements (e.g. First 10 Points, 5x Combo, Survivor) persisted in localStorage with in-game toast banners when unlocked. Run npm run build.',
+        category: 'architecture',
+        impact: 'medium',
+        effort: 'medium',
+        persona: 'architect',
+        preferredAgent: 'claude',
+        preferredModel: 'fable',
+        suggestedMilestoneCode: 'M3',
+      },
+      {
+        title: '60 FPS Render Loop Optimization, Object Pooling & Automated Playtest Suite',
+        rationale:
+          'Eliminates garbage-collection frame drops on mobile devices by pooling particles/obstacles and adds deterministic simulation tests.',
+        implementationPrompt:
+          'Optimize rendering and simulation performance using object pooling, ensure responsive touch/click latency on mobile viewports, and add automated tests verifying physics, collision bounds, and scoring. Run npm run build.',
+        category: 'performance',
+        impact: 'medium',
+        effort: 'small',
+        persona: 'qa',
+        preferredAgent: 'claude',
+        preferredModel: 'sonnet',
+        suggestedMilestoneCode: 'M4',
+      },
+    );
+  }
+
+  if (isTowerOrStrategy) {
     candidates.push(
       {
         title: 'Boss Waves, Elite Enemy Modifiers & Special Abilities',
         rationale:
           'Adds strategic depth and excitement every 5th/10th wave with unique boss mechanics (shield aura, speed burst, summoners) and boss health bar HUD.',
         implementationPrompt:
-          'Read PROJECT.md and implement Boss Waves & Elite Enemy Modifiers: every 5 waves spawn a Boss unit with a dedicated Boss HP bar at the top of the HUD, unique abilities (e.g. armor aura or minion spawn), and bonus reward currency. Run npm run build when complete.',
+          'Read PROJECT.md and implement Boss Waves & Elite Enemy Modifiers: every 5 waves spawn a Boss unit with a dedicated Boss HP bar at the top of the HUD, unique abilities, and bonus reward currency. Run npm run build when complete.',
         category: 'feature',
         impact: 'high',
         effort: 'medium',
@@ -167,7 +294,7 @@ export async function synthesizeBrainstormSuggestions(
         rationale:
           'Lets players customize their defense strategy with branching upgrade paths (e.g. Sniper vs Rapid-Fire, AoE Frost vs Chain Lightning).',
         implementationPrompt:
-          'Implement a branching Tower Upgrade & Specialization Tree in the game engine and selection panel: allow towers at max base level to specialize into 1 of 2 unique Tier-3 paths with distinct visual styling and combat effects. Run npm run build.',
+          'Implement a branching Tower Upgrade & Specialization Tree in the game engine and selection panel: allow towers at max base level to specialize into 1 of 2 unique Tier-3 paths. Run npm run build.',
         category: 'feature',
         impact: 'high',
         effort: 'medium',
@@ -175,62 +302,6 @@ export async function synthesizeBrainstormSuggestions(
         preferredAgent: 'claude',
         preferredModel: 'opus',
         suggestedMilestoneCode: 'M2',
-      },
-      {
-        title: 'WebAudio Synthesizer Sound Effects, Particle Explosions & Screen Shake',
-        rationale:
-          'Zero-dependency procedural WebAudio SFX (laser, cannon, hit, wave horn, upgrade chime) plus floating damage numbers make gameplay feel visceral and alive.',
-        implementationPrompt:
-          'Add a procedural WebAudio API sound synthesizer (with Mute/Volume toggle in HUD), floating damage numbers, particle burst effects on enemy defeat, and subtle screen shake on boss hits. Run npm run build and verify in $EMBERLINE_DEMO_URL.',
-        category: 'ui_ux',
-        impact: 'high',
-        effort: 'small',
-        persona: 'ui_ux',
-        preferredAgent: 'antigravity',
-        preferredModel: 'argon',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: 'Tactical Minimap, Game Speed Controls (1x / 2x / 4x) & Wave Preview Strip',
-        rationale:
-          'Quality-of-life HUD improvements so players can preview upcoming enemy compositions, fast-forward early waves, and auto-start waves.',
-        implementationPrompt:
-          'Enhance the game HUD with a Next-Wave Enemy Composition preview strip, 1x / 2x / 4x game speed multiplier buttons, Auto-Wave toggle, and keyboard shortcuts (Space to pause, 1-4 to select towers). Run npm run build.',
-        category: 'ui_ux',
-        impact: 'high',
-        effort: 'small',
-        persona: 'ui_ux',
-        preferredAgent: 'antigravity',
-        preferredModel: 'argon',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: 'Persistent Meta-Progression, Achievements & LocalStorage Save/Resume',
-        rationale:
-          'Automatically saves mid-run state to localStorage so browser refreshes never lose progress, plus unlockable achievements and high-score hall of fame.',
-        implementationPrompt:
-          'Implement automatic mid-game state persistence in localStorage (Continue Run button on title screen), a High Score Leaderboard modal, and 8 unlockable Achievements with toast notifications. Run npm run build.',
-        category: 'architecture',
-        impact: 'medium',
-        effort: 'medium',
-        persona: 'architect',
-        preferredAgent: 'claude',
-        preferredModel: 'fable',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: '60 FPS Render Loop Optimization, Object Pooling & Automated Playtest Suite',
-        rationale:
-          'Eliminates garbage-collection frame drops during heavy late-game waves by pooling projectiles/particles and adds deterministic simulation tests.',
-        implementationPrompt:
-          'Optimize rendering and simulation performance using projectile/particle object pooling, add an optional FPS/entity telemetry counter in the corner, and add automated tests verifying wave spawning, tower targeting, and economy math. Run npm run build.',
-        category: 'performance',
-        impact: 'medium',
-        effort: 'small',
-        persona: 'qa',
-        preferredAgent: 'claude',
-        preferredModel: 'sonnet',
-        suggestedMilestoneCode: 'M4',
       },
     );
   } else if (isApiOrBackend) {
@@ -268,6 +339,20 @@ export async function synthesizeBrainstormSuggestions(
 
   // Universal high-value software factory suggestions
   candidates.push(
+    {
+      title: 'Mobile Touch Ergonomics, Safe-Area Viewport Fit & Haptic Feedback',
+      rationale:
+        'Ensures full-screen edge-to-edge responsiveness on iOS/Android viewports (100dvh, safe-area-inset) with optional navigator.vibrate haptic feedback.',
+      implementationPrompt:
+        'Audit and refine mobile viewport sizing (100dvh, safe-area-inset padding, touch-action: manipulation, zero overscroll bounce) and add subtle haptic feedback on mobile devices. Run npm run build.',
+      category: 'ui_ux',
+      impact: 'high',
+      effort: 'small',
+      persona: 'ui_ux',
+      preferredAgent: 'antigravity',
+      preferredModel: 'argon',
+      suggestedMilestoneCode: 'M3',
+    },
     {
       title: 'Interactive Onboarding Tour, Command Shortcuts & Empty-State Polish',
       rationale:
@@ -312,8 +397,13 @@ export async function synthesizeBrainstormSuggestions(
     },
   );
 
-  const filtered = candidates.filter((c) => !existingTitles.has(c.title.toLowerCase()));
-  return filtered.slice(0, 8).map((c) => ({
+  const notInRoadmap = candidates.filter((c) => !existingTitles.has(c.title.toLowerCase()));
+  // Prioritize candidates that are NOT currently shown so clicking "Synthesize Ideas" rotates in fresh ideas
+  const unseen = notInRoadmap.filter((c) => !currentSuggestionTitles.has(c.title.toLowerCase()));
+  const alreadyShown = notInRoadmap.filter((c) => currentSuggestionTitles.has(c.title.toLowerCase()));
+  const ordered = [...unseen, ...alreadyShown];
+
+  return ordered.slice(0, 6).map((c) => ({
     ...c,
     id: `sug-${randomUUID().slice(0, 8)}`,
   }));
@@ -462,6 +552,12 @@ async function readOrInitRoadmapFile(
   const linkedTicketIds = new Set<string>();
 
   for (const ms of stored.milestones) {
+    // Strip any accidental brainstorm meta-tickets that may have been imported earlier
+    ms.items = ms.items.filter(
+      (i) =>
+        !i.title.startsWith('[Factory] Brainstorm & Roadmap Expansion') &&
+        !i.title.startsWith('[Brainstorm]'),
+    );
     for (const item of ms.items) {
       if (item.ticketId) {
         linkedTicketIds.add(item.ticketId);
@@ -476,9 +572,15 @@ async function readOrInitRoadmapFile(
     }
   }
 
-  // Import any Kanban tickets not yet represented in the roadmap
+  // Import any Kanban tickets not yet represented in the roadmap (excluding brainstorm meta-tickets)
   for (const t of projectTickets) {
     if (linkedTicketIds.has(t.id)) continue;
+    if (
+      t.title.startsWith('[Factory] Brainstorm & Roadmap Expansion') ||
+      t.title.startsWith('[Brainstorm]')
+    ) {
+      continue;
+    }
     const msIdx = milestoneIndexForPersona(t.persona);
     const ms = stored.milestones[msIdx] ?? stored.milestones[0];
     if (!ms) continue;
@@ -702,12 +804,14 @@ export async function runProjectBrainstorm(
   const existingTitles = new Set(
     stored.milestones.flatMap((m) => m.items.map((i) => i.title.toLowerCase())),
   );
+  const currentSuggestionTitles = new Set(stored.suggestions.map((s) => s.title.toLowerCase()));
 
   const freshSuggestions = await synthesizeBrainstormSuggestions(
     project,
     blueprint.content,
     existingTitles,
     input.focus ?? '',
+    currentSuggestionTitles,
   );
 
   // Merge fresh suggestions at the top while deduplicating by title
@@ -719,7 +823,7 @@ export async function runProjectBrainstorm(
     seen.add(key);
     merged.push(s);
   }
-  stored.suggestions = merged.slice(0, 12);
+  stored.suggestions = merged.slice(0, 8);
   await saveRoadmapFile(project, stored);
 
   let agentRun = null;
@@ -728,21 +832,18 @@ export async function runProjectBrainstorm(
       ? `Focus especially on: "${input.focus.trim()}".`
       : 'Cover high-impact gameplay/product features, UI/UX polish, architecture, and QA.';
     const prompt = [
-      `Brainstorm & Roadmap Expansion for **${project.name}**:`,
+      `Brainstorm & Roadmap Ideation for **${project.name}** (Read-Only Analysis + JSON Output):`,
       `${focusClause}`,
-      `1. Read PROJECT.md and inspect the codebase.`,
-      `2. Write 4 to 6 creative, concrete, high-value feature suggestions to \`.emberline/brainstorm-suggestions.json\` with the exact JSON format:`,
+      `1. Read PROJECT.md and inspect the codebase structure.`,
+      `2. Write 4 to 6 creative, concrete, high-value feature suggestions to \`${project.path}/.emberline/brainstorm-suggestions.json\` with the exact JSON format:`,
       `{"suggestions": [{"title": "...", "rationale": "Why this makes the project great", "implementationPrompt": "Detailed instructions for the coding agent", "category": "feature|ui_ux|architecture|performance|qa_security", "impact": "high|medium", "effort": "small|medium|large", "persona": "coder|ui_ux|architect|dba|qa|security", "preferredAgent": "claude|antigravity|copilot", "preferredModel": "fable|opus|sonnet|argon", "suggestedMilestoneCode": "M2|M3|M4"}]}`,
-      `3. Update PROJECT.md Section 6 if new milestones or roadmap items should be documented.`,
+      `3. IMPORTANT: Do NOT create or modify \`.emberline/new-tickets.json\` and do NOT start implementation changes. Only write \`${project.path}/.emberline/brainstorm-suggestions.json\` so the user can review and select suggestions in the Roadmap Studio.`,
     ].join('\n');
 
-    const res = await ticketService.submitFactoryRequest(project.id, {
+    agentRun = await ticketService.startBrainstormRun(project.id, {
       prompt,
-      leadPersona: input.leadPersona ?? 'product_owner',
-      permissionMode: 'acceptEdits',
-      autoDispatch: false,
+      persona: input.leadPersona ?? 'product_owner',
     });
-    agentRun = res.run;
   }
 
   return {

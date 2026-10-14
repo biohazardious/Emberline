@@ -177,6 +177,41 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
+   * Starts or returns an active single-flight AI Brainstorming run for `projectId`
+   * WITHOUT creating a Kanban ticket or triggering `.emberline/new-tickets.json` creation.
+   */
+  async startBrainstormRun(
+    projectId: string,
+    opts: { prompt: string; persona?: AgentPersona },
+  ): Promise<Run> {
+    this.project(projectId);
+    const existing = this.runs.list().find(
+      (r) =>
+        r.projectId === projectId &&
+        !r.endedAt &&
+        r.state !== 'done' &&
+        r.state !== 'failed' &&
+        Boolean(r.title?.includes('[Brainstorm]')),
+    );
+    if (existing) {
+      return existing;
+    }
+
+    return this.scheduler.submit(
+      {
+        projectId,
+        persona: opts.persona ?? 'product_owner',
+        model: 'fable',
+        prompt: opts.prompt,
+        permissionMode: 'acceptEdits',
+      },
+      {
+        title: '[Brainstorm] Feature & Roadmap Ideation',
+      },
+    );
+  }
+
+  /**
    * Creates 1..N specialist tickets delegated by an agent (via `.emberline/new-tickets.json`
    * or `POST /api/internal/agent/tickets`) and optionally starts the sequential pipeline.
    */
