@@ -169,12 +169,13 @@ export function generateProjectBlueprint(input: BlueprintGeneratorInput): string
   const appLabel = APP_TYPE_LABELS[input.appType] ?? APP_TYPE_LABELS.custom;
   const stack = input.techStack;
   const stackLines: string[] = [];
-  if (stack?.language) stackLines.push(`- **Primary Language:** ${stack.language}`);
-  if (stack?.frontend) stackLines.push(`- **Frontend Framework:** ${stack.frontend}`);
-  if (stack?.backend) stackLines.push(`- **Backend / Runtime:** ${stack.backend}`);
-  if (stack?.database) stackLines.push(`- **Database & ORM:** ${stack.database}`);
-  if (stack?.styling) stackLines.push(`- **UI & Styling:** ${stack.styling}`);
-  if (stack?.testing) stackLines.push(`- **Testing & QA:** ${stack.testing}`);
+  if (stack?.versionPolicy) stackLines.push(`- **Release & Version Policy:** ${stack.versionPolicy}`);
+  if (stack?.language) stackLines.push(`- **Primary Language & Runtime:** ${stack.language}`);
+  if (stack?.frontend) stackLines.push(`- **Frontend / Surface Layer:** ${stack.frontend}`);
+  if (stack?.backend) stackLines.push(`- **Backend / Core Runtime:** ${stack.backend}`);
+  if (stack?.database) stackLines.push(`- **Database & Persistence:** ${stack.database}`);
+  if (stack?.styling) stackLines.push(`- **UI / Styling / Output:** ${stack.styling}`);
+  if (stack?.testing) stackLines.push(`- **Testing & Verification:** ${stack.testing}`);
 
   const stackSection =
     stackLines.length > 0

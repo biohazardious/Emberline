@@ -67,12 +67,13 @@ export const ProjectAppType = z.enum([
 export type ProjectAppType = z.infer<typeof ProjectAppType>;
 
 export const ProjectTechStack = z.object({
-  language: z.string().max(100).default(''),
-  frontend: z.string().max(100).default(''),
-  backend: z.string().max(100).default(''),
-  database: z.string().max(100).default(''),
-  styling: z.string().max(100).default(''),
-  testing: z.string().max(100).default(''),
+  language: z.string().max(200).default(''),
+  frontend: z.string().max(200).default(''),
+  backend: z.string().max(200).default(''),
+  database: z.string().max(200).default(''),
+  styling: z.string().max(200).default(''),
+  testing: z.string().max(200).default(''),
+  versionPolicy: z.string().max(200).optional(),
 });
 export type ProjectTechStack = z.infer<typeof ProjectTechStack>;
 
