@@ -744,7 +744,9 @@ export type AgentCreateTicketsPayload = z.input<typeof AgentCreateTicketsPayload
 export const FactoryRequestBody = z.object({
   prompt: z.string().trim().min(1).max(20_000),
   leadPersona: AgentPersona.default('product_owner'),
-  permissionMode: PermissionMode.default('acceptEdits'),
+  permissionMode: z
+    .preprocess((v) => (v === 'auto' ? 'acceptEdits' : v), PermissionMode)
+    .default('acceptEdits'),
   autoDispatch: z.boolean().default(true),
 });
 export type FactoryRequestBody = z.input<typeof FactoryRequestBody>;
