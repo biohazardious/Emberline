@@ -38,7 +38,40 @@ export type SetupBody = z.infer<typeof SetupBody>;
 export const LoginBody = z.object({ password: z.string().min(1).max(1024) });
 export type LoginBody = z.infer<typeof LoginBody>;
 
-// --- projects ---------------------------------------------------------------
+// --- projects & AI factory metadata -----------------------------------------
+
+/** Specialized AI Coding Factory agent personas. */
+export const AgentPersona = z.enum([
+  'product_owner',
+  'architect',
+  'ui_ux',
+  'coder',
+  'dba',
+  'qa',
+  'security',
+]);
+export type AgentPersona = z.infer<typeof AgentPersona>;
+
+export const ProjectAppType = z.enum([
+  'web_saas',
+  'fullstack',
+  'api_service',
+  'cli_tool',
+  'mobile_desktop',
+  'library',
+  'custom',
+]);
+export type ProjectAppType = z.infer<typeof ProjectAppType>;
+
+export const ProjectTechStack = z.object({
+  language: z.string().max(100).default(''),
+  frontend: z.string().max(100).default(''),
+  backend: z.string().max(100).default(''),
+  database: z.string().max(100).default(''),
+  styling: z.string().max(100).default(''),
+  testing: z.string().max(100).default(''),
+});
+export type ProjectTechStack = z.infer<typeof ProjectTechStack>;
 
 /** https://, ssh:// or scp-style git@host:path. Never starts with "-" (no git option injection). */
 const RepoUrl = z
@@ -54,12 +87,16 @@ export const Project = z.object({
   repoUrl: z.string().nullable(),
   defaultBranch: z.string(),
   path: z.string(),
+  appType: ProjectAppType,
+  description: z.string(),
+  techStack: ProjectTechStack.nullable(),
   createdAt: z.string(),
 });
 export type Project = z.infer<typeof Project>;
 
 export const CreateProjectBody = z.object({
   name: z.string().trim().min(1).max(80),
+  mode: z.enum(['manual', 'wizard']).default('manual'),
   repoUrl: RepoUrl.optional().or(z.literal('').transform(() => undefined)),
   defaultBranch: z
     .string()
@@ -67,6 +104,13 @@ export const CreateProjectBody = z.object({
     .regex(/^[A-Za-z0-9._/-]+$/)
     .max(200)
     .default('main'),
+  appType: ProjectAppType.default('custom'),
+  description: z.string().trim().max(4000).default(''),
+  techStack: ProjectTechStack.optional(),
+  architectureNotes: z.string().trim().max(20_000).optional(),
+  referenceDocs: z.string().trim().max(40_000).optional(),
+  initGit: z.boolean().optional(),
+  seedStarterTickets: z.boolean().default(false),
 });
 export type CreateProjectBody = z.input<typeof CreateProjectBody>;
 
@@ -76,6 +120,53 @@ export const CreateProjectResponse = z.object({
   terminalId: z.string().nullable(),
 });
 export type CreateProjectResponse = z.infer<typeof CreateProjectResponse>;
+
+export const ProjectBlueprintResponse = z.object({
+  projectId: z.string(),
+  exists: z.boolean(),
+  content: z.string(),
+  path: z.string(),
+});
+export type ProjectBlueprintResponse = z.infer<typeof ProjectBlueprintResponse>;
+
+export const UpdateProjectBlueprintBody = z.object({
+  content: z.string().max(200_000),
+});
+export type UpdateProjectBlueprintBody = z.input<typeof UpdateProjectBlueprintBody>;
+
+export const ActiveProjectPreference = z.object({
+  activeProjectId: z.string().nullable(),
+});
+export type ActiveProjectPreference = z.infer<typeof ActiveProjectPreference>;
+
+export const ProjectRecommendation = z.object({
+  id: z.string(),
+  priority: z.enum(['high', 'medium', 'low']),
+  category: z.enum(['blueprint', 'backlog', 'execution', 'qa', 'review']),
+  title: z.string(),
+  description: z.string(),
+  persona: AgentPersona,
+  actionLabel: z.string(),
+  actionType: z.enum(['open_blueprint', 'seed_tickets', 'start_run', 'open_board', 'open_review']),
+  prompt: z.string().optional(),
+  runId: z.string().optional(),
+});
+export type ProjectRecommendation = z.infer<typeof ProjectRecommendation>;
+
+/** Claude Code `--permission-mode`. `bypassPermissions` is only sane inside the isolated runner. */
+export const PermissionMode = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
+export type PermissionMode = z.infer<typeof PermissionMode>;
+
+export const TaskTemplate = z.object({
+  id: z.string(),
+  label: z.string(),
+  category: z.string(),
+  persona: AgentPersona,
+  permissionMode: PermissionMode,
+  titlePlaceholder: z.string(),
+  promptTemplate: z.string(),
+});
+export type TaskTemplate = z.infer<typeof TaskTemplate>;
 
 // --- terminals --------------------------------------------------------------
 
@@ -139,10 +230,6 @@ export type RunState = z.infer<typeof RunState>;
 export const AgentId = z.enum(['claude', 'codex', 'aider']);
 export type AgentId = z.infer<typeof AgentId>;
 
-/** Claude Code `--permission-mode`. `bypassPermissions` is only sane inside the isolated runner. */
-export const PermissionMode = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
-export type PermissionMode = z.infer<typeof PermissionMode>;
-
 export const Run = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -151,6 +238,7 @@ export const Run = z.object({
   /** Display title (e.g. "DP-1 Fix login" for ticket runs); null for ad-hoc runs. */
   title: z.string().nullable(),
   agent: z.string(),
+  persona: AgentPersona,
   state: RunState,
   prompt: z.string(),
   permissionMode: PermissionMode,
@@ -172,6 +260,7 @@ export type Run = z.infer<typeof Run>;
 export const CreateRunBody = z.object({
   projectId: z.string().min(1),
   agent: AgentId.default('claude'),
+  persona: AgentPersona.default('coder'),
   prompt: z.string().trim().max(20_000).default(''),
   permissionMode: PermissionMode.default('default'),
 });
@@ -252,6 +341,7 @@ export const Ticket = z.object({
   key: z.string(),
   title: z.string(),
   body: z.string(),
+  persona: AgentPersona,
   status: TicketStatus,
   priority: TicketPriority,
   /** Sort order inside a column (ascending). */
@@ -264,6 +354,7 @@ export type Ticket = z.infer<typeof Ticket>;
 export const CreateTicketBody = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().max(20_000).default(''),
+  persona: AgentPersona.default('coder'),
   priority: TicketPriority.default(1),
   status: TicketStatus.default('backlog'),
 });
@@ -273,6 +364,7 @@ export const UpdateTicketBody = z
   .object({
     title: z.string().trim().min(1).max(200),
     body: z.string().max(20_000),
+    persona: AgentPersona,
     priority: TicketPriority,
     status: TicketStatus,
     position: z.number().finite(),
@@ -280,7 +372,10 @@ export const UpdateTicketBody = z
   .partial();
 export type UpdateTicketBody = z.input<typeof UpdateTicketBody>;
 
-export const StartTicketBody = z.object({ permissionMode: PermissionMode.default('default') });
+export const StartTicketBody = z.object({
+  permissionMode: PermissionMode.default('default'),
+  persona: AgentPersona.optional(),
+});
 export type StartTicketBody = z.input<typeof StartTicketBody>;
 
 /** Follow-up prompt typed into the ticket's live run. */

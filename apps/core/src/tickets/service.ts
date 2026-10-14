@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
+  type AgentPersona,
   type CreateTicketBody,
   CreateTicketBody as CreateTicketBodySchema,
   type Run,
@@ -37,6 +38,7 @@ export const toTicket = (row: TicketRow): Ticket => ({
   body: row.body,
   status: row.status as TicketStatus,
   priority: row.priority,
+  persona: (row.persona as AgentPersona) ?? 'coder',
   position: row.position,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
@@ -127,6 +129,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           body: body.body,
           status: body.status,
           priority: body.priority,
+          persona: body.persona,
           position: this.edgePosition(projectId, body.status, 'bottom'),
           createdAt: now,
           updatedAt: now,
@@ -161,10 +164,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   async start(id: string, input: StartTicketBody): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
     if (this.runs.activeRunForTicket(id)) throw conflict('this ticket already has a running agent');
-    const { permissionMode } = StartTicketBodySchema.parse(input);
+    const { permissionMode, persona } = StartTicketBodySchema.parse(input);
     const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
     const run = await this.scheduler.submit(
-      { projectId: ticket.projectId, prompt: ticketPrompt(ticket), permissionMode },
+      {
+        projectId: ticket.projectId,
+        prompt: ticketPrompt(ticket),
+        permissionMode,
+        persona: persona ?? ticket.persona,
+      },
       {
         ticketId: id,
         branch: `emberline/${ticket.key.toLowerCase()}${slug ? `-${slug}` : ''}`,

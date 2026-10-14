@@ -8,12 +8,15 @@ import {
   buildSecondaryCliLaunchSpec,
   CLAUDE_ADAPTER_ID,
   CONTINUE_PROMPT,
+  decoratePromptWithPersona,
   nextStateFromHook,
+  PERSONA_CATALOG,
   type RateLimitInfo,
   rateLimitFromHook,
   stateAfterExit,
 } from '@emberline/adapter-claude';
 import {
+  type AgentPersona,
   type CreateRunBody,
   CreateRunBody as CreateRunBodySchema,
   type DiffScope,
@@ -101,6 +104,7 @@ export const toRun = (row: RunRow): Run => ({
   ticketId: row.ticketId,
   title: row.title,
   agent: row.agent,
+  persona: (row.persona as AgentPersona) ?? 'coder',
   state: row.state as RunState,
   prompt: row.prompt,
   permissionMode: row.permissionMode as Run['permissionMode'],
@@ -211,6 +215,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         projectId: project.id,
         ticketId: origin?.ticketId ?? null,
         agent: body.agent ?? CLAUDE_ADAPTER_ID,
+        persona: body.persona ?? 'coder',
         state: 'queued',
         prompt: body.prompt,
         permissionMode: body.permissionMode,
@@ -288,6 +293,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       patch: { hookTokenHash: sha256(hookToken), endedAt: null },
     });
 
+    const persona = (row.persona as AgentPersona) ?? 'coder';
+    const effectivePrompt =
+      options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
+
     const isSecondary = row.agent === 'codex' || row.agent === 'aider';
     const spec = isSecondary
       ? buildSecondaryCliLaunchSpec({
@@ -297,7 +306,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           coreUrl: this.config.hookUrl,
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
-          prompt: options.prompt,
+          prompt: effectivePrompt,
         })
       : buildLaunchSpec({
           runId: row.id,
@@ -306,13 +315,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           claudeCommand: this.config.claudeCommand,
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
-          prompt: options.prompt,
+          prompt: effectivePrompt,
           resumeSessionId: options.resumeSessionId,
           playwrightMcp:
             process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' || process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true',
         });
 
     const agentLabel = row.agent === 'codex' ? 'Codex' : row.agent === 'aider' ? 'Aider' : 'Claude';
+    const personaPrefix =
+      persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
     try {
       const session = await ptyd.spawn({
         file: spec.file,
@@ -323,7 +334,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           kind: 'agent',
           runId: row.id,
           projectId: row.projectId,
-          title: `${agentLabel} · ${row.title ?? project.name}`,
+          title: `${personaPrefix}${agentLabel} · ${row.title ?? project.name}`,
         },
       });
       return this.record(row.id, {

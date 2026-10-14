@@ -1,9 +1,11 @@
-import type { Project, SystemStatus } from '@emberline/protocol';
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import type { ActiveProjectPreference, Project, SystemStatus } from '@emberline/protocol';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api } from './api';
 import { AuthGate, useAuth } from './auth';
 import { CommandPalette } from './components/CommandPalette';
+import { PersonaBadge } from './components/PersonaBadge';
+import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { RunInspector } from './components/RunInspector';
 import { RunStatePill } from './components/RunStatePill';
 import { usePoll } from './hooks/usePoll';
@@ -17,6 +19,8 @@ const BoardPage = lazy(() => import('./pages/BoardPage').then((m) => ({ default:
 const FleetPage = lazy(() => import('./pages/FleetPage').then((m) => ({ default: m.FleetPage })));
 const ReviewPage = lazy(() => import('./pages/ReviewPage').then((m) => ({ default: m.ReviewPage })));
 
+const ACTIVE_PROJECT_STORAGE_KEY = 'emberline.activeProjectId';
+
 export function App() {
   return (
     <AuthGate>
@@ -27,18 +31,66 @@ export function App() {
 
 function Shell() {
   const { logout } = useAuth();
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const system = usePoll(() => api<SystemStatus>('/api/system'), 5_000);
   const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
   const { runs } = useRuns();
   const { scheduler } = useScheduler();
 
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [inspectRunId, setInspectRunId] = useState<string>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const ptyd = system.data?.ptyd ?? 'connecting';
+
+  const selectProject = useCallback(
+    (id: string | null) => {
+      setActiveProjectId(id);
+      try {
+        if (id) localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, id);
+        else localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      void api<ActiveProjectPreference>('/api/projects/active', 'PUT', { activeProjectId: id }).catch(() => undefined);
+    },
+    [],
+  );
+
+  // Sync initial active project preference from server if local preference is missing or stale
+  useEffect(() => {
+    const list = projects.data;
+    if (!list || list.length === 0) return;
+    if (activeProjectId && list.some((p) => p.id === activeProjectId)) return;
+
+    void api<ActiveProjectPreference>('/api/projects/active')
+      .then((pref) => {
+        const candidate = pref.activeProjectId && list.some((p) => p.id === pref.activeProjectId)
+          ? pref.activeProjectId
+          : list[0]?.id ?? null;
+        if (candidate) selectProject(candidate);
+      })
+      .catch(() => {
+        if (list[0]) selectProject(list[0].id);
+      });
+  }, [projects.data, activeProjectId, selectProject]);
+
+  // If the user navigates directly to /projects/:id/board, sync activeProjectId
+  useEffect(() => {
+    const match = /^\/projects\/([^/]+)\/board/.exec(location);
+    if (match?.[1] && match[1] !== activeProjectId) {
+      selectProject(match[1]);
+    }
+  }, [location, activeProjectId, selectProject]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -56,6 +108,10 @@ function Shell() {
   }, [location]);
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
+  const activeProject = useMemo(
+    () => (activeProjectId ? projectById.get(activeProjectId) : undefined) ?? projects.data?.[0],
+    [activeProjectId, projectById, projects.data],
+  );
 
   const activeRuns = useMemo(() => {
     const list = (runs ?? []).filter((r) => !r.endedAt);
@@ -67,6 +123,19 @@ function Shell() {
 
   const waitingRuns = useMemo(() => activeRuns.filter((r) => r.state === 'waiting_input'), [activeRuns]);
   const inspectedRun = useMemo(() => (runs ?? []).find((r) => r.id === inspectRunId), [runs, inspectRunId]);
+
+  const handleSwitchProject = (nextId: string) => {
+    if (nextId === '__new__') {
+      setWizardOpen(true);
+      return;
+    }
+    const targetId = nextId || null;
+    selectProject(targetId);
+    // When currently viewing a project board, switch directly to the new project's board!
+    if (targetId && /^\/projects\/[^/]+\/board/.test(location)) {
+      navigate(`/projects/${targetId}/board`);
+    }
+  };
 
   return (
     <div className={`app workbench${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
@@ -87,6 +156,47 @@ function Shell() {
           </button>
         </div>
 
+        {!sidebarCollapsed && (
+          <div
+            style={{
+              padding: '0 8px 8px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span className="eyebrow">Active Project</span>
+              <button
+                id="sidebar-new-project"
+                type="button"
+                className="btn btn-sm btn-ghost"
+                style={{ padding: '2px 6px', fontSize: '0.75rem' }}
+                onClick={() => setWizardOpen(true)}
+                title="Create new project with AI Factory Wizard or Git Clone"
+              >
+                + New
+              </button>
+            </div>
+            <select
+              id="project-switcher"
+              className="input"
+              aria-label="Switch active project"
+              style={{ width: '100%', padding: '6px 8px', fontSize: '0.85rem' }}
+              value={activeProject?.id ?? ''}
+              onChange={(e) => handleSwitchProject(e.target.value)}
+            >
+              {(projects.data?.length ?? 0) === 0 && <option value="">No projects yet</option>}
+              {(projects.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+              <option value="__new__">+ Create New Project…</option>
+            </select>
+          </div>
+        )}
+
         <button
           id="cmd-trigger"
           type="button"
@@ -101,8 +211,17 @@ function Shell() {
         <nav className="sidebar-nav" aria-label="Main views">
           <Link href="/" className={`nav-item${location === '/' ? ' active' : ''}`}>
             <span className="nav-icon mono">◈</span>
-            <span className="nav-label">Overview</span>
+            <span className="nav-label">Factory Overview</span>
           </Link>
+          {activeProject && (
+            <Link
+              href={`/projects/${activeProject.id}/board`}
+              className={`nav-item${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
+            >
+              <span className="nav-icon mono">▤</span>
+              <span className="nav-label">{activeProject.name} Board</span>
+            </Link>
+          )}
           <Link id="nav-fleet" href="/fleet" className={`nav-item${location === '/fleet' ? ' active' : ''}`}>
             <span className="nav-icon mono">⊞</span>
             <span className="nav-label">Fleet Multiplexer</span>
@@ -116,15 +235,20 @@ function Shell() {
 
         <div className="sidebar-section">
           <div className="sidebar-section-head">
-            <span className="eyebrow">Boards</span>
+            <span className="eyebrow">All Workspaces</span>
             <span className="sidebar-count mono">{projects.data?.length ?? 0}</span>
           </div>
           <ul className="sidebar-list">
             {(projects.data ?? []).map((p) => {
               const boardHref = `/projects/${p.id}/board`;
+              const isSelected = activeProject?.id === p.id;
               return (
                 <li key={p.id}>
-                  <Link href={boardHref} className={`nav-item${location === boardHref ? ' active' : ''}`}>
+                  <Link
+                    href={boardHref}
+                    onClick={() => selectProject(p.id)}
+                    className={`nav-item${location === boardHref || (location === '/' && isSelected) ? ' active' : ''}`}
+                  >
                     <span className="nav-icon mono">#</span>
                     <span className="nav-label">{p.name}</span>
                   </Link>
@@ -153,6 +277,7 @@ function Shell() {
                   >
                     <span className={`dot run-${r.state}`} />
                     <span className="nav-label">{title}</span>
+                    {r.persona && r.persona !== 'coder' && <PersonaBadge persona={r.persona} />}
                     <RunStatePill state={r.state} />
                   </button>
                 </li>
@@ -194,6 +319,14 @@ function Shell() {
               <Link href="/" className={`topbar-tab${location === '/' ? ' active' : ''}`}>
                 Overview
               </Link>
+              {activeProject && (
+                <Link
+                  href={`/projects/${activeProject.id}/board`}
+                  className={`topbar-tab${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
+                >
+                  {activeProject.name} Board
+                </Link>
+              )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
                 Fleet
                 {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
@@ -202,6 +335,14 @@ function Shell() {
           </div>
 
           <div className="topbar-right">
+            <button
+              id="topbar-new-project"
+              type="button"
+              className="btn btn-sm hide-sm"
+              onClick={() => setWizardOpen(true)}
+            >
+              + New Project
+            </button>
             {waitingRuns[0] && (
               <button
                 id="attention-pill"
@@ -263,7 +404,13 @@ function Shell() {
               </Route>
               <Route path="/">
                 <h1 className="sr-only">Emberline dashboard</h1>
-                <Dashboard system={system.data} onInspectRun={(id) => setInspectRunId(id)} />
+                <Dashboard
+                  system={system.data}
+                  activeProjectId={activeProject?.id ?? null}
+                  onSelectProject={selectProject}
+                  onOpenWizard={() => setWizardOpen(true)}
+                  onInspectRun={(id) => setInspectRunId(id)}
+                />
               </Route>
               <Route>
                 <div className="empty">
@@ -284,6 +431,17 @@ function Shell() {
           )}
         </div>
       </div>
+
+      <ProjectWizardModal
+        open={wizardOpen}
+        runnerDown={ptyd !== 'connected'}
+        onClose={() => setWizardOpen(false)}
+        onCreated={async (res) => {
+          await projects.refresh();
+          selectProject(res.project.id);
+          if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
+        }}
+      />
 
       <CommandPalette
         open={cmdOpen}

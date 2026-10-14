@@ -22,6 +22,10 @@ export const projects = sqliteTable('projects', {
   defaultBranch: text('default_branch').notNull().default('main'),
   /** Absolute path inside the shared workspaces volume. */
   path: text('path').notNull(),
+  /** Factory metadata: application type & structured tech stack. */
+  appType: text('app_type').notNull().default('custom'),
+  description: text('description').notNull().default(''),
+  techStack: text('tech_stack', { mode: 'json' }).$type<Record<string, string> | null>(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
@@ -38,6 +42,7 @@ export const tickets = sqliteTable(
     key: text('key').notNull(),
     title: text('title').notNull(),
     body: text('body').notNull().default(''),
+    persona: text('persona').notNull().default('coder'),
     status: text('status').notNull(),
     priority: integer('priority').notNull().default(1),
     position: real('position').notNull(),
@@ -57,6 +62,7 @@ export const runs = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     ticketId: text('ticket_id').references(() => tickets.id, { onDelete: 'set null' }),
     agent: text('agent').notNull(),
+    persona: text('persona').notNull().default('coder'),
     state: text('state').notNull(),
     prompt: text('prompt').notNull().default(''),
     permissionMode: text('permission_mode').notNull().default('default'),

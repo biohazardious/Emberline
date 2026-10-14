@@ -1,8 +1,10 @@
-import type { PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
+import type { AgentPersona, PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { BlueprintModal } from '../components/BlueprintModal';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
+import { PERSONA_LIST, PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunEventTimeline, STAGE_TEMPLATES } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
@@ -53,6 +55,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [dragId, setDragId] = useState<string>();
   const [drop, setDrop] = useState<DropTarget>();
   const [autoStart, setAutoStart] = useState(true);
+  const [blueprintOpen, setBlueprintOpen] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const [error, setError] = useState<string>();
 
   /** Newest run per ticket (runs arrive newest-first). */
@@ -107,6 +111,19 @@ export function BoardPage({ projectId }: { projectId: string }) {
     setDrop(undefined);
   };
 
+  const seedTickets = async () => {
+    setSeeding(true);
+    setError(undefined);
+    try {
+      const seeded = await api<Ticket[]>(`/api/projects/${projectId}/seed-tickets`, 'POST', {});
+      for (const t of seeded) patchLocal(t);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   const open = tickets?.find((t) => t.id === openId);
 
   return (
@@ -122,6 +139,27 @@ export function BoardPage({ projectId }: { projectId: string }) {
           </div>
         </div>
         <div className="board-controls">
+          {project && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setBlueprintOpen(true)}
+              title="Open PROJECT.md Blueprint"
+            >
+              PROJECT.md
+            </button>
+          )}
+          {(tickets?.length ?? 0) === 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={seeding}
+              onClick={() => void seedTickets()}
+              title="Seed 4 starter tickets across PO, Architect, Coder, and QA personas"
+            >
+              {seeding ? 'Seeding…' : '✨ Seed Starter Backlog'}
+            </button>
+          )}
           <button
             id="pipeline-auto-start"
             type="button"
@@ -226,6 +264,14 @@ export function BoardPage({ projectId }: { projectId: string }) {
           }}
         />
       )}
+
+      {project && (
+        <BlueprintModal
+          project={project}
+          open={blueprintOpen}
+          onClose={() => setBlueprintOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -240,6 +286,7 @@ function QuickAdd({
   onError: (message: string | undefined) => void;
 }) {
   const [title, setTitle] = useState('');
+  const [persona, setPersona] = useState<AgentPersona>('coder');
   const [busy, setBusy] = useState(false);
 
   const submit = async (event: FormEvent) => {
@@ -248,7 +295,7 @@ function QuickAdd({
     setBusy(true);
     onError(undefined);
     try {
-      onCreated(await api<Ticket>(`/api/projects/${projectId}/tickets`, 'POST', { title }));
+      onCreated(await api<Ticket>(`/api/projects/${projectId}/tickets`, 'POST', { title, persona }));
       setTitle('');
     } catch (e) {
       onError(errorMessage(e));
@@ -259,6 +306,20 @@ function QuickAdd({
 
   return (
     <form className="quick-add" onSubmit={(e) => void submit(e)}>
+      <select
+        className="input"
+        aria-label="Ticket persona"
+        style={{ width: 'auto', padding: '6px 8px', fontSize: '0.82rem' }}
+        value={persona}
+        onChange={(e) => setPersona(e.target.value as AgentPersona)}
+        title="Assign specialist persona for this ticket"
+      >
+        {PERSONA_LIST.map((p) => (
+          <option key={p.id} value={p.id}>
+            [{p.shortLabel}] {p.label}
+          </option>
+        ))}
+      </select>
       <input
         id="ticket-title"
         className="input"
@@ -314,6 +375,7 @@ function TicketCard({
       >
         <div className="card-top">
           <span className="card-key mono">{ticket.key}</span>
+          <PersonaBadge persona={ticket.persona} />
           {shortBranch && <span className="card-branch mono">{shortBranch}</span>}
           <span className="prio-dot" title={`${PRIORITIES[ticket.priority]} priority`} />
         </div>
@@ -346,6 +408,7 @@ function TicketDrawer({
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
   const [priority, setPriority] = useState(ticket.priority);
+  const [persona, setPersona] = useState<AgentPersona>(ticket.persona ?? 'coder');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [followUp, setFollowUp] = useState('');
   const [viewTab, setViewTab] = useState<'details' | 'review' | 'terminal' | 'events'>(
@@ -356,7 +419,11 @@ function TicketDrawer({
   const live = run && !run.endedAt;
   const queued = run?.state === 'queued';
   const canFollowUp = (live && !queued) || run?.resumable === true;
-  const dirty = title.trim() !== ticket.title || body !== ticket.body || priority !== ticket.priority;
+  const dirty =
+    title.trim() !== ticket.title ||
+    body !== ticket.body ||
+    priority !== ticket.priority ||
+    persona !== (ticket.persona ?? 'coder');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -378,14 +445,15 @@ function TicketDrawer({
 
   const save = () =>
     act('save', async () => {
-      onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority }));
+      onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority, persona }));
     });
 
   const start = () =>
     act('start', async () => {
-      if (dirty) await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority });
+      if (dirty) await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority, persona });
       const res = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
         permissionMode: mode,
+        persona,
       });
       onChanged(res.ticket);
     });
@@ -425,6 +493,7 @@ function TicketDrawer({
           <span id="drawer-key" className="card-key mono">
             {ticket.key}
           </span>
+          <PersonaBadge persona={persona} showFull />
           {run && <RunStatePill state={run.state} />}
           {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
           <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
@@ -501,6 +570,14 @@ function TicketDrawer({
 
         {viewTab === 'details' && (
           <>
+            <TaskTemplateBar
+              onSelect={(tpl) => {
+                setPersona(tpl.persona);
+                setMode(tpl.permissionMode);
+                if (!title.trim()) setTitle(tpl.titlePlaceholder);
+                setBody(tpl.promptTemplate);
+              }}
+            />
             <input
               id="drawer-title"
               className="input drawer-title"
@@ -516,6 +593,8 @@ function TicketDrawer({
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
+            <label className="drawer-label">Specialist Persona</label>
+            <PersonaPicker value={persona} onChange={setPersona} />
             <div className="drawer-row">
               <div className="segmented" role="radiogroup" aria-label="Priority">
                 {PRIORITIES.map((label, value) => (

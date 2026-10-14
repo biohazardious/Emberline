@@ -1,5 +1,6 @@
 import type {
   AgentId,
+  AgentPersona,
   CreateProjectResponse,
   PermissionMode,
   Project,
@@ -10,8 +11,11 @@ import type {
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { BlueprintModal } from '../components/BlueprintModal';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
+import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
+import { ProjectAdvisorPanel } from '../components/ProjectAdvisorPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
 import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
@@ -28,9 +32,15 @@ const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
 
 export function Dashboard({
   system,
+  activeProjectId,
+  onSelectProject,
+  onOpenWizard,
   onInspectRun,
 }: {
   system: SystemStatus | undefined;
+  activeProjectId?: string | null;
+  onSelectProject?: (id: string | null) => void;
+  onOpenWizard?: () => void;
   onInspectRun?: (runId: string) => void;
 }) {
   const [, navigate] = useLocation();
@@ -39,18 +49,42 @@ export function Dashboard({
   const { runs } = useRuns();
   const [actionError, setActionError] = useState<string>();
   const [runFormFor, setRunFormFor] = useState<string>();
+  const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
+  const [runFormPrompt, setRunFormPrompt] = useState<string>('');
+  const [blueprintFor, setBlueprintFor] = useState<Project>();
+  const [scopeToActive, setScopeToActive] = useState(false);
+
   const runnerDown = system?.ptyd !== 'connected';
-  const plainTerminals = terminals.data?.filter((t) => t.kind !== 'agent');
+  const activeProject = useMemo(
+    () => (activeProjectId ? projects.data?.find((p) => p.id === activeProjectId) : undefined) ?? projects.data?.[0],
+    [activeProjectId, projects.data],
+  );
+
+  const plainTerminals = useMemo(() => {
+    const list = terminals.data?.filter((t) => t.kind !== 'agent') ?? [];
+    if (scopeToActive && activeProject) {
+      return list.filter((t) => !t.projectId || t.projectId === activeProject.id);
+    }
+    return list;
+  }, [terminals.data, scopeToActive, activeProject]);
+
+  const visibleRuns = useMemo(() => {
+    const list = runs ?? [];
+    if (scopeToActive && activeProject) {
+      return list.filter((r) => r.projectId === activeProject.id);
+    }
+    return list;
+  }, [runs, scopeToActive, activeProject]);
 
   const stats = useMemo(() => {
-    const all = runs ?? [];
+    const all = visibleRuns;
     return {
       working: all.filter((r) => r.state === 'starting' || r.state === 'working').length,
       attention: all.filter((r) => r.state === 'waiting_input').length,
       queuedOrPaused: all.filter((r) => r.state === 'queued' || r.state === 'rate_limited').length,
       projects: projects.data?.length ?? 0,
     };
-  }, [runs, projects.data]);
+  }, [visibleRuns, projects.data]);
 
   const openTerminal = async (kind: 'shell' | 'claude', projectId?: string) => {
     setActionError(undefined);
@@ -117,6 +151,24 @@ export function Dashboard({
         </div>
       </div>
 
+      {activeProject && (
+        <ProjectAdvisorPanel
+          key={activeProject.id}
+          project={activeProject}
+          runnerDown={runnerDown}
+          onOpenBlueprint={() => setBlueprintFor(activeProject)}
+          onStartPersonaRun={(persona, defaultPrompt) => {
+            setRunFormPersona(persona);
+            setRunFormPrompt(defaultPrompt ?? '');
+            setRunFormFor(activeProject.id);
+          }}
+          onRunStarted={(run) => {
+            if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+            else onInspectRun?.(run.id);
+          }}
+        />
+      )}
+
       <QuotaPanel />
       <NotificationsPanel />
       <ScheduledJobsPanel projects={projects.data ?? []} />
@@ -128,49 +180,93 @@ export function Dashboard({
               <h2 id="projects-title">Projects</h2>
               <p className="muted">Repositories in the shared workspaces volume.</p>
             </div>
+            {onOpenWizard && (
+              <div className="actions">
+                <button
+                  id="open-project-wizard"
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={onOpenWizard}
+                >
+                  + AI Factory Wizard
+                </button>
+              </div>
+            )}
           </header>
           <ul className="list">
-            {projects.data?.map((p) => (
-              <li key={p.id} className="row row-wrap">
-                <div className="row-main">
-                  <span className="row-title">{p.name}</span>
-                  <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
-                </div>
-                <div className="actions">
-                  <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
-                    Board
-                  </Link>
-                  <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
-                    Shell
-                  </button>
-                  <button
-                    id={`start-run-${p.slug}`}
-                    className="btn btn-sm btn-primary"
-                    disabled={runnerDown}
-                    aria-expanded={runFormFor === p.id}
-                    onClick={() => setRunFormFor(runFormFor === p.id ? undefined : p.id)}
+            {projects.data?.map((p) => {
+              const isSelected = activeProject?.id === p.id;
+              return (
+                <li
+                  key={p.id}
+                  className="row row-wrap"
+                  style={isSelected ? { borderLeft: '3px solid var(--accent)' } : undefined}
+                >
+                  <div
+                    className="row-main"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onSelectProject?.(p.id)}
+                    title="Click to make this the active workspace"
                   >
-                    Start run
-                  </button>
-                </div>
-                {runFormFor === p.id && (
-                  <StartRunForm
-                    project={p}
-                    onCancel={() => setRunFormFor(undefined)}
-                    onStarted={(run) => {
-                      setRunFormFor(undefined);
-                      if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
-                      else onInspectRun?.(run.id);
-                    }}
-                  />
-                )}
-              </li>
-            ))}
+                    <span className="row-title">{p.name}</span>
+                    {isSelected && <span className="badge mono">active</span>}
+                    {p.appType && p.appType !== 'custom' && (
+                      <span className="badge badge-soft">{p.appType.replace('_', ' ')}</span>
+                    )}
+                    <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
+                  </div>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setBlueprintFor(p)}
+                      title="Open PROJECT.md Blueprint"
+                    >
+                      PROJECT.md
+                    </button>
+                    <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
+                      Board
+                    </Link>
+                    <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
+                      Shell
+                    </button>
+                    <button
+                      id={`start-run-${p.slug}`}
+                      className="btn btn-sm btn-primary"
+                      disabled={runnerDown}
+                      aria-expanded={runFormFor === p.id}
+                      onClick={() => {
+                        setRunFormPersona('coder');
+                        setRunFormPrompt('');
+                        setRunFormFor(runFormFor === p.id ? undefined : p.id);
+                      }}
+                    >
+                      Start run
+                    </button>
+                  </div>
+                  {runFormFor === p.id && (
+                    <StartRunForm
+                      key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}
+                      project={p}
+                      initialPersona={runFormPersona}
+                      initialPrompt={runFormPrompt}
+                      onCancel={() => setRunFormFor(undefined)}
+                      onStarted={(run) => {
+                        setRunFormFor(undefined);
+                        if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+                        else onInspectRun?.(run.id);
+                      }}
+                    />
+                  )}
+                </li>
+              );
+            })}
           </ul>
           <NewProjectForm
             disabled={runnerDown}
             onCreated={async (res) => {
               await projects.refresh();
+              onSelectProject?.(res.project.id);
               if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
             }}
           />
@@ -183,14 +279,19 @@ export function Dashboard({
               <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
             </div>
             <div className="actions">
-              <button id="new-shell" className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell')}>
+              <button
+                id="new-shell"
+                className="btn btn-sm"
+                disabled={runnerDown}
+                onClick={() => void openTerminal('shell', activeProject?.id)}
+              >
                 New shell
               </button>
               <button
                 id="new-claude"
                 className="btn btn-sm btn-primary"
                 disabled={runnerDown}
-                onClick={() => void openTerminal('claude')}
+                onClick={() => void openTerminal('claude', activeProject?.id)}
                 title="Starts Claude Code; on first run it walks you through logging in with your subscription"
               >
                 Claude
@@ -240,12 +341,23 @@ export function Dashboard({
             <p className="muted">Claude sessions on their own branch and worktree. State comes live from hooks.</p>
           </div>
           <div className="actions">
+            {activeProject && (projects.data?.length ?? 0) > 1 && (
+              <button
+                type="button"
+                className={`chip-toggle${scopeToActive ? ' active' : ''}`}
+                aria-pressed={scopeToActive}
+                onClick={() => setScopeToActive((v) => !v)}
+              >
+                <span className="dot" />
+                {scopeToActive ? `Showing: ${activeProject.name}` : 'All projects'}
+              </button>
+            )}
             <Link href="/fleet" className="btn btn-sm">
               Open Fleet Multiplexer →
             </Link>
           </div>
         </header>
-        {runs?.length === 0 && (
+        {visibleRuns.length === 0 && (
           <div className="empty">
             <p>No runs yet.</p>
             <p className="muted">
@@ -255,7 +367,7 @@ export function Dashboard({
           </div>
         )}
         <ul className="list">
-          {runs?.map((run) => (
+          {visibleRuns.map((run) => (
             <RunRow
               key={run.id}
               run={run}
@@ -269,6 +381,18 @@ export function Dashboard({
           ))}
         </ul>
       </section>
+
+      {blueprintFor && (
+        <BlueprintModal
+          project={blueprintFor}
+          open={Boolean(blueprintFor)}
+          onClose={() => setBlueprintFor(undefined)}
+          onRunStarted={(run) => {
+            if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+            else onInspectRun?.(run.id);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -298,6 +422,7 @@ function RunRow({
   const body = (
     <>
       <RunStatePill state={run.state} />
+      <PersonaBadge persona={run.persona} />
       <span className="row-title">{run.title ?? projectName ?? 'project'}</span>
       {run.title && projectName && <span className="badge">{projectName}</span>}
       {!run.title && run.ticketId && <span className="badge">{ticketKey ?? 'ticket'}</span>}
@@ -385,15 +510,20 @@ function RunRow({
 
 function StartRunForm({
   project,
+  initialPersona = 'coder',
+  initialPrompt = '',
   onStarted,
   onCancel,
 }: {
   project: Project;
+  initialPersona?: AgentPersona;
+  initialPrompt?: string;
   onStarted: (run: Run) => void;
   onCancel: () => void;
 }) {
   const [agent, setAgent] = useState<AgentId>('claude');
-  const [prompt, setPrompt] = useState('');
+  const [persona, setPersona] = useState<AgentPersona>(initialPersona);
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [mode, setMode] = useState<PermissionMode>('default');
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -407,6 +537,7 @@ function StartRunForm({
         await api<Run>('/api/runs', 'POST', {
           projectId: project.id,
           agent,
+          persona,
           prompt,
           permissionMode: mode,
         }),
@@ -419,6 +550,17 @@ function StartRunForm({
 
   return (
     <form className="run-form" onSubmit={(e) => void submit(e)}>
+      <TaskTemplateBar
+        onSelect={(tpl) => {
+          setPersona(tpl.persona);
+          setMode(tpl.permissionMode);
+          setPrompt(tpl.promptTemplate);
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <span className="muted small mono">Specialist Persona:</span>
+        <PersonaPicker value={persona} onChange={setPersona} />
+      </div>
       <textarea
         id="run-prompt"
         className="input"

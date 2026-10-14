@@ -9,12 +9,90 @@
  * Rate-limit detection and reset-time parsing live in ./ratelimit.ts, behind fixture tests.
  */
 import type { AgentState, LaunchSpec } from '@emberline/adapter-sdk';
-import type { HookEventName, HookPayload } from '@emberline/protocol';
+import type { AgentPersona, HookEventName, HookPayload } from '@emberline/protocol';
 import { rateLimitFromHook } from './ratelimit.js';
 
 export * from './ratelimit.js';
 
 export const CLAUDE_ADAPTER_ID = 'claude';
+
+export interface PersonaSpec {
+  id: AgentPersona;
+  label: string;
+  shortLabel: string;
+  roleTitle: string;
+  systemPrompt: string;
+}
+
+export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
+  product_owner: {
+    id: 'product_owner',
+    label: 'Product Owner',
+    shortLabel: 'PO',
+    roleTitle: 'Senior Technical Product Owner & Requirements Architect',
+    systemPrompt:
+      'You are acting as the Senior Technical Product Owner for this project. Read PROJECT.md (if present) first. Focus on clear user stories, edge cases, acceptance criteria, milestone breakdown, and keeping PROJECT.md accurate and actionable.',
+  },
+  architect: {
+    id: 'architect',
+    label: 'System Architect',
+    shortLabel: 'ARCH',
+    roleTitle: 'Principal Software & Systems Architect',
+    systemPrompt:
+      'You are acting as the Principal Systems Architect for this project. Read PROJECT.md first. Focus on clean module boundaries, API contracts, data flow, scalability, and idiomatic directory structure. Document architectural decisions clearly.',
+  },
+  ui_ux: {
+    id: 'ui_ux',
+    label: 'UI/UX Engineer',
+    shortLabel: 'UI/UX',
+    roleTitle: 'Staff Design Systems & Frontend UX Engineer',
+    systemPrompt:
+      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, responsive layouts, accessible semantics, keyboard navigation, and cohesive styling.',
+  },
+  coder: {
+    id: 'coder',
+    label: 'Software Engineer',
+    shortLabel: 'DEV',
+    roleTitle: 'Senior Full-Stack Software Engineer',
+    systemPrompt:
+      'You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested code that adheres to existing repository conventions.',
+  },
+  dba: {
+    id: 'dba',
+    label: 'Database Architect',
+    shortLabel: 'DBA',
+    roleTitle: 'Principal Database & Data Layer Engineer',
+    systemPrompt:
+      'You are acting as the Principal Database & Data Layer Engineer for this project. Read PROJECT.md first. Focus on normalized schema design, safe reversible migrations, indexing strategy, query performance, and data integrity.',
+  },
+  qa: {
+    id: 'qa',
+    label: 'QA & Test Engineer',
+    shortLabel: 'QA',
+    roleTitle: 'Staff Quality Assurance & Verification Engineer',
+    systemPrompt:
+      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, reproduction steps, and regression prevention.',
+  },
+  security: {
+    id: 'security',
+    label: 'Security Engineer',
+    shortLabel: 'SEC',
+    roleTitle: 'Principal Application Security Engineer',
+    systemPrompt:
+      'You are acting as the Principal Application Security Engineer for this project. Read PROJECT.md first. Audit and harden authentication, authorization, input validation, secret handling, injection vectors, and dependency safety.',
+  },
+};
+
+/**
+ * Prepends role-specific instructions for non-default personas (or when explicitly requested)
+ * so the CLI coding agent operates with the chosen specialist mindset.
+ */
+export function decoratePromptWithPersona(prompt: string | undefined, persona: AgentPersona = 'coder'): string | undefined {
+  if (!prompt) return prompt;
+  if (persona === 'coder') return prompt;
+  const spec = PERSONA_CATALOG[persona] ?? PERSONA_CATALOG.coder;
+  return `[Role: ${spec.roleTitle}]\n${spec.systemPrompt}\n\n---\nTask:\n${prompt}`;
+}
 
 /** Hooks Emberline listens to for state detection (PROJECT.md §3.3). */
 export const WATCHED_HOOKS: readonly HookEventName[] = [
