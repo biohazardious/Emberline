@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {
   AgentCreateTicketsPayload,
   type AgentId,
+  type AgentModelId,
   type AgentPersona,
   type AgentTicketDraft,
   type BrowserViewportSnapshot,
@@ -1066,6 +1067,16 @@ const DEFAULT_PERSONA_AGENTS: Record<AgentPersona, AgentId> = {
   security: 'claude',
 };
 
+const DEFAULT_PERSONA_MODELS: Record<AgentPersona, AgentModelId> = {
+  product_owner: 'fable',
+  architect: 'fable',
+  ui_ux: 'argon',
+  coder: 'opus',
+  dba: 'opus',
+  qa: 'sonnet',
+  security: 'opus',
+};
+
 export function getFactorySettings(db: Db): FactorySettings {
   const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
@@ -1079,6 +1090,11 @@ export function getFactorySettings(db: Db): FactorySettings {
       ...DEFAULT_PERSONA_AGENTS,
       ...(raw.personaAgents ?? {}),
     },
+    personaModels: {
+      ...DEFAULT_PERSONA_MODELS,
+      ...(raw.personaModels ?? {}),
+    },
+    quotaAutoDowngrade: raw.quotaAutoDowngrade ?? true,
     autoPickupReady: raw.autoPickupReady ?? true,
     autoPickupBacklog: raw.autoPickupBacklog ?? false,
     autoSyncToMain: raw.autoSyncToMain ?? true,
@@ -1101,6 +1117,11 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
       ...current.personaAgents,
       ...(body.personaAgents ?? {}),
     },
+    personaModels: {
+      ...current.personaModels,
+      ...(body.personaModels ?? {}),
+    },
+    quotaAutoDowngrade: body.quotaAutoDowngrade ?? current.quotaAutoDowngrade,
     autoPickupReady: body.autoPickupReady ?? current.autoPickupReady,
     autoPickupBacklog: body.autoPickupBacklog ?? current.autoPickupBacklog,
     autoSyncToMain: body.autoSyncToMain ?? current.autoSyncToMain,
@@ -1164,6 +1185,16 @@ export function resolveAgentForPersona(
   if (explicitAgent) return explicitAgent;
   const cfg = getFactorySettings(db);
   return cfg.personaAgents[persona] ?? cfg.defaultAgent ?? 'claude';
+}
+
+export function resolveModelForPersona(
+  db: Db,
+  persona: AgentPersona,
+  explicitModel?: AgentModelId,
+): AgentModelId {
+  if (explicitModel && explicitModel !== 'auto') return explicitModel;
+  const cfg = getFactorySettings(db);
+  return cfg.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona] ?? 'opus';
 }
 
 // --- F8: VS Code-like Code Explorer & File Editor ---------------------------

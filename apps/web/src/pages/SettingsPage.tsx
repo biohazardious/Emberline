@@ -1,7 +1,9 @@
 import type {
   AgentId,
+  AgentModelId,
   FactorySettings,
   PersonaAgentMap,
+  PersonaModelMap,
   ThemeMode,
 } from '@emberline/protocol';
 import { type FormEvent, useEffect, useState } from 'react';
@@ -11,10 +13,23 @@ import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 
 const AGENT_OPTIONS: Array<{ id: AgentId; label: string; desc: string }> = [
-  { id: 'claude', label: 'Claude Code (Anthropic)', desc: 'Full hook telemetry + session resume' },
+  { id: 'claude', label: 'Claude Code (Anthropic)', desc: 'Full hook telemetry + Fable/Opus/Sonnet tiers' },
+  { id: 'antigravity', label: 'Antigravity CLI (agy)', desc: 'Argon / Gemini specialist for Frontend & UI/UX' },
+  { id: 'copilot', label: 'GitHub Copilot CLI', desc: 'Fast shell/git/code assistant & PR specialist' },
   { id: 'gemini', label: 'Gemini CLI (Google)', desc: 'Fast multimodal & large-context reasoning' },
   { id: 'codex', label: 'Codex CLI (OpenAI)', desc: 'OpenAI o3 / GPT-4.1 coding specialist' },
   { id: 'aider', label: 'Aider CLI (Multi-Model)', desc: 'Git-centric pair programmer' },
+];
+
+const MODEL_OPTIONS: Array<{ id: AgentModelId; label: string; badge: string }> = [
+  { id: 'fable', label: 'Claude Fable — Deep Architecture & Spec Analysis', badge: 'Deep Analysis' },
+  { id: 'opus', label: 'Claude Opus — High-Power Backend & Core Engineering', badge: 'Core Power' },
+  { id: 'sonnet', label: 'Claude Sonnet — Fast Search, QA & Low-Token Tasks', badge: 'Token Saver' },
+  { id: 'haiku', label: 'Claude Haiku — Ultra-Light Quick Edits', badge: 'Ultra-Light' },
+  { id: 'argon', label: 'Antigravity Argon — Frontend, UI/UX & Interactive Design', badge: 'Frontend UI' },
+  { id: 'gemini-pro', label: 'Gemini 2.5 Pro — Large Codebase Context', badge: '1M Context' },
+  { id: 'gpt-4o', label: 'GPT-4o / Codex — Fast General Coding', badge: 'General' },
+  { id: 'auto', label: 'Auto (Default CLI Model)', badge: 'Default' },
 ];
 
 export function SettingsPage({
@@ -34,15 +49,25 @@ export function SettingsPage({
   const [autoSyncToMain, setAutoSyncToMain] = useState(true);
   const [selfHealingBuildGate, setSelfHealingBuildGate] = useState(true);
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
+  const [quotaAutoDowngrade, setQuotaAutoDowngrade] = useState(true);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [personaAgents, setPersonaAgents] = useState<PersonaAgentMap>({
     product_owner: 'claude',
     architect: 'claude',
-    ui_ux: 'claude',
+    ui_ux: 'antigravity',
     coder: 'claude',
     dba: 'claude',
     qa: 'claude',
     security: 'claude',
+  });
+  const [personaModels, setPersonaModels] = useState<PersonaModelMap>({
+    product_owner: 'fable',
+    architect: 'fable',
+    ui_ux: 'argon',
+    coder: 'opus',
+    dba: 'opus',
+    qa: 'sonnet',
+    security: 'opus',
   });
 
   const [anthropicApiKey, setAnthropicApiKey] = useState('');
@@ -63,11 +88,77 @@ export function SettingsPage({
         setAutoSyncToMain(res.autoSyncToMain);
         setSelfHealingBuildGate(res.selfHealingBuildGate);
         setAutoMoveToDone(res.autoMoveToDone);
+        setQuotaAutoDowngrade(res.quotaAutoDowngrade ?? true);
         setDefaultAgent(res.defaultAgent);
         setPersonaAgents(res.personaAgents);
+        if (res.personaModels) setPersonaModels(res.personaModels);
       })
       .catch((err) => setError(errorMessage(err)));
   }, []);
+
+  const applyRoutingPreset = (preset: 'visionary' | 'claude-tiered' | 'token-saver') => {
+    if (preset === 'visionary') {
+      setPersonaAgents({
+        product_owner: 'claude',
+        architect: 'claude',
+        ui_ux: 'antigravity',
+        coder: 'claude',
+        dba: 'claude',
+        qa: 'claude',
+        security: 'claude',
+      });
+      setPersonaModels({
+        product_owner: 'fable',
+        architect: 'fable',
+        ui_ux: 'argon',
+        coder: 'opus',
+        dba: 'opus',
+        qa: 'sonnet',
+        security: 'opus',
+      });
+      setNotice('Applied "Visionary Multi-Agent Orchestra" preset (Fable for PO/Arch, Antigravity Argon for UI/UX, Opus for Backend, Sonnet for QA). Click Save to persist.');
+    } else if (preset === 'claude-tiered') {
+      setPersonaAgents({
+        product_owner: 'claude',
+        architect: 'claude',
+        ui_ux: 'claude',
+        coder: 'claude',
+        dba: 'claude',
+        qa: 'claude',
+        security: 'claude',
+      });
+      setPersonaModels({
+        product_owner: 'fable',
+        architect: 'fable',
+        ui_ux: 'opus',
+        coder: 'opus',
+        dba: 'opus',
+        qa: 'sonnet',
+        security: 'opus',
+      });
+      setNotice('Applied "Claude All-Tier (Fable + Opus + Sonnet)" preset. Click Save to persist.');
+    } else {
+      setPersonaAgents({
+        product_owner: 'claude',
+        architect: 'claude',
+        ui_ux: 'claude',
+        coder: 'claude',
+        dba: 'claude',
+        qa: 'claude',
+        security: 'claude',
+      });
+      setPersonaModels({
+        product_owner: 'opus',
+        architect: 'opus',
+        ui_ux: 'sonnet',
+        coder: 'sonnet',
+        dba: 'sonnet',
+        qa: 'sonnet',
+        security: 'sonnet',
+      });
+      setNotice('Applied "Low-Token Economy (Sonnet-First)" preset. Click Save to persist.');
+    }
+  };
 
   const handleSaveFactorySettings = async (e: FormEvent) => {
     e.preventDefault();
@@ -82,8 +173,10 @@ export function SettingsPage({
         autoSyncToMain,
         selfHealingBuildGate,
         autoMoveToDone,
+        quotaAutoDowngrade,
         defaultAgent,
         personaAgents,
+        personaModels,
       };
       if (anthropicApiKey.trim()) payload.anthropicApiKey = anthropicApiKey.trim();
       if (openaiApiKey.trim()) payload.openaiApiKey = openaiApiKey.trim();
@@ -97,7 +190,7 @@ export function SettingsPage({
       if (themePref === 'light' || themePref === 'dark') {
         onChangeTheme(themePref);
       }
-      setNotice('Factory settings saved and applied.');
+      setNotice('Factory settings & Multi-Agent Model Routing saved and applied.');
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -120,7 +213,7 @@ export function SettingsPage({
       >
         <div>
           <span className="eyebrow">Control Center</span>
-          <h2 style={{ margin: '4px 0 0' }}>⚙ Factory Settings & Multi-Provider Routing</h2>
+          <h2 style={{ margin: '4px 0 0' }}>⚙ Factory Settings &amp; Multi-Agent Model Routing</h2>
         </div>
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -129,28 +222,28 @@ export function SettingsPage({
             className={`btn btn-sm ${activeTab === 'autopilot' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('autopilot')}
           >
-            ⚡ Auto-Pilot & Theme
+            ⚡ Auto-Pilot &amp; Theme
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'providers' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('providers')}
           >
-            🤖 AI Providers & Personas
+            🤖 Multi-Agent &amp; Model Matrix
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'quota' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('quota')}
           >
-            ⏱️ Quota & Concurrency
+            ⏱️ Quota &amp; Concurrency
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'notifications' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('notifications')}
           >
-            🔔 Forge & Webhooks
+            🔔 Forge &amp; Webhooks
           </button>
         </div>
       </header>
@@ -196,7 +289,7 @@ export function SettingsPage({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div>
               <span className="eyebrow">Autonomous Pipeline</span>
-              <h3 style={{ margin: '4px 0 4px' }}>Backlog & Ready Auto-Pickup + Self-Healing</h3>
+              <h3 style={{ margin: '4px 0 4px' }}>Backlog &amp; Ready Auto-Pickup + Self-Healing</h3>
               <p className="muted small">
                 Configure how the AI Coding Factory chains specialist tickets, verifies builds, and updates the live workspace.
               </p>
@@ -240,7 +333,7 @@ export function SettingsPage({
                 style={{ marginTop: '3px' }}
               />
               <div>
-                <strong>Self-Healing Build Gate (Auto-Verify & Auto-Fix Compile Errors)</strong>
+                <strong>Self-Healing Build Gate (Auto-Verify &amp; Auto-Fix Compile Errors)</strong>
                 <div className="muted small">
                   When a specialist finishes a run on a project with a <code>build</code> script, automatically run the build. If it fails, resume the agent with the compiler output to self-heal before advancing.
                 </div>
@@ -293,17 +386,71 @@ export function SettingsPage({
           style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}
         >
           <div>
-            <span className="eyebrow">Multi-Provider AI Routing</span>
-            <h3 style={{ margin: '4px 0 6px' }}>Per-Persona AI Model Assignment</h3>
-            <p className="muted small">
-              Assign the ideal AI CLI engine (<code>claude</code>, <code>gemini</code>, <code>codex</code>, or <code>aider</code>) to each specialist persona in your AI Coding Factory.
-            </p>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <span className="eyebrow">Multi-CLI &amp; Autonomous Model Routing</span>
+                <h3 style={{ margin: '4px 0 6px' }}>Per-Persona Agent &amp; Model Matrix</h3>
+                <p className="muted small" style={{ maxWidth: 680 }}>
+                  Route each specialist persona to the optimal CLI engine (<code>claude</code>, <code>antigravity</code>, <code>copilot</code>, <code>gemini</code>, <code>codex</code>, <code>aider</code>) and model tier (<code>fable</code> for deep analysis, <code>argon</code> for frontend/UI, <code>opus</code> for core backend, <code>sonnet</code> for low-token search/QA).
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() => applyRoutingPreset('visionary')}
+                  title="Fable for PO/Arch, Antigravity Argon for UI/UX, Claude Opus for Coder/DBA/Sec, Claude Sonnet for QA"
+                >
+                  ⚡ Visionary Multi-Agent Preset
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => applyRoutingPreset('claude-tiered')}
+                  title="Claude Fable + Opus + Sonnet across all roles"
+                >
+                  🧠 Claude All-Tier
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => applyRoutingPreset('token-saver')}
+                  title="Prioritize Claude Sonnet to minimize token consumption"
+                >
+                  💰 Token Saver (Sonnet)
+                </button>
+              </div>
+            </div>
+
+            <label
+              style={{
+                marginTop: 10,
+                padding: '10px 12px',
+                borderRadius: 'var(--radius)',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={quotaAutoDowngrade}
+                onChange={(e) => setQuotaAutoDowngrade(e.target.checked)}
+              />
+              <span style={{ fontSize: '0.82rem' }}>
+                <strong>Quota-Aware Autonomous Model Routing:</strong> Automatically prefer low-token models (<code>sonnet</code>) for routine search, verification, and QA tasks to preserve your 5-hour &amp; 7-day rate limits.
+              </span>
+            </label>
 
             <div
               style={{
-                marginTop: '12px',
+                marginTop: '14px',
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
                 gap: '10px',
               }}
             >
@@ -329,22 +476,44 @@ export function SettingsPage({
                     <div className="muted small" style={{ fontSize: '0.72rem' }}>
                       {meta.hint}
                     </div>
-                    <select
-                      className="input"
-                      value={personaAgents[personaKey]}
-                      onChange={(e) =>
-                        setPersonaAgents((prev) => ({
-                          ...prev,
-                          [personaKey]: e.target.value as AgentId,
-                        }))
-                      }
-                    >
-                      {AGENT_OPTIONS.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
+                    <label className="field" style={{ gap: 3 }}>
+                      <span className="muted mono" style={{ fontSize: '0.7rem' }}>CLI Agent</span>
+                      <select
+                        className="input"
+                        value={personaAgents[personaKey]}
+                        onChange={(e) =>
+                          setPersonaAgents((prev) => ({
+                            ...prev,
+                            [personaKey]: e.target.value as AgentId,
+                          }))
+                        }
+                      >
+                        {AGENT_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field" style={{ gap: 3 }}>
+                      <span className="muted mono" style={{ fontSize: '0.7rem' }}>Model Tier</span>
+                      <select
+                        className="input"
+                        value={personaModels[personaKey] ?? 'auto'}
+                        onChange={(e) =>
+                          setPersonaModels((prev) => ({
+                            ...prev,
+                            [personaKey]: e.target.value as AgentModelId,
+                          }))
+                        }
+                      >
+                        {MODEL_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                 );
               })}

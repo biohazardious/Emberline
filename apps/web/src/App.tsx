@@ -26,6 +26,9 @@ const CodeExplorerPage = lazy(() =>
 const LiveBrowserPage = lazy(() =>
   import('./pages/LiveBrowserPage').then((m) => ({ default: m.LiveBrowserPage })),
 );
+const RoadmapPage = lazy(() =>
+  import('./pages/RoadmapPage').then((m) => ({ default: m.RoadmapPage })),
+);
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
@@ -133,9 +136,9 @@ function Shell() {
       });
   }, [projects.data, activeProjectId, selectProject]);
 
-  // If the user navigates directly to /projects/:id/board or /projects/:id/code, sync activeProjectId
+  // If the user navigates directly to /projects/:id/board|code|browser|roadmap, sync activeProjectId
   useEffect(() => {
-    const match = /^\/projects\/([^/]+)\/(board|code)/.exec(location);
+    const match = /^\/projects\/([^/]+)\/(board|code|browser|roadmap)/.exec(location);
     if (match?.[1] && match[1] !== activeProjectId) {
       selectProject(match[1]);
     }
@@ -187,11 +190,15 @@ function Shell() {
     }
     const targetId = nextId || null;
     selectProject(targetId);
-    // When currently viewing a project board or code explorer, switch directly to the new project's view!
+    // When currently viewing a project board, roadmap, browser, or code explorer, switch directly to the new project's view!
     if (targetId && /^\/projects\/[^/]+\/board/.test(location)) {
       navigate(`/projects/${targetId}/board`);
     } else if (targetId && /^\/projects\/[^/]+\/code/.test(location)) {
       navigate(`/projects/${targetId}/code`);
+    } else if (targetId && /^\/projects\/[^/]+\/browser/.test(location)) {
+      navigate(`/projects/${targetId}/browser`);
+    } else if (targetId && /^\/projects\/[^/]+\/roadmap/.test(location)) {
+      navigate(`/projects/${targetId}/roadmap`);
     }
   };
 
@@ -272,6 +279,16 @@ function Shell() {
             <span className="nav-icon mono">◈</span>
             <span className="nav-label">Factory Overview</span>
           </Link>
+          {activeProject && (
+            <Link
+              href={`/projects/${activeProject.id}/roadmap`}
+              className={`nav-item${location === `/projects/${activeProject.id}/roadmap` ? ' active' : ''}`}
+              title="Roadmap & AI Brainstorming Studio"
+            >
+              <span className="nav-icon mono">🎯</span>
+              <span className="nav-label">Roadmap & Brainstorm</span>
+            </Link>
+          )}
           {activeProject && (
             <Link
               href={`/projects/${activeProject.id}/board`}
@@ -420,6 +437,14 @@ function Shell() {
               </Link>
               {activeProject && (
                 <Link
+                  href={`/projects/${activeProject.id}/roadmap`}
+                  className={`topbar-tab${location === `/projects/${activeProject.id}/roadmap` ? ' active' : ''}`}
+                >
+                  🎯 Roadmap
+                </Link>
+              )}
+              {activeProject && (
+                <Link
                   href={`/projects/${activeProject.id}/board`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
                 >
@@ -531,6 +556,13 @@ function Shell() {
                 {(params) => (
                   <Suspense fallback={<div className="board-page" aria-busy="true" />}>
                     <ReviewPage key={params.id} id={params.id} onInspectRun={(id) => setInspectRunId(id)} />
+                  </Suspense>
+                )}
+              </Route>
+              <Route path="/projects/:id/roadmap">
+                {(params) => (
+                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                    <RoadmapPage key={params.id} projectId={params.id} />
                   </Suspense>
                 )}
               </Route>

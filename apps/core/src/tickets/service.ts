@@ -185,10 +185,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const parsed = AgentCreateTicketsPayloadSchema.parse(payload);
     const created: Ticket[] = [];
     for (const draft of parsed.tickets) {
+      let body = draft.body ?? '';
+      if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
+        const agentStr = draft.preferredAgent ?? 'claude';
+        const modelStr = draft.preferredModel ?? 'auto';
+        body = `${body}\n\n[Preferred Agent: ${agentStr} · Model: ${modelStr}]`.trim();
+      }
       created.push(
         this.create(projectId, {
           title: draft.title,
-          body: draft.body,
+          body,
           persona: draft.persona,
           priority: draft.priority,
           status: 'ready',

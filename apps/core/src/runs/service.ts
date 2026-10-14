@@ -16,6 +16,7 @@ import {
   stateAfterExit,
 } from '@emberline/adapter-claude';
 import {
+  type AgentModelId,
   type AgentPersona,
   type BrowserAgentAction,
   type CreateRunBody,
@@ -44,7 +45,7 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
-import { getProviderEnvFromSettings, resolveAgentForPersona } from '../factory/service.js';
+import { getProviderEnvFromSettings, resolveAgentForPersona, resolveModelForPersona } from '../factory/service.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
@@ -238,6 +239,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
     const persona = body.persona ?? 'coder';
     const resolvedAgent = input.agent ?? resolveAgentForPersona(this.db, persona) ?? CLAUDE_ADAPTER_ID;
+    const explicitModel = body.model && body.model !== 'auto' ? body.model : undefined;
+    const promptWithRoute =
+      explicitModel && !/\[Preferred Agent:/i.test(body.prompt)
+        ? `${body.prompt}${body.prompt ? '\n\n' : ''}[Preferred Agent: ${resolvedAgent} · Model: ${explicitModel}]`
+        : body.prompt;
     const now = new Date();
     this.db
       .insert(runs)
@@ -248,7 +254,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         agent: resolvedAgent,
         persona,
         state: 'queued',
-        prompt: body.prompt,
+        prompt: promptWithRoute,
         permissionMode: body.permissionMode,
         branch: workspace.branch,
         worktreePath: workspace.path,
@@ -325,11 +331,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     });
 
     const persona = (row.persona as AgentPersona) ?? 'coder';
+    const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
+      options.prompt ?? row.prompt ?? '',
+    );
+    const preferredModelFromPrompt = routeTagMatch?.[2] as AgentModelId | undefined;
+    const resolvedModel = resolveModelForPersona(this.db, persona, preferredModelFromPrompt);
+
     const effectivePrompt =
       options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
 
     const extraEnv = getProviderEnvFromSettings(this.db);
-    const isSecondary = row.agent === 'gemini' || row.agent === 'codex' || row.agent === 'aider';
+    const isSecondary =
+      row.agent === 'antigravity' ||
+      row.agent === 'copilot' ||
+      row.agent === 'gemini' ||
+      row.agent === 'codex' ||
+      row.agent === 'aider';
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
     const enablePlaywrightMcp =
       process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' ||
@@ -347,7 +364,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const demoUrl = `http://localhost:7420/api/projects/${row.projectId}/demo/main/`;
     const spec = isSecondary
       ? buildSecondaryCliLaunchSpec({
-          agent: row.agent as 'gemini' | 'codex' | 'aider',
+          agent: row.agent as 'antigravity' | 'copilot' | 'gemini' | 'codex' | 'aider',
+          model: resolvedModel,
           runId: row.id,
           hookToken,
           coreUrl: this.config.hookUrl,
@@ -363,6 +381,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           claudeCommand: this.config.claudeCommand,
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
+          model: isRealClaude ? resolvedModel : undefined,
           autonomous: row.permissionMode !== 'plan',
           prompt: effectivePrompt,
           resumeSessionId: options.resumeSessionId,
@@ -370,15 +389,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
 
     const agentLabel =
-      row.agent === 'gemini'
-        ? 'Gemini'
-        : row.agent === 'codex'
-          ? 'Codex'
-          : row.agent === 'aider'
-            ? 'Aider'
-            : 'Claude';
+      row.agent === 'antigravity'
+        ? 'Antigravity'
+        : row.agent === 'copilot'
+          ? 'Copilot'
+          : row.agent === 'gemini'
+            ? 'Gemini'
+            : row.agent === 'codex'
+              ? 'Codex'
+              : row.agent === 'aider'
+                ? 'Aider'
+                : 'Claude';
     const personaPrefix =
       persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
+    const modelSuffix = isRealClaude && resolvedModel && resolvedModel !== 'auto' ? ` (${resolvedModel})` : '';
     const hookFile = path.join(path.dirname(this.config.ptydSocket), 'playwright-hook.cjs');
     const playwrightEnv: Record<string, string> =
       enablePlaywrightMcp && isRealClaude
@@ -389,12 +413,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         file: spec.file,
         args: spec.args,
         cwd: row.worktreePath,
-        env: { ...spec.env, ...extraEnv, ...playwrightEnv, EMBERLINE_DEMO_URL: demoUrl },
+        env: {
+          ...spec.env,
+          ...extraEnv,
+          ...playwrightEnv,
+          EMBERLINE_DEMO_URL: demoUrl,
+          EMBERLINE_MODEL: resolvedModel,
+        },
         meta: {
           kind: 'agent',
           runId: row.id,
           projectId: row.projectId,
-          title: `${personaPrefix}${agentLabel} · ${row.title ?? project.name}`,
+          title: `${personaPrefix}${agentLabel}${modelSuffix} · ${row.title ?? project.name}`,
         },
       });
       return this.record(row.id, {

@@ -5,14 +5,20 @@ import path from 'node:path';
 import {
   ActiveProjectPreference,
   AgentCreateTicketsPayload,
+  BrainstormRequestBody,
+  type BrainstormResponse,
   BrowserActionBody,
   type BrowserViewportSnapshot,
   BuildDemoBody,
   type BuildDemoResponse,
   type ClaudeUsageTelemetry,
+  CreateMilestoneBody,
   CreateProjectBody,
   type CreateProjectResponse,
+  CreateRoadmapItemBody,
   DeleteWorkspaceFileBody,
+  DispatchRoadmapItemsBody,
+  type DispatchRoadmapItemsResponse,
   FactoryRequestBody,
   type FactoryRequestResponse,
   type FactorySettings,
@@ -21,6 +27,7 @@ import {
   type ProjectBlueprintResponse,
   type ProjectCheckpoint,
   type ProjectRecommendation,
+  type ProjectRoadmapState,
   type ProjectStatusSummary,
   type ProjectTechStack,
   RollbackCheckpointBody,
@@ -30,6 +37,7 @@ import {
   type Ticket,
   UpdateFactorySettingsBody,
   UpdateProjectBlueprintBody,
+  UpdateRoadmapItemBody,
   type WorkspaceFileContentResponse,
   type WorkspaceFileListResponse,
   WriteWorkspaceFileBody,
@@ -39,6 +47,15 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { projects, settings } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import { getRunnerBrowserState, getRunnerClaudeUsage, performRunnerBrowserAction } from '../factory/browser-daemon.js';
+import {
+  addRoadmapItem,
+  addRoadmapMilestone,
+  deleteRoadmapItem,
+  dispatchRoadmapItems,
+  getProjectRoadmap,
+  runProjectBrainstorm,
+  updateRoadmapItem,
+} from '../factory/roadmap.js';
 import {
   buildWorkspaceDemo,
   captureBrowserViewportSnapshot,
@@ -549,6 +566,88 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         agentActions,
         agentActive,
       };
+    },
+  );
+
+  // --- Interactive Roadmap, Milestones & AI Brainstorming Studio ---
+
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/roadmap',
+    async (request): Promise<ProjectRoadmapState> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      return getProjectRoadmap(toProject(row), tickets);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/roadmap/milestones',
+    async (request, reply): Promise<ProjectRoadmapState> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = CreateMilestoneBody.parse(request.body ?? {});
+      const state = await addRoadmapMilestone(toProject(row), tickets, body);
+      reply.code(201);
+      return state;
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/roadmap/items',
+    async (request, reply): Promise<ProjectRoadmapState> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = CreateRoadmapItemBody.parse(request.body ?? {});
+      try {
+        const state = await addRoadmapItem(toProject(row), tickets, body);
+        reply.code(201);
+        return state;
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.patch<{ Params: { id: string; itemId: string } }>(
+    '/api/projects/:id/roadmap/items/:itemId',
+    async (request): Promise<ProjectRoadmapState> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = UpdateRoadmapItemBody.parse(request.body ?? {});
+      try {
+        return await updateRoadmapItem(toProject(row), tickets, request.params.itemId, body);
+      } catch (err) {
+        throw notFound((err as Error).message);
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string; itemId: string } }>(
+    '/api/projects/:id/roadmap/items/:itemId',
+    async (request): Promise<ProjectRoadmapState> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      return deleteRoadmapItem(toProject(row), tickets, request.params.itemId);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/roadmap/brainstorm',
+    async (request): Promise<BrainstormResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = BrainstormRequestBody.parse(request.body ?? {});
+      return runProjectBrainstorm(toProject(row), tickets, body);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/roadmap/dispatch',
+    async (request): Promise<DispatchRoadmapItemsResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = DispatchRoadmapItemsBody.parse(request.body ?? {});
+      return dispatchRoadmapItems(toProject(row), tickets, body);
     },
   );
 

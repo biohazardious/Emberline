@@ -227,8 +227,21 @@ export const RunState = z.enum(['queued', 'starting', 'working', 'waiting_input'
 export type RunState = z.infer<typeof RunState>;
 
 /** Supported CLI coding agent adapters. */
-export const AgentId = z.enum(['claude', 'gemini', 'codex', 'aider']);
+export const AgentId = z.enum(['claude', 'antigravity', 'copilot', 'gemini', 'codex', 'aider']);
 export type AgentId = z.infer<typeof AgentId>;
+
+/** Model tiers across Claude (fable/opus/sonnet/haiku), Antigravity (argon/gemini-pro), and Copilot/Codex (gpt-4o). */
+export const AgentModelId = z.enum([
+  'auto',
+  'fable',
+  'opus',
+  'sonnet',
+  'haiku',
+  'argon',
+  'gemini-pro',
+  'gpt-4o',
+]);
+export type AgentModelId = z.infer<typeof AgentModelId>;
 
 export const Run = z.object({
   id: z.string(),
@@ -260,6 +273,7 @@ export type Run = z.infer<typeof Run>;
 export const CreateRunBody = z.object({
   projectId: z.string().min(1),
   agent: AgentId.default('claude'),
+  model: AgentModelId.default('auto'),
   persona: AgentPersona.default('coder'),
   prompt: z.string().trim().max(20_000).default(''),
   permissionMode: PermissionMode.default('default'),
@@ -732,6 +746,8 @@ export const AgentTicketDraft = z.object({
   body: z.string().max(20_000).default(''),
   persona: AgentPersona.default('coder'),
   priority: TicketPriority.default(2),
+  preferredAgent: AgentId.optional(),
+  preferredModel: AgentModelId.optional(),
 });
 export type AgentTicketDraft = z.infer<typeof AgentTicketDraft>;
 
@@ -773,10 +789,31 @@ export const PersonaAgentMap = z.object({
 });
 export type PersonaAgentMap = z.infer<typeof PersonaAgentMap>;
 
+export const PersonaModelMap = z.object({
+  product_owner: AgentModelId.default('fable'),
+  architect: AgentModelId.default('fable'),
+  ui_ux: AgentModelId.default('argon'),
+  coder: AgentModelId.default('opus'),
+  dba: AgentModelId.default('opus'),
+  qa: AgentModelId.default('sonnet'),
+  security: AgentModelId.default('opus'),
+});
+export type PersonaModelMap = z.infer<typeof PersonaModelMap>;
+
 export const FactorySettings = z.object({
   theme: ThemeMode.default('dark'),
   defaultAgent: AgentId.default('claude'),
   personaAgents: PersonaAgentMap,
+  personaModels: PersonaModelMap.default({
+    product_owner: 'fable',
+    architect: 'fable',
+    ui_ux: 'argon',
+    coder: 'opus',
+    dba: 'opus',
+    qa: 'sonnet',
+    security: 'opus',
+  }),
+  quotaAutoDowngrade: z.boolean().default(true),
   autoPickupReady: z.boolean().default(true),
   autoPickupBacklog: z.boolean().default(false),
   autoSyncToMain: z.boolean().default(true),
@@ -793,6 +830,8 @@ export const UpdateFactorySettingsBody = z
     theme: ThemeMode,
     defaultAgent: AgentId,
     personaAgents: PersonaAgentMap.partial(),
+    personaModels: PersonaModelMap.partial(),
+    quotaAutoDowngrade: z.boolean(),
     autoPickupReady: z.boolean(),
     autoPickupBacklog: z.boolean(),
     autoSyncToMain: z.boolean(),
@@ -969,3 +1008,135 @@ export const ClaudeUsageTelemetry = z.object({
   updatedAt: z.string(),
 });
 export type ClaudeUsageTelemetry = z.infer<typeof ClaudeUsageTelemetry>;
+
+// --- Interactive Roadmap, Milestones & AI Brainstorming Studio --------------
+
+export const RoadmapCategory = z.enum([
+  'feature',
+  'ui_ux',
+  'architecture',
+  'performance',
+  'qa_security',
+]);
+export type RoadmapCategory = z.infer<typeof RoadmapCategory>;
+
+export const RoadmapItemStatus = z.enum(['idea', 'planned', 'in_progress', 'done']);
+export type RoadmapItemStatus = z.infer<typeof RoadmapItemStatus>;
+
+export const RoadmapItem = z.object({
+  id: z.string(),
+  milestoneId: z.string(),
+  title: z.string(),
+  description: z.string(),
+  category: RoadmapCategory.default('feature'),
+  persona: AgentPersona.default('coder'),
+  preferredAgent: AgentId.default('claude'),
+  preferredModel: AgentModelId.default('auto'),
+  priority: TicketPriority.default(2),
+  status: RoadmapItemStatus.default('planned'),
+  ticketId: z.string().nullable().default(null),
+  ticketKey: z.string().nullable().default(null),
+  createdAt: z.string(),
+});
+export type RoadmapItem = z.infer<typeof RoadmapItem>;
+
+export const RoadmapMilestone = z.object({
+  id: z.string(),
+  code: z.string(),
+  title: z.string(),
+  description: z.string().default(''),
+  status: z.enum(['planned', 'active', 'completed']).default('planned'),
+  items: z.array(RoadmapItem).default([]),
+});
+export type RoadmapMilestone = z.infer<typeof RoadmapMilestone>;
+
+export const BrainstormSuggestion = z.object({
+  id: z.string(),
+  title: z.string(),
+  rationale: z.string(),
+  implementationPrompt: z.string(),
+  category: RoadmapCategory,
+  impact: z.enum(['high', 'medium', 'low']).default('high'),
+  effort: z.enum(['small', 'medium', 'large']).default('medium'),
+  persona: AgentPersona,
+  preferredAgent: AgentId,
+  preferredModel: AgentModelId,
+  suggestedMilestoneCode: z.string().default('M2'),
+});
+export type BrainstormSuggestion = z.infer<typeof BrainstormSuggestion>;
+
+export const ProjectRoadmapState = z.object({
+  projectId: z.string(),
+  visionSummary: z.string(),
+  totalItems: z.number().int().nonnegative(),
+  completedItems: z.number().int().nonnegative(),
+  completionPercent: z.number().int().min(0).max(100),
+  milestones: z.array(RoadmapMilestone),
+  suggestions: z.array(BrainstormSuggestion),
+  updatedAt: z.string(),
+});
+export type ProjectRoadmapState = z.infer<typeof ProjectRoadmapState>;
+
+export const CreateMilestoneBody = z.object({
+  code: z.string().trim().min(1).max(20).optional(),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(2000).default(''),
+});
+export type CreateMilestoneBody = z.input<typeof CreateMilestoneBody>;
+
+export const CreateRoadmapItemBody = z.object({
+  milestoneId: z.string().min(1),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(10_000).default(''),
+  category: RoadmapCategory.default('feature'),
+  persona: AgentPersona.default('coder'),
+  preferredAgent: AgentId.default('claude'),
+  preferredModel: AgentModelId.default('auto'),
+  priority: TicketPriority.default(2),
+  status: RoadmapItemStatus.default('planned'),
+});
+export type CreateRoadmapItemBody = z.input<typeof CreateRoadmapItemBody>;
+
+export const UpdateRoadmapItemBody = z
+  .object({
+    milestoneId: z.string().min(1),
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(10_000),
+    category: RoadmapCategory,
+    persona: AgentPersona,
+    preferredAgent: AgentId,
+    preferredModel: AgentModelId,
+    priority: TicketPriority,
+    status: RoadmapItemStatus,
+  })
+  .partial();
+export type UpdateRoadmapItemBody = z.input<typeof UpdateRoadmapItemBody>;
+
+export const BrainstormRequestBody = z.object({
+  focus: z.string().trim().max(2000).default(''),
+  mode: z.enum(['instant', 'agent']).default('instant'),
+  leadPersona: AgentPersona.default('product_owner'),
+});
+export type BrainstormRequestBody = z.input<typeof BrainstormRequestBody>;
+
+export const BrainstormResponse = z.object({
+  roadmap: ProjectRoadmapState,
+  agentRun: Run.nullable().default(null),
+});
+export type BrainstormResponse = z.infer<typeof BrainstormResponse>;
+
+export const DispatchRoadmapItemsBody = z.object({
+  itemIds: z.array(z.string()).default([]),
+  suggestionIds: z.array(z.string()).default([]),
+  targetMilestoneId: z.string().optional(),
+  autoStart: z.boolean().default(true),
+});
+export type DispatchRoadmapItemsBody = z.input<typeof DispatchRoadmapItemsBody>;
+
+export const DispatchRoadmapItemsResponse = z.object({
+  roadmap: ProjectRoadmapState,
+  createdTickets: z.array(Ticket),
+  startedRun: Run.nullable().default(null),
+});
+export type DispatchRoadmapItemsResponse = z.infer<typeof DispatchRoadmapItemsResponse>;
+

@@ -1,5 +1,6 @@
 import type {
   AgentId,
+  AgentModelId,
   AgentPersona,
   CreateProjectResponse,
   PermissionMode,
@@ -23,6 +24,7 @@ import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
 import { timeAgo } from '../time';
+import { MODEL_LABELS, RoadmapStudioPanel } from './RoadmapPage';
 
 const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   shell: 'shell',
@@ -31,7 +33,7 @@ const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   agent: 'agent',
 };
 
-type OverviewTab = 'studio' | 'runs' | 'automation' | 'system';
+type OverviewTab = 'studio' | 'roadmap' | 'runs' | 'automation' | 'system';
 
 export function Dashboard({
   system,
@@ -217,6 +219,16 @@ export function Dashboard({
               onClick={() => setOverviewTab('studio')}
             >
               🚀 Command Center
+            </button>
+            <button
+              id="overview-tab-roadmap"
+              type="button"
+              role="tab"
+              aria-selected={overviewTab === 'roadmap'}
+              className={overviewTab === 'roadmap' ? 'active' : ''}
+              onClick={() => setOverviewTab('roadmap')}
+            >
+              🎯 Roadmap &amp; Brainstorm
             </button>
             <button
               id="overview-tab-runs"
@@ -557,6 +569,11 @@ export function Dashboard({
         </>
       )}
 
+      {/* TAB 2.5: Roadmap & Brainstorm Studio */}
+      {overviewTab === 'roadmap' && activeProject && (
+        <RoadmapStudioPanel key={`roadmap-${activeProject.id}`} projectId={activeProject.id} />
+      )}
+
       {/* TAB 3: Automation & Cron */}
       {overviewTab === 'automation' && (
         <ScheduledJobsPanel projects={visibleProjects} />
@@ -710,6 +727,7 @@ function StartRunForm({
   onCancel: () => void;
 }) {
   const [agent, setAgent] = useState<AgentId>('claude');
+  const [model, setModel] = useState<AgentModelId>('auto');
   const [persona, setPersona] = useState<AgentPersona>(initialPersona);
   const [prompt, setPrompt] = useState(initialPrompt);
   const [mode, setMode] = useState<PermissionMode>('default');
@@ -725,6 +743,7 @@ function StartRunForm({
         await api<Run>('/api/runs', 'POST', {
           projectId: project.id,
           agent,
+          model,
           persona,
           prompt,
           permissionMode: mode,
@@ -754,7 +773,7 @@ function StartRunForm({
         className="input"
         rows={3}
         autoFocus
-        placeholder={`What should ${agent === 'codex' ? 'Codex' : agent === 'aider' ? 'Aider' : 'Claude'} do in ${project.name}? (optional, leave empty for an interactive session)`}
+        placeholder={`What should ${agent === 'antigravity' ? 'Antigravity' : agent === 'copilot' ? 'Copilot' : agent === 'codex' ? 'Codex' : agent === 'aider' ? 'Aider' : 'Claude'} do in ${project.name}? (optional, leave empty for an interactive session)`}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
@@ -763,19 +782,43 @@ function StartRunForm({
       />
       <div className="run-form-foot" style={{ flexWrap: 'wrap', gap: '8px' }}>
         <div className="segmented" role="radiogroup" aria-label="CLI Agent">
-          {(['claude', 'codex', 'aider'] as const).map((a) => (
+          {(['claude', 'antigravity', 'copilot', 'codex', 'aider'] as const).map((a) => (
             <button
               key={a}
               type="button"
               role="radio"
               aria-checked={agent === a}
               className={agent === a ? 'active' : ''}
-              onClick={() => setAgent(a)}
+              onClick={() => {
+                setAgent(a);
+                if (a === 'antigravity' && model === 'auto') setModel('argon');
+              }}
             >
-              {a === 'claude' ? 'Claude' : a === 'codex' ? 'Codex' : 'Aider'}
+              {a === 'claude'
+                ? 'Claude'
+                : a === 'antigravity'
+                  ? 'Antigravity'
+                  : a === 'copilot'
+                    ? 'Copilot'
+                    : a === 'codex'
+                      ? 'Codex'
+                      : 'Aider'}
             </button>
           ))}
         </div>
+        <select
+          className="input mono"
+          style={{ fontSize: '0.78rem', padding: '4px 8px' }}
+          value={model}
+          onChange={(e) => setModel(e.target.value as AgentModelId)}
+          title="Model Tier (Fable / Opus / Sonnet / Argon / Auto)"
+        >
+          {(Object.keys(MODEL_LABELS) as AgentModelId[]).map((m) => (
+            <option key={m} value={m}>
+              {MODEL_LABELS[m]}
+            </option>
+          ))}
+        </select>
         <PermissionModePicker value={mode} onChange={setMode} />
         <div className="actions">
           <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>

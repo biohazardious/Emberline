@@ -195,6 +195,16 @@ export function buildPlaywrightMcpConfig(
 
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions';
 
+export type ClaudeModelTier =
+  | 'auto'
+  | 'fable'
+  | 'opus'
+  | 'sonnet'
+  | 'haiku'
+  | 'argon'
+  | 'gemini-pro'
+  | 'gpt-4o';
+
 export interface ClaudeLaunchOptions {
   runId: string;
   /** Per-run secret the hook presents to core. */
@@ -205,6 +215,8 @@ export interface ClaudeLaunchOptions {
   claudeCommand?: string;
   hookCommand?: string;
   permissionMode?: ClaudePermissionMode;
+  /** Optional model tier (fable, opus, sonnet, haiku, etc.). */
+  model?: ClaudeModelTier;
   /**
    * When true, starts the session in unattended `auto` mode with pre-authorized
    * Bash/Edit/Write permissions and appends the autonomous non-interactive system prompt.
@@ -218,6 +230,14 @@ export interface ClaudeLaunchOptions {
   playwrightMcp?: boolean;
 }
 
+export function resolveClaudeCliModelFlag(model?: ClaudeModelTier): string | undefined {
+  if (!model || model === 'auto') return undefined;
+  if (model === 'fable' || model === 'opus') return 'opus';
+  if (model === 'sonnet' || model === 'argon' || model === 'gemini-pro' || model === 'gpt-4o') return 'sonnet';
+  if (model === 'haiku') return 'haiku';
+  return undefined;
+}
+
 export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   const isAutonomous = Boolean(options.autonomous && options.permissionMode !== 'plan');
   const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook', 5, isAutonomous);
@@ -225,10 +245,18 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   if (options.playwrightMcp) {
     args.push('--mcp-config', JSON.stringify(buildPlaywrightMcpConfig()));
   }
+  const cliModel = resolveClaudeCliModelFlag(options.model);
+  if (cliModel) {
+    args.push('--model', cliModel);
+  }
   if (isAutonomous) {
     const cliMode = options.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'auto';
     args.push('--permission-mode', cliMode);
-    args.push('--append-system-prompt', AUTONOMOUS_EXECUTION_POLICY);
+    const extraPolicy =
+      options.model === 'fable'
+        ? `${AUTONOMOUS_EXECUTION_POLICY}\n[FABLE DEEP-ANALYSIS MODE: Perform deep architectural synthesis, edge-case analysis, and root-cause verification before writing code.]`
+        : AUTONOMOUS_EXECUTION_POLICY;
+    args.push('--append-system-prompt', extraPolicy);
   } else if (options.permissionMode && options.permissionMode !== 'default') {
     args.push('--permission-mode', options.permissionMode);
   }
@@ -248,7 +276,8 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
 }
 
 export interface SecondaryCliLaunchOptions {
-  agent: 'gemini' | 'codex' | 'aider';
+  agent: 'antigravity' | 'copilot' | 'gemini' | 'codex' | 'aider';
+  model?: ClaudeModelTier;
   runId: string;
   hookToken: string;
   coreUrl: string;
@@ -259,16 +288,33 @@ export interface SecondaryCliLaunchOptions {
 }
 
 /**
- * Builds a launch spec for secondary CLI coding agents (`gemini`, `codex`, or `aider`), wrapping
- * execution with `emberline-hook` lifecycle signals so core tracks `working` -> `done` / `failed`.
+ * Builds a launch spec for secondary CLI coding agents (`antigravity`, `copilot`, `gemini`, `codex`, or `aider`),
+ * wrapping execution with `emberline-hook` lifecycle signals so core tracks `working` -> `done` / `failed`.
+ * If a secondary CLI binary is not yet installed in the runner image, gracefully falls back to `claude` with
+ * the corresponding model & specialist mode so runs never fail with `command not found`.
  */
 export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
   const hook = options.hookCommand ?? 'emberline-hook';
   const autoApprove =
-    options.permissionMode === 'acceptEdits' || options.permissionMode === 'bypassPermissions';
+    options.permissionMode === 'acceptEdits' ||
+    options.permissionMode === 'auto' ||
+    options.permissionMode === 'bypassPermissions';
+  const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
+  const claudeFallback = `claude --permission-mode auto --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
 
   let cliCmd: string;
-  if (options.agent === 'gemini') {
+  if (options.agent === 'antigravity') {
+    const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
+    const modelFlag = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
+    cliCmd = options.prompt
+      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${modelFlag}-p "$EMBERLINE_PROMPT"; elif command -v antigravity >/dev/null 2>&1; then antigravity ${modelFlag}-p "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
+      : `if command -v ${bin} >/dev/null 2>&1; then ${bin}; else claude --model ${fallbackModel}; fi`;
+  } else if (options.agent === 'copilot') {
+    const bin = process.env.EMBERLINE_COPILOT_COMMAND?.trim() || 'copilot';
+    cliCmd = options.prompt
+      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} -p "$EMBERLINE_PROMPT"; elif command -v gh >/dev/null 2>&1 && gh copilot --version >/dev/null 2>&1; then gh copilot suggest -t shell "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
+      : `if command -v ${bin} >/dev/null 2>&1; then ${bin}; else claude --model sonnet; fi`;
+  } else if (options.agent === 'gemini') {
     const bin = process.env.EMBERLINE_GEMINI_COMMAND?.trim() || 'gemini';
     const flags = autoApprove ? '--yolo ' : '';
     cliCmd = options.prompt
