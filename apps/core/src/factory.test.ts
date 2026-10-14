@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { decoratePromptWithPersona, PERSONA_CATALOG } from '@emberline/adapter-claude';
 import type {
@@ -6,6 +6,7 @@ import type {
   CreateProjectResponse,
   ProjectBlueprintResponse,
   ProjectRecommendation,
+  ProjectStatusSummary,
   TaskTemplate,
   Ticket,
 } from '@emberline/protocol';
@@ -179,5 +180,41 @@ describe('AI Coding Factory (F1–F4)', () => {
     });
     expect(switchRes.statusCode).toBe(200);
     expect((switchRes.json() as ActiveProjectPreference).activeProjectId).toBe(p1.id);
+
+    // Create a compiled dist/index.html bundle inside p1's workspace and verify status + demo serving
+    const distDir = path.join(p1.path, 'dist', 'assets');
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(
+      path.join(p1.path, 'dist', 'index.html'),
+      '<!doctype html><html><head><script type="module" src="/assets/app.js"></script></head><body><h1>Flappy Demo</h1></body></html>',
+    );
+    writeFileSync(path.join(distDir, 'app.js'), 'console.log("flappy ready");');
+
+    const statusRes = await t.app.inject({
+      url: `/api/projects/${p1.id}/status`,
+      headers: { cookie },
+    });
+    expect(statusRes.statusCode).toBe(200);
+    const status = statusRes.json() as ProjectStatusSummary;
+    expect(status.ticketCounts.total).toBe(4);
+    expect(status.targets[0]?.demoEntryRelPath).toBe('dist/index.html');
+    expect(status.targets[0]?.demoUrl).toBe(`/api/projects/${p1.id}/demo/main/`);
+
+    const demoHtmlRes = await t.app.inject({
+      url: `/api/projects/${p1.id}/demo/main/`,
+      headers: { cookie },
+    });
+    expect(demoHtmlRes.statusCode).toBe(200);
+    expect(demoHtmlRes.headers['content-type']).toContain('text/html');
+    expect(demoHtmlRes.body).toContain(`<base href="/api/projects/${p1.id}/demo/main/">`);
+    expect(demoHtmlRes.body).toContain('src="./assets/app.js"');
+
+    const demoJsRes = await t.app.inject({
+      url: `/api/projects/${p1.id}/demo/main/assets/app.js`,
+      headers: { cookie },
+    });
+    expect(demoJsRes.statusCode).toBe(200);
+    expect(demoJsRes.headers['content-type']).toContain('application/javascript');
+    expect(demoJsRes.body).toContain('flappy ready');
   });
 });

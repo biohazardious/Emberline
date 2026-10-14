@@ -1,17 +1,21 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
+  BuildDemoResponse,
   Project,
   ProjectAppType,
   ProjectBlueprintResponse,
   ProjectRecommendation,
+  ProjectStatusSummary,
   ProjectTechStack,
   Run,
+  SyncWorktreeResponse,
   TaskTemplate,
   Ticket,
+  WorkspaceDemoTarget,
 } from '@emberline/protocol';
 import type { TicketService } from '../tickets/service.js';
 
@@ -464,3 +468,463 @@ export function computeProjectRecommendations(
 
   return recommendations;
 }
+
+const IGNORED_WALK_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  '.next',
+  'coverage',
+  'test-results',
+  '.emberline',
+  '.turbo',
+]);
+
+async function collectWorkspaceFiles(
+  workspacePath: string,
+  maxDepth = 3,
+): Promise<{ fileCount: number; topFiles: string[] }> {
+  if (!existsSync(workspacePath)) {
+    return { fileCount: 0, topFiles: [] };
+  }
+  const files: string[] = [];
+  async function walk(currentDir: string, depth: number): Promise<void> {
+    if (depth > maxDepth || files.length >= 250) return;
+    let entries;
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (IGNORED_WALK_DIRS.has(entry.name)) continue;
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(workspacePath, fullPath);
+      if (entry.isDirectory()) {
+        await walk(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        files.push(relPath);
+        if (files.length >= 250) return;
+      }
+    }
+  }
+  await walk(workspacePath, 0);
+  files.sort((a, b) => a.localeCompare(b));
+  return {
+    fileCount: files.length,
+    topFiles: files.slice(0, 18),
+  };
+}
+
+async function inspectPackageJson(
+  workspacePath: string,
+): Promise<{ hasPackageJson: boolean; hasBuildScript: boolean }> {
+  const pkgPath = path.join(workspacePath, 'package.json');
+  if (!existsSync(pkgPath)) {
+    return { hasPackageJson: false, hasBuildScript: false };
+  }
+  try {
+    const raw = await readFile(pkgPath, 'utf-8');
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, string> };
+    const hasBuildScript = Boolean(parsed.scripts && typeof parsed.scripts.build === 'string');
+    return { hasPackageJson: true, hasBuildScript };
+  } catch {
+    return { hasPackageJson: true, hasBuildScript: false };
+  }
+}
+
+export async function detectDemoEntryRelPath(workspacePath: string): Promise<string | null> {
+  if (!existsSync(workspacePath)) return null;
+
+  // 1. Direct compiled bundles in root
+  const directCandidates = [
+    'dist/index.html',
+    'dist/client/index.html',
+    'dist/public/index.html',
+    'dist/web/index.html',
+    'build/index.html',
+    'out/index.html',
+    'apps/client/dist/index.html',
+    'apps/web/dist/index.html',
+    'apps/frontend/dist/index.html',
+    'apps/game/dist/index.html',
+  ];
+  for (const rel of directCandidates) {
+    if (existsSync(path.join(workspacePath, rel))) {
+      return rel;
+    }
+  }
+
+  // 2. Any apps/*/dist/index.html or packages/*/dist/index.html
+  for (const parentDir of ['apps', 'packages']) {
+    const parentAbs = path.join(workspacePath, parentDir);
+    if (!existsSync(parentAbs)) continue;
+    try {
+      const subDirs = await readdir(parentAbs, { withFileTypes: true });
+      for (const d of subDirs) {
+        if (!d.isDirectory()) continue;
+        for (const buildSub of ['dist/index.html', 'build/index.html']) {
+          const candidateRel = path.posix.join(parentDir, d.name, buildSub);
+          if (existsSync(path.join(workspacePath, candidateRel))) {
+            return candidateRel;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Static public/index.html or root index.html (only if it does NOT point to raw .ts/.tsx/.jsx)
+  for (const staticRel of ['public/index.html', 'index.html']) {
+    const abs = path.join(workspacePath, staticRel);
+    if (!existsSync(abs)) continue;
+    try {
+      const html = await readFile(abs, 'utf-8');
+      const referencesUnbuiltTs = /\bsrc\s*=\s*["'][^"']*\.(tsx|ts|jsx)\b/i.test(html);
+      if (!referencesUnbuiltTs) {
+        return staticRel;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+export async function computeProjectStatusSummary(params: {
+  project: Project;
+  tickets: readonly Ticket[];
+  runs: readonly Run[];
+}): Promise<ProjectStatusSummary> {
+  const { project, tickets, runs } = params;
+  const projectTickets = tickets.filter((t) => t.projectId === project.id);
+  const projectRuns = runs
+    .filter((r) => r.projectId === project.id)
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const counts = {
+    total: projectTickets.length,
+    backlog: 0,
+    ready: 0,
+    in_progress: 0,
+    review: 0,
+    done: 0,
+  };
+  for (const t of projectTickets) {
+    counts[t.status] = (counts[t.status] ?? 0) + 1;
+  }
+
+  const completionPercent =
+    counts.total > 0 ? Math.round(((counts.done + counts.review * 0.75) / counts.total) * 100) : 0;
+
+  const activeRunCount = projectRuns.filter(
+    (r) => r.state === 'working' || r.state === 'starting' || r.state === 'queued' || r.state === 'waiting_input',
+  ).length;
+
+  const ticketMap = new Map(projectTickets.map((t) => [t.id, t]));
+  const targets: WorkspaceDemoTarget[] = [];
+
+  // 1. Main workspace target
+  const mainFiles = await collectWorkspaceFiles(project.path);
+  const mainPkg = await inspectPackageJson(project.path);
+  const mainDemoEntry = await detectDemoEntryRelPath(project.path);
+  targets.push({
+    id: 'main',
+    kind: 'main',
+    label: `Main Workspace (${project.slug})`,
+    ticketKey: null,
+    ticketTitle: null,
+    persona: null,
+    runStatus: null,
+    branch: project.defaultBranch,
+    workspacePath: project.path,
+    exists: existsSync(project.path),
+    fileCount: mainFiles.fileCount,
+    topFiles: mainFiles.topFiles,
+    hasPackageJson: mainPkg.hasPackageJson,
+    hasBuildScript: mainPkg.hasBuildScript,
+    demoEntryRelPath: mainDemoEntry,
+    demoUrl: mainDemoEntry ? `/api/projects/${project.id}/demo/main/` : null,
+    updatedAt: project.createdAt,
+  });
+
+  // 2. Run worktree targets
+  const seenPaths = new Set<string>([project.path]);
+  for (const run of projectRuns) {
+    if (!run.worktreePath || seenPaths.has(run.worktreePath)) continue;
+    seenPaths.add(run.worktreePath);
+    if (!existsSync(run.worktreePath)) continue;
+
+    const ticket = run.ticketId ? ticketMap.get(run.ticketId) : undefined;
+    const wtFiles = await collectWorkspaceFiles(run.worktreePath);
+    const wtPkg = await inspectPackageJson(run.worktreePath);
+    const wtDemoEntry = await detectDemoEntryRelPath(run.worktreePath);
+    const shortId = run.id.slice(0, 8);
+    const fallbackTitle = run.prompt.split('\n')[0]?.slice(0, 48) || `Run ${shortId}`;
+    const label = ticket ? `${ticket.key}: ${ticket.title}` : `${fallbackTitle} (${shortId})`;
+
+    targets.push({
+      id: run.id,
+      kind: 'worktree',
+      label,
+      ticketKey: ticket?.key ?? null,
+      ticketTitle: ticket?.title ?? fallbackTitle,
+      persona: run.persona,
+      runStatus: run.state,
+      branch: run.branch,
+      workspacePath: run.worktreePath,
+      exists: true,
+      fileCount: wtFiles.fileCount,
+      topFiles: wtFiles.topFiles,
+      hasPackageJson: wtPkg.hasPackageJson,
+      hasBuildScript: wtPkg.hasBuildScript,
+      demoEntryRelPath: wtDemoEntry,
+      demoUrl: wtDemoEntry ? `/api/projects/${project.id}/demo/${run.id}/` : null,
+      updatedAt: run.endedAt ?? run.stateChangedAt ?? run.createdAt,
+    });
+  }
+
+  const slugName = path.basename(project.path);
+  return {
+    projectId: project.id,
+    workspaceRoot: project.path,
+    hostBindHint: `./workspaces/${slugName}`,
+    ticketCounts: counts,
+    completionPercent: Math.min(100, Math.max(0, completionPercent)),
+    activeRunCount,
+    targets,
+  };
+}
+
+export async function syncWorktreeToMainWorkspace(params: {
+  worktreePath: string;
+  mainWorkspacePath: string;
+  ticketKey: string | null;
+  runId: string;
+}): Promise<SyncWorktreeResponse> {
+  const { worktreePath, mainWorkspacePath, ticketKey, runId } = params;
+  if (!existsSync(worktreePath)) {
+    throw new Error(`Worktree path does not exist: ${worktreePath}`);
+  }
+  await mkdir(mainWorkspacePath, { recursive: true });
+
+  const entries = await readdir(worktreePath, { withFileTypes: true });
+  let syncedTopEntries = 0;
+
+  for (const entry of entries) {
+    if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.emberline') {
+      continue;
+    }
+    const srcPath = path.join(worktreePath, entry.name);
+    const destPath = path.join(mainWorkspacePath, entry.name);
+    await cp(srcPath, destPath, {
+      recursive: true,
+      force: true,
+      filter: (source) => {
+        const base = path.basename(source);
+        return base !== '.git' && base !== 'node_modules' && base !== '.emberline';
+      },
+    });
+    syncedTopEntries += 1;
+  }
+
+  const mainFiles = await collectWorkspaceFiles(mainWorkspacePath);
+  let commitSha: string | null = null;
+  const label = ticketKey ?? runId.slice(0, 8);
+
+  if (existsSync(path.join(mainWorkspacePath, '.git'))) {
+    try {
+      await execFileAsync('git', ['add', '-A'], { cwd: mainWorkspacePath });
+      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], {
+        cwd: mainWorkspacePath,
+      });
+      if (statusOut.trim().length > 0) {
+        await execFileAsync(
+          'git',
+          [
+            '-c',
+            'user.name=Emberline AI Factory',
+            '-c',
+            'user.email=factory@emberline.local',
+            'commit',
+            '-m',
+            `feat(${label}): sync worktree output into main workspace`,
+          ],
+          { cwd: mainWorkspacePath },
+        );
+      }
+      const { stdout: revOut } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: mainWorkspacePath,
+      });
+      commitSha = revOut.trim() || null;
+    } catch {
+      // Non-fatal if git commit is a no-op
+    }
+  }
+
+  return {
+    ok: true,
+    runId,
+    filesSynced: mainFiles.fileCount || syncedTopEntries,
+    commitSha,
+    summary: `Synced ${mainFiles.fileCount} project files from ${label} into ${mainWorkspacePath}${commitSha ? ` (commit ${commitSha})` : ''}.`,
+  };
+}
+
+export async function buildWorkspaceDemo(params: {
+  projectId: string;
+  targetId: string;
+  workspacePath: string;
+}): Promise<BuildDemoResponse> {
+  const { projectId, targetId, workspacePath } = params;
+  if (!existsSync(workspacePath)) {
+    throw new Error(`Workspace path not found: ${workspacePath}`);
+  }
+
+  const logs: string[] = [];
+  const hasNodeModules = existsSync(path.join(workspacePath, 'node_modules'));
+
+  try {
+    if (!hasNodeModules && existsSync(path.join(workspacePath, 'package.json'))) {
+      const { stdout, stderr } = await execFileAsync('npm', ['install', '--no-audit', '--no-fund'], {
+        cwd: workspacePath,
+        timeout: 120_000,
+      });
+      if (stdout) logs.push(stdout);
+      if (stderr) logs.push(stderr);
+    }
+
+    const { stdout, stderr } = await execFileAsync('npm', ['run', 'build'], {
+      cwd: workspacePath,
+      timeout: 120_000,
+    });
+    if (stdout) logs.push(stdout);
+    if (stderr) logs.push(stderr);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logs.push(msg);
+    const fallbackEntry = await detectDemoEntryRelPath(workspacePath);
+    return {
+      ok: Boolean(fallbackEntry),
+      targetId,
+      demoEntryRelPath: fallbackEntry,
+      demoUrl: fallbackEntry ? `/api/projects/${projectId}/demo/${targetId}/` : null,
+      output: logs.join('\n').slice(-4000),
+    };
+  }
+
+  const demoEntryRelPath = await detectDemoEntryRelPath(workspacePath);
+  return {
+    ok: Boolean(demoEntryRelPath),
+    targetId,
+    demoEntryRelPath,
+    demoUrl: demoEntryRelPath ? `/api/projects/${projectId}/demo/${targetId}/` : null,
+    output: logs.join('\n').slice(-4000) || 'Build completed.',
+  };
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.wasm': 'application/wasm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+export async function serveWorkspaceDemoAsset(params: {
+  workspacePath: string;
+  demoBaseHref: string;
+  subPath: string;
+}): Promise<{ status: number; contentType: string; body: Buffer | string }> {
+  const { workspacePath, demoBaseHref, subPath } = params;
+  const entryRel = await detectDemoEntryRelPath(workspacePath);
+  if (!entryRel) {
+    return {
+      status: 404,
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html><html><body style="background:#0d0f14;color:#e2e8f0;font-family:sans-serif;padding:2rem;"><h3>No playable demo bundle found in ${workspacePath}</h3><p>Click <b>Build Demo</b> in the Emberline Project Status panel to compile the project.</p></body></html>`,
+    };
+  }
+
+  const entryAbs = path.join(workspacePath, entryRel);
+  const demoRootDir = path.dirname(entryAbs);
+  const cleanSub = subPath.replace(/^\/+/, '');
+  const requestedRel = cleanSub.length === 0 ? path.basename(entryAbs) : cleanSub;
+  const resolvedAbs = path.resolve(demoRootDir, requestedRel);
+
+  // Prevent path traversal outside demoRootDir
+  if (!resolvedAbs.startsWith(demoRootDir + path.sep) && resolvedAbs !== demoRootDir) {
+    return {
+      status: 403,
+      contentType: 'text/plain; charset=utf-8',
+      body: 'Forbidden path',
+    };
+  }
+
+  let targetFile = resolvedAbs;
+  if (!existsSync(targetFile)) {
+    // SPA fallback to entry HTML when extensionless route is requested
+    if (!path.extname(targetFile)) {
+      targetFile = entryAbs;
+    } else {
+      return {
+        status: 404,
+        contentType: 'text/plain; charset=utf-8',
+        body: `Asset not found: ${requestedRel}`,
+      };
+    }
+  } else {
+    const fileStat = await stat(targetFile);
+    if (fileStat.isDirectory()) {
+      targetFile = path.join(targetFile, 'index.html');
+      if (!existsSync(targetFile)) {
+        targetFile = entryAbs;
+      }
+    }
+  }
+
+  const ext = path.extname(targetFile).toLowerCase();
+  const contentType = MIME_BY_EXT[ext] ?? 'application/octet-stream';
+
+  if (ext === '.html' || ext === '.htm') {
+    let html = await readFile(targetFile, 'utf-8');
+    // Rewrite root-relative Vite/static asset URLs so they resolve under demoBaseHref
+    html = html
+      .replace(/\b(src|href)=["']\/(?!\/)/g, '$1="./')
+      .replace(/<head([^>]*)>/i, `<head$1><base href="${demoBaseHref}">`);
+    return {
+      status: 200,
+      contentType,
+      body: html,
+    };
+  }
+
+  const buf = await readFile(targetFile);
+  return {
+    status: 200,
+    contentType,
+    body: buf,
+  };
+}
+

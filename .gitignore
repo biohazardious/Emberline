@@ -11,6 +11,7 @@ coverage/
 # Local runtime data
 /data/
 /.emberline/
+/workspaces/
 
 # OpenWolf runtime files
 .wolf/daemon.log

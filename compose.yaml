@@ -21,7 +21,7 @@ services:
     volumes:
       - ptyd-socket:/run/emberline
       - data:/data
-      - workspaces:/workspaces
+      - ${EMBERLINE_WORKSPACES_HOST_DIR:-./workspaces}:/workspaces
       - runner-home:/home/node:ro
     depends_on:
       runner:
@@ -42,7 +42,7 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ptyd-socket:/run/emberline
-      - workspaces:/workspaces
+      - ${EMBERLINE_WORKSPACES_HOST_DIR:-./workspaces}:/workspaces
       # Persists `claude login` credentials (~/.claude, ~/.claude.json) and shell history.
       - runner-home:/home/node
       - runner-logs:/var/log/emberline
@@ -50,6 +50,5 @@ services:
 volumes:
   ptyd-socket:
   data:
-  workspaces:
   runner-home:
   runner-logs:

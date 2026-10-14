@@ -652,6 +652,74 @@ export const ServerEvent = z.discriminatedUnion('type', [
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 
+// --- project status, worktree sync & interactive demo (Factory F5) ----------
 
+export const WorkspaceDemoTarget = z.object({
+  /** 'main' for /workspaces/<slug>, or the runId for a ticket run worktree. */
+  id: z.string(),
+  kind: z.enum(['main', 'worktree']),
+  label: z.string(),
+  ticketKey: z.string().nullable(),
+  ticketTitle: z.string().nullable(),
+  persona: AgentPersona.nullable(),
+  runStatus: RunState.nullable(),
+  branch: z.string().nullable(),
+  workspacePath: z.string(),
+  exists: z.boolean(),
+  fileCount: z.number().int().nonnegative(),
+  topFiles: z.array(z.string()),
+  hasPackageJson: z.boolean(),
+  hasBuildScript: z.boolean(),
+  /** Relative path to the detected playable HTML entrypoint (e.g. 'dist/index.html', 'apps/client/dist/index.html', 'index.html'), or null if not built yet. */
+  demoEntryRelPath: z.string().nullable(),
+  /** Ready-to-open URL served by core, e.g. `/api/projects/:id/demo/main/` or `/api/projects/:id/demo/:runId/`. */
+  demoUrl: z.string().nullable(),
+  updatedAt: z.string(),
+});
+export type WorkspaceDemoTarget = z.infer<typeof WorkspaceDemoTarget>;
 
+export const ProjectStatusSummary = z.object({
+  projectId: z.string(),
+  workspaceRoot: z.string(),
+  hostBindHint: z.string(),
+  ticketCounts: z.object({
+    total: z.number().int().nonnegative(),
+    backlog: z.number().int().nonnegative(),
+    ready: z.number().int().nonnegative(),
+    in_progress: z.number().int().nonnegative(),
+    review: z.number().int().nonnegative(),
+    done: z.number().int().nonnegative(),
+  }),
+  completionPercent: z.number().int().min(0).max(100),
+  activeRunCount: z.number().int().nonnegative(),
+  targets: z.array(WorkspaceDemoTarget),
+});
+export type ProjectStatusSummary = z.infer<typeof ProjectStatusSummary>;
 
+export const SyncWorktreeBody = z.object({
+  runId: z.string().min(1),
+});
+export type SyncWorktreeBody = z.input<typeof SyncWorktreeBody>;
+
+export const SyncWorktreeResponse = z.object({
+  ok: z.boolean(),
+  runId: z.string(),
+  filesSynced: z.number().int().nonnegative(),
+  commitSha: z.string().nullable(),
+  summary: z.string(),
+});
+export type SyncWorktreeResponse = z.infer<typeof SyncWorktreeResponse>;
+
+export const BuildDemoBody = z.object({
+  targetId: z.string().default('main'),
+});
+export type BuildDemoBody = z.input<typeof BuildDemoBody>;
+
+export const BuildDemoResponse = z.object({
+  ok: z.boolean(),
+  targetId: z.string(),
+  demoEntryRelPath: z.string().nullable(),
+  demoUrl: z.string().nullable(),
+  output: z.string(),
+});
+export type BuildDemoResponse = z.infer<typeof BuildDemoResponse>;

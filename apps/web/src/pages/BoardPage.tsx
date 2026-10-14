@@ -5,6 +5,7 @@ import { api, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PERSONA_LIST, PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
+import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunEventTimeline, STAGE_TEMPLATES } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
@@ -56,6 +57,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [drop, setDrop] = useState<DropTarget>();
   const [autoStart, setAutoStart] = useState(true);
   const [blueprintOpen, setBlueprintOpen] = useState(false);
+  const [demoPanelOpen, setDemoPanelOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -140,14 +142,24 @@ export function BoardPage({ projectId }: { projectId: string }) {
         </div>
         <div className="board-controls">
           {project && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setBlueprintOpen(true)}
-              title="Open PROJECT.md Blueprint"
-            >
-              PROJECT.md
-            </button>
+            <>
+              <button
+                type="button"
+                className={`btn btn-sm${demoPanelOpen ? ' btn-primary' : ''}`}
+                onClick={() => setDemoPanelOpen((v) => !v)}
+                title="View Project Status, Sync Worktrees & Play Live Demo"
+              >
+                ▶ Live Demo & Status
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setBlueprintOpen(true)}
+                title="Open PROJECT.md Blueprint"
+              >
+                PROJECT.md
+              </button>
+            </>
           )}
           {(tickets?.length ?? 0) === 0 && (
             <button
@@ -176,6 +188,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
       </header>
 
       <QuotaPanel compact />
+
+      {demoPanelOpen && project && <ProjectStatusAndDemoPanel project={project} />}
 
       {error && (
         <div className="banner banner-error" role="alert">

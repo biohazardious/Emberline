@@ -9,6 +9,7 @@
 .claude
 .codex
 .opencode
+workspaces
 .env
 .env.*
 data

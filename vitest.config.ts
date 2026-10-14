@@ -16,7 +16,7 @@ export default defineConfig({
   },
   test: {
     include: ['{apps,packages}/*/src/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', 'apps/web/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'apps/web/**', 'workspaces/**'],
     environment: 'node',
     pool: 'forks',
     testTimeout: 15_000,

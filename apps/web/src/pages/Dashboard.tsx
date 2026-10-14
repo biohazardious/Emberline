@@ -16,6 +16,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectAdvisorPanel } from '../components/ProjectAdvisorPanel';
+import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
 import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
@@ -156,21 +157,24 @@ export function Dashboard({
       </div>
 
       {activeProject && (
-        <ProjectAdvisorPanel
-          key={activeProject.id}
-          project={activeProject}
-          runnerDown={runnerDown}
-          onOpenBlueprint={() => setBlueprintFor(activeProject)}
-          onStartPersonaRun={(persona, defaultPrompt) => {
-            setRunFormPersona(persona);
-            setRunFormPrompt(defaultPrompt ?? '');
-            setRunFormFor(activeProject.id);
-          }}
-          onRunStarted={(run) => {
-            if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
-            else onInspectRun?.(run.id);
-          }}
-        />
+        <>
+          <ProjectStatusAndDemoPanel key={`status-${activeProject.id}`} project={activeProject} />
+          <ProjectAdvisorPanel
+            key={activeProject.id}
+            project={activeProject}
+            runnerDown={runnerDown}
+            onOpenBlueprint={() => setBlueprintFor(activeProject)}
+            onStartPersonaRun={(persona, defaultPrompt) => {
+              setRunFormPersona(persona);
+              setRunFormPrompt(defaultPrompt ?? '');
+              setRunFormFor(activeProject.id);
+            }}
+            onRunStarted={(run) => {
+              if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+              else onInspectRun?.(run.id);
+            }}
+          />
+        </>
       )}
 
       <QuotaPanel />

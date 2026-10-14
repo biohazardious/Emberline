@@ -4,28 +4,37 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActiveProjectPreference,
+  BuildDemoBody,
+  type BuildDemoResponse,
   CreateProjectBody,
   type CreateProjectResponse,
   type Project,
   type ProjectAppType,
   type ProjectBlueprintResponse,
   type ProjectRecommendation,
+  type ProjectStatusSummary,
   type ProjectTechStack,
+  SyncWorktreeBody,
+  type SyncWorktreeResponse,
   type TaskTemplate,
   type Ticket,
   UpdateProjectBlueprintBody,
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { projects, settings } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import {
+  buildWorkspaceDemo,
   computeProjectRecommendations,
+  computeProjectStatusSummary,
   generateClaudeInstructions,
   generateProjectBlueprint,
   initLocalGitRepository,
   readProjectBlueprint,
   seedStarterTickets,
+  serveWorkspaceDemoAsset,
+  syncWorktreeToMainWorkspace,
   TASK_TEMPLATES,
   writeProjectBlueprint,
 } from '../factory/service.js';
@@ -211,6 +220,96 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const projectTickets = tickets.list(project.id);
       const projectRuns = runs.list().filter((r) => r.projectId === project.id);
       return computeProjectRecommendations(project, blueprint, projectTickets, projectRuns);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/status',
+    async (request): Promise<ProjectStatusSummary> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const project = toProject(row);
+      const projectTickets = tickets.list(project.id);
+      const projectRuns = runs.list().filter((r) => r.projectId === project.id);
+      return computeProjectStatusSummary({ project, tickets: projectTickets, runs: projectRuns });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/sync-worktree',
+    async (request): Promise<SyncWorktreeResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const project = toProject(row);
+      const body = SyncWorktreeBody.parse(request.body);
+      const run = runs.get(body.runId);
+      if (!run || run.projectId !== project.id) throw notFound('no such run for this project');
+      const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
+      return syncWorktreeToMainWorkspace({
+        worktreePath: run.worktreePath,
+        mainWorkspacePath: project.path,
+        ticketKey: ticket?.key ?? null,
+        runId: run.id,
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/build-demo',
+    async (request): Promise<BuildDemoResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const project = toProject(row);
+      const body = BuildDemoBody.parse(request.body ?? {});
+      let workspacePath = project.path;
+      if (body.targetId !== 'main') {
+        const run = runs.get(body.targetId);
+        if (!run || run.projectId !== project.id) throw notFound('no such run target for this project');
+        workspacePath = run.worktreePath;
+      }
+      return buildWorkspaceDemo({
+        projectId: project.id,
+        targetId: body.targetId,
+        workspacePath,
+      });
+    },
+  );
+
+  const handleDemoRequest = async (
+    projectId: string,
+    targetId: string,
+    subPath: string,
+    reply: FastifyReply,
+  ) => {
+    const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
+    if (!row) throw notFound('no such project');
+    const project = toProject(row);
+    let workspacePath = project.path;
+    if (targetId !== 'main') {
+      const run = runs.get(targetId);
+      if (!run || run.projectId !== project.id) throw notFound('no such run target');
+      workspacePath = run.worktreePath;
+    }
+    const demoBaseHref = `/api/projects/${project.id}/demo/${targetId}/`;
+    const result = await serveWorkspaceDemoAsset({
+      workspacePath,
+      demoBaseHref,
+      subPath,
+    });
+    reply.code(result.status).header('content-type', result.contentType).send(result.body);
+  };
+
+  app.get<{ Params: { id: string; targetId: string } }>(
+    '/api/projects/:id/demo/:targetId',
+    async (request, reply) => {
+      return handleDemoRequest(request.params.id, request.params.targetId, '', reply);
+    },
+  );
+
+  app.get<{ Params: { id: string; targetId: string; '*': string } }>(
+    '/api/projects/:id/demo/:targetId/*',
+    async (request, reply) => {
+      return handleDemoRequest(request.params.id, request.params.targetId, request.params['*'] ?? '', reply);
     },
   );
 
