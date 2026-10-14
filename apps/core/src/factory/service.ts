@@ -12,6 +12,7 @@ import {
   type AgentTicketDraft,
   type BrowserViewportSnapshot,
   type BuildDemoResponse,
+  type FactoryAttachmentInput,
   FactorySettings,
   type Project,
   type ProjectAppType,
@@ -745,23 +746,84 @@ export async function computeProjectStatusSummary(params: {
   };
 }
 
-export function buildFactoryOrchestratorPrompt(userRequest: string, autoDispatch = true): string {
+export async function persistFactoryAttachments(
+  workspacePath: string,
+  attachments: readonly FactoryAttachmentInput[],
+): Promise<string> {
+  if (!attachments || attachments.length === 0) return '';
+  const attachDir = path.join(workspacePath, '.emberline', 'attachments');
+  await mkdir(attachDir, { recursive: true });
+
+  const ts = Date.now();
+  const sections: string[] = [];
+
+  for (let i = 0; i < attachments.length; i += 1) {
+    const att = attachments[i]!;
+    const safeName = att.name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || `file-${i + 1}`;
+    const storedName = `${ts}-${i + 1}-${safeName}`;
+    const absPath = path.join(attachDir, storedName);
+
+    const rawBase64 = att.dataBase64.replace(/^data:[^;]+;base64,/, '');
+    const buf = Buffer.from(rawBase64, 'base64');
+    await writeFile(absPath, buf);
+
+    const sizeKb = Math.max(1, Math.round(buf.length / 1024));
+    const ext = path.extname(safeName).toLowerCase();
+    const isImage =
+      att.mimeType.startsWith('image/') ||
+      ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.ico'].includes(ext);
+    const isTextLike =
+      att.mimeType.startsWith('text/') ||
+      att.mimeType === 'application/json' ||
+      ['.md', '.txt', '.json', '.csv', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.yaml', '.yml', '.xml', '.svg'].includes(
+        ext,
+      );
+
+    if (isImage) {
+      sections.push(
+        `- 🖼️ **Image / Visual Asset:** \`${att.name}\` (${att.mimeType}, ${sizeKb} KB)\n  - **Absolute Path:** \`${absPath}\`\n  - **Action:** Use your \`Read\` tool on \`${absPath}\` to visually inspect this image/screenshot/logo, and copy it into \`public/\` or \`src/assets/\` if the user wants it embedded in the app. **Include this exact path \`${absPath}\` in delegated \`ui_ux\` / \`coder\` ticket bodies!**`,
+      );
+    } else if (isTextLike && buf.length <= 16_384 && !buf.subarray(0, 1024).includes(0)) {
+      const preview = buf.toString('utf8').trim();
+      sections.push(
+        `- 📄 **Attached File:** \`${att.name}\` (${att.mimeType}, ${sizeKb} KB)\n  - **Absolute Path:** \`${absPath}\`\n  - **Content Preview:**\n\`\`\`\n${preview.slice(0, 6000)}\n\`\`\``,
+      );
+    } else {
+      sections.push(
+        `- 📎 **Attached File:** \`${att.name}\` (${att.mimeType}, ${sizeKb} KB)\n  - **Absolute Path:** \`${absPath}\`\n  - **Action:** Read or inspect \`${absPath}\` and include this path in delegated specialist ticket bodies.`,
+      );
+    }
+  }
+
+  return sections.join('\n\n');
+}
+
+export function buildFactoryOrchestratorPrompt(
+  userRequest: string,
+  autoDispatch = true,
+  attachmentContext = '',
+): string {
+  const attachmentSection = attachmentContext.trim()
+    ? `\n### Attached Reference Files & Visual Assets (Uploaded by User):\n${attachmentContext.trim()}\n`
+    : '';
+
   return `## AI Coding Factory — Feature Request & Specialist Persona Delegation
 
 User Request:
 """
 ${userRequest.trim()}
 """
-
+${attachmentSection}
 ### Your Mission (as Lead Product Owner & Factory Orchestrator):
-1. **Inspect Context:** Read \`PROJECT.md\` and inspect the existing project files in the repository so you know the exact directory structure, frontend components, backend/engine modules, and build setup.
-2. **Refine Specification:** Translate the user's request into a clear, well-structured engineering specification and update \`PROJECT.md\` if needed.
+1. **Inspect Context & Attached Files:** Read \`PROJECT.md\`, inspect any **Attached Reference Files / Images** listed above using your \`Read\` tool, and inspect the existing project files in the repository so you know the exact directory structure, frontend components, backend/engine modules, and build setup.
+2. **Refine Specification:** Translate the user's request (and any visual/file references) into a clear, well-structured engineering specification and update \`PROJECT.md\` if needed.
 3. **Delegate to Specialist Personas (DO NOT implement the entire feature yourself):**
    Break the work down into concrete, non-overlapping sub-tasks for the appropriate specialist personas so each specialist handles its domain:
    - \`coder\` (Priority 3 - High): Backend services, game engine / business logic, counters/state management, and API endpoints.
    - \`dba\` (Priority 3 - High, if applicable): Database schema or persistence updates.
    - \`ui_ux\` (Priority 2 - Normal): Frontend UI components, HUD overlays, visual styling, layout, animations, and user interactions.
    - \`qa\` (Priority 1 - Low): Unit/component tests verifying the new feature AND running \`npm run build\` so the compiled Live Demo bundle (\`dist/\`) is updated.
+   *(If the user attached images, screenshots, logos, or reference files above, ALWAYS copy their exact Absolute Paths into the \`body\` of the relevant \`ui_ux\` / \`coder\` tickets so those specialists can inspect or copy them!)*
 4. **Write Delegated Tickets to \`.emberline/new-tickets.json\`:**
    Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below:
    \`\`\`json

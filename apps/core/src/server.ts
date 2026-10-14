@@ -37,7 +37,11 @@ export interface CoreDeps {
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ ...fastifyOptions, trustProxy: deps.config.trustProxy });
+  const app = Fastify({
+    bodyLimit: 32 * 1024 * 1024,
+    ...fastifyOptions,
+    trustProxy: deps.config.trustProxy,
+  });
   const startedAt = Date.now();
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler);
   const forge = new ForgeService(deps.db, deps.runs);

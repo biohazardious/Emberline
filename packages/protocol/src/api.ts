@@ -757,6 +757,15 @@ export const AgentCreateTicketsPayload = z.object({
 });
 export type AgentCreateTicketsPayload = z.input<typeof AgentCreateTicketsPayload>;
 
+export const FactoryAttachmentInput = z.object({
+  name: z.string().trim().min(1).max(200),
+  mimeType: z.string().trim().max(150).default('application/octet-stream'),
+  /** Base64-encoded file bytes (or data URL). */
+  dataBase64: z.string().min(1).max(25_000_000),
+  sizeBytes: z.number().int().nonnegative().optional(),
+});
+export type FactoryAttachmentInput = z.infer<typeof FactoryAttachmentInput>;
+
 export const FactoryRequestBody = z.object({
   prompt: z.string().trim().min(1).max(20_000),
   leadPersona: AgentPersona.default('product_owner'),
@@ -764,6 +773,7 @@ export const FactoryRequestBody = z.object({
     .preprocess((v) => (v === 'auto' ? 'acceptEdits' : v), PermissionMode)
     .default('acceptEdits'),
   autoDispatch: z.boolean().default(true),
+  attachments: z.array(FactoryAttachmentInput).max(10).optional(),
 });
 export type FactoryRequestBody = z.input<typeof FactoryRequestBody>;
 

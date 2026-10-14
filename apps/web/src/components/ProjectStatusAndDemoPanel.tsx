@@ -1,5 +1,6 @@
 import type {
   BuildDemoResponse,
+  FactoryAttachmentInput,
   FactoryRequestResponse,
   Project,
   ProjectCheckpoint,
@@ -8,7 +9,7 @@ import type {
   Ticket,
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { usePoll } from '../hooks/usePoll';
@@ -25,6 +26,27 @@ interface DemoRuntimeError {
   message: string;
   stack?: string;
   timestamp: string;
+}
+
+interface AttachedFilePreview extends FactoryAttachmentInput {
+  id: string;
+  previewDataUrl?: string;
+}
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
 }
 
 type StudioTab = 'factory' | 'demo' | 'browser' | 'worktrees' | 'checkpoints';
@@ -51,10 +73,89 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [syncingRunId, setSyncingRunId] = useState<string>();
   const [buildingTargetId, setBuildingTargetId] = useState<string>();
   const [factoryPrompt, setFactoryPrompt] = useState('');
+  const [factoryAttachments, setFactoryAttachments] = useState<AttachedFilePreview[]>([]);
+  const [dragOverComposer, setDragOverComposer] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
   const [submittingFactory, setSubmittingFactory] = useState(false);
   const [startingPipeline, setStartingPipeline] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
+
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-resize the multi-line prompt textarea as text grows (starts at ~2-3 rows, expands up to 260px)
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 68), 260)}px`;
+  }, [factoryPrompt]);
+
+  const addFilesToAttachments = async (files: FileList | File[]) => {
+    const list = Array.from(files).slice(0, 10 - factoryAttachments.length);
+    if (list.length === 0) return;
+
+    const added: AttachedFilePreview[] = [];
+    for (const file of list) {
+      if (file.size > 15 * 1024 * 1024) {
+        setBanner({
+          kind: 'err',
+          text: `File "${file.name}" exceeds the 15 MB per-file limit.`,
+        });
+        continue;
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const rawBase64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
+        const isImage =
+          file.type.startsWith('image/') ||
+          /\.(png|jpe?g|webp|gif|svg|ico)$/i.test(file.name);
+        added.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name || `pasted-image-${Date.now()}.png`,
+          mimeType: file.type || 'application/octet-stream',
+          dataBase64: rawBase64,
+          sizeBytes: file.size,
+          previewDataUrl: isImage ? dataUrl : undefined,
+        });
+      } catch (err) {
+        setBanner({ kind: 'err', text: errorMessage(err) });
+      }
+    }
+
+    if (added.length > 0) {
+      setFactoryAttachments((prev) => [...prev, ...added].slice(0, 10));
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setFactoryAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const handleComposerPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item && item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFilesToAttachments(files);
+    }
+  };
+
+  const handleComposerDrop = (e: DragEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setDragOverComposer(false);
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      void addFilesToAttachments(e.dataTransfer.files);
+    }
+  };
 
   // Demo Runtime Error Catcher + Quick Tweak + Checkpoints
   const [demoErrors, setDemoErrors] = useState<DemoRuntimeError[]>([]);
@@ -105,10 +206,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     ? targets.filter((t) => !isTargetCompleted(t))
     : targets;
 
-  const handleSubmitFactoryRequest = async (e: FormEvent) => {
-    e.preventDefault();
-    const trimmed = factoryPrompt.trim();
-    if (!trimmed) return;
+  const submitFactoryRequestNow = async () => {
+    const trimmed =
+      factoryPrompt.trim() ||
+      (factoryAttachments.length > 0
+        ? `Inspect the attached file(s) (${factoryAttachments.map((a) => a.name).join(', ')}) and implement the corresponding design/changes in the project.`
+        : '');
+    if (!trimmed || submittingFactory) return;
     setSubmittingFactory(true);
     setBanner(undefined);
     try {
@@ -120,20 +224,36 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           leadPersona: 'product_owner',
           permissionMode: 'acceptEdits',
           autoDispatch,
+          attachments:
+            factoryAttachments.length > 0
+              ? factoryAttachments.map((a) => ({
+                  name: a.name,
+                  mimeType: a.mimeType,
+                  dataBase64: a.dataBase64,
+                  sizeBytes: a.sizeBytes,
+                }))
+              : undefined,
         },
       );
+      const attachedCount = factoryAttachments.length;
       setFactoryPrompt('');
+      setFactoryAttachments([]);
       await statusPoll.refresh();
       await ticketsPoll.refresh();
       setBanner({
         kind: 'ok',
-        text: `Factory request dispatched to Product Owner (${res.ticket.key}). PO will refine the spec, create specialist tickets (Coder, UI/UX, QA), and ${autoDispatch ? 'auto-dispatch them sequentially' : 'place them in Ready'}.`,
+        text: `Factory request${attachedCount > 0 ? ` (+${attachedCount} attached file${attachedCount > 1 ? 's' : ''})` : ''} dispatched to Product Owner (${res.ticket.key}). PO will refine the spec, create specialist tickets (Coder, UI/UX, QA), and ${autoDispatch ? 'auto-dispatch them sequentially' : 'place them in Ready'}.`,
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
     } finally {
       setSubmittingFactory(false);
     }
+  };
+
+  const handleSubmitFactoryRequest = async (e: FormEvent) => {
+    e.preventDefault();
+    await submitFactoryRequestNow();
   };
 
   const handleQuickDemoTweak = async (e: FormEvent) => {
@@ -578,14 +698,30 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <form
             onSubmit={(e) => void handleSubmitFactoryRequest(e)}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!dragOverComposer) setDragOverComposer(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDragOverComposer(false);
+            }}
+            onDrop={handleComposerDrop}
             style={{
               padding: '12px 14px',
               borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-2)',
-              border: '1px solid color-mix(in hsl, var(--ember-1) 35%, var(--border))',
+              background: dragOverComposer
+                ? 'color-mix(in hsl, var(--ember-1) 10%, var(--surface-2))'
+                : 'var(--surface-2)',
+              border: dragOverComposer
+                ? '1px dashed var(--ember-1)'
+                : '1px solid color-mix(in hsl, var(--ember-1) 35%, var(--border))',
               display: 'flex',
               flexDirection: 'column',
-              gap: 8,
+              gap: 10,
+              transition: 'border-color 140ms ease, background 140ms ease',
             }}
           >
             <div
@@ -625,25 +761,208 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               </label>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                className="input"
+            {/* Gemini / Claude style multi-line composer container */}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-0)',
+                border: '1px solid var(--border-strong)',
+              }}
+            >
+              {/* Attached files / images preview strip */}
+              {factoryAttachments.length > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    paddingBottom: 6,
+                    borderBottom: '1px solid var(--border)',
+                  }}
+                >
+                  {factoryAttachments.map((att) => (
+                    <div
+                      key={att.id}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '4px 8px 4px 6px',
+                        borderRadius: 'var(--radius-xs)',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border-strong)',
+                        maxWidth: 260,
+                      }}
+                    >
+                      {att.previewDataUrl ? (
+                        <img
+                          src={att.previewDataUrl}
+                          alt={att.name}
+                          style={{
+                            width: 32,
+                            height: 32,
+                            objectFit: 'cover',
+                            borderRadius: 4,
+                            border: '1px solid var(--border)',
+                            flexShrink: 0,
+                          }}
+                        />
+                      ) : (
+                        <span
+                          style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 4,
+                            background: 'var(--surface-1)',
+                            border: '1px solid var(--border)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.95rem',
+                            flexShrink: 0,
+                          }}
+                        >
+                          📄
+                        </span>
+                      )}
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          minWidth: 0,
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: '0.73rem',
+                            fontWeight: 600,
+                            color: 'var(--text-0)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={att.name}
+                        >
+                          {att.name}
+                        </span>
+                        <span className="muted mono" style={{ fontSize: '0.65rem' }}>
+                          {formatFileSize(att.sizeBytes)}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => removeAttachment(att.id)}
+                        title="Remove attachment"
+                        style={{ padding: '1px 5px', fontSize: '0.72rem', marginLeft: 2 }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <textarea
+                ref={textareaRef}
+                rows={2}
                 value={factoryPrompt}
                 onChange={(e) => setFactoryPrompt(e.target.value)}
-                placeholder='Describe a feature or change (e.g. "Add a score counter and high-score HUD" or "Redesign the main screen") — PO will refine & delegate to specialists…'
+                onPaste={handleComposerPaste}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!submittingFactory && (factoryPrompt.trim() || factoryAttachments.length > 0)) {
+                      void submitFactoryRequestNow();
+                    }
+                  }
+                }}
+                placeholder='Describe a feature, bug fix, or UI change… (Shift+Enter for new line, Enter to delegate, paste or drop screenshots/files directly)'
                 style={{
-                  width: 'auto',
-                  flex: '1 1 360px',
+                  width: '100%',
+                  minHeight: 54,
+                  maxHeight: 240,
+                  resize: 'none',
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-0)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: '0.88rem',
+                  lineHeight: 1.5,
+                  padding: 0,
+                  overflowY: 'auto',
                 }}
               />
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submittingFactory || !factoryPrompt.trim()}
+
+              {/* Composer bottom action bar */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  paddingTop: 6,
+                  borderTop: '1px solid var(--border)',
+                }}
               >
-                {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
-              </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*,.json,.md,.txt,.csv,.svg,.html,.css,.ts,.tsx,.js,.pdf"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        void addFilesToAttachments(e.target.files);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Attach reference images, UI mockups, sprites, JSON specs, or logs (or drag & drop / Ctrl+V paste)"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    📎 Attach Files / Images
+                    {factoryAttachments.length > 0 && (
+                      <span className="badge badge-accent" style={{ fontSize: '0.65rem' }}>
+                        {factoryAttachments.length}/10
+                      </span>
+                    )}
+                  </button>
+                  <span className="muted" style={{ fontSize: '0.7rem' }}>
+                    Drop files, <span className="mono">Ctrl+V</span> screenshot,{' '}
+                    <span className="mono">Shift+Enter</span> newline
+                  </span>
+                </div>
+
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={
+                    submittingFactory ||
+                    (!factoryPrompt.trim() && factoryAttachments.length === 0)
+                  }
+                >
+                  {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
+                </button>
+              </div>
             </div>
 
             <div

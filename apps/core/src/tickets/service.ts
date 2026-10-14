@@ -28,6 +28,7 @@ import {
   buildWorkspaceDemo,
   getFactorySettings,
   ingestAgentTicketsFile,
+  persistFactoryAttachments,
   resolveAgentForPersona,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
@@ -157,12 +158,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * (`coder`, `ui_ux`, `dba`, `qa`), and chains them automatically.
    */
   async submitFactoryRequest(projectId: string, input: FactoryRequestBody): Promise<FactoryRequestResponse> {
-    this.project(projectId);
+    const projectRow = this.project(projectId);
     const body = FactoryRequestBodySchema.parse(input);
+    const attachmentContext =
+      body.attachments && body.attachments.length > 0
+        ? await persistFactoryAttachments(projectRow.path, body.attachments)
+        : '';
     const firstLine = body.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Feature Request';
     const ticket = this.create(projectId, {
       title: `[Factory] ${firstLine}`,
-      body: buildFactoryOrchestratorPrompt(body.prompt, body.autoDispatch),
+      body: buildFactoryOrchestratorPrompt(body.prompt, body.autoDispatch, attachmentContext),
       persona: body.leadPersona,
       priority: 3,
       status: 'ready',
