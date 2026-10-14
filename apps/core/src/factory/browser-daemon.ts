@@ -433,14 +433,14 @@ async function runPlaytestTick() {
 
       const info = evalRes?.result?.value;
       if (info?.action === 'clicked_button') {
-        pushDaemonAction('ai_playtest_click', 'Clicked "' + info.label + '" button');
+        pushDaemonAction('auto_interact_click', 'Clicked "' + info.label + '" button');
       } else if (info?.action === 'enabled_autopilot') {
-        pushDaemonAction('ai_playtest_autopilot', 'Activated in-game Autopilot (' + info.label + ')');
+        pushDaemonAction('auto_interact_autopilot', 'Activated Autopilot (' + info.label + ')');
       }
 
-      // 2. Dispatch Space key & canvas click rhythmically so Flappy Bird / arcade games fly actively
-      const shouldFlap = playtestTickCount % 2 === 0;
-      if (shouldFlap) {
+      // 2. Dispatch Space key when interacting with an active page
+      const shouldPress = playtestTickCount % 2 === 0;
+      if (shouldPress) {
         const k = KEY_MAP.Space;
         await call('Input.dispatchKeyEvent', {
           type: 'keyDown',
@@ -459,8 +459,8 @@ async function runPlaytestTick() {
           nativeVirtualKeyCode: k.keyCode,
         });
         if (playtestTickCount % 8 === 0) {
-          const scoreNote = info?.score ? ' · Score: ' + info.score : '';
-          pushDaemonAction('ai_playtest_flap', 'Pressed Space (Flap/Jump)' + scoreNote);
+          const scoreNote = info?.score ? ' · Metric: ' + info.score : '';
+          pushDaemonAction('auto_interact_key', 'Sent Space key' + scoreNote);
         }
       }
     });
@@ -481,7 +481,7 @@ async function startPlaytestLoop(targetUrl) {
   }
   playtestEndsAt = Date.now() + 45_000;
   playtestTickCount = 0;
-  pushDaemonAction('ai_playtest_start', 'Started Live AI Playtest Bot (45s autonomous gameplay)');
+  pushDaemonAction('auto_interact_start', 'Started Browser Auto-Interact session (45s)');
   await runPlaytestTick();
   playtestTimer = setInterval(() => {
     void runPlaytestTick();
@@ -582,7 +582,7 @@ async function captureState(defaultUrl) {
     imageDataUrl,
     capturedAt: nowIso,
     message: isPlaytestRunning
-      ? '🎮 AI Playtest Bot is actively playing in the browser!'
+      ? '🤖 Browser Auto-Interact is active!'
       : ephemeralActive
         ? '⚡ Streaming Agent Playwright session (:9223) live!'
         : imageDataUrl

@@ -488,6 +488,19 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     }
   };
 
+  const handleClearAllSuggestions = async () => {
+    try {
+      const next = await api<ProjectRoadmapState>(
+        `/api/projects/${projectId}/roadmap/items/__all_suggestions__`,
+        'DELETE',
+      );
+      setLocalRoadmap(next);
+      setSelectedSuggestions(new Set());
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
+
   const handleToggleItemDone = async (item: RoadmapItem) => {
     const nextStatus = item.status === 'done' ? 'planned' : 'done';
     try {
@@ -987,6 +1000,16 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                       : '☑ Select All'}
                   </button>
                   <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    style={{ fontSize: '0.74rem', padding: '3px 8px' }}
+                    disabled={busy !== null}
+                    onClick={() => void handleClearAllSuggestions()}
+                    title="Clear all current brainstorming suggestions"
+                  >
+                    🗑 Clear
+                  </button>
+                  <button
                     id="brainstorm-build-all-btn"
                     type="button"
                     className="btn btn-sm btn-primary"
@@ -1019,7 +1042,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             <input
               id="brainstorm-focus-input"
               className="input"
-              placeholder="Brainstorm focus (e.g. RBAC & approval workflow, multi-agent DAG router, ESP32 I2C protocol, dry-run rollback, desktop tray…)"
+              placeholder="Optional brainstorm focus (leave empty for general project analysis, or type a topic and press Enter)…"
               value={brainstormFocus}
               onChange={(e) => setBrainstormFocus(e.target.value)}
               onKeyDown={(e) => {
@@ -1057,7 +1080,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   className="btn btn-sm"
                   disabled={busy !== null}
                   onClick={() => void handleBrainstorm('instant')}
-                  title="Analyze codebase & topic to synthesize instant suggestions (rotates unseen ideas)"
+                  title="Analyze PROJECT.md & project domain to synthesize instant suggestions"
                 >
                   {busy === 'brainstorm-instant' ? 'Synthesizing…' : '⚡ Synthesize Ideas'}
                 </button>
@@ -1221,9 +1244,28 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             })}
 
             {filteredSuggestions.length === 0 && (
-              <p className="muted" style={{ textAlign: 'center', padding: '16px 0' }}>
-                No suggestions in this category yet. Click <strong>⚡ Synthesize Ideas</strong> above to generate new ideas!
-              </p>
+              <div
+                style={{
+                  textAlign: 'center',
+                  padding: '24px 16px',
+                  borderRadius: 'var(--radius)',
+                  border: '1px dashed var(--border)',
+                  background: 'var(--bg)',
+                }}
+              >
+                {isAgentBrainstorming ? (
+                  <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
+                    🧠 <strong>Deep Brainstorming Agent</strong> is analyzing <strong>{project?.name ?? 'this project'}</strong>…
+                    Tailored suggestions will automatically appear here as soon as analysis finishes.
+                  </p>
+                ) : (
+                  <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
+                    Brainstorming list is empty. Click <strong>🤖 Deep Agent Brainstorm</strong> (for full AI codebase analysis)
+                    or <strong>⚡ Synthesize Ideas</strong> above to populate suggestions tailored to{' '}
+                    <strong>{project?.name ?? 'this project'}</strong>.
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </section>

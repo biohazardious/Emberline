@@ -12,7 +12,7 @@ import { api, errorMessage } from '../api';
 import { PersonaBadge } from './PersonaBadge';
 
 const QUICK_KEYS = [
-  { label: 'Space (Jump/Flap)', key: 'Space' },
+  { label: 'Space', key: 'Space' },
   { label: 'Enter ↵', key: 'Enter' },
   { label: 'Esc', key: 'Escape' },
   { label: '↑', key: 'ArrowUp' },
@@ -142,7 +142,7 @@ export function LiveBrowserStudio({
     await sendAction({ action: 'start_playtest', url: demoUrl });
     setBanner({
       kind: 'ok',
-      text: '🎮 Live AI Playtest Bot started! Watch the viewport and Agent Activity stream as the AI plays in real time.',
+      text: '🤖 Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
     });
   };
 
@@ -170,12 +170,12 @@ export function LiveBrowserStudio({
     setBanner(undefined);
     try {
       const demoUrl = `http://localhost:7420/api/projects/${project.id}/demo/${targetId}/`;
-      await sendAction({ action: 'start_playtest', url: demoUrl }).catch(() => null);
+      await sendAction({ action: 'navigate', url: demoUrl }).catch(() => null);
       const res = await api<FactoryRequestResponse>(
         `/api/projects/${project.id}/factory-request`,
         'POST',
         {
-          prompt: `[Live Browser QA Verification] Open ${demoUrl} using your Playwright MCP browser tools (mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click / mcp__playwright__browser_press_key, mcp__playwright__browser_take_screenshot). Visually inspect the application, interact with the main controls or gameplay, verify there are no console errors, and leave the app open in the browser.`,
+          prompt: `[Live Browser QA Verification] Open ${demoUrl} using your Playwright MCP browser tools (mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click / mcp__playwright__browser_press_key, mcp__playwright__browser_take_screenshot). Visually inspect the application, interact with the primary UI controls and workflows, verify there are no console errors, and leave the app open in the browser.`,
           leadPersona: 'qa',
           permissionMode: 'acceptEdits',
           autoDispatch: true,
@@ -185,7 +185,7 @@ export function LiveBrowserStudio({
       setSideTab('activity');
       setBanner({
         kind: 'ok',
-        text: `QA Agent (${res.ticket.key}) dispatched + Live AI Playtest started in this browser! Watch the viewport and Agent Activity feed.`,
+        text: `QA Agent (${res.ticket.key}) dispatched to inspect and verify the application in this Live Browser! Watch the viewport and Agent Activity feed.`,
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
@@ -321,9 +321,9 @@ export function LiveBrowserStudio({
             className={snap?.playtestActive ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-primary'}
             disabled={acting}
             onClick={() => void handleTogglePlaytest()}
-            title="Watch the built-in AI Playtest Bot autonomously play and test the application live inside this browser"
+            title="Autonomously interact with the active page inside the shared browser"
           >
-            {snap?.playtestActive ? '⏹ Stop AI Playtest' : '🎮 Watch AI Play Live'}
+            {snap?.playtestActive ? '⏹ Stop Auto-Interact' : '🤖 Auto-Interact'}
           </button>
           <button
             type="button"
