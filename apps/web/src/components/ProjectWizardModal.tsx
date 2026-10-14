@@ -1012,9 +1012,21 @@ function TechStackComboField({
   };
 
   return (
-    <div ref={wrapperRef} style={{ position: 'relative' }}>
-      <label className="drawer-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span>{label}</span>
+    <div
+      ref={wrapperRef}
+      style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '5px' }}
+    >
+      <label
+        className="drawer-label"
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          marginBottom: 0,
+          lineHeight: 1.25,
+        }}
+      >
+        <span style={{ fontWeight: 600, color: 'var(--text)' }}>{label}</span>
         <span className="muted" style={{ fontSize: '0.68rem', fontWeight: 400 }}>
           Select or type freely
         </span>
@@ -1525,39 +1537,48 @@ export function ProjectWizardModal({
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                       gap: '8px',
                     }}
                   >
-                    {APP_TYPE_LIST.map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        className={`card${appType === t.id ? ' card-live' : ''}`}
-                        style={{
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                          borderColor: appType === t.id ? 'var(--accent)' : undefined,
-                          padding: '10px 12px',
-                        }}
-                        onClick={() => handleSelectAppType(t.id)}
-                      >
-                        <strong
+                    {APP_TYPE_LIST.map((t) => {
+                      const selected = appType === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className={`card${selected ? ' card-live prio-2' : ''}`}
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            fontSize: '0.86rem',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderColor: selected ? 'var(--ember-1)' : undefined,
+                            background: selected
+                              ? 'color-mix(in hsl, var(--ember-1) 8%, var(--surface))'
+                              : undefined,
+                            padding: '10px 12px',
                           }}
+                          onClick={() => handleSelectAppType(t.id)}
                         >
-                          <span>{t.icon}</span>
-                          <span>{t.label}</span>
-                        </strong>
-                        <span className="muted small" style={{ display: 'block', marginTop: '4px' }}>
-                          {t.desc}
-                        </span>
-                      </button>
-                    ))}
+                          <strong
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            <span>{t.icon}</span>
+                            <span>{t.label}</span>
+                          </strong>
+                          <span
+                            className="muted small"
+                            style={{ display: 'block', marginTop: '4px' }}
+                          >
+                            {t.desc}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   <label className="drawer-label" htmlFor="wizard-description">
@@ -1575,7 +1596,7 @@ export function ProjectWizardModal({
               )}
 
               {step === 2 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {/* Context banner showing active App Type */}
                   <div
                     style={{
@@ -1613,14 +1634,22 @@ export function ProjectWizardModal({
 
                   {/* Release & Version Track Policy (No Hardcoded Stale Versions) */}
                   <div>
-                    <label className="drawer-label" style={{ display: 'block', marginBottom: '6px' }}>
+                    <label
+                      className="drawer-label"
+                      style={{
+                        display: 'block',
+                        marginBottom: '6px',
+                        fontWeight: 600,
+                        color: 'var(--text)',
+                      }}
+                    >
                       Release & Runtime Version Policy (Version-Agnostic)
                     </label>
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                        gap: '6px',
+                        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                        gap: '8px',
                       }}
                     >
                       {VERSION_POLICIES.map((vp) => {
@@ -1629,17 +1658,23 @@ export function ProjectWizardModal({
                           <button
                             key={vp.id}
                             type="button"
-                            className={`card${selected ? ' card-live' : ''}`}
+                            className={`card${selected ? ' card-live prio-2' : ''}`}
                             style={{
-                              padding: '7px 10px',
+                              padding: '8px 12px',
                               textAlign: 'left',
                               cursor: 'pointer',
-                              borderColor: selected ? 'var(--accent)' : undefined,
+                              borderColor: selected ? 'var(--ember-1)' : undefined,
+                              background: selected
+                                ? 'color-mix(in hsl, var(--ember-1) 8%, var(--surface))'
+                                : undefined,
                             }}
                             onClick={() => handleVersionPolicyChange(vp.id)}
                           >
-                            <div style={{ fontSize: '0.78rem', fontWeight: 600 }}>{vp.label}</div>
-                            <div className="muted" style={{ fontSize: '0.68rem', marginTop: '2px' }}>
+                            <div style={{ fontSize: '0.79rem', fontWeight: 600 }}>{vp.label}</div>
+                            <div
+                              className="muted"
+                              style={{ fontSize: '0.69rem', marginTop: '2px', lineHeight: 1.3 }}
+                            >
                               {vp.hint}
                             </div>
                           </button>
@@ -1650,26 +1685,51 @@ export function ProjectWizardModal({
 
                   {/* Filtered Presets for Selected App Type */}
                   <div>
-                    <span className="drawer-label" style={{ display: 'block', marginBottom: '6px' }}>
+                    <span
+                      className="drawer-label"
+                      style={{
+                        display: 'block',
+                        marginBottom: '6px',
+                        fontWeight: 600,
+                        color: 'var(--text)',
+                      }}
+                    >
                       Recommended Presets for {activeProfile.label}
                     </span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {activeProfile.presets.map((preset) => (
-                        <button
-                          key={preset.label}
-                          type="button"
-                          className="chip-btn"
-                          title={preset.summary}
-                          onClick={() =>
-                            setTechStack({
-                              ...preset.stack,
-                              versionPolicy,
-                            })
-                          }
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
+                      {activeProfile.presets.map((preset) => {
+                        const isActivePreset =
+                          techStack.language === preset.stack.language &&
+                          techStack.frontend === preset.stack.frontend &&
+                          techStack.backend === preset.stack.backend;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className="chip-btn"
+                            style={
+                              isActivePreset
+                                ? {
+                                    borderColor: 'var(--ember-1)',
+                                    background:
+                                      'color-mix(in hsl, var(--ember-1) 12%, var(--surface))',
+                                    color: 'var(--text)',
+                                    fontWeight: 600,
+                                  }
+                                : undefined
+                            }
+                            title={preset.summary}
+                            onClick={() =>
+                              setTechStack({
+                                ...preset.stack,
+                                versionPolicy,
+                              })
+                            }
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1677,8 +1737,8 @@ export function ProjectWizardModal({
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                      gap: '12px',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: '14px 12px',
                     }}
                   >
                     <TechStackComboField
