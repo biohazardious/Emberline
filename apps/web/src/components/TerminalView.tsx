@@ -8,27 +8,27 @@ import { useEffect, useRef, useState } from 'react';
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting' | 'exited';
 
 const THEME = {
-  background: '#0d0907',
-  foreground: '#f1e6dc',
-  cursor: '#ff8a3d',
-  cursorAccent: '#0d0907',
-  selectionBackground: '#ff8a3d44',
-  black: '#1a1310',
-  red: '#ff5c5c',
-  green: '#5fd38d',
-  yellow: '#ffc457',
-  blue: '#6cb6ff',
-  magenta: '#e08cff',
-  cyan: '#5fd7d7',
-  white: '#e8ddd3',
-  brightBlack: '#6b5d55',
-  brightRed: '#ff7b7b',
-  brightGreen: '#7ee2a6',
-  brightYellow: '#ffd37a',
-  brightBlue: '#8cc8ff',
-  brightMagenta: '#ebaaff',
-  brightCyan: '#7ee6e6',
-  brightWhite: '#fff8f2',
+  background: '#090a0d',
+  foreground: '#e5e9f0',
+  cursor: '#f97316',
+  cursorAccent: '#090a0d',
+  selectionBackground: '#f9731638',
+  black: '#111319',
+  red: '#f87171',
+  green: '#4ade80',
+  yellow: '#facc15',
+  blue: '#60a5fa',
+  magenta: '#c084fc',
+  cyan: '#22d3ee',
+  white: '#d8dee9',
+  brightBlack: '#4b5563',
+  brightRed: '#fca5a5',
+  brightGreen: '#86efac',
+  brightYellow: '#fde047',
+  brightBlue: '#93c5fd',
+  brightMagenta: '#d8b4fe',
+  brightCyan: '#67e8f9',
+  brightWhite: '#f8fafc',
 };
 
 /** Keys that are hard to type on a phone keyboard. */
@@ -45,6 +45,8 @@ const MOBILE_KEYS: { label: string; seq: string }[] = [
 
 interface Props {
   terminalId: string;
+  compact?: boolean;
+  autoFocus?: boolean;
   onStateChange?: (state: ConnectionState) => void;
 }
 
@@ -52,7 +54,7 @@ interface Props {
  * Live terminal bound to `/api/terminals/:id/ws`. Reconnects with backoff and restores the
  * screen from the server snapshot, so reloading the page or losing Wi-Fi never loses context.
  */
-export function TerminalView({ terminalId, onStateChange }: Props) {
+export function TerminalView({ terminalId, compact = false, autoFocus = true, onStateChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sendInputRef = useRef<(data: string) => void>(() => {});
   const onStateRef = useRef(onStateChange);
@@ -65,7 +67,7 @@ export function TerminalView({ terminalId, onStateChange }: Props) {
 
     const term = new Terminal({
       fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-      fontSize: window.innerWidth < 640 ? 12 : 13,
+      fontSize: compact ? 11.5 : window.innerWidth < 640 ? 12 : 13,
       cursorBlink: true,
       scrollback: 5000,
       theme: THEME,
@@ -147,7 +149,7 @@ export function TerminalView({ terminalId, onStateChange }: Props) {
 
     safeFit();
     connect();
-    term.focus();
+    if (autoFocus) term.focus();
 
     return () => {
       disposed = true;
@@ -158,10 +160,10 @@ export function TerminalView({ terminalId, onStateChange }: Props) {
       ws?.close();
       term.dispose();
     };
-  }, [terminalId]);
+  }, [terminalId, compact, autoFocus]);
 
   return (
-    <div className="term-shell" data-state={state}>
+    <div className={`term-shell${compact ? ' term-shell-compact' : ''}`} data-state={state}>
       <div className="term-container" ref={containerRef} />
       <div className="keybar" role="toolbar" aria-label="Terminal keys">
         {MOBILE_KEYS.map((key) => (

@@ -6,7 +6,7 @@ import type {
   SystemStatus,
   TerminalInfo,
 } from '@emberline/protocol';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
@@ -23,7 +23,13 @@ const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   agent: 'agent',
 };
 
-export function Dashboard({ system }: { system: SystemStatus | undefined }) {
+export function Dashboard({
+  system,
+  onInspectRun,
+}: {
+  system: SystemStatus | undefined;
+  onInspectRun?: (runId: string) => void;
+}) {
   const [, navigate] = useLocation();
   const terminals = usePoll(() => api<TerminalInfo[]>('/api/terminals'), 3_000);
   const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
@@ -32,6 +38,16 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
   const [runFormFor, setRunFormFor] = useState<string>();
   const runnerDown = system?.ptyd !== 'connected';
   const plainTerminals = terminals.data?.filter((t) => t.kind !== 'agent');
+
+  const stats = useMemo(() => {
+    const all = runs ?? [];
+    return {
+      working: all.filter((r) => r.state === 'starting' || r.state === 'working').length,
+      attention: all.filter((r) => r.state === 'waiting_input').length,
+      queuedOrPaused: all.filter((r) => r.state === 'queued' || r.state === 'rate_limited').length,
+      projects: projects.data?.length ?? 0,
+    };
+  }, [runs, projects.data]);
 
   const openTerminal = async (kind: 'shell' | 'claude', projectId?: string) => {
     setActionError(undefined);
@@ -78,7 +94,138 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
         </div>
       )}
 
+      <div className="stat-strip" aria-label="Fleet telemetry">
+        <div className="stat-card">
+          <span className="stat-label">Active Agents</span>
+          <strong className="stat-value mono">{stats.working}</strong>
+        </div>
+        <div className={`stat-card${stats.attention > 0 ? ' stat-card-warn' : ''}`}>
+          <span className="stat-label">Needs Your Input</span>
+          <strong className="stat-value mono">{stats.attention}</strong>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Queued / Paused</span>
+          <strong className="stat-value mono">{stats.queuedOrPaused}</strong>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Workspaces</span>
+          <strong className="stat-value mono">{stats.projects}</strong>
+        </div>
+      </div>
+
       <QuotaPanel />
+
+      <div className="dashboard-grid">
+        <section className="panel" aria-labelledby="projects-title">
+          <header className="panel-head">
+            <div>
+              <h2 id="projects-title">Projects</h2>
+              <p className="muted">Repositories in the shared workspaces volume.</p>
+            </div>
+          </header>
+          <ul className="list">
+            {projects.data?.map((p) => (
+              <li key={p.id} className="row row-wrap">
+                <div className="row-main">
+                  <span className="row-title">{p.name}</span>
+                  <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
+                </div>
+                <div className="actions">
+                  <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
+                    Board
+                  </Link>
+                  <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
+                    Shell
+                  </button>
+                  <button
+                    id={`start-run-${p.slug}`}
+                    className="btn btn-sm btn-primary"
+                    disabled={runnerDown}
+                    aria-expanded={runFormFor === p.id}
+                    onClick={() => setRunFormFor(runFormFor === p.id ? undefined : p.id)}
+                  >
+                    Start run
+                  </button>
+                </div>
+                {runFormFor === p.id && (
+                  <StartRunForm
+                    project={p}
+                    onCancel={() => setRunFormFor(undefined)}
+                    onStarted={(run) => {
+                      setRunFormFor(undefined);
+                      if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+                      else onInspectRun?.(run.id);
+                    }}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+          <NewProjectForm
+            disabled={runnerDown}
+            onCreated={async (res) => {
+              await projects.refresh();
+              if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
+            }}
+          />
+        </section>
+
+        <section className="panel" aria-labelledby="terminals-title">
+          <header className="panel-head">
+            <div>
+              <h2 id="terminals-title">Terminals</h2>
+              <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
+            </div>
+            <div className="actions">
+              <button id="new-shell" className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell')}>
+                New shell
+              </button>
+              <button
+                id="new-claude"
+                className="btn btn-sm btn-primary"
+                disabled={runnerDown}
+                onClick={() => void openTerminal('claude')}
+                title="Starts Claude Code; on first run it walks you through logging in with your subscription"
+              >
+                Claude
+              </button>
+            </div>
+          </header>
+
+          {plainTerminals?.length === 0 && (
+            <div className="empty">
+              <p>No terminals yet.</p>
+              <p className="muted">
+                First time here? Open <strong>Claude</strong> and log in with your own subscription.
+              </p>
+            </div>
+          )}
+          <ul className="list">
+            {plainTerminals?.map((t) => (
+              <li key={t.id} className="row">
+                <Link href={`/terminals/${t.id}`} className="row-main">
+                  <span className={`dot dot-${t.status}`} aria-label={t.status} />
+                  <span className="row-title">{t.title}</span>
+                  <span className="badge">{KIND_LABEL[t.kind]}</span>
+                  {t.projectId && <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>}
+                  <span className="row-meta mono">
+                    {t.status === 'exited' ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · ` : ''}
+                    {timeAgo(t.createdAt)}
+                  </span>
+                </Link>
+                <button
+                  className="icon-btn"
+                  aria-label={`Close ${t.title}`}
+                  title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
+                  onClick={() => void removeTerminal(t.id)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
 
       <section className="panel" aria-labelledby="runs-title">
         <header className="panel-head">
@@ -86,12 +233,18 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
             <h2 id="runs-title">Runs</h2>
             <p className="muted">Claude sessions on their own branch and worktree. State comes live from hooks.</p>
           </div>
+          <div className="actions">
+            <Link href="/fleet" className="btn btn-sm">
+              Open Fleet Multiplexer →
+            </Link>
+          </div>
         </header>
         {runs?.length === 0 && (
           <div className="empty">
             <p>No runs yet.</p>
             <p className="muted">
-              Pick a project below and press <strong>Start run</strong>.
+              Pick a project above and press <strong>Start run</strong>, or dispatch a ticket from its{' '}
+              <strong>Board</strong>.
             </p>
           </div>
         )}
@@ -101,120 +254,13 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
               key={run.id}
               run={run}
               projectName={projectName(run.projectId)}
+              onInspect={onInspectRun ? () => onInspectRun(run.id) : undefined}
               onStop={() => void runAction(run.id, 'stop')}
               onResume={() => void runAction(run.id, 'resume')}
               onRemove={() => void runAction(run.id, 'remove')}
             />
           ))}
         </ul>
-      </section>
-      <section className="panel" aria-labelledby="terminals-title">
-        <header className="panel-head">
-          <div>
-            <h2 id="terminals-title">Terminals</h2>
-            <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
-          </div>
-          <div className="actions">
-            <button id="new-shell" className="btn" disabled={runnerDown} onClick={() => void openTerminal('shell')}>
-              New shell
-            </button>
-            <button
-              id="new-claude"
-              className="btn btn-primary"
-              disabled={runnerDown}
-              onClick={() => void openTerminal('claude')}
-              title="Starts Claude Code; on first run it walks you through logging in with your subscription"
-            >
-              Claude
-            </button>
-          </div>
-        </header>
-
-        {plainTerminals?.length === 0 && (
-          <div className="empty">
-            <p>No terminals yet.</p>
-            <p className="muted">
-              First time here? Open <strong>Claude</strong> and log in with your own subscription.
-            </p>
-          </div>
-        )}
-        <ul className="list">
-          {plainTerminals?.map((t) => (
-            <li key={t.id} className="row">
-              <Link href={`/terminals/${t.id}`} className="row-main">
-                <span className={`dot dot-${t.status}`} aria-label={t.status} />
-                <span className="row-title">{t.title}</span>
-                <span className="badge">{KIND_LABEL[t.kind]}</span>
-                {t.projectId && <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>}
-                <span className="row-meta">
-                  {t.status === 'exited' ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · ` : ''}
-                  {timeAgo(t.createdAt)}
-                </span>
-              </Link>
-              <button
-                className="icon-btn"
-                aria-label={`Close ${t.title}`}
-                title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
-                onClick={() => void removeTerminal(t.id)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="panel" aria-labelledby="projects-title">
-        <header className="panel-head">
-          <div>
-            <h2 id="projects-title">Projects</h2>
-            <p className="muted">Repositories in the shared workspaces volume.</p>
-          </div>
-        </header>
-        <ul className="list">
-          {projects.data?.map((p) => (
-            <li key={p.id} className="row row-wrap">
-              <div className="row-main">
-                <span className="row-title">{p.name}</span>
-                <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
-              </div>
-              <div className="actions">
-                <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
-                  Board
-                </Link>
-                <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
-                  Shell
-                </button>
-                <button
-                  id={`start-run-${p.slug}`}
-                  className="btn btn-sm btn-primary"
-                  disabled={runnerDown}
-                  aria-expanded={runFormFor === p.id}
-                  onClick={() => setRunFormFor(runFormFor === p.id ? undefined : p.id)}
-                >
-                  Start run
-                </button>
-              </div>
-              {runFormFor === p.id && (
-                <StartRunForm
-                  project={p}
-                  onCancel={() => setRunFormFor(undefined)}
-                  onStarted={(run) => {
-                    setRunFormFor(undefined);
-                    if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
-                  }}
-                />
-              )}
-            </li>
-          ))}
-        </ul>
-        <NewProjectForm
-          disabled={runnerDown}
-          onCreated={async (res) => {
-            await projects.refresh();
-            if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
-          }}
-        />
       </section>
     </div>
   );
@@ -223,24 +269,28 @@ export function Dashboard({ system }: { system: SystemStatus | undefined }) {
 function RunRow({
   run,
   projectName,
+  onInspect,
   onStop,
   onResume,
   onRemove,
 }: {
   run: Run;
   projectName: string | undefined;
+  onInspect: (() => void) | undefined;
   onStop: () => void;
   onResume: () => void;
   onRemove: () => void;
 }) {
+  const ticketKey = run.title?.split(' ')[0];
   const body = (
     <>
       <RunStatePill state={run.state} />
-      <span className="row-title">{projectName ?? 'project'}</span>
-      {run.ticketId && <span className="badge">ticket</span>}
+      <span className="row-title">{run.title ?? projectName ?? 'project'}</span>
+      {run.title && projectName && <span className="badge">{projectName}</span>}
+      {!run.title && run.ticketId && <span className="badge">{ticketKey ?? 'ticket'}</span>}
       {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
       <span className="row-prompt">{run.prompt || <em className="muted">interactive</em>}</span>
-      <span className="row-meta">
+      <span className="row-meta mono">
         {run.lastEvent ? `${run.lastEvent} · ` : ''}
         {timeAgo(run.stateChangedAt)}
       </span>
@@ -253,7 +303,28 @@ function RunRow({
           {body}
         </Link>
       ) : (
-        <div className="row-main">{body}</div>
+        <div className="row-main" onClick={onInspect} style={onInspect ? { cursor: 'pointer' } : undefined}>
+          {body}
+        </div>
+      )}
+      {run.worktreePath && (
+        <Link
+          href={`/runs/${run.id}/review`}
+          className="btn btn-sm btn-ghost"
+          title="Inspect git diff, add line comments, commit or push branch"
+        >
+          Review
+        </Link>
+      )}
+      {onInspect && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onInspect}
+          title="Dock live terminal and hook event timeline"
+        >
+          Inspect
+        </button>
       )}
       {(run.state === 'rate_limited' || run.resumable) && (
         <button

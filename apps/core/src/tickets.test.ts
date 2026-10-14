@@ -196,4 +196,20 @@ describe('tickets', () => {
       .toEqual(expect.arrayContaining(['ticket', 'ticket_removed']));
     ws.close();
   });
+
+  it('exposes ticket key + title on run and accepts direct /api/runs/:id/prompt', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'Ship workbench' });
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    expect(run.title).toBe('DP-1 Ship workbench');
+
+    const token = await waitFile(`token-${run.id}`);
+    await hook(run.id, 'Stop', token);
+    expect((await getTicket(ticket.id)).status).toBe('review');
+
+    const promptRes = await api('POST', `/api/runs/${run.id}/prompt`, { text: 'Please add tests' });
+    expect(promptRes.statusCode).toBe(200);
+    expect((promptRes.json() as Run).lastEvent).toBe('prompt_sent');
+    expect((await getTicket(ticket.id)).status).toBe('in_progress');
+  });
 });

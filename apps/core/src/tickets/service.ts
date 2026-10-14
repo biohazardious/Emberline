@@ -84,7 +84,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     super();
     this.setMaxListeners(0);
     runs.on('run', (run, stateChanged) => {
-      if (stateChanged && run.ticketId) this.followRun(run.ticketId, run.state);
+      if (!run.ticketId) return;
+      if (stateChanged) this.followRun(run.ticketId, run.state);
+      else if (run.lastEvent === 'prompt_sent') this.followRun(run.ticketId, 'working');
     });
   }
 

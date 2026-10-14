@@ -245,12 +245,23 @@ deploy/
 docs/
 ```
 
+### 5.9 UI/UX Workbench & Competitive Feature Set
+Learned from evaluating adjacent orchestrators (`stablyai/orca`, `herdr` + `herdr-board`, `AionUi`, `Omnigent`, `Vibe Kanban`, `Conductor`):
+
+- **Unified ADE Workbench (Orca / Linear / Conductor):** Full-viewport IDE shell replacing isolated web pages. Left collapsible sidebar (Projects & Boards, Fleet Multiplexer, Attention Inbox for `waiting_input` runs, Shell Terminals, compact Quota bar), central workspace, and a **Docked Live Terminal & Run Inspector** that opens alongside the board or overview without losing page context.
+- **Precision Dark Design System v2 (Linear / Zed / Ghostty):** High-density obsidian/graphite surfaces (`#090a0d` / `#101217`), crisp `1px` structural borders, zero decorative background blurs, tabular numerals, and semantic ember/status accents reserved for live state and primary actions.
+- **Command Palette (`⌘K` / `Ctrl+K`, AionUi / Linear):** Instant keyboard navigation to any project board, fleet view, active run, terminal, or quick action (create ticket, start run, open shell, resume quota).
+- **Live Terminal + Hook Event Timeline:** Every run/ticket inspector shows both the live `xterm.js` terminal and the structured `run_events` timeline (`PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `StopFailure`, `UserPromptSubmit`) with tool names and timestamps.
+- **Fleet / Grid Multiplexer (`/fleet`, Herdr / Orca):** Side-by-side live terminal grid (`1x1`, `2x2`, focus split) for supervising parallel runs at once, with an **Attention Filter** (`waiting_input` / `rate_limited`) and inline quick-prompt bar per pane.
+- **Pipeline Columns & Stage Prompt Templates (`herdr-board` / Omnigent):** Dragging a ticket into `in_progress` can auto-dispatch a run; one-click stage templates (*Plan & Analyze*, *Implement*, *Verify & Tests*, *Self-Review*) streamline multi-step steering and critic passes.
+- **Annotated Diff Review (M6, Orca / Vibe Kanban):** Monaco diff view against the base branch with line-level review comments that compile into a single structured follow-up prompt sent back to the agent, plus stage/commit/push and worktree artifact browsing.
+
 ## 6. Phases
 
-1. **MVP (single user):** core, `ptyd`, Claude adapter, persistent PTYs, quota auto-resume, web terminal, simple board, worktree diff, headless Playwright MCP, single `docker compose` deploy.
-2. **Forge + plugins:** Gitea / GitLab / GitHub sync, MR/PR creation, CI status; out-of-process plugin host; per-worktree preview environments; canary automation; notifiers.
+1. **MVP (single user):** core, `ptyd`, Claude adapter, persistent PTYs, quota auto-resume, unified ADE workbench, fleet multiplexer, pipeline board, annotated worktree diff, headless Playwright MCP, single `docker compose` deploy.
+2. **Forge + plugins:** Gitea / GitLab / GitHub sync, MR/PR creation, CI status; out-of-process plugin host; per-worktree preview environments; canary automation; notifiers; cron/scheduled maintenance runs.
 3. **Memory and wizard:** pattern library, decision logs, deterministic templates; code-server plugin; Xvfb + noVNC.
-4. **Multi-user and additional agents:** OIDC, per-user installations or roles, Codex/OpenCode adapters.
+4. **Multi-user and additional agents:** OIDC, per-user installations or roles, Codex/OpenCode adapters, cross-agent review pipelines.
 
 ### 6.1 MVP milestones
 
@@ -262,7 +273,10 @@ docs/
 | M3 | Claude adapter | Run `claude` in a worktree; hooks drive `working` / `waiting_input` / `done` in the UI. |
 | M4 | Board | Create ticket → start run → column follows run state; follow-up prompts from the ticket. |
 | M5 | Quota scheduler | Rate limit (fixture-simulated + real) pauses dispatch and auto-resumes at reset. |
-| M6 | Review + deploy | Monaco diff, commit/push branch, artifacts view, `docker compose up` on TrueNAS. |
+| M5.1 | Workbench UI v2 | Precision Dark theme, left sidebar shell, `⌘K` command palette, docked live terminal + hook event timeline, run `title` exposure. |
+| M5.2 | Fleet & Pipeline | `/fleet` multi-terminal grid multiplexer with attention filter; pipeline board auto-start on drop to `in_progress` + stage prompt templates. |
+| M6 | Review + deploy | Monaco diff + inline diff annotations sent to Claude, commit/push branch, artifacts view, `docker compose up` on TrueNAS. |
+
 
 ## 7. Open questions
 

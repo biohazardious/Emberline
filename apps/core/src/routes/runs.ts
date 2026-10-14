@@ -1,5 +1,20 @@
-import { HookEnvelope, ResumeRunBody, type Run, type RunDetail } from '@emberline/protocol';
+import {
+  DiffScope,
+  GitCommitBody,
+  type GitCommitResponse,
+  type GitPushResponse,
+  GitStageBody,
+  HookEnvelope,
+  ResumeRunBody,
+  type Run,
+  type RunArtifact,
+  type RunDetail,
+  type RunDiffSummary,
+  type RunFileDiff,
+  TicketPromptBody,
+} from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
+import { badRequest } from '../errors.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -25,6 +40,61 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     const { text } = ResumeRunBody.parse(request.body ?? {});
     return runs.resume(request.params.id, text || undefined);
   });
+
+  /** Sends a follow-up prompt into a live run (or resumes an ended session with that prompt). */
+  app.post<{ Params: { id: string } }>('/api/runs/:id/prompt', async (request): Promise<Run> => {
+    const { text } = TicketPromptBody.parse(request.body);
+    return runs.prompt(request.params.id, text);
+  });
+
+  /** Per-run git diff summary against base branch (`branch`), `unstaged`, or `staged`. */
+  app.get<{ Params: { id: string }; Querystring: { scope?: string } }>(
+    '/api/runs/:id/diff',
+    async (request): Promise<RunDiffSummary> => {
+      const scope = request.query.scope ? DiffScope.parse(request.query.scope) : 'branch';
+      return runs.diff(request.params.id, scope);
+    },
+  );
+
+  /** Full original/modified contents and patch for a single file in the run's worktree. */
+  app.get<{ Params: { id: string }; Querystring: { path?: string; scope?: string } }>(
+    '/api/runs/:id/diff/file',
+    async (request): Promise<RunFileDiff> => {
+      if (!request.query.path) throw badRequest('query parameter "path" is required');
+      const scope = request.query.scope ? DiffScope.parse(request.query.scope) : 'branch';
+      return runs.fileDiff(request.params.id, request.query.path, scope);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/git/stage', async (request): Promise<RunDiffSummary> => {
+    const body = GitStageBody.parse(request.body ?? {});
+    return runs.stage(request.params.id, body);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/git/commit', async (request): Promise<GitCommitResponse> => {
+    const body = GitCommitBody.parse(request.body ?? {});
+    return runs.commit(request.params.id, body);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/git/push', async (request): Promise<GitPushResponse> => {
+    return runs.push(request.params.id);
+  });
+
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/artifacts',
+    async (request): Promise<RunArtifact[]> => runs.artifacts(request.params.id),
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    '/api/runs/:id/artifacts/raw',
+    async (request, reply) => {
+      if (!request.query.path) throw badRequest('query parameter "path" is required');
+      const { buffer, contentType, fileName } = await runs.readArtifact(request.params.id, request.query.path);
+      reply.header('Content-Type', contentType);
+      reply.header('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+      return reply.send(buffer);
+    },
+  );
 
   app.delete<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
     await runs.remove(request.params.id);

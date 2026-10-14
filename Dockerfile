@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-#
 # Emberline images. Everything (dev, test, build, run) happens in containers;
 # the host only needs Docker.
 #
@@ -78,7 +76,7 @@ RUN pnpm lint && pnpm typecheck && pnpm test
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------

@@ -1,18 +1,23 @@
 import type { PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
-import { type DragEvent, type FormEvent, useEffect, useMemo, useState } from 'react';
+import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
+import { QuotaPanel } from '../components/QuotaPanel';
+import { RunEventTimeline, STAGE_TEMPLATES } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
 import { useTickets } from '../hooks/useTickets';
 import { timeAgo } from '../time';
 
+const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
+const ReviewView = lazy(() => import('../components/ReviewView').then((m) => ({ default: m.ReviewView })));
+
 const COLUMNS: { status: TicketStatus; label: string; hint: string }[] = [
   { status: 'backlog', label: 'Backlog', hint: 'Ideas and not-yet-ready work' },
   { status: 'ready', label: 'Ready', hint: 'Specified and ready to hand to Claude' },
-  { status: 'in_progress', label: 'In progress', hint: 'Claude is on it (or waiting for you)' },
+  { status: 'in_progress', label: 'In progress', hint: 'Drop here to dispatch Claude (or monitor active run)' },
   { status: 'review', label: 'Review', hint: 'Claude finished its turn; review or send a follow-up' },
   { status: 'done', label: 'Done', hint: 'Accepted; runs never move tickets out of here' },
 ];
@@ -47,6 +52,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [openId, setOpenId] = useState<string>();
   const [dragId, setDragId] = useState<string>();
   const [drop, setDrop] = useState<DropTarget>();
+  const [autoStart, setAutoStart] = useState(true);
   const [error, setError] = useState<string>();
 
   /** Newest run per ticket (runs arrive newest-first). */
@@ -71,10 +77,22 @@ export function BoardPage({ projectId }: { projectId: string }) {
     const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
+    const enteringInProgress = target.status === 'in_progress' && ticket.status !== 'in_progress';
+    const currentRun = latestRun.get(ticket.id);
+    const hasLiveRun = currentRun && !currentRun.endedAt;
+
     patchLocal({ ...ticket, status: target.status, position });
     setError(undefined);
     try {
-      patchLocal(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position }));
+      const updated = await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position });
+      patchLocal(updated);
+      // Pipeline column behavior (herdr-board): dropping into In progress dispatches an agent when idle.
+      if (enteringInProgress && autoStart && !hasLiveRun) {
+        const started = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
+          permissionMode: 'default',
+        });
+        patchLocal(started.ticket);
+      }
     } catch (e) {
       patchLocal(ticket);
       setError(errorMessage(e));
@@ -99,12 +117,27 @@ export function BoardPage({ projectId }: { projectId: string }) {
             ←
           </Link>
           <div>
-            <p className="eyebrow">{project?.name ?? 'Project'}</p>
-            <h1>Board</h1>
+            <p className="eyebrow">{project?.name ?? 'Project'} · Pipeline Board</p>
+            <h1>{project?.name ?? 'Board'}</h1>
           </div>
         </div>
-        <QuickAdd projectId={projectId} onCreated={patchLocal} onError={setError} />
+        <div className="board-controls">
+          <button
+            id="pipeline-auto-start"
+            type="button"
+            className={`chip-toggle${autoStart ? ' active' : ''}`}
+            aria-pressed={autoStart}
+            title="When enabled, dragging a card into In progress automatically starts a Claude run"
+            onClick={() => setAutoStart((v) => !v)}
+          >
+            <span className="dot" />
+            Auto-dispatch on In progress
+          </button>
+          <QuickAdd projectId={projectId} onCreated={patchLocal} onError={setError} />
+        </div>
       </header>
+
+      <QuotaPanel compact />
 
       {error && (
         <div className="banner banner-error" role="alert">
@@ -141,6 +174,11 @@ export function BoardPage({ projectId }: { projectId: string }) {
               <header className="board-col-head" title={col.hint}>
                 <span className="board-col-dot" aria-hidden="true" />
                 <h2>{col.label}</h2>
+                {col.status === 'in_progress' && autoStart && (
+                  <span className="badge mono" title="Drop a card here to auto-start Claude">
+                    auto
+                  </span>
+                )}
                 <span className="board-count">{list.length}</span>
               </header>
               <ol className="board-cards">
@@ -254,6 +292,7 @@ function TicketCard({
   onDragOver: (e: DragEvent<HTMLLIElement>) => void;
 }) {
   const live = run && !run.endedAt;
+  const shortBranch = run?.branch?.replace(/^emberline\//, '');
   return (
     <>
       {dropBefore && <li className="drop-marker" aria-hidden="true" />}
@@ -275,13 +314,15 @@ function TicketCard({
       >
         <div className="card-top">
           <span className="card-key mono">{ticket.key}</span>
+          {shortBranch && <span className="card-branch mono">{shortBranch}</span>}
           <span className="prio-dot" title={`${PRIORITIES[ticket.priority]} priority`} />
         </div>
         <p className="card-title">{ticket.title}</p>
         {run && (
           <div className="card-foot">
             <RunStatePill state={run.state} />
-            <span className="card-meta">{timeAgo(run.stateChangedAt)}</span>
+            {run.lastEvent && <span className="card-event mono">{run.lastEvent}</span>}
+            <span className="card-meta mono">{timeAgo(run.stateChangedAt)}</span>
           </div>
         )}
       </li>
@@ -307,6 +348,9 @@ function TicketDrawer({
   const [priority, setPriority] = useState(ticket.priority);
   const [mode, setMode] = useState<PermissionMode>('default');
   const [followUp, setFollowUp] = useState('');
+  const [viewTab, setViewTab] = useState<'details' | 'review' | 'terminal' | 'events'>(
+    ticket.status === 'review' && run?.worktreePath ? 'review' : 'details',
+  );
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const live = run && !run.endedAt;
@@ -371,7 +415,7 @@ function TicketDrawer({
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside
-        className="drawer"
+        className={`drawer${run ? ' drawer-wide' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-key"
@@ -381,78 +425,161 @@ function TicketDrawer({
           <span id="drawer-key" className="card-key mono">
             {ticket.key}
           </span>
-          <span className="muted small">updated {timeAgo(ticket.updatedAt)}</span>
+          {run && <RunStatePill state={run.state} />}
+          {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
+          <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
+          {run && (
+            <div className="segmented" role="tablist" aria-label="Ticket inspector view">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewTab === 'details'}
+                className={viewTab === 'details' ? 'active' : ''}
+                onClick={() => setViewTab('details')}
+              >
+                Spec & Agent
+              </button>
+              {run.worktreePath && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewTab === 'review'}
+                  className={viewTab === 'review' ? 'active' : ''}
+                  onClick={() => setViewTab('review')}
+                >
+                  Review & Diff
+                </button>
+              )}
+              {run.terminalId && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewTab === 'terminal'}
+                  className={viewTab === 'terminal' ? 'active' : ''}
+                  onClick={() => setViewTab('terminal')}
+                >
+                  Live Terminal
+                </button>
+              )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewTab === 'events'}
+                className={viewTab === 'events' ? 'active' : ''}
+                onClick={() => setViewTab('events')}
+              >
+                Events
+              </button>
+            </div>
+          )}
           <button id="drawer-close" className="icon-btn" aria-label="Close" onClick={onClose}>
             ×
           </button>
         </header>
 
-        <input
-          id="drawer-title"
-          className="input drawer-title"
-          value={title}
-          maxLength={200}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <textarea
-          id="drawer-body"
-          className="input drawer-body"
-          rows={6}
-          placeholder="Details, acceptance criteria, files to look at… (sent to Claude with the title)"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-        />
-        <div className="drawer-row">
-          <div className="segmented" role="radiogroup" aria-label="Priority">
-            {PRIORITIES.map((label, value) => (
-              <button
-                key={label}
-                type="button"
-                role="radio"
-                aria-checked={priority === value}
-                className={priority === value ? 'active' : ''}
-                onClick={() => setPriority(value)}
-              >
-                {label}
-              </button>
-            ))}
+        {viewTab === 'review' && run && (
+          <div className="drawer-review-pane">
+            <Suspense fallback={<div className="empty" aria-busy="true">Loading diff & review…</div>}>
+              <ReviewView run={run} />
+            </Suspense>
           </div>
-          <button id="drawer-save" className="btn btn-sm" disabled={!dirty || !!busy || !title.trim()} onClick={save}>
-            {busy === 'save' ? 'Saving…' : 'Save'}
-          </button>
-        </div>
+        )}
 
-        <label className="drawer-label" htmlFor="drawer-status">
-          Column
-        </label>
-        <div id="drawer-status" className="segmented segmented-wrap" role="radiogroup" aria-label="Column">
-          {COLUMNS.map((c) => (
-            <button
-              key={c.status}
-              type="button"
-              role="radio"
-              aria-checked={ticket.status === c.status}
-              className={ticket.status === c.status ? 'active' : ''}
-              onClick={() => onMove(c.status)}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
+        {viewTab === 'terminal' && run?.terminalId && (
+          <div className="drawer-terminal-pane">
+            <Suspense fallback={<div className="term-shell term-shell-compact" aria-busy="true" />}>
+              <TerminalView key={run.terminalId} terminalId={run.terminalId} compact />
+            </Suspense>
+          </div>
+        )}
+
+        {viewTab === 'events' && run && (
+          <div className="drawer-events-pane">
+            <RunEventTimeline run={run} />
+          </div>
+        )}
+
+        {viewTab === 'details' && (
+          <>
+            <input
+              id="drawer-title"
+              className="input drawer-title"
+              value={title}
+              maxLength={200}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <textarea
+              id="drawer-body"
+              className="input drawer-body"
+              rows={5}
+              placeholder="Details, acceptance criteria, files to look at… (sent to Claude with the title)"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+            />
+            <div className="drawer-row">
+              <div className="segmented" role="radiogroup" aria-label="Priority">
+                {PRIORITIES.map((label, value) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="radio"
+                    aria-checked={priority === value}
+                    className={priority === value ? 'active' : ''}
+                    onClick={() => setPriority(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button id="drawer-save" className="btn btn-sm" disabled={!dirty || !!busy || !title.trim()} onClick={save}>
+                {busy === 'save' ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+
+            <label className="drawer-label" htmlFor="drawer-status">
+              Column
+            </label>
+            <div id="drawer-status" className="segmented segmented-wrap" role="radiogroup" aria-label="Column">
+              {COLUMNS.map((c) => (
+                <button
+                  key={c.status}
+                  type="button"
+                  role="radio"
+                  aria-checked={ticket.status === c.status}
+                  className={ticket.status === c.status ? 'active' : ''}
+                  onClick={() => onMove(c.status)}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <section className="drawer-agent" aria-label="Agent">
-          <h2>Agent</h2>
-          {run && (
-            <div className="agent-run">
-              <RunStatePill state={run.state} />
-              {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
-              {run.terminalId && (
-                <Link id="drawer-terminal" href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost">
-                  Open terminal →
-                </Link>
-              )}
-            </div>
-          )}
+          <div className="drawer-agent-head">
+            <h2>Agent Execution</h2>
+            {run && (
+              <div className="agent-run">
+                <RunStatePill state={run.state} />
+                {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
+                {run.terminalId && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setViewTab(viewTab === 'terminal' ? 'details' : 'terminal')}
+                    >
+                      {viewTab === 'terminal' ? 'Show spec' : 'Docked terminal'}
+                    </button>
+                    <Link id="drawer-terminal" href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost">
+                      Open terminal →
+                    </Link>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {queued && (
             <div className="agent-note">
               <span>Queued: starts as soon as a slot and quota are free.</span>
@@ -481,6 +608,20 @@ function TicketDrawer({
           )}
           {canFollowUp && (
             <div className="run-form drawer-form">
+              <div className="template-bar" aria-label="Stage prompt templates">
+                <span className="template-label mono">Stage:</span>
+                {STAGE_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    className="chip-btn"
+                    title={tpl.hint}
+                    onClick={() => setFollowUp(tpl.prompt)}
+                  >
+                    {tpl.label}
+                  </button>
+                ))}
+              </div>
               <textarea
                 id="drawer-followup"
                 className="input"

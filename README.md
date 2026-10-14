@@ -7,19 +7,20 @@ Self-hosted orchestrator for AI coding agents: a ticket board drives the **real 
 > Emberline is not a SaaS and has no account sharing or rotation features.
 > Emberline is an independent project and is **not affiliated with or endorsed by Anthropic**.
 
-Status: early development (MVP milestones M0–M5 done: PTY host, web terminal, Claude runs with hook-driven state, ticket board, quota scheduler). See [PROJECT.md](PROJECT.md) for the design.
+Status: **MVP complete (M0–M6)**: PTY host, web terminal, Claude runs with hook-driven state, Kanban ticket board, quota-aware scheduler, Fleet Multiplexer (`/fleet`), and Monaco diff review with inline review annotations, commit/push, and worktree artifacts. See [PROJECT.md](PROJECT.md) for the design.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `apps/core` | API, board, scheduler, git layer (Fastify) |
-| `apps/web` | Web UI (React + Vite) |
+| `apps/core` | API, board, scheduler, git diff/commit/push & artifact layer (Fastify) |
+| `apps/web` | ADE Workbench UI (React + Vite + xterm.js + Monaco Editor) |
 | `apps/ptyd` | PTY holder daemon — keeps agent sessions alive across core restarts |
 | `packages/protocol` | zod schemas for every wire contract |
 | `packages/adapter-sdk` | Agent adapter interface |
 | `packages/adapter-claude` | Claude Code adapter |
 | `packages/hook` | `emberline-hook`, forwards Claude Code hooks to core |
+| `deploy/truenas-compose.yaml` | TrueNAS SCALE dataset-backed Compose stack |
 
 ## Running (self-host)
 
@@ -33,24 +34,52 @@ make upgrade-core        # rebuild/restart core only; running agents keep runnin
 make logs / make down
 ```
 
-Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinned Claude Code CLI, hosts the agents). They share only the ptyd socket and the workspaces volume.
+Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinned Claude Code CLI, hosts the agents). They share only the ptyd socket and the workspaces volume (`runner-home` is mounted read-only into `core` so `git push` can use your runner's SSH/git credentials).
 
-### Runs
+### TrueNAS SCALE Deployment
+
+On TrueNAS SCALE 24.10+ (Electric Eel / Fangtooth), use [`deploy/truenas-compose.yaml`](deploy/truenas-compose.yaml) with dataset bind mounts:
+
+```bash
+# 1. Create datasets / directories on your pool and set ownership to node (1000:1000)
+mkdir -p /mnt/tank/apps/emberline/{data,runner-home,workspaces}
+chown -R 1000:1000 /mnt/tank/apps/emberline/{data,runner-home,workspaces}
+
+# 2. Build and launch the stack
+docker compose -f deploy/truenas-compose.yaml up -d --build
+
+# 3. Log in once with your personal Claude subscription inside the runner
+docker compose -f deploy/truenas-compose.yaml exec -it runner claude login
+```
+
+Set `EMBERLINE_BIND=0.0.0.0` (behind Tailscale or a TLS reverse proxy) and `TZ=Europe/Istanbul` (or your local IANA timezone) in your environment.
+
+### Runs & Fleet Multiplexer
 
 **Start run** on a project launches Claude Code in the runner:
 
 - Git projects get an isolated worktree at `/workspaces/.worktrees/<project>/<id>` on a new branch `emberline/run-<id>`; plain directories run in place.
 - Claude Code hooks are wired per run via `--settings`. `emberline-hook` posts them to core (`EMBERLINE_HOOK_URL`, default `http://core:7420` in compose) with a per-run token, and the UI shows live state: `starting` → `working` / `needs you` → `done` (or `failed` if the process exits non-zero).
+- **Fleet Multiplexer (`/fleet`)** renders a `2×2`, `2×1`, or `1×1` grid of live agent terminals with an attention filter (`Waiting on you`) and inline steering prompts.
 - Removing a run keeps its worktree and branch.
 
 ### Board
 
 Each project has a Kanban board (**Board** on the dashboard): Backlog → Ready → In progress → Review → Done.
 
-- Tickets get a key from the project name (`Demo Project` → `DP-1`). Drag cards to reorder or move them; on touch devices use the column picker in the ticket drawer.
+- Tickets get a key from the project name (`Demo Project` → `DP-1`). Drag cards to reorder or move them; dropping a `backlog`/`ready` card without an active run onto **In progress** automatically launches Claude.
 - **Start with Claude** launches a run on branch `emberline/<key>-<title-slug>` with the title + description as the prompt. The card then follows the run live: working / needs you → *In progress*, turn finished → *Review*.
 - From *Review*, a follow-up prompt is typed into the same live Claude session and the card moves back to *In progress*. Permission prompts are answered in the run's terminal.
 - Runs never move a ticket out of *Done*. Deleting a ticket keeps its runs, branches and worktrees.
+
+### Diff Review, Inline Annotations, Commit/Push & Artifacts (M6)
+
+Every git-backed run has a **Review & Diff** workspace (available as a tab inside the Ticket Drawer and at `/runs/:id/review`):
+
+- **Monaco Diff Editor:** Inspect side-by-side or inline diffs across `Branch vs base`, `Unstaged`, or `Staged` scopes with per-file `+additions / -deletions` and stage/unstage toggles.
+- **Inline Diff Annotations:** Click any line in the Monaco diff to queue line-specific review notes (`path:line`) and click **Request Changes** to dispatch structured revision instructions directly to the live or resumable Claude session.
+- **Commit & Push:** Stage and commit working-tree changes and push the run branch (`emberline/...`) to `origin` directly from the UI. Pushing to `main`, `master`, or the project's `defaultBranch` is blocked.
+- **Worktree Artifacts:** Browse and preview screenshots, Playwright traces, logs, and newly created files from the run's worktree.
 
 ### Quota scheduler
 

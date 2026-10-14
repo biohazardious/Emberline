@@ -1,0 +1,80 @@
+# TrueNAS SCALE (24.10 Electric Eel+) Custom App / Docker Compose stack for Emberline.
+#
+# Recommended dataset layout on your TrueNAS pool (e.g. /mnt/tank/apps/emberline):
+#   /mnt/tank/apps/emberline/data         (uid:gid 1000:1000) -> SQLite DB + session keys
+#   /mnt/tank/apps/emberline/runner-home  (uid:gid 1000:1000) -> ~/.claude login + ~/.ssh keys
+#   /mnt/tank/apps/emberline/workspaces   (uid:gid 1000:1000) -> Git repositories + .worktrees/
+#
+# Prepare dataset ownership once on the TrueNAS host:
+#   mkdir -p /mnt/tank/apps/emberline/{data,runner-home,workspaces}
+#   chown -R 1000:1000 /mnt/tank/apps/emberline/{data,runner-home,workspaces}
+#
+# First-time Claude subscription login (run once after starting the stack):
+#   docker compose exec -it runner claude login
+
+name: emberline
+
+services:
+  runner:
+    build:
+      context: ..
+      target: runner
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.105}
+    restart: unless-stopped
+    init: true
+    environment:
+      PTYD_SOCKET: /run/emberline/ptyd.sock
+      PTYD_CWD: /workspaces
+      EMBERLINE_HOOK_URL: http://core:7420
+      TZ: ${TZ:-Europe/Istanbul}
+    volumes:
+      - ptyd-sock:/run/emberline
+      - ${EMBERLINE_RUNNER_HOME:-/mnt/tank/apps/emberline/runner-home}:/home/node
+      - ${EMBERLINE_WORKSPACES:-/mnt/tank/apps/emberline/workspaces}:/workspaces
+    healthcheck:
+      test: ['CMD', 'test', '-S', '/run/emberline/ptyd.sock']
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
+
+  core:
+    build:
+      context: ..
+      target: runtime
+    restart: unless-stopped
+    init: true
+    depends_on:
+      runner:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      EMBERLINE_HOST: 0.0.0.0
+      EMBERLINE_PORT: 7420
+      EMBERLINE_DATA_DIR: /data
+      EMBERLINE_WORKSPACES_DIR: /workspaces
+      PTYD_SOCKET: /run/emberline/ptyd.sock
+      TZ: ${TZ:-Europe/Istanbul}
+    ports:
+      - '${EMBERLINE_BIND:-127.0.0.1}:${EMBERLINE_PORT:-7420}:7420'
+    volumes:
+      - ${EMBERLINE_DATA:-/mnt/tank/apps/emberline/data}:/data
+      - ${EMBERLINE_WORKSPACES:-/mnt/tank/apps/emberline/workspaces}:/workspaces
+      - ${EMBERLINE_RUNNER_HOME:-/mnt/tank/apps/emberline/runner-home}:/home/node:ro
+      - ptyd-sock:/run/emberline
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:7420/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  ptyd-sock:

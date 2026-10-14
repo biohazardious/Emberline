@@ -14,10 +14,18 @@ import {
 import {
   type CreateRunBody,
   CreateRunBody as CreateRunBodySchema,
+  type DiffScope,
+  type GitCommitBody,
+  type GitCommitResponse,
+  type GitPushResponse,
+  type GitStageBody,
   type HookEnvelope,
   type Run,
+  type RunArtifact,
   type RunDetail,
+  type RunDiffSummary,
   type RunEvent,
+  type RunFileDiff,
   type RunState,
 } from '@emberline/protocol';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
@@ -26,7 +34,16 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
-import { prepareWorkspace } from './git.js';
+import {
+  commitWorktree,
+  inspectDiff,
+  inspectFileDiff,
+  listWorktreeArtifacts,
+  prepareWorkspace,
+  pushWorktreeBranch,
+  readWorktreeArtifact,
+  stageWorktreeFiles,
+} from './git.js';
 
 type RunRow = typeof runs.$inferSelect;
 type EventSource = RunEvent['source'];
@@ -75,6 +92,7 @@ export const toRun = (row: RunRow): Run => ({
   id: row.id,
   projectId: row.projectId,
   ticketId: row.ticketId,
+  title: row.title,
   agent: row.agent,
   state: row.state as RunState,
   prompt: row.prompt,
@@ -380,12 +398,80 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
   }
 
+  /**
+   * Sends a follow-up prompt to a run: types into the live PTY when running, or respawns
+   * `claude --resume` when the process has ended.
+   */
+  async prompt(id: string, text: string): Promise<Run> {
+    const row = this.row(id);
+    if (row.state === 'queued') throw conflict('the agent has not started yet; it is queued');
+    if (row.ptydSessionId && !row.endedAt) return this.sendPrompt(id, text);
+    if (!row.agentSessionId) throw conflict('no agent session to continue; start a new run');
+    return this.resume(id, text);
+  }
+
   private async typePrompt(sessionId: string, text: string): Promise<void> {
     const ptyd = this.ptyd.get();
     const input = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
     await ptyd.write(sessionId, input);
     await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS));
     await ptyd.write(sessionId, '\r');
+  }
+
+  private defaultBranch(projectId: string): string {
+    const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
+    return project?.defaultBranch ?? 'main';
+  }
+
+  async diff(id: string, scope: DiffScope = 'branch'): Promise<RunDiffSummary> {
+    const row = this.row(id);
+    return inspectDiff(row.worktreePath, this.defaultBranch(row.projectId), scope, row.id, row.branch);
+  }
+
+  async fileDiff(id: string, relPath: string, scope: DiffScope = 'branch'): Promise<RunFileDiff> {
+    const row = this.row(id);
+    return inspectFileDiff(row.worktreePath, this.defaultBranch(row.projectId), scope, relPath);
+  }
+
+  async stage(id: string, body: GitStageBody): Promise<RunDiffSummary> {
+    const row = this.row(id);
+    await stageWorktreeFiles(row.worktreePath, body);
+    return this.diff(id, 'branch');
+  }
+
+  async commit(id: string, body: GitCommitBody): Promise<GitCommitResponse> {
+    const row = this.row(id);
+    const res = await commitWorktree(row.worktreePath, row.branch, body);
+    this.record(id, {
+      source: 'user',
+      type: 'committed',
+      payload: { sha: res.sha, message: body.message.slice(0, 200) },
+    });
+    return res;
+  }
+
+  async push(id: string): Promise<GitPushResponse> {
+    const row = this.row(id);
+    const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId));
+    this.record(id, {
+      source: 'user',
+      type: 'pushed',
+      payload: { branch: res.branch, remote: res.remote },
+    });
+    return res;
+  }
+
+  async artifacts(id: string): Promise<RunArtifact[]> {
+    const row = this.row(id);
+    return listWorktreeArtifacts(row.worktreePath, this.defaultBranch(row.projectId));
+  }
+
+  async readArtifact(
+    id: string,
+    relPath: string,
+  ): Promise<{ buffer: Buffer; contentType: string; fileName: string }> {
+    const row = this.row(id);
+    return readWorktreeArtifact(row.worktreePath, relPath);
   }
 
   /** Forgets the run and its terminal. The worktree and branch are kept on purpose. */

@@ -22,6 +22,7 @@ services:
       - ptyd-socket:/run/emberline
       - data:/data
       - workspaces:/workspaces
+      - runner-home:/home/node:ro
     depends_on:
       runner:
         condition: service_healthy
