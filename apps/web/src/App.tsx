@@ -202,6 +202,34 @@ function Shell() {
     }
   };
 
+  const handleCleanupProjectWorktrees = async () => {
+    if (!activeProject) return;
+    try {
+      await api(`/api/projects/${activeProject.id}/cleanup-worktrees`, 'POST');
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteActiveProject = async () => {
+    if (!activeProject) return;
+    const confirmed = window.confirm(
+      `Delete project "${activeProject.name}" (${activeProject.slug})?\n\nThis will stop all runs, remove its tickets & worktrees, and delete the workspace folder (${activeProject.path}).`,
+    );
+    if (!confirmed) return;
+    try {
+      const res = await api<{ ok: boolean; deletedProjectId: string; nextActiveProjectId: string | null }>(
+        `/api/projects/${activeProject.id}`,
+        'DELETE',
+      );
+      await projects.refresh();
+      handleSwitchProject(res.nextActiveProjectId ?? '');
+      if (!res.nextActiveProjectId) navigate('/');
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div className={`app workbench${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <aside className={`sidebar${mobileNavOpen ? ' sidebar-open' : ''}`} aria-label="Workspace navigation">
@@ -230,18 +258,43 @@ function Shell() {
               gap: '6px',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
               <span className="eyebrow">Active Project</span>
-              <button
-                id="sidebar-new-project"
-                type="button"
-                className="btn btn-sm btn-ghost"
-                style={{ padding: '2px 6px', fontSize: '0.75rem' }}
-                onClick={() => setWizardOpen(true)}
-                title="Create new project with AI Factory Wizard or Git Clone"
-              >
-                + New
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                {activeProject && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      style={{ padding: '2px 5px', fontSize: '0.72rem' }}
+                      onClick={() => void handleCleanupProjectWorktrees()}
+                      title={`Prune finished git worktrees for ${activeProject.name}`}
+                    >
+                      🧹
+                    </button>
+                    <button
+                      id="sidebar-delete-project"
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      style={{ padding: '2px 5px', fontSize: '0.72rem', color: 'var(--danger)' }}
+                      onClick={() => void handleDeleteActiveProject()}
+                      title={`Delete project ${activeProject.name} and its workspace files`}
+                    >
+                      🗑
+                    </button>
+                  </>
+                )}
+                <button
+                  id="sidebar-new-project"
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  style={{ padding: '2px 6px', fontSize: '0.75rem' }}
+                  onClick={() => setWizardOpen(true)}
+                  title="Create new project with AI Factory Wizard or Git Clone"
+                >
+                  + New
+                </button>
+              </div>
             </div>
             <select
               id="project-switcher"

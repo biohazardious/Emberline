@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActiveProjectPreference,
@@ -778,17 +778,51 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     },
   );
 
-  /** Removes the project record only; files in the workspace are left untouched on purpose. */
-  app.delete<{ Params: { id: string } }>('/api/projects/:id', async (request) => {
-    const projectId = request.params.id;
-    tickets.setAutoChain(projectId, false);
-    for (const run of runs.list()) {
-      if (run.projectId === projectId && !run.endedAt && run.state !== 'done' && run.state !== 'failed') {
-        await runs.stop(run.id).catch(() => {});
-      }
-    }
-    const result = db.delete(projects).where(eq(projects.id, projectId)).run();
-    if (result.changes === 0) throw notFound('no such project');
-    return { ok: true };
+  app.post<{ Params: { id: string } }>('/api/projects/:id/cleanup-worktrees', async (request) => {
+    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+    if (!row) throw notFound('no such project');
+    return runs.garbageCollect({
+      projectId: row.id,
+      keepRecent: 0,
+      includeFailed: true,
+      pruneWorktrees: true,
+    });
   });
+
+  app.delete<{ Params: { id: string }; Querystring: { deleteFiles?: string } }>(
+    '/api/projects/:id',
+    async (request) => {
+      const projectId = request.params.id;
+      const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
+      if (!row) throw notFound('no such project');
+
+      tickets.setAutoChain(projectId, false);
+      for (const run of runs.list()) {
+        if (run.projectId === projectId) {
+          await runs.remove(run.id).catch(() => {});
+        }
+      }
+
+      const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
+      await rm(worktreeSlugDir, { recursive: true, force: true }).catch(() => {});
+
+      const shouldDeleteFiles = request.query.deleteFiles !== '0';
+      const resolvedWorkspace = path.resolve(row.path);
+      const resolvedRoot = path.resolve(config.workspacesDir);
+      if (
+        shouldDeleteFiles &&
+        resolvedWorkspace.startsWith(resolvedRoot + path.sep) &&
+        resolvedWorkspace !== resolvedRoot
+      ) {
+        await rm(resolvedWorkspace, { recursive: true, force: true }).catch(() => {});
+      }
+
+      db.delete(projects).where(eq(projects.id, projectId)).run();
+
+      const nextFirst = db.select().from(projects).orderBy(asc(projects.createdAt)).get();
+      saveActiveProjectId(nextFirst?.id ?? null);
+
+      return { ok: true, deletedProjectId: projectId, nextActiveProjectId: nextFirst?.id ?? null };
+    },
+  );
 }

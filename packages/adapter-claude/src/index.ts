@@ -357,14 +357,23 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
       : `${bin} ${flags}`.trim();
   }
 
+  const watcherSnippet = options.prompt
+    ? `( LAST_GIT=""; while sleep 2; do CUR_GIT=$(git status --porcelain 2>/dev/null | head -n 5 | tr '\\n' ' ' | sed 's/["\\\\]/ /g'); if [ -n "$CUR_GIT" ] && [ "$CUR_GIT" != "$LAST_GIT" ]; then LAST_GIT="$CUR_GIT"; echo "{\\"tool_name\\":\\"Edit\\",\\"message\\":\\"Worktree updated: $CUR_GIT\\"}" | ${hook} PreToolUse >/dev/null 2>&1 || true; echo "{\\"tool_name\\":\\"Edit\\",\\"message\\":\\"Worktree updated: $CUR_GIT\\"}" | ${hook} PostToolUse >/dev/null 2>&1 || true; fi; done ) & EMBERLINE_WATCH_PID=$!`
+    : '';
+
   const script = [
     `echo '{"session_id":"'${options.agent}-${options.runId.slice(0, 8)}'"}' | ${hook} SessionStart >/dev/null 2>&1 || true`,
     options.prompt
       ? `echo '{"prompt":"started"}' | ${hook} UserPromptSubmit >/dev/null 2>&1 || true`
       : '',
+    options.prompt
+      ? `echo '{"tool_name":"${options.agent}","message":"Executing ${options.agent} CLI task"}' | ${hook} PreToolUse >/dev/null 2>&1 || true`
+      : '',
+    watcherSnippet,
     cliCmd,
     `STATUS=$?`,
-    `if [ "$STATUS" -eq 0 ]; then echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; fi`,
+    options.prompt ? `kill "$EMBERLINE_WATCH_PID" >/dev/null 2>&1 || true` : '',
+    `if [ "$STATUS" -eq 0 ]; then echo '{"tool_name":"${options.agent}","message":"Completed ${options.agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else echo '{"error":"cli_exit","reason":"${options.agent} exited with non-zero code"}' | ${hook} StopFailure >/dev/null 2>&1 || true; fi`,
     `exit $STATUS`,
   ]
     .filter(Boolean)

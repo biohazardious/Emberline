@@ -76,7 +76,7 @@ RUN pnpm lint && pnpm typecheck && pnpm test
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
+  && apt-get install -y --no-install-recommends git ca-certificates openssh-client python3 make \
   && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,12 @@ FROM runtime AS runner
 # Pinned on purpose (PROJECT.md §3.4). Bump via .env / build arg after a canary run.
 ARG CLAUDE_CODE_VERSION=2.1.296
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends bash less procps openssh-client chromium \
+  && apt-get install -y --no-install-recommends \
+    bash less procps openssh-client chromium \
+    build-essential pkg-config cmake \
+    golang-go rustc cargo \
+    python3-pip python3-venv python3-pytest \
+    sqlite3 curl jq zip unzip \
   && rm -rf /var/lib/apt/lists/*
 RUN npm install -g \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \

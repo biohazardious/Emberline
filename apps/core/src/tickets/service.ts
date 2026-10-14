@@ -92,15 +92,25 @@ export function statusForRunState(state: Run['state']): TicketStatus | null {
   return null; // failed: stays put and shows the failed run
 }
 
-function hasNpmBuildScript(workspacePath: string): boolean {
+function hasVerifiableBuildTarget(workspacePath: string): boolean {
   const pkgPath = path.join(workspacePath, 'package.json');
-  if (!existsSync(pkgPath)) return false;
-  try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
-    return Boolean(pkg.scripts?.build);
-  } catch {
-    return false;
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
+      if (pkg.scripts?.build || pkg.scripts?.typecheck || pkg.scripts?.check) return true;
+    } catch {
+      // ignore invalid package.json
+    }
   }
+  return (
+    existsSync(path.join(workspacePath, 'Cargo.toml')) ||
+    existsSync(path.join(workspacePath, 'go.mod')) ||
+    existsSync(path.join(workspacePath, 'pyproject.toml')) ||
+    existsSync(path.join(workspacePath, 'requirements.txt')) ||
+    existsSync(path.join(workspacePath, 'setup.py')) ||
+    existsSync(path.join(workspacePath, 'platformio.ini')) ||
+    existsSync(path.join(workspacePath, 'Makefile'))
+  );
 }
 
 /**
@@ -428,15 +438,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       this.autoChainProjects.add(run.projectId);
     }
 
-    // 2. Self-Healing Build Gate: if enabled and package.json has a build script, verify the build
-    //    before syncing or moving to Done. If the build fails and the run hasn't been self-healed yet,
-    //    resume the agent with the build error log so it fixes its own mistake automatically.
+    // 2. Polyglot Self-Healing Build Gate: if enabled and the workspace has a verifiable build/syntax
+    //    target (Node/TS, Python, Go, Rust, PlatformIO, or Makefile), verify it before syncing or
+    //    moving to Done. If verification fails, resume the agent with the error log automatically.
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
       (!run.endedAt || run.resumable) &&
       run.worktreePath &&
-      hasNpmBuildScript(run.worktreePath)
+      hasVerifiableBuildTarget(run.worktreePath)
     ) {
       this.selfHealedRuns.add(run.id);
       const buildRes = await buildWorkspaceDemo({
@@ -449,7 +459,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         await this.runs
           .prompt(
             run.id,
-            `[Self-Healing Build Gate] The project build (\`npm run build\`) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the build/compile errors above and verify the build succeeds before finishing.`,
+            `[Self-Healing Build Gate] Automated build & syntax verification failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the build/compile errors above and verify the project builds cleanly before finishing.`,
           )
           .catch(() => undefined);
         return;

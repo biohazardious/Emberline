@@ -408,6 +408,40 @@ export function Dashboard({
                         Shell
                       </button>
                       <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        title="Prune finished git worktrees for this project"
+                        onClick={async () => {
+                          await api(`/api/projects/${p.id}/cleanup-worktrees`, 'POST');
+                        }}
+                      >
+                        🧹 Clean Worktrees
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        style={{ color: 'var(--danger)' }}
+                        title="Delete project, stop runs, and remove its workspace directory"
+                        onClick={async () => {
+                          if (
+                            !window.confirm(
+                              `Delete project "${p.name}" (${p.slug}) and remove its workspace directory (${p.path})?`,
+                            )
+                          ) {
+                            return;
+                          }
+                          const res = await api<{
+                            ok: boolean;
+                            deletedProjectId: string;
+                            nextActiveProjectId: string | null;
+                          }>(`/api/projects/${p.id}`, 'DELETE');
+                          await projects.refresh();
+                          onSelectProject?.(res.nextActiveProjectId);
+                        }}
+                      >
+                        🗑 Delete
+                      </button>
+                      <button
                         id={`start-run-${p.slug}`}
                         className="btn btn-sm btn-primary"
                         disabled={runnerDown}

@@ -1,7 +1,16 @@
-import { type ClaudeTokenBucket, type ClaudeUsageTelemetry, MAX_CONCURRENCY, type SchedulerState } from '@emberline/protocol';
-import { useEffect, useState } from 'react';
+import {
+  type AgentId,
+  type ClaudeTokenBucket,
+  type ClaudeUsageTelemetry,
+  type FactorySettings,
+  MAX_CONCURRENCY,
+  PROVIDER_REGISTRY,
+  type SchedulerState,
+} from '@emberline/protocol';
+import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { usePoll } from '../hooks/usePoll';
+import { useRuns } from '../hooks/useRuns';
 import { useScheduler } from '../hooks/useScheduler';
 
 const SOURCE_LABEL = {
@@ -118,7 +127,9 @@ function TokenBucketCard({ label, sublabel, bucket }: { label: string; sublabel:
  */
 export function QuotaPanel({ compact = false }: { compact?: boolean }) {
   const { scheduler, setScheduler } = useScheduler();
+  const { runs } = useRuns();
   const usagePoll = usePoll(() => api<ClaudeUsageTelemetry>('/api/factory/claude-usage'), 30_000);
+  const settingsPoll = usePoll(() => api<FactorySettings>('/api/factory/settings'), 25_000);
   const [manualUsage, setManualUsage] = useState<ClaudeUsageTelemetry | null>(null);
   const [refreshingUsage, setRefreshingUsage] = useState(false);
   const now = useNow(1_000);
@@ -126,6 +137,32 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
   const [busy, setBusy] = useState(false);
 
   const usage = manualUsage ?? usagePoll.data ?? null;
+
+  const providerTelemetry = useMemo(() => {
+    const enabled: AgentId[] = settingsPoll.data?.enabledProviders?.length
+      ? settingsPoll.data.enabledProviders
+      : ['claude'];
+    const authMap = settingsPoll.data?.providerAuth;
+    return enabled.map((providerId) => {
+      const entry = PROVIDER_REGISTRY[providerId];
+      const providerRuns = (runs ?? []).filter((r) => r.agent === providerId);
+      const activeCount = providerRuns.filter(
+        (r) => !r.endedAt && r.state !== 'done' && r.state !== 'failed',
+      ).length;
+      const doneCount = providerRuns.filter((r) => r.state === 'done').length;
+      const failedCount = providerRuns.filter((r) => r.state === 'failed').length;
+      const auth = authMap?.[providerId];
+      return {
+        providerId,
+        entry,
+        activeCount,
+        doneCount,
+        failedCount,
+        authenticated: auth?.authenticated ?? (providerId === 'claude' ? Boolean(usage?.authenticated) : true),
+        authLabel: auth?.label ?? (providerId === 'claude' ? formatClaudePlanLabel(usage) : `${entry.shortLabel} Ready`),
+      };
+    });
+  }, [settingsPoll.data, runs, usage]);
 
   if (!scheduler) return null;
   const { window } = scheduler;
@@ -147,6 +184,7 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
     try {
       const fresh = await api<ClaudeUsageTelemetry>('/api/factory/claude-usage?refresh=1');
       setManualUsage(fresh);
+      await settingsPoll.refresh();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -272,6 +310,23 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               {' · '}
               7d: <strong style={{ color: 'var(--text)' }}>{formatTokensCompact(usage.weeklyTokens.totalTokens)}</strong>
             </span>
+
+            {providerTelemetry
+              .filter((p) => p.providerId !== 'claude')
+              .map((p) => (
+                <span
+                  key={p.providerId}
+                  className="badge mono"
+                  style={{
+                    color: p.authenticated ? 'var(--ok)' : 'var(--text-muted)',
+                    borderColor: p.authenticated ? 'rgba(63, 185, 80, 0.35)' : 'var(--border)',
+                  }}
+                  title={`${p.entry.label} — ${p.authLabel} · ${p.activeCount} active / ${p.doneCount} completed runs`}
+                >
+                  {p.entry.icon} {p.entry.shortLabel}
+                  {p.activeCount > 0 ? ` (${p.activeCount} active)` : p.doneCount > 0 ? ` (${p.doneCount} done)` : ''}
+                </span>
+              ))}
           </div>
         )}
 
@@ -560,6 +615,72 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
             <TokenBucketCard label="📊 Weekly Token Usage" sublabel="Last 7d" bucket={usage.weeklyTokens} />
           </div>
         </>
+      )}
+
+      {/* Multi-Provider Fleet Readiness & Run Telemetry */}
+      {providerTelemetry.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {providerTelemetry.map((p) => (
+            <div
+              key={p.providerId}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--radius)',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                  {p.entry.icon} {p.entry.shortLabel}
+                </span>
+                <span
+                  className="badge mono"
+                  style={{
+                    fontSize: '0.68rem',
+                    color: p.authenticated ? 'var(--ok)' : 'var(--warn)',
+                    borderColor: p.authenticated ? 'rgba(63, 185, 80, 0.35)' : 'var(--warn)',
+                  }}
+                >
+                  ● {p.authenticated ? 'READY' : 'UNCONFIGURED'}
+                </span>
+              </div>
+              <span className="muted mono" style={{ fontSize: '0.72rem' }}>
+                {p.authLabel}
+              </span>
+              <div
+                className="mono muted"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: '0.73rem',
+                  paddingTop: 4,
+                  borderTop: '1px solid var(--border)',
+                }}
+              >
+                <span>
+                  Active: <strong style={{ color: 'var(--text)' }}>{p.activeCount}</strong>
+                </span>
+                <span>
+                  Done: <strong style={{ color: 'var(--text)' }}>{p.doneCount}</strong>
+                </span>
+                <span>
+                  Failed: <strong style={{ color: 'var(--text)' }}>{p.failedCount}</strong>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {error && <p className="form-error quota-error">{error}</p>}
