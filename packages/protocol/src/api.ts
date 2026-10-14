@@ -56,9 +56,12 @@ export const ProjectAppType = z.enum([
   'web_saas',
   'fullstack',
   'api_service',
+  'ai_agents',
   'cli_tool',
   'mobile_desktop',
+  'embedded_iot',
   'library',
+  'game_interactive',
   'custom',
 ]);
 export type ProjectAppType = z.infer<typeof ProjectAppType>;
@@ -684,6 +687,12 @@ export const WorkspaceDemoTarget = z.object({
   topFiles: z.array(z.string()),
   hasPackageJson: z.boolean(),
   hasBuildScript: z.boolean(),
+  /** Detected language/build stack (e.g. 'TypeScript / Node', 'Python', 'Go', 'Rust / Cargo', 'PlatformIO / ESP32', 'Shell / System CLI'). */
+  detectedStack: z.string().optional(),
+  /** Detected build/check command (e.g. 'pnpm run build', 'cargo check', 'go build ./...', 'pio run', 'pytest', 'bash -n'). */
+  buildCommand: z.string().nullable().optional(),
+  /** Architectural layers detected in the workspace (e.g. ['Frontend UI', 'Backend API', 'Database Schema']). */
+  detectedLayers: z.array(z.string()).optional(),
   /** Relative path to the detected playable HTML entrypoint (e.g. 'dist/index.html', 'apps/client/dist/index.html', 'index.html'), or null if not built yet. */
   demoEntryRelPath: z.string().nullable(),
   /** Ready-to-open URL served by core, e.g. `/api/projects/:id/demo/main/` or `/api/projects/:id/demo/:runId/`. */
@@ -802,7 +811,7 @@ export type PersonaAgentMap = z.infer<typeof PersonaAgentMap>;
 export const PersonaModelMap = z.object({
   product_owner: AgentModelId.default('fable'),
   architect: AgentModelId.default('fable'),
-  ui_ux: AgentModelId.default('argon'),
+  ui_ux: AgentModelId.default('opus'),
   coder: AgentModelId.default('opus'),
   dba: AgentModelId.default('opus'),
   qa: AgentModelId.default('sonnet'),
@@ -817,7 +826,7 @@ export const FactorySettings = z.object({
   personaModels: PersonaModelMap.default({
     product_owner: 'fable',
     architect: 'fable',
-    ui_ux: 'argon',
+    ui_ux: 'opus',
     coder: 'opus',
     dba: 'opus',
     qa: 'sonnet',

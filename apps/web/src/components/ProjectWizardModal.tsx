@@ -7,29 +7,72 @@ import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from '
 import { api, errorMessage } from '../api';
 
 const APP_TYPES: Array<{ id: ProjectAppType; label: string; desc: string }> = [
-  { id: 'web_saas', label: 'Web SaaS App', desc: 'Multi-page or SPA web product with auth & dashboard' },
-  { id: 'fullstack', label: 'Full-Stack Platform', desc: 'Frontend + API backend + database monorepo' },
-  { id: 'api_service', label: 'Backend API / Service', desc: 'REST/GraphQL service, workers, or microservice' },
-  { id: 'cli_tool', label: 'CLI / Dev Tool', desc: 'Command-line utility, automation, or developer tool' },
-  { id: 'mobile_desktop', label: 'Mobile / Desktop', desc: 'Cross-platform mobile or desktop application' },
-  { id: 'library', label: 'SDK / Library', desc: 'Reusable package, SDK, or shared component library' },
-  { id: 'custom', label: 'Custom Project', desc: 'Tailored architecture and custom workflow' },
+  {
+    id: 'fullstack',
+    label: 'Full-Stack Multi-Layer Platform',
+    desc: 'Frontend + Backend API + Database monorepo (Portals, ERP/CRM, Workflow systems)',
+  },
+  {
+    id: 'web_saas',
+    label: 'Web SaaS / Portal / Form App',
+    desc: 'Dashboards, multi-step operational forms, incident tracking & client apps',
+  },
+  {
+    id: 'api_service',
+    label: 'Backend API / Microservice',
+    desc: 'REST/GraphQL/gRPC service, background workers, or distributed data pipeline',
+  },
+  {
+    id: 'ai_agents',
+    label: 'Multi-Agent AI / Orchestrator',
+    desc: 'Autonomous agent pipelines, MCP tools, LLM routers & knowledge systems',
+  },
+  {
+    id: 'mobile_desktop',
+    label: 'Desktop / Mobile Application',
+    desc: 'Tauri, Electron, Native GUI, Display/Overlay apps, Flutter or React Native',
+  },
+  {
+    id: 'cli_tool',
+    label: 'CLI / System & Infra Automation',
+    desc: 'Linux/TrueNAS utilities, kernel/driver updaters, DevOps & shell/Python/Go CLI tools',
+  },
+  {
+    id: 'embedded_iot',
+    label: 'Embedded / IoT / Hardware Firmware',
+    desc: 'ESP32, PlatformIO, Arduino, STM32, C/C++ firmware & I2C/SPI/UART chip tools',
+  },
+  {
+    id: 'library',
+    label: 'SDK / Package Library',
+    desc: 'Reusable package, protocol SDK, or shared component library',
+  },
+  {
+    id: 'game_interactive',
+    label: 'Interactive Canvas / Game',
+    desc: '2D/3D WebGL, Canvas, Phaser/Three.js or real-time simulation',
+  },
+  {
+    id: 'custom',
+    label: 'Custom Multi-Layer Project',
+    desc: 'Tailored polyglot architecture and custom engineering workflow',
+  },
 ];
 
 const STACK_PRESETS: Array<{ label: string; stack: ProjectTechStack }> = [
   {
-    label: 'React + Fastify + SQLite (TypeScript)',
+    label: 'Full-Stack Portal (React + Fastify + SQLite/Postgres)',
     stack: {
       language: 'TypeScript (Node 22)',
       frontend: 'React 19 + Vite',
       backend: 'Fastify + Zod',
-      database: 'SQLite + Drizzle ORM',
+      database: 'SQLite / PostgreSQL + Drizzle ORM',
       styling: 'Modern CSS / Design Tokens',
       testing: 'Vitest + Playwright',
     },
   },
   {
-    label: 'Next.js Full-Stack + Postgres',
+    label: 'Next.js Enterprise Portal + Postgres',
     stack: {
       language: 'TypeScript',
       frontend: 'Next.js App Router + React',
@@ -37,6 +80,50 @@ const STACK_PRESETS: Array<{ label: string; stack: ProjectTechStack }> = [
       database: 'PostgreSQL + Drizzle / Prisma',
       styling: 'Tailwind CSS',
       testing: 'Vitest + Playwright',
+    },
+  },
+  {
+    label: 'Multi-Agent AI Platform (TS / Python + MCP)',
+    stack: {
+      language: 'TypeScript / Python 3.12',
+      frontend: 'React + Streaming Telemetry UI',
+      backend: 'Fastify / FastAPI + Agent Orchestrator + MCP',
+      database: 'SQLite / PostgreSQL + Vector Store',
+      styling: 'Tailwind CSS / Custom Dark UI',
+      testing: 'Vitest / Pytest',
+    },
+  },
+  {
+    label: 'Desktop / Overlay App (Rust Tauri / Electron)',
+    stack: {
+      language: 'Rust & TypeScript (or C# / Python)',
+      frontend: 'React / Vite or Native Window Overlay',
+      backend: 'Tauri Core / Electron Main IPC',
+      database: 'Local SQLite / JSON Config Store',
+      styling: 'Frameless / Native CSS',
+      testing: 'Cargo Test + Vitest',
+    },
+  },
+  {
+    label: 'System / Linux / TrueNAS CLI Automation',
+    stack: {
+      language: 'Bash / Python 3 / Go',
+      frontend: 'ANSI CLI / TUI Progress & Flags',
+      backend: 'Systemd / Kernel / ZFS / OS Tooling',
+      database: 'Stateless / Checksum & Backup Archives',
+      styling: 'Structured CLI / JSON Output',
+      testing: 'ShellCheck / Bats / Pytest',
+    },
+  },
+  {
+    label: 'ESP32 / Embedded Hardware Firmware (PlatformIO / C++)',
+    stack: {
+      language: 'C / C++ (ESP-IDF / Arduino)',
+      frontend: 'Serial Console / Web-Serial / OLED HUD',
+      backend: 'PlatformIO + I2C / SPI / UART / GPIO Protocols',
+      database: 'EEPROM / NVS Flash Storage',
+      styling: 'Embedded WebUI / Serial Telemetry',
+      testing: 'PlatformIO Unity / Hardware Bus Verifier',
     },
   },
   {
@@ -51,11 +138,11 @@ const STACK_PRESETS: Array<{ label: string; stack: ProjectTechStack }> = [
     },
   },
   {
-    label: 'Go Service / CLI',
+    label: 'Go Microservice / CLI',
     stack: {
       language: 'Go 1.23',
-      frontend: 'None / CLI or Web UI',
-      backend: 'Go net/http / Chi',
+      frontend: 'CLI or Web Dashboard',
+      backend: 'Go net/http / Chi / gRPC',
       database: 'PostgreSQL / SQLite (sqlc)',
       styling: 'N/A',
       testing: 'go test + table-driven suites',

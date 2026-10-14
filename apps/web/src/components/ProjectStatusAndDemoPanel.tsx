@@ -16,11 +16,78 @@ import { usePoll } from '../hooks/usePoll';
 import { LiveBrowserStudio } from './LiveBrowserStudio';
 import { PersonaBadge } from './PersonaBadge';
 
-const FACTORY_EXAMPLES = [
-  'Add a live score counter and persistent high-score HUD overlay',
-  'Modernize the visual design, color palette, and UI animations',
-  'Add a game-over summary screen with a local leaderboard',
-] as const;
+function getFactoryExamples(project: Project, target?: WorkspaceDemoTarget): string[] {
+  const appType = project.appType ?? 'fullstack';
+  const layers = target?.detectedLayers ?? [];
+  const stack = (target?.detectedStack ?? '').toLowerCase();
+
+  if (
+    appType === 'embedded_iot' ||
+    layers.includes('Embedded / Hardware Firmware') ||
+    stack.includes('platformio')
+  ) {
+    return [
+      'Implement I2C / SPI bus scanner, EEPROM read/write routine & CRC verification',
+      'Add non-blocking serial command CLI (115200 baud) with diagnostic status output',
+      'Add PlatformIO environment targets, pinout config header, and hardware test routine',
+    ];
+  }
+
+  if (
+    appType === 'cli_tool' ||
+    layers.includes('CLI / System Automation') ||
+    stack.includes('shell')
+  ) {
+    return [
+      'Add --dry-run mode, pre-flight kernel/ZFS checks, and automatic rollback on failure',
+      'Add structured JSON/log output, strict exit codes, and systemd service/timer unit',
+      'Add SHA256 artifact checksum verification and automated smoke test script',
+    ];
+  }
+
+  if (
+    appType === 'mobile_desktop' ||
+    layers.includes('Desktop / Mobile Native') ||
+    stack.includes('rust')
+  ) {
+    return [
+      'Add persistent JSON configuration, multi-monitor window state, and system tray controls',
+      'Implement smooth hardware-accelerated rendering, keyboard shortcuts, and theme presets',
+      'Add typed IPC command bridge between native backend and UI layer',
+    ];
+  }
+
+  if (appType === 'ai_agents') {
+    return [
+      'Build multi-agent DAG task router with live SSE streaming and tool-call execution logs',
+      'Add per-agent token/cost telemetry ledger and automatic fallback circuit breaker',
+      'Add interactive agent workflow inspector and customizable system prompt templates',
+    ];
+  }
+
+  if (appType === 'api_service' || appType === 'library') {
+    return [
+      'Add OpenAPI schema validation, structured error middleware, and /healthz diagnostics',
+      'Implement database migration runner, repository layer, and audit log endpoints',
+      'Add comprehensive integration test suite and request rate-limiting',
+    ];
+  }
+
+  if (appType === 'game_interactive') {
+    return [
+      'Add a live score counter and persistent high-score HUD overlay',
+      'Modernize the visual design, color palette, and UI animations',
+      'Add a game-over summary screen with a local leaderboard',
+    ];
+  }
+
+  // Default: Web SaaS, Full-Stack Multi-Layer Portals, Enterprise Forms & Dashboards
+  return [
+    'Build a multi-step workflow form with validation, status tracking, and CSV/PDF export',
+    'Add role-based dashboard view with filterable data grid and REST API integration',
+    'Modernize UI layout, responsive navigation, dark theme polish, and error boundaries',
+  ];
+}
 
 interface DemoRuntimeError {
   message: string;
@@ -157,11 +224,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     }
   };
 
-  // Demo Runtime Error Catcher + Quick Tweak + Checkpoints
+  // Demo Runtime Error Catcher + Quick Tweak + Checkpoints + Build Output Console
   const [demoErrors, setDemoErrors] = useState<DemoRuntimeError[]>([]);
   const [quickTweakPrompt, setQuickTweakPrompt] = useState('');
   const [submittingTweak, setSubmittingTweak] = useState(false);
   const [rollingBackSha, setRollingBackSha] = useState<string>();
+  const [lastBuildOutput, setLastBuildOutput] = useState<string>('');
 
   // Worktrees filter: hide completed worktrees by default to avoid clutter
   const [hideCompletedWorktrees, setHideCompletedWorktrees] = useState(true);
@@ -382,20 +450,28 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         'POST',
         { targetId: target.id },
       );
+      setLastBuildOutput(res.output || '');
       await statusPoll.refresh();
+      setSelectedTargetId(target.id);
       if (res.ok && res.demoUrl) {
-        setSelectedTargetId(target.id);
         setIframeNonce((n) => n + 1);
         setDemoErrors([]);
         if (autoOpen) setActiveTab('demo');
         setBanner({
           kind: 'ok',
-          text: `Demo built (${res.demoEntryRelPath}) for ${target.label}.`,
+          text: `Built interactive bundle (${res.demoEntryRelPath}) for ${target.label}.`,
+        });
+      } else if (res.ok) {
+        if (autoOpen) setActiveTab('demo');
+        setBanner({
+          kind: 'ok',
+          text: `Build & verification succeeded for ${target.label} (${target.buildCommand ?? target.detectedStack ?? 'workspace'}).`,
         });
       } else {
+        if (autoOpen) setActiveTab('demo');
         setBanner({
           kind: 'err',
-          text: `Build finished without a detected HTML entrypoint: ${res.output.slice(-240)}`,
+          text: `Build / verification failed: ${res.output.slice(-240)}`,
         });
       }
     } catch (e) {
@@ -415,7 +491,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     }
     if (target.hasBuildScript) {
       await handleBuildAndPlay(target, true);
+      return;
     }
+    setActiveTab('demo');
   };
 
   const { ticketCounts } = summary;
@@ -625,15 +703,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             role="tab"
             aria-selected={activeTab === 'demo'}
             className={activeTab === 'demo' ? 'active' : ''}
-            onClick={() => {
-              if (bestPlayableTarget && !bestPlayableTarget.demoUrl && bestPlayableTarget.hasBuildScript) {
-                void handleBuildAndPlay(bestPlayableTarget, true);
-              } else {
-                setActiveTab('demo');
-              }
-            }}
+            onClick={() => setActiveTab('demo')}
           >
-            ▶ Live Demo
+            ▶ Preview &amp; Build
           </button>
           <button
             type="button"
@@ -974,7 +1046,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               }}
             >
               <span className="muted small">Quick examples:</span>
-              {FACTORY_EXAMPLES.map((ex) => (
+              {getFactoryExamples(project, mainTarget).map((ex) => (
                 <button
                   key={ex}
                   type="button"
@@ -1001,15 +1073,36 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 flexWrap: 'wrap',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span className="badge badge-soft mono">MAIN WORKSPACE</span>
                 <span className="mono small">{mainTarget.workspacePath}</span>
                 <span className="muted small">· {mainTarget.fileCount} files</span>
-                {mainTarget.demoEntryRelPath && (
+                {mainTarget.detectedStack && (
+                  <span className="badge mono" style={{ fontSize: '0.68rem' }}>
+                    ⚙ {mainTarget.detectedStack}
+                  </span>
+                )}
+                {mainTarget.detectedLayers?.map((layer) => (
+                  <span
+                    key={layer}
+                    className="badge"
+                    style={{
+                      fontSize: '0.66rem',
+                      borderColor: 'color-mix(in hsl, var(--ember-1) 35%, var(--border))',
+                    }}
+                  >
+                    {layer}
+                  </span>
+                ))}
+                {mainTarget.demoEntryRelPath ? (
                   <span className="small" style={{ color: 'var(--ok)' }}>
                     ● Bundle ready (<span className="mono">{mainTarget.demoEntryRelPath}</span>)
                   </span>
-                )}
+                ) : mainTarget.buildCommand ? (
+                  <span className="muted mono small" title="Detected build / verification command">
+                    cmd: {mainTarget.buildCommand}
+                  </span>
+                ) : null}
               </div>
               <div className="actions">
                 {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
@@ -1021,7 +1114,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   >
                     {buildingTargetId === bestPlayableTarget.id
                       ? 'Building…'
-                      : '▶ Open Live Demo'}
+                      : bestPlayableTarget.demoUrl
+                        ? '▶ Open Live Preview'
+                        : '🔨 Build & Verify'}
                   </button>
                 )}
                 <button
@@ -1037,8 +1132,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     className="btn btn-sm"
                     disabled={buildingTargetId === mainTarget.id}
                     onClick={() => void handleBuildAndPlay(mainTarget, false)}
+                    title={mainTarget.buildCommand ? `Run ${mainTarget.buildCommand}` : 'Run build'}
                   >
-                    {buildingTargetId === mainTarget.id ? 'Building…' : '🔨 Rebuild Bundle'}
+                    {buildingTargetId === mainTarget.id
+                      ? 'Building…'
+                      : mainTarget.demoUrl
+                        ? '🔨 Rebuild Bundle'
+                        : '🔨 Run Build / Check'}
                   </button>
                 )}
               </div>
@@ -1047,7 +1147,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
       )}
 
-      {/* TAB 2: Embedded Live Demo & Preview Player */}
+      {/* TAB 2: Embedded Live Preview & Universal Build / Verification Console */}
       {activeTab === 'demo' && (
         <div>
           {activeTarget.demoUrl ? (
@@ -1101,7 +1201,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   >
                     {targets.map((t) => (
                       <option key={t.id} value={t.id}>
-                        {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : '(no bundle)'}
+                        {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : `(${t.detectedStack ?? 'no bundle'})`}
                       </option>
                     ))}
                   </select>
@@ -1160,7 +1260,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 >
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <strong>
-                      🐛 Runtime Error Detected in Live Demo ({demoErrors[0]!.timestamp}):
+                      🐛 Runtime Error Detected in Live Preview ({demoErrors[0]!.timestamp}):
                     </strong>
                     <div
                       className="mono small"
@@ -1205,13 +1305,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   borderBottom: '1px solid var(--border)',
                 }}
               >
-                <span className="mono muted small">💬 Quick Demo Tweak:</span>
+                <span className="mono muted small">💬 Quick Live Tweak:</span>
                 <input
                   type="text"
                   className="input"
                   value={quickTweakPrompt}
                   onChange={(e) => setQuickTweakPrompt(e.target.value)}
-                  placeholder='Type an instant change while playing (e.g. "Make jump physics gentler" or "Add sound effect on score")…'
+                  placeholder='Type an instant UI, API, or logic tweak (e.g. "Add CSV export button to table" or "Refine form validation")…'
                   style={{ width: 'auto', flex: 1, fontSize: '0.78rem', padding: '4px 8px' }}
                 />
                 <button
@@ -1226,7 +1326,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               <iframe
                 key={`${activeTarget.id}-${iframeNonce}`}
                 src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
-                title={`Live Demo - ${activeTarget.label}`}
+                title={`Live Preview - ${activeTarget.label}`}
                 style={{
                   width: '100%',
                   height: fullscreen ? '100%' : 520,
@@ -1237,17 +1337,143 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               />
             </div>
           ) : (
-            <div className="empty">
-              <p>No playable HTML bundle built for {activeTarget.label} yet.</p>
-              {activeTarget.hasBuildScript && (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={buildingTargetId === activeTarget.id}
-                  onClick={() => void handleBuildAndPlay(activeTarget, true)}
-                >
-                  {buildingTargetId === activeTarget.id ? 'Building Demo…' : '🔨 Build & Launch Demo'}
-                </button>
+            <div
+              style={{
+                padding: '16px 18px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12,
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '0.88rem' }}>
+                    🛠 Workspace Build, Verification &amp; Architecture Console
+                  </strong>
+                  <select
+                    className="input"
+                    value={activeTarget.id}
+                    onChange={(e) => setSelectedTargetId(e.target.value)}
+                    style={{ width: 'auto', fontSize: '0.78rem', padding: '4px 8px' }}
+                  >
+                    {targets.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label} ({t.detectedStack ?? `${t.fileCount} files`})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="actions">
+                  {activeTarget.hasBuildScript && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      disabled={buildingTargetId === activeTarget.id}
+                      onClick={() => void handleBuildAndPlay(activeTarget, true)}
+                    >
+                      {buildingTargetId === activeTarget.id
+                        ? 'Running Build / Verification…'
+                        : `🔨 Run Build & Verify${activeTarget.buildCommand ? ` (${activeTarget.buildCommand})` : ''}`}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setActiveTab('browser')}
+                  >
+                    🌐 Live Browser Studio
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => navigate(`/projects/${project.id}/code`)}
+                  >
+                    ◫ Code Explorer
+                  </button>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  padding: '8px 10px',
+                  borderRadius: 'var(--radius-xs)',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <span className="muted small">Detected Stack:</span>
+                <span className="badge mono">{activeTarget.detectedStack ?? 'Polyglot / Custom'}</span>
+                {activeTarget.buildCommand && (
+                  <>
+                    <span className="muted small">Build / Check Command:</span>
+                    <span className="badge badge-soft mono">{activeTarget.buildCommand}</span>
+                  </>
+                )}
+                {activeTarget.detectedLayers && activeTarget.detectedLayers.length > 0 && (
+                  <>
+                    <span className="muted small">Layers:</span>
+                    {activeTarget.detectedLayers.map((layer) => (
+                      <span key={layer} className="badge" style={{ fontSize: '0.7rem' }}>
+                        {layer}
+                      </span>
+                    ))}
+                  </>
+                )}
+              </div>
+
+              <p className="muted small" style={{ margin: 0, lineHeight: 1.5 }}>
+                This workspace target does not expose a static HTML bundle yet (common for{' '}
+                <strong>Backend APIs, CLI / System Automation, Desktop &amp; Mobile Apps, Embedded / ESP32 Firmware</strong>,
+                or unbuilt web projects). Use <strong>🔨 Run Build &amp; Verify</strong> above to compile or syntax-check the
+                project, or open <strong>🌐 Live Browser Studio</strong> to inspect any running web server URL.
+              </p>
+
+              {lastBuildOutput && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span className="mono muted small">Last Build / Compiler Verification Output:</span>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setLastBuildOutput('')}
+                    >
+                      Clear Log
+                    </button>
+                  </div>
+                  <pre
+                    className="mono"
+                    style={{
+                      margin: 0,
+                      padding: '10px 12px',
+                      borderRadius: 'var(--radius-xs)',
+                      background: 'var(--bg-0)',
+                      border: '1px solid var(--border-strong)',
+                      fontSize: '0.74rem',
+                      lineHeight: 1.45,
+                      maxHeight: 280,
+                      overflowY: 'auto',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {lastBuildOutput}
+                  </pre>
+                </div>
               )}
             </div>
           )}
@@ -1374,13 +1600,28 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       {target.workspacePath}
                     </div>
 
+                    {(target.detectedStack || (target.detectedLayers && target.detectedLayers.length > 0)) && (
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                        {target.detectedStack && (
+                          <span className="badge mono" style={{ fontSize: '0.66rem' }}>
+                            ⚙ {target.detectedStack}
+                          </span>
+                        )}
+                        {target.detectedLayers?.map((layer) => (
+                          <span key={layer} className="badge" style={{ fontSize: '0.64rem' }}>
+                            {layer}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
                     {target.demoEntryRelPath ? (
                       <div className="small" style={{ color: 'var(--ok)', marginBottom: 6 }}>
-                        ● Playable bundle: <span className="mono">{target.demoEntryRelPath}</span>
+                        ● Interactive bundle: <span className="mono">{target.demoEntryRelPath}</span>
                       </div>
                     ) : target.hasBuildScript ? (
                       <div className="small" style={{ color: 'var(--warn)', marginBottom: 6 }}>
-                        ◐ Build script ready (<span className="mono">npm run build</span>)
+                        ◐ Build / Check ready (<span className="mono">{target.buildCommand ?? 'build'}</span>)
                       </div>
                     ) : null}
 
@@ -1414,8 +1655,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         {isBuilding
                           ? 'Building…'
                           : target.demoUrl
-                            ? '▶ Play Demo'
-                            : '🔨 Build & Play'}
+                            ? '▶ Open Preview'
+                            : '🔨 Build & Verify'}
                       </button>
                     )}
                     {target.hasBuildScript && target.demoUrl && (
@@ -1434,7 +1675,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         className="btn btn-sm"
                         disabled={isSyncing}
                         onClick={() => void handleSyncToMain(target.id)}
-                        title="Copy/sync this worktree's files & compiled bundle into the Main Project Workspace on host"
+                        title="Copy/sync this worktree's files & compiled artifacts into the Main Project Workspace on host"
                       >
                         {isSyncing ? 'Syncing…' : '⇄ Sync to Main'}
                       </button>

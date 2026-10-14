@@ -108,19 +108,48 @@ export async function synthesizeBrainstormSuggestions(
 ): Promise<BrainstormSuggestion[]> {
   const files = await listWorkspaceFilesFlat(project.path).catch(() => []);
   const fileNamesLower = files.map((f) => f.path.toLowerCase()).join(' ');
-  const combinedContext = `${project.name} ${project.description} ${blueprintContent} ${fileNamesLower}`.toLowerCase();
+  const stackText = project.techStack
+    ? `${project.techStack.language} ${project.techStack.frontend} ${project.techStack.backend} ${project.techStack.database}`
+    : '';
+  const combinedContext = `${project.name} ${project.appType} ${project.description} ${stackText} ${blueprintContent} ${fileNamesLower}`.toLowerCase();
 
-  const isFlappyOrArcade = /flappy|bird|jump|flap|obstacle|pipe|endless|runner|arcade|cat|petiqa|paw/.test(
-    combinedContext,
-  );
-  const isTowerOrStrategy = /tower|defen[cs]e|wave|turret/.test(combinedContext);
+  const isEmbeddedOrHardware =
+    project.appType === 'embedded_iot' ||
+    /esp32|esp8266|arduino|platformio|stm32|firmware|eeprom|i2c|spi|uart|gpio|chip|lexmark|mcu|\.ino\b|platformio\.ini/.test(
+      combinedContext,
+    );
+  const isCliOrSystem =
+    project.appType === 'cli_tool' ||
+    /truenas|nvidia|driver|kernel|systemd|cron|installer|updater|cli|shell|bash|zfs|devops|daemon/.test(
+      combinedContext,
+    );
+  const isDesktopOrMobile =
+    project.appType === 'mobile_desktop' ||
+    /tauri|electron|marquee|desktop|overlay|window|tray|flutter|react-native|qt|gtk|wpf|maui/.test(
+      combinedContext,
+    );
+  const isAiAgents =
+    project.appType === 'ai_agents' ||
+    /multi-agent|nexus|orchestrat|llm|agentic|mcp|prompt-router|autonomous-agent|rag|vector/.test(
+      combinedContext,
+    );
+  const isFlappyOrArcade = /flappy|bird|endless-runner|arcade|petiqa/.test(combinedContext);
+  const isTowerOrStrategy = /tower-defen[cs]e|turret/.test(combinedContext);
   const isGameOrInteractive =
+    project.appType === 'game_interactive' ||
     isFlappyOrArcade ||
     isTowerOrStrategy ||
-    /game|canvas|phaser|pixi|three|webgl|enemy|sprite|player|score/.test(combinedContext);
-  const isApiOrBackend = /fastify|express|nest|prisma|drizzle|postgres|sqlite|graphql|endpoint|webhook/.test(
-    combinedContext,
-  );
+    /\b(game|phaser|pixi|webgl|sprite|gameplay)\b/.test(combinedContext);
+  const isApiOrBackend =
+    project.appType === 'api_service' ||
+    project.appType === 'library' ||
+    /fastify|express|nest|fastapi|grpc|graphql|microservice|webhook|worker/.test(combinedContext);
+  const isPortalOrFullstack =
+    project.appType === 'fullstack' ||
+    project.appType === 'web_saas' ||
+    /portal|dashboard|form|kesinti|outage|workflow|approval|rbac|tenant|admin|crm|erp/.test(
+      combinedContext,
+    );
 
   const candidates: Array<Omit<BrainstormSuggestion, 'id'>> = [];
 
@@ -128,9 +157,9 @@ export async function synthesizeBrainstormSuggestions(
     const cleanFocus = focus.trim();
     candidates.push(
       {
-        title: `Feature Spec & Core Implementation: ${cleanFocus.slice(0, 72)}`,
-        rationale: `Directly addresses your brainstorm focus ("${cleanFocus}") with end-to-end domain logic and state integration.`,
-        implementationPrompt: `Read PROJECT.md and inspect the codebase. Design and implement the following capability end-to-end: "${cleanFocus}". Include clean state management, modular code structure, and run npm run build when finished.`,
+        title: `Architecture & Core Implementation: ${cleanFocus.slice(0, 72)}`,
+        rationale: `Directly implements "${cleanFocus}" across the project's domain logic, service layer, and state contracts.`,
+        implementationPrompt: `Read PROJECT.md and inspect the codebase structure. Design and implement the following capability end-to-end: "${cleanFocus}". Maintain clean module boundaries, input validation, and verify the project's build/test pipeline when finished.`,
         category: 'feature',
         impact: 'high',
         effort: 'medium',
@@ -140,21 +169,21 @@ export async function synthesizeBrainstormSuggestions(
         suggestedMilestoneCode: 'M2',
       },
       {
-        title: `Interactive UI/UX & Visual Polish for: ${cleanFocus.slice(0, 64)}`,
-        rationale: `Builds an intuitive, responsive HUD/UI surface and visual feedback loop for "${cleanFocus}".`,
-        implementationPrompt: `Read PROJECT.md and design the user interface, HUD controls, animations, and visual feedback for: "${cleanFocus}". Ensure responsive layout, run npm run build, and verify in the Live Browser ($EMBERLINE_DEMO_URL).`,
+        title: `Interface, UX & Ergonomics for: ${cleanFocus.slice(0, 64)}`,
+        rationale: `Delivers a clean, responsive user interface or CLI/GUI interaction flow for "${cleanFocus}".`,
+        implementationPrompt: `Read PROJECT.md and implement the user-facing interface, views, forms, or CLI/GUI ergonomics for: "${cleanFocus}". Ensure clear feedback states, error handling, and verify the build passes cleanly.`,
         category: 'ui_ux',
         impact: 'high',
         effort: 'medium',
         persona: 'ui_ux',
-        preferredAgent: 'antigravity',
-        preferredModel: 'argon',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
         suggestedMilestoneCode: 'M3',
       },
       {
-        title: `Automated QA & Live Browser Verification for: ${cleanFocus.slice(0, 60)}`,
-        rationale: `Ensures "${cleanFocus}" works reliably with zero console errors and full test coverage.`,
-        implementationPrompt: `Verify the implementation of "${cleanFocus}". Add unit/integration tests, run npm run build, open $EMBERLINE_DEMO_URL with Playwright MCP, exercise the new user flow, and confirm zero console errors.`,
+        title: `Automated Verification & Regression Tests for: ${cleanFocus.slice(0, 56)}`,
+        rationale: `Verifies "${cleanFocus}" with automated unit/integration tests and build checks.`,
+        implementationPrompt: `Verify the implementation of "${cleanFocus}". Add automated unit/integration tests covering happy paths and edge cases, and run the project's build/test suite to confirm zero regressions.`,
         category: 'qa_security',
         impact: 'medium',
         effort: 'small',
@@ -166,167 +195,15 @@ export async function synthesizeBrainstormSuggestions(
     );
   }
 
-  if (isFlappyOrArcade) {
+  // 1. Embedded / IoT / Hardware Firmware (e.g., esp32_lexmark_chip_reset)
+  if (isEmbeddedOrHardware) {
     candidates.push(
       {
-        title: 'Power-Up Collectibles (Shield Bubble, Coin Magnet, Slow-Mo & Score 2x)',
+        title: 'Hardware Bus Scanner (I2C/SPI/UART), Address Probing & CRC/ACK Verification',
         rationale:
-          'Spawns collectible power-up orbs between obstacle gaps that grant temporary invulnerability, magnet attraction, or double points with HUD timers.',
+          'Automatically scans connected bus addresses, validates device signatures, and checks ACK/CRC framing before any register write.',
         implementationPrompt:
-          'Read PROJECT.md and implement collectible Power-Ups (Shield Bubble that absorbs 1 hit, Magnet that pulls nearby collectibles, Slow-Mo Feather, and 2x Score Multiplier) with visual aura effects and active duration bars in the HUD. Run npm run build.',
-        category: 'feature',
-        impact: 'high',
-        effort: 'medium',
-        persona: 'coder',
-        preferredAgent: 'claude',
-        preferredModel: 'opus',
-        suggestedMilestoneCode: 'M2',
-      },
-      {
-        title: 'Unlockable Character Skins, Particle Trails & Pet Shop Modal',
-        rationale:
-          'Gives players a compelling reason to collect coins/points by unlocking custom character skins, rainbow/paw particle trails, and accessories persisted in localStorage.',
-        implementationPrompt:
-          'Implement an interactive Character & Trail Customization Shop accessible from the title/game-over screen: let players spend collected currency to unlock and equip character skins and particle trails, persisted in localStorage. Run npm run build.',
-        category: 'ui_ux',
-        impact: 'high',
-        effort: 'medium',
-        persona: 'ui_ux',
-        preferredAgent: 'antigravity',
-        preferredModel: 'argon',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: 'Dynamic Day/Sunset/Night Parallax Biomes & Weather Effects',
-        rationale:
-          'Smoothly transitions the sky, clouds, and background scenery every 15 points (Sunny Day -> Golden Sunset -> Starry Night -> Sakura/Snowfall) to make long runs visually rewarding.',
-        implementationPrompt:
-          'Add dynamic biome & time-of-day transitions as the player score increases (Day, Sunset, Starry Night) with multi-layer parallax scrolling and subtle ambient weather particles. Run npm run build.',
-        category: 'ui_ux',
-        impact: 'high',
-        effort: 'small',
-        persona: 'ui_ux',
-        preferredAgent: 'antigravity',
-        preferredModel: 'argon',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: 'Near-Miss Combo Multiplier, Fever Mode & Floating Score Popups',
-        rationale:
-          'Rewards skillful close passes through obstacle centers ("PERFECT +2", "FEVER x3!") with juicy floating text and combo streak feedback.',
-        implementationPrompt:
-          'Implement a Near-Miss / Sweet-Spot Combo system: passing through the center of an obstacle gap increments a combo streak with floating "+2 PERFECT!" popups and triggers Fever Mode visual glow at 5x streak. Run npm run build.',
-        category: 'feature',
-        impact: 'high',
-        effort: 'small',
-        persona: 'coder',
-        preferredAgent: 'claude',
-        preferredModel: 'opus',
-        suggestedMilestoneCode: 'M2',
-      },
-      {
-        title: 'Daily Seeded Challenge Mode, Ghost Replay & Shareable Score Card',
-        rationale:
-          'Adds a deterministic Daily Challenge seed so every player faces the exact same obstacle layout each day, plus a Ghost silhouette of their personal best run.',
-        implementationPrompt:
-          'Implement a Daily Challenge mode using a date-seeded PRNG for obstacle generation, record the player best run trajectory to render a semi-transparent Ghost replay, and add a Share Score Card summary on Game Over. Run npm run build.',
-        category: 'feature',
-        impact: 'medium',
-        effort: 'medium',
-        persona: 'coder',
-        preferredAgent: 'claude',
-        preferredModel: 'opus',
-        suggestedMilestoneCode: 'M2',
-      },
-    );
-  }
-
-  if (isGameOrInteractive) {
-    candidates.push(
-      {
-        title: 'WebAudio Synthesizer Sound Effects, Particle Explosions & Screen Shake',
-        rationale:
-          'Zero-dependency procedural WebAudio SFX (jump/flap chime, score ding, power-up synth, collision thud) plus floating score popups make gameplay feel visceral and alive.',
-        implementationPrompt:
-          'Add a procedural WebAudio API sound synthesizer (with Mute/Volume toggle in HUD), floating score numbers, particle burst effects, and subtle screen shake on collision. Run npm run build and verify in $EMBERLINE_DEMO_URL.',
-        category: 'ui_ux',
-        impact: 'high',
-        effort: 'small',
-        persona: 'ui_ux',
-        preferredAgent: 'antigravity',
-        preferredModel: 'argon',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: 'Persistent Meta-Progression, Achievements & LocalStorage Leaderboard',
-        rationale:
-          'Tracks lifetime statistics, top 10 local high scores, and 8 unlockable achievement badges with animated toast notifications.',
-        implementationPrompt:
-          'Implement a High Score Leaderboard & Stats modal and 8 unlockable Achievements (e.g. First 10 Points, 5x Combo, Survivor) persisted in localStorage with in-game toast banners when unlocked. Run npm run build.',
-        category: 'architecture',
-        impact: 'medium',
-        effort: 'medium',
-        persona: 'architect',
-        preferredAgent: 'claude',
-        preferredModel: 'fable',
-        suggestedMilestoneCode: 'M3',
-      },
-      {
-        title: '60 FPS Render Loop Optimization, Object Pooling & Automated Playtest Suite',
-        rationale:
-          'Eliminates garbage-collection frame drops on mobile devices by pooling particles/obstacles and adds deterministic simulation tests.',
-        implementationPrompt:
-          'Optimize rendering and simulation performance using object pooling, ensure responsive touch/click latency on mobile viewports, and add automated tests verifying physics, collision bounds, and scoring. Run npm run build.',
-        category: 'performance',
-        impact: 'medium',
-        effort: 'small',
-        persona: 'qa',
-        preferredAgent: 'claude',
-        preferredModel: 'sonnet',
-        suggestedMilestoneCode: 'M4',
-      },
-    );
-  }
-
-  if (isTowerOrStrategy) {
-    candidates.push(
-      {
-        title: 'Boss Waves, Elite Enemy Modifiers & Special Abilities',
-        rationale:
-          'Adds strategic depth and excitement every 5th/10th wave with unique boss mechanics (shield aura, speed burst, summoners) and boss health bar HUD.',
-        implementationPrompt:
-          'Read PROJECT.md and implement Boss Waves & Elite Enemy Modifiers: every 5 waves spawn a Boss unit with a dedicated Boss HP bar at the top of the HUD, unique abilities, and bonus reward currency. Run npm run build when complete.',
-        category: 'feature',
-        impact: 'high',
-        effort: 'medium',
-        persona: 'coder',
-        preferredAgent: 'claude',
-        preferredModel: 'opus',
-        suggestedMilestoneCode: 'M2',
-      },
-      {
-        title: 'Tower Specialization Tech Tree & Tier-3 Ultimate Upgrades',
-        rationale:
-          'Lets players customize their defense strategy with branching upgrade paths (e.g. Sniper vs Rapid-Fire, AoE Frost vs Chain Lightning).',
-        implementationPrompt:
-          'Implement a branching Tower Upgrade & Specialization Tree in the game engine and selection panel: allow towers at max base level to specialize into 1 of 2 unique Tier-3 paths. Run npm run build.',
-        category: 'feature',
-        impact: 'high',
-        effort: 'medium',
-        persona: 'coder',
-        preferredAgent: 'claude',
-        preferredModel: 'opus',
-        suggestedMilestoneCode: 'M2',
-      },
-    );
-  } else if (isApiOrBackend) {
-    candidates.push(
-      {
-        title: 'OpenAPI / Swagger Interactive Documentation & Schema Validation',
-        rationale:
-          'Provides self-documenting interactive API explorer and strict boundary validation for every route.',
-        implementationPrompt:
-          'Add comprehensive Zod request/response schemas and an interactive API documentation endpoint (/docs or /api/openapi.json) with health and telemetry metrics.',
+          'Read PROJECT.md and implement a deterministic hardware bus scanner and protocol handshake verifier (I2C/SPI/UART address probing, device ID validation, timeout retries, and CRC/ACK checks). Document pinout and status codes.',
         category: 'architecture',
         impact: 'high',
         effort: 'medium',
@@ -336,9 +213,249 @@ export async function synthesizeBrainstormSuggestions(
         suggestedMilestoneCode: 'M1',
       },
       {
-        title: 'Rate Limiting, Structured Audit Logging & Security Headers',
+        title: 'Safe EEPROM / Chip Register Dump, Hex Backup & Read-After-Write Verification',
         rationale:
-          'Hardens the service against abuse with token-bucket rate limiting and structured JSON audit trails.',
+          'Prevents corrupting target hardware chips by dumping original register/EEPROM bytes first, writing the reset payload in page-aligned chunks, and verifying byte-for-byte.',
+        implementationPrompt:
+          'Implement a safe Read -> Backup Dump -> Write -> Verify state machine for chip/EEPROM operations, including hex dump output over Serial/WebUI and automatic abort on write mismatch.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+      {
+        title: 'Interactive Serial / Web-Serial Diagnostic Console & Status LED Patterns',
+        rationale:
+          'Allows operators to trigger chip scan, dump, reset, and dry-run commands interactively via Serial/Web-UI with clear diagnostic telemetry.',
+        implementationPrompt:
+          'Add an interactive command parser (scan, dump, verify, reset, status, help) over Serial / Web interface along with clear hardware status indicator states and error codes.',
+        category: 'ui_ux',
+        impact: 'high',
+        effort: 'small',
+        persona: 'ui_ux',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M3',
+      },
+    );
+  }
+
+  // 2. System / CLI / Driver & Infrastructure Automation (e.g., truenas-nvidia-driver-updater)
+  if (isCliOrSystem) {
+    candidates.push(
+      {
+        title: 'Pre-Flight OS/Kernel Compatibility Check & Non-Destructive Dry-Run Mode (--dry-run)',
+        rationale:
+          'Validates OS version, kernel headers, disk space, and privileges before making any system changes, and lets admins preview every command via --dry-run.',
+        implementationPrompt:
+          'Read PROJECT.md and implement pre-flight environment checks (OS/release detection, kernel version match, root/privilege check, required binaries) and a comprehensive --dry-run mode that logs all planned system operations without mutating state.',
+        category: 'architecture',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'architect',
+        preferredAgent: 'claude',
+        preferredModel: 'fable',
+        suggestedMilestoneCode: 'M1',
+      },
+      {
+        title: 'Atomic Backup Snapshot, Checksum Verification & Automatic Rollback on Failure',
+        rationale:
+          'Guarantees system safety during driver/package updates bysnapshotting current binaries/configs, verifying SHA256 checksums of downloads, and rolling back automatically if post-install validation fails.',
+        implementationPrompt:
+          'Implement SHA256 artifact checksum verification, pre-update state backup, post-install health check (e.g. module load / binary check), and automatic rollback handler on error traps.',
+        category: 'qa_security',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'security',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M4',
+      },
+      {
+        title: 'Structured CLI Flags, ANSI Progress Telemetry & Unattended Cron/Init Hook',
+        rationale:
+          'Supports both interactive terminal operators (clear progress steps & summary table) and unattended post-init/cron execution (--yes, --json, log rotation).',
+        implementationPrompt:
+          'Enhance the CLI interface with structured flag parsing (--check, --update, --rollback, --dry-run, --json, --yes), timestamped log file output, and an idempotent lockfile to prevent concurrent runs.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'small',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+    );
+  }
+
+  // 3. Desktop / Mobile / Display & Media Apps (e.g., Marquee, Tauri/Electron/Native GUI)
+  if (isDesktopOrMobile) {
+    candidates.push(
+      {
+        title: 'Multi-Monitor Window Positioning, Always-on-Top Overlay & Display Geometry Manager',
+        rationale:
+          'Provides precise control over screen docking, DPI scaling, frameless/transparent overlay modes, and multi-display persistence.',
+        implementationPrompt:
+          'Read PROJECT.md and implement display geometry & window management controls (monitor selection, docking/alignment, always-on-top toggle, click-through/overlay mode, and saved window bounds).',
+        category: 'feature',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+      {
+        title: 'System Tray Controller, Global Keyboard Shortcuts & Live Preset Switcher',
+        rationale:
+          'Lets users control the desktop app seamlessly from the OS system tray or global hotkeys without interrupting their active window.',
+        implementationPrompt:
+          'Implement system tray menu integration, configurable global keyboard shortcuts, and a live preset/profile switcher persisted in local configuration.',
+        category: 'ui_ux',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'ui_ux',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M3',
+      },
+      {
+        title: 'Cross-Platform Packaging, Crash-Safe Config Store & Hardware-Accelerated Rendering',
+        rationale:
+          'Ensures smooth 60fps rendering with minimal CPU/GPU footprint and atomic configuration saves across Linux, Windows, and macOS.',
+        implementationPrompt:
+          'Implement atomic config persistence with schema migration, optimize rendering performance when minimized/occluded, and configure cross-platform build targets.',
+        category: 'performance',
+        impact: 'medium',
+        effort: 'small',
+        persona: 'architect',
+        preferredAgent: 'claude',
+        preferredModel: 'fable',
+        suggestedMilestoneCode: 'M4',
+      },
+    );
+  }
+
+  // 4. Multi-Agent AI / Orchestration Platforms (e.g., Nexus Agents)
+  if (isAiAgents) {
+    candidates.push(
+      {
+        title: 'Capability-Based Multi-Agent Router, Model Tier Fallback & Token Cost Ledger',
+        rationale:
+          'Routes complex tasks across specialized agents/models (e.g. deep reasoning vs fast execution) with automatic rate-limit fallback and per-run token accounting.',
+        implementationPrompt:
+          'Read PROJECT.md and implement a capability-based agent router with model tier selection, automatic retry/fallback on rate limits, and a persistent token/cost usage ledger.',
+        category: 'architecture',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'architect',
+        preferredAgent: 'claude',
+        preferredModel: 'fable',
+        suggestedMilestoneCode: 'M1',
+      },
+      {
+        title: 'DAG Task Pipeline Executor, Shared Context Memory & Tool Call Inspector',
+        rationale:
+          'Coordinates multi-step agent handoffs (Planner -> Specialist -> Verifier) with structured artifact passing and live streaming telemetry.',
+        implementationPrompt:
+          'Implement a sequential/DAG task handoff coordinator with structured JSON contract validation between agents and a real-time execution timeline view.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+    );
+  }
+
+  // 5. Enterprise Portals, Business Forms & Full-Stack Systems (e.g., aktechportal, kesinti formu, duraq)
+  if (isPortalOrFullstack || (!isEmbeddedOrHardware && !isCliOrSystem && !isGameOrInteractive)) {
+    candidates.push(
+      {
+        title: 'Multi-Step Form Workflow, Strict Schema Validation & Draft Auto-Save',
+        rationale:
+          'Eliminates data entry errors in complex operational forms (e.g. outage/incident reports, service requests) with field-level Zod validation, conditional sections, and draft recovery.',
+        implementationPrompt:
+          'Read PROJECT.md and implement structured form workflows with strict client/server schema validation, clear inline error messages, attachment support, and automatic draft persistence.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+      {
+        title: 'Role-Based Access Control (RBAC), Approval Status Pipeline & Audit Trail',
+        rationale:
+          'Tracks every record transition (Submitted -> In Review -> Approved / Resolved) with user attribution, timestamps, and role permissions.',
+        implementationPrompt:
+          'Design and implement role-based permission guards, a structured status transition workflow, and an immutable audit log recording who changed what and when.',
+        category: 'architecture',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'architect',
+        preferredAgent: 'claude',
+        preferredModel: 'fable',
+        suggestedMilestoneCode: 'M1',
+      },
+      {
+        title: 'Interactive Data Grid, Advanced Multi-Filter Search & CSV/PDF Report Export',
+        rationale:
+          'Lets operators filter records by date range, status, category, or keyword and export clean operational reports in 1 click.',
+        implementationPrompt:
+          'Implement a responsive data table with multi-criteria filtering, sorting, pagination, KPI summary cards at the top, and 1-click CSV/printable report export.',
+        category: 'ui_ux',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'ui_ux',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M3',
+      },
+    );
+  }
+
+  // 6. Backend API / Microservices & Data Layer
+  if (isApiOrBackend) {
+    candidates.push(
+      {
+        title: 'OpenAPI / Swagger Interactive Documentation & Strict Boundary Validation',
+        rationale:
+          'Provides self-documenting API contracts and strict request/response schema validation for every endpoint.',
+        implementationPrompt:
+          'Add comprehensive Zod/schema request and response validation across all API routes, standardized error envelopes, and an interactive API documentation/health endpoint.',
+        category: 'architecture',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'architect',
+        preferredAgent: 'claude',
+        preferredModel: 'fable',
+        suggestedMilestoneCode: 'M1',
+      },
+      {
+        title: 'Database Indexing, Migration Safety & Query Performance Optimization',
+        rationale:
+          'Ensures fast response times under load with proper foreign-key indexes, safe transactional writes, and reversible migrations.',
+        implementationPrompt:
+          'Audit the database schema and queries in the project, add missing indexes and transactional boundaries, and verify migrations and seed data run cleanly.',
+        category: 'performance',
+        impact: 'high',
+        effort: 'small',
+        persona: 'dba',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      },
+      {
+        title: 'Rate Limiting, Structured Audit Logging & Security Hardening',
+        rationale:
+          'Hardens the service against abuse with rate limiting, CORS/CSRF protection, and structured JSON audit trails.',
         implementationPrompt:
           'Implement request rate limiting, security headers, and structured audit logging for sensitive mutations, along with integration tests.',
         category: 'qa_security',
@@ -352,42 +469,94 @@ export async function synthesizeBrainstormSuggestions(
     );
   }
 
-  // Universal high-value software factory suggestions
-  candidates.push(
-    {
-      title: 'Mobile Touch Ergonomics, Safe-Area Viewport Fit & Haptic Feedback',
+  // 7. Interactive / Game / Canvas (ONLY when project actually matches game/interactive)
+  if (isGameOrInteractive) {
+    if (isFlappyOrArcade) {
+      candidates.push(
+        {
+          title: 'Power-Up Collectibles (Shield Bubble, Coin Magnet, Slow-Mo & Score 2x)',
+          rationale:
+            'Spawns collectible power-up orbs that grant temporary invulnerability, magnet attraction, or double points with HUD timers.',
+          implementationPrompt:
+            'Read PROJECT.md and implement collectible Power-Ups (Shield Bubble, Magnet, Slow-Mo, and 2x Score Multiplier) with visual aura effects and active duration bars in the HUD.',
+          category: 'feature',
+          impact: 'high',
+          effort: 'medium',
+          persona: 'coder',
+          preferredAgent: 'claude',
+          preferredModel: 'opus',
+          suggestedMilestoneCode: 'M2',
+        },
+        {
+          title: 'Unlockable Skins, Particle Trails & Customization Shop Modal',
+          rationale:
+            'Gives players a progression loop by unlocking custom character skins and particle trails persisted in localStorage.',
+          implementationPrompt:
+            'Implement an interactive Customization Shop accessible from the title/game-over screen to unlock and equip skins and particle trails.',
+          category: 'ui_ux',
+          impact: 'high',
+          effort: 'medium',
+          persona: 'ui_ux',
+          preferredAgent: 'claude',
+          preferredModel: 'opus',
+          suggestedMilestoneCode: 'M3',
+        },
+      );
+    }
+    if (isTowerOrStrategy) {
+      candidates.push({
+        title: 'Boss Waves, Elite Modifiers & Branching Specialization Tech Tree',
+        rationale:
+          'Adds strategic depth with boss waves and branching Tier-3 unit/tower upgrade specializations.',
+        implementationPrompt:
+          'Read PROJECT.md and implement Boss Waves every 5 waves with a dedicated Boss HP bar and branching specialization upgrades.',
+        category: 'feature',
+        impact: 'high',
+        effort: 'medium',
+        persona: 'coder',
+        preferredAgent: 'claude',
+        preferredModel: 'opus',
+        suggestedMilestoneCode: 'M2',
+      });
+    }
+    candidates.push({
+      title: 'WebAudio Synthesizer SFX, Visual Juice & Persistent High-Score Leaderboard',
       rationale:
-        'Ensures full-screen edge-to-edge responsiveness on iOS/Android viewports (100dvh, safe-area-inset) with optional navigator.vibrate haptic feedback.',
+        'Adds zero-dependency WebAudio procedural sound effects, particle feedback, and persistent local statistics/achievements.',
       implementationPrompt:
-        'Audit and refine mobile viewport sizing (100dvh, safe-area-inset padding, touch-action: manipulation, zero overscroll bounce) and add subtle haptic feedback on mobile devices. Run npm run build.',
+        'Add a procedural WebAudio sound synthesizer (with Mute toggle), particle effects, and a persistent stats/achievements modal.',
       category: 'ui_ux',
       impact: 'high',
       effort: 'small',
       persona: 'ui_ux',
-      preferredAgent: 'antigravity',
-      preferredModel: 'argon',
+      preferredAgent: 'claude',
+      preferredModel: 'opus',
       suggestedMilestoneCode: 'M3',
-    },
+    });
+  }
+
+  // 8. Universal high-value engineering suggestions applicable to any software project
+  candidates.push(
     {
-      title: 'Interactive Onboarding Tour, Command Shortcuts & Empty-State Polish',
+      title: 'Responsive UX Polish, Keyboard Navigation & Empty/Error State Ergonomics',
       rationale:
-        'Makes first-time user experience effortless with contextual hints, keyboard shortcuts overlay (?), and polished empty/loading states.',
+        'Improves usability across desktop and mobile viewports with clear loading, empty, and error recovery states plus keyboard shortcuts.',
       implementationPrompt:
-        'Read PROJECT.md and polish the user experience with a keyboard shortcuts modal, interactive quick-start guide, and refined micro-interactions across all primary views. Run npm run build.',
+        'Read PROJECT.md and refine the user experience: improve visual hierarchy, keyboard navigation/shortcuts, responsive layout, and informative empty/error states.',
       category: 'ui_ux',
       impact: 'medium',
       effort: 'small',
       persona: 'ui_ux',
-      preferredAgent: 'antigravity',
-      preferredModel: 'argon',
+      preferredAgent: 'claude',
+      preferredModel: 'opus',
       suggestedMilestoneCode: 'M3',
     },
     {
-      title: 'Data Export / Import (JSON & Shareable Snapshot) + Telemetry Dashboard',
+      title: 'State Export / Import (JSON Snapshot) & Diagnostics Summary View',
       rationale:
-        'Lets users back up, share, or inspect their application state and view real-time performance/usage statistics.',
+        'Lets users or administrators back up, restore, and inspect application configuration, records, and system health diagnostics.',
       implementationPrompt:
-        'Implement JSON state export/import and an in-app statistics/analytics summary modal so users can inspect metrics and back up their progress. Run npm run build.',
+        'Implement JSON data/configuration export & import with schema validation and a diagnostics/metrics summary view.',
       category: 'feature',
       impact: 'medium',
       effort: 'small',
@@ -397,11 +566,11 @@ export async function synthesizeBrainstormSuggestions(
       suggestedMilestoneCode: 'M2',
     },
     {
-      title: 'End-to-End Smoke Test Suite & Zero-Warning Build Hardening',
+      title: 'End-to-End Automated Test Suite & Zero-Warning Build Hardening',
       rationale:
-        'Verifies all critical user journeys automatically and ensures TypeScript/ESLint/build pipelines stay 100% clean.',
+        'Verifies critical workflows automatically and ensures the compiler, linter, and build pipeline stay 100% clean.',
       implementationPrompt:
-        'Audit the project for any unhandled edge cases, TypeScript/lint warnings, or untested modules. Add comprehensive smoke tests and verify npm run build succeeds cleanly.',
+        'Audit the project for unhandled edge cases, compiler/lint warnings, or untested modules. Add comprehensive automated tests and verify the build pipeline succeeds cleanly.',
       category: 'qa_security',
       impact: 'high',
       effort: 'small',
@@ -440,7 +609,7 @@ async function seedInitialRoadmap(
     {
       id: 'ms-m1',
       code: 'M1',
-      title: 'Foundation, Blueprint & Core Architecture',
+      title: 'Foundation, Blueprint & System Architecture',
       description: 'Project specification (PROJECT.md), repository structure, build pipeline, and core contracts.',
       status: 'planned',
       items: [],
@@ -448,24 +617,24 @@ async function seedInitialRoadmap(
     {
       id: 'ms-m2',
       code: 'M2',
-      title: 'Core Domain Engine & Primary Features',
-      description: 'Primary gameplay/business logic, state management, entities, and core workflows.',
+      title: 'Core Domain, Services & Primary Workflows',
+      description: 'Core business/system logic, data models, services, and primary functional workflows.',
       status: 'planned',
       items: [],
     },
     {
       id: 'ms-m3',
       code: 'M3',
-      title: 'Interactive UI/UX, Audio/Visual Polish & Progression',
-      description: 'HUD, responsive interface, visual effects, sound design, and user experience.',
+      title: 'User Interface, API/CLI Surface & Experience',
+      description: 'Web/Desktop UI views, forms, CLI/API ergonomics, reporting, and user experience polish.',
       status: 'planned',
       items: [],
     },
     {
       id: 'ms-m4',
       code: 'M4',
-      title: 'QA Verification, Performance & Release Readiness',
-      description: 'Automated test suites, Live Browser QA verification, performance optimization, and security.',
+      title: 'QA Verification, Security & Release Readiness',
+      description: 'Automated test suites, security hardening, performance optimization, and packaging.',
       status: 'planned',
       items: [],
     },

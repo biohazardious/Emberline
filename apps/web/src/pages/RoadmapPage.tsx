@@ -805,7 +805,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
               />
               <input
                 className="input grow"
-                placeholder="Milestone title (e.g. Multiplayer & Co-op Mode)"
+                placeholder="Milestone title (e.g. Multi-Tenant RBAC, Hardware I2C Protocol, or Production Hardening)"
                 required
                 value={newMsTitle}
                 onChange={(e) => setNewMsTitle(e.target.value)}
@@ -1019,7 +1019,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             <input
               id="brainstorm-focus-input"
               className="input"
-              placeholder="Brainstorm topic (e.g. Boss waves, skill tree, sound effects, co-op mode, dark theme…)"
+              placeholder="Brainstorm focus (e.g. RBAC & approval workflow, multi-agent DAG router, ESP32 I2C protocol, dry-run rollback, desktop tray…)"
               value={brainstormFocus}
               onChange={(e) => setBrainstormFocus(e.target.value)}
               onKeyDown={(e) => {

@@ -39,13 +39,16 @@ import { getLastKnownClaudeUtilizationPercent } from './browser-daemon.js';
 const execFileAsync = promisify(execFile);
 
 export const APP_TYPE_LABELS: Record<ProjectAppType, string> = {
-  web_saas: 'Web SaaS Application',
-  fullstack: 'Full-Stack Web Platform',
+  web_saas: 'Web SaaS / Enterprise Portal',
+  fullstack: 'Full-Stack Multi-Layer Platform',
   api_service: 'Backend API / Microservice',
-  cli_tool: 'CLI Tool / Developer Utility',
-  mobile_desktop: 'Mobile / Desktop App',
+  ai_agents: 'Multi-Agent AI / Orchestration Platform',
+  cli_tool: 'CLI Tool / System & Infra Automation',
+  mobile_desktop: 'Desktop / Mobile Application',
+  embedded_iot: 'Embedded / IoT / Hardware Firmware',
   library: 'SDK / Package Library',
-  custom: 'Custom Software Project',
+  game_interactive: 'Interactive Canvas / Game App',
+  custom: 'Custom Multi-Layer Project',
 };
 
 export const TASK_TEMPLATES: readonly TaskTemplate[] = [
@@ -245,37 +248,37 @@ ${refSection}
 export function generateClaudeInstructions(name: string): string {
   return `# ${name} — Agent Instructions (\`CLAUDE.md\`)
 
-1. **Always read \`PROJECT.md\` first** before planning or making changes. It is the living source of truth for product vision, tech stack, architecture rules, and milestones.
-2. **Respect your assigned Persona role** (Product Owner, Architect, UI/UX, Coder, DBA, QA, or Security) when executing a task.
+1. **Always read \`PROJECT.md\` first** before planning or making changes. It is the living source of truth for product vision, tech stack, architectural layers, and milestones.
+2. **Respect your assigned Persona role** (Product Owner, Architect, UI/UX, Coder, DBA, QA, or Security) and adapt to the project's actual architecture (Full-Stack Web/Portal, Backend API, Multi-Agent Platform, Desktop/Mobile App, System/CLI Automation, or Embedded/IoT Firmware).
 3. **Self-Task Delegation (\`.emberline/new-tickets.json\`):**
-   - When acting as \`product_owner\` or \`architect\` (or whenever a request requires multiple specialist personas such as \`coder\` for backend/engine logic, \`ui_ux\` for frontend UI/HUD/design, \`dba\` for database changes, and \`qa\` for test & build verification), create delegated tickets by writing \`.emberline/new-tickets.json\`:
+   - When acting as \`product_owner\` or \`architect\` (or whenever a request spans multiple architectural layers such as \`coder\` for backend/core/service/firmware logic, \`dba\` for database schemas & migrations, \`ui_ux\` for frontend views/desktop GUI/CLI UX, and \`qa\` for automated test & build verification), create delegated tickets by writing \`.emberline/new-tickets.json\`:
    \`\`\`json
    {
      "autoDispatch": true,
      "tickets": [
        {
-         "title": "Backend & Engine: ...",
+         "title": "Core / Backend: ...",
          "persona": "coder",
          "priority": 3,
          "body": "Detailed specification, target files, and acceptance criteria..."
        },
        {
-         "title": "UI/UX: ...",
+         "title": "UI/UX or Surface: ...",
          "persona": "ui_ux",
          "priority": 2,
-         "body": "Detailed UI/UX design & frontend component specification..."
+         "body": "Detailed interface, view, or CLI/GUI ergonomics specification..."
        },
        {
-         "title": "QA: ...",
+         "title": "QA & Build Verification: ...",
          "persona": "qa",
          "priority": 1,
-         "body": "Write/run tests and run npm run build to update the playable demo bundle."
+         "body": "Write/run automated tests and verify the project's build/compile pipeline passes cleanly."
        }
      ]
    }
    \`\`\`
    - Emberline Core automatically reads \`.emberline/new-tickets.json\` when your turn finishes, creates the tickets on the Kanban Board, syncs your work to \`main\`, and dispatches each specialist persona sequentially!
-4. **Verify your work & Demo Bundle:** Run relevant typechecks, linters, and tests (\`npm run build\` if present) before concluding your turn.
+4. **Verify your work:** Run the project's appropriate build, compiler, linter, and test suite (e.g., \`pnpm/npm run build\`, \`pytest\`, \`go test ./...\`, \`cargo check\`, \`pio run\`, \`make\`, or \`bash -n\`) before concluding your turn.
 5. **Keep \`PROJECT.md\` up to date** whenever architectural boundaries, commands, or milestones evolve.
 `;
 }
@@ -562,21 +565,188 @@ async function collectWorkspaceFiles(
   };
 }
 
-async function inspectPackageJson(
+interface WorkspaceInspection {
+  hasPackageJson: boolean;
+  hasBuildScript: boolean;
+  detectedStack: string;
+  buildCommand: string | null;
+  detectedLayers: string[];
+}
+
+async function inspectWorkspaceProject(
   workspacePath: string,
-): Promise<{ hasPackageJson: boolean; hasBuildScript: boolean }> {
+  topFiles: readonly string[] = [],
+): Promise<WorkspaceInspection> {
+  if (!existsSync(workspacePath)) {
+    return {
+      hasPackageJson: false,
+      hasBuildScript: false,
+      detectedStack: 'Empty Workspace',
+      buildCommand: null,
+      detectedLayers: [],
+    };
+  }
+
   const pkgPath = path.join(workspacePath, 'package.json');
-  if (!existsSync(pkgPath)) {
-    return { hasPackageJson: false, hasBuildScript: false };
+  const hasPackageJson = existsSync(pkgPath);
+  const hasPnpmWorkspace =
+    existsSync(path.join(workspacePath, 'pnpm-workspace.yaml')) ||
+    existsSync(path.join(workspacePath, 'turbo.json'));
+  const hasPnpmLock = existsSync(path.join(workspacePath, 'pnpm-lock.yaml'));
+  const hasYarnLock = existsSync(path.join(workspacePath, 'yarn.lock'));
+  const pkgManager = hasPnpmLock || hasPnpmWorkspace ? 'pnpm' : hasYarnLock ? 'yarn' : 'npm';
+
+  const hasPyproject =
+    existsSync(path.join(workspacePath, 'pyproject.toml')) ||
+    existsSync(path.join(workspacePath, 'requirements.txt')) ||
+    existsSync(path.join(workspacePath, 'setup.py'));
+  const hasGoMod = existsSync(path.join(workspacePath, 'go.mod'));
+  const hasCargo =
+    existsSync(path.join(workspacePath, 'Cargo.toml')) ||
+    existsSync(path.join(workspacePath, 'src-tauri', 'Cargo.toml'));
+  const hasPlatformIo = existsSync(path.join(workspacePath, 'platformio.ini'));
+  const hasCMake = existsSync(path.join(workspacePath, 'CMakeLists.txt'));
+  const hasMakefile = existsSync(path.join(workspacePath, 'Makefile'));
+  const hasIno = topFiles.some((f) => f.endsWith('.ino') || f.endsWith('.c') || f.endsWith('.cpp') || f.endsWith('.h'));
+  const hasPyFiles = topFiles.some((f) => f.endsWith('.py'));
+  const hasShFiles = topFiles.some((f) => f.endsWith('.sh'));
+
+  const layers = new Set<string>();
+  if (
+    hasPnpmWorkspace ||
+    existsSync(path.join(workspacePath, 'apps')) ||
+    existsSync(path.join(workspacePath, 'packages')) ||
+    existsSync(path.join(workspacePath, 'services'))
+  ) {
+    layers.add('Multi-Layer / Monorepo');
   }
-  try {
-    const raw = await readFile(pkgPath, 'utf-8');
-    const parsed = JSON.parse(raw) as { scripts?: Record<string, string> };
-    const hasBuildScript = Boolean(parsed.scripts && typeof parsed.scripts.build === 'string');
-    return { hasPackageJson: true, hasBuildScript };
-  } catch {
-    return { hasPackageJson: true, hasBuildScript: false };
+  if (
+    existsSync(path.join(workspacePath, 'index.html')) ||
+    existsSync(path.join(workspacePath, 'public')) ||
+    existsSync(path.join(workspacePath, 'apps', 'web')) ||
+    existsSync(path.join(workspacePath, 'apps', 'client')) ||
+    existsSync(path.join(workspacePath, 'frontend')) ||
+    topFiles.some((f) => f.endsWith('.tsx') || f.endsWith('.vue') || f.endsWith('.svelte'))
+  ) {
+    layers.add('Frontend / Web UI');
   }
+  if (
+    existsSync(path.join(workspacePath, 'apps', 'core')) ||
+    existsSync(path.join(workspacePath, 'apps', 'api')) ||
+    existsSync(path.join(workspacePath, 'apps', 'server')) ||
+    existsSync(path.join(workspacePath, 'backend')) ||
+    existsSync(path.join(workspacePath, 'server')) ||
+    existsSync(path.join(workspacePath, 'api')) ||
+    hasGoMod ||
+    hasPyproject
+  ) {
+    layers.add('Backend / Service');
+  }
+  if (
+    existsSync(path.join(workspacePath, 'prisma')) ||
+    existsSync(path.join(workspacePath, 'drizzle')) ||
+    existsSync(path.join(workspacePath, 'migrations')) ||
+    topFiles.some((f) => f.includes('schema') || f.endsWith('.sql'))
+  ) {
+    layers.add('Database / Schema');
+  }
+  if (
+    existsSync(path.join(workspacePath, 'src-tauri')) ||
+    existsSync(path.join(workspacePath, 'electron')) ||
+    existsSync(path.join(workspacePath, 'android')) ||
+    existsSync(path.join(workspacePath, 'ios'))
+  ) {
+    layers.add('Desktop / Mobile Native');
+  }
+  if (hasPlatformIo || hasIno || existsSync(path.join(workspacePath, 'firmware'))) {
+    layers.add('Embedded / Hardware Firmware');
+  }
+  if (hasShFiles || existsSync(path.join(workspacePath, 'scripts')) || existsSync(path.join(workspacePath, 'bin'))) {
+    layers.add('CLI / System Automation');
+  }
+  if (
+    existsSync(path.join(workspacePath, 'Dockerfile')) ||
+    existsSync(path.join(workspacePath, 'docker-compose.yml')) ||
+    existsSync(path.join(workspacePath, 'compose.yaml'))
+  ) {
+    layers.add('Docker / Containers');
+  }
+
+  let hasBuildScript = false;
+  let buildCommand: string | null = null;
+  let detectedStack = 'Polyglot / Custom';
+
+  if (hasPackageJson) {
+    detectedStack = hasPnpmWorkspace ? `TypeScript / JS Monorepo (${pkgManager})` : `Node.js / TypeScript (${pkgManager})`;
+    try {
+      const raw = await readFile(pkgPath, 'utf-8');
+      const parsed = JSON.parse(raw) as {
+        scripts?: Record<string, string>;
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const scripts = parsed.scripts ?? {};
+      const deps = { ...(parsed.dependencies ?? {}), ...(parsed.devDependencies ?? {}) };
+      if (deps.electron || deps['@tauri-apps/api']) layers.add('Desktop / Mobile Native');
+      if (deps.fastify || deps.express || deps['@nestjs/core'] || deps.hono) layers.add('Backend / Service');
+      if (deps['drizzle-orm'] || deps.prisma || deps['@prisma/client'] || deps.pg || deps['better-sqlite3']) {
+        layers.add('Database / Schema');
+      }
+      if (typeof scripts.build === 'string') {
+        hasBuildScript = true;
+        buildCommand = `${pkgManager} run build`;
+      } else if (typeof scripts.typecheck === 'string') {
+        hasBuildScript = true;
+        buildCommand = `${pkgManager} run typecheck`;
+      } else if (typeof scripts.check === 'string') {
+        hasBuildScript = true;
+        buildCommand = `${pkgManager} run check`;
+      } else if (typeof scripts.test === 'string') {
+        hasBuildScript = true;
+        buildCommand = `${pkgManager} test`;
+      }
+    } catch {
+      // ignore invalid package.json
+    }
+  }
+
+  if (hasPlatformIo) {
+    detectedStack = 'PlatformIO / Embedded Firmware (ESP32/MCU)';
+    hasBuildScript = true;
+    buildCommand = buildCommand ?? 'pio run';
+  } else if (hasCargo) {
+    detectedStack = existsSync(path.join(workspacePath, 'src-tauri')) ? 'Rust + Tauri Desktop' : 'Rust / Cargo';
+    hasBuildScript = true;
+    buildCommand = buildCommand ?? 'cargo check';
+  } else if (hasGoMod) {
+    detectedStack = 'Go Module';
+    hasBuildScript = true;
+    buildCommand = buildCommand ?? 'go build ./...';
+  } else if (hasPyproject || hasPyFiles) {
+    detectedStack = hasShFiles ? 'Python + Shell Automation' : 'Python';
+    hasBuildScript = true;
+    buildCommand = buildCommand ?? 'python3 -m compileall -q .';
+  } else if (hasCMake || hasIno) {
+    detectedStack = hasIno ? 'Embedded C/C++ / Arduino Firmware' : 'C/C++ (CMake)';
+    hasBuildScript = Boolean(hasMakefile || hasCMake);
+    buildCommand = buildCommand ?? (hasMakefile ? 'make' : 'cmake --build build');
+  } else if (hasShFiles) {
+    detectedStack = 'Shell / Linux System Automation';
+    hasBuildScript = true;
+    buildCommand = buildCommand ?? 'bash -n *.sh';
+  } else if (hasMakefile && !buildCommand) {
+    detectedStack = 'Makefile Project';
+    hasBuildScript = true;
+    buildCommand = 'make';
+  }
+
+  return {
+    hasPackageJson,
+    hasBuildScript,
+    detectedStack,
+    buildCommand,
+    detectedLayers: Array.from(layers),
+  };
 }
 
 export async function detectDemoEntryRelPath(workspacePath: string): Promise<string | null> {
@@ -676,7 +846,7 @@ export async function computeProjectStatusSummary(params: {
 
   // 1. Main workspace target
   const mainFiles = await collectWorkspaceFiles(project.path);
-  const mainPkg = await inspectPackageJson(project.path);
+  const mainPkg = await inspectWorkspaceProject(project.path, mainFiles.topFiles);
   const mainDemoEntry = await detectDemoEntryRelPath(project.path);
   targets.push({
     id: 'main',
@@ -693,6 +863,9 @@ export async function computeProjectStatusSummary(params: {
     topFiles: mainFiles.topFiles,
     hasPackageJson: mainPkg.hasPackageJson,
     hasBuildScript: mainPkg.hasBuildScript,
+    detectedStack: mainPkg.detectedStack,
+    buildCommand: mainPkg.buildCommand,
+    detectedLayers: mainPkg.detectedLayers,
     demoEntryRelPath: mainDemoEntry,
     demoUrl: mainDemoEntry ? `/api/projects/${project.id}/demo/main/` : null,
     updatedAt: project.createdAt,
@@ -707,7 +880,7 @@ export async function computeProjectStatusSummary(params: {
 
     const ticket = run.ticketId ? ticketMap.get(run.ticketId) : undefined;
     const wtFiles = await collectWorkspaceFiles(run.worktreePath);
-    const wtPkg = await inspectPackageJson(run.worktreePath);
+    const wtPkg = await inspectWorkspaceProject(run.worktreePath, wtFiles.topFiles);
     const wtDemoEntry = await detectDemoEntryRelPath(run.worktreePath);
     const shortId = run.id.slice(0, 8);
     const fallbackTitle = run.prompt.split('\n')[0]?.slice(0, 48) || `Run ${shortId}`;
@@ -728,6 +901,9 @@ export async function computeProjectStatusSummary(params: {
       topFiles: wtFiles.topFiles,
       hasPackageJson: wtPkg.hasPackageJson,
       hasBuildScript: wtPkg.hasBuildScript,
+      detectedStack: wtPkg.detectedStack,
+      buildCommand: wtPkg.buildCommand,
+      detectedLayers: wtPkg.detectedLayers,
       demoEntryRelPath: wtDemoEntry,
       demoUrl: wtDemoEntry ? `/api/projects/${project.id}/demo/${run.id}/` : null,
       updatedAt: run.endedAt ?? run.stateChangedAt ?? run.createdAt,
@@ -776,13 +952,13 @@ export async function persistFactoryAttachments(
     const isTextLike =
       att.mimeType.startsWith('text/') ||
       att.mimeType === 'application/json' ||
-      ['.md', '.txt', '.json', '.csv', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.yaml', '.yml', '.xml', '.svg'].includes(
+      ['.md', '.txt', '.json', '.csv', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.yaml', '.yml', '.xml', '.svg', '.py', '.sh', '.go', '.rs', '.c', '.cpp', '.h', '.ino', '.ini'].includes(
         ext,
       );
 
     if (isImage) {
       sections.push(
-        `- 🖼️ **Image / Visual Asset:** \`${att.name}\` (${att.mimeType}, ${sizeKb} KB)\n  - **Absolute Path:** \`${absPath}\`\n  - **Action:** Use your \`Read\` tool on \`${absPath}\` to visually inspect this image/screenshot/logo, and copy it into \`public/\` or \`src/assets/\` if the user wants it embedded in the app. **Include this exact path \`${absPath}\` in delegated \`ui_ux\` / \`coder\` ticket bodies!**`,
+        `- 🖼️ **Image / Visual Asset:** \`${att.name}\` (${att.mimeType}, ${sizeKb} KB)\n  - **Absolute Path:** \`${absPath}\`\n  - **Action:** Use your \`Read\` tool on \`${absPath}\` to visually inspect this image/screenshot/diagram/mockup, and copy it into the project assets directory if the user wants it embedded. **Include this exact path \`${absPath}\` in delegated \`ui_ux\` / \`coder\` ticket bodies!**`,
       );
     } else if (isTextLike && buf.length <= 16_384 && !buf.subarray(0, 1024).includes(0)) {
       const preview = buf.toString('utf8').trim();
@@ -808,7 +984,7 @@ export function buildFactoryOrchestratorPrompt(
     ? `\n### Attached Reference Files & Visual Assets (Uploaded by User):\n${attachmentContext.trim()}\n`
     : '';
 
-  return `## AI Coding Factory — Feature Request & Specialist Persona Delegation
+  return `## AI Coding Factory — Feature Request & Multi-Layer Specialist Delegation
 
 User Request:
 """
@@ -816,44 +992,45 @@ ${userRequest.trim()}
 """
 ${attachmentSection}
 ### Your Mission (as Lead Product Owner & Factory Orchestrator):
-1. **Inspect Context & Attached Files:** Read \`PROJECT.md\`, inspect any **Attached Reference Files / Images** listed above using your \`Read\` tool, and inspect the existing project files in the repository so you know the exact directory structure, frontend components, backend/engine modules, and build setup.
-2. **Refine Specification:** Translate the user's request (and any visual/file references) into a clear, well-structured engineering specification and update \`PROJECT.md\` if needed.
+1. **Inspect Architecture & Attached Files:** Read \`PROJECT.md\`, inspect any **Attached Reference Files / Images** listed above using your \`Read\` tool, and inspect the repository structure so you understand the project's exact stack and layers (e.g., Full-Stack Web/Portal, Multi-Package Monorepo, Backend API/Microservice, Multi-Agent Platform, Desktop/Mobile App, CLI/System Automation, or Embedded/IoT Firmware).
+2. **Refine Specification:** Translate the user's request (and any attached specs/diagrams/screenshots) into a clear engineering specification and update \`PROJECT.md\` if needed.
 3. **Delegate to Specialist Personas (DO NOT implement the entire feature yourself):**
-   Break the work down into concrete, non-overlapping sub-tasks for the appropriate specialist personas so each specialist handles its domain:
-   - \`coder\` (Priority 3 - High): Backend services, game engine / business logic, counters/state management, and API endpoints.
-   - \`dba\` (Priority 3 - High, if applicable): Database schema or persistence updates.
-   - \`ui_ux\` (Priority 2 - Normal): Frontend UI components, HUD overlays, visual styling, layout, animations, and user interactions.
-   - \`qa\` (Priority 1 - Low): Unit/component tests verifying the new feature AND running \`npm run build\` so the compiled Live Demo bundle (\`dist/\`) is updated.
-   *(If the user attached images, screenshots, logos, or reference files above, ALWAYS copy their exact Absolute Paths into the \`body\` of the relevant \`ui_ux\` / \`coder\` tickets so those specialists can inspect or copy them!)*
+   Break the work down into concrete, non-overlapping sub-tasks for the relevant specialist personas based on the project's architecture:
+   - \`architect\` (Priority 3 - High, when cross-layer contracts, monorepo packages, or system protocols change): Module boundaries, shared schemas/types, or hardware/IPC contracts.
+   - \`dba\` (Priority 3 - High, when persistence/database schemas change): Database tables, migrations, indexes, or storage models.
+   - \`coder\` (Priority 3 - High): Core business logic, backend services/APIs, CLI/system automation scripts, desktop/native state, or embedded firmware implementation.
+   - \`ui_ux\` (Priority 2 - Normal, when user-facing surfaces exist): Web/Portal pages, forms, dashboards, desktop/mobile GUI views, or interactive CLI/TUI output ergonomics.
+   - \`qa\` (Priority 1 - Low): Unit/integration/E2E tests, safety/regression checks, and running the project's build/compile verification pipeline.
+   *(If the user attached images, screenshots, schemas, logs, or reference files above, ALWAYS copy their exact Absolute Paths into the \`body\` of the relevant delegated tickets so those specialists can inspect or use them!)*
 4. **Write Delegated Tickets to \`.emberline/new-tickets.json\`:**
-   Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below:
+   Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below (include only the personas relevant to this request):
    \`\`\`json
    {
      "autoDispatch": ${autoDispatch ? 'true' : 'false'},
      "tickets": [
        {
-         "title": "Backend/Engine: <concise title>",
+         "title": "Core / Backend: <concise title>",
          "persona": "coder",
          "priority": 3,
          "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..."
        },
        {
-         "title": "UI/UX: <concise title>",
+         "title": "UI/UX or Surface: <concise title>",
          "persona": "ui_ux",
          "priority": 2,
          "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..."
        },
        {
-         "title": "QA & Build: <concise title>",
+         "title": "QA & Build Verification: <concise title>",
          "persona": "qa",
          "priority": 1,
-         "body": "## Objective\\nAdd tests for the new changes and run \`npm run build\` to refresh the production demo bundle."
+         "body": "## Objective\\nAdd tests for the new changes and verify the project's build/test pipeline succeeds cleanly."
        }
      ]
    }
    \`\`\`
    *(Keep \`.emberline/new-tickets.json\` on disk when you finish; Emberline Core will automatically ingest it, create the tickets on the Kanban Board, sync your \`PROJECT.md\` update to \`main\`, and dispatch each specialist persona in priority order!)*
-5. **Autonomous Execution Rule (CRITICAL):** Do NOT ask the user clarifying questions (such as asking whether to use \`localStorage\` vs a backend leaderboard) and do NOT wait for confirmation. Always select the simplest self-contained local option that fits \`PROJECT.md\` and write \`.emberline/new-tickets.json\` in this turn.`;
+5. **Autonomous Execution Rule (CRITICAL):** Do NOT ask the user clarifying questions and do NOT wait for confirmation. Always select the cleanest architecture-appropriate design that fits \`PROJECT.md\` and write \`.emberline/new-tickets.json\` in this turn.`;
 }
 
 export async function ingestAgentTicketsFile(
@@ -991,35 +1168,108 @@ export async function buildWorkspaceDemo(params: {
   }
 
   const logs: string[] = [];
-  const hasNodeModules = existsSync(path.join(workspacePath, 'node_modules'));
-  const hasPnpmLock = existsSync(path.join(workspacePath, 'pnpm-lock.yaml'));
-  const hasYarnLock = existsSync(path.join(workspacePath, 'yarn.lock'));
-  const pkgManager = hasPnpmLock ? 'pnpm' : hasYarnLock ? 'yarn' : 'npm';
-  const installArgs =
-    pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
+  const filesInfo = await collectWorkspaceFiles(workspacePath);
+  const inspection = await inspectWorkspaceProject(workspacePath, filesInfo.topFiles);
+  let buildCommandSucceeded = false;
 
   try {
-    if (!hasNodeModules && existsSync(path.join(workspacePath, 'package.json'))) {
-      const { stdout, stderr } = await execFileAsync(pkgManager, installArgs, {
+    if (inspection.hasPackageJson) {
+      const hasNodeModules = existsSync(path.join(workspacePath, 'node_modules'));
+      const hasPnpmLock =
+        existsSync(path.join(workspacePath, 'pnpm-lock.yaml')) ||
+        existsSync(path.join(workspacePath, 'pnpm-workspace.yaml'));
+      const hasYarnLock = existsSync(path.join(workspacePath, 'yarn.lock'));
+      const pkgManager = hasPnpmLock ? 'pnpm' : hasYarnLock ? 'yarn' : 'npm';
+      const installArgs =
+        pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
+
+      if (!hasNodeModules) {
+        const { stdout, stderr } = await execFileAsync(pkgManager, installArgs, {
+          cwd: workspacePath,
+          timeout: 120_000,
+        });
+        if (stdout) logs.push(stdout);
+        if (stderr) logs.push(stderr);
+      }
+
+      const rawPkg = await readFile(path.join(workspacePath, 'package.json'), 'utf-8');
+      const parsedPkg = JSON.parse(rawPkg) as { scripts?: Record<string, string> };
+      const scripts = parsedPkg.scripts ?? {};
+      const scriptName =
+        typeof scripts.build === 'string'
+          ? 'build'
+          : typeof scripts.typecheck === 'string'
+            ? 'typecheck'
+            : typeof scripts.check === 'string'
+              ? 'check'
+              : null;
+
+      if (scriptName) {
+        logs.push(`$ ${pkgManager} run ${scriptName}`);
+        const { stdout, stderr } = await execFileAsync(pkgManager, ['run', scriptName], {
+          cwd: workspacePath,
+          timeout: 120_000,
+        });
+        if (stdout) logs.push(stdout);
+        if (stderr) logs.push(stderr);
+      }
+      buildCommandSucceeded = true;
+    } else if (existsSync(path.join(workspacePath, 'Cargo.toml'))) {
+      logs.push('$ cargo check');
+      const { stdout, stderr } = await execFileAsync('cargo', ['check'], {
         cwd: workspacePath,
         timeout: 120_000,
       });
       if (stdout) logs.push(stdout);
       if (stderr) logs.push(stderr);
+      buildCommandSucceeded = true;
+    } else if (existsSync(path.join(workspacePath, 'go.mod'))) {
+      logs.push('$ go build ./...');
+      const { stdout, stderr } = await execFileAsync('go', ['build', './...'], {
+        cwd: workspacePath,
+        timeout: 120_000,
+      });
+      if (stdout) logs.push(stdout);
+      if (stderr) logs.push(stderr);
+      buildCommandSucceeded = true;
+    } else if (filesInfo.topFiles.some((f) => f.endsWith('.py'))) {
+      logs.push('$ python3 -m compileall -q .');
+      const { stdout, stderr } = await execFileAsync('python3', ['-m', 'compileall', '-q', '.'], {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+      if (stdout) logs.push(stdout);
+      if (stderr) logs.push(stderr);
+      buildCommandSucceeded = true;
+    } else if (filesInfo.topFiles.some((f) => f.endsWith('.sh'))) {
+      const shFiles = filesInfo.topFiles.filter((f) => f.endsWith('.sh'));
+      logs.push(`$ bash -n ${shFiles.join(' ')}`);
+      const { stdout, stderr } = await execFileAsync('bash', ['-n', ...shFiles], {
+        cwd: workspacePath,
+        timeout: 30_000,
+      });
+      if (stdout) logs.push(stdout);
+      if (stderr) logs.push(stderr);
+      buildCommandSucceeded = true;
+    } else if (existsSync(path.join(workspacePath, 'Makefile'))) {
+      logs.push('$ make');
+      const { stdout, stderr } = await execFileAsync('make', [], {
+        cwd: workspacePath,
+        timeout: 120_000,
+      });
+      if (stdout) logs.push(stdout);
+      if (stderr) logs.push(stderr);
+      buildCommandSucceeded = true;
+    } else {
+      logs.push(`Verified workspace structure (${filesInfo.fileCount} files, stack: ${inspection.detectedStack}).`);
+      buildCommandSucceeded = true;
     }
-
-    const { stdout, stderr } = await execFileAsync(pkgManager, ['run', 'build'], {
-      cwd: workspacePath,
-      timeout: 120_000,
-    });
-    if (stdout) logs.push(stdout);
-    if (stderr) logs.push(stderr);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logs.push(msg);
     const fallbackEntry = await detectDemoEntryRelPath(workspacePath);
     return {
-      ok: Boolean(fallbackEntry),
+      ok: false,
       targetId,
       demoEntryRelPath: fallbackEntry,
       demoUrl: fallbackEntry ? `/api/projects/${projectId}/demo/${targetId}/` : null,
@@ -1029,11 +1279,13 @@ export async function buildWorkspaceDemo(params: {
 
   const demoEntryRelPath = await detectDemoEntryRelPath(workspacePath);
   return {
-    ok: Boolean(demoEntryRelPath),
+    ok: buildCommandSucceeded || Boolean(demoEntryRelPath),
     targetId,
     demoEntryRelPath,
     demoUrl: demoEntryRelPath ? `/api/projects/${projectId}/demo/${targetId}/` : null,
-    output: logs.join('\n').slice(-4000) || 'Build completed.',
+    output:
+      logs.join('\n').slice(-4000) ||
+      `Build & verification succeeded (${inspection.detectedStack}).`,
   };
 }
 
