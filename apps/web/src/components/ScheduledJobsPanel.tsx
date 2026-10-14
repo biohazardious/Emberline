@@ -52,10 +52,12 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   }, [loadJobs]);
 
   useEffect(() => {
-    if (!projectId && projects[0]) {
+    if (projects[0] && !projects.some((p) => p.id === projectId)) {
       setProjectId(projects[0].id);
     }
   }, [projects, projectId]);
+
+  const visibleJobs = jobs.filter((j) => projects.some((p) => p.id === j.projectId));
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -140,7 +142,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
           </p>
         </div>
         <div className="actions">
-          <span className="badge mono">{jobs.filter((j) => j.enabled).length} ACTIVE</span>
+          <span className="badge mono">{visibleJobs.filter((j) => j.enabled).length} ACTIVE</span>
           <button
             type="button"
             className="btn btn-sm"
@@ -236,7 +238,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
       {notice && <p className="muted small mono" style={{ padding: '0 0.25rem' }}>{notice}</p>}
       {error && <p className="form-error">{error}</p>}
 
-      {jobs.length === 0 ? (
+      {visibleJobs.length === 0 ? (
         <div className="empty">
           <p>No scheduled jobs configured.</p>
           <p className="muted">
@@ -245,7 +247,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
         </div>
       ) : (
         <ul className="list">
-          {jobs.map((job) => (
+          {visibleJobs.map((job) => (
             <li key={job.id} className="row">
               <div className="row-main">
                 <span className={`dot ${job.enabled ? 'dot-running' : 'dot-exited'}`} />

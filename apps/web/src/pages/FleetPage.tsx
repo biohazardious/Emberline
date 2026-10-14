@@ -14,7 +14,13 @@ const TerminalView = lazy(() => import('../components/TerminalView').then((m) =>
 type FleetFilter = 'active' | 'attention' | 'queued' | 'all';
 type GridLayout = 'grid' | 'cols' | 'single';
 
-export function FleetPage({ onInspectRun }: { onInspectRun: (runId: string) => void }) {
+export function FleetPage({
+  activeProjectId,
+  onInspectRun,
+}: {
+  activeProjectId?: string | null;
+  onInspectRun: (runId: string) => void;
+}) {
   const { runs } = useRuns();
   const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
   const [filter, setFilter] = useState<FleetFilter>('all');
@@ -23,8 +29,13 @@ export function FleetPage({ onInspectRun }: { onInspectRun: (runId: string) => v
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
 
+  const scopedRuns = useMemo(
+    () => (runs ?? []).filter((r) => !activeProjectId || r.projectId === activeProjectId),
+    [runs, activeProjectId],
+  );
+
   const counts = useMemo(() => {
-    const all = runs ?? [];
+    const all = scopedRuns;
     return {
       active: all.filter((r) => !r.endedAt && r.state !== 'queued').length,
       attention: all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed')
@@ -32,10 +43,10 @@ export function FleetPage({ onInspectRun }: { onInspectRun: (runId: string) => v
       queued: all.filter((r) => r.state === 'queued').length,
       all: all.length,
     };
-  }, [runs]);
+  }, [scopedRuns]);
 
   const visibleRuns = useMemo(() => {
-    const all = runs ?? [];
+    const all = scopedRuns;
     switch (filter) {
       case 'active':
         return all.filter((r) => !r.endedAt && r.state !== 'queued');
@@ -46,7 +57,7 @@ export function FleetPage({ onInspectRun }: { onInspectRun: (runId: string) => v
       case 'all':
         return all;
     }
-  }, [runs, filter]);
+  }, [scopedRuns, filter]);
 
   return (
     <div className="fleet-page">

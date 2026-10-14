@@ -113,13 +113,16 @@ function Shell() {
     [activeProjectId, projectById, projects.data],
   );
 
+  // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
   const activeRuns = useMemo(() => {
-    const list = (runs ?? []).filter((r) => !r.endedAt);
+    const list = (runs ?? []).filter(
+      (r) => !r.endedAt && (!activeProject || r.projectId === activeProject.id),
+    );
     return list.sort((a, b) => {
       const rank = (s: string) => (s === 'waiting_input' ? 0 : s === 'working' || s === 'starting' ? 1 : 2);
       return rank(a.state) - rank(b.state);
     });
-  }, [runs]);
+  }, [runs, activeProject]);
 
   const waitingRuns = useMemo(() => activeRuns.filter((r) => r.state === 'waiting_input'), [activeRuns]);
   const inspectedRun = useMemo(() => (runs ?? []).find((r) => r.id === inspectRunId), [runs, inspectRunId]);
@@ -219,7 +222,7 @@ function Shell() {
               className={`nav-item${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
             >
               <span className="nav-icon mono">▤</span>
-              <span className="nav-label">{activeProject.name} Board</span>
+              <span className="nav-label">Kanban Board</span>
             </Link>
           )}
           <Link id="nav-fleet" href="/fleet" className={`nav-item${location === '/fleet' ? ' active' : ''}`}>
@@ -232,32 +235,6 @@ function Shell() {
             )}
           </Link>
         </nav>
-
-        <div className="sidebar-section">
-          <div className="sidebar-section-head">
-            <span className="eyebrow">All Workspaces</span>
-            <span className="sidebar-count mono">{projects.data?.length ?? 0}</span>
-          </div>
-          <ul className="sidebar-list">
-            {(projects.data ?? []).map((p) => {
-              const boardHref = `/projects/${p.id}/board`;
-              const isSelected = activeProject?.id === p.id;
-              return (
-                <li key={p.id}>
-                  <Link
-                    href={boardHref}
-                    onClick={() => selectProject(p.id)}
-                    className={`nav-item${location === boardHref || (location === '/' && isSelected) ? ' active' : ''}`}
-                  >
-                    <span className="nav-icon mono">#</span>
-                    <span className="nav-label">{p.name}</span>
-                  </Link>
-                </li>
-              );
-            })}
-            {(projects.data?.length ?? 0) === 0 && <li className="sidebar-empty muted small">No projects yet</li>}
-          </ul>
-        </div>
 
         <div className="sidebar-section sidebar-section-grow">
           <div className="sidebar-section-head">
@@ -324,7 +301,7 @@ function Shell() {
                   href={`/projects/${activeProject.id}/board`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
                 >
-                  {activeProject.name} Board
+                  Board
                 </Link>
               )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
@@ -399,7 +376,10 @@ function Shell() {
               </Route>
               <Route path="/fleet">
                 <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
-                  <FleetPage onInspectRun={(id) => setInspectRunId(id)} />
+                  <FleetPage
+                    activeProjectId={activeProject?.id ?? null}
+                    onInspectRun={(id) => setInspectRunId(id)}
+                  />
                 </Suspense>
               </Route>
               <Route path="/">
@@ -447,7 +427,7 @@ function Shell() {
         open={cmdOpen}
         onClose={() => setCmdOpen(false)}
         projects={projects.data ?? []}
-        runs={runs ?? []}
+        runs={(runs ?? []).filter((r) => !activeProject || r.projectId === activeProject.id)}
         scheduler={scheduler}
         onInspectRun={(id) => setInspectRunId(id)}
         onLogout={() => void logout()}
