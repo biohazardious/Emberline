@@ -16,9 +16,9 @@ import { usePoll } from '../hooks/usePoll';
 import { PersonaBadge } from './PersonaBadge';
 
 const FACTORY_EXAMPLES = [
-  'Oyuna score counter ve en yüksek skor (high score) göstergesi ekle',
-  'Oyundaki görsel tasarımı, renk paletini ve HUD arayüzünü modernleştir',
-  'Oyun bittiğinde skor kaydetme ekranı ve liderlik tablosu (leaderboard) ekle',
+  'Add a live score counter and persistent high-score HUD overlay',
+  'Modernize the visual design, color palette, and UI animations',
+  'Add a game-over summary screen with a local leaderboard',
 ] as const;
 
 interface DemoRuntimeError {
@@ -310,93 +310,41 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const checkpoints = checkpointsPoll.data ?? [];
 
   return (
-    <section
-      style={{
-        marginBottom: 20,
-        padding: '16px 18px',
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--border-subtle)',
-        background: 'var(--bg-surface)',
-      }}
-    >
+    <section className="panel" aria-label="Project status and live demo">
       {/* Top Header: Project Status & Quick Demo Launch */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          flexWrap: 'wrap',
-          marginBottom: 14,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div className="panel-head">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span
+            className="pill pill-live"
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '3px 9px',
-              borderRadius: 999,
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-              background: 'rgba(16, 185, 129, 0.14)',
-              color: '#34d399',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
+              borderColor: 'color-mix(in hsl, var(--ok) 45%, var(--border))',
+              background: 'color-mix(in hsl, var(--ok) 12%, var(--surface))',
+              color: 'var(--ok)',
+              fontWeight: 600,
             }}
           >
-            ◈ Project Status & Live Demo
+            <span className="dot" />
+            Project Status &amp; Live Demo
           </span>
           {summary.autoChainActive && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '2px 8px',
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 600,
-                background: 'rgba(59, 130, 246, 0.16)',
-                color: '#60a5fa',
-                border: '1px solid rgba(59, 130, 246, 0.35)',
-              }}
-            >
-              ⟳ Multi-Persona Auto-Pipeline Active
-            </span>
+            <span className="badge badge-soft mono">⟳ Multi-Persona Auto-Pipeline Active</span>
           )}
           <span
-            className="mono"
-            style={{
-              fontSize: 11,
-              padding: '2px 8px',
-              borderRadius: 6,
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              color: 'var(--text-secondary)',
-            }}
+            className="badge mono"
             title="Host bind-mount directory mapped to container /workspaces"
           >
             Host Mount: {summary.hostBindHint} ↔ {summary.workspaceRoot}
           </span>
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="muted small">
             {summary.completionPercent}% complete · {ticketCounts.done}/{ticketCounts.total} tickets done
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <div className="actions">
           {(ticketCounts.ready > 0 || ticketCounts.backlog > 0) && (
             <button
               type="button"
-              className="ghost"
-              style={{
-                fontSize: 12,
-                padding: '5px 10px',
-                borderColor: 'rgba(59, 130, 246, 0.4)',
-                color: '#60a5fa',
-              }}
+              className="btn btn-sm"
               disabled={startingPipeline}
               onClick={() => void handleRunPipeline()}
               title="Sequentially run Ready/Backlog tickets across their assigned personas and sync each to Main"
@@ -409,8 +357,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
             <button
               type="button"
-              className="primary"
-              style={{ fontSize: 12, padding: '6px 12px' }}
+              className="btn btn-sm btn-primary"
               disabled={buildingTargetId === bestPlayableTarget.id}
               onClick={() => void handleOpenDemo(bestPlayableTarget)}
             >
@@ -423,17 +370,15 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           )}
           <button
             type="button"
-            className="ghost"
-            style={{ fontSize: 12, padding: '5px 10px' }}
+            className="btn btn-sm"
             onClick={() => navigate(`/projects/${project.id}/code`)}
-            title="Open integrated VS Code Explorer & Monaco Editor"
+            title="Open integrated Code Explorer & Monaco Editor"
           >
-            &lt;/&gt; Code Explorer
+            ◫ Code Explorer
           </button>
           <button
             type="button"
-            className="ghost"
-            style={{ fontSize: 12, padding: '5px 10px' }}
+            className="btn btn-sm"
             onClick={() => {
               const next = !viewportOpen;
               setViewportOpen(next);
@@ -445,8 +390,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           </button>
           <button
             type="button"
-            className="ghost"
-            style={{ fontSize: 12, padding: '5px 10px' }}
+            className="btn btn-sm"
             onClick={() => setCheckpointsOpen((v) => !v)}
             title="View Git checkpoints & roll back with 1 click"
           >
@@ -454,16 +398,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           </button>
           <a
             href={`/api/projects/${project.id}/export.tar.gz`}
-            className="btn ghost"
-            style={{ fontSize: 12, padding: '5px 10px', textDecoration: 'none' }}
+            className="btn btn-sm"
             title="Download project workspace as .tar.gz archive"
           >
             📦 .tar.gz
           </a>
           <button
             type="button"
-            className="ghost"
-            style={{ fontSize: 12, padding: '5px 10px' }}
+            className="btn btn-sm btn-ghost"
             onClick={() => navigate(`/projects/${project.id}/board`)}
           >
             Kanban Board →
@@ -472,7 +414,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       </div>
 
       {/* Progress Bar & Live Factory Pipeline Stepper */}
-      <div style={{ marginBottom: 14 }}>
+      <div>
         <div
           style={{
             height: 6,
@@ -480,14 +422,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             background: 'var(--bg-elevated)',
             overflow: 'hidden',
             marginBottom: 8,
-            border: '1px solid var(--border-subtle)',
+            border: '1px solid var(--border)',
           }}
         >
           <div
             style={{
               width: `${summary.completionPercent}%`,
               height: '100%',
-              background: 'linear-gradient(90deg, var(--accent), #10b981)',
+              background: 'linear-gradient(90deg, var(--ember-1), var(--ok))',
               transition: 'width 0.3s ease',
             }}
           />
@@ -499,37 +441,25 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             justifyContent: 'space-between',
             gap: 8,
             flexWrap: 'wrap',
-            fontSize: 11,
           }}
         >
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <span className="badge">Backlog: {ticketCounts.backlog}</span>
             <span className="badge">Ready: {ticketCounts.ready}</span>
-            <span
-              className="badge"
-              style={
-                ticketCounts.in_progress > 0
-                  ? { borderColor: 'var(--accent)', color: 'var(--accent)' }
-                  : undefined
-              }
-            >
+            <span className={ticketCounts.in_progress > 0 ? 'badge badge-soft' : 'badge'}>
               In Progress: {ticketCounts.in_progress}
             </span>
-            <span
-              className="badge"
-              style={
-                ticketCounts.review > 0
-                  ? { borderColor: '#f59e0b', color: '#fbbf24' }
-                  : undefined
-              }
-            >
+            <span className={ticketCounts.review > 0 ? 'badge badge-soft' : 'badge'}>
               In Review: {ticketCounts.review}
             </span>
             <span
               className="badge"
               style={
                 ticketCounts.done > 0
-                  ? { borderColor: '#10b981', color: '#34d399' }
+                  ? {
+                      borderColor: 'color-mix(in hsl, var(--ok) 45%, var(--border))',
+                      color: 'var(--ok)',
+                    }
                   : undefined
               }
             >
@@ -545,14 +475,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 alignItems: 'center',
                 gap: 6,
                 overflowX: 'auto',
-                padding: '3px 6px',
-                borderRadius: 6,
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-subtle)',
+                padding: '4px 8px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
               }}
               title="Live Specialist Persona Pipeline Stepper"
             >
-              <span className="mono muted" style={{ fontSize: 10 }}>
+              <span className="mono muted" style={{ fontSize: '0.68rem' }}>
                 Pipeline:
               </span>
               {pipelineTickets.map((t, idx) => {
@@ -566,11 +496,11 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         : '○';
                 const color =
                   t.status === 'done'
-                    ? '#34d399'
+                    ? 'var(--ok)'
                     : t.status === 'in_progress'
-                      ? '#60a5fa'
+                      ? 'var(--ember-2)'
                       : t.status === 'review'
-                        ? '#fbbf24'
+                        ? 'var(--warn)'
                         : 'var(--muted)';
                 return (
                   <span
@@ -579,7 +509,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     title={`${t.key}: ${t.title} (${t.status})`}
                   >
                     {idx > 0 && <span className="muted">→</span>}
-                    <span className="mono" style={{ color, fontWeight: 600, fontSize: 10.5 }}>
+                    <span className="mono" style={{ color, fontWeight: 600, fontSize: '0.72rem' }}>
                       {icon} {t.key}
                     </span>
                     <PersonaBadge persona={t.persona} />
@@ -595,11 +525,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       <form
         onSubmit={(e) => void handleSubmitFactoryRequest(e)}
         style={{
-          marginBottom: 14,
           padding: '12px 14px',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--bg-elevated)',
-          border: '1px solid rgba(245, 158, 11, 0.28)',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--surface-2)',
+          border: '1px solid color-mix(in hsl, var(--ember-1) 35%, var(--border))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
         }}
       >
         <div
@@ -609,29 +541,25 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             justifyContent: 'space-between',
             gap: 8,
             flexWrap: 'wrap',
-            marginBottom: 8,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: '0.8rem', color: 'var(--ember-2)' }}>
               ⚡ Ask AI Factory (PO Orchestrator → Specialist Personas)
-            </span>
+            </strong>
             <PersonaBadge persona="product_owner" />
-            <span className="muted" style={{ fontSize: 11 }}>
-              → spawns &amp; delegates tickets to
-            </span>
+            <span className="muted small">→ spawns &amp; delegates tickets to</span>
             <PersonaBadge persona="coder" />
             <PersonaBadge persona="ui_ux" />
             <PersonaBadge persona="qa" />
           </div>
           <label
+            className="small muted"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              fontSize: 11,
               cursor: 'pointer',
-              color: 'var(--text-secondary)',
             }}
           >
             <input
@@ -646,20 +574,19 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
+            className="input"
             value={factoryPrompt}
             onChange={(e) => setFactoryPrompt(e.target.value)}
-            placeholder='Describe what you want (e.g. "Oyuna score counter ekle" or "Oyundaki tasarımı değiştir") — PO will refine & delegate to UI/UX, Backend & QA…'
+            placeholder='Describe a feature or change (e.g. "Add a score counter and high-score HUD" or "Redesign the main screen") — PO will refine & delegate to specialists…'
             style={{
+              width: 'auto',
               flex: '1 1 360px',
-              fontSize: 12.5,
-              padding: '8px 11px',
             }}
           />
           <button
             type="submit"
-            className="primary"
+            className="btn btn-primary"
             disabled={submittingFactory || !factoryPrompt.trim()}
-            style={{ fontSize: 12, padding: '8px 14px', whiteSpace: 'nowrap' }}
           >
             {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
           </button>
@@ -671,18 +598,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             alignItems: 'center',
             gap: 6,
             flexWrap: 'wrap',
-            marginTop: 8,
           }}
         >
-          <span className="muted" style={{ fontSize: 10.5 }}>
-            Quick examples:
-          </span>
+          <span className="muted small">Quick examples:</span>
           {FACTORY_EXAMPLES.map((ex) => (
             <button
               key={ex}
               type="button"
-              className="ghost"
-              style={{ fontSize: 10.5, padding: '2px 7px' }}
+              className="chip-btn"
               onClick={() => setFactoryPrompt(ex)}
             >
               + {ex}
@@ -693,25 +616,18 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
       {banner && (
         <div
+          className={`banner ${banner.kind === 'ok' ? 'banner-ok' : 'banner-error'}`}
           style={{
-            marginBottom: 12,
-            padding: '8px 12px',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: 12,
-            background:
-              banner.kind === 'ok' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-            border: `1px solid ${banner.kind === 'ok' ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)'}`,
-            color: banner.kind === 'ok' ? '#34d399' : '#f87171',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            gap: 8,
           }}
         >
           <span>{banner.text}</span>
           <button
             type="button"
-            className="ghost"
-            style={{ fontSize: 11, padding: '2px 6px' }}
+            className="btn btn-sm btn-ghost"
             onClick={() => setBanner(undefined)}
           >
             ✕
@@ -723,11 +639,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       {checkpointsOpen && (
         <div
           style={{
-            marginBottom: 14,
             padding: '12px 14px',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
           }}
         >
           <div
@@ -738,13 +653,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               marginBottom: 8,
             }}
           >
-            <strong style={{ fontSize: 12 }}>
+            <strong style={{ fontSize: '0.82rem' }}>
               🕓 Workspace Git Checkpoints ({checkpoints.length})
             </strong>
             <button
               type="button"
-              className="ghost"
-              style={{ fontSize: 11, padding: '2px 6px' }}
+              className="btn btn-sm btn-ghost"
               onClick={() => setCheckpointsOpen(false)}
             >
               ✕ Close
@@ -763,18 +677,16 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     justifyContent: 'space-between',
                     gap: 8,
                     padding: '6px 8px',
-                    borderRadius: 6,
+                    borderRadius: 'var(--radius-sm)',
                     background: 'var(--surface)',
                     border: '1px solid var(--border)',
-                    fontSize: 11.5,
+                    fontSize: '0.78rem',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <span className="badge mono">{cp.shortSha}</span>
                     {index === 0 && (
-                      <span className="badge mono" style={{ color: '#34d399' }}>
-                        HEAD
-                      </span>
+                      <span className="badge badge-soft mono">HEAD</span>
                     )}
                     <span
                       style={{
@@ -787,14 +699,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="mono muted" style={{ fontSize: 10.5 }}>
+                    <span className="mono muted small">
                       {new Date(cp.createdAt).toLocaleString()}
                     </span>
                     {index > 0 && (
                       <button
                         type="button"
-                        className="ghost"
-                        style={{ fontSize: 11, padding: '2px 8px' }}
+                        className="btn btn-sm"
                         disabled={rollingBackSha === cp.sha}
                         onClick={() => void handleRollbackCheckpoint(cp.sha)}
                       >
@@ -813,11 +724,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       {viewportOpen && (
         <div
           style={{
-            marginBottom: 14,
             padding: '12px 14px',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
           }}
         >
           <div
@@ -831,18 +741,17 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <strong style={{ fontSize: 12 }}>
+              <strong style={{ fontSize: '0.82rem' }}>
                 🌐 Live Browser / Headless Chromium Viewport ({activeTarget.label})
               </strong>
               {viewportSnap?.source && (
                 <span className="badge mono">source: {viewportSnap.source}</span>
               )}
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div className="actions">
               <button
                 type="button"
-                className="ghost"
-                style={{ fontSize: 11, padding: '3px 8px' }}
+                className="btn btn-sm"
                 disabled={viewportLoading}
                 onClick={() => void fetchViewportSnapshot(activeTarget.id)}
               >
@@ -850,8 +759,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               </button>
               <button
                 type="button"
-                className="ghost"
-                style={{ fontSize: 11, padding: '3px 8px' }}
+                className="btn btn-sm btn-ghost"
                 onClick={() => setViewportOpen(false)}
               >
                 ✕ Close
@@ -865,7 +773,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 alt="Live Browser Viewport"
                 style={{ maxWidth: '100%', maxHeight: 420, borderRadius: 4 }}
               />
-              <div className="mono muted" style={{ fontSize: 10.5, marginTop: 4 }}>
+              <div className="mono muted small" style={{ marginTop: 4 }}>
                 Captured at {viewportSnap.capturedAt} · {viewportSnap.message}
               </div>
             </div>
@@ -889,19 +797,18 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   position: 'fixed',
                   inset: 16,
                   zIndex: 1000,
-                  background: '#090b10',
-                  border: '1px solid var(--accent)',
-                  borderRadius: 'var(--radius-lg)',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--ember-1)',
+                  borderRadius: 'var(--radius)',
                   display: 'flex',
                   flexDirection: 'column',
                   boxShadow: '0 24px 64px rgba(0,0,0,0.75)',
                 }
               : {
-                  marginBottom: 16,
-                  border: '1px solid var(--accent)',
-                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--ember-1)',
+                  borderRadius: 'var(--radius-sm)',
                   overflow: 'hidden',
-                  background: '#090b10',
+                  background: 'var(--bg)',
                 }
           }
         >
@@ -913,22 +820,23 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               gap: 10,
               padding: '8px 12px',
               background: 'var(--bg-elevated)',
-              borderBottom: '1px solid var(--border-subtle)',
+              borderBottom: '1px solid var(--border)',
               flexWrap: 'wrap',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#34d399' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ok)' }}>
                 ● Live Interactive Preview
               </span>
               <select
+                className="input"
                 value={activeTarget.id}
                 onChange={(e) => {
                   setSelectedTargetId(e.target.value);
                   setIframeNonce((n) => n + 1);
                   setDemoErrors([]);
                 }}
-                style={{ fontSize: 12, padding: '3px 8px' }}
+                style={{ width: 'auto', fontSize: '0.78rem', padding: '4px 8px' }}
               >
                 {targets.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -936,15 +844,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   </option>
                 ))}
               </select>
-              <span className="mono muted" style={{ fontSize: 11 }}>
-                {activeTarget.demoEntryRelPath}
-              </span>
+              <span className="mono muted small">{activeTarget.demoEntryRelPath}</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="actions">
               <button
                 type="button"
-                className="ghost"
-                style={{ fontSize: 11, padding: '3px 8px' }}
+                className="btn btn-sm"
                 onClick={() => {
                   setDemoErrors([]);
                   setIframeNonce((n) => n + 1);
@@ -954,8 +859,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               </button>
               <button
                 type="button"
-                className="ghost"
-                style={{ fontSize: 11, padding: '3px 8px' }}
+                className="btn btn-sm"
                 onClick={() => setFullscreen((f) => !f)}
               >
                 {fullscreen ? '🗗 Exit Fullscreen' : '⛶ Fullscreen'}
@@ -964,20 +868,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 href={activeTarget.demoUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="ghost"
-                style={{
-                  fontSize: 11,
-                  padding: '3px 8px',
-                  textDecoration: 'none',
-                  color: 'var(--text-primary)',
-                }}
+                className="btn btn-sm"
               >
                 ↗ New Tab
               </a>
               <button
                 type="button"
-                className="ghost"
-                style={{ fontSize: 11, padding: '3px 8px' }}
+                className="btn btn-sm btn-ghost"
                 onClick={() => {
                   setFullscreen(false);
                   setPreviewOpen(false);
@@ -991,10 +888,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           {/* Live Demo Runtime Error Catcher Banner (Faz F9) */}
           {demoErrors.length > 0 && (
             <div
+              className="banner banner-error"
               style={{
-                padding: '8px 12px',
-                background: 'rgba(239, 68, 68, 0.16)',
-                borderBottom: '1px solid rgba(239, 68, 68, 0.4)',
+                borderRadius: 0,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
@@ -1003,14 +899,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               }}
             >
               <div style={{ minWidth: 0, flex: 1 }}>
-                <strong style={{ fontSize: 11.5, color: '#f87171' }}>
+                <strong>
                   🐛 Runtime Error Detected in Live Demo ({demoErrors[0]!.timestamp}):
                 </strong>
                 <div
-                  className="mono"
+                  className="mono small"
                   style={{
-                    fontSize: 11,
-                    color: '#fca5a5',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -1020,11 +914,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   {demoErrors[0]!.message}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
+              <div className="actions">
                 <button
                   type="button"
-                  className="primary"
-                  style={{ fontSize: 11, padding: '4px 10px' }}
+                  className="btn btn-sm btn-primary"
                   disabled={submittingTweak}
                   onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
                 >
@@ -1032,8 +925,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 </button>
                 <button
                   type="button"
-                  className="ghost"
-                  style={{ fontSize: 11, padding: '4px 8px' }}
+                  className="btn btn-sm btn-ghost"
                   onClick={() => setDemoErrors([])}
                 >
                   Dismiss
@@ -1051,23 +943,21 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               gap: 8,
               padding: '6px 12px',
               background: 'var(--surface-2)',
-              borderBottom: '1px solid var(--border-subtle)',
+              borderBottom: '1px solid var(--border)',
             }}
           >
-            <span className="mono muted" style={{ fontSize: 11 }}>
-              💬 Quick Demo Tweak:
-            </span>
+            <span className="mono muted small">💬 Quick Demo Tweak:</span>
             <input
               type="text"
+              className="input"
               value={quickTweakPrompt}
               onChange={(e) => setQuickTweakPrompt(e.target.value)}
-              placeholder='Type an instant change while playing (e.g. "Make bird jump slightly gentler" or "Add sound effect on score")…'
-              style={{ flex: 1, fontSize: 11.5, padding: '4px 8px' }}
+              placeholder='Type an instant change while playing (e.g. "Make jump physics gentler" or "Add sound effect on score")…'
+              style={{ width: 'auto', flex: 1, fontSize: '0.78rem', padding: '4px 8px' }}
             />
             <button
               type="submit"
-              className="primary"
-              style={{ fontSize: 11, padding: '4px 10px' }}
+              className="btn btn-sm btn-primary"
               disabled={submittingTweak || !quickTweakPrompt.trim()}
             >
               {submittingTweak ? 'Sending…' : '✨ Apply Tweak'}
@@ -1106,12 +996,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             <div
               key={target.id}
               style={{
-                padding: '11px 13px',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-elevated)',
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--surface-2)',
                 border: isSelected
-                  ? '1px solid var(--accent)'
-                  : '1px solid var(--border-subtle)',
+                  ? '1px solid var(--ember-1)'
+                  : '1px solid var(--border)',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between',
@@ -1129,33 +1019,18 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        textTransform: 'uppercase',
-                        padding: '1px 6px',
-                        borderRadius: 4,
-                        background:
-                          target.kind === 'main'
-                            ? 'rgba(59, 130, 246, 0.16)'
-                            : 'rgba(168, 85, 247, 0.16)',
-                        color: target.kind === 'main' ? '#60a5fa' : '#c084fc',
-                      }}
-                    >
+                    <span className="badge badge-soft mono">
                       {target.kind === 'main' ? 'MAIN' : target.ticketKey ?? 'WORKTREE'}
                     </span>
                     {target.persona && <PersonaBadge persona={target.persona} />}
                   </div>
-                  <span className="mono muted" style={{ fontSize: 11 }}>
-                    {target.fileCount} files
-                  </span>
+                  <span className="mono muted small">{target.fileCount} files</span>
                 </div>
 
                 <div
                   style={{
                     fontWeight: 600,
-                    fontSize: 12.5,
+                    fontSize: '0.84rem',
                     marginBottom: 3,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -1167,9 +1042,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 </div>
 
                 <div
-                  className="mono muted"
+                  className="mono muted small"
                   style={{
-                    fontSize: 10.5,
                     marginBottom: 6,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -1182,29 +1056,29 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
                 {target.demoEntryRelPath ? (
                   <div
+                    className="small"
                     style={{
-                      fontSize: 11,
-                      color: '#34d399',
+                      color: 'var(--ok)',
                       marginBottom: 6,
                     }}
                   >
                     ● Playable bundle: <span className="mono">{target.demoEntryRelPath}</span>
                   </div>
                 ) : target.hasBuildScript ? (
-                  <div style={{ fontSize: 11, color: '#fbbf24', marginBottom: 6 }}>
+                  <div className="small" style={{ color: 'var(--warn)', marginBottom: 6 }}>
                     ◐ Build script ready (<span className="mono">npm run build</span>)
                   </div>
                 ) : null}
 
                 {target.topFiles.length > 0 && (
                   <div
-                    className="mono muted"
+                    className="mono muted small"
                     style={{
-                      fontSize: 10.5,
                       lineHeight: 1.45,
                       padding: '5px 7px',
                       borderRadius: 4,
-                      background: 'rgba(0,0,0,0.2)',
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
                       maxHeight: 54,
                       overflowY: 'auto',
                     }}
@@ -1215,20 +1089,11 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 )}
               </div>
 
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  flexWrap: 'wrap',
-                  marginTop: 4,
-                }}
-              >
+              <div className="actions" style={{ marginTop: 4 }}>
                 {(target.demoUrl || target.hasBuildScript) && (
                   <button
                     type="button"
-                    className="primary"
-                    style={{ fontSize: 11, padding: '4px 9px' }}
+                    className="btn btn-sm btn-primary"
                     disabled={isBuilding}
                     onClick={() => void handleOpenDemo(target)}
                   >
@@ -1242,8 +1107,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 {target.hasBuildScript && target.demoUrl && (
                   <button
                     type="button"
-                    className="ghost"
-                    style={{ fontSize: 11, padding: '4px 8px' }}
+                    className="btn btn-sm"
                     disabled={isBuilding}
                     onClick={() => void handleBuildAndPlay(target, false)}
                   >
@@ -1253,13 +1117,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 {target.kind === 'worktree' && target.fileCount > 2 && (
                   <button
                     type="button"
-                    className="ghost"
-                    style={{
-                      fontSize: 11,
-                      padding: '4px 8px',
-                      borderColor: 'rgba(59, 130, 246, 0.35)',
-                      color: '#60a5fa',
-                    }}
+                    className="btn btn-sm"
                     disabled={isSyncing}
                     onClick={() => void handleSyncToMain(target.id)}
                     title="Copy/sync this worktree's files & compiled bundle into the Main Project Workspace on host"
@@ -1270,8 +1128,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 {target.kind === 'worktree' && (
                   <button
                     type="button"
-                    className="ghost"
-                    style={{ fontSize: 11, padding: '4px 8px' }}
+                    className="btn btn-sm btn-ghost"
                     onClick={() => navigate(`/runs/${target.id}/review`)}
                   >
                     Diff →

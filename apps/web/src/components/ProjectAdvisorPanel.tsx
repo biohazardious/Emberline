@@ -169,13 +169,15 @@ export function ProjectAdvisorPanel({
         {(recs.data ?? []).map((rec) => (
           <div
             key={rec.id}
-            className="card"
             style={{
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface-2)',
+              border: `1px solid ${rec.priority === 'high' ? 'color-mix(in hsl, var(--ember-1) 45%, var(--border))' : 'var(--border)'}`,
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'space-between',
               gap: '10px',
-              borderColor: rec.priority === 'high' ? 'rgba(245, 158, 11, 0.35)' : undefined,
             }}
           >
             <div>

@@ -603,9 +603,15 @@ a {
 }
 
 .nav-icon {
-  width: 16px;
+  width: 18px;
+  height: 18px;
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
+  font-size: 0.9rem;
+  line-height: 1;
   color: var(--muted);
 }
 
@@ -838,6 +844,11 @@ a {
 .banner-error {
   border: 1px solid hsl(355 75% 55% / 0.4);
   background: hsl(355 60% 20% / 0.2);
+}
+
+.banner-ok {
+  border: 1px solid color-mix(in hsl, var(--ok) 45%, var(--border));
+  background: color-mix(in hsl, var(--ok) 12%, var(--surface));
 }
 
 .panel {

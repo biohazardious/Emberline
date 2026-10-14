@@ -417,8 +417,8 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <span className="badge mono" style={{ background: 'var(--ember-1)', color: '#000', fontWeight: 700 }}>
-            &lt;/&gt; VS Code Explorer
+          <span className="badge badge-soft mono" style={{ fontWeight: 600 }}>
+            ◫ Code Explorer
           </span>
           <strong>{project?.name ?? projectId}</strong>
           <span className="muted mono small">{fileList.data?.workspacePath ?? project?.path}</span>
@@ -431,7 +431,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           <select
             id="code-target-select"
             className="input"
-            style={{ padding: '4px 8px', fontSize: '0.78rem' }}
+            style={{ width: 'auto', padding: '4px 8px', fontSize: '0.78rem' }}
             value={targetId}
             onChange={(e) => {
               setTargetId(e.target.value);
@@ -461,12 +461,12 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
       </div>
 
       {error && (
-        <div className="alert alert-bad" style={{ margin: 0 }}>
+        <div className="banner banner-error" style={{ margin: 0 }}>
           {error}
         </div>
       )}
       {statusMessage && (
-        <div className="alert" style={{ margin: 0, borderColor: 'var(--ok)' }}>
+        <div className="banner banner-ok" style={{ margin: 0 }}>
           {statusMessage}
         </div>
       )}
@@ -748,7 +748,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               </span>
               <select
                 className="input"
-                style={{ padding: '4px 8px', fontSize: '0.76rem' }}
+                style={{ width: 'auto', padding: '4px 8px', fontSize: '0.76rem' }}
                 value={agentPersona}
                 onChange={(e) => setAgentPersona(e.target.value as AgentPersona)}
               >
@@ -760,7 +760,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               </select>
               <input
                 className="input"
-                style={{ flex: 1, minWidth: '220px', padding: '5px 8px', fontSize: '0.78rem' }}
+                style={{ width: 'auto', flex: '1 1 220px', padding: '5px 8px', fontSize: '0.78rem' }}
                 placeholder={`e.g. "Refactor ${activeTab.path} to add particle effects and sound hooks"`}
                 value={agentPrompt}
                 onChange={(e) => setAgentPrompt(e.target.value)}

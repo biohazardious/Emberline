@@ -261,7 +261,7 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(delegated.map((tk) => tk.persona)).toEqual(['coder', 'ui_ux']);
     expect(delegated.every((tk) => tk.status === 'ready')).toBe(true);
 
-    // Faz F7 & F10: Factory Settings (Theme, Auto-Pilot, Multi-Provider Persona Routing)
+    // Phase F7 & F10: Factory Settings (Theme, Auto-Pilot, Multi-Provider Persona Routing)
     const getSettingsRes = await t.app.inject({
       url: '/api/factory/settings',
       headers: { cookie },
@@ -292,7 +292,7 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(updatedSettings.personaAgents.ui_ux).toBe('gemini');
     expect(updatedSettings.geminiKeyConfigured).toBe(true);
 
-    // Faz F8: VS Code Explorer file tree, read, write, and delete APIs
+    // Phase F8: Code Explorer file tree, read, write, and delete APIs
     const writeFileRes = await t.app.inject({
       method: 'PUT',
       url: `/api/projects/${p1.id}/files/content`,

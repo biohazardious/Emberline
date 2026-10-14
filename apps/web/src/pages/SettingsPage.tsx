@@ -155,12 +155,8 @@ export function SettingsPage({
         </div>
       </header>
 
-      {error && <div className="alert alert-bad">{error}</div>}
-      {notice && (
-        <div className="alert" style={{ borderColor: 'var(--ok)' }}>
-          {notice}
-        </div>
-      )}
+      {error && <div className="banner banner-error">{error}</div>}
+      {notice && <div className="banner banner-ok">{notice}</div>}
 
       {activeTab === 'autopilot' && (
         <form

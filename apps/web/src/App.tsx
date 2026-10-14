@@ -275,7 +275,7 @@ function Shell() {
               href={`/projects/${activeProject.id}/code`}
               className={`nav-item${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
             >
-              <span className="nav-icon mono">&lt;/&gt;</span>
+              <span className="nav-icon mono">◫</span>
               <span className="nav-label">Code Explorer</span>
             </Link>
           )}
@@ -367,7 +367,7 @@ function Shell() {
                   href={`/projects/${activeProject.id}/code`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
                 >
-                  &lt;/&gt; Code
+                  Code Explorer
                 </Link>
               )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
