@@ -901,6 +901,24 @@ export const DeleteWorkspaceFileBody = z.object({
 });
 export type DeleteWorkspaceFileBody = z.input<typeof DeleteWorkspaceFileBody>;
 
+export const UploadWorkspaceFileItem = z.object({
+  path: z.string().trim().min(1).max(1024),
+  dataBase64: z.string().min(0),
+});
+export type UploadWorkspaceFileItem = z.infer<typeof UploadWorkspaceFileItem>;
+
+export const UploadWorkspaceFilesBody = z.object({
+  targetId: z.string().default('main'),
+  files: z.array(UploadWorkspaceFileItem).min(1).max(50),
+});
+export type UploadWorkspaceFilesBody = z.input<typeof UploadWorkspaceFilesBody>;
+
+export const UploadWorkspaceFilesResponse = z.object({
+  targetId: z.string(),
+  uploadedPaths: z.array(z.string()),
+});
+export type UploadWorkspaceFilesResponse = z.infer<typeof UploadWorkspaceFilesResponse>;
+
 export const ProjectCheckpoint = z.object({
   sha: z.string(),
   shortSha: z.string(),

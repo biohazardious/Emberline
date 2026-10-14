@@ -38,6 +38,8 @@ import {
   UpdateFactorySettingsBody,
   UpdateProjectBlueprintBody,
   UpdateRoadmapItemBody,
+  UploadWorkspaceFilesBody,
+  type UploadWorkspaceFilesResponse,
   type WorkspaceFileContentResponse,
   type WorkspaceFileListResponse,
   WriteWorkspaceFileBody,
@@ -71,12 +73,14 @@ import {
   listWorkspaceFilesFlat,
   readProjectBlueprint,
   readWorkspaceFileContent,
+  readWorkspaceFileRaw,
   rollbackProjectCheckpoint,
   seedStarterTickets,
   serveWorkspaceDemoAsset,
   syncWorktreeToMainWorkspace,
   TASK_TEMPLATES,
   updateFactorySettings,
+  uploadWorkspaceFiles,
   writeProjectBlueprint,
   writeWorkspaceFileContent,
 } from '../factory/service.js';
@@ -475,6 +479,41 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       try {
         await deleteWorkspaceFileEntry(workspacePath, body.path);
         return { ok: true };
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { targetId?: string; path?: string; inline?: string } }>(
+    '/api/projects/:id/files/download',
+    async (request, reply) => {
+      const targetId = request.query.targetId ?? 'main';
+      const relPath = request.query.path;
+      if (!relPath) throw badRequest('missing path query parameter');
+      const { workspacePath } = resolveProjectTargetPath(request.params.id, targetId);
+      try {
+        const raw = await readWorkspaceFileRaw(workspacePath, relPath);
+        const safeName = raw.fileName.replace(/["\\\r\n]/g, '_');
+        const disposition = request.query.inline === '1' ? 'inline' : 'attachment';
+        return reply
+          .header('content-type', raw.contentType)
+          .header('content-length', String(raw.sizeBytes))
+          .header('content-disposition', `${disposition}; filename="${safeName}"`)
+          .send(raw.buffer);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/files/upload',
+    async (request): Promise<UploadWorkspaceFilesResponse> => {
+      const body = UploadWorkspaceFilesBody.parse(request.body);
+      const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+      try {
+        return await uploadWorkspaceFiles(workspacePath, body.targetId, body.files);
       } catch (err) {
         throw badRequest((err as Error).message);
       }
