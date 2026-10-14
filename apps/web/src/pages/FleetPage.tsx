@@ -1,4 +1,4 @@
-import type { Project, Run } from '@emberline/protocol';
+import type { GarbageCollectRunsResponse, Project, Run } from '@emberline/protocol';
 import { type FormEvent, lazy, Suspense, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -12,10 +12,8 @@ import { timeAgo } from '../time';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
 
-type FleetFilter = 'all' | 'active' | 'attention' | 'queued' | 'completed';
+type FleetFilter = 'active' | 'attention' | 'queued' | 'completed' | 'all';
 type GridLayout = 'grid' | 'cols' | 'single';
-
-const HIDE_COMPLETED_STORAGE_KEY = 'emberline.fleet.hideCompleted';
 
 function isRunCompleted(r: Run): boolean {
   return Boolean(r.endedAt) || r.state === 'done' || r.state === 'failed';
@@ -30,31 +28,12 @@ export function FleetPage({
 }) {
   const { runs } = useRuns();
   const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
-  const [filter, setFilter] = useState<FleetFilter>('all');
-  const [hideCompleted, setHideCompleted] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem(HIDE_COMPLETED_STORAGE_KEY);
-      if (saved === 'false') return false;
-      if (saved === 'true') return true;
-    } catch {
-      // ignore storage errors
-    }
-    return true;
-  });
+  const [filter, setFilter] = useState<FleetFilter>('active');
   const [layout, setLayout] = useState<GridLayout>('grid');
   const [error, setError] = useState<string>();
-
-  const toggleHideCompleted = () => {
-    setHideCompleted((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(HIDE_COMPLETED_STORAGE_KEY, String(next));
-      } catch {
-        // ignore storage errors
-      }
-      return next;
-    });
-  };
+  const [notice, setNotice] = useState<string>();
+  const [gcBusy, setGcBusy] = useState(false);
+  const [stoppingAll, setStoppingAll] = useState(false);
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
 
@@ -66,36 +45,73 @@ export function FleetPage({
   const counts = useMemo(() => {
     const all = scopedRuns;
     const completed = all.filter((r) => isRunCompleted(r)).length;
-    const nonCompleted = all.length - completed;
+    const active = all.filter((r) => !isRunCompleted(r)).length;
     return {
-      active: all.filter((r) => !isRunCompleted(r) && r.state !== 'queued').length,
+      active,
       attention: all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed')
         .length,
-      queued: all.filter((r) => r.state === 'queued').length,
+      queued: all.filter((r) => r.state === 'queued' && !isRunCompleted(r)).length,
       completed,
-      all: hideCompleted ? nonCompleted : all.length,
       total: all.length,
     };
-  }, [scopedRuns, hideCompleted]);
+  }, [scopedRuns]);
 
   const visibleRuns = useMemo(() => {
-    let list = scopedRuns;
-    if (hideCompleted && filter !== 'completed') {
-      list = list.filter((r) => !isRunCompleted(r));
-    }
     switch (filter) {
       case 'active':
-        return list.filter((r) => !isRunCompleted(r) && r.state !== 'queued');
+        return scopedRuns.filter((r) => !isRunCompleted(r));
       case 'attention':
-        return list.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed');
+        return scopedRuns.filter(
+          (r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed',
+        );
       case 'queued':
-        return list.filter((r) => r.state === 'queued');
+        return scopedRuns.filter((r) => r.state === 'queued' && !isRunCompleted(r));
       case 'completed':
         return scopedRuns.filter((r) => isRunCompleted(r));
       case 'all':
-        return list;
+        return scopedRuns;
     }
-  }, [scopedRuns, filter, hideCompleted]);
+  }, [scopedRuns, filter]);
+
+  const handleGarbageCollect = async (keepRecent = 0) => {
+    setGcBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const res = await api<GarbageCollectRunsResponse>('/api/runs/gc', 'POST', {
+        projectId: activeProjectId ?? undefined,
+        keepRecent,
+        includeFailed: true,
+        pruneWorktrees: true,
+      });
+      setNotice(
+        `🧹 Garbage collection complete: removed ${res.removedRuns} finished session${res.removedRuns === 1 ? '' : 's'}, closed ${res.closedSessions} lingering terminal${res.closedSessions === 1 ? '' : 's'}, and pruned ${res.prunedWorktrees} git worktree${res.prunedWorktrees === 1 ? '' : 's'}.`,
+      );
+      if (filter === 'completed' && res.removedRuns > 0 && keepRecent === 0) {
+        setFilter('active');
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setGcBusy(false);
+    }
+  };
+
+  const handleStopAllActive = async () => {
+    const activeList = scopedRuns.filter((r) => !isRunCompleted(r));
+    if (activeList.length === 0) return;
+    setStoppingAll(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await Promise.allSettled(activeList.map((r) => api(`/api/runs/${r.id}/stop`, 'POST')));
+      setNotice(`⏹ Stopped ${activeList.length} active session${activeList.length === 1 ? '' : 's'}.`);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setStoppingAll(false);
+    }
+  };
 
   return (
     <div className="fleet-page">
@@ -103,51 +119,39 @@ export function FleetPage({
         <div className="workspace-bar-title">
           <h1>Fleet Multiplexer</h1>
           <span className="muted small">
-            Supervise and steer parallel agent sessions side-by-side
+            Supervise live agent sessions · Auto-GC closes finished terminals &amp; retains recent history
           </span>
         </div>
         <div className="workspace-bar-controls" style={{ flexWrap: 'wrap', gap: 8 }}>
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '5px 10px',
-              borderRadius: 'var(--radius-sm)',
-              background: hideCompleted
-                ? 'color-mix(in hsl, var(--ember-1) 14%, var(--surface))'
-                : 'var(--surface)',
-              border: hideCompleted
-                ? '1px solid color-mix(in hsl, var(--ember-1) 45%, var(--border))'
-                : '1px solid var(--border)',
-              fontSize: '0.78rem',
-              fontWeight: 500,
-              cursor: 'pointer',
-              userSelect: 'none',
-            }}
-            title="Hide finished or exited runs so only live and queued sessions appear in the multiplexer"
-          >
-            <input
-              id="fleet-hide-completed"
-              type="checkbox"
-              checked={hideCompleted}
-              onChange={toggleHideCompleted}
-              style={{ margin: 0 }}
-            />
-            <span>Hide Completed ({counts.completed})</span>
-          </label>
+          {counts.active > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost danger"
+              disabled={stoppingAll}
+              onClick={() => void handleStopAllActive()}
+              title="Stop all currently running or queued sessions in this project"
+            >
+              {stoppingAll ? 'Stopping…' : `⏹ Stop All Active (${counts.active})`}
+            </button>
+          )}
+
+          {counts.completed > 0 && (
+            <button
+              id="fleet-gc-btn"
+              type="button"
+              className="btn btn-sm"
+              disabled={gcBusy}
+              onClick={() => void handleGarbageCollect(0)}
+              style={{
+                borderColor: 'color-mix(in hsl, var(--ember-1) 45%, var(--border))',
+              }}
+              title="Purge all finished/failed sessions, dispose exited PTY terminals, and prune their temporary git worktrees"
+            >
+              {gcBusy ? '🧹 Cleaning…' : `🧹 Clean Up Finished (${counts.completed})`}
+            </button>
+          )}
 
           <div className="segmented" role="tablist" aria-label="Fleet filter">
-            <button
-              id="fleet-filter-all"
-              type="button"
-              role="tab"
-              aria-selected={filter === 'all'}
-              className={filter === 'all' ? 'active' : ''}
-              onClick={() => setFilter('all')}
-            >
-              All ({counts.all})
-            </button>
             <button
               id="fleet-filter-active"
               type="button"
@@ -155,8 +159,9 @@ export function FleetPage({
               aria-selected={filter === 'active'}
               className={filter === 'active' ? 'active' : ''}
               onClick={() => setFilter('active')}
+              title="Only live running, waiting, or queued sessions"
             >
-              Active ({counts.active})
+              🟢 Live ({counts.active})
             </button>
             <button
               id="fleet-filter-attention"
@@ -166,7 +171,7 @@ export function FleetPage({
               className={filter === 'attention' ? 'active' : ''}
               onClick={() => setFilter('attention')}
             >
-              Needs Attention ({counts.attention})
+              ⚠️ Attention ({counts.attention})
             </button>
             <button
               id="fleet-filter-queued"
@@ -178,18 +183,27 @@ export function FleetPage({
             >
               Queued ({counts.queued})
             </button>
-            {!hideCompleted && (
-              <button
-                id="fleet-filter-completed"
-                type="button"
-                role="tab"
-                aria-selected={filter === 'completed'}
-                className={filter === 'completed' ? 'active' : ''}
-                onClick={() => setFilter('completed')}
-              >
-                Completed ({counts.completed})
-              </button>
-            )}
+            <button
+              id="fleet-filter-completed"
+              type="button"
+              role="tab"
+              aria-selected={filter === 'completed'}
+              className={filter === 'completed' ? 'active' : ''}
+              onClick={() => setFilter('completed')}
+              title="Archived completed & failed runs"
+            >
+              📦 History ({counts.completed})
+            </button>
+            <button
+              id="fleet-filter-all"
+              type="button"
+              role="tab"
+              aria-selected={filter === 'all'}
+              className={filter === 'all' ? 'active' : ''}
+              onClick={() => setFilter('all')}
+            >
+              All ({counts.total})
+            </button>
           </div>
 
           <div className="segmented hide-sm" role="radiogroup" aria-label="Grid layout">
@@ -229,6 +243,26 @@ export function FleetPage({
 
       <QuotaPanel compact />
 
+      {notice && (
+        <div
+          className="banner"
+          style={{
+            background: 'rgba(16, 185, 129, 0.12)',
+            border: '1px solid rgba(16, 185, 129, 0.4)',
+            color: '#6ee7b7',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
+        >
+          <span>{notice}</span>
+          <button type="button" className="btn btn-xs btn-ghost" onClick={() => setNotice(undefined)}>
+            ✕
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="banner banner-error" role="alert">
           {error}
@@ -238,23 +272,32 @@ export function FleetPage({
       {visibleRuns.length === 0 ? (
         <div className="empty fleet-empty">
           <p>
-            {hideCompleted && counts.completed > 0
-              ? `No active agent sessions right now (${counts.completed} completed run${counts.completed === 1 ? '' : 's'} hidden).`
+            {filter === 'active' && counts.completed > 0
+              ? `No live agent sessions running right now (${counts.completed} finished session${counts.completed === 1 ? '' : 's'} archived in History).`
               : 'No agent sessions match the selected filter.'}
           </p>
-          <p className="muted small" style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+          <p
+            className="muted small"
+            style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}
+          >
             <span>
               Start a ticket from a project board or launch a run from the{' '}
               <Link href="/">Factory Overview</Link>.
             </span>
-            {hideCompleted && counts.completed > 0 && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={toggleHideCompleted}
-              >
-                Show Completed Runs ({counts.completed})
-              </button>
+            {filter === 'active' && counts.completed > 0 && (
+              <>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFilter('completed')}>
+                  📦 View History ({counts.completed})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={gcBusy}
+                  onClick={() => void handleGarbageCollect(0)}
+                >
+                  🧹 Clean Up Finished ({counts.completed})
+                </button>
+              </>
             )}
           </p>
         </div>
@@ -288,8 +331,11 @@ function FleetPane({
 }) {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState<string>();
-  const live = !run.endedAt && run.state !== 'done' && run.state !== 'failed';
-  const canPrompt = (live && run.state !== 'queued') || run.resumable;
+  const [showReopenBar, setShowReopenBar] = useState(false);
+
+  const completed = isRunCompleted(run);
+  const live = !completed;
+  const showPromptFooter = (live && run.state !== 'queued') || (completed && showReopenBar && run.resumable);
 
   const act = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -309,6 +355,7 @@ function FleetPane({
     void act('send', async () => {
       await api(`/api/runs/${run.id}/prompt`, 'POST', { text: prompt });
       setPrompt('');
+      setShowReopenBar(false);
     });
   };
 
@@ -339,7 +386,7 @@ function FleetPane({
           <button type="button" className="btn btn-sm btn-ghost" onClick={onInspect} title="Inspect events & details">
             Timeline
           </button>
-          {(run.state === 'rate_limited' || run.resumable) && (
+          {run.state === 'rate_limited' && (
             <button
               type="button"
               className="btn btn-sm"
@@ -347,6 +394,17 @@ function FleetPane({
               onClick={() => void act('resume', () => api(`/api/runs/${run.id}/resume`, 'POST', {}))}
             >
               Resume
+            </button>
+          )}
+          {completed && run.resumable && (
+            <button
+              type="button"
+              className={`btn btn-sm ${showReopenBar ? 'btn-primary' : 'btn-ghost'}`}
+              disabled={!!busy}
+              onClick={() => setShowReopenBar((v) => !v)}
+              title="Re-open this finished session with a follow-up prompt"
+            >
+              ↻ Re-open
             </button>
           )}
           {live && (
@@ -359,7 +417,18 @@ function FleetPane({
               {run.state === 'queued' ? 'Cancel' : 'Stop'}
             </button>
           )}
-          {run.terminalId && (
+          {completed && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost danger"
+              disabled={!!busy}
+              onClick={() => void act('remove', () => api(`/api/runs/${run.id}`, 'DELETE'))}
+              title="Remove this finished session from history"
+            >
+              🗑
+            </button>
+          )}
+          {live && run.terminalId && (
             <Link href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost" title="Full-screen terminal">
               ↗
             </Link>
@@ -368,25 +437,61 @@ function FleetPane({
       </header>
 
       <div className="fleet-pane-body">
-        {run.terminalId ? (
+        {live && run.terminalId ? (
           <Suspense fallback={<div className="term-shell term-shell-compact" aria-busy="true" />}>
             <TerminalView key={run.terminalId} terminalId={run.terminalId} compact autoFocus={false} />
           </Suspense>
         ) : (
-          <div className="fleet-placeholder">
-            <p className="mono">
+          <div className="fleet-placeholder" style={{ padding: '18px 20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+              <span
+                className="badge mono"
+                style={{
+                  borderColor:
+                    run.state === 'done'
+                      ? 'rgba(16, 185, 129, 0.45)'
+                      : run.state === 'failed'
+                        ? 'rgba(239, 68, 68, 0.45)'
+                        : 'var(--border)',
+                  color:
+                    run.state === 'done'
+                      ? '#6ee7b7'
+                      : run.state === 'failed'
+                        ? '#fca5a5'
+                        : 'var(--muted)',
+                }}
+              >
+                {run.state === 'queued'
+                  ? '⏳ Queued in Scheduler'
+                  : run.state === 'done'
+                    ? '✓ Completed & Terminal Closed'
+                    : '✕ Session Ended / Failed'}
+              </span>
+              <span className="muted small mono">
+                Provider: <strong>{run.agent}</strong>
+              </span>
+              {run.endedAt && (
+                <span className="muted small mono">Ended {timeAgo(run.endedAt)}</span>
+              )}
+            </div>
+            <p className="mono" style={{ margin: '0 0 8px', fontSize: '0.82rem' }}>
               {run.state === 'queued'
-                ? 'Waiting in scheduler queue…'
+                ? 'Waiting in scheduler queue for an execution slot…'
                 : run.state === 'done'
-                  ? '✓ Session completed and archived. Use Review to inspect git changes or Resume below to continue.'
-                  : 'Terminal session ended. Use Resume below to continue.'}
+                  ? 'Task finished and changes synced. Click Review to inspect git changes, ↻ Re-open to send a follow-up prompt, or 🗑 to remove.'
+                  : 'Session stopped or exited with an error. Click Timeline to inspect events or 🗑 to remove.'}
             </p>
-            {run.prompt && <p className="muted small mono">{run.prompt.slice(0, 320)}</p>}
+            {run.prompt && (
+              <p className="muted small mono" style={{ margin: 0, opacity: 0.8 }}>
+                {run.prompt.slice(0, 260)}
+                {run.prompt.length > 260 ? '…' : ''}
+              </p>
+            )}
           </div>
         )}
       </div>
 
-      {canPrompt && (
+      {showPromptFooter && (
         <form className="fleet-pane-foot" onSubmit={submitPrompt}>
           <div className="fleet-templates hide-sm">
             {STAGE_TEMPLATES.map((tpl) => (
@@ -406,15 +511,15 @@ function FleetPane({
             placeholder={
               run.state === 'waiting_input'
                 ? 'Agent is waiting for input — reply here…'
-                : !live
-                  ? 'Resume session with prompt…'
+                : completed
+                  ? 'Enter follow-up prompt to re-open this session…'
                   : 'Steer this agent…'
             }
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
           <button type="submit" className="btn btn-sm btn-primary" disabled={!prompt.trim() || !!busy}>
-            {busy === 'send' ? '…' : live ? 'Send' : 'Resume'}
+            {busy === 'send' ? '…' : live ? 'Send' : 'Re-open'}
           </button>
         </form>
       )}

@@ -763,6 +763,25 @@ export type RunDetail = z.infer<typeof RunDetail>;
 export const ResumeRunBody = z.object({ text: z.string().trim().max(20_000).optional() });
 export type ResumeRunBody = z.input<typeof ResumeRunBody>;
 
+export const GarbageCollectRunsBody = z.object({
+  projectId: z.string().min(1).optional(),
+  /** Number of most-recent completed runs to retain (0 = purge all completed/failed runs). */
+  keepRecent: z.number().int().min(0).max(500).default(0),
+  /** Whether to also delete failed runs. Defaults to true. */
+  includeFailed: z.boolean().default(true),
+  /** Whether to prune git worktrees of removed runs. Defaults to true. */
+  pruneWorktrees: z.boolean().default(true),
+});
+export type GarbageCollectRunsBody = z.input<typeof GarbageCollectRunsBody>;
+
+export const GarbageCollectRunsResponse = z.object({
+  removedRuns: z.number().int(),
+  closedSessions: z.number().int(),
+  prunedWorktrees: z.number().int(),
+  remainingRuns: z.number().int(),
+});
+export type GarbageCollectRunsResponse = z.infer<typeof GarbageCollectRunsResponse>;
+
 // --- quota scheduler --------------------------------------------------------
 
 /** How the reset time of an exhausted window was determined. */

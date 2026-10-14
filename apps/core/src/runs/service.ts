@@ -22,6 +22,9 @@ import {
   type CreateRunBody,
   CreateRunBody as CreateRunBodySchema,
   type DiffScope,
+  type GarbageCollectRunsBody,
+  GarbageCollectRunsBody as GarbageCollectRunsBodySchema,
+  type GarbageCollectRunsResponse,
   type GitCommitBody,
   type GitCommitResponse,
   type GitPushResponse,
@@ -82,6 +85,9 @@ export interface RunOrigin {
 const SUBMIT_DELAY_MS = 150;
 
 const RECONCILE_INTERVAL_MS = 3_000;
+const AUTO_GC_INTERVAL_MS = 60_000;
+const IDLE_DONE_SESSION_TTL_MS = 25_000;
+const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -166,6 +172,7 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
 export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   private reconciling = false;
+  private lastAutoGcAt = 0;
 
   constructor(
     private readonly db: Db,
@@ -554,13 +561,31 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (row.state === 'queued') {
       return this.record(id, { source: 'user', type: 'cancelled', state: 'failed', patch: { endedAt: new Date() } });
     }
-    if (row.ptydSessionId && !row.endedAt) {
+    const sessionId = row.ptydSessionId;
+    if (sessionId && !row.endedAt) {
       await this.ptyd
         .get()
-        .kill(row.ptydSessionId)
+        .kill(sessionId)
         .catch(() => {
           // Already exited; reconcile will notice.
         });
+      // Interactive CLI TUIs (e.g. Claude sitting at the `>` prompt) sometimes trap SIGTERM;
+      // ensure the PTY is force-killed if it hasn't exited within 1.2s.
+      const fallbackTimer = setTimeout(() => {
+        try {
+          if (this.ptyd.status !== 'connected') return;
+          void this.ptyd
+            .get()
+            .kill(sessionId, 'SIGKILL')
+            .catch(() => undefined)
+            .finally(() => {
+              void this.reconcile();
+            });
+        } catch {
+          // ptyd disconnected or test app closed
+        }
+      }, 1_200);
+      fallbackTimer.unref();
     }
     const run = this.record(id, { source: 'user', type: 'stop_requested' });
     void this.reconcile();
@@ -876,6 +901,120 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.emit('removed', id);
   }
 
+  /**
+   * Garbage-collects completed/failed runs, closes lingering PTY sessions, and optionally prunes
+   * their `.worktrees` directories so Fleet Multiplexer and disk stay clean.
+   */
+  async garbageCollect(rawInput?: GarbageCollectRunsBody): Promise<GarbageCollectRunsResponse> {
+    const body = GarbageCollectRunsBodySchema.parse(rawInput ?? {});
+    await this.reconcile();
+
+    let closedSessions = 0;
+    let prunedWorktrees = 0;
+    let removedRuns = 0;
+
+    // 1. Ensure any run already in `done` or `failed` state with an open or attached PTY session is closed & detached.
+    const allRuns = this.db.select().from(runs).orderBy(desc(runs.createdAt)).all();
+    const scopedRuns = body.projectId ? allRuns.filter((r) => r.projectId === body.projectId) : allRuns;
+
+    for (const row of scopedRuns) {
+      const isFinished = Boolean(row.endedAt) || row.state === 'done' || row.state === 'failed';
+      if (!isFinished) continue;
+      if (row.ptydSessionId && this.ptyd.status === 'connected') {
+        await this.ptyd
+          .get()
+          .remove(row.ptydSessionId)
+          .then(() => {
+            closedSessions += 1;
+          })
+          .catch(() => undefined);
+      }
+      if (!row.endedAt || row.ptydSessionId) {
+        const updated = this.db
+          .update(runs)
+          .set({
+            endedAt: row.endedAt ?? new Date(),
+            ptydSessionId: null,
+          })
+          .where(eq(runs.id, row.id))
+          .returning()
+          .get();
+        if (updated) {
+          this.emit('run', toRun(updated), false);
+        }
+      }
+    }
+
+    // 2. Also remove any exited orphaned sessions in ptyd
+    if (this.ptyd.status === 'connected') {
+      try {
+        const { sessions } = await this.ptyd.get().list();
+        for (const s of sessions) {
+          if (s.status === 'exited' && (!body.projectId || s.meta.projectId === body.projectId)) {
+            await this.ptyd
+              .get()
+              .remove(s.id)
+              .then(() => {
+                closedSessions += 1;
+              })
+              .catch(() => undefined);
+          }
+        }
+      } catch {
+        // ignore ptyd errors
+      }
+    }
+
+    // 3. Group finished runs per project and remove runs beyond `keepRecent`
+    const refreshedRuns = this.db.select().from(runs).orderBy(desc(runs.createdAt)).all();
+    const projectMap = new Map(
+      this.db
+        .select()
+        .from(projects)
+        .all()
+        .map((p) => [p.id, p]),
+    );
+
+    const byProject = new Map<string, RunRow[]>();
+    for (const row of refreshedRuns) {
+      if (body.projectId && row.projectId !== body.projectId) continue;
+      const isCandidate =
+        row.state === 'done' ||
+        (body.includeFailed && row.state === 'failed') ||
+        (Boolean(row.endedAt) && (row.state === 'done' || body.includeFailed));
+      if (!isCandidate) continue;
+      const list = byProject.get(row.projectId) ?? [];
+      list.push(row);
+      byProject.set(row.projectId, list);
+    }
+
+    for (const [projId, list] of byProject.entries()) {
+      const toRemove = list.slice(body.keepRecent);
+      const proj = projectMap.get(projId);
+      for (const row of toRemove) {
+        if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path) {
+          const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
+          if (removedWt) prunedWorktrees += 1;
+        }
+        await this.remove(row.id).catch(() => undefined);
+        removedRuns += 1;
+      }
+    }
+
+    const remainingRuns = this.db
+      .select()
+      .from(runs)
+      .all()
+      .filter((r) => !body.projectId || r.projectId === body.projectId).length;
+
+    return {
+      removedRuns,
+      closedSessions,
+      prunedWorktrees,
+      remainingRuns,
+    };
+  }
+
   /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
   async reconcile(): Promise<void> {
     if (this.reconciling || this.ptyd.status !== 'connected') return;
@@ -891,22 +1030,66 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (open.length === 0 && attached.length === 0) return;
       const { sessions } = await this.ptyd.get().list();
       const byId = new Map(sessions.map((s) => [s.id, s]));
+      const nowMs = Date.now();
+
       for (const row of open) {
-        if (!row.ptydSessionId) continue; // still spawning
+        if (!row.ptydSessionId) {
+          if (row.state === 'done' || row.state === 'failed') {
+            const updated = this.db
+              .update(runs)
+              .set({ endedAt: new Date() })
+              .where(eq(runs.id, row.id))
+              .returning()
+              .get();
+            if (updated) this.emit('run', toRun(updated), false);
+          }
+          continue; // still spawning or queued
+        }
         const session = byId.get(row.ptydSessionId);
-        if (session?.status === 'running') continue;
+        if (session?.status === 'running') {
+          // If an interactive CLI finished its turn (`state === 'done'`) and has been sitting idle
+          // for over IDLE_DONE_SESSION_TTL_MS without any follow-up prompt, close & dispose its PTY
+          // so it never lingers as a zombie process in Fleet Multiplexer.
+          if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > IDLE_DONE_SESSION_TTL_MS) {
+            await this.ptyd
+              .get()
+              .remove(row.ptydSessionId)
+              .catch(() => undefined);
+            byId.delete(row.ptydSessionId);
+            this.record(row.id, {
+              source: 'system',
+              type: 'idle_session_closed',
+              state: 'done',
+              patch: { endedAt: new Date(), ptydSessionId: null },
+            });
+          }
+          continue;
+        }
         const exitCode = session ? session.exitCode : null;
+        if (session) {
+          await this.ptyd
+            .get()
+            .remove(row.ptydSessionId)
+            .catch(() => undefined);
+          byId.delete(row.ptydSessionId);
+        }
         this.record(row.id, {
           source: 'system',
           type: session ? 'process_exited' : 'session_lost',
           state: stateAfterExit(row.state as AgentState, exitCode),
           payload: session ? { exitCode, signal: session.signal } : {},
-          patch: { endedAt: new Date(), ...(session ? {} : { ptydSessionId: null }) },
+          patch: { endedAt: new Date(), ptydSessionId: null },
         });
       }
       for (const row of attached) {
         if (!row.endedAt || !row.ptydSessionId) continue;
-        if (byId.has(row.ptydSessionId)) continue;
+        if (byId.has(row.ptydSessionId)) {
+          await this.ptyd
+            .get()
+            .remove(row.ptydSessionId)
+            .catch(() => undefined);
+          byId.delete(row.ptydSessionId);
+        }
         const updated = this.db
           .update(runs)
           .set({ ptydSessionId: null })
@@ -915,6 +1098,41 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           .get();
         if (updated) {
           this.emit('run', toRun(updated), false);
+        }
+      }
+
+      // Periodic background garbage collection of old completed runs & worktrees
+      if (nowMs - this.lastAutoGcAt > AUTO_GC_INTERVAL_MS) {
+        this.lastAutoGcAt = nowMs;
+        const allFinished = this.db
+          .select()
+          .from(runs)
+          .where(isNotNull(runs.endedAt))
+          .orderBy(desc(runs.createdAt))
+          .all();
+        const projectMap = new Map(
+          this.db
+            .select()
+            .from(projects)
+            .all()
+            .map((p) => [p.id, p]),
+        );
+        const byProj = new Map<string, RunRow[]>();
+        for (const r of allFinished) {
+          if (r.state !== 'done' && r.state !== 'failed') continue;
+          const arr = byProj.get(r.projectId) ?? [];
+          arr.push(r);
+          byProj.set(r.projectId, arr);
+        }
+        for (const [projId, arr] of byProj.entries()) {
+          if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
+          const proj = projectMap.get(projId);
+          for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
+            if (proj && stale.worktreePath && stale.worktreePath !== proj.path) {
+              await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
+            }
+            await this.remove(stale.id).catch(() => undefined);
+          }
         }
       }
     } catch {

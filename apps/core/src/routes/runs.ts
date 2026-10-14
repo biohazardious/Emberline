@@ -117,6 +117,10 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     async (request) => runs.stopPreview(request.params.id),
   );
 
+  app.post('/api/runs/gc', async (request) => {
+    return runs.garbageCollect((request.body ?? {}) as never);
+  });
+
   app.delete<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
     await runs.remove(request.params.id);
     return { ok: true };
