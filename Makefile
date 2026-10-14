@@ -55,8 +55,20 @@ logs: ## Follow logs
 upgrade-core: ## Rebuild/restart core only; running agents in the runner are untouched
 	$(PROD) up -d --build --no-deps core
 
-claude-login: ## One-time `claude login` inside the runner (subscription credentials)
+claude-login: ## One-time `claude login` inside the runner (Anthropic OAuth credentials)
 	$(PROD) exec runner claude login
+
+gemini-login: ## Interactive Google OAuth login (`gemini`) inside the runner (no API key needed)
+	$(PROD) exec runner gemini
+
+agy-login: ## Interactive Antigravity / Google OAuth login (`agy login`) inside the runner
+	$(PROD) exec runner agy login
+
+codex-login: ## Interactive OpenAI ChatGPT/Codex OAuth login (`codex login`) inside the runner
+	$(PROD) exec runner codex login
+
+copilot-login: ## Interactive GitHub Copilot CLI login (`copilot login`) inside the runner
+	$(PROD) exec runner copilot login
 
 clean: ## Remove dev containers and volumes (node_modules, pnpm store)
 	$(DEV) down -v --remove-orphans

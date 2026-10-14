@@ -171,22 +171,22 @@ function detectPrimaryProjectDomain(
   // Inspect only the project name, description, and top heading of PROJECT.md with strict word boundaries
   const headerSnippet = `${project.name} ${project.description ?? ''} ${blueprintContent.slice(0, 600)}`.toLowerCase();
 
-  if (/\b(flappy|petiqa|arcade|endless-runner|tower-defense|phaser|pixi|game|gameplay|oyun|zıplayan)\b/.test(headerSnippet)) {
+  if (/\b(flappy|arcade|endless-runner|tower-defense|phaser|pixi|game|gameplay|oyun|zıplayan)\b/.test(headerSnippet)) {
     return 'game_interactive';
   }
   if (
-    /\b(esp32|esp8266|arduino|platformio|stm32|firmware|eeprom|i2c|uart|lexmark)\b/.test(headerSnippet) ||
+    /\b(esp32|esp8266|arduino|platformio|stm32|firmware|eeprom|i2c|uart|microcontroller)\b/.test(headerSnippet) ||
     /\bplatformio\.ini\b|\.ino\b/.test(fileNamesLower)
   ) {
     return 'embedded_iot';
   }
-  if (/\b(truenas|nvidia|driver-updater|kernel|zfs|systemd|cli-tool)\b/.test(headerSnippet)) {
+  if (/\b(driver-updater|kernel|zfs|systemd|cli-tool|shell-tool)\b/.test(headerSnippet)) {
     return 'cli_tool';
   }
-  if (/\b(tauri|electron|marquee|flutter|react-native|qt|desktop-app)\b/.test(headerSnippet)) {
+  if (/\b(tauri|electron|flutter|react-native|qt|desktop-app|mobile-app)\b/.test(headerSnippet)) {
     return 'mobile_desktop';
   }
-  if (/\b(multi-agent|nexus-agents|agentic|mcp-server|llm-orchestrator)\b/.test(headerSnippet)) {
+  if (/\b(multi-agent|agentic|mcp-server|llm-orchestrator)\b/.test(headerSnippet)) {
     return 'ai_agents';
   }
   if (/\b(fastapi|microservice|grpc|rest-api)\b/.test(headerSnippet)) {

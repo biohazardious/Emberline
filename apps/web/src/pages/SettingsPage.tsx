@@ -13,17 +13,20 @@ import {
   type PersonaAgentMap,
   type PersonaModelMap,
   PROVIDER_REGISTRY,
+  type ProviderLoginResponse,
   selectProviderModelByRank,
   selectProviderModelByTier,
   type ThemeMode,
 } from '@emberline/protocol';
 import { type FormEvent, useEffect, useState } from 'react';
+import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 
 const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
+const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot'];
 
 const CAPABILITY_TAG_META: Record<ModelCapabilityTag, { label: string; icon: string }> = {
   reasoning: { label: 'Reasoning', icon: '🧠' },
@@ -60,6 +63,7 @@ export function SettingsPage({
   theme: 'dark' | 'light';
   onChangeTheme: (theme: 'dark' | 'light') => void;
 }) {
+  const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<'autopilot' | 'providers' | 'quota' | 'notifications'>(
     'autopilot',
   );
@@ -97,6 +101,7 @@ export function SettingsPage({
   const [geminiApiKey, setGeminiApiKey] = useState('');
 
   const [saving, setSaving] = useState(false);
+  const [launchingLoginProvider, setLaunchingLoginProvider] = useState<AgentId | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -118,6 +123,23 @@ export function SettingsPage({
       })
       .catch((err) => setError(errorMessage(err)));
   }, []);
+
+  const handleStartProviderLogin = async (providerId: AgentId) => {
+    setLaunchingLoginProvider(providerId);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await api<ProviderLoginResponse>('/api/factory/provider-login', 'POST', {
+        provider: providerId,
+      });
+      setEnabledProviders((prev) => (prev.includes(providerId) ? prev : [...prev, providerId]));
+      setLocation(`/terminals/${res.terminal.id}`);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLaunchingLoginProvider(null);
+    }
+  };
 
   const toggleProviderEnabled = (providerId: AgentId) => {
     setEnabledProviders((prev) => {
@@ -504,14 +526,29 @@ export function SettingsPage({
               {ALL_PROVIDER_IDS.map((providerId) => {
                 const entry = PROVIDER_REGISTRY[providerId];
                 const isEnabled = enabledProviders.includes(providerId);
+                const authStatus = settings?.providerAuth?.[providerId];
+                const supportsOAuthLogin = OAUTH_LOGIN_PROVIDERS.includes(providerId);
                 const isKeyConfigured =
                   providerId === 'claude'
                     ? Boolean(settings?.anthropicKeyConfigured)
-                    : providerId === 'gemini'
+                    : providerId === 'gemini' || providerId === 'antigravity'
                       ? Boolean(settings?.geminiKeyConfigured)
                       : providerId === 'codex'
                         ? Boolean(settings?.openaiKeyConfigured)
                         : false;
+                const isAuthReady = Boolean(authStatus?.authenticated || isKeyConfigured);
+                const makeLoginCmd =
+                  providerId === 'antigravity'
+                    ? 'make agy-login'
+                    : providerId === 'claude'
+                      ? 'make claude-login'
+                      : providerId === 'gemini'
+                        ? 'make gemini-login'
+                        : providerId === 'codex'
+                          ? 'make codex-login'
+                          : providerId === 'copilot'
+                            ? 'make copilot-login'
+                            : null;
 
                 return (
                   <div
@@ -523,7 +560,7 @@ export function SettingsPage({
                       border: isEnabled
                         ? '1px solid rgba(59, 130, 246, 0.5)'
                         : '1px dashed var(--border)',
-                      opacity: isEnabled ? 1 : 0.7,
+                      opacity: isEnabled ? 1 : 0.75,
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'space-between',
@@ -555,32 +592,18 @@ export function SettingsPage({
                         <span className="badge mono" style={{ fontSize: '0.66rem' }}>
                           {entry.badge}
                         </span>
-                        {providerId === 'claude' && (
-                          <span
-                            className="badge mono"
-                            style={{
-                              fontSize: '0.66rem',
-                              borderColor: 'rgba(16, 185, 129, 0.45)',
-                              color: '#6ee7b7',
-                            }}
-                          >
-                            {isKeyConfigured ? '✓ API Key Set' : '✓ Host CLI Auth'}
-                          </span>
-                        )}
-                        {(providerId === 'gemini' || providerId === 'codex') && (
-                          <span
-                            className="badge mono"
-                            style={{
-                              fontSize: '0.66rem',
-                              borderColor: isKeyConfigured
-                                ? 'rgba(16, 185, 129, 0.45)'
-                                : 'rgba(245, 158, 11, 0.4)',
-                              color: isKeyConfigured ? '#6ee7b7' : '#fcd34d',
-                            }}
-                          >
-                            {isKeyConfigured ? '✓ API Key Set' : 'CLI / API Key'}
-                          </span>
-                        )}
+                        <span
+                          className="badge mono"
+                          style={{
+                            fontSize: '0.65rem',
+                            borderColor: isAuthReady
+                              ? 'rgba(16, 185, 129, 0.45)'
+                              : 'rgba(245, 158, 11, 0.45)',
+                            color: isAuthReady ? '#6ee7b7' : '#fcd34d',
+                          }}
+                        >
+                          {authStatus?.label ?? (isKeyConfigured ? '✓ API Key Set' : 'OAuth CLI / API Key')}
+                        </span>
                       </div>
 
                       <div className="muted small" style={{ fontSize: '0.73rem', lineHeight: 1.35 }}>
@@ -612,54 +635,88 @@ export function SettingsPage({
                       </div>
                     </div>
 
-                    {/* Inline API Key Input for Claude, Gemini, and Codex when enabled */}
-                    {isEnabled && providerId === 'claude' && (
-                      <label className="field" style={{ gap: 3, marginTop: 2 }}>
-                        <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-                          Anthropic API Key (Optional Override · Host OAuth used by default)
-                        </span>
-                        <input
-                          type="password"
-                          className="input mono"
-                          style={{ padding: '5px 8px', fontSize: '0.76rem' }}
-                          placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-ant-...'}
-                          value={anthropicApiKey}
-                          onChange={(e) => setAnthropicApiKey(e.target.value)}
-                        />
-                      </label>
-                    )}
+                    {/* Interactive OAuth CLI Login & Optional API Key Overrides */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                      {supportsOAuthLogin && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-ghost"
+                            disabled={launchingLoginProvider !== null}
+                            onClick={() => void handleStartProviderLogin(providerId)}
+                            style={{
+                              borderColor: 'rgba(59, 130, 246, 0.45)',
+                              color: '#93c5fd',
+                              fontSize: '0.72rem',
+                            }}
+                            title="Opens an interactive browser terminal inside the runner container to authenticate via official CLI OAuth (no API key required)"
+                          >
+                            {launchingLoginProvider === providerId
+                              ? '⏳ Opening Terminal…'
+                              : isAuthReady && authStatus?.method === 'oauth_cli'
+                                ? '🔄 Re-Login CLI Account'
+                                : '🔑 CLI OAuth Login (Terminal)'}
+                          </button>
+                          {makeLoginCmd && (
+                            <code
+                              className="muted mono"
+                              style={{ fontSize: '0.65rem' }}
+                              title="Or run this command from your host terminal"
+                            >
+                              {makeLoginCmd}
+                            </code>
+                          )}
+                        </div>
+                      )}
 
-                    {isEnabled && providerId === 'gemini' && (
-                      <label className="field" style={{ gap: 3, marginTop: 2 }}>
-                        <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-                          Google Gemini API Key (GEMINI_API_KEY)
-                        </span>
-                        <input
-                          type="password"
-                          className="input mono"
-                          style={{ padding: '5px 8px', fontSize: '0.76rem' }}
-                          placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'AIzaSy...'}
-                          value={geminiApiKey}
-                          onChange={(e) => setGeminiApiKey(e.target.value)}
-                        />
-                      </label>
-                    )}
+                      {isEnabled && providerId === 'claude' && (
+                        <label className="field" style={{ gap: 3, marginTop: 2 }}>
+                          <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+                            Anthropic API Key (Optional Override · CLI OAuth used by default)
+                          </span>
+                          <input
+                            type="password"
+                            className="input mono"
+                            style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+                            placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-ant-...'}
+                            value={anthropicApiKey}
+                            onChange={(e) => setAnthropicApiKey(e.target.value)}
+                          />
+                        </label>
+                      )}
 
-                    {isEnabled && providerId === 'codex' && (
-                      <label className="field" style={{ gap: 3, marginTop: 2 }}>
-                        <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-                          OpenAI API Key (OPENAI_API_KEY)
-                        </span>
-                        <input
-                          type="password"
-                          className="input mono"
-                          style={{ padding: '5px 8px', fontSize: '0.76rem' }}
-                          placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-proj-...'}
-                          value={openaiApiKey}
-                          onChange={(e) => setOpenaiApiKey(e.target.value)}
-                        />
-                      </label>
-                    )}
+                      {isEnabled && (providerId === 'gemini' || providerId === 'antigravity') && (
+                        <label className="field" style={{ gap: 3, marginTop: 2 }}>
+                          <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+                            Google Gemini API Key (Optional Override · Google Account OAuth supported)
+                          </span>
+                          <input
+                            type="password"
+                            className="input mono"
+                            style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+                            placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'AIzaSy...'}
+                            value={geminiApiKey}
+                            onChange={(e) => setGeminiApiKey(e.target.value)}
+                          />
+                        </label>
+                      )}
+
+                      {isEnabled && providerId === 'codex' && (
+                        <label className="field" style={{ gap: 3, marginTop: 2 }}>
+                          <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+                            OpenAI API Key (Optional Override · ChatGPT Account OAuth supported)
+                          </span>
+                          <input
+                            type="password"
+                            className="input mono"
+                            style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+                            placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-proj-...'}
+                            value={openaiApiKey}
+                            onChange={(e) => setOpenaiApiKey(e.target.value)}
+                          />
+                        </label>
+                      )}
+                    </div>
                   </div>
                 );
               })}

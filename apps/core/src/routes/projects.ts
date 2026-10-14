@@ -30,6 +30,9 @@ import {
   type ProjectRoadmapState,
   type ProjectStatusSummary,
   type ProjectTechStack,
+  PROVIDER_REGISTRY,
+  ProviderLoginBody,
+  type ProviderLoginResponse,
   RollbackCheckpointBody,
   SyncWorktreeBody,
   type SyncWorktreeResponse,
@@ -404,6 +407,91 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   app.patch('/api/factory/settings', async (request): Promise<FactorySettings> => {
     const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
     return updateFactorySettings(db, patch);
+  });
+
+  app.post('/api/factory/provider-login', async (request, reply): Promise<ProviderLoginResponse> => {
+    const body = ProviderLoginBody.parse(request.body ?? {});
+    const provider = body.provider;
+    const entry = PROVIDER_REGISTRY[provider];
+
+    // Automatically enable this provider so it appears in routing selectors immediately
+    const current = getFactorySettings(db);
+    if (!current.enabledProviders.includes(provider)) {
+      updateFactorySettings(db, {
+        enabledProviders: [...current.enabledProviders, provider],
+      });
+    }
+
+    const loginSpecs: Record<
+      typeof provider,
+      { cmd: string; instructions: string }
+    > = {
+      claude: {
+        cmd: 'claude login',
+        instructions:
+          'Follow the Anthropic OAuth URL in the terminal to sign in with your Claude subscription.',
+      },
+      antigravity: {
+        cmd: 'agy login',
+        instructions:
+          'Select "Login with Google" in the terminal and open the OAuth URL to sign in with your Google/Gemini account (no API key required).',
+      },
+      gemini: {
+        cmd: 'gemini',
+        instructions:
+          'Select "Login with Google" in the terminal and open the OAuth URL to sign in with your Google/Gemini account (no API key required).',
+      },
+      codex: {
+        cmd: 'codex login',
+        instructions:
+          'Follow the OpenAI OAuth URL in the terminal to sign in with your ChatGPT Plus/Pro/Team account.',
+      },
+      copilot: {
+        cmd: 'copilot login',
+        instructions:
+          'Follow the GitHub device/OAuth prompt in the terminal to authenticate GitHub Copilot CLI.',
+      },
+      aider: {
+        cmd: 'aider --version',
+        instructions:
+          'Aider uses your configured Anthropic, OpenAI, or Gemini credentials.',
+      },
+    };
+
+    const spec = loginSpecs[provider];
+    const shellScript = [
+      `printf "\\033[1;36m=== ${entry.icon} ${entry.label} — Interactive Account Login ===\\033[0m\\n"`,
+      `printf "${spec.instructions}\\n\\n"`,
+      spec.cmd,
+      `exec bash -i`,
+    ].join('; ');
+
+    const session = await ptyd.get().spawn({
+      file: 'bash',
+      args: ['-c', shellScript],
+      cwd: config.workspacesDir,
+      meta: {
+        kind: 'shell',
+        title: `🔑 Login · ${entry.shortLabel}`,
+      },
+    });
+
+    reply.code(201);
+    return {
+      provider,
+      terminal: {
+        id: session.id,
+        title: session.meta.title ?? `🔑 Login · ${entry.shortLabel}`,
+        kind: 'shell',
+        projectId: null,
+        runId: null,
+        status: session.status,
+        exitCode: session.exitCode,
+        createdAt: session.createdAt,
+      },
+      command: spec.cmd,
+      instructions: spec.instructions,
+    };
   });
 
   app.get<{ Querystring: { refresh?: string } }>(

@@ -108,7 +108,13 @@ ARG CLAUDE_CODE_VERSION=2.1.296
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash less procps openssh-client chromium \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @playwright/mcp && npm cache clean --force
+RUN npm install -g \
+    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    @google/gemini-cli \
+    @openai/codex \
+    @github/copilot \
+    @playwright/mcp \
+  && npm cache clean --force
 ENV DISABLE_AUTOUPDATER=1 \
     SHELL=/bin/bash \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
@@ -116,7 +122,42 @@ ENV DISABLE_AUTOUPDATER=1 \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd
 COPY --from=build /out/hook /opt/emberline/hook
-RUN chmod +x /opt/emberline/hook/dist/main.js \
+RUN printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -e' \
+    'if [ "$1" = "login" ] || [ "$1" = "auth" ] || [ "$#" -eq 0 ]; then' \
+    '  echo "🚀 Antigravity (AGY) Agentic CLI — Google Account OAuth / Gemini Session"' \
+    '  echo "Select \"Login with Google\" below to authenticate without an API key:"' \
+    '  exec gemini' \
+    'fi' \
+    'MODEL="gemini-2.5-pro"' \
+    'PROMPT=""' \
+    'while [ "$#" -gt 0 ]; do' \
+    '  case "$1" in' \
+    '    --model|-m)' \
+    '      shift' \
+    '      case "$1" in' \
+    '        argon|gemini-pro) MODEL="gemini-2.5-pro" ;;' \
+    '        gemini-flash) MODEL="gemini-2.5-flash" ;;' \
+    '        gemini-flash-lite) MODEL="gemini-2.5-flash-lite" ;;' \
+    '        *) MODEL="$1" ;;' \
+    '      esac' \
+    '      shift ;;' \
+    '    -p|--prompt)' \
+    '      shift; PROMPT="$1"; shift ;;' \
+    '    *)' \
+    '      PROMPT="$1"; shift ;;' \
+    '  esac' \
+    'done' \
+    'if [ -n "$PROMPT" ]; then' \
+    '  exec gemini --yolo --model "$MODEL" -p "$PROMPT"' \
+    'else' \
+    '  exec gemini --model "$MODEL"' \
+    'fi' \
+    > /usr/local/bin/agy \
+  && chmod +x /usr/local/bin/agy \
+  && ln -sf /usr/local/bin/agy /usr/local/bin/antigravity \
+  && chmod +x /opt/emberline/hook/dist/main.js \
   && ln -s /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \
   && mkdir -p /run/emberline /var/log/emberline /workspaces \
   && chown node:node /run/emberline /var/log/emberline /workspaces

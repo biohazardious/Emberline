@@ -1437,6 +1437,152 @@ const ALL_PERSONA_KEYS: readonly AgentPersona[] = [
   'security',
 ];
 
+function detectRunnerProviderAuth(params: {
+  anthropicKeyConfigured: boolean;
+  openaiKeyConfigured: boolean;
+  geminiKeyConfigured: boolean;
+}) {
+  const home = '/home/node';
+  const claudeOAuth =
+    existsSync(path.join(home, '.claude', '.credentials.json')) ||
+    existsSync(path.join(home, '.claude.json'));
+  const geminiOAuth =
+    existsSync(path.join(home, '.gemini', 'oauth_creds.json')) ||
+    existsSync(path.join(home, '.gemini', 'google_accounts.json')) ||
+    existsSync(path.join(home, '.config', 'gcloud', 'application_default_credentials.json'));
+  const codexOAuth = existsSync(path.join(home, '.codex', 'auth.json'));
+  const copilotOAuth =
+    existsSync(path.join(home, '.copilot')) ||
+    existsSync(path.join(home, '.config', 'github-copilot')) ||
+    existsSync(path.join(home, '.config', 'gh', 'hosts.yml'));
+
+  return {
+    claude: claudeOAuth
+      ? {
+          authenticated: true,
+          method: 'oauth_cli' as const,
+          label: '✓ Claude OAuth Active',
+          cliInstalled: true,
+          loginCommandHint: 'claude login',
+        }
+      : params.anthropicKeyConfigured
+        ? {
+            authenticated: true,
+            method: 'api_key' as const,
+            label: '✓ Anthropic API Key',
+            cliInstalled: true,
+            loginCommandHint: 'claude login',
+          }
+        : {
+            authenticated: false,
+            method: 'none' as const,
+            label: 'OAuth Login or API Key',
+            cliInstalled: true,
+            loginCommandHint: 'claude login',
+          },
+    antigravity: geminiOAuth
+      ? {
+          authenticated: true,
+          method: 'oauth_cli' as const,
+          label: '✓ Google Account OAuth',
+          cliInstalled: true,
+          loginCommandHint: 'agy login',
+        }
+      : params.geminiKeyConfigured
+        ? {
+            authenticated: true,
+            method: 'api_key' as const,
+            label: '✓ Gemini API Key',
+            cliInstalled: true,
+            loginCommandHint: 'agy login',
+          }
+        : {
+            authenticated: false,
+            method: 'none' as const,
+            label: 'Google OAuth (No Key Needed)',
+            cliInstalled: true,
+            loginCommandHint: 'agy login',
+          },
+    gemini: geminiOAuth
+      ? {
+          authenticated: true,
+          method: 'oauth_cli' as const,
+          label: '✓ Google Account OAuth',
+          cliInstalled: true,
+          loginCommandHint: 'gemini',
+        }
+      : params.geminiKeyConfigured
+        ? {
+            authenticated: true,
+            method: 'api_key' as const,
+            label: '✓ Gemini API Key',
+            cliInstalled: true,
+            loginCommandHint: 'gemini',
+          }
+        : {
+            authenticated: false,
+            method: 'none' as const,
+            label: 'Google OAuth or API Key',
+            cliInstalled: true,
+            loginCommandHint: 'gemini',
+          },
+    codex: codexOAuth
+      ? {
+          authenticated: true,
+          method: 'oauth_cli' as const,
+          label: '✓ ChatGPT / Codex OAuth',
+          cliInstalled: true,
+          loginCommandHint: 'codex login',
+        }
+      : params.openaiKeyConfigured
+        ? {
+            authenticated: true,
+            method: 'api_key' as const,
+            label: '✓ OpenAI API Key',
+            cliInstalled: true,
+            loginCommandHint: 'codex login',
+          }
+        : {
+            authenticated: false,
+            method: 'none' as const,
+            label: 'ChatGPT OAuth or API Key',
+            cliInstalled: true,
+            loginCommandHint: 'codex login',
+          },
+    copilot: copilotOAuth
+      ? {
+          authenticated: true,
+          method: 'oauth_cli' as const,
+          label: '✓ GitHub OAuth Active',
+          cliInstalled: true,
+          loginCommandHint: 'copilot login',
+        }
+      : {
+          authenticated: false,
+          method: 'none' as const,
+          label: 'GitHub OAuth Login',
+          cliInstalled: true,
+          loginCommandHint: 'copilot login',
+        },
+    aider:
+      params.anthropicKeyConfigured || params.openaiKeyConfigured || params.geminiKeyConfigured
+        ? {
+            authenticated: true,
+            method: 'api_key' as const,
+            label: '✓ Uses Provider API Keys',
+            cliInstalled: true,
+            loginCommandHint: 'aider',
+          }
+        : {
+            authenticated: false,
+            method: 'none' as const,
+            label: 'API Key Recommended',
+            cliInstalled: true,
+            loginCommandHint: 'aider',
+          },
+  };
+}
+
 export function getFactorySettings(db: Db): FactorySettings {
   const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
@@ -1448,6 +1594,11 @@ export function getFactorySettings(db: Db): FactorySettings {
   const geminiKeyConfigured = Boolean(
     keys.geminiApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
   );
+  const providerAuth = detectRunnerProviderAuth({
+    anthropicKeyConfigured,
+    openaiKeyConfigured,
+    geminiKeyConfigured,
+  });
 
   // Derive active/enabled providers: Claude is always available by default via Host CLI Auth / API key.
   const enabledSet = new Set<AgentId>(
@@ -1457,8 +1608,8 @@ export function getFactorySettings(db: Db): FactorySettings {
   );
   if (enabledSet.size === 0) enabledSet.add('claude');
   if (!Array.isArray(raw.enabledProviders)) {
-    if (openaiKeyConfigured) enabledSet.add('codex');
-    if (geminiKeyConfigured) enabledSet.add('gemini');
+    if (openaiKeyConfigured || providerAuth.codex.authenticated) enabledSet.add('codex');
+    if (geminiKeyConfigured || providerAuth.gemini.authenticated) enabledSet.add('gemini');
   }
   const enabledProviders = Array.from(enabledSet);
 
@@ -1502,6 +1653,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     anthropicKeyConfigured,
     openaiKeyConfigured,
     geminiKeyConfigured,
+    providerAuth,
   });
 }
 

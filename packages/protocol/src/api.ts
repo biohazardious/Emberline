@@ -252,7 +252,7 @@ export const AgentModelId = z.enum([
 ]);
 export type AgentModelId = z.infer<typeof AgentModelId>;
 
-/** Capability tier and 1-5 star rank inspired by Nexus Agents model matrix. */
+/** Capability tier and 1-5 star rank for the multi-provider model matrix. */
 export const ModelCapabilityTier = z.enum(['high', 'medium', 'low']);
 export type ModelCapabilityTier = z.infer<typeof ModelCapabilityTier>;
 export type ModelRank = 1 | 2 | 3 | 4 | 5;
@@ -1281,6 +1281,25 @@ export const PersonaModelMap = z.object({
 });
 export type PersonaModelMap = z.infer<typeof PersonaModelMap>;
 
+export const ProviderAuthStatus = z.object({
+  authenticated: z.boolean(),
+  method: z.enum(['oauth_cli', 'api_key', 'host_auth', 'none']),
+  label: z.string(),
+  cliInstalled: z.boolean().default(true),
+  loginCommandHint: z.string(),
+});
+export type ProviderAuthStatus = z.infer<typeof ProviderAuthStatus>;
+
+export const ProviderAuthStatusMap = z.object({
+  claude: ProviderAuthStatus,
+  antigravity: ProviderAuthStatus,
+  gemini: ProviderAuthStatus,
+  codex: ProviderAuthStatus,
+  copilot: ProviderAuthStatus,
+  aider: ProviderAuthStatus,
+});
+export type ProviderAuthStatusMap = z.infer<typeof ProviderAuthStatusMap>;
+
 export const FactorySettings = z.object({
   theme: ThemeMode.default('dark'),
   defaultAgent: AgentId.default('claude'),
@@ -1304,8 +1323,22 @@ export const FactorySettings = z.object({
   anthropicKeyConfigured: z.boolean().default(false),
   openaiKeyConfigured: z.boolean().default(false),
   geminiKeyConfigured: z.boolean().default(false),
+  providerAuth: ProviderAuthStatusMap.optional(),
 });
 export type FactorySettings = z.infer<typeof FactorySettings>;
+
+export const ProviderLoginBody = z.object({
+  provider: AgentId,
+});
+export type ProviderLoginBody = z.input<typeof ProviderLoginBody>;
+
+export const ProviderLoginResponse = z.object({
+  provider: AgentId,
+  terminal: TerminalInfo,
+  command: z.string(),
+  instructions: z.string(),
+});
+export type ProviderLoginResponse = z.infer<typeof ProviderLoginResponse>;
 
 export const UpdateFactorySettingsBody = z
   .object({

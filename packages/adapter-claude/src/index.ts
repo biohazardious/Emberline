@@ -344,7 +344,9 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     const codexModel =
       options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
     const flags = `${autoApprove ? '--full-auto ' : ''}${codexModel}`;
-    cliCmd = options.prompt ? `${bin} ${flags}"$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
+    cliCmd = options.prompt
+      ? `${bin} exec ${autoApprove ? '--full-auto --skip-git-repo-check ' : ''}${codexModel}"$EMBERLINE_PROMPT"`
+      : `${bin} ${flags}`.trim();
   } else {
     const bin = process.env.EMBERLINE_AIDER_COMMAND?.trim() || 'aider';
     const aiderModel =

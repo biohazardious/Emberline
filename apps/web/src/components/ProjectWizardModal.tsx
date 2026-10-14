@@ -621,7 +621,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
     id: 'cli_tool',
     icon: '🛠️',
     label: 'CLI / System & Infra Automation',
-    desc: 'Linux/TrueNAS utilities, kernel/driver updaters, DevOps & shell/Python/Go/Rust CLI tools',
+    desc: 'Linux/OS system utilities, driver & package updaters, DevOps & shell/Python/Go/Rust CLI tools',
     layerLabels: {
       language: 'Language & Shell Runtime',
       frontend: 'CLI / TUI Interface & Flags',
@@ -634,7 +634,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
       '- Support `--dry-run`, `--verbose`, `--json`, and `--help` flags out of the box.\n- Always validate system prerequisites, permissions, and checksums before mutating system state.\n- Create safe backups/rollbacks before modifying drivers, kernel modules, or system configs.',
     presets: [
       {
-        label: 'Linux / TrueNAS System & Driver Automation (Python / Bash)',
+        label: 'Linux System, Kernel & Driver Automation (Python / Bash)',
         summary: 'Idempotent OS/driver installer & updater with dry-run, checksums, and rollback',
         stack: {
           language: 'Python + Bash',
@@ -694,7 +694,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
         'Pure POSIX Flags (`getopts`)',
       ],
       backend: [
-        'Linux / TrueNAS / ZFS / Systemd / Kernel Tooling',
+        'Linux Kernel / ZFS / Systemd / Storage Tooling',
         'Docker / Container / Kubernetes API',
         'Git / CI-CD / Release Automation',
         'Network / SSH / WireGuard / Firewall Tooling',
@@ -1512,7 +1512,7 @@ export function ProjectWizardModal({
                   <input
                     id="wizard-project-name"
                     className="input"
-                    placeholder="e.g. aktech-portal, nexus-agents, driver-updater"
+                    placeholder="e.g. acme-cloud-portal, order-orchestrator, infra-sync-cli"
                     required
                     autoFocus
                     value={name}
