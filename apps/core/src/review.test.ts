@@ -168,4 +168,91 @@ describe('M6 review, git commit/push, and artifacts', () => {
     );
     expect(traversalRes.statusCode).toBe(400);
   });
+
+  it('prunes an ended run worktree while keeping the branch and blocking active run prune', async () => {
+    const { project } = await createGitProjectWithBareRemote('Prune App');
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'prune' })).json();
+
+    // Active run cannot be pruned yet
+    const activePrune = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(activePrune.statusCode).toBe(409);
+
+    // Stop run, wait for process exit, then prune worktree
+    await api('POST', `/api/runs/${run.id}/stop`);
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return ((await api('GET', `/api/runs/${run.id}`)).json() as Run).endedAt;
+      })
+      .toBeTruthy();
+
+    const prunedRes = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(prunedRes.statusCode).toBe(200);
+    expect(prunedRes.json()).toEqual({
+      runId: run.id,
+      worktreePath: run.worktreePath,
+      removed: true,
+    });
+
+    // Repeat prune is idempotent (removed: false)
+    const secondPrune = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(secondPrune.statusCode).toBe(200);
+    expect(secondPrune.json().removed).toBe(false);
+  });
+
+  it('configures and dispatches ntfy / webhook notifications', async () => {
+    const { createServer } = await import('node:http');
+    const received: { headers: Record<string, unknown>; body: string }[] = [];
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += String(chunk);
+      });
+      req.on('end', () => {
+        received.push({ headers: req.headers, body });
+        res.writeHead(200).end('ok');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as { port: number };
+    const webhookUrl = `http://127.0.0.1:${address.port}/hook`;
+
+    try {
+      const patchRes = await t.app.inject({
+        method: 'PATCH',
+        url: '/api/notifications',
+        headers: { ...CSRF, cookie },
+        payload: {
+          enabled: true,
+          provider: 'webhook',
+          url: webhookUrl,
+          token: 'secret-tok',
+          onRateLimited: true,
+          onQuotaResumed: true,
+          onWaitingInput: true,
+          onRunFinished: true,
+        },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      expect(patchRes.json()).toMatchObject({
+        enabled: true,
+        provider: 'webhook',
+        url: webhookUrl,
+        token: 'secret-tok',
+      });
+
+      const testRes = await api('POST', '/api/notifications/test', {});
+      expect(testRes.statusCode).toBe(200);
+      expect(testRes.json()).toEqual({ ok: true, status: 200, error: null });
+      expect(received).toHaveLength(1);
+      expect(received[0]?.headers.authorization).toBe('Bearer secret-tok');
+      expect(JSON.parse(received[0]?.body ?? '{}')).toMatchObject({
+        event: 'test',
+        title: 'Emberline test notification',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
+

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
@@ -563,3 +563,27 @@ export async function readWorktreeArtifact(
   const contentType = MIME_BY_EXT[ext] ?? (isBinaryBuffer(buffer) ? 'application/octet-stream' : 'text/plain; charset=utf-8');
   return { buffer, contentType, fileName: path.basename(rel) };
 }
+
+/**
+ * Safely removes a linked git worktree created for a run (`/workspaces/.worktrees/...`),
+ * leaving the branch intact in the parent repository. Never touches the main project path.
+ */
+export async function pruneWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
+  const resolvedProject = path.resolve(projectPath);
+  const resolvedWorktree = path.resolve(worktreePath);
+  if (resolvedWorktree === resolvedProject || !resolvedWorktree.includes(`${path.sep}.worktrees${path.sep}`)) {
+    throw conflict('cannot prune the main project directory; only linked run worktrees can be pruned');
+  }
+  if (!existsSync(resolvedWorktree)) {
+    await git(resolvedProject, ['worktree', 'prune']).catch(() => undefined);
+    return false;
+  }
+  try {
+    await git(resolvedProject, ['worktree', 'remove', '--force', resolvedWorktree]);
+  } catch {
+    await rm(resolvedWorktree, { recursive: true, force: true });
+    await git(resolvedProject, ['worktree', 'prune']).catch(() => undefined);
+  }
+  return true;
+}
+

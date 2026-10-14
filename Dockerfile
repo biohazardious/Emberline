@@ -106,11 +106,12 @@ FROM runtime AS runner
 # Pinned on purpose (PROJECT.md §3.4). Bump via .env / build arg after a canary run.
 ARG CLAUDE_CODE_VERSION=2.1.296
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends bash less procps openssh-client \
+  && apt-get install -y --no-install-recommends bash less procps openssh-client chromium \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @playwright/mcp && npm cache clean --force
 ENV DISABLE_AUTOUPDATER=1 \
     SHELL=/bin/bash \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
     EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd.sock \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd

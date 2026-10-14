@@ -5,6 +5,7 @@ import {
   type GitPushResponse,
   GitStageBody,
   HookEnvelope,
+  type PruneWorktreeResponse,
   ResumeRunBody,
   type Run,
   type RunArtifact,
@@ -94,6 +95,11 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
       reply.header('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
       return reply.send(buffer);
     },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/worktree/prune',
+    async (request): Promise<PruneWorktreeResponse> => runs.pruneWorktree(request.params.id),
   );
 
   app.delete<{ Params: { id: string } }>('/api/runs/:id', async (request) => {

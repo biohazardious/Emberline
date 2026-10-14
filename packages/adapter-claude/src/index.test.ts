@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildHookSettings, buildLaunchSpec, nextStateFromHook, stateAfterExit, WATCHED_HOOKS } from './index.js';
+import {
+  buildHookSettings,
+  buildLaunchSpec,
+  buildPlaywrightMcpConfig,
+  nextStateFromHook,
+  stateAfterExit,
+  WATCHED_HOOKS,
+} from './index.js';
 
 describe('buildHookSettings', () => {
   it('wires every watched hook to the hook command', () => {
@@ -40,6 +47,15 @@ describe('buildLaunchSpec', () => {
       prompt: '--help me',
     });
     expect(spec.args.slice(2)).toEqual(['--permission-mode', 'acceptEdits', '--resume', 'sess-1', '--', '--help me']);
+  });
+
+  it('wires headless Playwright MCP via --mcp-config when playwrightMcp is enabled', () => {
+    const spec = buildLaunchSpec({
+      ...base,
+      playwrightMcp: true,
+    });
+    expect(spec.args[2]).toBe('--mcp-config');
+    expect(JSON.parse(spec.args[3] ?? '')).toEqual(buildPlaywrightMcpConfig());
   });
 });
 

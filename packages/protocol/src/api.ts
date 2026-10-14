@@ -371,6 +371,53 @@ export const RunArtifact = z.object({
 });
 export type RunArtifact = z.infer<typeof RunArtifact>;
 
+export const PruneWorktreeResponse = z.object({
+  runId: z.string(),
+  worktreePath: z.string(),
+  removed: z.boolean(),
+});
+export type PruneWorktreeResponse = z.infer<typeof PruneWorktreeResponse>;
+
+// --- notifications (ntfy / webhook) -----------------------------------------
+
+export const NotificationProvider = z.enum(['ntfy', 'webhook']);
+export type NotificationProvider = z.infer<typeof NotificationProvider>;
+
+export const NotificationSettings = z.object({
+  enabled: z.boolean(),
+  provider: NotificationProvider,
+  /** Target URL (e.g. https://ntfy.sh/my-emberline-topic or Discord/Slack/generic webhook URL). */
+  url: z.string(),
+  /** Optional Bearer token (for private ntfy servers or authenticated webhooks). */
+  token: z.string().nullable(),
+  onRateLimited: z.boolean(),
+  onQuotaResumed: z.boolean(),
+  onWaitingInput: z.boolean(),
+  onRunFinished: z.boolean(),
+});
+export type NotificationSettings = z.infer<typeof NotificationSettings>;
+
+export const UpdateNotificationSettingsBody = z
+  .object({
+    enabled: z.boolean(),
+    provider: NotificationProvider,
+    url: z.string().trim().max(1000),
+    token: z.string().trim().max(500).nullable(),
+    onRateLimited: z.boolean(),
+    onQuotaResumed: z.boolean(),
+    onWaitingInput: z.boolean(),
+    onRunFinished: z.boolean(),
+  })
+  .partial();
+export type UpdateNotificationSettingsBody = z.input<typeof UpdateNotificationSettingsBody>;
+
+export const TestNotificationResponse = z.object({
+  ok: z.boolean(),
+  status: z.number().int().nullable(),
+  error: z.string().nullable(),
+});
+export type TestNotificationResponse = z.infer<typeof TestNotificationResponse>;
+
 // --- live events (`/api/events` WebSocket) ----------------------------------
 
 /** Core -> browser push channel. */
@@ -382,3 +429,4 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('scheduler'), scheduler: SchedulerState }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
+

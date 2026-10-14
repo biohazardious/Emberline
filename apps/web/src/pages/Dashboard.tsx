@@ -9,6 +9,7 @@ import type {
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
@@ -68,11 +69,12 @@ export function Dashboard({
     }
   };
 
-  const runAction = async (id: string, action: 'stop' | 'remove' | 'resume') => {
+  const runAction = async (id: string, action: 'stop' | 'remove' | 'resume' | 'prune') => {
     setActionError(undefined);
     try {
       if (action === 'stop') await api(`/api/runs/${id}/stop`, 'POST');
       else if (action === 'resume') await api(`/api/runs/${id}/resume`, 'POST', {});
+      else if (action === 'prune') await api(`/api/runs/${id}/worktree/prune`, 'POST', {});
       else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
       setActionError(errorMessage(e));
@@ -114,6 +116,7 @@ export function Dashboard({
       </div>
 
       <QuotaPanel />
+      <NotificationsPanel />
 
       <div className="dashboard-grid">
         <section className="panel" aria-labelledby="projects-title">
@@ -257,6 +260,7 @@ export function Dashboard({
               onInspect={onInspectRun ? () => onInspectRun(run.id) : undefined}
               onStop={() => void runAction(run.id, 'stop')}
               onResume={() => void runAction(run.id, 'resume')}
+              onPrune={() => void runAction(run.id, 'prune')}
               onRemove={() => void runAction(run.id, 'remove')}
             />
           ))}
@@ -272,6 +276,7 @@ function RunRow({
   onInspect,
   onStop,
   onResume,
+  onPrune,
   onRemove,
 }: {
   run: Run;
@@ -279,9 +284,14 @@ function RunRow({
   onInspect: (() => void) | undefined;
   onStop: () => void;
   onResume: () => void;
+  onPrune: () => void;
   onRemove: () => void;
 }) {
   const ticketKey = run.title?.split(' ')[0];
+  const canPrune =
+    Boolean(run.endedAt) &&
+    run.worktreePath.includes('/.worktrees/') &&
+    run.lastEvent !== 'worktree_pruned';
   const body = (
     <>
       <RunStatePill state={run.state} />
@@ -337,6 +347,16 @@ function RunRow({
           }
         >
           Resume
+        </button>
+      )}
+      {canPrune && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onPrune}
+          title="Delete linked git worktree directory on disk to reclaim space (keeps branch & run record)"
+        >
+          Prune worktree
         </button>
       )}
       {!run.endedAt && (

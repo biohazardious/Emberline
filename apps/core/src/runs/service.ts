@@ -20,6 +20,7 @@ import {
   type GitPushResponse,
   type GitStageBody,
   type HookEnvelope,
+  type PruneWorktreeResponse,
   type Run,
   type RunArtifact,
   type RunDetail,
@@ -40,6 +41,7 @@ import {
   inspectFileDiff,
   listWorktreeArtifacts,
   prepareWorkspace,
+  pruneWorktree,
   pushWorktreeBranch,
   readWorktreeArtifact,
   stageWorktreeFiles,
@@ -290,6 +292,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       permissionMode: row.permissionMode as Run['permissionMode'],
       prompt: options.prompt,
       resumeSessionId: options.resumeSessionId,
+      playwrightMcp:
+        process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' || process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true',
     });
 
     try {
@@ -472,6 +476,32 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   ): Promise<{ buffer: Buffer; contentType: string; fileName: string }> {
     const row = this.row(id);
     return readWorktreeArtifact(row.worktreePath, relPath);
+  }
+
+  /**
+   * Prunes the linked git worktree (`/workspaces/.worktrees/...`) for an ended run, keeping
+   * the run record and git branch intact. Active runs must be stopped first.
+   */
+  async pruneWorktree(id: string): Promise<PruneWorktreeResponse> {
+    let row = this.row(id);
+    if (!row.endedAt) {
+      await this.reconcile();
+      row = this.row(id);
+    }
+    if (!row.endedAt && row.state !== 'done' && row.state !== 'failed') {
+      throw conflict('stop the active run before pruning its worktree');
+    }
+    const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
+    if (!project) throw notFound('no such project');
+    const removed = await pruneWorktree(project.path, row.worktreePath);
+    if (removed) {
+      this.record(id, {
+        source: 'user',
+        type: 'worktree_pruned',
+        payload: { worktreePath: row.worktreePath },
+      });
+    }
+    return { runId: id, worktreePath: row.worktreePath, removed };
   }
 
   /** Forgets the run and its terminal. The worktree and branch are kept on purpose. */

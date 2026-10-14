@@ -9,7 +9,9 @@ import type { CoreConfig } from './config.js';
 import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
 import type { PtydBridge } from './ptyd-bridge.js';
+import { NotificationService } from './notifications/service.js';
 import { registerEventRoutes } from './routes/events.js';
+import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSchedulerRoutes } from './routes/scheduler.js';
@@ -33,6 +35,7 @@ export interface CoreDeps {
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ ...fastifyOptions, trustProxy: deps.config.trustProxy });
   const startedAt = Date.now();
+  const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler);
 
   installErrorHandler(app);
   await app.register(cookie);
@@ -52,6 +55,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerRunRoutes(app, deps.runs, deps.scheduler);
   registerTicketRoutes(app, deps.tickets);
   registerSchedulerRoutes(app, deps.scheduler);
+  registerNotificationRoutes(app, notifications);
   registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler);
 
   const { webDir } = deps.config;

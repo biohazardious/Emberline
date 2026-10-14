@@ -62,6 +62,25 @@ export function buildHookSettings(hookCommand: string, timeoutSeconds = 5): Clau
   return { hooks };
 }
 
+export interface ClaudeMcpConfig {
+  mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+}
+
+/**
+ * Builds the `--mcp-config` payload wiring headless `@playwright/mcp` so the agent can
+ * navigate pages and save screenshots directly into `./artifacts` inside its worktree.
+ */
+export function buildPlaywrightMcpConfig(outputDir = './artifacts'): ClaudeMcpConfig {
+  return {
+    mcpServers: {
+      playwright: {
+        command: 'playwright-mcp',
+        args: ['--headless', '--no-sandbox', '--output-dir', outputDir],
+      },
+    },
+  };
+}
+
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 
 export interface ClaudeLaunchOptions {
@@ -78,11 +97,16 @@ export interface ClaudeLaunchOptions {
   prompt?: string;
   /** Claude session id to continue (`--resume`). */
   resumeSessionId?: string;
+  /** When true, passes `--mcp-config` wiring headless `@playwright/mcp`. */
+  playwrightMcp?: boolean;
 }
 
 export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook');
   const args = ['--settings', JSON.stringify(settings)];
+  if (options.playwrightMcp) {
+    args.push('--mcp-config', JSON.stringify(buildPlaywrightMcpConfig()));
+  }
   if (options.permissionMode && options.permissionMode !== 'default') {
     args.push('--permission-mode', options.permissionMode);
   }

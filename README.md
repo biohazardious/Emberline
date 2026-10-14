@@ -79,9 +79,9 @@ Every git-backed run has a **Review & Diff** workspace (available as a tab insid
 - **Monaco Diff Editor:** Inspect side-by-side or inline diffs across `Branch vs base`, `Unstaged`, or `Staged` scopes with per-file `+additions / -deletions` and stage/unstage toggles.
 - **Inline Diff Annotations:** Click any line in the Monaco diff to queue line-specific review notes (`path:line`) and click **Request Changes** to dispatch structured revision instructions directly to the live or resumable Claude session.
 - **Commit & Push:** Stage and commit working-tree changes and push the run branch (`emberline/...`) to `origin` directly from the UI. Pushing to `main`, `master`, or the project's `defaultBranch` is blocked.
-- **Worktree Artifacts:** Browse and preview screenshots, Playwright traces, logs, and newly created files from the run's worktree.
+- **Worktree Artifacts & Pruning:** Browse and preview screenshots, Playwright traces, logs, and newly created files from the run's worktree. When `EMBERLINE_PLAYWRIGHT_MCP=1` is set on `core`, runs launch with headless `@playwright/mcp` (`playwright-mcp --headless --no-sandbox --output-dir ./artifacts`) wired via `--mcp-config`. Ended runs can prune their linked `.worktrees/` directory from the dashboard (`Prune worktree`) while preserving the git branch.
 
-### Quota scheduler
+### Quota scheduler & Notifications
 
 Every new run (from the dashboard or a ticket) is **queued** and dispatched by the scheduler:
 
@@ -90,7 +90,7 @@ Every new run (from the dashboard or a ticket) is **queued** and dispatched by t
 - The reset time comes from the hook message or the terminal banner (`resets 2pm (Europe/Istanbul)`, `resets in 2h 5m`, …), read in `TZ` / `EMBERLINE_TIMEZONE`. If none can be read, it probes again every 15 minutes.
 - At reset plus 30–120 s jitter, rate-limited runs get *"Continue where you left off."* (ended sessions are resumed with `claude --resume`), then the queue continues, in ticket priority order. If the limit hits again within 5 minutes, the same window reopens.
 - **Resume now** (dashboard or ticket drawer) ends the pause early. Windows are stored in SQLite, so a core restart keeps the timer.
-- Notifications (ntfy/webhook) on limit and resume are not implemented yet.
+- **Notifications (`ntfy` / Webhook):** Configure an `ntfy.sh` topic or generic/Discord/Slack webhook URL on the Overview dashboard (or via `EMBERLINE_NOTIFY_URL`) to receive push notifications on quota limit reached, quota reset & auto-resume, agent waiting for input, or run completion.
 
 ## Development
 
