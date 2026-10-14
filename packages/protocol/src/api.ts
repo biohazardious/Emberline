@@ -855,13 +855,70 @@ export const RollbackCheckpointBody = z.object({
 });
 export type RollbackCheckpointBody = z.input<typeof RollbackCheckpointBody>;
 
+export const BrowserTabInfo = z.object({
+  id: z.string(),
+  title: z.string(),
+  url: z.string(),
+  active: z.boolean(),
+});
+export type BrowserTabInfo = z.infer<typeof BrowserTabInfo>;
+
+export const BrowserConsoleEntry = z.object({
+  level: z.enum(['log', 'info', 'warn', 'error']),
+  text: z.string(),
+  timestamp: z.string(),
+});
+export type BrowserConsoleEntry = z.infer<typeof BrowserConsoleEntry>;
+
+export const BrowserAgentAction = z.object({
+  id: z.number(),
+  runId: z.string(),
+  runTitle: z.string().nullable(),
+  persona: AgentPersona,
+  toolName: z.string(),
+  summary: z.string(),
+  timestamp: z.string(),
+});
+export type BrowserAgentAction = z.infer<typeof BrowserAgentAction>;
+
 export const BrowserViewportSnapshot = z.object({
   available: z.boolean(),
-  source: z.enum(['x11', 'headless_browser', 'none']),
+  source: z.enum(['cdp_live', 'x11', 'headless_browser', 'none']),
   targetUrl: z.string().nullable(),
+  pageTitle: z.string().nullable().optional(),
+  activeTabId: z.string().nullable().optional(),
+  tabs: z.array(BrowserTabInfo).optional(),
+  consoleLogs: z.array(BrowserConsoleEntry).optional(),
+  agentActions: z.array(BrowserAgentAction).optional(),
+  agentActive: z.boolean().optional(),
   imageDataUrl: z.string().nullable(),
   capturedAt: z.string(),
   message: z.string().nullable(),
 });
 export type BrowserViewportSnapshot = z.infer<typeof BrowserViewportSnapshot>;
+
+export const BrowserActionBody = z.object({
+  action: z.enum([
+    'navigate',
+    'reload',
+    'back',
+    'forward',
+    'click',
+    'type',
+    'key',
+    'select_tab',
+    'new_tab',
+    'close_tab',
+  ]),
+  url: z.string().optional(),
+  tabId: z.string().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  button: z.enum(['left', 'right']).optional(),
+  text: z.string().optional(),
+  submit: z.boolean().optional(),
+  key: z.string().optional(),
+  targetId: z.string().optional(),
+});
+export type BrowserActionBody = z.input<typeof BrowserActionBody>;
 

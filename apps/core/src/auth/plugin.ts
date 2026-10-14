@@ -12,6 +12,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/state', '/api/auth/setup', '/api/auth/login']);
 /** Machine-to-machine routes (runner -> core) that carry their own credentials. */
 const INTERNAL_PREFIX = '/api/internal/';
+/** Static project demo bundle assets rendered in iframes and runner Chromium / Playwright MCP. */
+const DEMO_ASSET_RE = /^\/api\/projects\/[^/]+\/demo\//;
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW_MS = 15 * 60_000;
@@ -48,6 +50,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     const url = request.url.split('?')[0] ?? '';
     if (!url.startsWith('/api/')) return;
     if (url.startsWith(INTERNAL_PREFIX)) return;
+    if (SAFE_METHODS.has(request.method) && DEMO_ASSET_RE.test(url)) return;
 
     const origin = request.headers.origin;
     if (origin && !sameHost(origin, request.host)) {

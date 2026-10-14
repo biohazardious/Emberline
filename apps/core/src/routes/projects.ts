@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   ActiveProjectPreference,
   AgentCreateTicketsPayload,
+  BrowserActionBody,
   type BrowserViewportSnapshot,
   BuildDemoBody,
   type BuildDemoResponse,
@@ -36,6 +37,7 @@ import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { projects, settings } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
+import { getRunnerBrowserState, performRunnerBrowserAction } from '../factory/browser-daemon.js';
 import {
   buildWorkspaceDemo,
   captureBrowserViewportSnapshot,
@@ -491,8 +493,50 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     async (request): Promise<BrowserViewportSnapshot> => {
       const targetId = request.query.targetId ?? 'main';
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
-      const demoUrl = `http://127.0.0.1:${config.port}/api/projects/${project.id}/demo/${targetId}/`;
-      return captureBrowserViewportSnapshot({ targetUrl: demoUrl });
+      const demoUrl = `http://localhost:${config.port}/api/projects/${project.id}/demo/${targetId}/`;
+      const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
+      const runnerSnap = await getRunnerBrowserState({
+        ptyd,
+        socketDir: path.dirname(config.ptydSocket),
+        defaultUrl: demoUrl,
+        agentActions,
+        agentActive,
+      });
+      if (runnerSnap) return runnerSnap;
+      const fallback = await captureBrowserViewportSnapshot({ targetUrl: demoUrl });
+      return {
+        ...fallback,
+        agentActions,
+        agentActive,
+      };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/browser-action',
+    async (request): Promise<BrowserViewportSnapshot> => {
+      const body = BrowserActionBody.parse(request.body);
+      const targetId = body.targetId ?? 'main';
+      const { project } = resolveProjectTargetPath(request.params.id, targetId);
+      const demoUrl = `http://localhost:${config.port}/api/projects/${project.id}/demo/${targetId}/`;
+      const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
+      const runnerSnap = await performRunnerBrowserAction({
+        ptyd,
+        socketDir: path.dirname(config.ptydSocket),
+        defaultUrl: demoUrl,
+        actionBody: body,
+        agentActions,
+        agentActive,
+      });
+      if (runnerSnap) return runnerSnap;
+      const fallback = await captureBrowserViewportSnapshot({
+        targetUrl: body.url ?? demoUrl,
+      });
+      return {
+        ...fallback,
+        agentActions,
+        agentActive,
+      };
     },
   );
 

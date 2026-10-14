@@ -37,6 +37,7 @@ export const AUTONOMOUS_ALLOWED_TOOLS = [
   'WebFetch',
   'WebSearch',
   'NotebookEdit',
+  'mcp__playwright__*',
 ] as const;
 
 export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
@@ -62,7 +63,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'UI/UX',
     roleTitle: 'Staff Design Systems & Frontend UX Engineer',
     systemPrompt:
-      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. If `package.json` has a `build` script, run `npm run build` after your changes so the Live Demo preview updates. Execute autonomously without asking whether to commit.',
+      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. If `package.json` has a `build` script, run `npm run build` after your changes so the Live Demo preview updates, and if `$EMBERLINE_DEMO_URL` is set, open `$EMBERLINE_DEMO_URL` with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. Execute autonomously without asking whether to commit.',
   },
   coder: {
     id: 'coder',
@@ -86,7 +87,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'QA',
     roleTitle: 'Staff Quality Assurance & Verification Engineer',
     systemPrompt:
-      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and `npm run build` (if present) so the production demo bundle is verified and up to date. Execute autonomously without asking whether to commit.',
+      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and `npm run build` (if present) so the production demo bundle is verified and up to date, then open `$EMBERLINE_DEMO_URL` using `mcp__playwright__browser_navigate`, interact with the app via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. Execute autonomously without asking whether to commit.',
   },
   security: {
     id: 'security',
@@ -174,15 +175,19 @@ export interface ClaudeMcpConfig {
 }
 
 /**
- * Builds the `--mcp-config` payload wiring headless `@playwright/mcp` so the agent can
- * navigate pages and save screenshots directly into `./artifacts` inside its worktree.
+ * Builds the `--mcp-config` payload wiring `@playwright/mcp` to the shared CDP Chromium
+ * instance (`http://127.0.0.1:9222`) inside the runner so the user can watch and interact
+ * with the agent's browser in real time from the Emberline Live Browser view.
  */
-export function buildPlaywrightMcpConfig(outputDir = './artifacts'): ClaudeMcpConfig {
+export function buildPlaywrightMcpConfig(
+  outputDir = './artifacts',
+  cdpEndpoint = 'http://127.0.0.1:9222',
+): ClaudeMcpConfig {
   return {
     mcpServers: {
       playwright: {
         command: 'playwright-mcp',
-        args: ['--headless', '--no-sandbox', '--output-dir', outputDir],
+        args: ['--cdp-endpoint', cdpEndpoint, '--output-dir', outputDir],
       },
     },
   };

@@ -22,6 +22,9 @@ const ReviewPage = lazy(() => import('./pages/ReviewPage').then((m) => ({ defaul
 const CodeExplorerPage = lazy(() =>
   import('./pages/CodeExplorerPage').then((m) => ({ default: m.CodeExplorerPage })),
 );
+const LiveBrowserPage = lazy(() =>
+  import('./pages/LiveBrowserPage').then((m) => ({ default: m.LiveBrowserPage })),
+);
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
@@ -287,6 +290,16 @@ function Shell() {
               <span className="nav-label">Code Explorer</span>
             </Link>
           )}
+          {activeProject && (
+            <Link
+              href={`/projects/${activeProject.id}/browser`}
+              className={`nav-item${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
+              title="Live Browser Studio"
+            >
+              <span className="nav-icon mono">🌐</span>
+              <span className="nav-label">Live Browser</span>
+            </Link>
+          )}
           <Link
             id="nav-fleet"
             href="/fleet"
@@ -388,6 +401,14 @@ function Shell() {
                   Code Explorer
                 </Link>
               )}
+              {activeProject && (
+                <Link
+                  href={`/projects/${activeProject.id}/browser`}
+                  className={`topbar-tab${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
+                >
+                  🌐 Live Browser
+                </Link>
+              )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
                 Fleet
                 {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
@@ -474,6 +495,13 @@ function Shell() {
                 {(params) => (
                   <Suspense fallback={<div className="board-page" aria-busy="true" />}>
                     <CodeExplorerPage key={params.id} projectId={params.id} />
+                  </Suspense>
+                )}
+              </Route>
+              <Route path="/projects/:id/browser">
+                {(params) => (
+                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                    <LiveBrowserPage key={params.id} projectId={params.id} />
                   </Suspense>
                 )}
               </Route>

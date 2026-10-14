@@ -17,6 +17,7 @@ import {
 } from '@emberline/adapter-claude';
 import {
   type AgentPersona,
+  type BrowserAgentAction,
   type CreateRunBody,
   CreateRunBody as CreateRunBodySchema,
   type DiffScope,
@@ -42,8 +43,9 @@ import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import type { PtydBridge } from '../ptyd-bridge.js';
+import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import { getProviderEnvFromSettings, resolveAgentForPersona } from '../factory/service.js';
+import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
   inspectDiff,
@@ -126,6 +128,22 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
     const value = payload[key];
     if (typeof value === 'string') summary[key] = value.length > 500 ? `${value.slice(0, 500)}…` : value;
     else if (typeof value === 'number' || typeof value === 'boolean') summary[key] = value;
+  }
+  if (
+    typeof payload.tool_name === 'string' &&
+    payload.tool_name.startsWith('mcp__playwright__') &&
+    payload.tool_input &&
+    typeof payload.tool_input === 'object'
+  ) {
+    const input = payload.tool_input as Record<string, unknown>;
+    const parts: string[] = [];
+    for (const k of ['url', 'element', 'text', 'key', 'filename', 'ref']) {
+      if (typeof input[k] === 'string' && input[k]) {
+        parts.push(`${k}: ${input[k]}`);
+      }
+    }
+    const text = parts.length > 0 ? parts.join(' · ') : JSON.stringify(input);
+    summary.tool_input_summary = text.length > 240 ? `${text.slice(0, 240)}…` : text;
   }
   return summary;
 }
@@ -302,6 +320,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
     const extraEnv = getProviderEnvFromSettings(this.db);
     const isSecondary = row.agent === 'gemini' || row.agent === 'codex' || row.agent === 'aider';
+    const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
+    const enablePlaywrightMcp =
+      process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' ||
+      process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true' ||
+      (isRealClaude &&
+        process.env.EMBERLINE_PLAYWRIGHT_MCP !== '0' &&
+        process.env.EMBERLINE_PLAYWRIGHT_MCP !== 'false');
+
+    if (enablePlaywrightMcp && isRealClaude) {
+      await ensureRunnerBrowserDaemon(this.ptyd, path.dirname(this.config.ptydSocket)).catch(
+        () => null,
+      );
+    }
+
+    const demoUrl = `http://localhost:7420/api/projects/${row.projectId}/demo/main/`;
     const spec = isSecondary
       ? buildSecondaryCliLaunchSpec({
           agent: row.agent as 'gemini' | 'codex' | 'aider',
@@ -323,8 +356,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           autonomous: row.permissionMode !== 'plan',
           prompt: effectivePrompt,
           resumeSessionId: options.resumeSessionId,
-          playwrightMcp:
-            process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' || process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true',
+          playwrightMcp: enablePlaywrightMcp,
         });
 
     const agentLabel =
@@ -342,7 +374,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         file: spec.file,
         args: spec.args,
         cwd: row.worktreePath,
-        env: { ...spec.env, ...extraEnv },
+        env: { ...spec.env, ...extraEnv, EMBERLINE_DEMO_URL: demoUrl },
         meta: {
           kind: 'agent',
           runId: row.id,
@@ -366,6 +398,66 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
       throw error;
     }
+  }
+
+  /** Lists recent Playwright MCP browser actions across runs for a project. */
+  listBrowserAgentActions(projectId: string): {
+    actions: BrowserAgentAction[];
+    agentActive: boolean;
+  } {
+    const projectRuns = this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.projectId, projectId))
+      .orderBy(desc(runs.createdAt))
+      .limit(20)
+      .all();
+    if (projectRuns.length === 0) return { actions: [], agentActive: false };
+
+    const runById = new Map(projectRuns.map((r) => [r.id, r]));
+    const actions: BrowserAgentAction[] = [];
+    const nowMs = Date.now();
+    let agentActive = false;
+
+    for (const r of projectRuns) {
+      const evs = this.db
+        .select()
+        .from(runEvents)
+        .where(eq(runEvents.runId, r.id))
+        .orderBy(desc(runEvents.id))
+        .limit(80)
+        .all();
+      for (const e of evs) {
+        if (e.type !== 'PreToolUse' && e.type !== 'PostToolUse') continue;
+        const p = (e.payload ?? {}) as Record<string, unknown>;
+        const toolName = typeof p.tool_name === 'string' ? p.tool_name : '';
+        if (!toolName.startsWith('mcp__playwright__')) continue;
+        const shortTool = toolName.replace(/^mcp__playwright__/, '');
+        const detail = typeof p.tool_input_summary === 'string' ? p.tool_input_summary : '';
+        const ageMs = nowMs - e.ts.getTime();
+        if (r.state === 'working' && ageMs < 60_000) {
+          agentActive = true;
+        }
+        if (e.type === 'PreToolUse') {
+          const runRow = runById.get(r.id);
+          actions.push({
+            id: e.id,
+            runId: r.id,
+            runTitle: runRow?.title ?? null,
+            persona: (runRow?.persona as AgentPersona) ?? 'coder',
+            toolName: shortTool,
+            summary: detail ? `${shortTool} (${detail})` : shortTool,
+            timestamp: e.ts.toISOString(),
+          });
+        }
+      }
+    }
+
+    actions.sort((a, b) => b.id - a.id);
+    return {
+      actions: actions.slice(0, 25),
+      agentActive,
+    };
   }
 
   /** Applies a hook forwarded by `emberline-hook`. The per-run token is the only credential. */

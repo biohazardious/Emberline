@@ -1,5 +1,4 @@
 import type {
-  BrowserViewportSnapshot,
   BuildDemoResponse,
   FactoryRequestResponse,
   Project,
@@ -13,6 +12,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { usePoll } from '../hooks/usePoll';
+import { LiveBrowserStudio } from './LiveBrowserStudio';
 import { PersonaBadge } from './PersonaBadge';
 
 const FACTORY_EXAMPLES = [
@@ -61,10 +61,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [checkpointsOpen, setCheckpointsOpen] = useState(false);
   const [rollingBackSha, setRollingBackSha] = useState<string>();
 
-  // Faz F11: Live Browser / Headless Chromium Viewport Stream
+  // Faz F11: Live Browser / Shared Chromium CDP Studio
   const [viewportOpen, setViewportOpen] = useState(false);
-  const [viewportSnap, setViewportSnap] = useState<BrowserViewportSnapshot | null>(null);
-  const [viewportLoading, setViewportLoading] = useState(false);
 
   // Listen for runtime errors forwarded by the injected errorBridgeScript inside the Demo iframe
   useEffect(() => {
@@ -84,20 +82,6 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
-
-  const fetchViewportSnapshot = async (targetId: string) => {
-    setViewportLoading(true);
-    try {
-      const snap = await api<BrowserViewportSnapshot>(
-        `/api/projects/${project.id}/browser-viewport?targetId=${encodeURIComponent(targetId)}`,
-      );
-      setViewportSnap(snap);
-    } catch (err) {
-      setBanner({ kind: 'err', text: errorMessage(err) });
-    } finally {
-      setViewportLoading(false);
-    }
-  };
 
   const summary = statusPoll.data;
   if (!summary) return null;
@@ -378,13 +362,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           </button>
           <button
             type="button"
-            className="btn btn-sm"
-            onClick={() => {
-              const next = !viewportOpen;
-              setViewportOpen(next);
-              if (next) void fetchViewportSnapshot(activeTarget.id);
-            }}
-            title="Capture and stream headless Chromium / X11 viewport snapshot"
+            className={viewportOpen ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
+            onClick={() => setViewportOpen((v) => !v)}
+            title="Open shared Live Browser Studio (Playwright MCP + Chromium CDP stream)"
           >
             🌐 Live Browser
           </button>
@@ -720,72 +700,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         </div>
       )}
 
-      {/* Live Browser / Headless Chromium Viewport Stream Drawer (Faz F11) */}
+      {/* Live Browser Studio Drawer (Faz F11) */}
       {viewportOpen && (
-        <div
-          style={{
-            padding: '12px 14px',
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--surface-2)',
-            border: '1px solid var(--border)',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 8,
-              flexWrap: 'wrap',
-              gap: 8,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <strong style={{ fontSize: '0.82rem' }}>
-                🌐 Live Browser / Headless Chromium Viewport ({activeTarget.label})
-              </strong>
-              {viewportSnap?.source && (
-                <span className="badge mono">source: {viewportSnap.source}</span>
-              )}
-            </div>
-            <div className="actions">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={viewportLoading}
-                onClick={() => void fetchViewportSnapshot(activeTarget.id)}
-              >
-                {viewportLoading ? 'Capturing…' : '📸 Capture Screenshot'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => setViewportOpen(false)}
-              >
-                ✕ Close
-              </button>
-            </div>
-          </div>
-          {viewportSnap?.imageDataUrl ? (
-            <div style={{ textAlign: 'center', background: '#000', borderRadius: 6, padding: 8 }}>
-              <img
-                src={viewportSnap.imageDataUrl}
-                alt="Live Browser Viewport"
-                style={{ maxWidth: '100%', maxHeight: 420, borderRadius: 4 }}
-              />
-              <div className="mono muted small" style={{ marginTop: 4 }}>
-                Captured at {viewportSnap.capturedAt} · {viewportSnap.message}
-              </div>
-            </div>
-          ) : (
-            <div className="muted small" style={{ padding: '8px 0' }}>
-              {viewportLoading
-                ? 'Rendering live browser viewport via Headless Chromium…'
-                : viewportSnap?.message ??
-                  'Click "Capture Screenshot" to render the current workspace or Playwright/X11 session.'}
-            </div>
-          )}
-        </div>
+        <LiveBrowserStudio
+          project={project}
+          targetId={activeTarget.id}
+          onClose={() => setViewportOpen(false)}
+        />
       )}
 
       {/* Embedded Live Demo & Preview Player */}

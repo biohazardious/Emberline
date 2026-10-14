@@ -50,6 +50,7 @@ function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
   const rec = payload as Record<string, unknown>;
   const tool = typeof rec.tool_name === 'string' ? rec.tool_name : undefined;
   const detail =
+    (typeof rec.tool_input_summary === 'string' && rec.tool_input_summary) ||
     (typeof rec.message === 'string' && rec.message) ||
     (typeof rec.error_details === 'string' && rec.error_details) ||
     (typeof rec.error === 'string' && rec.error) ||
@@ -195,6 +196,13 @@ export function RunInspector({
               Events
             </button>
           </div>
+          <Link
+            href={`/projects/${run.projectId}/browser`}
+            className="btn btn-sm btn-ghost"
+            title="Watch shared Live Browser Studio"
+          >
+            🌐 Live Browser
+          </Link>
           {run.worktreePath && (
             <Link href={`/runs/${run.id}/review`} className="btn btn-sm btn-ghost" title="Open Diff & Review workspace">
               Diff & Review
