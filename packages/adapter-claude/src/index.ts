@@ -24,6 +24,21 @@ export interface PersonaSpec {
   systemPrompt: string;
 }
 
+export const AUTONOMOUS_EXECUTION_POLICY =
+  'AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.';
+
+export const AUTONOMOUS_ALLOWED_TOOLS = [
+  'Bash',
+  'Edit',
+  'Write',
+  'Read',
+  'Glob',
+  'Grep',
+  'WebFetch',
+  'WebSearch',
+  'NotebookEdit',
+] as const;
+
 export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
   product_owner: {
     id: 'product_owner',
@@ -31,7 +46,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'PO',
     roleTitle: 'Senior Technical Product Owner & Requirements Architect',
     systemPrompt:
-      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & `npm run build` verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`.',
+      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & `npm run build` verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`. Do NOT ask clarifying questions—choose pragmatic self-contained defaults and write `.emberline/new-tickets.json` in this turn.',
   },
   architect: {
     id: 'architect',
@@ -39,7 +54,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'ARCH',
     roleTitle: 'Principal Software & Systems Architect',
     systemPrompt:
-      'You are acting as the Principal Systems Architect for this project. Read PROJECT.md first. Focus on clean module boundaries, API contracts, data flow, scalability, and idiomatic directory structure. You may also spawn follow-up specialist tickets by writing `.emberline/new-tickets.json`.',
+      'You are acting as the Principal Systems Architect for this project. Read PROJECT.md first. Focus on clean module boundaries, API contracts, data flow, scalability, and idiomatic directory structure. You may also spawn follow-up specialist tickets by writing `.emberline/new-tickets.json`. Execute autonomously without asking clarifying questions.',
   },
   ui_ux: {
     id: 'ui_ux',
@@ -47,7 +62,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'UI/UX',
     roleTitle: 'Staff Design Systems & Frontend UX Engineer',
     systemPrompt:
-      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. If `package.json` has a `build` script, run `npm run build` after your changes so the Live Demo preview updates.',
+      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. If `package.json` has a `build` script, run `npm run build` after your changes so the Live Demo preview updates. Execute autonomously without asking whether to commit.',
   },
   coder: {
     id: 'coder',
@@ -55,7 +70,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'DEV',
     roleTitle: 'Senior Full-Stack Software Engineer',
     systemPrompt:
-      'You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. If `package.json` has a `build` script, run `npm run build` when done.',
+      'You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. If `package.json` has a `build` script, run `npm run build` when done. Execute autonomously without asking clarifying questions or asking whether to commit.',
   },
   dba: {
     id: 'dba',
@@ -63,7 +78,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'DBA',
     roleTitle: 'Principal Database & Data Layer Engineer',
     systemPrompt:
-      'You are acting as the Principal Database & Data Layer Engineer for this project. Read PROJECT.md first. Focus on normalized schema design, safe reversible migrations, indexing strategy, query performance, and data integrity.',
+      'You are acting as the Principal Database & Data Layer Engineer for this project. Read PROJECT.md first. Focus on normalized schema design, safe reversible migrations, indexing strategy, query performance, and data integrity. Execute autonomously without asking clarifying questions.',
   },
   qa: {
     id: 'qa',
@@ -71,7 +86,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'QA',
     roleTitle: 'Staff Quality Assurance & Verification Engineer',
     systemPrompt:
-      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and `npm run build` (if present) so the production demo bundle is verified and up to date.',
+      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and `npm run build` (if present) so the production demo bundle is verified and up to date. Execute autonomously without asking whether to commit.',
   },
   security: {
     id: 'security',
@@ -79,7 +94,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'SEC',
     roleTitle: 'Principal Application Security Engineer',
     systemPrompt:
-      'You are acting as the Principal Application Security Engineer for this project. Read PROJECT.md first. Audit and harden authentication, authorization, input validation, secret handling, injection vectors, and dependency safety.',
+      'You are acting as the Principal Application Security Engineer for this project. Read PROJECT.md first. Audit and harden authentication, authorization, input validation, secret handling, injection vectors, and dependency safety. Execute autonomously without asking clarifying questions.',
   },
 };
 
@@ -119,6 +134,10 @@ interface HookMatcherGroup {
 
 export interface ClaudeHookSettings {
   hooks: Partial<Record<HookEventName, HookMatcherGroup[]>>;
+  permissions?: {
+    defaultMode?: 'auto' | 'acceptEdits' | 'bypassPermissions';
+    allow?: string[];
+  };
 }
 
 /** Tool events require a matcher; an empty string matches every tool. */
@@ -127,8 +146,9 @@ const MATCHER_EVENTS = new Set<HookEventName>(['PreToolUse', 'PostToolUse']);
 /**
  * Builds the settings object passed to `claude --settings <json>` for a run.
  * Every watched hook invokes `<hookCommand> <EventName>`; the run id travels via env.
+ * When `autonomous` is enabled, pre-allows Bash/Edit/Write tools and sets `defaultMode: 'auto'`.
  */
-export function buildHookSettings(hookCommand: string, timeoutSeconds = 5): ClaudeHookSettings {
+export function buildHookSettings(hookCommand: string, timeoutSeconds = 5, autonomous = false): ClaudeHookSettings {
   const hooks: ClaudeHookSettings['hooks'] = {};
   for (const event of WATCHED_HOOKS) {
     const group: HookMatcherGroup = {
@@ -136,6 +156,15 @@ export function buildHookSettings(hookCommand: string, timeoutSeconds = 5): Clau
     };
     if (MATCHER_EVENTS.has(event)) group.matcher = '';
     hooks[event] = [group];
+  }
+  if (autonomous) {
+    return {
+      hooks,
+      permissions: {
+        defaultMode: 'auto',
+        allow: [...AUTONOMOUS_ALLOWED_TOOLS],
+      },
+    };
   }
   return { hooks };
 }
@@ -159,7 +188,7 @@ export function buildPlaywrightMcpConfig(outputDir = './artifacts'): ClaudeMcpCo
   };
 }
 
-export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions';
 
 export interface ClaudeLaunchOptions {
   runId: string;
@@ -171,6 +200,11 @@ export interface ClaudeLaunchOptions {
   claudeCommand?: string;
   hookCommand?: string;
   permissionMode?: ClaudePermissionMode;
+  /**
+   * When true, starts the session in unattended `auto` mode with pre-authorized
+   * Bash/Edit/Write permissions and appends the autonomous non-interactive system prompt.
+   */
+  autonomous?: boolean;
   /** Initial prompt; empty starts an idle interactive session. */
   prompt?: string;
   /** Claude session id to continue (`--resume`). */
@@ -180,12 +214,17 @@ export interface ClaudeLaunchOptions {
 }
 
 export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
-  const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook');
+  const isAutonomous = Boolean(options.autonomous && options.permissionMode !== 'plan');
+  const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook', 5, isAutonomous);
   const args = ['--settings', JSON.stringify(settings)];
   if (options.playwrightMcp) {
     args.push('--mcp-config', JSON.stringify(buildPlaywrightMcpConfig()));
   }
-  if (options.permissionMode && options.permissionMode !== 'default') {
+  if (isAutonomous) {
+    const cliMode = options.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'auto';
+    args.push('--permission-mode', cliMode);
+    args.push('--append-system-prompt', AUTONOMOUS_EXECUTION_POLICY);
+  } else if (options.permissionMode && options.permissionMode !== 'default') {
     args.push('--permission-mode', options.permissionMode);
   }
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId);

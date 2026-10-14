@@ -159,7 +159,11 @@ function Shell() {
   // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
   const activeRuns = useMemo(() => {
     const list = (runs ?? []).filter(
-      (r) => !r.endedAt && (!activeProject || r.projectId === activeProject.id),
+      (r) =>
+        !r.endedAt &&
+        r.state !== 'done' &&
+        r.state !== 'failed' &&
+        (!activeProject || r.projectId === activeProject.id),
     );
     return list.sort((a, b) => {
       const rank = (s: string) => (s === 'waiting_input' ? 0 : s === 'working' || s === 'starting' ? 1 : 2);

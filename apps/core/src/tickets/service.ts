@@ -106,6 +106,7 @@ function hasNpmBuildScript(workspacePath: string): boolean {
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly autoChainProjects = new Set<string>();
   private readonly selfHealedRuns = new Set<string>();
+  private readonly autoNudgedRuns = new Set<string>();
 
   constructor(
     private readonly db: Db,
@@ -118,6 +119,22 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (run.ticketId) {
         if (stateChanged) this.followRun(run.ticketId, run.state);
         else if (run.lastEvent === 'prompt_sent') this.followRun(run.ticketId, 'working');
+      }
+      if (
+        stateChanged &&
+        run.state === 'waiting_input' &&
+        run.lastEvent === 'Notification' &&
+        run.projectId &&
+        this.autoChainProjects.has(run.projectId) &&
+        !this.autoNudgedRuns.has(run.id)
+      ) {
+        this.autoNudgedRuns.add(run.id);
+        void this.runs
+          .sendPrompt(
+            run.id,
+            'Autonomous Factory Mode: Proceed automatically using the simplest self-contained local option that satisfies PROJECT.md. Do not wait for user confirmation.',
+          )
+          .catch(() => undefined);
       }
       if (stateChanged && run.state === 'done' && run.projectId) {
         void this.handleRunCompleted(run);
@@ -236,6 +253,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return;
     }
 
+    const ticketRow = run.ticketId
+      ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
+      : undefined;
+
     // 1. Check if the agent wrote `.emberline/new-tickets.json` in its worktree or main workspace
     const fromWorktree = run.worktreePath ? await ingestAgentTicketsFile(run.worktreePath) : null;
     const fromMain =
@@ -259,7 +280,30 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
 
-    const isFactoryRun = this.autoChainProjects.has(run.projectId) || Boolean(ingested);
+    const isFactoryOrchestratorTicket = Boolean(
+      ticketRow?.title.startsWith('[Factory]') && run.persona === 'product_owner',
+    );
+
+    // If a Factory Orchestrator (PO) stopped to ask a clarifying question without writing
+    // `.emberline/new-tickets.json`, automatically reply once so it writes the tickets immediately.
+    if (
+      isFactoryOrchestratorTicket &&
+      !ingested &&
+      !this.autoNudgedRuns.has(run.id) &&
+      (!run.endedAt || run.resumable)
+    ) {
+      this.autoNudgedRuns.add(run.id);
+      await this.runs
+        .prompt(
+          run.id,
+          'Autonomous Factory Mode: Do not ask clarifying questions or wait for user confirmation. Choose the simplest self-contained local option (e.g., localStorage / existing stack in PROJECT.md), update PROJECT.md, and write .emberline/new-tickets.json now so the specialist pipeline can start.',
+        )
+        .catch(() => undefined);
+      return;
+    }
+
+    const isFactoryRun =
+      this.autoChainProjects.has(run.projectId) || Boolean(ingested) || isFactoryOrchestratorTicket;
     if (!isFactoryRun) return;
 
     const fSettings = getFactorySettings(this.db);
@@ -270,7 +314,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
-      run.resumable &&
+      (!run.endedAt || run.resumable) &&
       run.worktreePath &&
       hasNpmBuildScript(run.worktreePath)
     ) {
@@ -283,7 +327,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (buildRes && !buildRes.ok) {
         const errorExcerpt = buildRes.output.slice(-2_000);
         await this.runs
-          .resume(
+          .prompt(
             run.id,
             `[Self-Healing Build Gate] The project build (\`npm run build\`) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the build/compile errors above and verify the build succeeds before finishing.`,
           )
@@ -295,9 +339,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // 3. Auto-sync worktree into main workspace so subsequent specialist personas branch off the
     //    updated codebase and Live Demo stays current!
     if (fSettings.autoSyncToMain && run.worktreePath && run.worktreePath !== projectRow.path) {
-      const ticketRow = run.ticketId
-        ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
-        : undefined;
       await syncWorktreeToMainWorkspace({
         worktreePath: run.worktreePath,
         mainWorkspacePath: projectRow.path,
@@ -315,7 +356,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
 
-    // 5. Dispatch the next specialist ticket in the project's queue if auto-chaining is active
+    // 5. Close the idle interactive CLI process for this completed factory step so it does not
+    //    linger at the `>` prompt or fire idle notifications.
+    if (!run.endedAt) {
+      await this.runs.stop(run.id).catch(() => undefined);
+    }
+
+    // 6. Dispatch the next specialist ticket in the project's queue if auto-chaining is active
     if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     }

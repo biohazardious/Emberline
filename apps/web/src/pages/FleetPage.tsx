@@ -37,7 +37,7 @@ export function FleetPage({
   const counts = useMemo(() => {
     const all = scopedRuns;
     return {
-      active: all.filter((r) => !r.endedAt && r.state !== 'queued').length,
+      active: all.filter((r) => !r.endedAt && r.state !== 'queued' && r.state !== 'done' && r.state !== 'failed').length,
       attention: all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed')
         .length,
       queued: all.filter((r) => r.state === 'queued').length,
@@ -49,7 +49,7 @@ export function FleetPage({
     const all = scopedRuns;
     switch (filter) {
       case 'active':
-        return all.filter((r) => !r.endedAt && r.state !== 'queued');
+        return all.filter((r) => !r.endedAt && r.state !== 'queued' && r.state !== 'done' && r.state !== 'failed');
       case 'attention':
         return all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed');
       case 'queued':
@@ -259,7 +259,7 @@ function FleetPane({
               disabled={!!busy}
               onClick={() => void act('stop', () => api(`/api/runs/${run.id}/stop`, 'POST'))}
             >
-              {run.state === 'queued' ? 'Cancel' : 'Stop'}
+              {run.state === 'queued' ? 'Cancel' : run.state === 'done' ? 'Close' : 'Stop'}
             </button>
           )}
           {run.terminalId && (
@@ -277,8 +277,14 @@ function FleetPane({
           </Suspense>
         ) : (
           <div className="fleet-placeholder">
-            <p className="mono">{run.state === 'queued' ? 'Waiting in scheduler queue…' : 'No live terminal attached.'}</p>
-            {run.prompt && <p className="muted small mono">{run.prompt}</p>}
+            <p className="mono">
+              {run.state === 'queued'
+                ? 'Waiting in scheduler queue…'
+                : run.state === 'done'
+                  ? '✓ Session completed and archived. Use Review to inspect git changes or Resume below to continue.'
+                  : 'Terminal session ended. Use Resume below to continue.'}
+            </p>
+            {run.prompt && <p className="muted small mono">{run.prompt.slice(0, 320)}</p>}
           </div>
         )}
       </div>

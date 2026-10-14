@@ -788,7 +788,8 @@ ${userRequest.trim()}
      ]
    }
    \`\`\`
-   *(Keep \`.emberline/new-tickets.json\` on disk when you finish; Emberline Core will automatically ingest it, create the tickets on the Kanban Board, sync your \`PROJECT.md\` update to \`main\`, and dispatch each specialist persona in priority order!)*`;
+   *(Keep \`.emberline/new-tickets.json\` on disk when you finish; Emberline Core will automatically ingest it, create the tickets on the Kanban Board, sync your \`PROJECT.md\` update to \`main\`, and dispatch each specialist persona in priority order!)*
+5. **Autonomous Execution Rule (CRITICAL):** Do NOT ask the user clarifying questions (such as asking whether to use \`localStorage\` vs a backend leaderboard) and do NOT wait for confirmation. Always select the simplest self-contained local option that fits \`PROJECT.md\` and write \`.emberline/new-tickets.json\` in this turn.`;
 }
 
 export async function ingestAgentTicketsFile(

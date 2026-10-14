@@ -37,7 +37,7 @@ import {
   type StartPreviewBody,
   StartPreviewBody as StartPreviewBodySchema,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
@@ -320,6 +320,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           claudeCommand: this.config.claudeCommand,
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
+          autonomous: row.permissionMode !== 'plan',
           prompt: effectivePrompt,
           resumeSessionId: options.resumeSessionId,
           playwrightMcp:
@@ -729,7 +730,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.reconciling = true;
     try {
       const open = this.db.select().from(runs).where(isNull(runs.endedAt)).orderBy(asc(runs.createdAt)).all();
-      if (open.length === 0) return;
+      const attached = this.db
+        .select()
+        .from(runs)
+        .where(isNotNull(runs.ptydSessionId))
+        .orderBy(asc(runs.createdAt))
+        .all();
+      if (open.length === 0 && attached.length === 0) return;
       const { sessions } = await this.ptyd.get().list();
       const byId = new Map(sessions.map((s) => [s.id, s]));
       for (const row of open) {
@@ -742,8 +749,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           type: session ? 'process_exited' : 'session_lost',
           state: stateAfterExit(row.state as AgentState, exitCode),
           payload: session ? { exitCode, signal: session.signal } : {},
-          patch: { endedAt: new Date() },
+          patch: { endedAt: new Date(), ...(session ? {} : { ptydSessionId: null }) },
         });
+      }
+      for (const row of attached) {
+        if (!row.endedAt || !row.ptydSessionId) continue;
+        if (byId.has(row.ptydSessionId)) continue;
+        const updated = this.db
+          .update(runs)
+          .set({ ptydSessionId: null })
+          .where(eq(runs.id, row.id))
+          .returning()
+          .get();
+        if (updated) {
+          this.emit('run', toRun(updated), false);
+        }
       }
     } catch {
       // ptyd went away mid-call; next tick retries.

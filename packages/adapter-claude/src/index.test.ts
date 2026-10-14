@@ -57,6 +57,22 @@ describe('buildLaunchSpec', () => {
     expect(spec.args[2]).toBe('--mcp-config');
     expect(JSON.parse(spec.args[3] ?? '')).toEqual(buildPlaywrightMcpConfig());
   });
+
+  it('enables auto permission mode, pre-allowed tools, and autonomous system prompt when autonomous is true', () => {
+    const spec = buildLaunchSpec({
+      ...base,
+      permissionMode: 'acceptEdits',
+      autonomous: true,
+      prompt: 'Add score counter',
+    });
+    const settings = JSON.parse(spec.args[1] ?? '');
+    expect(settings.permissions?.defaultMode).toBe('auto');
+    expect(settings.permissions?.allow).toContain('Bash');
+    expect(settings.permissions?.allow).toContain('Edit');
+    expect(spec.args).toContain('--permission-mode');
+    expect(spec.args).toContain('auto');
+    expect(spec.args).toContain('--append-system-prompt');
+  });
 });
 
 describe('nextStateFromHook', () => {

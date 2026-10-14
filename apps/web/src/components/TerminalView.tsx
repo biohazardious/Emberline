@@ -127,7 +127,13 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
             update('exited');
             break;
           case 'error':
-            term.write(`\r\n\x1b[31m${message.message}\x1b[0m\r\n`);
+            exited = true;
+            if (/no such session/i.test(message.message)) {
+              term.write('\r\n\x1b[2m[terminal session archived — click Resume to continue]\x1b[0m\r\n');
+            } else {
+              term.write(`\r\n\x1b[31m${message.message}\x1b[0m\r\n`);
+            }
+            update('exited');
             break;
         }
       };
