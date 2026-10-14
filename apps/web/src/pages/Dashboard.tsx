@@ -286,6 +286,8 @@ export function Dashboard({
             )}
           </div>
         </div>
+
+        {overviewTab !== 'system' && <QuotaPanel compact />}
       </div>
 
       {/* TAB 1: Command Center (Project Status, AI Factory, Live Demo/Browser, AI Advisor) */}

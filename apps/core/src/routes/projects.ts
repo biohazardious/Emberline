@@ -9,6 +9,7 @@ import {
   type BrowserViewportSnapshot,
   BuildDemoBody,
   type BuildDemoResponse,
+  type ClaudeUsageTelemetry,
   CreateProjectBody,
   type CreateProjectResponse,
   DeleteWorkspaceFileBody,
@@ -37,7 +38,7 @@ import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { projects, settings } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
-import { getRunnerBrowserState, performRunnerBrowserAction } from '../factory/browser-daemon.js';
+import { getRunnerBrowserState, getRunnerClaudeUsage, performRunnerBrowserAction } from '../factory/browser-daemon.js';
 import {
   buildWorkspaceDemo,
   captureBrowserViewportSnapshot,
@@ -383,6 +384,17 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
     return updateFactorySettings(db, patch);
   });
+
+  app.get<{ Querystring: { refresh?: string } }>(
+    '/api/factory/claude-usage',
+    async (request): Promise<ClaudeUsageTelemetry> => {
+      return getRunnerClaudeUsage({
+        ptyd,
+        socketDir: path.dirname(config.ptydSocket),
+        forceRefresh: request.query.refresh === '1',
+      });
+    },
+  );
 
   const resolveProjectTargetPath = (projectId: string, targetId = 'main'): { project: Project; workspacePath: string } => {
     const row = db.select().from(projects).where(eq(projects.id, projectId)).get();

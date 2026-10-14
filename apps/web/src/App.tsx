@@ -1,4 +1,4 @@
-import type { ActiveProjectPreference, FactorySettings, Project, SystemStatus } from '@emberline/protocol';
+import type { ActiveProjectPreference, ClaudeUsageTelemetry, FactorySettings, Project, SystemStatus } from '@emberline/protocol';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api } from './api';
@@ -7,6 +7,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { CommandPalette } from './components/CommandPalette';
 import { PersonaBadge } from './components/PersonaBadge';
 import { ProjectWizardModal } from './components/ProjectWizardModal';
+import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
 import { RunInspector } from './components/RunInspector';
 import { RunStatePill } from './components/RunStatePill';
 import { usePoll } from './hooks/usePoll';
@@ -45,6 +46,7 @@ function Shell() {
   const [location, navigate] = useLocation();
   const system = usePoll(() => api<SystemStatus>('/api/system'), 5_000);
   const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
+  const claudeUsage = usePoll(() => api<ClaudeUsageTelemetry>('/api/factory/claude-usage'), 30_000);
   const { runs } = useRuns();
   const { scheduler } = useScheduler();
 
@@ -364,6 +366,37 @@ function Shell() {
               </span>
             </div>
           )}
+          {claudeUsage.data && !sidebarCollapsed && (
+            <div
+              className="mono muted"
+              style={{
+                fontSize: '0.72rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 3,
+                padding: '6px 8px',
+                borderRadius: 'var(--radius)',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)',
+              }}
+              title="Live Claude OAuth 5-hour & 7-day utilization and token consumption"
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
+                <strong>⚡ {formatClaudePlanLabel(claudeUsage.data)}</strong>
+                <span style={{ color: claudeUsage.data.authenticated ? 'var(--ok)' : 'var(--warn)' }}>
+                  ● {claudeUsage.data.authenticated ? 'active' : 'offline'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>5h: {Math.round(claudeUsage.data.fiveHour?.utilizationPercent ?? 0)}%</span>
+                <span>7d: {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>1h: {formatTokensCompact(claudeUsage.data.hourlyTokens.totalTokens)}</span>
+                <span>7d: {formatTokensCompact(claudeUsage.data.weeklyTokens.totalTokens)}</span>
+              </div>
+            </div>
+          )}
           <p className="footer">One installation = one user = your own Claude subscription. Not affiliated with Anthropic.</p>
         </footer>
       </aside>
@@ -420,6 +453,23 @@ function Shell() {
           </div>
 
           <div className="topbar-right">
+            {claudeUsage.data && (
+              <span
+                id="topbar-claude-usage"
+                className="pill hide-sm mono"
+                style={{ fontSize: '0.74rem', gap: 6 }}
+                title={`Claude OAuth (${formatClaudePlanLabel(claudeUsage.data)}) · 1h tokens: ${formatTokensCompact(claudeUsage.data.hourlyTokens.totalTokens)} · 7d tokens: ${formatTokensCompact(claudeUsage.data.weeklyTokens.totalTokens)}`}
+              >
+                <span
+                  className="dot"
+                  style={{
+                    background: claudeUsage.data.authenticated ? 'var(--ok)' : 'var(--warn)',
+                  }}
+                />
+                5h: {Math.round(claudeUsage.data.fiveHour?.utilizationPercent ?? 0)}% · 7d:{' '}
+                {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%
+              </span>
+            )}
             <button
               id="topbar-new-project"
               type="button"

@@ -6,10 +6,11 @@ import type {
   BrowserActionBody,
   BrowserAgentAction,
   BrowserViewportSnapshot,
+  ClaudeUsageTelemetry,
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.1.0';
+export const BROWSER_DAEMON_VERSION = '1.2.0';
 
 /**
  * Preload hook (`NODE_OPTIONS="--require /run/emberline/playwright-hook.cjs"`) injected into
@@ -730,6 +731,180 @@ async function handleAction(body, defaultUrl) {
   return captureState(defaultUrl);
 }
 
+let cachedClaudeUsage = null;
+let cachedClaudeUsageAt = 0;
+
+function emptyBucket() {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens: 0,
+    turnCount: 0,
+  };
+}
+
+function addUsageToBucket(bucket, u) {
+  const inp = Number(u.input_tokens) || 0;
+  const out = Number(u.output_tokens) || 0;
+  const cr = Number(u.cache_read_input_tokens) || 0;
+  const cc = Number(u.cache_creation_input_tokens) || 0;
+  bucket.inputTokens += inp;
+  bucket.outputTokens += out;
+  bucket.cacheReadTokens += cr;
+  bucket.cacheCreationTokens += cc;
+  bucket.totalTokens += inp + out + cr + cc;
+  bucket.turnCount += 1;
+}
+
+function scanTranscriptTokens(nowMs) {
+  const hourly = emptyBucket();
+  const daily = emptyBucket();
+  const weekly = emptyBucket();
+  const projectsRoot = '/home/node/.claude/projects';
+  const cutoff7d = nowMs - 7 * 86400_000;
+  const cutoff24h = nowMs - 86400_000;
+  const cutoff1h = nowMs - 3600_000;
+
+  try {
+    if (!fs.existsSync(projectsRoot)) return { hourly, daily, weekly };
+    const byMsgId = new Map();
+    const dirs = fs.readdirSync(projectsRoot, { withFileTypes: true });
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      const dirPath = projectsRoot + '/' + d.name;
+      let files = [];
+      try { files = fs.readdirSync(dirPath); } catch { continue; }
+      for (const f of files) {
+        if (!f.endsWith('.jsonl')) continue;
+        const fullPath = dirPath + '/' + f;
+        let st;
+        try { st = fs.statSync(fullPath); } catch { continue; }
+        if (st.mtimeMs < cutoff7d) continue;
+        let raw = '';
+        try { raw = fs.readFileSync(fullPath, 'utf8'); } catch { continue; }
+        const lines = raw.split('\\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line || !line.includes('"usage"')) continue;
+          try {
+            const obj = JSON.parse(line);
+            const usage = obj?.message?.usage || obj?.usage;
+            if (!usage || typeof usage !== 'object') continue;
+            const ts = obj?.timestamp ? Date.parse(obj.timestamp) : st.mtimeMs;
+            if (!Number.isFinite(ts) || ts < cutoff7d) continue;
+            const key = obj?.message?.id || obj?.uuid || (fullPath + ':' + i);
+            byMsgId.set(key, { ts, usage });
+          } catch {}
+        }
+      }
+    }
+
+    for (const { ts, usage } of byMsgId.values()) {
+      addUsageToBucket(weekly, usage);
+      if (ts >= cutoff24h) addUsageToBucket(daily, usage);
+      if (ts >= cutoff1h) addUsageToBucket(hourly, usage);
+    }
+  } catch {}
+
+  return { hourly, daily, weekly };
+}
+
+async function getClaudeUsage(forceRefresh = false) {
+  const nowMs = Date.now();
+  if (!forceRefresh && cachedClaudeUsage && nowMs - cachedClaudeUsageAt < 25_000) {
+    return cachedClaudeUsage;
+  }
+
+  const { hourly, daily, weekly } = scanTranscriptTokens(nowMs);
+  let authenticated = false;
+  let subscriptionType = null;
+  let rateLimitTier = null;
+  let tokenExpiresAt = null;
+  let fiveHour = null;
+  let sevenDay = null;
+  let extraUsage = null;
+
+  try {
+    const credsPath = '/home/node/.claude/.credentials.json';
+    if (fs.existsSync(credsPath)) {
+      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+      const oauth = creds?.claudeAiOauth;
+      if (oauth && oauth.accessToken) {
+        authenticated = true;
+        subscriptionType = oauth.subscriptionType || null;
+        rateLimitTier = oauth.rateLimitTier || null;
+        if (oauth.expiresAt) {
+          const expDate = new Date(oauth.expiresAt);
+          if (!Number.isNaN(expDate.getTime())) {
+            tokenExpiresAt = expDate.toISOString();
+          }
+        }
+
+        const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+          headers: {
+            Authorization: 'Bearer ' + oauth.accessToken,
+            'anthropic-beta': 'oauth-2025-04-20',
+          },
+          signal: AbortSignal.timeout(4000),
+        }).catch(() => null);
+
+        if (res && res.ok) {
+          const data = await res.json();
+          const limits = Array.isArray(data?.limits) ? data.limits : [];
+          const sessionLim = limits.find((l) => l.kind === 'session');
+          const weeklyLim = limits.find((l) => l.kind === 'weekly_all');
+
+          if (data?.five_hour) {
+            fiveHour = {
+              utilizationPercent: Math.min(100, Math.max(0, Number(data.five_hour.utilization) || 0)),
+              resetsAt: data.five_hour.resets_at || null,
+              severity: sessionLim?.severity || 'normal',
+            };
+          }
+          if (data?.seven_day) {
+            sevenDay = {
+              utilizationPercent: Math.min(100, Math.max(0, Number(data.seven_day.utilization) || 0)),
+              resetsAt: data.seven_day.resets_at || null,
+              severity: weeklyLim?.severity || 'normal',
+            };
+          }
+          if (data?.extra_usage && typeof data.extra_usage === 'object') {
+            const eu = data.extra_usage;
+            extraUsage = {
+              enabled: Boolean(eu.is_enabled),
+              usedUsd: (Number(eu.used_credits) || 0) / 100,
+              limitUsd: (Number(eu.monthly_limit) || 0) / 100,
+              utilizationPercent: Math.min(100, Math.max(0, Number(eu.utilization) || 0)),
+              disabledReason: eu.disabled_reason || null,
+            };
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const result = {
+    available: true,
+    authenticated,
+    subscriptionType,
+    rateLimitTier,
+    tokenExpiresAt,
+    fiveHour,
+    sevenDay,
+    extraUsage,
+    hourlyTokens: hourly,
+    dailyTokens: daily,
+    weeklyTokens: weekly,
+    updatedAt: new Date(nowMs).toISOString(),
+  };
+
+  cachedClaudeUsage = result;
+  cachedClaudeUsageAt = nowMs;
+  return result;
+}
+
 try { fs.rmSync(SOCKET_PATH, { force: true }); } catch {}
 
 const server = http.createServer(async (req, res) => {
@@ -738,6 +913,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && u.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, version: DAEMON_VERSION }));
+      return;
+    }
+    if (req.method === 'GET' && u.pathname === '/claude-usage') {
+      const forceRefresh = u.searchParams.get('refresh') === '1';
+      const usage = await getClaudeUsage(forceRefresh);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(usage));
       return;
     }
     if (req.method === 'POST' && u.pathname === '/shutdown') {
@@ -978,3 +1160,42 @@ export async function performRunnerBrowserAction(params: {
     agentActive: Boolean(snap.agentActive || params.agentActive),
   };
 }
+
+export async function getRunnerClaudeUsage(params: {
+  ptyd: PtydBridge;
+  socketDir: string;
+  forceRefresh?: boolean;
+}): Promise<ClaudeUsageTelemetry> {
+  const empty = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens: 0,
+    turnCount: 0,
+  };
+  const fallback: ClaudeUsageTelemetry = {
+    available: false,
+    authenticated: false,
+    subscriptionType: null,
+    rateLimitTier: null,
+    tokenExpiresAt: null,
+    fiveHour: null,
+    sevenDay: null,
+    extraUsage: null,
+    hourlyTokens: empty,
+    dailyTokens: empty,
+    weeklyTokens: empty,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const sock = await ensureRunnerBrowserDaemon(params.ptyd, params.socketDir);
+  if (!sock) return fallback;
+  try {
+    const query = params.forceRefresh ? '?refresh=1' : '';
+    return await socketRequest<ClaudeUsageTelemetry>(sock, 'GET', `/claude-usage${query}`, undefined, 6_000);
+  } catch {
+    return fallback;
+  }
+}
+
