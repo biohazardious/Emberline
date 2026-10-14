@@ -1,10 +1,21 @@
-import type {
-  AgentId,
-  AgentModelId,
-  FactorySettings,
-  PersonaAgentMap,
-  PersonaModelMap,
-  ThemeMode,
+import {
+  type AgentId,
+  type AgentModelId,
+  type AgentPersona,
+  coerceModelForProvider,
+  type FactorySettings,
+  formatRankStars,
+  getModelInfoForProvider,
+  getModelsForProvider,
+  type ModelCapabilityTag,
+  type ModelCapabilityTier,
+  PERSONA_CAPABILITY_TARGETS,
+  type PersonaAgentMap,
+  type PersonaModelMap,
+  PROVIDER_REGISTRY,
+  selectProviderModelByRank,
+  selectProviderModelByTier,
+  type ThemeMode,
 } from '@emberline/protocol';
 import { type FormEvent, useEffect, useState } from 'react';
 import { api, errorMessage } from '../api';
@@ -12,25 +23,35 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 
-const AGENT_OPTIONS: Array<{ id: AgentId; label: string; desc: string }> = [
-  { id: 'claude', label: 'Claude Code (Anthropic)', desc: 'Full hook telemetry + Fable/Opus/Sonnet tiers' },
-  { id: 'antigravity', label: 'Antigravity CLI (agy)', desc: 'Argon / Gemini specialist for Frontend & UI/UX' },
-  { id: 'copilot', label: 'GitHub Copilot CLI', desc: 'Fast shell/git/code assistant & PR specialist' },
-  { id: 'gemini', label: 'Gemini CLI (Google)', desc: 'Fast multimodal & large-context reasoning' },
-  { id: 'codex', label: 'Codex CLI (OpenAI)', desc: 'OpenAI o3 / GPT-4.1 coding specialist' },
-  { id: 'aider', label: 'Aider CLI (Multi-Model)', desc: 'Git-centric pair programmer' },
-];
+const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
 
-const MODEL_OPTIONS: Array<{ id: AgentModelId; label: string; badge: string }> = [
-  { id: 'fable', label: 'Claude Fable — Deep Architecture & Spec Analysis', badge: 'Deep Analysis' },
-  { id: 'opus', label: 'Claude Opus — High-Power Backend & Core Engineering', badge: 'Core Power' },
-  { id: 'sonnet', label: 'Claude Sonnet — Fast Search, QA & Low-Token Tasks', badge: 'Token Saver' },
-  { id: 'haiku', label: 'Claude Haiku — Ultra-Light Quick Edits', badge: 'Ultra-Light' },
-  { id: 'argon', label: 'Antigravity Argon — Frontend, UI/UX & Interactive Design', badge: 'Frontend UI' },
-  { id: 'gemini-pro', label: 'Gemini 2.5 Pro — Large Codebase Context', badge: '1M Context' },
-  { id: 'gpt-4o', label: 'GPT-4o / Codex — Fast General Coding', badge: 'General' },
-  { id: 'auto', label: 'Auto (Default CLI Model)', badge: 'Default' },
-];
+const CAPABILITY_TAG_META: Record<ModelCapabilityTag, { label: string; icon: string }> = {
+  reasoning: { label: 'Reasoning', icon: '🧠' },
+  code: { label: 'Code', icon: '💻' },
+  ui_ux: { label: 'UI/UX', icon: '🎨' },
+  fast: { label: 'Fast', icon: '⚡' },
+};
+
+const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; text: string; label: string }> = {
+  high: {
+    bg: 'rgba(168, 85, 247, 0.14)',
+    border: 'rgba(168, 85, 247, 0.45)',
+    text: '#d8b4fe',
+    label: 'HIGH (★4–5)',
+  },
+  medium: {
+    bg: 'rgba(59, 130, 246, 0.14)',
+    border: 'rgba(59, 130, 246, 0.45)',
+    text: '#93c5fd',
+    label: 'MEDIUM (★3)',
+  },
+  low: {
+    bg: 'rgba(16, 185, 129, 0.14)',
+    border: 'rgba(16, 185, 129, 0.45)',
+    text: '#6ee7b7',
+    label: 'LOW (★1–2)',
+  },
+};
 
 export function SettingsPage({
   theme,
@@ -51,6 +72,7 @@ export function SettingsPage({
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
   const [quotaAutoDowngrade, setQuotaAutoDowngrade] = useState(true);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
+  const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
   const [personaAgents, setPersonaAgents] = useState<PersonaAgentMap>({
     product_owner: 'claude',
     architect: 'claude',
@@ -90,74 +112,142 @@ export function SettingsPage({
         setAutoMoveToDone(res.autoMoveToDone);
         setQuotaAutoDowngrade(res.quotaAutoDowngrade ?? true);
         setDefaultAgent(res.defaultAgent);
+        setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
         setPersonaAgents(res.personaAgents);
         if (res.personaModels) setPersonaModels(res.personaModels);
       })
       .catch((err) => setError(errorMessage(err)));
   }, []);
 
-  const applyRoutingPreset = (preset: 'visionary' | 'claude-tiered' | 'token-saver') => {
-    if (preset === 'visionary') {
-      setPersonaAgents({
-        product_owner: 'claude',
-        architect: 'claude',
-        ui_ux: 'antigravity',
-        coder: 'claude',
-        dba: 'claude',
-        qa: 'claude',
-        security: 'claude',
-      });
-      setPersonaModels({
-        product_owner: 'fable',
-        architect: 'fable',
-        ui_ux: 'argon',
-        coder: 'opus',
-        dba: 'opus',
-        qa: 'sonnet',
-        security: 'opus',
-      });
-      setNotice('Applied "Visionary Multi-Agent Orchestra" preset (Fable for PO/Arch, Antigravity Argon for UI/UX, Opus for Backend, Sonnet for QA). Click Save to persist.');
-    } else if (preset === 'claude-tiered') {
-      setPersonaAgents({
-        product_owner: 'claude',
-        architect: 'claude',
-        ui_ux: 'claude',
-        coder: 'claude',
-        dba: 'claude',
-        qa: 'claude',
-        security: 'claude',
-      });
-      setPersonaModels({
-        product_owner: 'fable',
-        architect: 'fable',
-        ui_ux: 'opus',
-        coder: 'opus',
-        dba: 'opus',
-        qa: 'sonnet',
-        security: 'opus',
-      });
-      setNotice('Applied "Claude All-Tier (Fable + Opus + Sonnet)" preset. Click Save to persist.');
-    } else {
-      setPersonaAgents({
-        product_owner: 'claude',
-        architect: 'claude',
-        ui_ux: 'claude',
-        coder: 'claude',
-        dba: 'claude',
-        qa: 'claude',
-        security: 'claude',
-      });
-      setPersonaModels({
-        product_owner: 'opus',
-        architect: 'opus',
-        ui_ux: 'sonnet',
-        coder: 'sonnet',
-        dba: 'sonnet',
-        qa: 'sonnet',
-        security: 'sonnet',
-      });
-      setNotice('Applied "Low-Token Economy (Sonnet-First)" preset. Click Save to persist.');
+  const toggleProviderEnabled = (providerId: AgentId) => {
+    setEnabledProviders((prev) => {
+      const exists = prev.includes(providerId);
+      if (exists && prev.length <= 1) {
+        setNotice('At least one AI provider must remain active.');
+        return prev;
+      }
+      const next = exists ? prev.filter((p) => p !== providerId) : [...prev, providerId];
+      const fallbackAgent: AgentId = next.includes(defaultAgent) ? defaultAgent : (next[0] ?? 'claude');
+      if (!next.includes(defaultAgent)) {
+        setDefaultAgent(fallbackAgent);
+      }
+
+      // If disabling a provider, migrate any personas that were using it to fallbackAgent and rank-match their models
+      if (exists) {
+        setPersonaAgents((prevAgents) => {
+          const updatedAgents = { ...prevAgents };
+          setPersonaModels((prevModels) => {
+            const updatedModels = { ...prevModels };
+            for (const p of PERSONA_LIST) {
+              const key = p.id;
+              if (updatedAgents[key] === providerId) {
+                updatedAgents[key] = fallbackAgent;
+                updatedModels[key] = coerceModelForProvider(
+                  fallbackAgent,
+                  updatedModels[key] ?? 'opus',
+                  key,
+                );
+              }
+            }
+            return updatedModels;
+          });
+          return updatedAgents;
+        });
+      }
+      return next;
+    });
+  };
+
+  const handlePersonaProviderChange = (personaKey: AgentPersona, nextAgent: AgentId) => {
+    setPersonaAgents((prev) => ({
+      ...prev,
+      [personaKey]: nextAgent,
+    }));
+    // Automatically pick the model in `nextAgent` matching the current model's capability rank (or persona target rank)
+    setPersonaModels((prev) => {
+      const currentModel = prev[personaKey] ?? 'opus';
+      const coerced = coerceModelForProvider(nextAgent, currentModel, personaKey);
+      return {
+        ...prev,
+        [personaKey]: coerced,
+      };
+    });
+  };
+
+  const handlePersonaTierQuickSelect = (personaKey: AgentPersona, tier: ModelCapabilityTier) => {
+    const agent = personaAgents[personaKey] ?? defaultAgent ?? 'claude';
+    const nextModel = selectProviderModelByTier(agent, tier, personaKey);
+    setPersonaModels((prev) => ({
+      ...prev,
+      [personaKey]: nextModel,
+    }));
+  };
+
+  const applyCapabilityPreset = (preset: 'auto-rank' | 'all-high' | 'all-medium' | 'all-low' | 'multi-provider') => {
+    if (preset === 'multi-provider') {
+      const uiProvider: AgentId = enabledProviders.includes('antigravity')
+        ? 'antigravity'
+        : enabledProviders.includes('gemini')
+          ? 'gemini'
+          : (enabledProviders[0] ?? 'claude');
+      const qaProvider: AgentId = enabledProviders.includes('gemini')
+        ? 'gemini'
+        : enabledProviders.includes('codex')
+          ? 'codex'
+          : (enabledProviders[0] ?? 'claude');
+      const coreProvider: AgentId = enabledProviders.includes('claude')
+        ? 'claude'
+        : (enabledProviders[0] ?? 'claude');
+
+      const nextAgents: PersonaAgentMap = {
+        product_owner: coreProvider,
+        architect: coreProvider,
+        ui_ux: uiProvider,
+        coder: coreProvider,
+        dba: coreProvider,
+        qa: qaProvider,
+        security: coreProvider,
+      };
+      const nextModels: PersonaModelMap = {
+        product_owner: selectProviderModelByRank(coreProvider, 5),
+        architect: selectProviderModelByRank(coreProvider, 5),
+        ui_ux: selectProviderModelByRank(uiProvider, 5),
+        coder: selectProviderModelByRank(coreProvider, 4),
+        dba: selectProviderModelByRank(coreProvider, 4),
+        qa: selectProviderModelByRank(qaProvider, 3),
+        security: selectProviderModelByRank(coreProvider, 4),
+      };
+      setPersonaAgents(nextAgents);
+      setPersonaModels(nextModels);
+      setNotice(
+        'Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. Click Save to persist.',
+      );
+      return;
     }
+
+    const nextModels = { ...personaModels };
+    for (const meta of PERSONA_LIST) {
+      const p = meta.id;
+      const agent = personaAgents[p] ?? defaultAgent ?? 'claude';
+      if (preset === 'auto-rank') {
+        const targetRank = PERSONA_CAPABILITY_TARGETS[p].recommendedRank;
+        nextModels[p] = selectProviderModelByRank(agent, targetRank);
+      } else if (preset === 'all-high') {
+        nextModels[p] = selectProviderModelByTier(agent, 'high', p);
+      } else if (preset === 'all-medium') {
+        nextModels[p] = selectProviderModelByTier(agent, 'medium', p);
+      } else {
+        nextModels[p] = selectProviderModelByTier(agent, 'low', p);
+      }
+    }
+    setPersonaModels(nextModels);
+    const labelMap = {
+      'auto-rank': 'Recommended Persona Capability Ranks (★5 PO/Arch, ★4 Core/UI/Sec, ★3 QA)',
+      'all-high': 'Maximum Capability / High Tier (★4–5)',
+      'all-medium': 'Balanced Medium Tier (★3)',
+      'all-low': 'Fast / Token-Saver Low Tier (★1–2)',
+    };
+    setNotice(`Applied "${labelMap[preset]}" across active providers. Click Save to persist.`);
   };
 
   const handleSaveFactorySettings = async (e: FormEvent) => {
@@ -175,6 +265,7 @@ export function SettingsPage({
         autoMoveToDone,
         quotaAutoDowngrade,
         defaultAgent,
+        enabledProviders,
         personaAgents,
         personaModels,
       };
@@ -184,13 +275,17 @@ export function SettingsPage({
 
       const updated = await api<FactorySettings>('/api/factory/settings', 'PATCH', payload);
       setSettings(updated);
+      setEnabledProviders(updated.enabledProviders?.length ? updated.enabledProviders : ['claude']);
+      setDefaultAgent(updated.defaultAgent);
+      setPersonaAgents(updated.personaAgents);
+      setPersonaModels(updated.personaModels);
       setAnthropicApiKey('');
       setOpenaiApiKey('');
       setGeminiApiKey('');
       if (themePref === 'light' || themePref === 'dark') {
         onChangeTheme(themePref);
       }
-      setNotice('Factory settings & Multi-Agent Model Routing saved and applied.');
+      setNotice('Factory settings, active AI providers & capability-ranked model matrix saved.');
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -383,15 +478,204 @@ export function SettingsPage({
         <form
           onSubmit={(e) => void handleSaveFactorySettings(e)}
           className="panel"
-          style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}
+          style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '22px' }}
         >
-          <div>
+          {/* STEP 1: ACTIVE AI PROVIDERS & CREDENTIALS */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <div>
+                <span className="eyebrow">Step 1 · Provider Registry &amp; Credentials</span>
+                <h3 style={{ margin: '4px 0 4px' }}>
+                  Active AI Providers ({enabledProviders.length} Enabled)
+                </h3>
+                <p className="muted small" style={{ maxWidth: 760, margin: 0 }}>
+                  Enable only the CLI providers you actually use. Disabled providers and their models stay completely hidden from persona routing, roadmap selectors, and brainstorming cards.
+                </p>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gap: '10px',
+              }}
+            >
+              {ALL_PROVIDER_IDS.map((providerId) => {
+                const entry = PROVIDER_REGISTRY[providerId];
+                const isEnabled = enabledProviders.includes(providerId);
+                const isKeyConfigured =
+                  providerId === 'claude'
+                    ? Boolean(settings?.anthropicKeyConfigured)
+                    : providerId === 'gemini'
+                      ? Boolean(settings?.geminiKeyConfigured)
+                      : providerId === 'codex'
+                        ? Boolean(settings?.openaiKeyConfigured)
+                        : false;
+
+                return (
+                  <div
+                    key={providerId}
+                    style={{
+                      padding: '12px 14px',
+                      borderRadius: '8px',
+                      background: isEnabled ? 'var(--surface-2)' : 'rgba(255,255,255,0.015)',
+                      border: isEnabled
+                        ? '1px solid rgba(59, 130, 246, 0.5)'
+                        : '1px dashed var(--border)',
+                      opacity: isEnabled ? 1 : 0.7,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '10px',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                          <span style={{ fontSize: '1.05rem' }}>{entry.icon}</span>
+                          <strong style={{ fontSize: '0.9rem' }}>{entry.label}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          className={`btn btn-xs ${isEnabled ? 'btn-primary' : 'btn-ghost'}`}
+                          onClick={() => toggleProviderEnabled(providerId)}
+                          title={
+                            isEnabled
+                              ? 'Click to disable this provider and hide its models'
+                              : 'Click to enable this provider in routing selectors'
+                          }
+                        >
+                          {isEnabled ? '✓ Active' : '+ Enable'}
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span className="badge mono" style={{ fontSize: '0.66rem' }}>
+                          {entry.badge}
+                        </span>
+                        {providerId === 'claude' && (
+                          <span
+                            className="badge mono"
+                            style={{
+                              fontSize: '0.66rem',
+                              borderColor: 'rgba(16, 185, 129, 0.45)',
+                              color: '#6ee7b7',
+                            }}
+                          >
+                            {isKeyConfigured ? '✓ API Key Set' : '✓ Host CLI Auth'}
+                          </span>
+                        )}
+                        {(providerId === 'gemini' || providerId === 'codex') && (
+                          <span
+                            className="badge mono"
+                            style={{
+                              fontSize: '0.66rem',
+                              borderColor: isKeyConfigured
+                                ? 'rgba(16, 185, 129, 0.45)'
+                                : 'rgba(245, 158, 11, 0.4)',
+                              color: isKeyConfigured ? '#6ee7b7' : '#fcd34d',
+                            }}
+                          >
+                            {isKeyConfigured ? '✓ API Key Set' : 'CLI / API Key'}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="muted small" style={{ fontSize: '0.73rem', lineHeight: 1.35 }}>
+                        {entry.description}
+                      </div>
+
+                      {/* Scoped Models Preview */}
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
+                        {entry.models.map((m) => {
+                          const tierMeta = TIER_COLORS[m.tier];
+                          return (
+                            <span
+                              key={m.id}
+                              className="mono"
+                              style={{
+                                fontSize: '0.65rem',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                background: tierMeta.bg,
+                                border: `1px solid ${tierMeta.border}`,
+                                color: tierMeta.text,
+                              }}
+                              title={`${m.label} — Rank ${m.rank}/5 (${m.tier.toUpperCase()})`}
+                            >
+                              ★{m.rank} {m.shortLabel}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Inline API Key Input for Claude, Gemini, and Codex when enabled */}
+                    {isEnabled && providerId === 'claude' && (
+                      <label className="field" style={{ gap: 3, marginTop: 2 }}>
+                        <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+                          Anthropic API Key (Optional Override · Host OAuth used by default)
+                        </span>
+                        <input
+                          type="password"
+                          className="input mono"
+                          style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+                          placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-ant-...'}
+                          value={anthropicApiKey}
+                          onChange={(e) => setAnthropicApiKey(e.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {isEnabled && providerId === 'gemini' && (
+                      <label className="field" style={{ gap: 3, marginTop: 2 }}>
+                        <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+                          Google Gemini API Key (GEMINI_API_KEY)
+                        </span>
+                        <input
+                          type="password"
+                          className="input mono"
+                          style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+                          placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'AIzaSy...'}
+                          value={geminiApiKey}
+                          onChange={(e) => setGeminiApiKey(e.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {isEnabled && providerId === 'codex' && (
+                      <label className="field" style={{ gap: 3, marginTop: 2 }}>
+                        <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+                          OpenAI API Key (OPENAI_API_KEY)
+                        </span>
+                        <input
+                          type="password"
+                          className="input mono"
+                          style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+                          placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-proj-...'}
+                          value={openaiApiKey}
+                          onChange={(e) => setOpenaiApiKey(e.target.value)}
+                        />
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: 0 }} />
+
+          {/* STEP 2: CAPABILITY-RANKED PERSONA ROUTING MATRIX */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div>
-                <span className="eyebrow">Multi-CLI &amp; Autonomous Model Routing</span>
-                <h3 style={{ margin: '4px 0 6px' }}>Per-Persona Agent &amp; Model Matrix</h3>
-                <p className="muted small" style={{ maxWidth: 680 }}>
-                  Route each specialist persona to the optimal CLI engine (<code>claude</code>, <code>antigravity</code>, <code>copilot</code>, <code>gemini</code>, <code>codex</code>, <code>aider</code>) and model tier (<code>fable</code> for deep analysis, <code>argon</code> for frontend/UI, <code>opus</code> for core backend, <code>sonnet</code> for low-token search/QA).
+                <span className="eyebrow">Step 2 · Capability-Ranked Persona Matrix (★1–5 &amp; Low / Med / High)</span>
+                <h3 style={{ margin: '4px 0 4px' }}>Specialist Persona Routing &amp; Model Rank Assignment</h3>
+                <p className="muted small" style={{ maxWidth: 720, margin: 0 }}>
+                  Each specialist role has a recommended capability rank (<code>★5 Frontier</code> for Architecture/PO, <code>★4 High</code> for Full-Stack/UI/Security, <code>★3 Medium</code> for Fast QA). Model choices are strictly scoped to the selected provider—switching a persona&apos;s provider automatically selects the matching rank model from that provider!
                 </p>
               </div>
 
@@ -399,33 +683,50 @@ export function SettingsPage({
                 <button
                   type="button"
                   className="btn btn-sm btn-primary"
-                  onClick={() => applyRoutingPreset('visionary')}
-                  title="Fable for PO/Arch, Antigravity Argon for UI/UX, Claude Opus for Coder/DBA/Sec, Claude Sonnet for QA"
+                  onClick={() => applyCapabilityPreset('auto-rank')}
+                  title="Automatically match each persona to its optimal ★1-5 rank on its active provider"
                 >
-                  ⚡ Visionary Multi-Agent Preset
+                  ⚡ Auto-Match by Persona Rank
                 </button>
+                {enabledProviders.length > 1 && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => applyCapabilityPreset('multi-provider')}
+                    title="Distribute UI/UX, QA, and Architecture across your enabled providers"
+                  >
+                    🌐 Multi-Provider Split
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() => applyRoutingPreset('claude-tiered')}
-                  title="Claude Fable + Opus + Sonnet across all roles"
+                  onClick={() => applyCapabilityPreset('all-high')}
+                  title="Assign High / Frontier (★4-5) models across all personas"
                 >
-                  🧠 Claude All-Tier
+                  🔥 All High (★4–5)
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
-                  onClick={() => applyRoutingPreset('token-saver')}
-                  title="Prioritize Claude Sonnet to minimize token consumption"
+                  onClick={() => applyCapabilityPreset('all-medium')}
+                  title="Assign Medium / Balanced (★3) models across all personas"
                 >
-                  💰 Token Saver (Sonnet)
+                  ⚖️ All Medium (★3)
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => applyCapabilityPreset('all-low')}
+                  title="Assign Low / Fast (★1-2) models across all personas to save tokens"
+                >
+                  💰 All Low / Fast (★1–2)
                 </button>
               </div>
             </div>
 
             <label
               style={{
-                marginTop: 10,
                 padding: '10px 12px',
                 borderRadius: 'var(--radius)',
                 background: 'var(--bg-elevated)',
@@ -442,64 +743,212 @@ export function SettingsPage({
                 onChange={(e) => setQuotaAutoDowngrade(e.target.checked)}
               />
               <span style={{ fontSize: '0.82rem' }}>
-                <strong>Quota-Aware Autonomous Model Routing:</strong> Automatically prefer low-token models (<code>sonnet</code>) for routine search, verification, and QA tasks to preserve your 5-hour &amp; 7-day rate limits.
+                <strong>Quota-Aware Autonomous Rank Step-Down:</strong> When 5-hour or 7-day utilization exceeds 80%, automatically step down <code>High (★4–5)</code> runs to <code>Medium (★3)</code> on that same provider so the pipeline keeps running without hitting hard rate limits.
               </span>
             </label>
 
             <div
               style={{
-                marginTop: '14px',
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-                gap: '10px',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gap: '12px',
               }}
             >
               {PERSONA_LIST.map((meta) => {
                 const personaKey = meta.id;
+                const targetSpec = PERSONA_CAPABILITY_TARGETS[personaKey];
+                const rawSelectedAgent = personaAgents[personaKey] ?? defaultAgent ?? 'claude';
+                const selectedAgent: AgentId = enabledProviders.includes(rawSelectedAgent)
+                  ? rawSelectedAgent
+                  : (enabledProviders[0] ?? 'claude');
+                const providerEntry = PROVIDER_REGISTRY[selectedAgent];
+                const providerModels = getModelsForProvider(selectedAgent);
+
+                const rawSelectedModel = personaModels[personaKey] ?? 'opus';
+                const selectedModel = coerceModelForProvider(
+                  selectedAgent,
+                  rawSelectedModel,
+                  personaKey,
+                );
+                const modelInfo = getModelInfoForProvider(selectedAgent, selectedModel);
+                const activeTier: ModelCapabilityTier =
+                  modelInfo?.tier ?? targetSpec.recommendedTier;
+                const activeRank = modelInfo?.rank ?? targetSpec.recommendedRank;
+                const tierStyle = TIER_COLORS[activeTier];
+
                 return (
                   <div
                     key={personaKey}
                     style={{
-                      padding: '12px',
-                      borderRadius: '6px',
+                      padding: '14px',
+                      borderRadius: '8px',
                       background: 'var(--surface-2)',
                       border: '1px solid var(--border)',
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: '8px',
+                      justifyContent: 'space-between',
+                      gap: '10px',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-                      <strong>{meta.label}</strong>
-                      <span className="badge mono">{meta.shortLabel}</span>
+                    {/* Header: Persona + Recommended Rank */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <strong>{meta.label}</strong>
+                          <span className="badge mono" style={{ fontSize: '0.68rem' }}>
+                            {meta.shortLabel}
+                          </span>
+                        </div>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: '0.68rem',
+                            padding: '2px 7px',
+                            borderRadius: '999px',
+                            background: tierStyle.bg,
+                            border: `1px solid ${tierStyle.border}`,
+                            color: tierStyle.text,
+                            fontWeight: 600,
+                          }}
+                          title={`Recommended for ${meta.label}: ${targetSpec.summary}`}
+                        >
+                          {formatRankStars(activeRank)} · {activeTier.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="muted small" style={{ fontSize: '0.72rem' }}>
+                        {targetSpec.summary}
+                      </div>
                     </div>
-                    <div className="muted small" style={{ fontSize: '0.72rem' }}>
-                      {meta.hint}
-                    </div>
-                    <label className="field" style={{ gap: 3 }}>
-                      <span className="muted mono" style={{ fontSize: '0.7rem' }}>CLI Agent</span>
-                      <select
-                        className="input"
-                        value={personaAgents[personaKey]}
-                        onChange={(e) =>
-                          setPersonaAgents((prev) => ({
-                            ...prev,
-                            [personaKey]: e.target.value as AgentId,
-                          }))
-                        }
+
+                    {/* Provider Selector (Only shows Enabled Providers!) */}
+                    <div className="field" style={{ gap: 4 }}>
+                      <span
+                        className="muted mono"
+                        style={{
+                          fontSize: '0.68rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                        }}
                       >
-                        {AGENT_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field" style={{ gap: 3 }}>
-                      <span className="muted mono" style={{ fontSize: '0.7rem' }}>Model Tier</span>
+                        <span>AI Provider / CLI Engine</span>
+                        <span>
+                          {enabledProviders.length === 1
+                            ? '1 Active Provider'
+                            : `${enabledProviders.length} Active Providers`}
+                        </span>
+                      </span>
+                      {enabledProviders.length === 1 ? (
+                        <div
+                          className="input mono"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '6px 10px',
+                            fontSize: '0.8rem',
+                            background: 'rgba(255,255,255,0.03)',
+                            cursor: 'default',
+                          }}
+                          title="Enable additional providers in Step 1 above to switch providers per persona"
+                        >
+                          <span>
+                            {providerEntry.icon} {providerEntry.label}
+                          </span>
+                          <span className="badge mono" style={{ fontSize: '0.64rem' }}>
+                            Active
+                          </span>
+                        </div>
+                      ) : (
+                        <select
+                          className="input"
+                          value={selectedAgent}
+                          onChange={(e) =>
+                            handlePersonaProviderChange(personaKey, e.target.value as AgentId)
+                          }
+                        >
+                          {enabledProviders.map((provId) => {
+                            const prov = PROVIDER_REGISTRY[provId];
+                            return (
+                              <option key={provId} value={provId}>
+                                {prov.icon} {prov.label}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      )}
+                    </div>
+
+                    {/* Capability Tier Quick-Select Bar (Low / Medium / High) */}
+                    <div className="field" style={{ gap: 4 }}>
+                      <span
+                        className="muted mono"
+                        style={{
+                          fontSize: '0.68rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <span>Capability Tier Quick-Match</span>
+                        <span>Target: ★{targetSpec.recommendedRank}/5</span>
+                      </span>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, 1fr)',
+                          gap: '4px',
+                        }}
+                      >
+                        {(['low', 'medium', 'high'] as const).map((tierKey) => {
+                          const isCurrentTier = activeTier === tierKey && selectedModel !== 'auto';
+                          const tMeta = TIER_COLORS[tierKey];
+                          return (
+                            <button
+                              key={tierKey}
+                              type="button"
+                              onClick={() => handlePersonaTierQuickSelect(personaKey, tierKey)}
+                              style={{
+                                padding: '4px 6px',
+                                fontSize: '0.68rem',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: isCurrentTier ? 700 : 500,
+                                borderRadius: '5px',
+                                cursor: 'pointer',
+                                background: isCurrentTier ? tMeta.bg : 'rgba(255,255,255,0.02)',
+                                border: isCurrentTier
+                                  ? `1px solid ${tMeta.border}`
+                                  : '1px solid var(--border)',
+                                color: isCurrentTier ? tMeta.text : 'var(--text-muted)',
+                                transition: 'all 0.12s ease',
+                              }}
+                              title={`Auto-select ${providerEntry.shortLabel}'s ${tierKey.toUpperCase()} tier model`}
+                            >
+                              {tierKey === 'low'
+                                ? 'LOW ★1-2'
+                                : tierKey === 'medium'
+                                  ? 'MED ★3'
+                                  : 'HIGH ★4-5'}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Strictly Provider-Scoped Model Dropdown */}
+                    <label className="field" style={{ gap: 4 }}>
+                      <span
+                        className="muted mono"
+                        style={{
+                          fontSize: '0.68rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <span>{providerEntry.shortLabel} Model Selection</span>
+                        <span className="mono">{providerModels.length} Models</span>
+                      </span>
                       <select
                         className="input"
-                        value={personaModels[personaKey] ?? 'auto'}
+                        value={selectedModel}
                         onChange={(e) =>
                           setPersonaModels((prev) => ({
                             ...prev,
@@ -507,89 +956,64 @@ export function SettingsPage({
                           }))
                         }
                       >
-                        {MODEL_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
+                        {providerModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {formatRankStars(m.rank)} [{m.rank}/5 · {m.tier.toUpperCase()}] {m.label}
                           </option>
                         ))}
+                        <option value="auto">
+                          ⚡ Auto (Match Persona Target Rank ★{targetSpec.recommendedRank})
+                        </option>
                       </select>
                     </label>
+
+                    {/* Selected Model Capability Tags & Description */}
+                    {modelInfo && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '5px',
+                          padding: '7px 9px',
+                          borderRadius: '6px',
+                          background: 'rgba(0, 0, 0, 0.18)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {modelInfo.capabilities.map((cap) => {
+                            const cMeta = CAPABILITY_TAG_META[cap];
+                            return (
+                              <span
+                                key={cap}
+                                className="mono"
+                                style={{
+                                  fontSize: '0.64rem',
+                                  padding: '1px 5px',
+                                  borderRadius: '4px',
+                                  background: 'rgba(255,255,255,0.05)',
+                                  color: 'var(--text-secondary)',
+                                }}
+                              >
+                                {cMeta.icon} {cMeta.label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        <div className="muted small" style={{ fontSize: '0.69rem', lineHeight: 1.3 }}>
+                          {modelInfo.description}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           </div>
 
-          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: 0 }} />
-
-          <div>
-            <span className="eyebrow">Provider Credentials</span>
-            <h3 style={{ margin: '4px 0 6px' }}>API Keys (Optional Override)</h3>
-            <p className="muted small">
-              Keys are stored in SQLite and injected into agent PTY environments (<code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>). Leave blank to use your existing host CLI login.
-            </p>
-
-            <div
-              style={{
-                marginTop: '12px',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-                gap: '12px',
-              }}
-            >
-              <label className="field">
-                <span style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Anthropic API Key (Claude)</span>
-                  <span className="badge mono">
-                    {settings?.anthropicKeyConfigured ? '✓ Configured' : 'Host Auth'}
-                  </span>
-                </span>
-                <input
-                  type="password"
-                  className="input mono"
-                  placeholder={settings?.anthropicKeyConfigured ? '••••••••••••••••' : 'sk-ant-...'}
-                  value={anthropicApiKey}
-                  onChange={(e) => setAnthropicApiKey(e.target.value)}
-                />
-              </label>
-
-              <label className="field">
-                <span style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Google Gemini API Key (Gemini CLI)</span>
-                  <span className="badge mono">
-                    {settings?.geminiKeyConfigured ? '✓ Configured' : 'Not set'}
-                  </span>
-                </span>
-                <input
-                  type="password"
-                  className="input mono"
-                  placeholder={settings?.geminiKeyConfigured ? '••••••••••••••••' : 'AIzaSy...'}
-                  value={geminiApiKey}
-                  onChange={(e) => setGeminiApiKey(e.target.value)}
-                />
-              </label>
-
-              <label className="field">
-                <span style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>OpenAI API Key (Codex / Aider)</span>
-                  <span className="badge mono">
-                    {settings?.openaiKeyConfigured ? '✓ Configured' : 'Not set'}
-                  </span>
-                </span>
-                <input
-                  type="password"
-                  className="input mono"
-                  placeholder={settings?.openaiKeyConfigured ? '••••••••••••••••' : 'sk-proj-...'}
-                  value={openaiApiKey}
-                  onChange={(e) => setOpenaiApiKey(e.target.value)}
-                />
-              </label>
-            </div>
-          </div>
-
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Saving…' : '💾 Save AI Providers & Persona Routing'}
+              {saving ? 'Saving…' : '💾 Save Active Providers & Capability Matrix'}
             </button>
           </div>
         </form>
@@ -600,3 +1024,4 @@ export function SettingsPage({
     </div>
   );
 }
+

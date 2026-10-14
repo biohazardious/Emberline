@@ -12,6 +12,7 @@ import {
   type AgentTicketDraft,
   type BrowserViewportSnapshot,
   type BuildDemoResponse,
+  coerceModelForProvider,
   type FactoryAttachmentInput,
   FactorySettings,
   type Project,
@@ -22,6 +23,7 @@ import {
   type ProjectStatusSummary,
   type ProjectTechStack,
   type Run,
+  selectProviderModelByRank,
   type SyncWorktreeResponse,
   type TaskTemplate,
   type Ticket,
@@ -1425,32 +1427,81 @@ const DEFAULT_PERSONA_MODELS: Record<AgentPersona, AgentModelId> = {
   security: 'opus',
 };
 
+const ALL_PERSONA_KEYS: readonly AgentPersona[] = [
+  'product_owner',
+  'architect',
+  'ui_ux',
+  'coder',
+  'dba',
+  'qa',
+  'security',
+];
+
 export function getFactorySettings(db: Db): FactorySettings {
   const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
   const raw = (row?.value ?? {}) as Partial<FactorySettings>;
   const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
 
+  const anthropicKeyConfigured = Boolean(keys.anthropicApiKey || process.env.ANTHROPIC_API_KEY);
+  const openaiKeyConfigured = Boolean(keys.openaiApiKey || process.env.OPENAI_API_KEY);
+  const geminiKeyConfigured = Boolean(
+    keys.geminiApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
+  );
+
+  // Derive active/enabled providers: Claude is always available by default via Host CLI Auth / API key.
+  const enabledSet = new Set<AgentId>(
+    Array.isArray(raw.enabledProviders) && raw.enabledProviders.length > 0
+      ? raw.enabledProviders
+      : ['claude'],
+  );
+  if (enabledSet.size === 0) enabledSet.add('claude');
+  if (!Array.isArray(raw.enabledProviders)) {
+    if (openaiKeyConfigured) enabledSet.add('codex');
+    if (geminiKeyConfigured) enabledSet.add('gemini');
+  }
+  const enabledProviders = Array.from(enabledSet);
+
+  const defaultAgent: AgentId =
+    raw.defaultAgent && enabledSet.has(raw.defaultAgent)
+      ? raw.defaultAgent
+      : (enabledProviders[0] ?? 'claude');
+
+  const rawPersonaAgents = {
+    ...DEFAULT_PERSONA_AGENTS,
+    ...(raw.personaAgents ?? {}),
+  };
+  const rawPersonaModels = {
+    ...DEFAULT_PERSONA_MODELS,
+    ...(raw.personaModels ?? {}),
+  };
+
+  const normalizedAgents = { ...DEFAULT_PERSONA_AGENTS };
+  const normalizedModels = { ...DEFAULT_PERSONA_MODELS };
+
+  for (const p of ALL_PERSONA_KEYS) {
+    const candidateAgent = rawPersonaAgents[p] ?? defaultAgent;
+    const validAgent = enabledSet.has(candidateAgent) ? candidateAgent : defaultAgent;
+    normalizedAgents[p] = validAgent;
+    const candidateModel = rawPersonaModels[p] ?? DEFAULT_PERSONA_MODELS[p];
+    normalizedModels[p] = coerceModelForProvider(validAgent, candidateModel, p);
+  }
+
   return FactorySettings.parse({
     theme: raw.theme ?? 'dark',
-    defaultAgent: raw.defaultAgent ?? 'claude',
-    personaAgents: {
-      ...DEFAULT_PERSONA_AGENTS,
-      ...(raw.personaAgents ?? {}),
-    },
-    personaModels: {
-      ...DEFAULT_PERSONA_MODELS,
-      ...(raw.personaModels ?? {}),
-    },
+    defaultAgent,
+    enabledProviders,
+    personaAgents: normalizedAgents,
+    personaModels: normalizedModels,
     quotaAutoDowngrade: raw.quotaAutoDowngrade ?? true,
     autoPickupReady: raw.autoPickupReady ?? true,
     autoPickupBacklog: raw.autoPickupBacklog ?? false,
     autoSyncToMain: raw.autoSyncToMain ?? true,
     selfHealingBuildGate: raw.selfHealingBuildGate ?? true,
     autoMoveToDone: raw.autoMoveToDone ?? true,
-    anthropicKeyConfigured: Boolean(keys.anthropicApiKey || process.env.ANTHROPIC_API_KEY),
-    openaiKeyConfigured: Boolean(keys.openaiApiKey || process.env.OPENAI_API_KEY),
-    geminiKeyConfigured: Boolean(keys.geminiApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+    anthropicKeyConfigured,
+    openaiKeyConfigured,
+    geminiKeyConfigured,
   });
 }
 
@@ -1458,17 +1509,52 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
   const body = UpdateFactorySettingsBody.parse(input);
   const current = getFactorySettings(db);
 
+  const enabledSet = new Set<AgentId>(body.enabledProviders ?? current.enabledProviders ?? ['claude']);
+  if (body.openaiApiKey && body.openaiApiKey.trim().length > 0) {
+    enabledSet.add('codex');
+  }
+  if (body.geminiApiKey && body.geminiApiKey.trim().length > 0) {
+    enabledSet.add('gemini');
+  }
+  if (body.anthropicApiKey && body.anthropicApiKey.trim().length > 0) {
+    enabledSet.add('claude');
+  }
+  if (enabledSet.size === 0) {
+    enabledSet.add('claude');
+  }
+  const enabledProviders = Array.from(enabledSet);
+
+  const nextDefaultAgent: AgentId =
+    body.defaultAgent && enabledSet.has(body.defaultAgent)
+      ? body.defaultAgent
+      : enabledSet.has(current.defaultAgent)
+        ? current.defaultAgent
+        : (enabledProviders[0] ?? 'claude');
+
+  const mergedAgents = {
+    ...current.personaAgents,
+    ...(body.personaAgents ?? {}),
+  };
+  const mergedModels = {
+    ...current.personaModels,
+    ...(body.personaModels ?? {}),
+  };
+
+  const normalizedAgents = { ...mergedAgents };
+  const normalizedModels = { ...mergedModels };
+  for (const p of ALL_PERSONA_KEYS) {
+    const requestedAgent = mergedAgents[p] ?? nextDefaultAgent;
+    const validAgent = enabledSet.has(requestedAgent) ? requestedAgent : nextDefaultAgent;
+    normalizedAgents[p] = validAgent;
+    normalizedModels[p] = coerceModelForProvider(validAgent, mergedModels[p] ?? DEFAULT_PERSONA_MODELS[p], p);
+  }
+
   const nextValue = {
     theme: body.theme ?? current.theme,
-    defaultAgent: body.defaultAgent ?? current.defaultAgent,
-    personaAgents: {
-      ...current.personaAgents,
-      ...(body.personaAgents ?? {}),
-    },
-    personaModels: {
-      ...current.personaModels,
-      ...(body.personaModels ?? {}),
-    },
+    defaultAgent: nextDefaultAgent,
+    enabledProviders,
+    personaAgents: normalizedAgents,
+    personaModels: normalizedModels,
     quotaAutoDowngrade: body.quotaAutoDowngrade ?? current.quotaAutoDowngrade,
     autoPickupReady: body.autoPickupReady ?? current.autoPickupReady,
     autoPickupBacklog: body.autoPickupBacklog ?? current.autoPickupBacklog,
@@ -1530,27 +1616,33 @@ export function resolveAgentForPersona(
   persona: AgentPersona,
   explicitAgent?: AgentId,
 ): AgentId {
-  if (explicitAgent) return explicitAgent;
   const cfg = getFactorySettings(db);
-  return cfg.personaAgents[persona] ?? cfg.defaultAgent ?? 'claude';
+  if (explicitAgent && cfg.enabledProviders.includes(explicitAgent)) return explicitAgent;
+  const personaAgent = cfg.personaAgents[persona];
+  if (personaAgent && cfg.enabledProviders.includes(personaAgent)) return personaAgent;
+  return cfg.defaultAgent ?? 'claude';
 }
 
 export function resolveModelForPersona(
   db: Db,
   persona: AgentPersona,
   explicitModel?: AgentModelId,
+  explicitAgent?: AgentId,
 ): AgentModelId {
   const cfg = getFactorySettings(db);
-  const candidate =
+  const agent = resolveAgentForPersona(db, persona, explicitAgent);
+  const rawCandidate =
     explicitModel && explicitModel !== 'auto'
       ? explicitModel
       : (cfg.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona] ?? 'opus');
+  const candidate = coerceModelForProvider(agent, rawCandidate, persona);
   if (
     cfg.quotaAutoDowngrade &&
+    agent === 'claude' &&
     getLastKnownClaudeUtilizationPercent() >= 80 &&
     (candidate === 'fable' || candidate === 'opus')
   ) {
-    return 'sonnet';
+    return selectProviderModelByRank(agent, 3);
   }
   return candidate;
 }

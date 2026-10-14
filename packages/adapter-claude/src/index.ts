@@ -203,7 +203,12 @@ export type ClaudeModelTier =
   | 'haiku'
   | 'argon'
   | 'gemini-pro'
-  | 'gpt-4o';
+  | 'gemini-flash'
+  | 'gemini-flash-lite'
+  | 'o3'
+  | 'gpt-4o'
+  | 'o4-mini'
+  | 'gpt-4o-mini';
 
 export interface ClaudeLaunchOptions {
   runId: string;
@@ -232,9 +237,18 @@ export interface ClaudeLaunchOptions {
 
 export function resolveClaudeCliModelFlag(model?: ClaudeModelTier): string | undefined {
   if (!model || model === 'auto') return undefined;
-  if (model === 'fable' || model === 'opus') return 'opus';
-  if (model === 'sonnet' || model === 'argon' || model === 'gemini-pro' || model === 'gpt-4o') return 'sonnet';
-  if (model === 'haiku') return 'haiku';
+  if (model === 'fable' || model === 'opus' || model === 'o3') return 'opus';
+  if (
+    model === 'sonnet' ||
+    model === 'argon' ||
+    model === 'gemini-pro' ||
+    model === 'gemini-flash' ||
+    model === 'gpt-4o' ||
+    model === 'o4-mini'
+  ) {
+    return 'sonnet';
+  }
+  if (model === 'haiku' || model === 'gemini-flash-lite' || model === 'gpt-4o-mini') return 'haiku';
   return undefined;
 }
 
@@ -313,17 +327,29 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
       : `if command -v ${bin} >/dev/null 2>&1; then ${bin}; else claude --model sonnet; fi`;
   } else if (options.agent === 'gemini') {
     const bin = process.env.EMBERLINE_GEMINI_COMMAND?.trim() || 'gemini';
-    const flags = autoApprove ? '--yolo ' : '';
+    const geminiModel =
+      options.model === 'gemini-pro'
+        ? '--model gemini-2.5-pro '
+        : options.model === 'gemini-flash'
+          ? '--model gemini-2.5-flash '
+          : options.model === 'gemini-flash-lite'
+            ? '--model gemini-2.5-flash-lite '
+            : '';
+    const flags = `${autoApprove ? '--yolo ' : ''}${geminiModel}`;
     cliCmd = options.prompt
       ? `${bin} ${flags}-p "$EMBERLINE_PROMPT"`
       : `${bin} ${flags}`.trim();
   } else if (options.agent === 'codex') {
     const bin = process.env.EMBERLINE_CODEX_COMMAND?.trim() || 'codex';
-    const flags = autoApprove ? '--full-auto ' : '';
+    const codexModel =
+      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
+    const flags = `${autoApprove ? '--full-auto ' : ''}${codexModel}`;
     cliCmd = options.prompt ? `${bin} ${flags}"$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
   } else {
     const bin = process.env.EMBERLINE_AIDER_COMMAND?.trim() || 'aider';
-    const flags = autoApprove ? '--yes-always ' : '';
+    const aiderModel =
+      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
+    const flags = `${autoApprove ? '--yes-always ' : ''}${aiderModel}`;
     cliCmd = options.prompt
       ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"`
       : `${bin} ${flags}`.trim();

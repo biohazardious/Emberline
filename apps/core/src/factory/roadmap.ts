@@ -2,25 +2,26 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type {
-  AgentId,
-  AgentModelId,
-  AgentPersona,
-  BrainstormRequestBody,
-  BrainstormResponse,
-  BrainstormSuggestion,
-  CreateMilestoneBody,
-  CreateRoadmapItemBody,
-  DispatchRoadmapItemsBody,
-  DispatchRoadmapItemsResponse,
-  FactorySettings,
-  Project,
-  ProjectRoadmapState,
-  RoadmapCategory,
-  RoadmapItem,
-  RoadmapMilestone,
-  Ticket,
-  UpdateRoadmapItemBody,
+import {
+  type AgentId,
+  type AgentModelId,
+  type AgentPersona,
+  type BrainstormRequestBody,
+  type BrainstormResponse,
+  type BrainstormSuggestion,
+  coerceModelForProvider,
+  type CreateMilestoneBody,
+  type CreateRoadmapItemBody,
+  type DispatchRoadmapItemsBody,
+  type DispatchRoadmapItemsResponse,
+  type FactorySettings,
+  type Project,
+  type ProjectRoadmapState,
+  type RoadmapCategory,
+  type RoadmapItem,
+  type RoadmapMilestone,
+  type Ticket,
+  type UpdateRoadmapItemBody,
 } from '@emberline/protocol';
 import type { TicketService } from '../tickets/service.js';
 import { listWorkspaceFilesFlat, readProjectBlueprint } from './service.js';
@@ -43,14 +44,21 @@ function defaultRoutingForPersona(
   preferredModel: AgentModelId;
 } {
   if (fSettings) {
-    const preferredAgent = fSettings.personaAgents[persona] ?? fSettings.defaultAgent ?? 'claude';
-    const preferredModel =
+    const enabled: AgentId[] = fSettings.enabledProviders?.length
+      ? fSettings.enabledProviders
+      : ['claude'];
+    const rawAgent = fSettings.personaAgents[persona] ?? fSettings.defaultAgent ?? 'claude';
+    const preferredAgent: AgentId = enabled.includes(rawAgent)
+      ? rawAgent
+      : (enabled[0] ?? 'claude');
+    const rawModel =
       fSettings.personaModels?.[persona] ??
       (persona === 'product_owner' || persona === 'architect'
         ? 'fable'
         : persona === 'qa'
           ? 'sonnet'
           : 'opus');
+    const preferredModel = coerceModelForProvider(preferredAgent, rawModel, persona);
     return { preferredAgent, preferredModel };
   }
   switch (persona) {
@@ -635,33 +643,39 @@ async function readOrInitRoadmapFile(
     }
   }
 
-  // Normalize any uncustomized suggestion/item routes that still point to an unconfigured secondary agent
-  // (e.g., `antigravity · argon` when the user's Settings route for that persona is `claude`).
+  const enabledProviders = fSettings.enabledProviders?.length
+    ? fSettings.enabledProviders
+    : (['claude'] as AgentId[]);
+
+  // Normalize any suggestion/item routes that point to a disabled provider or a mismatched cross-provider model
   for (const sug of stored.suggestions ?? []) {
-    const customFlag = (sug as BrainstormSuggestion & { routeCustomized?: boolean }).routeCustomized;
     const configuredRoute = defaultRoutingForPersona(sug.persona, fSettings);
-    if (
-      !customFlag &&
-      sug.preferredAgent === 'antigravity' &&
-      configuredRoute.preferredAgent !== 'antigravity'
-    ) {
-      sug.preferredAgent = configuredRoute.preferredAgent;
-      sug.preferredModel = configuredRoute.preferredModel;
+    const agentAllowed = enabledProviders.includes(sug.preferredAgent);
+    const nextAgent = agentAllowed ? sug.preferredAgent : configuredRoute.preferredAgent;
+    const nextModel = coerceModelForProvider(
+      nextAgent,
+      agentAllowed ? sug.preferredModel : configuredRoute.preferredModel,
+      sug.persona,
+    );
+    if (sug.preferredAgent !== nextAgent || sug.preferredModel !== nextModel) {
+      sug.preferredAgent = nextAgent;
+      sug.preferredModel = nextModel;
       dirty = true;
     }
   }
   for (const ms of stored.milestones) {
     for (const item of ms.items) {
-      const customFlag = (item as RoadmapItem & { routeCustomized?: boolean }).routeCustomized;
       const configuredRoute = defaultRoutingForPersona(item.persona, fSettings);
-      if (
-        !customFlag &&
-        !item.ticketId &&
-        item.preferredAgent === 'antigravity' &&
-        configuredRoute.preferredAgent !== 'antigravity'
-      ) {
-        item.preferredAgent = configuredRoute.preferredAgent;
-        item.preferredModel = configuredRoute.preferredModel;
+      const agentAllowed = enabledProviders.includes(item.preferredAgent);
+      const nextAgent = agentAllowed ? item.preferredAgent : configuredRoute.preferredAgent;
+      const nextModel = coerceModelForProvider(
+        nextAgent,
+        agentAllowed ? item.preferredModel : configuredRoute.preferredModel,
+        item.persona,
+      );
+      if (item.preferredAgent !== nextAgent || item.preferredModel !== nextModel) {
+        item.preferredAgent = nextAgent;
+        item.preferredModel = nextModel;
         dirty = true;
       }
     }
@@ -680,8 +694,14 @@ async function readOrInitRoadmapFile(
           const persona: AgentPersona = s.persona ?? 'coder';
           const routing = defaultRoutingForPersona(persona, fSettings);
           const requestedAgent = s.preferredAgent ?? routing.preferredAgent;
-          const useConfigured =
-            requestedAgent === 'antigravity' && routing.preferredAgent !== 'antigravity';
+          const validAgent = enabledProviders.includes(requestedAgent)
+            ? requestedAgent
+            : routing.preferredAgent;
+          const validModel = coerceModelForProvider(
+            validAgent,
+            s.preferredModel ?? routing.preferredModel,
+            persona,
+          );
           stored.suggestions.unshift({
             id: `sug-${randomUUID().slice(0, 8)}`,
             title: s.title,
@@ -691,8 +711,8 @@ async function readOrInitRoadmapFile(
             impact: s.impact ?? 'high',
             effort: s.effort ?? 'medium',
             persona,
-            preferredAgent: useConfigured ? routing.preferredAgent : requestedAgent,
-            preferredModel: useConfigured ? routing.preferredModel : (s.preferredModel ?? routing.preferredModel),
+            preferredAgent: validAgent,
+            preferredModel: validModel,
             suggestedMilestoneCode: s.suggestedMilestoneCode ?? 'M2',
           });
           existingSuggestionTitles.add(s.title.toLowerCase());
@@ -879,6 +899,14 @@ export async function addRoadmapItem(
   const fSettings = ticketService.factorySettings();
   const persona = input.persona ?? 'coder';
   const routing = defaultRoutingForPersona(persona, fSettings);
+  const chosenAgent = input.preferredAgent ?? routing.preferredAgent;
+  const chosenModel = coerceModelForProvider(
+    chosenAgent,
+    input.preferredModel && input.preferredModel !== 'auto'
+      ? input.preferredModel
+      : routing.preferredModel,
+    persona,
+  );
   const newItem: RoadmapItem & { routeCustomized?: boolean } = {
     id: `item-${randomUUID().slice(0, 8)}`,
     milestoneId: targetMs.id,
@@ -886,11 +914,8 @@ export async function addRoadmapItem(
     description: input.description?.trim() || input.title.trim(),
     category: input.category ?? categoryForPersona(persona),
     persona,
-    preferredAgent: input.preferredAgent ?? routing.preferredAgent,
-    preferredModel:
-      input.preferredModel && input.preferredModel !== 'auto'
-        ? input.preferredModel
-        : routing.preferredModel,
+    preferredAgent: chosenAgent,
+    preferredModel: chosenModel,
     priority: input.priority ?? 2,
     status: input.status ?? 'planned',
     ticketId: null,
@@ -929,6 +954,7 @@ export async function updateRoadmapItem(
       sug.preferredModel = patch.preferredModel;
       sug.routeCustomized = true;
     }
+    sug.preferredModel = coerceModelForProvider(sug.preferredAgent, sug.preferredModel, sug.persona);
     if (patch.milestoneId !== undefined) {
       sug.suggestedMilestoneCode = patch.milestoneId;
     }
@@ -964,6 +990,7 @@ export async function updateRoadmapItem(
     found.preferredModel = patch.preferredModel;
     found.routeCustomized = true;
   }
+  found.preferredModel = coerceModelForProvider(found.preferredAgent, found.preferredModel, found.persona);
   if (patch.priority !== undefined) found.priority = patch.priority;
 
   // Sync updated route or persona to the linked Kanban ticket if one exists
