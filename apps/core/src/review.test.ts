@@ -164,6 +164,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
     );
     expect(rawRes.statusCode).toBe(200);
     expect(rawRes.headers['content-type']).toBe('image/png');
+    expect(rawRes.headers['content-security-policy']).toMatch(/^sandbox /);
     expect(rawRes.rawPayload).toEqual(fakePng);
 
     const traversalRes = await api(

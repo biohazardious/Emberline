@@ -59,6 +59,7 @@ import {
   resolveSkillPluginPromptForPersona,
 } from '../factory/service.js';
 import { auditWorktreeSlop } from '../factory/slop-guard.js';
+import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath } from '../demo-token.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
@@ -183,6 +184,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   private reconciling = false;
   private lastAutoGcAt = 0;
+  private readonly demoTokens: DemoTokens;
 
   constructor(
     private readonly db: Db,
@@ -191,6 +193,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   ) {
     super();
     this.setMaxListeners(0); // one listener per open UI socket
+    this.demoTokens = new DemoTokens(db);
   }
 
   /** Starts periodic reconciliation with ptyd. */
@@ -505,7 +508,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       );
     }
 
-    const demoUrl = `http://localhost:7420/api/projects/${row.projectId}/demo/main/`;
+    const demoToken = this.demoTokens.mint({ projectId: row.projectId, targetId: 'main' }, AGENT_DEMO_TOKEN_TTL_MS);
+    const demoUrl = `http://localhost:${this.config.port}${demoBasePath(demoToken)}`;
     const spec = isSecondary
       ? buildSecondaryCliLaunchSpec({
           agent: row.agent as 'antigravity' | 'copilot' | 'gemini' | 'codex' | 'aider',

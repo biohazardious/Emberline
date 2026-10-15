@@ -15,6 +15,7 @@ import type {
 } from '@emberline/protocol';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { MonacoDiff, type DiffAnnotation } from './MonacoDiff';
 import { formatAgentDisplayName } from './RunInspector';
 
@@ -1171,6 +1172,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       previewArtifact.path,
                     )}`}
                     className="artifact-iframe-preview"
+                    sandbox={DEMO_IFRAME_SANDBOX}
                   />
                 )}
               </div>

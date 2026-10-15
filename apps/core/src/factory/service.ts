@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -1410,6 +1410,12 @@ export async function serveWorkspaceDemoAsset(params: {
   const cleanSub = subPath.replace(/^\/+/, '');
   const requestedRel = cleanSub.length === 0 ? path.basename(entryAbs) : cleanSub;
   const resolvedAbs = path.resolve(demoRootDir, requestedRel);
+  const notFound = { status: 404, contentType: 'text/plain; charset=utf-8', body: `Asset not found: ${requestedRel}` };
+
+  // Dotfiles (.env, .git/...) are never part of a demo bundle.
+  if (requestedRel.split(/[\\/]/).some((segment) => segment.startsWith('.') && segment !== '.' && segment !== '..')) {
+    return notFound;
+  }
 
   // Prevent path traversal outside demoRootDir
   if (!resolvedAbs.startsWith(demoRootDir + path.sep) && resolvedAbs !== demoRootDir) {
@@ -1426,11 +1432,7 @@ export async function serveWorkspaceDemoAsset(params: {
     if (!path.extname(targetFile)) {
       targetFile = entryAbs;
     } else {
-      return {
-        status: 404,
-        contentType: 'text/plain; charset=utf-8',
-        body: `Asset not found: ${requestedRel}`,
-      };
+      return notFound;
     }
   } else {
     const fileStat = await stat(targetFile);
@@ -1441,6 +1443,14 @@ export async function serveWorkspaceDemoAsset(params: {
       }
     }
   }
+
+  // The lexical check above does not see symlinks; resolve them and stay inside the demo root.
+  const realRoot = await realpath(demoRootDir).catch(() => null);
+  const realTarget = await realpath(targetFile).catch(() => null);
+  if (!realRoot || !realTarget || (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep))) {
+    return notFound;
+  }
+  targetFile = realTarget;
 
   const ext = path.extname(targetFile).toLowerCase();
   const contentType = MIME_BY_EXT[ext] ?? 'application/octet-stream';

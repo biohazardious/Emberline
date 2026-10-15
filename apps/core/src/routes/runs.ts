@@ -16,6 +16,7 @@ import {
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { badRequest } from '../errors.js';
+import { UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -92,7 +93,9 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
       if (!request.query.path) throw badRequest('query parameter "path" is required');
       const { buffer, contentType, fileName } = await runs.readArtifact(request.params.id, request.query.path);
       reply.header('Content-Type', contentType);
-      reply.header('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+      reply.header('Content-Disposition', `inline; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`);
+      // Agent-written HTML/SVG must not run with the Emberline origin.
+      reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
       return reply.send(buffer);
     },
   );

@@ -12,8 +12,12 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/state', '/api/auth/setup', '/api/auth/login']);
 /** Machine-to-machine routes (runner -> core) that carry their own credentials. */
 const INTERNAL_PREFIX = '/api/internal/';
-/** Static project demo bundle assets rendered in iframes and runner Chromium / Playwright MCP. */
-const DEMO_ASSET_ROUTES = new Set(['/api/projects/:id/demo/:targetId', '/api/projects/:id/demo/:targetId/*']);
+/**
+ * Live demo assets, authorized by the signed capability token in their path. They are requested by
+ * sandboxed (opaque-origin, `Origin: null`) documents and by the runner's browser, neither of
+ * which carries a session.
+ */
+const DEMO_ASSET_ROUTES = new Set(['/api/demo/:token', '/api/demo/:token/*']);
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW_MS = 15 * 60_000;

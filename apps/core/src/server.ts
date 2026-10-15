@@ -40,6 +40,8 @@ export interface CoreDeps {
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     bodyLimit: DEFAULT_BODY_LIMIT,
+    // Demo capability tokens travel as a path parameter.
+    routerOptions: { maxParamLength: 512 },
     ...fastifyOptions,
     trustProxy: deps.config.trustProxy,
   });

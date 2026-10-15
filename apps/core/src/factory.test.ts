@@ -215,20 +215,22 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(status.targets[0]?.demoEntryRelPath).toBe('dist/index.html');
     expect(status.targets[0]?.demoUrl).toBe(`/api/projects/${p1.id}/demo/main/`);
 
-    const demoHtmlRes = await t.app.inject({
+    const demoRedirect = await t.app.inject({
       url: `/api/projects/${p1.id}/demo/main/`,
       headers: { cookie },
     });
+    expect(demoRedirect.statusCode).toBe(302);
+    const demoBase = String(demoRedirect.headers.location);
+    expect(demoBase).toMatch(/^\/api\/demo\/[\w-]+\.[\w-]+\/$/);
+
+    const demoHtmlRes = await t.app.inject({ url: demoBase });
     expect(demoHtmlRes.statusCode).toBe(200);
     expect(demoHtmlRes.headers['content-type']).toContain('text/html');
-    expect(demoHtmlRes.body).toContain(`<base href="/api/projects/${p1.id}/demo/main/">`);
+    expect(demoHtmlRes.body).toContain(`<base href="${demoBase}">`);
     expect(demoHtmlRes.body).toContain('src="./assets/app.js"');
     expect(demoHtmlRes.body).toContain('emberline:demo-error');
 
-    const demoJsRes = await t.app.inject({
-      url: `/api/projects/${p1.id}/demo/main/assets/app.js`,
-      headers: { cookie },
-    });
+    const demoJsRes = await t.app.inject({ url: `${demoBase}assets/app.js` });
     expect(demoJsRes.statusCode).toBe(200);
     expect(demoJsRes.headers['content-type']).toContain('application/javascript');
     expect(demoJsRes.body).toContain('flappy ready');

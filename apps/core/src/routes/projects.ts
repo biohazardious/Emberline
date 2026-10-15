@@ -102,7 +102,8 @@ import {
   writeProjectBlueprint,
   writeWorkspaceFileContent,
 } from '../factory/service.js';
-import { EDITOR_BODY_LIMIT, UPLOAD_BODY_LIMIT } from '../security-headers.js';
+import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
+import { EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
 import { ToolchainService } from '../toolchain/service.js';
 
@@ -383,42 +384,61 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     },
   );
 
-  const handleDemoRequest = async (
-    projectId: string,
-    targetId: string,
-    subPath: string,
-    reply: FastifyReply,
-  ) => {
+  const demoTokens = new DemoTokens(db);
+
+  const resolveDemoWorkspace = (projectId: string, targetId: string): string | null => {
     const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
-    if (!row) throw notFound('no such project');
-    const project = toProject(row);
-    let workspacePath = project.path;
-    if (targetId !== 'main') {
-      const run = runs.get(targetId);
-      if (!run || run.projectId !== project.id) throw notFound('no such run target');
-      workspacePath = run.worktreePath;
-    }
-    const demoBaseHref = `/api/projects/${project.id}/demo/${targetId}/`;
-    const result = await serveWorkspaceDemoAsset({
-      workspacePath,
-      demoBaseHref,
-      subPath,
-    });
-    reply.code(result.status).header('content-type', result.contentType).send(result.body);
+    if (!row) return null;
+    if (targetId === 'main') return row.path;
+    const run = runs.get(targetId);
+    return run && run.projectId === row.id ? run.worktreePath : null;
+  };
+
+  /** URL agents and the runner browser use to reach the demo (no session cookie there). */
+  const agentDemoUrl = (projectId: string, targetId: string) =>
+    `http://localhost:${config.port}${demoBasePath(demoTokens.mint({ projectId, targetId }, AGENT_DEMO_TOKEN_TTL_MS))}`;
+
+  // Authenticated entry point: hands the browser a short-lived capability URL. Demo documents run
+  // sandboxed with an opaque origin, so they cannot reuse the session to call the API.
+  const redirectToDemo = (projectId: string, targetId: string, subPath: string, rawUrl: string, reply: FastifyReply) => {
+    if (!resolveDemoWorkspace(projectId, targetId)) throw notFound('no such demo target');
+    const token = demoTokens.mint({ projectId, targetId }, UI_DEMO_TOKEN_TTL_MS);
+    const query = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
+    return reply.redirect(`${demoBasePath(token)}${subPath.replace(/^\/+/, '')}${query}`);
   };
 
   app.get<{ Params: { id: string; targetId: string } }>(
     '/api/projects/:id/demo/:targetId',
-    async (request, reply) => {
-      return handleDemoRequest(request.params.id, request.params.targetId, '', reply);
-    },
+    async (request, reply) => redirectToDemo(request.params.id, request.params.targetId, '', request.url, reply),
   );
 
   app.get<{ Params: { id: string; targetId: string; '*': string } }>(
     '/api/projects/:id/demo/:targetId/*',
-    async (request, reply) => {
-      return handleDemoRequest(request.params.id, request.params.targetId, request.params['*'] ?? '', reply);
-    },
+    async (request, reply) =>
+      redirectToDemo(request.params.id, request.params.targetId, request.params['*'] ?? '', request.url, reply),
+  );
+
+  const serveDemo = async (token: string, subPath: string, reply: FastifyReply) => {
+    const target = demoTokens.verify(token);
+    const workspacePath = target ? resolveDemoWorkspace(target.projectId, target.targetId) : null;
+    if (!workspacePath) throw notFound('demo link expired or unknown');
+    const result = await serveWorkspaceDemoAsset({ workspacePath, demoBaseHref: demoBasePath(token), subPath });
+    return reply
+      .code(result.status)
+      .header('content-type', result.contentType)
+      .header('content-security-policy', UNTRUSTED_CONTENT_CSP)
+      // Module scripts and fetches from the sandboxed (opaque-origin) document are CORS requests.
+      .header('access-control-allow-origin', '*')
+      .header('cache-control', 'no-store')
+      .send(result.body);
+  };
+
+  app.get<{ Params: { token: string } }>('/api/demo/:token', async (request, reply) =>
+    serveDemo(request.params.token, '', reply),
+  );
+
+  app.get<{ Params: { token: string; '*': string } }>('/api/demo/:token/*', async (request, reply) =>
+    serveDemo(request.params.token, request.params['*'] ?? '', reply),
   );
 
   const toolchain = new ToolchainService(db, ptyd, config.workspacesDir);
@@ -646,6 +666,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
           .header('content-type', raw.contentType)
           .header('content-length', String(raw.sizeBytes))
           .header('content-disposition', `${disposition}; filename="${safeName}"`)
+          .header('content-security-policy', UNTRUSTED_CONTENT_CSP)
           .send(raw.buffer);
       } catch (err) {
         throw badRequest((err as Error).message);
@@ -708,7 +729,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     async (request): Promise<BrowserViewportSnapshot> => {
       const targetId = request.query.targetId ?? 'main';
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
-      const demoUrl = `http://localhost:${config.port}/api/projects/${project.id}/demo/${targetId}/`;
+      const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
       const runnerSnap = await getRunnerBrowserState({
         ptyd,
@@ -733,7 +754,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const body = BrowserActionBody.parse(request.body);
       const targetId = body.targetId ?? 'main';
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
-      const demoUrl = `http://localhost:${config.port}/api/projects/${project.id}/demo/${targetId}/`;
+      const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
       const runnerSnap = await performRunnerBrowserAction({
         ptyd,

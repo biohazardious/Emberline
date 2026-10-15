@@ -12,6 +12,7 @@ import type {
 import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { usePoll } from '../hooks/usePoll';
 import { LiveBrowserStudio } from './LiveBrowserStudio';
 import { PersonaBadge } from './PersonaBadge';
@@ -230,6 +231,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [submittingTweak, setSubmittingTweak] = useState(false);
   const [rollingBackSha, setRollingBackSha] = useState<string>();
   const [lastBuildOutput, setLastBuildOutput] = useState<string>('');
+  const demoFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   // Worktrees filter: hide completed worktrees by default to avoid clutter
   const [hideCompletedWorktrees, setHideCompletedWorktrees] = useState(true);
@@ -237,6 +239,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   // Listen for runtime errors forwarded by the injected errorBridgeScript inside the Demo iframe
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
+      // Only trust messages from our own demo frame (sandboxed, so its origin is "null").
+      if (!demoFrameRef.current || ev.source !== demoFrameRef.current.contentWindow) return;
       const data = ev.data as { type?: string; message?: string; stack?: string } | undefined;
       if (data && data.type === 'emberline:demo-error' && typeof data.message === 'string') {
         setDemoErrors((prev) => [
@@ -1324,8 +1328,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               </form>
 
               <iframe
+                ref={demoFrameRef}
                 key={`${activeTarget.id}-${iframeNonce}`}
                 src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
+                sandbox={DEMO_IFRAME_SANDBOX}
                 title={`Live Preview - ${activeTarget.label}`}
                 style={{
                   width: '100%',
