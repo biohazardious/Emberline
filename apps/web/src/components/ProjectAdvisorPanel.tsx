@@ -69,7 +69,7 @@ export function ProjectAdvisorPanel({
         const run = await api<Run>('/api/runs', 'POST', {
           projectId: project.id,
           persona: rec.persona,
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           prompt: rec.prompt ?? '',
         });
         await recs.refresh();

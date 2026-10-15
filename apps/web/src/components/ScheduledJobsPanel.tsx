@@ -32,7 +32,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   const [name, setName] = useState('');
   const [cronExpr, setCronExpr] = useState('0 2 * * *');
   const [prompt, setPrompt] = useState('');
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('acceptEdits');
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -211,6 +211,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
               onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
               style={{ maxWidth: '170px' }}
             >
+              <option value="auto">Autonomous</option>
               <option value="acceptEdits">Accept edits</option>
               <option value="default">Ask permissions</option>
               <option value="plan">Plan only</option>

@@ -415,7 +415,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
       runId: 'run-codex-1234',
       hookToken: 'tok',
       coreUrl: 'http://127.0.0.1:7420',
-      permissionMode: 'acceptEdits',
+      permissionMode: 'auto',
       prompt: 'Fix lint',
     });
     expect(codexSpec.file).toBe('sh');

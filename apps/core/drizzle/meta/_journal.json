@@ -43,6 +43,13 @@
       "when": 1791970501314,
       "tag": "0005_flaky_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792027398434,
+      "tag": "0006_auto_permission_mode",
+      "breakpoints": true
     }
   ]
 }

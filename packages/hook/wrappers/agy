@@ -54,16 +54,24 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Approval prompts are only skipped when the run's permission mode is `auto` or `bypassPermissions`.
+SKIP_APPROVALS=()
+GEMINI_APPROVALS=()
+if [ "${EMBERLINE_AUTO_APPROVE:-0}" = "1" ]; then
+  SKIP_APPROVALS=("--dangerously-skip-permissions")
+  GEMINI_APPROVALS=("--yolo")
+fi
+
 if [ -s "/home/node/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -s "/home/node/.config/antigravity/plugin-secrets.json" ]; then
   if [ -n "$PROMPT" ]; then
-    "$AGY_BIN" --dangerously-skip-permissions --output-format stream-json ${CONTINUE_FLAG} "${ARGS[@]}" -p "$PROMPT" 2>&1 | node "$STREAM_PARSER"
+    "$AGY_BIN" "${SKIP_APPROVALS[@]}" --output-format stream-json ${CONTINUE_FLAG} "${ARGS[@]}" -p "$PROMPT" 2>&1 | node "$STREAM_PARSER"
     exit $?
   else
-    exec "$AGY_BIN" --dangerously-skip-permissions ${CONTINUE_FLAG} "${ARGS[@]}"
+    exec "$AGY_BIN" "${SKIP_APPROVALS[@]}" ${CONTINUE_FLAG} "${ARGS[@]}"
   fi
 elif [ -n "$GEMINI_API_KEY" ] || [ -s "/home/node/.gemini/oauth_creds.json" ]; then
   if [ -n "$PROMPT" ]; then
-    exec gemini --yolo -p "$PROMPT"
+    exec gemini "${GEMINI_APPROVALS[@]}" -p "$PROMPT"
   else
     exec gemini
   fi

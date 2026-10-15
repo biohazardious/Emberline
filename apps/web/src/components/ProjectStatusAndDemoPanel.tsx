@@ -290,7 +290,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         {
           prompt: trimmed,
           leadPersona: 'product_owner',
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           autoDispatch,
           attachments:
             factoryAttachments.length > 0
@@ -337,7 +337,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         {
           prompt: `[Live Demo Quick Tweak] ${trimmed}`,
           leadPersona: 'coder',
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           autoDispatch: true,
         },
       );
@@ -365,7 +365,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
         {
           prompt: `[Runtime Error Fix] The Live Demo threw the following runtime error in the browser:\n\nError: ${errItem.message}\n${errItem.stack ? `Stack:\n\`\`\`\n${errItem.stack.slice(0, 1200)}\n\`\`\`\n` : ''}\nPlease diagnose and fix the root cause in the codebase and rebuild the bundle.`,
           leadPersona: 'coder',
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           autoDispatch: true,
         },
       );

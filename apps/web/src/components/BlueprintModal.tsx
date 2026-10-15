@@ -101,7 +101,7 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
       const run = await api<Run>('/api/runs', 'POST', {
         projectId: project.id,
         persona: 'product_owner',
-        permissionMode: 'acceptEdits',
+        permissionMode: 'auto',
         prompt:
           'Read PROJECT.md and inspect the repository structure. Expand and refine PROJECT.md with detailed user stories, architecture boundaries, and testable milestone checklists.',
       });

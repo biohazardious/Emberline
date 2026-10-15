@@ -3,6 +3,7 @@ import {
   buildHookSettings,
   buildLaunchSpec,
   buildPlaywrightMcpConfig,
+  buildSecondaryCliLaunchSpec,
   nextStateFromHook,
   stateAfterExit,
   WATCHED_HOOKS,
@@ -58,11 +59,10 @@ describe('buildLaunchSpec', () => {
     expect(JSON.parse(spec.args[3] ?? '')).toEqual(buildPlaywrightMcpConfig());
   });
 
-  it('enables auto permission mode, pre-allowed tools, and autonomous system prompt when autonomous is true', () => {
+  it('enables auto permission mode, pre-allowed tools, and autonomous system prompt in auto mode', () => {
     const spec = buildLaunchSpec({
       ...base,
-      permissionMode: 'acceptEdits',
-      autonomous: true,
+      permissionMode: 'auto',
       prompt: 'Add score counter',
     });
     const settings = JSON.parse(spec.args[1] ?? '');
@@ -74,10 +74,39 @@ describe('buildLaunchSpec', () => {
     expect(spec.args).toContain('--append-system-prompt');
   });
 
+  it.each(['default', 'acceptEdits', 'plan'] as const)(
+    'keeps approval prompts in %s mode and still appends skill prompts',
+    (permissionMode) => {
+      const spec = buildLaunchSpec({
+        ...base,
+        permissionMode,
+        prompt: 'Add score counter',
+        extraSystemPrompt: '## ACTIVE SKILL: Modern UI Craft',
+      });
+      const settings = JSON.parse(spec.args[1] ?? '');
+      expect(settings.permissions).toBeUndefined();
+      expect(spec.args).not.toContain('auto');
+      const modeIdx = spec.args.indexOf('--permission-mode');
+      expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
+      const promptIdx = spec.args.indexOf('--append-system-prompt');
+      expect(spec.args[promptIdx + 1]).toBe('## ACTIVE SKILL: Modern UI Craft');
+    },
+  );
+
+  it('only auto-approves secondary CLIs in auto or bypassPermissions mode', () => {
+    const secondary = { runId: 'r1', hookToken: 't', coreUrl: 'http://core:7420', prompt: 'go' };
+    const careful = buildSecondaryCliLaunchSpec({ ...secondary, agent: 'gemini', permissionMode: 'acceptEdits' });
+    expect(careful.args[1]).not.toContain('--yolo');
+    expect(careful.env.EMBERLINE_AUTO_APPROVE).toBe('0');
+    const unattended = buildSecondaryCliLaunchSpec({ ...secondary, agent: 'gemini', permissionMode: 'auto' });
+    expect(unattended.args[1]).toContain('--yolo');
+    expect(unattended.env.EMBERLINE_AUTO_APPROVE).toBe('1');
+  });
+
   it('merges customMcpServers into --mcp-config, pre-allows mcp__<id>__* tools, and appends extraSystemPrompt', () => {
     const spec = buildLaunchSpec({
       ...base,
-      autonomous: true,
+      permissionMode: 'auto',
       playwrightMcp: true,
       customMcpServers: {
         context7: {

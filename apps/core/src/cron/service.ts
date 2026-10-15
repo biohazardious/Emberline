@@ -207,7 +207,7 @@ export class CronService {
       name: body.name,
       cronExpr: body.cronExpr,
       prompt: body.prompt,
-      permissionMode: body.permissionMode ?? 'acceptEdits',
+      permissionMode: body.permissionMode ?? 'auto',
       enabled: body.enabled ?? true,
       lastRunId: null,
       lastRunAt: null,

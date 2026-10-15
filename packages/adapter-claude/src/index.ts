@@ -252,11 +252,6 @@ export interface ClaudeLaunchOptions {
   permissionMode?: ClaudePermissionMode;
   /** Optional model tier (fable, opus, sonnet, haiku, etc.). */
   model?: ClaudeModelTier;
-  /**
-   * When true, starts the session in unattended `auto` mode with pre-authorized
-   * Bash/Edit/Write permissions and appends the autonomous non-interactive system prompt.
-   */
-  autonomous?: boolean;
   /** Initial prompt; empty starts an idle interactive session. */
   prompt?: string;
   /** Claude session id to continue (`--resume`). */
@@ -286,8 +281,20 @@ export function resolveClaudeCliModelFlag(model?: ClaudeModelTier): string | und
   return undefined;
 }
 
+/**
+ * Only `auto` and `bypassPermissions` run unattended. `default` and `acceptEdits` keep Claude's
+ * own approval prompts for commands, and `plan` never edits.
+ */
+export function isAutonomousPermissionMode(mode: ClaudePermissionMode | undefined): boolean {
+  return mode === 'auto' || mode === 'bypassPermissions';
+}
+
+/**
+ * In `auto`/`bypassPermissions` the session starts unattended with pre-authorized Bash/Edit/Write
+ * permissions and the autonomous non-interactive system prompt.
+ */
 export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
-  const isAutonomous = Boolean(options.autonomous && options.permissionMode !== 'plan');
+  const isAutonomous = isAutonomousPermissionMode(options.permissionMode);
   const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook', 5, isAutonomous);
   const customServerKeys = options.customMcpServers ? Object.keys(options.customMcpServers) : [];
   if (isAutonomous && settings.permissions?.allow && customServerKeys.length > 0) {
@@ -322,8 +329,13 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
       extraPolicy = `${extraPolicy}\n\n${options.extraSystemPrompt.trim()}`;
     }
     args.push('--append-system-prompt', extraPolicy);
-  } else if (options.permissionMode && options.permissionMode !== 'default') {
-    args.push('--permission-mode', options.permissionMode);
+  } else {
+    if (options.permissionMode && options.permissionMode !== 'default') {
+      args.push('--permission-mode', options.permissionMode);
+    }
+    if (options.extraSystemPrompt?.trim()) {
+      args.push('--append-system-prompt', options.extraSystemPrompt.trim());
+    }
   }
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId);
   // `--` ends option parsing so a prompt starting with "-" is never read as a flag.
@@ -361,9 +373,9 @@ export interface SecondaryCliLaunchOptions {
  */
 export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
   const hook = options.hookCommand ?? 'emberline-hook';
-  const autoApprove = options.permissionMode !== 'plan';
+  const autoApprove = isAutonomousPermissionMode(options.permissionMode);
   const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
-  const claudeFallback = `claude --permission-mode auto --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
+  const claudeFallback = `claude --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
 
   let cliCmd: string;
   if (options.agent === 'antigravity') {
@@ -446,6 +458,8 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
       EMBERLINE_HOOK_TOKEN: options.hookToken,
       EMBERLINE_CORE_URL: options.coreUrl,
       EMBERLINE_PROMPT: options.prompt ?? '',
+      // Read by the runner's CLI wrappers (e.g. `agy`) to decide whether to skip approval prompts.
+      EMBERLINE_AUTO_APPROVE: autoApprove ? '1' : '0',
     },
   };
 }

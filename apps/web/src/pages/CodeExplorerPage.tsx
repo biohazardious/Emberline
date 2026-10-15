@@ -617,7 +617,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         {
           prompt: contextualPrompt,
           leadPersona: agentPersona,
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           autoDispatch: true,
         },
       );

@@ -101,7 +101,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
       // Pipeline column behavior (herdr-board): dropping into In progress dispatches an agent when idle.
       if (enteringInProgress && autoStart && !hasLiveRun) {
         const started = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
         });
         patchLocal(started.ticket);
       }

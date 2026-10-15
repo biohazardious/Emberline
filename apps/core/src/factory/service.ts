@@ -67,7 +67,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'PRD & Epic Breakdown',
     category: 'Product & Planning',
     persona: 'product_owner',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Refine PROJECT.md & define acceptance criteria for next milestone',
     promptTemplate: `Review PROJECT.md and the current codebase structure.
 1. Identify any missing user flows, edge cases, or underspecified requirements.
@@ -79,7 +79,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'Architecture & Module Design',
     category: 'Architecture',
     persona: 'architect',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Design module boundaries & core interfaces',
     promptTemplate: `Read PROJECT.md and inspect the repository layout.
 1. Design or refine the core domain types, API contracts, and module boundaries.
@@ -91,7 +91,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'End-to-End Feature Implementation',
     category: 'Engineering',
     persona: 'coder',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Implement [feature name] with tests',
     promptTemplate: `Implement the following feature end-to-end according to PROJECT.md conventions:
 - Feature goal: [describe goal]
@@ -105,7 +105,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'Root-Cause Bug Investigation & Fix',
     category: 'Engineering',
     persona: 'coder',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Fix [symptom / bug description]',
     promptTemplate: `Investigate and fix the following bug:
 - Observed behavior: [describe issue]
@@ -119,7 +119,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'UI/UX Polish & Responsive Pass',
     category: 'Design & Frontend',
     persona: 'ui_ux',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Polish UI layout, empty states & interactions',
     promptTemplate: `Perform a UI/UX polish pass on the application interface:
 1. Improve visual hierarchy, spacing, typography, and empty/loading/error states.
@@ -131,7 +131,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'Database Schema & Migration',
     category: 'Data Layer',
     persona: 'dba',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Design schema & migration for [entity/domain]',
     promptTemplate: `Design and implement the database schema and data access layer changes:
 1. Define normalized tables/models, foreign keys, and indexes.
@@ -143,7 +143,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'QA Verification & Regression Suite',
     category: 'Quality Assurance',
     persona: 'qa',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Expand test coverage & verify critical flows',
     promptTemplate: `Act as QA Engineer and audit the project's test coverage and reliability:
 1. Run the existing test suite and build checks.
@@ -155,7 +155,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     label: 'Security Audit & Hardening',
     category: 'Security',
     persona: 'security',
-    permissionMode: 'acceptEdits',
+    permissionMode: 'auto',
     titlePlaceholder: 'Audit auth, input validation & secret handling',
     promptTemplate: `Perform an application security review of the codebase:
 1. Inspect authentication, authorization, input validation (Zod/schemas), and secret handling.

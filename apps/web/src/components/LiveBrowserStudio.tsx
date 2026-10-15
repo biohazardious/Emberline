@@ -177,7 +177,7 @@ export function LiveBrowserStudio({
         {
           prompt: `[Live Browser QA Verification] Open ${demoUrl} using your Playwright MCP browser tools (mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click / mcp__playwright__browser_press_key, mcp__playwright__browser_take_screenshot). Visually inspect the application, interact with the primary UI controls and workflows, verify there are no console errors, and leave the app open in the browser.`,
           leadPersona: 'qa',
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           autoDispatch: true,
         },
       );
@@ -204,7 +204,7 @@ export function LiveBrowserStudio({
         {
           prompt: `[Live Browser Console Error Fix] The shared Live Browser reported the following error on ${snap?.targetUrl ?? 'the active page'}:\n\n\`\`\`\n${entry.text}\n\`\`\`\n\nPlease diagnose and fix the root cause in the codebase and run \`npm run build\`.`,
           leadPersona: 'coder',
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
           autoDispatch: true,
         },
       );

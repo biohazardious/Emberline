@@ -240,7 +240,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         persona: opts.persona ?? 'product_owner',
         model: 'fable',
         prompt: opts.prompt,
-        permissionMode: 'acceptEdits',
+        permissionMode: 'auto',
       },
       {
         title: '[Brainstorm] Feature & Roadmap Ideation',
@@ -345,7 +345,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     this.autoChainProjects.add(projectId);
     return this.start(next.id, {
-      permissionMode: 'acceptEdits',
+      permissionMode: 'auto',
       persona: next.persona,
     });
   }

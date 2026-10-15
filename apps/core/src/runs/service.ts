@@ -527,7 +527,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
           model: isRealClaude ? resolvedModel : undefined,
-          autonomous: row.permissionMode !== 'plan',
           prompt: effectivePrompt,
           resumeSessionId: options.resumeSessionId,
           playwrightMcp: enablePlaywrightMcp,

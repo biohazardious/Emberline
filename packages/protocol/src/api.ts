@@ -158,7 +158,11 @@ export const ProjectRecommendation = z.object({
 export type ProjectRecommendation = z.infer<typeof ProjectRecommendation>;
 
 /** Claude Code `--permission-mode`. `bypassPermissions` is only sane inside the isolated runner. */
-export const PermissionMode = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
+/**
+ * `auto` and `bypassPermissions` run unattended (pre-approved tools, no prompts). `default` and
+ * `acceptEdits` keep the CLI's approval prompts for commands; `plan` never edits.
+ */
+export const PermissionMode = z.enum(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']);
 export type PermissionMode = z.infer<typeof PermissionMode>;
 
 export const TaskTemplate = z.object({
@@ -1117,7 +1121,7 @@ export const CreateScheduledJobBody = z.object({
   name: z.string().trim().min(1).max(200),
   cronExpr: z.string().trim().min(1).max(100),
   prompt: z.string().trim().min(1).max(20_000),
-  permissionMode: PermissionMode.default('acceptEdits'),
+  permissionMode: PermissionMode.default('auto'),
   enabled: z.boolean().default(true),
 });
 export type CreateScheduledJobBody = z.input<typeof CreateScheduledJobBody>;
@@ -1273,9 +1277,7 @@ export type FactoryAttachmentInput = z.infer<typeof FactoryAttachmentInput>;
 export const FactoryRequestBody = z.object({
   prompt: z.string().trim().min(1).max(20_000),
   leadPersona: AgentPersona.default('product_owner'),
-  permissionMode: z
-    .preprocess((v) => (v === 'auto' ? 'acceptEdits' : v), PermissionMode)
-    .default('acceptEdits'),
+  permissionMode: PermissionMode.default('auto'),
   autoDispatch: z.boolean().default(true),
   attachments: z.array(FactoryAttachmentInput).max(10).optional(),
 });
