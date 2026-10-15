@@ -4,6 +4,13 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-16
+
+### Fixed
+
+- "Back" on a terminal page returns to the page that opened it (Settings, a board, Overview, Fleet) instead of always going to Overview; opened directly, it still goes to Overview. The board's back arrow works the same way.
+- Settings tabs, Overview sections and the open ticket with its drawer tab are kept in the address (`?tab=`, `?section=`, `?ticket=&view=`), so coming back from a login or install terminal, a run's terminal or a reload restores them instead of resetting to the first tab.
+
 ## [0.1.1] - 2026-10-16
 
 ### Added
@@ -56,6 +63,7 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/biohazardious/emberline/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/biohazardious/emberline/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/biohazardious/emberline/releases/tag/v0.1.0
