@@ -24,6 +24,17 @@ describe('buildHookSettings', () => {
   });
 });
 
+describe('run settings', () => {
+  it('pins the classic renderer and keeps prompts and promos out of the PTY', () => {
+    const settings = buildHookSettings('emberline-hook');
+    // Any tui value also stops the mid-turn "Try the new fullscreen renderer?" dialog.
+    expect(settings).toMatchObject({ tui: 'default', spinnerTipsEnabled: false });
+    expect(buildHookSettings('emberline-hook', 5, true)).toMatchObject({ tui: 'default' });
+    const spec = buildLaunchSpec({ runId: 'r1', hookToken: 't', coreUrl: 'http://core:7420' });
+    expect(spec.env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY).toBe('1');
+  });
+});
+
 describe('buildLaunchSpec', () => {
   const base = { runId: 'r1', hookToken: 'tok', coreUrl: 'http://core:7420' };
 
@@ -156,6 +167,14 @@ describe('buildLaunchSpec', () => {
 });
 
 describe('nextStateFromHook', () => {
+  it('treats a session that restarted or was cleared mid-run as waiting at its prompt', () => {
+    // Claude Code relaunches itself (renderer switch, crash recovery): the turn in flight is gone.
+    expect(nextStateFromHook('working', 'SessionStart', { source: 'resume' })).toBe('waiting_input');
+    expect(nextStateFromHook('working', 'SessionStart', { source: 'clear' })).toBe('waiting_input');
+    // Compaction happens inside a turn, which keeps going.
+    expect(nextStateFromHook('working', 'SessionStart', { source: 'compact' })).toBeUndefined();
+  });
+
   it('follows a typical interactive session', () => {
     expect(nextStateFromHook('starting', 'SessionStart')).toBe('waiting_input');
     expect(nextStateFromHook('waiting_input', 'UserPromptSubmit')).toBe('working');

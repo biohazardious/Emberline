@@ -171,6 +171,9 @@ interface HookMatcherGroup {
 
 export interface ClaudeHookSettings {
   hooks: Partial<Record<HookEventName, HookMatcherGroup[]>>;
+  /** Renderer; any value also stops Claude Code from offering the fullscreen one mid-turn. */
+  tui: 'default';
+  spinnerTipsEnabled: false;
   permissions?: {
     defaultMode?: 'auto' | 'acceptEdits' | 'bypassPermissions';
     allow?: string[];
@@ -194,16 +197,21 @@ export function buildHookSettings(hookCommand: string, timeoutSeconds = 5, auton
     if (MATCHER_EVENTS.has(event)) group.matcher = '';
     hooks[event] = [group];
   }
+  // Emberline reads the agent's screen (limit banners, Fleet thumbnails) and never answers promos:
+  // keep the classic renderer, which also suppresses the "Try the new fullscreen renderer?" dialog
+  // that otherwise interrupts a running turn, and drop the spinner tips.
+  const ui = { tui: 'default', spinnerTipsEnabled: false } as const;
   if (autonomous) {
     return {
       hooks,
+      ...ui,
       permissions: {
         defaultMode: 'auto',
         allow: [...AUTONOMOUS_ALLOWED_TOOLS],
       },
     };
   }
-  return { hooks };
+  return { hooks, ...ui };
 }
 
 export interface ClaudeMcpServerSpec {
@@ -366,6 +374,8 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
       // the git root, so every run would stop at the "trust this folder?" dialog. The runner container
       // is the sandbox boundary; this tells Claude Code so.
       CLAUDE_CODE_SANDBOXED: '1',
+      // The session-feedback survey takes keystrokes; a prompt typed into the PTY must not answer it.
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
     },
   };
 }
@@ -510,7 +520,12 @@ export function nextStateFromHook(
   let next: AgentState | undefined;
   switch (event) {
     case 'SessionStart':
-      next = current === 'starting' ? 'waiting_input' : undefined;
+      // A fresh session waits for its prompt. Mid-run, `resume` (Claude Code relaunched itself, e.g.
+      // after a renderer switch) and `clear` drop any turn in flight: the agent is back at an empty
+      // prompt. `compact` happens inside a turn, which keeps going.
+      if (current === 'starting') next = 'waiting_input';
+      else if (payload.source === 'resume' || payload.source === 'clear') next = 'waiting_input';
+      else next = undefined;
       break;
     case 'UserPromptSubmit':
     case 'PreToolUse':
