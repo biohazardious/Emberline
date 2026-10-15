@@ -10,7 +10,13 @@ import { SessionStore } from './sessions.js';
 export const SESSION_COOKIE = 'emberline_session';
 const PASSWORD_KEY = 'auth.passwordHash';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/state', '/api/auth/setup', '/api/auth/login']);
+const PUBLIC_ROUTES = new Set([
+  '/api/health',
+  '/api/health/deep',
+  '/api/auth/state',
+  '/api/auth/setup',
+  '/api/auth/login',
+]);
 /** Machine-to-machine routes (runner -> core) that carry their own credentials. */
 const INTERNAL_PREFIX = '/api/internal/';
 /**

@@ -19,6 +19,8 @@ services:
       EMBERLINE_HOOK_URL: http://core:7420
       # Zone used to read wall-clock reset times such as "resets 2pm" (quota scheduler).
       TZ: ${TZ:-UTC}
+      # Enables GET /metrics (Prometheus) for scrapers that send this bearer token.
+      EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
     volumes:
       - ptyd-socket:/run/emberline
       - data:/data

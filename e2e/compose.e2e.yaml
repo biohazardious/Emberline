@@ -7,5 +7,6 @@ services:
       - "127.0.0.1:${EMBERLINE_E2E_PORT:-7498}:7420"
     environment:
       EMBERLINE_SETUP_TOKEN: e2e-setup-token
+      EMBERLINE_METRICS_TOKEN: e2e-metrics-token
   runner:
     image: emberline/runner:e2e

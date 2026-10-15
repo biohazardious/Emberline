@@ -11,6 +11,7 @@ import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
 import { ForgeService } from './forge/service.js';
 import { NotificationService } from './notifications/service.js';
+import { registerOpsRoutes } from './ops.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { registerEventRoutes } from './routes/events.js';
@@ -66,6 +67,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   }));
 
   registerAuth(app, deps);
+  registerOpsRoutes(app, deps, startedAt);
 
   app.get('/api/system', async (): Promise<SystemStatus> => ({
     version: VERSION,

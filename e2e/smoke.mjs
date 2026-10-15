@@ -162,5 +162,16 @@ await step('ticket changes are pushed over /api/events', async () => {
   ws.close();
 });
 
+await step('deep health is green and metrics need the bearer token', async () => {
+  const deep = await api('GET', '/api/health/deep');
+  assert.equal(deep.status, 200, deep.text);
+  assert.equal((await fetch(`${BASE}/metrics`)).status, 401);
+  const metrics = await fetch(`${BASE}/metrics`, { headers: { authorization: 'Bearer e2e-metrics-token' } });
+  assert.equal(metrics.status, 200);
+  const text = await metrics.text();
+  assert.match(text, /emberline_runner_connected 1/);
+  assert.match(text, /emberline_tickets\{status="backlog"\} 1/);
+});
+
 console.log(results.join('\n'));
 console.log(`\n${results.length} e2e checks passed against ${BASE}`);

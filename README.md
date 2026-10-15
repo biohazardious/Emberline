@@ -77,6 +77,14 @@ Every new run (from the dashboard or a ticket) is **queued** and dispatched by t
 - **Resume now** (dashboard or ticket drawer) ends the pause early. Windows are stored in SQLite, so a core restart keeps the timer.
 - **Notifications (`ntfy` / Webhook):** Configure an `ntfy.sh` topic or generic/Discord/Slack webhook URL on the Overview dashboard (or via `EMBERLINE_NOTIFY_URL`) to receive push notifications on quota limit reached, quota reset & auto-resume, agent waiting for input, or run completion.
 
+### Operations
+
+- **Health:** `GET /api/health` is the cheap liveness check Docker uses. `GET /api/health/deep` also checks the database, the runner connection and its protocol version, that the workspaces volume is writable and free disk space; it answers 503 with the failing check when degraded.
+- **Metrics:** set `EMBERLINE_METRICS_TOKEN` and scrape `GET /metrics` with `Authorization: Bearer <token>` (runs by state, tickets by column, scheduler slots/queue/quota pause, runner connection, database size, HTTP responses). Without the token the endpoint does not exist.
+- **Backups:** `make backup` writes a consistent snapshot (`VACUUM INTO`, safe while running) to `/data/backups` in the data volume, keeps the newest 10 (`EMBERLINE_BACKUP_KEEP`) and copies it to `./backups/`. Core also snapshots the database automatically before applying migrations (`emberline.db.pre-migration-<ts>.bak`, newest 3).
+- **Logs:** core logs structured JSON (pino) to stdout: `make logs`.
+- **End-to-end check:** `make e2e` starts an isolated core + runner stack on port 7498 and runs the smoke test (also in CI).
+
 ## Development
 
 All tooling runs in the `dev` image. Source is bind-mounted; `node_modules` and the pnpm store live in Docker volumes.

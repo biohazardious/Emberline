@@ -18,3 +18,4 @@ coverage/
 
 # Local IDE settings
 .vscode/
+/backups/

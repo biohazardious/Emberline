@@ -5,7 +5,7 @@ E2E  := docker compose -p emberline-e2e -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e up down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup up down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -66,6 +66,11 @@ logs: ## Follow logs
 
 upgrade-core: ## Rebuild/restart core only; running agents in the runner are untouched
 	$(PROD) up -d --build --no-deps core
+
+backup: ## Consistent SQLite snapshot (VACUUM INTO) in the data volume, copied to ./backups/
+	@set -e; file=$$($(PROD) exec -T core node dist/backup.js); \
+	mkdir -p backups; $(PROD) cp "core:$$file" "backups/$$(basename $$file)"; \
+	echo "backup: backups/$$(basename $$file) (also kept in the data volume)"
 
 claude-login: ## One-time `claude login` inside the runner (Anthropic OAuth credentials)
 	$(PROD) exec runner claude login
