@@ -1,7 +1,7 @@
 {
   "name": "@emberline/adapter-sdk",
   "license": "Apache-2.0",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Agent adapter contract shared by core and every agent adapter.",
