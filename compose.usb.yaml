@@ -1,0 +1,22 @@
+# Optional: hand one USB serial device (ESP32, Arduino, STM32 with a USB-UART bridge, ...) to the
+# runner so agents can flash it and read its serial output. Enable it in .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.usb.yaml
+#   EMBERLINE_SERIAL_DEVICE=/dev/ttyACM0   # or /dev/ttyUSB0; see `ls /dev/ttyUSB* /dev/ttyACM*`
+#   EMBERLINE_SERIAL_GID=20                # group owning it on the host: `stat -c %g /dev/ttyACM0`
+#
+# The device keeps its host name inside the runner: esptool finds boards with native USB
+# (ESP32-C3/C6/S3) through that name in /sys, and picks the wrong reset sequence otherwise.
+# Docker cannot take paths that contain ":", so /dev/serial/by-id links of Espressif boards (they
+# carry the MAC address) do not work; use the /dev/tty* name.
+#
+# The board must be plugged in when the runner starts (`make up`). Re-plugging it keeps working as
+# long as it comes back under the same name; otherwise restart the runner, which stops running
+# agents. This grants the runner, and so every agent, access to the device: see SECURITY.md.
+services:
+  runner:
+    devices:
+      - ${EMBERLINE_SERIAL_DEVICE:-/dev/ttyUSB0}:${EMBERLINE_SERIAL_DEVICE:-/dev/ttyUSB0}
+    group_add:
+      # Debian/Ubuntu use dialout (20); Arch uses uucp (often 984), Fedora dialout (18).
+      - '${EMBERLINE_SERIAL_GID:-20}'
