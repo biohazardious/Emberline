@@ -36,6 +36,36 @@ describe('core server', () => {
   });
 });
 
+describe('hardening', () => {
+  it('sends security headers and a CSP on the web UI', async () => {
+    const webDir = mkdtempSync(path.join(tmpdir(), 'web-'));
+    writeFileSync(path.join(webDir, 'index.html'), '<h1>ember</h1>');
+    try {
+      t = await createTestApp({ webDir });
+      const page = await t.app.inject({ url: '/' });
+      expect(page.headers['content-security-policy']).toContain("frame-ancestors 'self'");
+      expect(page.headers['content-security-policy']).toContain("object-src 'none'");
+      expect(page.headers['x-content-type-options']).toBe('nosniff');
+      const api = await t.app.inject({ url: '/api/health' });
+      expect(api.headers['x-content-type-options']).toBe('nosniff');
+      expect(api.headers['referrer-policy']).toBe('same-origin');
+    } finally {
+      rmSync(webDir, { recursive: true, force: true });
+    }
+  });
+
+  it('caps request bodies at 1 MiB on routes without a larger limit', async () => {
+    t = await createTestApp();
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { ...CSRF, 'content-type': 'application/json' },
+      payload: JSON.stringify({ password: 'x'.repeat(2 * 1024 * 1024) }),
+    });
+    expect(res.statusCode).toBe(413);
+  });
+});
+
 describe('auth', () => {
   it('requires setup first, then issues a session', async () => {
     t = await createTestApp();

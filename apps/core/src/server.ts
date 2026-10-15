@@ -23,6 +23,7 @@ import { registerTerminalRoutes } from './routes/terminals.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import type { RunService } from './runs/service.js';
 import type { Scheduler } from './scheduler/service.js';
+import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.js';
 import type { TicketService } from './tickets/service.js';
 
 export const VERSION = '0.0.0';
@@ -38,7 +39,7 @@ export interface CoreDeps {
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
-    bodyLimit: 128 * 1024 * 1024,
+    bodyLimit: DEFAULT_BODY_LIMIT,
     ...fastifyOptions,
     trustProxy: deps.config.trustProxy,
   });
@@ -52,6 +53,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   });
 
   installErrorHandler(app);
+  installSecurityHeaders(app);
   await app.register(cookie);
   await app.register(websocket, { options: { maxPayload: 1024 * 1024 } });
 

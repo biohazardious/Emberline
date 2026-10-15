@@ -102,6 +102,7 @@ import {
   writeProjectBlueprint,
   writeWorkspaceFileContent,
 } from '../factory/service.js';
+import { EDITOR_BODY_LIMIT, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
 import { ToolchainService } from '../toolchain/service.js';
 
@@ -260,6 +261,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.put<{ Params: { id: string } }>(
     '/api/projects/:id/blueprint',
+    { bodyLimit: EDITOR_BODY_LIMIT },
     async (request): Promise<ProjectBlueprintResponse> => {
       const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
       if (!row) throw notFound('no such project');
@@ -307,6 +309,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.post<{ Params: { id: string } }>(
     '/api/projects/:id/factory-request',
+    { bodyLimit: UPLOAD_BODY_LIMIT },
     async (request, reply): Promise<FactoryRequestResponse> => {
       const body = FactoryRequestBody.parse(request.body);
       const result = await tickets.submitFactoryRequest(request.params.id, body);
@@ -602,6 +605,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.put<{ Params: { id: string } }>(
     '/api/projects/:id/files/content',
+    { bodyLimit: EDITOR_BODY_LIMIT },
     async (request): Promise<WorkspaceFileContentResponse> => {
       const body = WriteWorkspaceFileBody.parse(request.body);
       const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
@@ -651,6 +655,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.post<{ Params: { id: string } }>(
     '/api/projects/:id/files/upload',
+    { bodyLimit: UPLOAD_BODY_LIMIT },
     async (request): Promise<UploadWorkspaceFilesResponse> => {
       const body = UploadWorkspaceFilesBody.parse(request.body);
       const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
