@@ -46,4 +46,17 @@ describe('ToolchainService', () => {
     ).rejects.toThrow(/boom[\s\S]*exited with code 3/);
     expect((await toolchain.getToolStatus('codex')).lastError).toContain('boom');
   });
+
+  it('runs one CLI install at a time, across providers (B24)', async () => {
+    const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+    const slow = toolchain.executeAction('codex', { action: 'install', customCommand: 'sleep 1; echo slow-done' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect(
+      toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect((await slow).output).toContain('slow-done');
+    expect((await toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' })).output).toContain(
+      'second',
+    );
+  });
 });
