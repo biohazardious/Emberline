@@ -39,6 +39,11 @@ export class SessionStore {
     if (token) this.db.delete(sessions).where(eq(sessions.id, hashToken(token))).run();
   }
 
+  /** Ends every session (after a password change or reset). */
+  revokeAll(): void {
+    this.db.delete(sessions).run();
+  }
+
   purgeExpired(): void {
     this.db.delete(sessions).where(lt(sessions.expiresAt, new Date())).run();
   }

@@ -1,4 +1,4 @@
-import { type AuthState, CSRF_HEADER, LoginBody, SetupBody } from '@emberline/protocol';
+import { type AuthState, ChangePasswordBody, CSRF_HEADER, LoginBody, SetupBody } from '@emberline/protocol';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { hash, verify } from '@node-rs/argon2';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -28,6 +28,9 @@ const DEMO_ASSET_ROUTES = new Set(['/api/demo/:token', '/api/demo/:token/*']);
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW_MS = 15 * 60_000;
+/** Across all clients: spoofed or rotating addresses cannot multiply the guesses (S12). */
+const MAX_GLOBAL_FAILURES = 50;
+const MAX_TRACKED_CLIENTS = 10_000;
 
 /**
  * Single-user auth (PROJECT.md §3.13).
@@ -106,24 +109,70 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     return { ok: true };
   });
 
-  app.post('/api/auth/login', async (request, reply) => {
-    const key = request.ip;
-    const now = Date.now();
-    const entry = failures.get(key);
-    if (entry && now - entry.since < FAILURE_WINDOW_MS && entry.count >= MAX_FAILURES) {
-      throw new HttpError(429, 'too_many_attempts', 'too many failed attempts, try again later');
-    }
+  let globalFailures = { count: 0, since: 0 };
 
+  /** Refuses with 429 (and Retry-After) while this client or all clients together failed too often. */
+  const assertNotThrottled = (request: FastifyRequest, reply: FastifyReply) => {
+    const now = Date.now();
+    const entry = failures.get(request.ip);
+    const blockedUntil = Math.max(
+      entry && now - entry.since < FAILURE_WINDOW_MS && entry.count >= MAX_FAILURES ? entry.since + FAILURE_WINDOW_MS : 0,
+      now - globalFailures.since < FAILURE_WINDOW_MS && globalFailures.count >= MAX_GLOBAL_FAILURES
+        ? globalFailures.since + FAILURE_WINDOW_MS
+        : 0,
+    );
+    if (blockedUntil > now) {
+      const minutes = Math.ceil((blockedUntil - now) / 60_000);
+      reply.header('retry-after', String(Math.ceil((blockedUntil - now) / 1000)));
+      throw new HttpError(
+        429,
+        'too_many_attempts',
+        `too many failed attempts, try again in ${minutes} minute${minutes === 1 ? '' : 's'}`,
+      );
+    }
+  };
+
+  const recordFailure = (request: FastifyRequest) => {
+    const now = Date.now();
+    const entry = failures.get(request.ip);
+    const fresh = !entry || now - entry.since >= FAILURE_WINDOW_MS;
+    if (fresh && failures.size >= MAX_TRACKED_CLIENTS) {
+      for (const [ip, e] of failures) if (now - e.since >= FAILURE_WINDOW_MS) failures.delete(ip);
+    }
+    failures.set(request.ip, fresh ? { count: 1, since: now } : { count: entry.count + 1, since: entry.since });
+    globalFailures =
+      now - globalFailures.since >= FAILURE_WINDOW_MS
+        ? { count: 1, since: now }
+        : { count: globalFailures.count + 1, since: globalFailures.since };
+  };
+
+  app.post('/api/auth/login', async (request, reply) => {
+    assertNotThrottled(request, reply);
     const { password } = LoginBody.parse(request.body);
     const stored = getSetting<string>(db, PASSWORD_KEY);
     if (!stored) throw new HttpError(409, 'setup_required', 'run first-time setup first');
 
     if (!(await verify(stored, password))) {
-      const fresh = !entry || now - entry.since >= FAILURE_WINDOW_MS;
-      failures.set(key, fresh ? { count: 1, since: now } : { count: entry.count + 1, since: entry.since });
+      recordFailure(request);
       throw new HttpError(401, 'invalid_password', 'invalid password');
     }
-    failures.delete(key);
+    failures.delete(request.ip);
+    issueSession(request, reply);
+    return { ok: true };
+  });
+
+  // Changing the password ends every session (other browsers, stolen cookies) and signs this one in again.
+  app.post('/api/auth/password', async (request, reply) => {
+    assertNotThrottled(request, reply);
+    const { currentPassword, newPassword } = ChangePasswordBody.parse(request.body);
+    const stored = getSetting<string>(db, PASSWORD_KEY);
+    if (!stored) throw new HttpError(409, 'setup_required', 'run first-time setup first');
+    if (!(await verify(stored, currentPassword))) {
+      recordFailure(request);
+      throw new HttpError(403, 'invalid_password', 'current password is incorrect');
+    }
+    setSetting(db, PASSWORD_KEY, await hash(newPassword));
+    store.revokeAll();
     issueSession(request, reply);
     return { ok: true };
   });

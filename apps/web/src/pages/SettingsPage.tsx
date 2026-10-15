@@ -62,6 +62,7 @@ import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { McpPluginsPanel } from '../components/McpPluginsPanel';
+import { AccountPanel } from '../components/AccountPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
@@ -106,7 +107,7 @@ export function SettingsPage({
 }) {
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<
-    'autopilot' | 'providers' | 'mcp_plugins' | 'quota' | 'notifications'
+    'autopilot' | 'providers' | 'mcp_plugins' | 'quota' | 'notifications' | 'account'
   >('autopilot');
   const [settings, setSettings] = useState<FactorySettings | null>(null);
   const [themePref, setThemePref] = useState<ThemeMode>(theme);
@@ -510,6 +511,13 @@ export function SettingsPage({
             onClick={() => setActiveTab('notifications')}
           >
             <Bell className="icon" aria-hidden /> Forge &amp; Webhooks
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${activeTab === 'account' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('account')}
+          >
+            <KeyRound className="icon" aria-hidden /> Account
           </button>
         </div>
       </header>
@@ -1513,6 +1521,7 @@ export function SettingsPage({
 
       {activeTab === 'quota' && <QuotaPanel />}
       {activeTab === 'notifications' && <NotificationsPanel />}
+      {activeTab === 'account' && <AccountPanel />}
     </div>
   );
 }

@@ -18,3 +18,9 @@ export type SetupBody = z.infer<typeof SetupBody>;
 
 export const LoginBody = z.object({ password: z.string().min(1).max(1024) });
 export type LoginBody = z.infer<typeof LoginBody>;
+
+export const ChangePasswordBody = z.object({
+  currentPassword: z.string().min(1).max(1024),
+  newPassword: z.string().min(MIN_PASSWORD_LENGTH).max(1024),
+});
+export type ChangePasswordBody = z.infer<typeof ChangePasswordBody>;

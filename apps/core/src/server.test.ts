@@ -132,6 +132,49 @@ describe('auth', () => {
     expect((await login('the right password')).statusCode).toBe(429);
   });
 
+  it('changes the password, ending every other session', async () => {
+    t = await createTestApp();
+    const first = await setupAndLogin(t.app, 'the first password');
+    const second = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: CSRF,
+      payload: { password: 'the first password' },
+    });
+    const other = `emberline_session=${second.cookies.find((c) => c.name === 'emberline_session')?.value}`;
+    const change = (cookie: string, currentPassword: string, newPassword: string) =>
+      t!.app.inject({
+        method: 'POST',
+        url: '/api/auth/password',
+        headers: { ...CSRF, cookie },
+        payload: { currentPassword, newPassword },
+      });
+    expect((await change(first, 'wrong password', 'a brand new password')).statusCode).toBe(403);
+    expect((await change(first, 'the first password', 'short')).statusCode).toBe(400);
+    const ok = await change(first, 'the first password', 'a brand new password');
+    expect(ok.statusCode).toBe(200);
+    const fresh = `emberline_session=${ok.cookies.find((c) => c.name === 'emberline_session')?.value}`;
+    expect((await t.app.inject({ url: '/api/projects', headers: { cookie: other } })).statusCode).toBe(401);
+    expect((await t.app.inject({ url: '/api/projects', headers: { cookie: first } })).statusCode).toBe(401);
+    expect((await t.app.inject({ url: '/api/projects', headers: { cookie: fresh } })).statusCode).toBe(200);
+    const login = (password: string) =>
+      t!.app.inject({ method: 'POST', url: '/api/auth/login', headers: CSRF, payload: { password } });
+    expect((await login('the first password')).statusCode).toBe(401);
+    expect((await login('a brand new password')).statusCode).toBe(200);
+  });
+
+  it('says how long a throttled client has to wait', async () => {
+    t = await createTestApp();
+    await setupAndLogin(t.app, 'the right password');
+    const login = (password: string) =>
+      t!.app.inject({ method: 'POST', url: '/api/auth/login', headers: CSRF, payload: { password } });
+    for (let i = 0; i < 5; i++) await login('wrong');
+    const blocked = await login('the right password');
+    expect(blocked.statusCode).toBe(429);
+    expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
+    expect(blocked.json().message).toMatch(/try again in \d+ minutes?/);
+  });
+
   it('enforces the CSRF header and same-origin requests', async () => {
     t = await createTestApp();
     const noHeader = await t.app.inject({
