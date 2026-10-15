@@ -69,6 +69,8 @@ export const CrossCriticResult = z.object({
   summary: z.string(),
   issues: z.array(CrossCriticIssue),
   followUpPrompt: z.string().nullable(),
+  /** `rival`: the reviewer CLI actually reviewed the diff; `deterministic`: only the local audit ran. */
+  reviewSource: z.enum(['rival', 'deterministic']).default('deterministic'),
   reviewedAt: z.string(),
 });
 export type CrossCriticResult = z.infer<typeof CrossCriticResult>;

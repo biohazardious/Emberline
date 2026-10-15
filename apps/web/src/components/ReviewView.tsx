@@ -325,7 +325,9 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       });
       setCrossCritic(res);
       setGitNotice(
-        `Cross-Provider Critic (${res.reviewerAgent.toUpperCase()} · ${res.reviewerModel}) verdict: ${res.verdict} (${res.score}/100)`,
+        res.reviewSource === 'rival'
+          ? `${res.reviewerAgent.toUpperCase()} (${res.reviewerModel}) reviewed the diff: ${res.verdict} (${res.score}/100)`
+          : `Deterministic audit only: ${res.verdict} (${res.score}/100). ${res.summary}`,
       );
     } catch (e) {
       setError(errorMessage(e));
@@ -607,7 +609,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             {runningCritic
               ? '⚖️ Auditing…'
               : crossCritic
-                ? `⚖️ Critic (${crossCritic.reviewerAgent.toUpperCase()}): ${crossCritic.verdict}`
+                ? `⚖️ ${crossCritic.reviewSource === 'rival' ? crossCritic.reviewerAgent.toUpperCase() : 'Audit'}: ${crossCritic.verdict}`
                 : '⚖️ Cross-Provider Critic'}
           </button>
 
@@ -752,7 +754,11 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     color: crossCritic.verdict === 'PASS' ? '#6ee7b7' : '#fcd34d',
                   }}
                 >
-                  ⚖️ {crossCritic.authorAgent.toUpperCase()} → Reviewed by {crossCritic.reviewerAgent.toUpperCase()} ({crossCritic.reviewerModel}): {crossCritic.verdict}
+                  ⚖️{' '}
+                  {crossCritic.reviewSource === 'rival'
+                    ? `${crossCritic.authorAgent.toUpperCase()} → reviewed by ${crossCritic.reviewerAgent.toUpperCase()} (${crossCritic.reviewerModel})`
+                    : 'Deterministic audit only (rival review did not run)'}
+                  : {crossCritic.verdict}
                 </span>
               )}
             </div>

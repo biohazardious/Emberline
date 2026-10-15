@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   type AgentId,
   type AgentModelId,
+  type CrossCriticIssue,
   CrossCriticResult,
   type FactorySettings,
   type Run,
@@ -13,6 +14,7 @@ import {
   selectProviderModelByRank,
 } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
+import { buildRivalPrompt, collectReviewDiff, runRivalReview, supportsRivalReview } from './rival-critic.js';
 
 
 const IGNORED_PATH_SEGMENTS = [
@@ -655,6 +657,13 @@ export function selectRivalCriticAgent(
   }
 
   const candidates: AgentId[] = ['antigravity', 'claude', 'gemini', 'codex', 'copilot'];
+  // Prefer a logged-in rival that can actually review non-interactively.
+  for (const candidate of candidates) {
+    if (candidate === authorAgent || !supportsRivalReview(candidate)) continue;
+    if (settings.providerAuth?.[candidate]?.authenticated) {
+      return { reviewerAgent: candidate, reviewerModel: selectProviderModelByRank(candidate, 4) };
+    }
+  }
   for (const candidate of candidates) {
     if (candidate === authorAgent) continue;
     const isEnabled = settings.enabledProviders.includes(candidate);
@@ -705,7 +714,7 @@ export async function runCrossProviderCritic(params: {
 
   const slopReport = await auditWorktreeSlop({ runId: run.id, workspacePath });
 
-  const criticIssues = slopReport.issues.map((iss) => ({
+  const auditIssues = slopReport.issues.map((iss) => ({
     severity: iss.severity === 'error' ? ('critical' as const) : ('warning' as const),
     category: iss.category,
     file: `${iss.file}:${iss.line}`,
@@ -713,20 +722,53 @@ export async function runCrossProviderCritic(params: {
     fixRecommendation: iss.fixHint,
   }));
 
-  // The verdict comes from the deterministic audit; the rival CLI is only selected, not run (a real
-  // rival review as a runner session needs provider credentials and is on the Phase 4 roadmap).
-  // The wording below must not claim that the rival reviewed the code.
+  // The rival CLI reviews the diff read-only in the runner. Without a usable rival (author reviewing
+  // itself, CLI missing or not logged in, timeout) only the deterministic audit counts, and the
+  // summary says so.
+  const rival =
+    reviewerAgent === authorAgent
+      ? ({ ok: false, reason: 'no other provider is available' } as const)
+      : await collectReviewDiff(workspacePath).then(({ diff }) =>
+          runRivalReview({
+            reviewer: reviewerAgent,
+            model: reviewerModel,
+            workspacePath,
+            prompt: buildRivalPrompt({
+              authorAgent,
+              ticketTitle: params.ticketTitle,
+              ticketBody: params.ticketBody,
+              diff,
+            }),
+          }),
+        );
 
-  const verdict: 'PASS' | 'NEEDS_FIX' = slopReport.passed ? 'PASS' : 'NEEDS_FIX';
-  const summary =
-    verdict === 'PASS'
-      ? `Deterministic code audit passed with Grade ${slopReport.grade} (${slopReport.score}/100) across ${slopReport.filesAudited} modified file(s). No type evasion, unfinished stubs, or vibe-coding bloat blocked approval. (Designated rival reviewer: ${reviewerAgent} ${reviewerModel}; it does not run yet.)`
-      : `Deterministic code audit flagged ${slopReport.errorCount} blocking hygiene error(s) and ${slopReport.warningCount} warning(s) (Score ${slopReport.score}/100 · Grade ${slopReport.grade}). Remediation required before completion. (Designated rival reviewer: ${reviewerAgent} ${reviewerModel}; it does not run yet.)`;
+  const auditSummary = slopReport.passed
+    ? `Deterministic audit passed (Grade ${slopReport.grade}, ${slopReport.score}/100, ${slopReport.filesAudited} file(s)).`
+    : `Deterministic audit flagged ${slopReport.errorCount} blocking error(s) and ${slopReport.warningCount} warning(s) (Grade ${slopReport.grade}, ${slopReport.score}/100).`;
+
+  let verdict: 'PASS' | 'NEEDS_FIX';
+  let score: number;
+  let summary: string;
+  let criticIssues: CrossCriticIssue[];
+  let header: string;
+  if (rival.ok) {
+    verdict = rival.review.verdict === 'NEEDS_FIX' || !slopReport.passed ? 'NEEDS_FIX' : 'PASS';
+    score = rival.review.score;
+    summary = `${reviewerAgent} (${reviewerModel}) review: ${rival.review.summary} ${auditSummary}`;
+    criticIssues = [...rival.review.issues, ...auditIssues];
+    header = `[Cross-Provider Review · ${reviewerAgent.toUpperCase()} (${reviewerModel}) -> ${authorAgent.toUpperCase()}]`;
+  } else {
+    verdict = slopReport.passed ? 'PASS' : 'NEEDS_FIX';
+    score = slopReport.score;
+    summary = `${auditSummary} Rival review by ${reviewerAgent} did not run: ${rival.reason}.`;
+    criticIssues = auditIssues;
+    header = `[Code Audit · deterministic checks -> ${authorAgent.toUpperCase()}]`;
+  }
 
   const followUpPrompt =
-    verdict === 'NEEDS_FIX' || criticIssues.length > 0
+    verdict === 'NEEDS_FIX' || criticIssues.some((c) => c.severity !== 'nit')
       ? [
-          `[Code Audit · deterministic checks -> ${authorAgent.toUpperCase()}]`,
+          header,
           summary,
           '',
           ...criticIssues.slice(0, 15).map(
@@ -744,10 +786,11 @@ export async function runCrossProviderCritic(params: {
     reviewerAgent,
     reviewerModel,
     verdict,
-    score: slopReport.score,
+    score,
     summary,
     issues: criticIssues,
     followUpPrompt,
+    reviewSource: rival.ok ? 'rival' : 'deterministic',
     reviewedAt: new Date().toISOString(),
   });
 
