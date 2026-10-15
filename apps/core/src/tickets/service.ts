@@ -772,10 +772,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const ticket = this.get(id);
     const active = this.runs.activeRunForTicket(id);
     let run: Run;
-    if (active && active.state !== 'queued') {
+    if (active && !active.endedAt && active.state !== 'queued') {
       run = await this.runs.sendPrompt(active.id, text);
-    } else if (active) {
+    } else if (active?.state === 'queued') {
       throw conflict('the agent has not started yet; it is queued');
+    } else if (active) {
+      // Rate limited with its process gone: continue it now with this prompt.
+      run = await this.runs.resume(active.id, text);
     } else {
       const latest = this.runs.latestRunForTicket(id);
       if (!latest?.resumable) throw conflict('no agent session to continue for this ticket; start a new run');

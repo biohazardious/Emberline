@@ -296,6 +296,32 @@ describe('scheduler', () => {
     expect((await scheduler()).rateLimited).toBe(0);
   });
 
+  it('does not start a second run on a ticket whose rate-limited run is waiting (B11)', async () => {
+    await submit();
+    const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Limited', status: 'ready' })).json();
+    const started = await api('POST', `/api/tickets/${ticket.id}/start`, {});
+    expect(started.statusCode).toBe(201);
+    const run: Run = started.json().run;
+    await expect.poll(async () => (await getRun(run.id)).state, { timeout: 5_000 }).not.toBe('queued');
+    const token = await work(run);
+    await hook(run.id, 'StopFailure', token, {
+      error: 'rate_limit',
+      last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}`,
+    });
+    await t.ptyd.get().write((await getRun(run.id)).terminalId ?? '', 'exit\r');
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return (await getRun(run.id)).endedAt;
+        },
+        { timeout: 5_000 },
+      )
+      .not.toBeNull();
+    expect((await getRun(run.id)).state).toBe('rate_limited');
+    expect((await api('POST', `/api/tickets/${ticket.id}/start`, {})).statusCode).toBe(409);
+  });
+
   it('cancels a queued run on stop', async () => {
     await api('PATCH', '/api/scheduler', { maxConcurrentRuns: 1 });
     await submit();

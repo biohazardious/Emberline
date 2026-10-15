@@ -43,7 +43,7 @@ import {
   StartPreviewBody as StartPreviewBodySchema,
   type ProjectUsageDay,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gte, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, or } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -821,11 +821,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** The newest run of a ticket whose agent process is still alive, if any. */
+  /**
+   * The ticket's run that is still in play: its process is alive, or it is rate limited and waiting
+   * for the quota window (process gone, resumed by the scheduler later). B11: the latter used to be
+   * ignored, so a second run could be started on the same ticket.
+   */
   activeRunForTicket(ticketId: string): Run | undefined {
     const row = this.db
       .select()
       .from(runs)
-      .where(and(eq(runs.ticketId, ticketId), isNull(runs.endedAt)))
+      .where(
+        and(
+          eq(runs.ticketId, ticketId),
+          or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt))),
+        ),
+      )
       .orderBy(desc(runs.createdAt))
       .get();
     return row ? toRun(row) : undefined;
