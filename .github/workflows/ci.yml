@@ -18,3 +18,6 @@ jobs:
         run: |
           docker build --target core -t emberline/core:ci .
           docker build --target runner -t emberline/runner:ci .
+      # Boots core + runner (isolated compose project) and drives the API end to end.
+      - name: End-to-end smoke test
+        run: make e2e

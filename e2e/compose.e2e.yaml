@@ -1,0 +1,11 @@
+# Isolated stack for `make e2e`: own project name, port and images, so it never touches a running
+# Emberline. Used together with the root compose.yaml.
+services:
+  core:
+    image: emberline/core:e2e
+    ports: !override
+      - "127.0.0.1:${EMBERLINE_E2E_PORT:-7498}:7420"
+    environment:
+      EMBERLINE_SETUP_TOKEN: e2e-setup-token
+  runner:
+    image: emberline/runner:e2e

@@ -1,10 +1,11 @@
 # Emberline task runner. The host only needs Docker (+ make).
 DEV  := docker compose -f compose.dev.yaml
 PROD := docker compose
+E2E  := docker compose -p emberline-e2e -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci up down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e up down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -40,6 +41,17 @@ attach: ## Interactive shell inside the dev ptyd (Ctrl-] detaches)
 
 ci: ## CI gate: lint/typecheck/test inside an image build
 	docker build --target check -t emberline/check:local .
+
+e2e: ## End-to-end smoke test on an isolated core + runner stack (port 7498, removed afterwards)
+	@set -e; ws=$$(mktemp -d); \
+	export EMBERLINE_WORKSPACES_HOST_DIR=$$ws; \
+	docker build -q --target core -t emberline/core:e2e . >/dev/null; \
+	docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
+	$(E2E) up -d --wait; \
+	status=0; docker run --rm --network emberline-e2e_default -v "$$PWD/e2e:/e2e:ro" emberline/core:e2e \
+	  node /e2e/smoke.mjs http://core:7420 || status=$$?; \
+	[ $$status -eq 0 ] || $(E2E) logs --tail 80; \
+	$(E2E) down -v >/dev/null 2>&1; rm -rf $$ws; exit $$status
 
 # --- production stack ------------------------------------------------------
 
