@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type AgentId,
@@ -25,6 +25,7 @@ import {
   type Ticket,
   type UpdateRoadmapItemBody,
 } from '@emberline/protocol';
+import { KeyedMutex } from '../keyed-mutex.js';
 import type { TicketService } from '../tickets/service.js';
 import { listWorkspaceFilesFlat, readProjectBlueprint } from './service.js';
 
@@ -36,6 +37,13 @@ interface StoredRoadmapFile {
 }
 
 const ROADMAP_REL_PATH = '.emberline/roadmap.json';
+
+/** Every read-modify-write of a project's roadmap.json runs under this per-project lock. */
+const roadmapLock = new KeyedMutex();
+
+function lockedByProject<A extends [Project, ...unknown[]], R>(fn: (...args: A) => Promise<R>) {
+  return (...args: A): Promise<R> => roadmapLock.run(args[0].id, () => fn(...args));
+}
 const BRAINSTORM_OUT_REL_PATH = '.emberline/brainstorm-suggestions.json';
 const ROADMAP_GEN_OUT_REL_PATH = '.emberline/roadmap-generated.json';
 
@@ -899,6 +907,8 @@ async function readOrInitRoadmapFile(
       const raw = await readFile(filePath, 'utf8');
       stored = JSON.parse(raw) as StoredRoadmapFile;
     } catch {
+      // Keep the unreadable file for recovery instead of silently replacing it with a fresh seed.
+      await rename(filePath, `${filePath}.corrupt-${Date.now()}`).catch(() => undefined);
       stored = null;
     }
   }
@@ -1205,7 +1215,10 @@ async function saveRoadmapFile(project: Project, data: StoredRoadmapFile): Promi
   const filePath = path.join(project.path, ROADMAP_REL_PATH);
   await mkdir(path.dirname(filePath), { recursive: true });
   data.updatedAt = new Date().toISOString();
-  await writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+  // Write-then-rename so readers never see a half-written file.
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+  await rename(tmpPath, filePath);
 }
 
 function toRoadmapState(project: Project, stored: StoredRoadmapFile): ProjectRoadmapState {
@@ -1226,7 +1239,7 @@ function toRoadmapState(project: Project, stored: StoredRoadmapFile): ProjectRoa
   };
 }
 
-export async function getProjectRoadmap(
+async function getProjectRoadmapUnlocked(
   project: Project,
   ticketService: TicketService,
 ): Promise<ProjectRoadmapState> {
@@ -1234,7 +1247,7 @@ export async function getProjectRoadmap(
   return toRoadmapState(project, stored);
 }
 
-export async function addRoadmapMilestone(
+async function addRoadmapMilestoneUnlocked(
   project: Project,
   ticketService: TicketService,
   input: CreateMilestoneBody,
@@ -1256,7 +1269,7 @@ export async function addRoadmapMilestone(
   return toRoadmapState(project, stored);
 }
 
-export async function deleteRoadmapMilestone(
+async function deleteRoadmapMilestoneUnlocked(
   project: Project,
   ticketService: TicketService,
   milestoneId: string,
@@ -1281,7 +1294,7 @@ export async function deleteRoadmapMilestone(
   return toRoadmapState(project, stored);
 }
 
-export async function addRoadmapItem(
+async function addRoadmapItemUnlocked(
   project: Project,
   ticketService: TicketService,
   input: CreateRoadmapItemBody,
@@ -1339,7 +1352,7 @@ export async function addRoadmapItem(
   return toRoadmapState(project, stored);
 }
 
-export async function autoGenerateProjectRoadmap(
+async function autoGenerateProjectRoadmapUnlocked(
   project: Project,
   ticketService: TicketService,
   input: AutoGenerateRoadmapBody,
@@ -1465,7 +1478,7 @@ export async function autoGenerateProjectRoadmap(
   };
 }
 
-export async function updateRoadmapItem(
+async function updateRoadmapItemUnlocked(
   project: Project,
   ticketService: TicketService,
   itemId: string,
@@ -1579,7 +1592,7 @@ export async function updateRoadmapItem(
   return toRoadmapState(project, stored);
 }
 
-export async function deleteRoadmapItem(
+async function deleteRoadmapItemUnlocked(
   project: Project,
   ticketService: TicketService,
   itemId: string,
@@ -1599,7 +1612,7 @@ export async function deleteRoadmapItem(
   return toRoadmapState(project, stored);
 }
 
-export async function runProjectBrainstorm(
+async function runProjectBrainstormUnlocked(
   project: Project,
   ticketService: TicketService,
   input: BrainstormRequestBody,
@@ -1668,7 +1681,7 @@ export async function runProjectBrainstorm(
   };
 }
 
-export async function dispatchRoadmapItems(
+async function dispatchRoadmapItemsUnlocked(
   project: Project,
   ticketService: TicketService,
   input: DispatchRoadmapItemsBody,
@@ -1763,3 +1776,13 @@ export async function dispatchRoadmapItems(
     startedRun,
   };
 }
+
+export const getProjectRoadmap = lockedByProject(getProjectRoadmapUnlocked);
+export const addRoadmapMilestone = lockedByProject(addRoadmapMilestoneUnlocked);
+export const deleteRoadmapMilestone = lockedByProject(deleteRoadmapMilestoneUnlocked);
+export const addRoadmapItem = lockedByProject(addRoadmapItemUnlocked);
+export const autoGenerateProjectRoadmap = lockedByProject(autoGenerateProjectRoadmapUnlocked);
+export const updateRoadmapItem = lockedByProject(updateRoadmapItemUnlocked);
+export const deleteRoadmapItem = lockedByProject(deleteRoadmapItemUnlocked);
+export const runProjectBrainstorm = lockedByProject(runProjectBrainstormUnlocked);
+export const dispatchRoadmapItems = lockedByProject(dispatchRoadmapItemsUnlocked);
