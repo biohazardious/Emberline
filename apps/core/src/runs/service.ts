@@ -5,8 +5,6 @@ import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import type { AgentState } from '@emberline/adapter-sdk';
 import {
-  buildLaunchSpec,
-  buildSecondaryCliLaunchSpec,
   CLAUDE_ADAPTER_ID,
   CONTINUE_PROMPT,
   decoratePromptWithPersona,
@@ -73,6 +71,7 @@ import {
   stageWorktreeFiles,
   worktreeHasUncommittedWork,
 } from './git.js';
+import { providerAdapter } from './providers.js';
 
 type RunRow = typeof runs.$inferSelect;
 type EventSource = RunEvent['source'];
@@ -514,12 +513,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
 
     const extraEnv = getProviderEnvFromSettings(this.db);
-    const isSecondary =
-      row.agent === 'antigravity' ||
-      row.agent === 'copilot' ||
-      row.agent === 'gemini' ||
-      row.agent === 'codex' ||
-      row.agent === 'aider';
+    const provider = providerAdapter(row.agent);
+    // Tests substitute a fake `claude`; the Claude-specific extras need the real CLI.
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
     const { playwrightEnabled, customMcpServers } = resolveMcpServersForPersona(this.db, persona);
     const activeSkillPrompt = isRealClaude ? resolveSkillPluginPromptForPersona(this.db, persona) : '';
@@ -540,47 +535,24 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const demoToken = this.demoTokens.mint({ projectId: row.projectId, targetId: 'main' }, AGENT_DEMO_TOKEN_TTL_MS);
     // hookUrl is how the runner reaches core (`http://core:7420` in compose); localhost is the runner itself.
     const demoUrl = `${this.config.hookUrl}${demoBasePath(demoToken)}`;
-    const spec = isSecondary
-      ? buildSecondaryCliLaunchSpec({
-          agent: row.agent as 'antigravity' | 'copilot' | 'gemini' | 'codex' | 'aider',
-          model: resolvedModel,
-          runId: row.id,
-          hookToken,
-          coreUrl: this.config.hookUrl,
-          hookCommand: this.config.hookCommand,
-          permissionMode: row.permissionMode as Run['permissionMode'],
-          prompt: effectivePrompt,
-          resumeSessionId: options.resumeSessionId,
-          extraEnv,
-        })
-      : buildLaunchSpec({
-          runId: row.id,
-          hookToken,
-          coreUrl: this.config.hookUrl,
-          claudeCommand: this.config.claudeCommand,
-          hookCommand: this.config.hookCommand,
-          permissionMode: row.permissionMode as Run['permissionMode'],
-          model: isRealClaude ? resolvedModel : undefined,
-          prompt: effectivePrompt,
-          resumeSessionId: options.resumeSessionId,
-          playwrightMcp: enablePlaywrightMcp,
-          customMcpServers:
-            isRealClaude && Object.keys(customMcpServers).length > 0 ? customMcpServers : undefined,
-          extraSystemPrompt: activeSkillPrompt || undefined,
-        });
+    const spec = provider.launch({
+      runId: row.id,
+      hookToken,
+      coreUrl: this.config.hookUrl,
+      hookCommand: this.config.hookCommand,
+      permissionMode: row.permissionMode as Run['permissionMode'],
+      model: provider.claudeNative && !isRealClaude ? 'auto' : resolvedModel,
+      prompt: effectivePrompt,
+      resumeSessionId: options.resumeSessionId,
+      extraEnv,
+      claude: {
+        command: this.config.claudeCommand,
+        playwrightMcp: enablePlaywrightMcp,
+        customMcpServers: isRealClaude && Object.keys(customMcpServers).length > 0 ? customMcpServers : undefined,
+        extraSystemPrompt: activeSkillPrompt || undefined,
+      },
+    });
 
-    const agentLabel =
-      row.agent === 'antigravity'
-        ? 'Antigravity'
-        : row.agent === 'copilot'
-          ? 'Copilot'
-          : row.agent === 'gemini'
-            ? 'Gemini'
-            : row.agent === 'codex'
-              ? 'Codex'
-              : row.agent === 'aider'
-                ? 'Aider'
-                : 'Claude';
     const personaPrefix =
       persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
     const modelSuffix = isRealClaude && resolvedModel && resolvedModel !== 'auto' ? ` (${resolvedModel})` : '';
@@ -605,7 +577,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           kind: 'agent',
           runId: row.id,
           projectId: row.projectId,
-          title: `${personaPrefix}${agentLabel}${modelSuffix} · ${row.title ?? project.name}`,
+          title: `${personaPrefix}${provider.displayName}${modelSuffix} · ${row.title ?? project.name}`,
         },
       });
       const run = this.record(row.id, {
