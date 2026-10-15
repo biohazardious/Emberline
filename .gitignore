@@ -13,8 +13,15 @@ coverage/
 /.emberline/
 /workspaces/
 
-# OpenWolf runtime files
-.wolf/daemon.log
+# Local agent tooling and its context (OpenWolf, Claude Code, Codex, OpenCode, Gemini)
+.wolf/
+.claude/
+.codex/
+.opencode/
+.playwright-mcp/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
 
 # Local IDE settings
 .vscode/
