@@ -43,15 +43,17 @@ ci: ## CI gate: lint/typecheck/test inside an image build
 	docker build --target check -t emberline/check:local .
 
 e2e: ## End-to-end smoke test on an isolated core + runner stack (port 7498, removed afterwards)
-	@set -e; ws=$$(mktemp -d); \
+	@set -e; ws=$$(mktemp -d); chmod 777 $$ws; \
 	export EMBERLINE_WORKSPACES_HOST_DIR=$$ws; \
-	docker build -q --target core -t emberline/core:e2e . >/dev/null; \
-	docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
+	if [ -z "$(E2E_PREBUILT)" ]; then \
+	  docker build -q --target core -t emberline/core:e2e . >/dev/null; \
+	  docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
+	fi; \
 	$(E2E) up -d --wait; \
 	status=0; docker run --rm --network emberline-e2e_default -v "$$PWD/e2e:/e2e:ro" emberline/core:e2e \
 	  node /e2e/smoke.mjs http://core:7420 || status=$$?; \
 	[ $$status -eq 0 ] || $(E2E) logs --tail 80; \
-	$(E2E) down -v >/dev/null 2>&1; rm -rf $$ws; exit $$status
+	$(E2E) down -v >/dev/null 2>&1; rm -rf $$ws 2>/dev/null || true; exit $$status
 
 # --- production stack ------------------------------------------------------
 

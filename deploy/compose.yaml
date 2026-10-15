@@ -1,0 +1,60 @@
+# Emberline from the published images: a single file for hosts that deploy compose YAML directly
+# (TrueNAS "Install via YAML", Portainer, Dockge, plain `docker compose -f deploy/compose.yaml up -d`).
+# Building from source uses the compose.yaml in the repository root instead.
+#
+# Before the first start:
+#   - Pick the version: EMBERLINE_VERSION (a release such as 0.1.0, `latest`, or `edge` for main).
+#   - Choose where the projects live: by default a named volume; set EMBERLINE_WORKSPACES to a host
+#     path (for example a TrueNAS dataset such as /mnt/tank/apps/emberline/workspaces) to see and
+#     back them up from the host. The runner works as uid 1000, so that path must be writable by it.
+#   - The first start prints a one-time setup token in the core log.
+# See SECURITY.md before exposing it beyond localhost.
+name: emberline
+
+services:
+  core:
+    image: ghcr.io/biohazardious/emberline-core:${EMBERLINE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${EMBERLINE_BIND:-127.0.0.1}:${EMBERLINE_PORT:-7420}:7420"
+    environment:
+      EMBERLINE_HOOK_URL: http://core:7420
+      TZ: ${TZ:-UTC}
+      EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
+    volumes:
+      - ptyd-socket:/run/emberline
+      - data:/data
+      - ${EMBERLINE_WORKSPACES:-workspaces}:/workspaces
+      - runner-home:/home/node:ro
+      - runner-tools:/opt/ai-tools:ro
+    depends_on:
+      runner:
+        condition: service_healthy
+        restart: false
+
+  runner:
+    image: ghcr.io/biohazardious/emberline-runner:${EMBERLINE_VERSION:-latest}
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ptyd-socket:/run/emberline
+      - ${EMBERLINE_WORKSPACES:-workspaces}:/workspaces
+      - runner-home:/home/node
+      - runner-tools:/opt/ai-tools
+      - runner-logs:/var/log/emberline
+    # Optional: hand a USB serial board to the agents (see compose.usb.yaml in the repository).
+    # The board must be plugged in when the runner starts; the device keeps its host name.
+    # devices:
+    #   - /dev/ttyACM0:/dev/ttyACM0
+    # group_add:
+    #   - "20"   # the group owning the device on the host: stat -c %g /dev/ttyACM0
+
+volumes:
+  ptyd-socket:
+  data:
+  workspaces:
+  runner-home:
+  runner-tools:
+  runner-logs:

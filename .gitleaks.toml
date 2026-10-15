@@ -1,0 +1,18 @@
+# gitleaks configuration: the default rules plus one allowlist entry.
+[extend]
+useDefault = true
+
+# The secret-guard tests feed a fake OpenAI key to the scanner on purpose. Matched by file and
+# value rather than by commit, so the rule survives history rewrites.
+[[allowlists]]
+description = "Fake key in the secret-guard test fixture"
+condition = "AND"
+paths = ['''(^|/)apps/core/src/factory\.test\.ts$''']
+regexes = ['''sk-proj-1234567890abcdefghijklmnop''']
+
+# The public OpenPGP fingerprint of the Chromium PPA's signing key, not a secret.
+[[allowlists]]
+description = "Public PPA signing-key fingerprint in the Dockerfile"
+condition = "AND"
+paths = ['''(^|/)Dockerfile$''']
+regexes = ['''5301FA4FD93244FBC6F6149982BB6851C64F6880''']

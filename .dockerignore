@@ -16,3 +16,9 @@ data
 compose*.yaml
 Dockerfile
 Makefile
+backups
+docs
+deploy
+e2e
+.playwright-mcp
+*.md

@@ -1,23 +1,179 @@
+# Lint, typecheck, test, secret scan and an end-to-end smoke test on every push and pull request.
+# Pushes to main publish the images as `edge`; a version tag (v0.1.0) publishes them as `0.1.0`,
+# `0.1` and `latest` and creates a GitHub release from that version's CHANGELOG section.
+#
+# Images: ghcr.io/<owner>/emberline-core and ghcr.io/<owner>/emberline-runner (linux/amd64).
+# The GHCR push needs no secrets: the workflow's own token may write packages. A new package
+# starts private; make it public once in the package settings when the repository goes public.
+
 name: CI
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  ci:
+  check:
+    name: Lint, typecheck, test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      # lint + typecheck + test run inside the image build (Dockerfile `check` target).
+      # The Dockerfile's `check` stage runs lint, typecheck, the unit tests and the build.
       - name: Check
-        run: docker build --target check .
-      - name: Build production images
-        run: |
-          docker build --target core -t emberline/core:ci .
-          docker build --target runner -t emberline/runner:ci .
-      # Boots core + runner (isolated compose project) and drives the API end to end.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: check
+          push: false
+          cache-from: type=gha,scope=check
+          cache-to: type=gha,scope=check,mode=max
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (whole history)
+        run: docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.30.0 git /repo --redact --no-banner
+
+  images:
+    name: Images and end-to-end test
+    needs: [check, secrets]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Built once into the local daemon for the smoke test, then pushed from the same cache.
+      - name: Build core
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: core
+          load: true
+          tags: emberline/core:e2e
+          cache-from: type=gha,scope=core
+          cache-to: type=gha,scope=core,mode=max
+      - name: Build runner
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          load: true
+          tags: emberline/runner:e2e
+          cache-from: type=gha,scope=runner
+          cache-to: type=gha,scope=runner,mode=max
       - name: End-to-end smoke test
-        run: make e2e
+        run: make e2e E2E_PREBUILT=1
+
+      - name: Log in to the GitHub Container Registry
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image names
+        if: env.PUSH == 'true'
+        # GHCR needs a lowercase owner.
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+      - name: Core tags
+        if: env.PUSH == 'true'
+        id: core-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.OWNER }}/emberline-core
+          # main -> edge; v0.1.0 -> 0.1.0, 0.1 and latest; every build -> sha-<short>.
+          tags: |
+            type=edge,branch=main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=Emberline core
+            org.opencontainers.image.description=Emberline API and web UI
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+      - name: Runner tags
+        if: env.PUSH == 'true'
+        id: runner-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.OWNER }}/emberline-runner
+          tags: |
+            type=edge,branch=main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=Emberline runner
+            org.opencontainers.image.description=Emberline runner: PTY host and developer environment for the agent CLIs
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+      - name: Push core
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: core
+          push: true
+          tags: ${{ steps.core-meta.outputs.tags }}
+          labels: ${{ steps.core-meta.outputs.labels }}
+          cache-from: type=gha,scope=core
+      - name: Push runner
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          push: true
+          tags: ${{ steps.runner-meta.outputs.tags }}
+          labels: ${{ steps.runner-meta.outputs.labels }}
+          cache-from: type=gha,scope=runner
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release notes from CHANGELOG.md
+        # The section between this version's heading and the next one.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # 0.x releases are pre-releases.
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in v0.*|*-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --title "Emberline ${GITHUB_REF_NAME}" --notes-file notes.md $flags
