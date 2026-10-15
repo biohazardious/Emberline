@@ -1,7 +1,8 @@
 # Production-style stack: `make up` (or `docker compose up -d --build`).
 #
 # core   — API + web UI. Safe to rebuild/restart at any time: `make upgrade-core`.
-# runner — ptyd + Claude Code CLI. Hosts running agents; restart only when idle.
+# runner — Generic Ubuntu 26.04 LTS + Node 24 LTS developer environment + ptyd.
+#          All AI CLIs live in the persistent `runner-tools` (/opt/ai-tools) volume.
 name: emberline
 
 services:
@@ -23,6 +24,7 @@ services:
       - data:/data
       - ${EMBERLINE_WORKSPACES_HOST_DIR:-./workspaces}:/workspaces
       - runner-home:/home/node:ro
+      - runner-tools:/opt/ai-tools
     depends_on:
       runner:
         condition: service_healthy
@@ -32,23 +34,24 @@ services:
     build:
       context: .
       target: runner
-      args:
-        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.296}
     image: emberline/runner:local
     restart: unless-stopped
     init: true
     environment:
-      # Same zone as core, so Claude's limit banners and core's parser agree.
+      # Same zone as core, so provider limit banners and core's parser agree.
       TZ: ${TZ:-UTC}
     volumes:
       - ptyd-socket:/run/emberline
       - ${EMBERLINE_WORKSPACES_HOST_DIR:-./workspaces}:/workspaces
-      # Persists `claude login` credentials (~/.claude, ~/.claude.json) and shell history.
+      # Persists OAuth credentials (~/.claude, ~/.gemini, ~/.config, etc.) and shell history.
       - runner-home:/home/node
+      # Persists dynamically installed & updated AI CLI tools (/opt/ai-tools/bin, /opt/ai-tools/npm).
+      - runner-tools:/opt/ai-tools
       - runner-logs:/var/log/emberline
 
 volumes:
   ptyd-socket:
   data:
   runner-home:
+  runner-tools:
   runner-logs:

@@ -1,22 +1,47 @@
 # Emberline images. Everything (dev, test, build, run) happens in containers;
 # the host only needs Docker.
 #
+# Architecture:
+#   - Base OS: Ubuntu 26.04 LTS (Resolute Raccoon) + Node.js 24 LTS
+#   - Zero hardcoded AI CLIs in the image. All AI agent CLIs (Claude Code,
+#     Google Antigravity, Gemini CLI, OpenAI Codex, GitHub Copilot, Aider, etc.)
+#     are dynamically installed and updated at runtime inside the persistent
+#     `runner-tools` volume (/opt/ai-tools) via the UI Toolchain Manager or
+#     automatic startup bootstrap.
+#
 # Targets:
 #   dev     toolbox used by compose.dev.yaml (source bind-mounted, deps in volumes)
 #   check   lint + typecheck + test inside the build (used by CI: `make ci`)
 #   core    production core (API + static web UI)
-#   runner  production runner (ptyd + pinned Claude Code CLI + emberline-hook)
+#   runner  generic Ubuntu 26.04 LTS runner (ptyd + emberline-hook + /opt/ai-tools volume)
 
-ARG NODE_VERSION=22
+ARG UBUNTU_VERSION=26.04
+ARG NODE_VERSION=24
 ARG PNPM_VERSION=10.15.0
 
 # ---------------------------------------------------------------------------
-# base: Node + pnpm + native toolchain (node-pty is compiled from source)
+# node_dist: Official Node.js 24 LTS binary distribution
 # ---------------------------------------------------------------------------
-FROM node:${NODE_VERSION}-bookworm-slim AS base
+FROM node:${NODE_VERSION}-bookworm-slim AS node_dist
+
+# ---------------------------------------------------------------------------
+# ubuntu_node: Ubuntu 26.04 LTS + Node.js 24 LTS + UID 1000 `node` user
+# ---------------------------------------------------------------------------
+FROM ubuntu:${UBUNTU_VERSION} AS ubuntu_node
+ENV DEBIAN_FRONTEND=noninteractive
+COPY --from=node_dist /usr/local /usr/local
+RUN groupmod -n node ubuntu \
+  && usermod -l node -d /home/node -m ubuntu \
+  && mkdir -p /home/node /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/npm/lib /opt/ai-tools/pipx \
+  && chown -R node:node /home/node /opt/ai-tools
+
+# ---------------------------------------------------------------------------
+# base: Node 24 LTS + pnpm + native C++ toolchain (node-pty & better-sqlite3)
+# ---------------------------------------------------------------------------
+FROM ubuntu_node AS base
 ARG PNPM_VERSION
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates bash \
+  && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates bash curl \
   && rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm@${PNPM_VERSION}
 # Keep the pnpm store at a fixed path so it can be a volume / cache mount.
@@ -72,12 +97,17 @@ FROM build AS check
 RUN pnpm lint && pnpm typecheck && pnpm test
 
 # ---------------------------------------------------------------------------
-# runtime base (no compilers)
+# runtime base (Ubuntu 26.04 LTS + Node 24 LTS + shared tool paths)
 # ---------------------------------------------------------------------------
-FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+FROM ubuntu_node AS runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates openssh-client python3 make \
+  && apt-get install -y --no-install-recommends git ca-certificates openssh-client python3 python3-venv pipx make curl bash \
   && rm -rf /var/lib/apt/lists/*
+ENV EMBERLINE_TOOLS_DIR=/opt/ai-tools \
+    NPM_CONFIG_PREFIX=/opt/ai-tools/npm \
+    PIPX_HOME=/opt/ai-tools/pipx \
+    PIPX_BIN_DIR=/opt/ai-tools/bin \
+    PATH="/opt/emberline/wrappers:/opt/ai-tools/bin:/opt/ai-tools/npm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ---------------------------------------------------------------------------
 # core
@@ -92,7 +122,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=build --chown=node:node /out/core ./
 COPY --from=build --chown=node:node /src/apps/web/dist ./public
-RUN mkdir -p /run/emberline /data /workspaces && chown node:node /run/emberline /data /workspaces
+RUN mkdir -p /run/emberline /data /workspaces /opt/ai-tools \
+  && chown -R node:node /run/emberline /data /workspaces /opt/ai-tools
 USER node
 EXPOSE 7420
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \
@@ -100,73 +131,37 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \
 CMD ["node", "dist/main.js"]
 
 # ---------------------------------------------------------------------------
-# runner: hosts agent sessions. Restarted rarely; core can restart freely.
+# runner: Generic Ubuntu 26.04 LTS developer environment.
+# AI CLIs are installed dynamically into the persistent /opt/ai-tools volume.
 # ---------------------------------------------------------------------------
 FROM runtime AS runner
-# Pinned on purpose (PROJECT.md §3.4). Bump via .env / build arg after a canary run.
-ARG CLAUDE_CODE_VERSION=2.1.296
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    bash less procps openssh-client chromium \
+    bash less procps openssh-client \
     build-essential pkg-config cmake \
     golang-go rustc cargo \
-    python3-pip python3-venv python3-pytest \
-    sqlite3 curl jq zip unzip \
+    python3-pip python3-venv python3-pytest pipx \
+    ripgrep fd-find sqlite3 curl wget jq zip unzip xz-utils \
+  && curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+  && apt-get install -y --no-install-recommends /tmp/chrome.deb \
+  && rm -f /tmp/chrome.deb \
+  && ln -sf /usr/bin/google-chrome-stable /usr/bin/chromium \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g \
-    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    @google/gemini-cli \
-    @openai/codex \
-    @github/copilot \
-    @playwright/mcp \
-  && npm cache clean --force
-ENV DISABLE_AUTOUPDATER=1 \
-    SHELL=/bin/bash \
+ENV SHELL=/bin/bash \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
     EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd.sock \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd
 COPY --from=build /out/hook /opt/emberline/hook
-RUN printf '%s\n' \
-    '#!/usr/bin/env bash' \
-    'set -e' \
-    'if [ "$1" = "login" ] || [ "$1" = "auth" ] || [ "$#" -eq 0 ]; then' \
-    '  echo "🚀 Antigravity (AGY) Agentic CLI — Google Account OAuth / Gemini Session"' \
-    '  echo "Select \"Login with Google\" below to authenticate without an API key:"' \
-    '  exec gemini' \
-    'fi' \
-    'MODEL="gemini-2.5-pro"' \
-    'PROMPT=""' \
-    'while [ "$#" -gt 0 ]; do' \
-    '  case "$1" in' \
-    '    --model|-m)' \
-    '      shift' \
-    '      case "$1" in' \
-    '        argon|gemini-pro) MODEL="gemini-2.5-pro" ;;' \
-    '        gemini-flash) MODEL="gemini-2.5-flash" ;;' \
-    '        gemini-flash-lite) MODEL="gemini-2.5-flash-lite" ;;' \
-    '        *) MODEL="$1" ;;' \
-    '      esac' \
-    '      shift ;;' \
-    '    -p|--prompt)' \
-    '      shift; PROMPT="$1"; shift ;;' \
-    '    *)' \
-    '      PROMPT="$1"; shift ;;' \
-    '  esac' \
-    'done' \
-    'if [ -n "$PROMPT" ]; then' \
-    '  exec gemini --yolo --model "$MODEL" -p "$PROMPT"' \
-    'else' \
-    '  exec gemini --model "$MODEL"' \
-    'fi' \
-    > /usr/local/bin/agy \
-  && chmod +x /usr/local/bin/agy \
-  && ln -sf /usr/local/bin/agy /usr/local/bin/antigravity \
-  && chmod +x /opt/emberline/hook/dist/main.js \
-  && ln -s /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \
-  && mkdir -p /run/emberline /var/log/emberline /workspaces \
-  && chown node:node /run/emberline /var/log/emberline /workspaces
+RUN chmod +x /opt/emberline/hook/dist/main.js \
+  && ln -sf /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \
+  && mkdir -p /opt/emberline/wrappers \
+  && cp /opt/emberline/hook/wrappers/* /opt/emberline/wrappers/ \
+  && chmod +x /opt/emberline/wrappers/* \
+  && ln -sf /opt/emberline/wrappers/agy /opt/emberline/wrappers/antigravity \
+  && mkdir -p /run/emberline /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx \
+  && chown -R node:node /run/emberline /var/log/emberline /workspaces /opt/ai-tools
 USER node
 WORKDIR /workspaces
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s CMD test -S /run/emberline/ptyd.sock
-CMD ["node", "/opt/emberline/ptyd/dist/main.js"]
+CMD ["/opt/emberline/wrappers/runner-entrypoint.sh"]

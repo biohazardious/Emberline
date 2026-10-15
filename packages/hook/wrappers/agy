@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -o pipefail
+
+TOOLS_DIR="${EMBERLINE_TOOLS_DIR:-/opt/ai-tools}"
+AGY_BIN="${TOOLS_DIR}/bin/agy"
+WRAPPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STREAM_PARSER="${WRAPPER_DIR}/agy-stream.mjs"
+
+# Version / help check: do not auto-install on --version probes so toolchain status is accurate
+if [ "$1" = "--version" ] || [ "$1" = "-v" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  if [ -x "$AGY_BIN" ]; then
+    exec "$AGY_BIN" "$@"
+  fi
+  exit 127
+fi
+
+# Auto-bootstrap into persistent volume if invoked for login or a run and not yet installed
+if [ ! -x "$AGY_BIN" ]; then
+  echo "📦 Installing Google Antigravity CLI (agy) into persistent volume (${TOOLS_DIR}/bin)..."
+  mkdir -p "${TOOLS_DIR}/bin"
+  curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir "${TOOLS_DIR}/bin"
+fi
+
+if [ "$1" = "login" ] || [ "$1" = "auth" ] || [ "$#" -eq 0 ]; then
+  echo "🚀 Google Antigravity CLI (agy) — Interactive Google Account OAuth"
+  exec "$AGY_BIN"
+fi
+
+ARGS=()
+PROMPT=""
+CONTINUE_FLAG=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --model|-m)
+      shift
+      case "$1" in
+        argon|gemini-pro|auto) ARGS+=("--effort" "high") ;;
+        gemini-flash) ARGS+=("--effort" "medium") ;;
+        gemini-flash-lite) ARGS+=("--effort" "low") ;;
+        *) ARGS+=("--model" "$1") ;;
+      esac
+      shift ;;
+    -c|--continue)
+      CONTINUE_FLAG="-c"
+      shift ;;
+    -p|--prompt|--print)
+      shift
+      PROMPT="$1"
+      shift ;;
+    *)
+      ARGS+=("$1")
+      shift ;;
+  esac
+done
+
+if [ -s "/home/node/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -s "/home/node/.config/antigravity/plugin-secrets.json" ]; then
+  if [ -n "$PROMPT" ]; then
+    "$AGY_BIN" --dangerously-skip-permissions --output-format stream-json ${CONTINUE_FLAG} "${ARGS[@]}" -p "$PROMPT" 2>&1 | node "$STREAM_PARSER"
+    exit $?
+  else
+    exec "$AGY_BIN" --dangerously-skip-permissions ${CONTINUE_FLAG} "${ARGS[@]}"
+  fi
+elif [ -n "$GEMINI_API_KEY" ] || [ -s "/home/node/.gemini/oauth_creds.json" ]; then
+  if [ -n "$PROMPT" ]; then
+    exec gemini --yolo -p "$PROMPT"
+  else
+    exec gemini
+  fi
+else
+  echo "❌ Google Antigravity CLI (agy) is not signed in yet, and no GEMINI_API_KEY is configured." >&2
+  echo "👉 Go to Settings & Keys -> Google Antigravity -> click Console Login, select 1. Google OAuth, and paste the authorization code." >&2
+  exit 41
+fi

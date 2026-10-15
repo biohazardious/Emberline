@@ -8,7 +8,7 @@
   "bin": {
     "emberline-hook": "./dist/main.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "wrappers"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"

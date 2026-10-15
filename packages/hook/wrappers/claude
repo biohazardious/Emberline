@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -e
+
+TOOLS_DIR="${EMBERLINE_TOOLS_DIR:-/opt/ai-tools}"
+CLAUDE_BIN="${TOOLS_DIR}/npm/bin/claude"
+
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+  if [ -x "$CLAUDE_BIN" ]; then
+    exec "$CLAUDE_BIN" "$@"
+  fi
+  exit 127
+fi
+
+if [ ! -x "$CLAUDE_BIN" ]; then
+  echo "📦 Installing @anthropic-ai/claude-code@latest into persistent volume (${TOOLS_DIR}/npm)..." >&2
+  mkdir -p "${TOOLS_DIR}/npm/bin" "${TOOLS_DIR}/npm/lib"
+  NPM_CONFIG_PREFIX="${TOOLS_DIR}/npm" npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest >&2
+fi
+
+exec "$CLAUDE_BIN" "$@"
