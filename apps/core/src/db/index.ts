@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -25,8 +25,49 @@ export function openDb(file: string): OpenedDb {
   sqlite.pragma('foreign_keys = ON');
   sqlite.pragma('busy_timeout = 5000');
   const db = drizzle({ client: sqlite, schema });
+  if (file !== ':memory:') backupBeforeMigrations(sqlite, file);
   migrate(db, { migrationsFolder: MIGRATIONS_DIR });
   return { db, close: () => sqlite.close() };
+}
+
+const KEPT_MIGRATION_BACKUPS = 3;
+
+/** Newest applied migration timestamp, or null for a database that has never been migrated. */
+function lastAppliedMigration(sqlite: Database.Database): number | null {
+  const table = sqlite
+    .prepare(`select name from sqlite_master where type = 'table' and name = '__drizzle_migrations'`)
+    .get();
+  if (!table) return null;
+  const row = sqlite.prepare('select max(created_at) as last from __drizzle_migrations').get() as {
+    last: number | null;
+  };
+  return row.last;
+}
+
+/**
+ * Snapshots an existing database (`VACUUM INTO`, consistent under WAL) before pending migrations
+ * run, so a failed or destructive migration can be rolled back by hand. Keeps the newest few.
+ */
+function backupBeforeMigrations(sqlite: Database.Database, file: string): void {
+  const last = lastAppliedMigration(sqlite);
+  if (last === null) return; // fresh database: nothing to protect
+  const journal = JSON.parse(readFileSync(path.join(MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')) as {
+    entries: { when: number; tag: string }[];
+  };
+  const pending = journal.entries.filter((entry) => entry.when > last);
+  if (pending.length === 0) return;
+
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.pre-migration-`;
+  const target = path.join(dir, `${prefix}${Date.now()}.bak`);
+  if (existsSync(target)) return;
+  sqlite.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`);
+  const backups = readdirSync(dir)
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.bak'))
+    .sort();
+  for (const old of backups.slice(0, Math.max(0, backups.length - KEPT_MIGRATION_BACKUPS))) {
+    rmSync(path.join(dir, old), { force: true });
+  }
 }
 
 export function getSetting<T>(db: Db, key: string): T | undefined {
