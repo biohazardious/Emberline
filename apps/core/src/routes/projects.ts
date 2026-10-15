@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   ActiveProjectPreference,
   AgentCreateTicketsPayload,
+  AgentId,
   AutoGenerateRoadmapBody,
   type AutoGenerateRoadmapResponse,
   BrainstormRequestBody,
@@ -18,6 +19,7 @@ import {
   CreateProjectBody,
   type CreateProjectResponse,
   CreateRoadmapItemBody,
+  type CrossCriticResult,
   DeleteWorkspaceFileBody,
   DispatchRoadmapItemsBody,
   type DispatchRoadmapItemsResponse,
@@ -36,10 +38,16 @@ import {
   ProviderLoginBody,
   type ProviderLoginResponse,
   RollbackCheckpointBody,
+  RunCrossCriticBody,
+  type RunTelemetry,
+  type SlopAuditReport,
   SyncWorktreeBody,
   type SyncWorktreeResponse,
   type TaskTemplate,
   type Ticket,
+  ToolchainActionBody,
+  type ToolchainActionResponse,
+  type ToolchainStatusResponse,
   UpdateFactorySettingsBody,
   UpdateProjectBlueprintBody,
   UpdateRoadmapItemBody,
@@ -66,6 +74,7 @@ import {
   updateRoadmapItem,
 } from '../factory/roadmap.js';
 import {
+  auditWorktreeSlop,
   buildWorkspaceDemo,
   captureBrowserViewportSnapshot,
   computeProjectRecommendations,
@@ -75,6 +84,7 @@ import {
   generateClaudeInstructions,
   generateProjectBlueprint,
   getFactorySettings,
+  getSavedCrossCriticResult,
   initLocalGitRepository,
   listProjectCheckpoints,
   listWorkspaceFilesFlat,
@@ -82,6 +92,7 @@ import {
   readWorkspaceFileContent,
   readWorkspaceFileRaw,
   rollbackProjectCheckpoint,
+  runCrossProviderCritic,
   seedStarterTickets,
   serveWorkspaceDemoAsset,
   syncWorktreeToMainWorkspace,
@@ -92,6 +103,7 @@ import {
   writeWorkspaceFileContent,
 } from '../factory/service.js';
 import type { CoreDeps } from '../server.js';
+import { ToolchainService } from '../toolchain/service.js';
 
 type ProjectRow = typeof projects.$inferSelect;
 
@@ -406,11 +418,41 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     },
   );
 
+  const toolchain = new ToolchainService(db, ptyd, config.workspacesDir);
+  if (process.env.NODE_ENV === 'production') {
+    toolchain.ensureEnabledProvidersInstalled();
+  }
+
+  app.get('/api/toolchain/status', async (): Promise<ToolchainStatusResponse> => toolchain.getStatus());
+
+  app.post<{ Params: { provider: string } }>(
+    '/api/toolchain/:provider/action',
+    async (request): Promise<ToolchainActionResponse> => {
+      const provider = AgentId.parse(request.params.provider);
+      const body = ToolchainActionBody.parse(request.body ?? {});
+      try {
+        return await toolchain.executeAction(provider, body);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.post('/api/toolchain/update-all', async () => {
+    const res = await toolchain.updateAllInstalled();
+    const status = await toolchain.getStatus();
+    return { ...res, status };
+  });
+
   app.get('/api/factory/settings', async (): Promise<FactorySettings> => getFactorySettings(db));
 
   app.patch('/api/factory/settings', async (request): Promise<FactorySettings> => {
     const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
-    return updateFactorySettings(db, patch);
+    const updated = updateFactorySettings(db, patch);
+    if (patch.enabledProviders && process.env.NODE_ENV === 'production') {
+      toolchain.ensureEnabledProvidersInstalled(updated.enabledProviders);
+    }
+    return updated;
   });
 
   app.post('/api/factory/provider-login', async (request, reply): Promise<ProviderLoginResponse> => {
@@ -426,6 +468,11 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       });
     }
 
+    const toolStatus = await toolchain.getToolStatus(provider);
+    const autoInstallStep = !toolStatus.installed
+      ? `printf "\\033[1;33m📦 ${entry.shortLabel} CLI not yet installed in /opt/ai-tools — installing latest version now...\\033[0m\\n"; ${toolStatus.installCommand}`
+      : '';
+
     const loginSpecs: Record<
       typeof provider,
       { cmd: string; instructions: string }
@@ -436,14 +483,14 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
           'Follow the Anthropic OAuth URL in the terminal to sign in with your Claude subscription.',
       },
       antigravity: {
-        cmd: 'agy login',
+        cmd: 'agy',
         instructions:
-          'Select "Login with Google" in the terminal and open the OAuth URL to sign in with your Google/Gemini account (no API key required).',
+          'Select "1. Google OAuth" in the Antigravity CLI, open the URL in your browser, and paste the authorization code below (no API key required).',
       },
       gemini: {
         cmd: 'gemini',
         instructions:
-          'Select "Login with Google" in the terminal and open the OAuth URL to sign in with your Google/Gemini account (no API key required).',
+          'Configure Gemini CLI authentication or enter your Gemini API Key (for personal Google OAuth without an API key, use Google Antigravity CLI).',
       },
       codex: {
         cmd: 'codex login',
@@ -466,9 +513,12 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     const shellScript = [
       `printf "\\033[1;36m=== ${entry.icon} ${entry.label} — Interactive Account Login ===\\033[0m\\n"`,
       `printf "${spec.instructions}\\n\\n"`,
+      autoInstallStep,
       spec.cmd,
       `exec bash -i`,
-    ].join('; ');
+    ]
+      .filter(Boolean)
+      .join('; ');
 
     const session = await ptyd.get().spawn({
       file: 'bash',
@@ -850,6 +900,66 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       saveActiveProjectId(nextFirst?.id ?? null);
 
       return { ok: true, deletedProjectId: projectId, nextActiveProjectId: nextFirst?.id ?? null };
+    },
+  );
+
+  // --- F12: Anti-AI-Slop Diff Hygiene Audit & Cross-Provider AI Critic -------
+
+  const resolveRunAuditPath = (runId: string) => {
+    const run = runs.get(runId);
+    const projectRow = db.select().from(projects).where(eq(projects.id, run.projectId)).get();
+    const workspacePath =
+      run.worktreePath && existsSync(run.worktreePath)
+        ? run.worktreePath
+        : (projectRow?.path ?? run.worktreePath);
+    return { run, workspacePath };
+  };
+
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/slop-audit',
+    async (request): Promise<SlopAuditReport> => {
+      const { run, workspacePath } = resolveRunAuditPath(request.params.id);
+      return auditWorktreeSlop({
+        runId: run.id,
+        workspacePath,
+      });
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/cross-critic',
+    async (request): Promise<CrossCriticResult | null> => {
+      const { run, workspacePath } = resolveRunAuditPath(request.params.id);
+      return getSavedCrossCriticResult(workspacePath, run.id);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/cross-critic',
+    async (request): Promise<CrossCriticResult> => {
+      const { run, workspacePath } = resolveRunAuditPath(request.params.id);
+      const body = RunCrossCriticBody.parse(request.body ?? {});
+      const fSettings = getFactorySettings(db);
+      const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
+      const result = await runCrossProviderCritic({
+        run,
+        ticketTitle: ticket?.title ?? run.title,
+        ticketBody: ticket?.body ?? null,
+        workspacePath,
+        settings: fSettings,
+        preferredReviewer: body.reviewerAgent,
+      });
+      if (body.autoDispatchFix && result.followUpPrompt) {
+        await runs.prompt(run.id, result.followUpPrompt).catch(() => undefined);
+      }
+      return result;
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/telemetry',
+    async (request): Promise<RunTelemetry> => {
+      return runs.getTelemetry(request.params.id);
     },
   );
 }

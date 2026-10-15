@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,8 +13,11 @@ import {
   type BrowserViewportSnapshot,
   type BuildDemoResponse,
   coerceModelForProvider,
+  DEFAULT_MCP_SERVERS,
+  DEFAULT_SKILL_PLUGINS,
   type FactoryAttachmentInput,
   FactorySettings,
+  type McpServerEntry,
   type Project,
   type ProjectAppType,
   type ProjectBlueprintResponse,
@@ -24,6 +27,7 @@ import {
   type ProjectTechStack,
   type Run,
   selectProviderModelByRank,
+  type SkillPluginEntry,
   type SyncWorktreeResponse,
   type TaskTemplate,
   type Ticket,
@@ -39,6 +43,8 @@ import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
 import type { TicketService } from '../tickets/service.js';
 import { getLastKnownClaudeUtilizationPercent } from './browser-daemon.js';
+
+export * from './slop-guard.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1200,7 +1206,9 @@ export async function buildWorkspaceDemo(params: {
       const rawPkg = await readFile(path.join(workspacePath, 'package.json'), 'utf-8');
       const parsedPkg = JSON.parse(rawPkg) as { scripts?: Record<string, string> };
       const scripts = parsedPkg.scripts ?? {};
-      const scriptName =
+      const ciEnv = { ...process.env, CI: 'true', FORCE_COLOR: '0' };
+
+      const buildScriptName =
         typeof scripts.build === 'string'
           ? 'build'
           : typeof scripts.typecheck === 'string'
@@ -1209,11 +1217,47 @@ export async function buildWorkspaceDemo(params: {
               ? 'check'
               : null;
 
-      if (scriptName) {
-        logs.push(`$ ${pkgManager} run ${scriptName}`);
-        const { stdout, stderr } = await execFileAsync(pkgManager, ['run', scriptName], {
+      if (buildScriptName) {
+        logs.push(`$ ${pkgManager} run ${buildScriptName}`);
+        const { stdout, stderr } = await execFileAsync(pkgManager, ['run', buildScriptName], {
           cwd: workspacePath,
           timeout: 120_000,
+          env: ciEnv,
+        });
+        if (stdout) logs.push(stdout);
+        if (stderr) logs.push(stderr);
+      }
+
+      if (
+        typeof scripts.lint === 'string' &&
+        buildScriptName !== 'check' &&
+        !scripts.lint.includes('--watch')
+      ) {
+        logs.push(`$ ${pkgManager} run lint`);
+        const { stdout, stderr } = await execFileAsync(pkgManager, ['run', 'lint'], {
+          cwd: workspacePath,
+          timeout: 90_000,
+          env: ciEnv,
+        });
+        if (stdout) logs.push(stdout);
+        if (stderr) logs.push(stderr);
+      }
+
+      if (
+        typeof scripts.test === 'string' &&
+        !scripts.test.includes('no test specified') &&
+        !scripts.test.includes('--watch') &&
+        buildScriptName !== 'check'
+      ) {
+        const testArgs =
+          scripts.test.trim() === 'vitest'
+            ? ['run', 'test', '--', '--run']
+            : ['run', 'test'];
+        logs.push(`$ ${pkgManager} ${testArgs.join(' ')}`);
+        const { stdout, stderr } = await execFileAsync(pkgManager, testArgs, {
+          cwd: workspacePath,
+          timeout: 120_000,
+          env: ciEnv,
         });
         if (stdout) logs.push(stdout);
         if (stderr) logs.push(stderr);
@@ -1250,8 +1294,8 @@ export async function buildWorkspaceDemo(params: {
     } else if (existsSync(path.join(workspacePath, 'go.mod'))) {
       const hasGo = await execFileAsync('sh', ['-c', 'command -v go']).then(() => true, () => false);
       if (hasGo) {
-        logs.push('$ go build ./...');
-        const { stdout, stderr } = await execFileAsync('go', ['build', './...'], {
+        logs.push('$ go build ./... && go test ./...');
+        const { stdout, stderr } = await execFileAsync('sh', ['-c', 'go build ./... && go test ./...'], {
           cwd: workspacePath,
           timeout: 120_000,
         });
@@ -1294,6 +1338,9 @@ export async function buildWorkspaceDemo(params: {
       buildCommandSucceeded = true;
     }
   } catch (err) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    if (typeof execErr.stdout === 'string' && execErr.stdout.trim()) logs.push(execErr.stdout);
+    if (typeof execErr.stderr === 'string' && execErr.stderr.trim()) logs.push(execErr.stderr);
     const msg = err instanceof Error ? err.message : String(err);
     logs.push(msg);
     const fallbackEntry = await detectDemoEntryRelPath(workspacePath);
@@ -1461,6 +1508,60 @@ const ALL_PERSONA_KEYS: readonly AgentPersona[] = [
   'security',
 ];
 
+function hasNonEmptyAntigravitySecrets(home: string): boolean {
+  try {
+    const oauthTokenPath = path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+    if (existsSync(oauthTokenPath)) {
+      const tokenRaw = readFileSync(oauthTokenPath, 'utf8').trim();
+      if (tokenRaw.length > 10) {
+        return true;
+      }
+    }
+    const secretsPath = path.join(home, '.config', 'antigravity', 'plugin-secrets.json');
+    if (existsSync(secretsPath)) {
+      const raw = readFileSync(secretsPath, 'utf8').trim();
+      if (raw.length > 4) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+          return true;
+        }
+      }
+    }
+    const jetskiPath = path.join(home, '.gemini', 'antigravity-cli', 'jetski_state.pbtxt');
+    if (existsSync(jetskiPath)) {
+      const pbtxt = readFileSync(jetskiPath, 'utf8');
+      if (/oauth_token|refresh_token|access_token/i.test(pbtxt)) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore read errors
+  }
+  return false;
+}
+
+function hasValidGeminiOAuth(home: string): boolean {
+  try {
+    if (
+      existsSync(path.join(home, '.gemini', 'oauth_creds.json')) ||
+      existsSync(path.join(home, '.gemini', 'gemini-credentials.json')) ||
+      existsSync(path.join(home, '.config', 'gcloud', 'application_default_credentials.json'))
+    ) {
+      return true;
+    }
+    const accountsPath = path.join(home, '.gemini', 'google_accounts.json');
+    if (existsSync(accountsPath)) {
+      const parsed = JSON.parse(readFileSync(accountsPath, 'utf8')) as { active?: string | null };
+      if (typeof parsed?.active === 'string' && parsed.active.trim().length > 0) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore read errors
+  }
+  return false;
+}
+
 function detectRunnerProviderAuth(params: {
   anthropicKeyConfigured: boolean;
   openaiKeyConfigured: boolean;
@@ -1470,10 +1571,8 @@ function detectRunnerProviderAuth(params: {
   const claudeOAuth =
     existsSync(path.join(home, '.claude', '.credentials.json')) ||
     existsSync(path.join(home, '.claude.json'));
-  const geminiOAuth =
-    existsSync(path.join(home, '.gemini', 'oauth_creds.json')) ||
-    existsSync(path.join(home, '.gemini', 'google_accounts.json')) ||
-    existsSync(path.join(home, '.config', 'gcloud', 'application_default_credentials.json'));
+  const geminiOAuth = hasValidGeminiOAuth(home);
+  const antigravityOAuth = hasNonEmptyAntigravitySecrets(home) || geminiOAuth;
   const codexOAuth = existsSync(path.join(home, '.codex', 'auth.json'));
   const copilotOAuth =
     existsSync(path.join(home, '.copilot')) ||
@@ -1504,13 +1603,13 @@ function detectRunnerProviderAuth(params: {
             cliInstalled: true,
             loginCommandHint: 'claude login',
           },
-    antigravity: geminiOAuth
+    antigravity: antigravityOAuth
       ? {
           authenticated: true,
           method: 'oauth_cli' as const,
           label: '✓ Google Account OAuth',
           cliInstalled: true,
-          loginCommandHint: 'agy login',
+          loginCommandHint: 'agy',
         }
       : params.geminiKeyConfigured
         ? {
@@ -1518,14 +1617,14 @@ function detectRunnerProviderAuth(params: {
             method: 'api_key' as const,
             label: '✓ Gemini API Key',
             cliInstalled: true,
-            loginCommandHint: 'agy login',
+            loginCommandHint: 'agy',
           }
         : {
             authenticated: false,
             method: 'none' as const,
             label: 'Google OAuth (No Key Needed)',
             cliInstalled: true,
-            loginCommandHint: 'agy login',
+            loginCommandHint: 'agy',
           },
     gemini: geminiOAuth
       ? {
@@ -1546,7 +1645,7 @@ function detectRunnerProviderAuth(params: {
         : {
             authenticated: false,
             method: 'none' as const,
-            label: 'Google OAuth or API Key',
+            label: 'API Key Recommended (or use Antigravity)',
             cliInstalled: true,
             loginCommandHint: 'gemini',
           },
@@ -1662,6 +1761,38 @@ export function getFactorySettings(db: Db): FactorySettings {
     normalizedModels[p] = coerceModelForProvider(validAgent, candidateModel, p);
   }
 
+  const storedMcpList = Array.isArray(raw.mcpServers) ? raw.mcpServers : [];
+  const storedMcpMap = new Map(storedMcpList.map((m) => [m.id, m]));
+  const mergedMcpServers: McpServerEntry[] = DEFAULT_MCP_SERVERS.map((def) => {
+    const saved = storedMcpMap.get(def.id);
+    if (!saved) return def;
+    storedMcpMap.delete(def.id);
+    return {
+      ...def,
+      ...saved,
+      builtIn: true,
+    };
+  });
+  for (const custom of storedMcpMap.values()) {
+    mergedMcpServers.push(custom);
+  }
+
+  const storedSkillList = Array.isArray(raw.skillPlugins) ? raw.skillPlugins : [];
+  const storedSkillMap = new Map(storedSkillList.map((s) => [s.id, s]));
+  const mergedSkillPlugins: SkillPluginEntry[] = DEFAULT_SKILL_PLUGINS.map((def) => {
+    const saved = storedSkillMap.get(def.id);
+    if (!saved) return def;
+    storedSkillMap.delete(def.id);
+    return {
+      ...def,
+      ...saved,
+      builtIn: true,
+    };
+  });
+  for (const custom of storedSkillMap.values()) {
+    mergedSkillPlugins.push(custom);
+  }
+
   return FactorySettings.parse({
     theme: raw.theme ?? 'dark',
     defaultAgent,
@@ -1673,7 +1804,12 @@ export function getFactorySettings(db: Db): FactorySettings {
     autoPickupBacklog: raw.autoPickupBacklog ?? false,
     autoSyncToMain: raw.autoSyncToMain ?? true,
     selfHealingBuildGate: raw.selfHealingBuildGate ?? true,
+    antiSlopGate: raw.antiSlopGate ?? true,
+    secretGuardGate: raw.secretGuardGate ?? true,
+    crossProviderCritic: raw.crossProviderCritic ?? false,
     autoMoveToDone: raw.autoMoveToDone ?? true,
+    mcpServers: mergedMcpServers,
+    skillPlugins: mergedSkillPlugins,
     anthropicKeyConfigured,
     openaiKeyConfigured,
     geminiKeyConfigured,
@@ -1736,7 +1872,12 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     autoPickupBacklog: body.autoPickupBacklog ?? current.autoPickupBacklog,
     autoSyncToMain: body.autoSyncToMain ?? current.autoSyncToMain,
     selfHealingBuildGate: body.selfHealingBuildGate ?? current.selfHealingBuildGate,
+    antiSlopGate: body.antiSlopGate ?? current.antiSlopGate,
+    secretGuardGate: body.secretGuardGate ?? current.secretGuardGate,
+    crossProviderCritic: body.crossProviderCritic ?? current.crossProviderCritic,
     autoMoveToDone: body.autoMoveToDone ?? current.autoMoveToDone,
+    mcpServers: body.mcpServers ?? current.mcpServers,
+    skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };
 
   db.insert(settings)
@@ -1821,6 +1962,59 @@ export function resolveModelForPersona(
     return selectProviderModelByRank(agent, 3);
   }
   return candidate;
+}
+
+export function resolveMcpServersForPersona(
+  db: Db,
+  persona: AgentPersona,
+): {
+  playwrightEnabled: boolean;
+  customMcpServers: Record<
+    string,
+    { command?: string; args?: string[]; env?: Record<string, string>; url?: string; type?: 'stdio' | 'sse' | 'http' }
+  >;
+} {
+  const cfg = getFactorySettings(db);
+  let playwrightEnabled = true;
+  const customMcpServers: Record<
+    string,
+    { command?: string; args?: string[]; env?: Record<string, string>; url?: string; type?: 'stdio' | 'sse' | 'http' }
+  > = {};
+
+  for (const srv of cfg.mcpServers ?? []) {
+    const matchesPersona = srv.personas.length === 0 || srv.personas.includes(persona);
+    if (srv.id === 'playwright') {
+      playwrightEnabled = Boolean(srv.enabled && matchesPersona);
+      continue;
+    }
+    if (!srv.enabled || !matchesPersona) continue;
+    if (srv.transport === 'stdio' && srv.command.trim()) {
+      customMcpServers[srv.id] = {
+        command: srv.command.trim(),
+        args: srv.args,
+        ...(Object.keys(srv.env).length > 0 ? { env: srv.env } : {}),
+      };
+    } else if ((srv.transport === 'sse' || srv.transport === 'http') && srv.url?.trim()) {
+      customMcpServers[srv.id] = {
+        type: srv.transport,
+        url: srv.url.trim(),
+      };
+    }
+  }
+
+  return { playwrightEnabled, customMcpServers };
+}
+
+export function resolveSkillPluginPromptForPersona(db: Db, persona: AgentPersona): string {
+  const cfg = getFactorySettings(db);
+  const activeSkills = (cfg.skillPlugins ?? []).filter(
+    (s) => s.enabled && (s.personas.length === 0 || s.personas.includes(persona)),
+  );
+  if (activeSkills.length === 0) return '';
+  return [
+    '[ACTIVE FACTORY SKILL & RULE PLUGINS]:',
+    ...activeSkills.map((s) => `- [${s.name}]: ${s.instructions.trim()}`),
+  ].join('\n');
 }
 
 // --- F8: VS Code-like Code Explorer & File Editor ---------------------------

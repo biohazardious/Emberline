@@ -15,6 +15,7 @@ import type {
   WorkspaceFileListResponse,
 } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import { auditWorktreeSlop } from './factory/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
@@ -327,5 +328,53 @@ describe('AI Coding Factory (F1–F4)', () => {
       payload: { targetId: 'main', path: 'src/scoreCounter.ts' },
     });
     expect(deleteFileRes.statusCode).toBe(200);
+
+    // Phase F12 & F13: Anti-AI-Slop + Pre-Commit Secret & Credential Guard
+    expect(updatedSettings.mcpServers.length).toBeGreaterThanOrEqual(4);
+    expect(updatedSettings.skillPlugins.length).toBeGreaterThanOrEqual(4);
+    expect(updatedSettings.secretGuardGate).toBe(true);
+
+    const slopFile = path.join(p1.path, 'src', 'slopExample.tsx');
+    mkdirSync(path.dirname(slopFile), { recursive: true });
+    writeFileSync(
+      slopFile,
+      [
+        'export function BadCard(props: any) {',
+        '  // TODO: implement real handler later',
+        '  console.log("debug card", props);',
+        '  return <div style={{ background: "linear-gradient(135deg, #6366f1, #ec4899)" }} />;',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    const slopReport = await auditWorktreeSlop({
+      runId: 'test-run-slop',
+      workspacePath: p1.path,
+    });
+    expect(slopReport.passed).toBe(false);
+    expect(slopReport.secretGuardPassed).toBe(true);
+    expect(slopReport.errorCount).toBeGreaterThanOrEqual(2);
+    expect(slopReport.issues.map((i) => i.category)).toEqual(
+      expect.arrayContaining(['type_evasion', 'unfinished_stub', 'debug_leftover', 'vibe_ui_cliche']),
+    );
+    expect(slopReport.autoFixPrompt).toContain('Anti-AI-Slop & Code Hygiene Gate');
+
+    // Verify Pre-Commit Secret & Credential Guard detects leaked keys and redacts the secret in snippet
+    writeFileSync(
+      path.join(p1.path, '.env'),
+      'OPENAI_API_KEY="sk-proj-1234567890abcdefghijklmnop"\n',
+      'utf8',
+    );
+    const secretReport = await auditWorktreeSlop({
+      runId: 'test-run-secret',
+      workspacePath: p1.path,
+    });
+    expect(secretReport.passed).toBe(false);
+    expect(secretReport.secretGuardPassed).toBe(false);
+    expect(secretReport.secretLeakCount).toBeGreaterThanOrEqual(1);
+    const leakIssue = secretReport.issues.find((i) => i.category === 'secret_leak' && i.snippet.includes('REDACTED'));
+    expect(leakIssue).toBeDefined();
+    expect(leakIssue?.snippet).not.toContain('1234567890abcdefghijklmnop');
+    expect(secretReport.autoFixPrompt).toContain('PRE-COMMIT SECRET & CREDENTIAL GUARD BLOCK');
   });
 });

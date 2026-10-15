@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -6,7 +6,9 @@ import type {
   BrowserActionBody,
   BrowserAgentAction,
   BrowserViewportSnapshot,
+  ClaudeTokenBucket,
   ClaudeUsageTelemetry,
+  ProviderTokenTelemetry,
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
@@ -1167,12 +1169,8 @@ export function getLastKnownClaudeUtilizationPercent(): number {
   return lastKnownClaudeUtilizationPercent;
 }
 
-export async function getRunnerClaudeUsage(params: {
-  ptyd: PtydBridge;
-  socketDir: string;
-  forceRefresh?: boolean;
-}): Promise<ClaudeUsageTelemetry> {
-  const empty = {
+function createEmptyBucket(): ClaudeTokenBucket {
+  return {
     inputTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,
@@ -1180,6 +1178,87 @@ export async function getRunnerClaudeUsage(params: {
     totalTokens: 0,
     turnCount: 0,
   };
+}
+
+function scanAntigravityTranscriptTokens(nowMs = Date.now()): ProviderTokenTelemetry {
+  const hourly = createEmptyBucket();
+  const daily = createEmptyBucket();
+  const weekly = createEmptyBucket();
+  const brainRoot = '/home/node/.gemini/antigravity-cli/brain';
+  const cutoff7d = nowMs - 7 * 86_400_000;
+  const cutoff24h = nowMs - 86_400_000;
+  const cutoff1h = nowMs - 3_600_000;
+
+  try {
+    if (!existsSync(brainRoot)) {
+      return { hourlyTokens: hourly, dailyTokens: daily, weeklyTokens: weekly };
+    }
+    const dirs = readdirSync(brainRoot, { withFileTypes: true });
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      const transcriptPath = path.join(brainRoot, d.name, '.system_generated', 'logs', 'transcript.jsonl');
+      if (!existsSync(transcriptPath)) continue;
+      let st;
+      try {
+        st = statSync(transcriptPath);
+      } catch {
+        continue;
+      }
+      if (st.mtimeMs < cutoff7d) continue;
+      let raw = '';
+      try {
+        raw = readFileSync(transcriptPath, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const line of raw.split('\n')) {
+        if (!line || !line.includes('"PLANNER_RESPONSE"')) continue;
+        try {
+          const obj = JSON.parse(line) as {
+            type?: string;
+            created_at?: string;
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_tokens?: number;
+          };
+          if (obj.type !== 'PLANNER_RESPONSE') continue;
+          const ts = obj.created_at ? Date.parse(obj.created_at) : st.mtimeMs;
+          if (!Number.isFinite(ts) || ts < cutoff7d) continue;
+          const inp = Number(obj.input_tokens) || 0;
+          const out = Number(obj.output_tokens) || 0;
+          const cr = Number(obj.cache_read_tokens) || 0;
+          const tot = inp + out + cr;
+          if (tot <= 0) continue;
+
+          const add = (b: ClaudeTokenBucket) => {
+            b.inputTokens += inp;
+            b.outputTokens += out;
+            b.cacheReadTokens += cr;
+            b.totalTokens += tot;
+            b.turnCount += 1;
+          };
+          add(weekly);
+          if (ts >= cutoff24h) add(daily);
+          if (ts >= cutoff1h) add(hourly);
+        } catch {
+          // ignore malformed line
+        }
+      }
+    }
+  } catch {
+    // ignore read errors
+  }
+
+  return { hourlyTokens: hourly, dailyTokens: daily, weeklyTokens: weekly };
+}
+
+export async function getRunnerClaudeUsage(params: {
+  ptyd: PtydBridge;
+  socketDir: string;
+  forceRefresh?: boolean;
+}): Promise<ClaudeUsageTelemetry> {
+  const empty = createEmptyBucket();
+  const agyTokens = scanAntigravityTranscriptTokens();
   const fallback: ClaudeUsageTelemetry = {
     available: false,
     authenticated: false,
@@ -1192,6 +1271,11 @@ export async function getRunnerClaudeUsage(params: {
     hourlyTokens: empty,
     dailyTokens: empty,
     weeklyTokens: empty,
+    providerTokens: {
+      claude: { hourlyTokens: empty, dailyTokens: empty, weeklyTokens: empty },
+      antigravity: agyTokens,
+      gemini: agyTokens,
+    },
     updatedAt: new Date().toISOString(),
   };
 
@@ -1203,7 +1287,18 @@ export async function getRunnerClaudeUsage(params: {
     const fivePct = res.fiveHour?.utilizationPercent ?? 0;
     const sevenPct = res.sevenDay?.utilizationPercent ?? 0;
     lastKnownClaudeUtilizationPercent = Math.max(fivePct, sevenPct);
-    return res;
+    return {
+      ...res,
+      providerTokens: {
+        claude: {
+          hourlyTokens: res.hourlyTokens,
+          dailyTokens: res.dailyTokens,
+          weeklyTokens: res.weeklyTokens,
+        },
+        antigravity: agyTokens,
+        gemini: agyTokens,
+      },
+    };
   } catch {
     return fallback;
   }

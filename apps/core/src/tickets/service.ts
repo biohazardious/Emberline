@@ -28,12 +28,14 @@ import type { Db } from '../db/index.js';
 import { projects, tickets } from '../db/schema.js';
 import { conflict, notFound } from '../errors.js';
 import {
+  auditWorktreeSlop,
   buildFactoryOrchestratorPrompt,
   buildWorkspaceDemo,
   getFactorySettings,
   ingestAgentTicketsFile,
   persistFactoryAttachments,
   resolveAgentForPersona,
+  runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
 import { slugify } from '../routes/projects.js';
@@ -97,7 +99,17 @@ function hasVerifiableBuildTarget(workspacePath: string): boolean {
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
-      if (pkg.scripts?.build || pkg.scripts?.typecheck || pkg.scripts?.check) return true;
+      const hasValidTest =
+        typeof pkg.scripts?.test === 'string' && !pkg.scripts.test.includes('no test specified');
+      if (
+        pkg.scripts?.build ||
+        pkg.scripts?.typecheck ||
+        pkg.scripts?.check ||
+        pkg.scripts?.lint ||
+        hasValidTest
+      ) {
+        return true;
+      }
     } catch {
       // ignore invalid package.json
     }
@@ -121,6 +133,8 @@ function hasVerifiableBuildTarget(workspacePath: string): boolean {
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly autoChainProjects = new Set<string>();
   private readonly selfHealedRuns = new Set<string>();
+  private readonly slopHealedRuns = new Set<string>();
+  private readonly criticReviewedRuns = new Set<string>();
   private readonly autoNudgedRuns = new Set<string>();
 
   constructor(
@@ -438,9 +452,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       this.autoChainProjects.add(run.projectId);
     }
 
-    // 2. Polyglot Self-Healing Build Gate: if enabled and the workspace has a verifiable build/syntax
-    //    target (Node/TS, Python, Go, Rust, PlatformIO, or Makefile), verify it before syncing or
-    //    moving to Done. If verification fails, resume the agent with the error log automatically.
+    // 2. Polyglot Self-Healing Build, Lint & Unit Test Gate: if enabled and the workspace has a
+    //    verifiable build, lint, or test target (Node/TS, Python, Go, Rust, PlatformIO, or Makefile),
+    //    verify it before syncing or moving to Done. If verification fails, resume the agent with the error log.
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
@@ -455,20 +469,88 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         workspacePath: run.worktreePath,
       }).catch(() => null);
       if (buildRes && !buildRes.ok) {
-        const errorExcerpt = buildRes.output.slice(-2_000);
+        const errorExcerpt = buildRes.output.slice(-2_400);
         await this.runs
           .prompt(
             run.id,
-            `[Self-Healing Build Gate] Automated build & syntax verification failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the build/compile errors above and verify the project builds cleanly before finishing.`,
+            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.`,
           )
           .catch(() => undefined);
         return;
       }
     }
 
+    // 2b. Layer 2 — Deterministic Anti-AI-Slop & Pre-Commit Secret Guard Gate:
+    //     Scans git diff for leaked API keys/tokens/.env files, type evasion (`: any`, `@ts-ignore`),
+    //     unfinished TODO/FIXME stubs, skipped tests, debug leftovers, and vibe-coding UI clichés.
+    let secretGuardBlockedMerge = false;
+    if (run.worktreePath && !isFactoryOrchestratorTicket) {
+      const slopReport = await auditWorktreeSlop({
+        runId: run.id,
+        workspacePath: run.worktreePath,
+      }).catch(() => null);
+
+      const hasSecretViolation = Boolean(
+        fSettings.secretGuardGate && slopReport && !slopReport.secretGuardPassed,
+      );
+      const hasSlopViolation = Boolean(
+        fSettings.antiSlopGate &&
+          slopReport &&
+          slopReport.addedLinesAudited > 0 &&
+          !slopReport.passed,
+      );
+
+      if (
+        (hasSecretViolation || hasSlopViolation) &&
+        slopReport?.autoFixPrompt &&
+        !this.slopHealedRuns.has(run.id) &&
+        (!run.endedAt || run.resumable)
+      ) {
+        this.slopHealedRuns.add(run.id);
+        await this.runs.prompt(run.id, slopReport.autoFixPrompt).catch(() => undefined);
+        return;
+      }
+
+      if (hasSecretViolation) {
+        secretGuardBlockedMerge = true;
+      }
+    }
+
+    // 2c. Layer 3 — Cross-Provider AI Critic (e.g. Claude codes -> Antigravity critiques, or vice versa):
+    if (
+      fSettings.crossProviderCritic &&
+      run.worktreePath &&
+      !isFactoryOrchestratorTicket &&
+      !this.criticReviewedRuns.has(run.id)
+    ) {
+      this.criticReviewedRuns.add(run.id);
+      const criticRes = await runCrossProviderCritic({
+        run,
+        ticketTitle: ticketRow?.title ?? run.title,
+        ticketBody: ticketRow?.body ?? null,
+        workspacePath: run.worktreePath,
+        settings: fSettings,
+      }).catch(() => null);
+
+      if (
+        criticRes &&
+        criticRes.verdict === 'NEEDS_FIX' &&
+        criticRes.followUpPrompt &&
+        (!run.endedAt || run.resumable)
+      ) {
+        await this.runs.prompt(run.id, criticRes.followUpPrompt).catch(() => undefined);
+        return;
+      }
+    }
+
     // 3. Auto-sync worktree into main workspace so subsequent specialist personas branch off the
-    //    updated codebase and Live Demo stays current!
-    if (fSettings.autoSyncToMain && run.worktreePath && run.worktreePath !== projectRow.path) {
+    //    updated codebase and Live Demo stays current — UNLESS Secret Guard blocked a credential leak!
+    if (
+      !secretGuardBlockedMerge &&
+      fSettings.autoSyncToMain &&
+      run.worktreePath &&
+      run.worktreePath !== projectRow.path
+    ) {
       await syncWorktreeToMainWorkspace({
         worktreePath: run.worktreePath,
         mainWorkspacePath: projectRow.path,
@@ -477,8 +559,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }).catch(() => undefined);
     }
 
-    // 4. Auto-move completed factory ticket to Done when enabled
-    if (fSettings.autoMoveToDone && run.ticketId) {
+    // 4. Auto-move completed factory ticket to Done when enabled (keep in Review if Secret Guard blocked merge)
+    if (!secretGuardBlockedMerge && fSettings.autoMoveToDone && run.ticketId) {
       try {
         this.moveToTop(run.ticketId, 'done');
       } catch {

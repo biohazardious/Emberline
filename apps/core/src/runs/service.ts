@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import type { AgentState } from '@emberline/adapter-sdk';
 import {
   buildLaunchSpec,
@@ -39,6 +40,7 @@ import {
   type RunFileDiff,
   type RunPreviewStatus,
   type RunState,
+  type RunTelemetry,
   type StartPreviewBody,
   StartPreviewBody as StartPreviewBodySchema,
 } from '@emberline/protocol';
@@ -48,7 +50,15 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
-import { getProviderEnvFromSettings, resolveAgentForPersona, resolveModelForPersona } from '../factory/service.js';
+import {
+  getFactorySettings,
+  getProviderEnvFromSettings,
+  resolveAgentForPersona,
+  resolveMcpServersForPersona,
+  resolveModelForPersona,
+  resolveSkillPluginPromptForPersona,
+} from '../factory/service.js';
+import { auditWorktreeSlop } from '../factory/slop-guard.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
@@ -194,7 +204,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   list(): Run[] {
-    return this.db.select().from(runs).orderBy(desc(runs.createdAt)).all().map(toRun);
+    const rows = this.db.select().from(runs).orderBy(desc(runs.createdAt)).all();
+    if (rows.length === 0) return [];
+    const allPreToolEvents = this.db
+      .select({ runId: runEvents.runId })
+      .from(runEvents)
+      .where(eq(runEvents.type, 'PreToolUse'))
+      .all();
+    const toolCountByRun = new Map<string, number>();
+    for (const ev of allPreToolEvents) {
+      toolCountByRun.set(ev.runId, (toolCountByRun.get(ev.runId) ?? 0) + 1);
+    }
+    return rows.map((row) => ({
+      ...toRun(row),
+      telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0),
+    }));
   }
 
   get(id: string): RunDetail {
@@ -218,7 +242,107 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           payload: e.payload ?? null,
         }),
       );
-    return { ...toRun(row), events };
+    const toolCalls = events.filter((e) => e.type === 'PreToolUse').length;
+    return {
+      ...toRun(row),
+      telemetry: this.computeTelemetryForRow(row, toolCalls),
+      events,
+    };
+  }
+
+  getTelemetry(id: string): RunTelemetry {
+    const row = this.row(id);
+    const toolCalls = this.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, id), eq(runEvents.type, 'PreToolUse')))
+      .all().length;
+    return this.computeTelemetryForRow(row, toolCalls);
+  }
+
+  private computeTelemetryForRow(row: RunRow, toolCalls: number): RunTelemetry {
+    const endMs = row.endedAt ? row.endedAt.getTime() : Date.now();
+    const durationSec = Math.max(0, Math.round((endMs - row.createdAt.getTime()) / 1000));
+
+    if (row.transcriptPath && existsSync(row.transcriptPath)) {
+      try {
+        const raw = readFileSync(row.transcriptPath, 'utf8');
+        let inputTokens = 0;
+        let outputTokens = 0;
+        let cachedTokens = 0;
+        for (const line of raw.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line) as {
+              message?: {
+                usage?: {
+                  input_tokens?: number;
+                  output_tokens?: number;
+                  cache_read_input_tokens?: number;
+                  cache_creation_input_tokens?: number;
+                };
+              };
+              usage?: {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+              };
+            };
+            const u = parsed.message?.usage ?? parsed.usage;
+            if (u) {
+              inputTokens += Number(u.input_tokens ?? 0);
+              outputTokens += Number(u.output_tokens ?? 0);
+              cachedTokens +=
+                Number(u.cache_read_input_tokens ?? 0) +
+                Number((u as { cache_creation_input_tokens?: number }).cache_creation_input_tokens ?? 0);
+            }
+          } catch {
+            // ignore malformed JSONL line
+          }
+        }
+        if (inputTokens + outputTokens > 0) {
+          return {
+            runId: row.id,
+            inputTokens,
+            outputTokens,
+            cachedTokens,
+            totalTokens: inputTokens + outputTokens + cachedTokens,
+            toolCalls,
+            durationSec,
+            isEstimated: false,
+          };
+        }
+      } catch {
+        // fallback to estimation
+      }
+    }
+
+    if (row.state === 'queued') {
+      return {
+        runId: row.id,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        totalTokens: 0,
+        toolCalls: 0,
+        durationSec: 0,
+        isEstimated: true,
+      };
+    }
+
+    const promptTokens = Math.max(40, Math.ceil((row.prompt?.length ?? 0) / 4));
+    const inputTokens = promptTokens + 920 + toolCalls * 760;
+    const outputTokens = (row.state === 'done' ? 640 : 260) + toolCalls * 290;
+    return {
+      runId: row.id,
+      inputTokens,
+      outputTokens,
+      cachedTokens: 0,
+      totalTokens: inputTokens + outputTokens,
+      toolCalls,
+      durationSec,
+      isEstimated: true,
+    };
   }
 
   /** Plain run (no slot/quota checks); `queued` until {@link launch}. The scheduler owns dispatch. */
@@ -365,10 +489,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       row.agent === 'codex' ||
       row.agent === 'aider';
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
+    const { playwrightEnabled, customMcpServers } = resolveMcpServersForPersona(this.db, persona);
+    const activeSkillPrompt = isRealClaude ? resolveSkillPluginPromptForPersona(this.db, persona) : '';
     const enablePlaywrightMcp =
       process.env.EMBERLINE_PLAYWRIGHT_MCP === '1' ||
       process.env.EMBERLINE_PLAYWRIGHT_MCP === 'true' ||
       (isRealClaude &&
+        playwrightEnabled &&
         process.env.EMBERLINE_PLAYWRIGHT_MCP !== '0' &&
         process.env.EMBERLINE_PLAYWRIGHT_MCP !== 'false');
 
@@ -389,6 +516,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           hookCommand: this.config.hookCommand,
           permissionMode: row.permissionMode as Run['permissionMode'],
           prompt: effectivePrompt,
+          resumeSessionId: options.resumeSessionId,
           extraEnv,
         })
       : buildLaunchSpec({
@@ -403,6 +531,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           prompt: effectivePrompt,
           resumeSessionId: options.resumeSessionId,
           playwrightMcp: enablePlaywrightMcp,
+          customMcpServers:
+            isRealClaude && Object.keys(customMcpServers).length > 0 ? customMcpServers : undefined,
+          extraSystemPrompt: activeSkillPrompt || undefined,
         });
 
     const agentLabel =
@@ -663,6 +794,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async commit(id: string, body: GitCommitBody): Promise<GitCommitResponse> {
     const row = this.row(id);
+    const fSettings = getFactorySettings(this.db);
+    if (fSettings.secretGuardGate && row.worktreePath) {
+      const report = await auditWorktreeSlop({
+        runId: id,
+        workspacePath: row.worktreePath,
+      }).catch(() => null);
+      if (report && !report.secretGuardPassed) {
+        const secretIssues = report.issues.filter((i) => i.category === 'secret_leak');
+        const first = secretIssues[0];
+        throw conflict(
+          `Pre-Commit Secret Guard blocked commit (${report.secretLeakCount} secret leak(s) detected)${
+            first ? ` — ${first.file}:${first.line}: ${first.message}` : ''
+          }`,
+        );
+      }
+    }
     const res = await commitWorktree(row.worktreePath, row.branch, body);
     this.record(id, {
       source: 'user',
@@ -1066,6 +1213,25 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           continue;
         }
         const exitCode = session ? session.exitCode : null;
+        const nextAfterExit = stateAfterExit(row.state as AgentState, exitCode);
+        let exitMessage: string | undefined;
+        if (session && nextAfterExit === 'failed') {
+          try {
+            const snap = await this.ptyd.get().snapshot(row.ptydSessionId, 40);
+            const cleaned = stripVTControlCharacters(snap.data ?? '')
+              .replace(/\r/g, '\n')
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+              .slice(-6)
+              .join(' · ');
+            if (cleaned) {
+              exitMessage = cleaned.slice(0, 480);
+            }
+          } catch {
+            // ignore snapshot errors
+          }
+        }
         if (session) {
           await this.ptyd
             .get()
@@ -1076,8 +1242,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         this.record(row.id, {
           source: 'system',
           type: session ? 'process_exited' : 'session_lost',
-          state: stateAfterExit(row.state as AgentState, exitCode),
-          payload: session ? { exitCode, signal: session.signal } : {},
+          state: nextAfterExit,
+          payload: session
+            ? {
+                exitCode,
+                signal: session.signal,
+                ...(exitMessage ? { message: exitMessage } : {}),
+              }
+            : {},
           patch: { endedAt: new Date(), ptydSessionId: null },
         });
       }
