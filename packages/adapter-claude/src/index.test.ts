@@ -1,3 +1,7 @@
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildHookSettings,
@@ -115,7 +119,8 @@ describe('buildLaunchSpec', () => {
         extraSystemPrompt: '## ACTIVE SKILL: Modern UI Craft',
       });
       const settings = JSON.parse(spec.args[1] ?? '');
-      expect(settings.permissions).toBeUndefined();
+      // The mode is always stated (it stops Claude Code's "make auto the default" nudge), with nothing pre-allowed.
+      expect(settings.permissions).toEqual({ defaultMode: permissionMode });
       expect(spec.args).not.toContain('auto');
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
@@ -206,5 +211,83 @@ describe('stateAfterExit', () => {
     expect(stateAfterExit('working', 1)).toBe('failed');
     expect(stateAfterExit('starting', null)).toBe('failed');
     expect(stateAfterExit('done', 1)).toBe('done');
+  });
+});
+
+describe('secondary CLIs start without first-run questions', () => {
+  const base = { runId: 'r1234567', hookToken: 't', coreUrl: 'http://core:7420', prompt: 'do it' };
+  const script = (spec: { args: string[] }) => spec.args[1] ?? '';
+
+  it('codex: no removed --full-auto, no inner sandbox, no update offer', () => {
+    const auto = buildSecondaryCliLaunchSpec({ ...base, agent: 'codex', permissionMode: 'auto' });
+    expect(script(auto)).not.toContain('--full-auto');
+    expect(script(auto)).toContain('exec -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox');
+    const ask = buildSecondaryCliLaunchSpec({ ...base, agent: 'codex', permissionMode: 'default' });
+    expect(script(ask)).toContain('-s danger-full-access');
+    expect(script(ask)).toContain('export CODEX_API_KEY="$OPENAI_API_KEY"');
+  });
+
+  it('gemini and the agy fallback trust the worktree; accept-edits maps to auto_edit', () => {
+    const gemini = buildSecondaryCliLaunchSpec({ ...base, agent: 'gemini', permissionMode: 'acceptEdits' });
+    expect(gemini.env.GEMINI_CLI_TRUST_WORKSPACE).toBe('true');
+    expect(script(gemini)).toContain('--approval-mode auto_edit');
+    expect(buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity' }).env.GEMINI_CLI_TRUST_WORKSPACE).toBe('true');
+  });
+
+  it('copilot: unattended runs may use every tool and never ask; no auto-update', () => {
+    const auto = buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot', permissionMode: 'auto' });
+    expect(script(auto)).toContain('--allow-all --no-ask-user -p');
+    expect(auto.env.COPILOT_AUTO_UPDATE).toBe('false');
+    expect(script(buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot' }))).not.toContain('--allow-all');
+  });
+
+  it('aider: first-run questions are switched off', () => {
+    const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'aider' });
+    for (const flag of ['--no-gitignore', '--no-show-release-notes', '--no-show-model-warnings', '--no-check-update', '--analytics-disable']) {
+      expect(script(spec)).toContain(flag);
+    }
+  });
+
+  it('the Claude fallback gets the same pre-answered dialogs', () => {
+    const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot' });
+    expect(script(spec)).toContain('claude --settings "$EMBERLINE_CLAUDE_SETTINGS"');
+    const settings = JSON.parse(spec.env.EMBERLINE_CLAUDE_SETTINGS ?? '{}');
+    expect(settings).toMatchObject({ tui: 'default', skipDangerousModePermissionPrompt: true });
+    expect(settings).not.toHaveProperty('hooks');
+    expect(spec.env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY).toBe('1');
+  });
+
+  /** Runs a launch spec's script in a git repo with a fake CLI that records its arguments. */
+  function runWithFake(agent: 'codex' | 'aider', fakeBody: string, prompt?: string) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cli-launch-'));
+    execFileSync('git', ['init', '-q', dir]);
+    const fake = path.join(dir, `fake-${agent}`);
+    writeFileSync(fake, `#!/bin/sh\n${fakeBody}\n`, { mode: 0o755 });
+    const envKey = agent === 'codex' ? 'EMBERLINE_CODEX_COMMAND' : 'EMBERLINE_AIDER_COMMAND';
+    process.env[envKey] = fake;
+    try {
+      const spec = buildSecondaryCliLaunchSpec({ ...base, agent, prompt });
+      const res = spawnSync(spec.file, spec.args, {
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? '', HOME: dir, ...spec.env },
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      return { dir, status: res.status };
+    } finally {
+      delete process.env[envKey];
+    }
+  }
+
+  it('codex UI trusts the repository root, quoted for its config syntax', () => {
+    const { dir } = runWithFake('codex', 'for a in "$@"; do printf "%s\\n" "$a"; done > "$PWD/args.txt"');
+    const args = readFileSync(path.join(dir, 'args.txt'), 'utf8').split('\n');
+    expect(args).toContain(`projects."${execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel']).toString().trim()}".trust_level="trusted"`);
+    expect(args).toContain('check_for_update_on_startup=false');
+  });
+
+  it('an aider run that could not authenticate fails although aider exits 0', () => {
+    const { status } = runWithFake('aider', 'echo "The API provider is not able to authenticate you."; exit 0', 'do it');
+    expect(status).toBe(1);
   });
 });

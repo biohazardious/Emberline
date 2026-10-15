@@ -79,8 +79,9 @@ const TOOL_SPECS: Record<AgentId, ToolSpec> = {
     provider: 'aider',
     binaryName: 'aider',
     installMethod: 'pipx',
-    installCommand: 'pipx install --force aider-chat',
-    updateCommand: 'pipx upgrade aider-chat || pipx install --force aider-chat',
+    // aider-chat does not support the runner's Python (3.14); pipx fetches a standalone 3.12.
+    installCommand: 'pipx install --force --python 3.12 --fetch-missing-python aider-chat',
+    updateCommand: 'pipx upgrade aider-chat || pipx install --force --python 3.12 --fetch-missing-python aider-chat',
     uninstallCommand: 'pipx uninstall aider-chat',
   },
 };

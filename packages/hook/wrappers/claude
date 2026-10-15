@@ -17,4 +17,9 @@ if [ ! -x "$CLAUDE_BIN" ]; then
   NPM_CONFIG_PREFIX="${TOOLS_DIR}/npm" npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest >&2
 fi
 
+# Emberline runs: pre-answer Claude Code's one-time dialogs (see claude-seed.mjs). Never blocks the run.
+if [ -n "${EMBERLINE_RUN_ID:-}" ]; then
+  node "$(dirname "${BASH_SOURCE[0]}")/claude-seed.mjs" 2>/dev/null || true
+fi
+
 exec "$CLAUDE_BIN" "$@"

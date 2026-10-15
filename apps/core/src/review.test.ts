@@ -457,7 +457,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
       prompt: 'Fix lint',
     });
     expect(codexSpec.file).toBe('sh');
-    expect(codexSpec.args[1]).toContain('--full-auto');
+    expect(codexSpec.args[1]).toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(codexSpec.env.EMBERLINE_PROMPT).toBe('Fix lint');
 
     const { project } = await createGitProjectWithBareRemote('Preview App');

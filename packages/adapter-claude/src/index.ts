@@ -174,8 +174,19 @@ export interface ClaudeHookSettings {
   /** Renderer; any value also stops Claude Code from offering the fullscreen one mid-turn. */
   tui: 'default';
   spinnerTipsEnabled: false;
-  permissions?: {
-    defaultMode?: 'auto' | 'acceptEdits' | 'bypassPermissions';
+  /** The bypass-mode warning defaults to "No, exit"; nobody is there to answer it. */
+  skipDangerousModePermissionPrompt: true;
+  /** A fresh worktree is never "trusted", so a repo's .mcp.json would be asked about on every run. */
+  enableAllProjectMcpServers: true;
+  /** When a safeguard flags a message, switch models instead of asking which to prefer. */
+  switchModelsOnFlag: true;
+  skillOverrides: { 'auto-mode-setup': 'off' };
+  modelProposedGoals: 'disabled';
+  /** Auto-continue a question the agent asks despite running unattended. */
+  askUserQuestionTimeout?: string;
+  permissions: {
+    /** Always set: otherwise Claude Code offers to make auto mode the default, mid-session. */
+    defaultMode: ClaudePermissionMode;
     allow?: string[];
   };
 }
@@ -187,8 +198,17 @@ const MATCHER_EVENTS = new Set<HookEventName>(['PreToolUse', 'PostToolUse']);
  * Builds the settings object passed to `claude --settings <json>` for a run.
  * Every watched hook invokes `<hookCommand> <EventName>`; the run id travels via env.
  * When `autonomous` is enabled, pre-allows Bash/Edit/Write tools and sets `defaultMode: 'auto'`.
+ *
+ * Settings passed this way override the user's own (~/.claude/settings.json). They also answer, in
+ * advance, every dialog Claude Code would otherwise open in the terminal and wait on: Emberline reads
+ * the agent's screen and hooks, but nobody sits at the keyboard of an unattended run.
  */
-export function buildHookSettings(hookCommand: string, timeoutSeconds = 5, autonomous = false): ClaudeHookSettings {
+export function buildHookSettings(
+  hookCommand: string,
+  timeoutSeconds = 5,
+  autonomous = false,
+  permissionMode: ClaudePermissionMode = 'default',
+): ClaudeHookSettings {
   const hooks: ClaudeHookSettings['hooks'] = {};
   for (const event of WATCHED_HOOKS) {
     const group: HookMatcherGroup = {
@@ -197,21 +217,29 @@ export function buildHookSettings(hookCommand: string, timeoutSeconds = 5, auton
     if (MATCHER_EVENTS.has(event)) group.matcher = '';
     hooks[event] = [group];
   }
-  // Emberline reads the agent's screen (limit banners, Fleet thumbnails) and never answers promos:
-  // keep the classic renderer, which also suppresses the "Try the new fullscreen renderer?" dialog
-  // that otherwise interrupts a running turn, and drop the spinner tips.
-  const ui = { tui: 'default', spinnerTipsEnabled: false } as const;
+  const base = {
+    hooks,
+    // Classic renderer: Emberline reads the agent's screen (limit banners, Fleet thumbnails), and any
+    // value here also suppresses the "Try the new fullscreen renderer?" dialog mid-turn.
+    tui: 'default',
+    spinnerTipsEnabled: false,
+    skipDangerousModePermissionPrompt: true,
+    enableAllProjectMcpServers: true,
+    switchModelsOnFlag: true,
+    skillOverrides: { 'auto-mode-setup': 'off' },
+    modelProposedGoals: 'disabled',
+  } as const;
   if (autonomous) {
     return {
-      hooks,
-      ...ui,
+      ...base,
+      askUserQuestionTimeout: '60s',
       permissions: {
         defaultMode: 'auto',
         allow: [...AUTONOMOUS_ALLOWED_TOOLS],
       },
     };
   }
-  return { hooks, ...ui };
+  return { ...base, permissions: { defaultMode: permissionMode } };
 }
 
 export interface ClaudeMcpServerSpec {
@@ -317,7 +345,12 @@ export function isAutonomousPermissionMode(mode: ClaudePermissionMode | undefine
  */
 export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   const isAutonomous = isAutonomousPermissionMode(options.permissionMode);
-  const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook', 5, isAutonomous);
+  const settings = buildHookSettings(
+    options.hookCommand ?? 'emberline-hook',
+    5,
+    isAutonomous,
+    options.permissionMode ?? 'default',
+  );
   const customServerKeys = options.customMcpServers ? Object.keys(options.customMcpServers) : [];
   if (isAutonomous && settings.permissions?.allow && customServerKeys.length > 0) {
     const allowSet = new Set(settings.permissions.allow);
@@ -374,8 +407,7 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
       // the git root, so every run would stop at the "trust this folder?" dialog. The runner container
       // is the sandbox boundary; this tells Claude Code so.
       CLAUDE_CODE_SANDBOXED: '1',
-      // The session-feedback survey takes keystrokes; a prompt typed into the PTY must not answer it.
-      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+      ...CLAUDE_DIALOG_ENV,
     },
   };
 }
@@ -393,6 +425,20 @@ export interface SecondaryCliLaunchOptions {
   extraEnv?: Record<string, string>;
 }
 
+/** Env that keeps Claude Code's surveys and cost acknowledgements out of a run's terminal. */
+const CLAUDE_DIALOG_ENV = {
+  // The session-feedback survey takes keystrokes; a prompt typed into the PTY must not answer it.
+  CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+  // The cost-threshold acknowledgement (API billing) would wait for a keypress after a turn.
+  DISABLE_COST_WARNINGS: '1',
+} as const;
+
+/** Run settings for the Claude fallback of a secondary CLI: every pre-answered dialog, no hooks. */
+function claudeFallbackSettings(autonomous: boolean): Omit<ClaudeHookSettings, 'hooks'> {
+  const { hooks: _hooks, ...dialogs } = buildHookSettings('emberline-hook', 5, autonomous);
+  return dialogs;
+}
+
 /**
  * Builds a launch spec for secondary CLI coding agents (`antigravity`, `copilot`, `gemini`, `codex`, or `aider`),
  * wrapping execution with `emberline-hook` lifecycle signals so core tracks `working` -> `done` / `failed`.
@@ -403,21 +449,32 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   const hook = options.hookCommand ?? 'emberline-hook';
   const autoApprove = isAutonomousPermissionMode(options.permissionMode);
   const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
-  const claudeFallback = `claude --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
+  // The Claude fallback gets the same pre-answered dialogs as a Claude run (its state comes from this
+  // script's hooks, so not Claude's own).
+  const claudeFallback = `claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
+  const extraEnv: Record<string, string> = {};
 
+  // Every CLI below has first-run questions (folder trust, update offers, onboarding) that would wait
+  // in the PTY for an answer nobody gives; each one is pre-answered with a flag, an env var, or a
+  // config entry that `emberline-cli-seed` merges into the runner's home before the CLI starts.
   let cliCmd: string;
   if (options.agent === 'antigravity') {
     const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
     const modelFlag = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
     const continueFlag = options.resumeSessionId ? '-c ' : '';
+    // The agy wrapper may fall back to Gemini CLI, which refuses untrusted folders.
+    extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
     cliCmd = options.prompt
       ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; elif command -v antigravity >/dev/null 2>&1; then antigravity ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
       : `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}; else claude --model ${fallbackModel}; fi`;
   } else if (options.agent === 'copilot') {
     const bin = process.env.EMBERLINE_COPILOT_COMMAND?.trim() || 'copilot';
+    // Unattended runs may use every tool and never ask; otherwise -p denies what needs approval.
+    const flags = autoApprove ? '--allow-all --no-ask-user ' : '';
+    extraEnv.COPILOT_AUTO_UPDATE = 'false';
     cliCmd = options.prompt
-      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} -p "$EMBERLINE_PROMPT"; elif command -v gh >/dev/null 2>&1 && gh copilot --version >/dev/null 2>&1; then gh copilot suggest -t shell "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
-      : `if command -v ${bin} >/dev/null 2>&1; then ${bin}; else claude --model sonnet; fi`;
+      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${flags}-p "$EMBERLINE_PROMPT"; elif command -v gh >/dev/null 2>&1 && gh copilot --version >/dev/null 2>&1; then gh copilot suggest -t shell "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
+      : `if command -v ${bin} >/dev/null 2>&1; then ${`${bin} ${flags}`.trim()}; else claude --model sonnet; fi`;
   } else if (options.agent === 'gemini') {
     const bin = process.env.EMBERLINE_GEMINI_COMMAND?.trim() || 'gemini';
     const geminiModel =
@@ -428,26 +485,36 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
           : options.model === 'gemini-flash-lite'
             ? '--model gemini-2.5-flash-lite '
             : '';
-    const flags = `${autoApprove ? '--yolo ' : ''}${geminiModel}`;
-    cliCmd = options.prompt
-      ? `${bin} ${flags}-p "$EMBERLINE_PROMPT"`
-      : `${bin} ${flags}`.trim();
+    // Gemini CLI refuses (exit 55) or downgrades --yolo in folders it does not trust; every run is a
+    // fresh worktree. In -p mode, tools that need approval are denied rather than asked.
+    extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
+    const approval = autoApprove ? '--yolo ' : options.permissionMode === 'acceptEdits' ? '--approval-mode auto_edit ' : '';
+    const flags = `${approval}${geminiModel}`;
+    cliCmd = options.prompt ? `${bin} ${flags}-p "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
   } else if (options.agent === 'codex') {
     const bin = process.env.EMBERLINE_CODEX_COMMAND?.trim() || 'codex';
-    const codexModel =
-      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
-    const flags = `${autoApprove ? '--full-auto ' : ''}${codexModel}`;
+    const codexModel = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
+    // Codex's own sandbox (bubblewrap) cannot run inside the runner container, which is the sandbox.
+    // `--full-auto` no longer exists; unattended means no approvals and no inner sandbox.
+    const access = autoApprove ? '--dangerously-bypass-approvals-and-sandbox ' : '-s danger-full-access ';
+    const noUpdate = '-c check_for_update_on_startup=false ';
+    // `codex exec` reads CODEX_API_KEY, not OPENAI_API_KEY.
+    const apiKey = 'if [ -n "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then export CODEX_API_KEY="$OPENAI_API_KEY"; fi; ';
+    // The interactive UI asks to trust the repository root (where the worktree's .git lives).
+    const trust =
+      '-c "projects.\\"$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)")\\".trust_level=\\"trusted\\"" ';
     cliCmd = options.prompt
-      ? `${bin} exec ${autoApprove ? '--full-auto --skip-git-repo-check ' : ''}${codexModel}"$EMBERLINE_PROMPT"`
-      : `${bin} ${flags}`.trim();
+      ? `${apiKey}${bin} exec ${noUpdate}${access}--skip-git-repo-check ${codexModel}"$EMBERLINE_PROMPT"`
+      : `${apiKey}${bin} ${noUpdate}${trust}${autoApprove ? '--dangerously-bypass-approvals-and-sandbox ' : ''}${codexModel}`.trim();
   } else {
     const bin = process.env.EMBERLINE_AIDER_COMMAND?.trim() || 'aider';
-    const aiderModel =
-      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
-    const flags = `${autoApprove ? '--yes-always ' : ''}${aiderModel}`;
-    cliCmd = options.prompt
-      ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"`
-      : `${bin} ${flags}`.trim();
+    const aiderModel = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
+    // First-run questions (gitignore, release notes, analytics, model warnings, URLs, updates) would
+    // wait on the PTY; --no-gitignore also keeps aider from editing the project's .gitignore.
+    const quiet =
+      '--no-gitignore --no-show-release-notes --no-show-model-warnings --no-check-update --analytics-disable --no-detect-urls ';
+    const flags = `${autoApprove ? '--yes-always ' : ''}${quiet}${aiderModel}`;
+    cliCmd = options.prompt ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
   }
 
   const watcherSnippet = options.prompt
@@ -457,10 +524,17 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   const logFile = `/tmp/emberline-cli-${options.runId}.log`;
   const statusFile = `/tmp/emberline-cli-${options.runId}.status`;
   const wrappedExec = options.prompt
-    ? `rm -f "${logFile}" "${statusFile}"; { { ${cliCmd}; echo $? > "${statusFile}"; } 2>&1 | tee "${logFile}"; }; STATUS=$(cat "${statusFile}" 2>/dev/null || echo 1); rm -f "${statusFile}"`
+    ? `rm -f "${logFile}" "${statusFile}"; { { ${cliCmd}; echo $? > "${statusFile}"; } 2>&1 | tee "${logFile}"; }; STATUS=$(cat "${statusFile}" 2>/dev/null || echo 1); rm -f "${statusFile}"${
+        // Aider reports a failed login and still exits 0.
+        options.agent === 'aider'
+          ? `; if [ "$STATUS" -eq 0 ] && grep -qi "not able to authenticate" "${logFile}" 2>/dev/null; then STATUS=1; fi`
+          : ''
+      }`
     : `${cliCmd}; STATUS=$?`;
 
   const script = [
+    // Merges the per-CLI config entries that pre-answer first-run questions (never blocks the run).
+    `emberline-cli-seed.mjs ${options.agent} >/dev/null 2>&1 || true`,
     `echo '{"session_id":"'${options.agent}-${options.runId.slice(0, 8)}'"}' | ${hook} SessionStart >/dev/null 2>&1 || true`,
     options.prompt
       ? `echo '{"prompt":"started"}' | ${hook} UserPromptSubmit >/dev/null 2>&1 || true`
@@ -488,6 +562,9 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
       EMBERLINE_PROMPT: options.prompt ?? '',
       // Read by the runner's CLI wrappers (e.g. `agy`) to decide whether to skip approval prompts.
       EMBERLINE_AUTO_APPROVE: autoApprove ? '1' : '0',
+      EMBERLINE_CLAUDE_SETTINGS: JSON.stringify(claudeFallbackSettings(autoApprove)),
+      ...CLAUDE_DIALOG_ENV,
+      ...extraEnv,
     },
   };
 }
