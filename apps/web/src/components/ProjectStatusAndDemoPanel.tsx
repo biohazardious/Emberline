@@ -1756,7 +1756,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         )}
                       </button>
                     )}
-                    {target.kind === 'worktree' && target.fileCount > 2 && (
+                    {target.kind === 'worktree' && target.exists && target.branch && (
                       <button
                         type="button"
                         className="btn btn-sm"

@@ -1,4 +1,12 @@
-import type { AgentPersona, PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
+import type {
+  AgentPersona,
+  PermissionMode,
+  Project,
+  Run,
+  SyncWorktreeResponse,
+  Ticket,
+  TicketStatus,
+} from '@emberline/protocol';
 import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
@@ -19,6 +27,7 @@ import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { useRuns, useTickets } from '../hooks/liveData';
 import { timeAgo } from '../time';
+import { toastInfo } from '../toast';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
 const ReviewView = lazy(() => import('../components/ReviewView').then((m) => ({ default: m.ReviewView })));
@@ -92,9 +101,27 @@ export function BoardPage({ projectId }: { projectId: string }) {
     const enteringInProgress = target.status === 'in_progress' && ticket.status !== 'in_progress';
     const currentRun = latestRun.get(ticket.id);
     const hasLiveRun = currentRun && !currentRun.endedAt;
+    setError(undefined);
+
+    // Accepting a ticket brings its run's branch into the main workspace first; a conflict keeps the
+    // ticket where it is so nothing is marked done that is not actually in main.
+    if (target.status === 'done' && ticket.status !== 'done' && currentRun?.branch) {
+      try {
+        const sync = await api<SyncWorktreeResponse>(`/api/projects/${ticket.projectId}/sync-worktree`, 'POST', {
+          runId: currentRun.id,
+        });
+        if (!sync.ok) {
+          setError(sync.summary);
+          return;
+        }
+        toastInfo(sync.summary);
+      } catch (e) {
+        // The worktree is gone (pruned): there is nothing left to merge.
+        toastInfo(`Not merged: ${errorMessage(e)}`);
+      }
+    }
 
     patchLocal({ ...ticket, status: target.status, position });
-    setError(undefined);
     try {
       const updated = await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position });
       patchLocal(updated);
