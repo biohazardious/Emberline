@@ -16,7 +16,25 @@ import {
   type RoadmapCategory,
   type RoadmapItem,
 } from '@emberline/protocol';
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import {
+  Bot,
+  Brain,
+  Construction,
+  Inbox,
+  Landmark,
+  Map as MapIcon,
+  Palette,
+  Rocket,
+  Shield,
+  Sparkles,
+  Square,
+  SquareCheck,
+  SquareKanban,
+  Target,
+  Trash2,
+  Zap,
+} from 'lucide-react';
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from '../components/PersonaBadge';
@@ -48,12 +66,12 @@ export const MODEL_LABELS: Record<AgentModelId, string> = {
   'gpt-4o-mini': 'GPT-4o Mini (★2 Fast)',
 };
 
-const CATEGORY_META: Record<RoadmapCategory, { label: string; icon: string }> = {
-  feature: { label: 'Feature', icon: '🚀' },
-  ui_ux: { label: 'UI/UX & Polish', icon: '🎨' },
-  architecture: { label: 'Architecture', icon: '🏗' },
-  performance: { label: 'Performance', icon: '⚡' },
-  qa_security: { label: 'QA & Security', icon: '🛡' },
+const CATEGORY_META: Record<RoadmapCategory, { label: string; icon: ReactNode }> = {
+  feature: { label: 'Feature', icon: <Rocket className="icon" aria-hidden /> },
+  ui_ux: { label: 'UI/UX & Polish', icon: <Palette className="icon" aria-hidden /> },
+  architecture: { label: 'Architecture', icon: <Construction className="icon" aria-hidden /> },
+  performance: { label: 'Performance', icon: <Zap className="icon" aria-hidden /> },
+  qa_security: { label: 'QA & Security', icon: <Shield className="icon" aria-hidden /> },
 };
 
 export function AgentModelBadge({ agent, model }: { agent: AgentId; model: AgentModelId }) {
@@ -63,12 +81,12 @@ export function AgentModelBadge({ agent, model }: { agent: AgentId; model: Agent
 
   const color =
     modelInfo?.rank === 5
-      ? '#f59e0b'
+      ? 'var(--warn)'
       : modelInfo?.rank === 4
         ? 'var(--accent)'
         : modelInfo?.rank === 3
-          ? '#38bdf8'
-          : '#34d399';
+          ? 'var(--info)'
+          : 'var(--ok)';
 
   return (
     <span
@@ -116,12 +134,12 @@ export function RouteBadgeSelect({
 
   const color =
     modelInfo?.rank === 5
-      ? '#f59e0b'
+      ? 'var(--warn)'
       : modelInfo?.rank === 4
         ? 'var(--accent)'
         : modelInfo?.rank === 3
-          ? '#38bdf8'
-          : '#34d399';
+          ? 'var(--info)'
+          : 'var(--ok)';
 
   const handleAgentChange = (nextAgent: AgentId) => {
     const nextModel = coerceModelForProvider(nextAgent, effectiveModel, persona);
@@ -321,11 +339,11 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
       if (mode === 'agent' && res.agentRun) {
         setPendingBrainstormRunId(res.agentRun.id);
         setBanner(
-          `🧠 Deep Brainstorming Agent (${res.agentRun.agent} · fable) is analyzing your codebase. New suggestions will appear automatically when it finishes.`,
+          `Deep Brainstorming Agent (${res.agentRun.agent} · fable) is analyzing your codebase. New suggestions will appear automatically when it finishes.`,
         );
       } else {
         setBanner(
-          `✨ Synthesized fresh codebase-aware feature & architecture suggestions${brainstormFocus.trim() ? ` for "${brainstormFocus.trim()}"` : ''}.`,
+          `Synthesized fresh codebase-aware feature & architecture suggestions${brainstormFocus.trim() ? ` for "${brainstormFocus.trim()}"` : ''}.`,
         );
       }
     } catch (e) {
@@ -354,7 +372,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
       setSelectedSuggestions(new Set());
       setSelectedItems(new Set());
       setBanner(
-        `🚀 Created ${res.createdTickets.length} Kanban ticket(s)${res.startedRun ? ` and launched agent run (${res.startedRun.title ?? res.startedRun.id.slice(0, 8)})` : ''}!`,
+        `Created ${res.createdTickets.length} Kanban ticket(s)${res.startedRun ? ` and launched agent run (${res.startedRun.title ?? res.startedRun.id.slice(0, 8)})` : ''}!`,
       );
     } catch (e) {
       setError(errorMessage(e));
@@ -391,7 +409,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
           'DELETE',
         );
         setLocalRoadmap(afterDelete ?? next);
-        setBanner(`📌 Added "${sug.title}" to Milestone ${targetMs?.code ?? 'M2'}.`);
+        setBanner(`Added "${sug.title}" to Milestone ${targetMs?.code ?? 'M2'}.`);
       } else {
         const res = await api<DispatchRoadmapItemsResponse>(
           `/api/projects/${projectId}/roadmap/dispatch`,
@@ -403,7 +421,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         );
         setLocalRoadmap(res.roadmap);
         setBanner(
-          `🚀 Added "${sug.title}" to Roadmap, created Ticket ${res.createdTickets[0]?.key ?? ''}, and dispatched ${sug.preferredAgent} (${sug.preferredModel})!`,
+          `Added "${sug.title}" to Roadmap, created Ticket ${res.createdTickets[0]?.key ?? ''}, and dispatched ${sug.preferredAgent} (${sug.preferredModel})!`,
         );
       }
     } catch (e) {
@@ -460,7 +478,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
       setLocalRoadmap(res.roadmap);
       setSelectedSuggestions(new Set());
       setBanner(
-        `🚀 Promoted all ${res.createdTickets.length} Brainstorming idea(s) to the Roadmap & Kanban Board and started the autonomous multi-agent pipeline!`,
+        `Promoted all ${res.createdTickets.length} Brainstorming idea(s) to the Roadmap & Kanban Board and started the autonomous multi-agent pipeline!`,
       );
     } catch (e) {
       setError(errorMessage(e));
@@ -549,7 +567,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
       );
       setLocalRoadmap(res.roadmap);
       setBanner(
-        `🚀 Dispatched item to Kanban Board (${res.createdTickets[0]?.key ?? 'ready'}) and started autonomous execution!`,
+        `Dispatched item to Kanban Board (${res.createdTickets[0]?.key ?? 'ready'}) and started autonomous execution!`,
       );
     } catch (e) {
       setError(errorMessage(e));
@@ -577,11 +595,11 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
       if (mode === 'agent' && res.agentRun) {
         setPendingBrainstormRunId(res.agentRun.id);
         setBanner(
-          `🏛 System Architect (${res.agentRun.agent}) is inspecting ${project?.name ?? 'the repository'} to generate a tailored milestone roadmap…`,
+          `System Architect (${res.agentRun.agent}) is inspecting ${project?.name ?? 'the repository'} to generate a tailored milestone roadmap…`,
         );
       } else {
         setBanner(
-          `✨ Auto-generated project-tailored milestones & tasks from PROJECT.md and repository context!`,
+          `Auto-generated project-tailored milestones & tasks from PROJECT.md and repository context!`,
         );
       }
     } catch (err) {
@@ -610,7 +628,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         setLocalRoadmap(next);
         setQuickAddText('');
         setQuickAddTarget('auto');
-        setBanner(`✅ Created new milestone "${raw}".`);
+        setBanner(`Created new milestone "${raw}".`);
       } else {
         const next = await api<ProjectRoadmapState>(
           `/api/projects/${projectId}/roadmap/items`,
@@ -623,7 +641,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         setLocalRoadmap(next);
         setQuickAddText('');
         setBanner(
-          `✅ Auto-routed "${raw}" to the right milestone, specialist persona & AI model!`,
+          `Auto-routed "${raw}" to the right milestone, specialist persona & AI model!`,
         );
       }
     } catch (err) {
@@ -645,7 +663,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
       });
       setLocalRoadmap(next);
       setInlineMsInputs((prev) => ({ ...prev, [msId]: '' }));
-      setBanner(`✅ Added "${raw}" to ${msCode} (auto-assigned specialist & model).`);
+      setBanner(`Added "${raw}" to ${msCode} (auto-assigned specialist & model).`);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -662,7 +680,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         'DELETE',
       );
       setLocalRoadmap(next);
-      setBanner(`🗑 Removed milestone ${msCode} (any remaining items were preserved).`);
+      setBanner(`Removed milestone ${msCode} (any remaining items were preserved).`);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -696,7 +714,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h2 style={{ margin: 0, fontSize: '1.05rem' }}>
-                🎯 {project?.name ?? 'Project'} — Roadmap, Milestones &amp; AI Brainstorming Studio
+                <Target className="icon" aria-hidden /> {project?.name ?? 'Project'} — Roadmap, Milestones &amp; AI Brainstorming Studio
               </h2>
               <span className="badge mono">
                 {roadmap.completedItems}/{roadmap.totalItems} completed ({roadmap.completionPercent}%)
@@ -716,7 +734,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
               onClick={() => void handleAutoGenerateRoadmap('instant')}
               title="Automatically synthesize domain-tailored milestones & roadmap tasks from PROJECT.md and codebase"
             >
-              {busy === 'autogen-instant' ? 'Generating…' : '✨ Auto-Generate Roadmap'}
+              {busy === 'autogen-instant' ? (
+                'Generating…'
+              ) : (
+                <>
+                  <Sparkles className="icon" aria-hidden /> Auto-Generate Roadmap
+                </>
+              )}
             </button>
             <button
               id="roadmap-autogen-agent-btn"
@@ -726,18 +750,24 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
               onClick={() => void handleAutoGenerateRoadmap('agent')}
               title="Dispatch the System Architect agent to inspect the repository and generate a full custom milestone roadmap"
             >
-              {busy === 'autogen-agent'
-                ? 'Launching…'
-                : isAgentBrainstorming
-                  ? '🏛 Architect Working…'
-                  : '🤖 AI Architect Roadmap'}
+              {busy === 'autogen-agent' ? (
+                'Launching…'
+              ) : isAgentBrainstorming ? (
+                <>
+                  <Landmark className="icon" aria-hidden /> Architect Working…
+                </>
+              ) : (
+                <>
+                  <Bot className="icon" aria-hidden /> AI Architect Roadmap
+                </>
+              )}
             </button>
             <button
               type="button"
               className="btn btn-sm btn-ghost"
               onClick={() => navigate(`/projects/${projectId}/board`)}
             >
-              ▤ Open Kanban Board
+              <SquareKanban className="icon" aria-hidden /> Open Kanban Board
             </button>
           </div>
         </div>
@@ -774,7 +804,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                     fontSize: '0.73rem',
                     borderColor:
                       ms.status === 'completed'
-                        ? 'rgba(63, 185, 80, 0.45)'
+                        ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
                         : ms.status === 'active'
                           ? 'var(--accent)'
                           : 'var(--border)',
@@ -817,13 +847,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             onChange={(e) => setQuickAddTarget(e.target.value)}
             title="Choose where to add: Smart Auto-Route automatically selects the milestone, specialist persona, and model!"
           >
-            <option value="auto">⚡ Smart Auto-Route (Recommended)</option>
+            <option value="auto">Smart Auto-Route (Recommended)</option>
             {roadmap.milestones.map((m) => (
               <option key={m.id} value={m.id}>
-                🎯 {m.code} — {m.title.slice(0, 32)}
+                {m.code} — {m.title.slice(0, 32)}
               </option>
             ))}
-            <option value="__new_milestone__">➕ Create as New Milestone Phase</option>
+            <option value="__new_milestone__">Create as New Milestone Phase</option>
           </select>
           <input
             id="roadmap-quick-add-input"
@@ -857,7 +887,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
               marginTop: 12,
               padding: '10px 12px',
               borderRadius: 'var(--radius)',
-              background: 'rgba(249, 115, 22, 0.1)',
+              background: 'color-mix(in srgb, var(--ember-1) 10%, transparent)',
               border: '1px solid var(--accent)',
               display: 'flex',
               alignItems: 'center',
@@ -867,7 +897,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             }}
           >
             <span className="mono" style={{ fontSize: '0.82rem', fontWeight: 600 }}>
-              ☑ {totalSelected} selected ({selectedSuggestions.size} suggestion
+              <SquareCheck className="icon" aria-hidden /> {totalSelected} selected ({selectedSuggestions.size} suggestion
               {selectedSuggestions.size === 1 ? '' : 's'}, {selectedItems.size} roadmap item
               {selectedItems.size === 1 ? '' : 's'})
             </span>
@@ -888,7 +918,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                 disabled={busy !== null}
                 onClick={() => void handleDispatchSelected(false)}
               >
-                📥 Create Ready Tickets on Board
+                <Inbox className="icon" aria-hidden /> Create Ready Tickets on Board
               </button>
               <button
                 type="button"
@@ -896,9 +926,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                 disabled={busy !== null}
                 onClick={() => void handleDispatchSelected(true)}
               >
-                {busy === 'dispatch-run'
-                  ? 'Dispatching…'
-                  : '🚀 Create Tickets & Auto-Dispatch Multi-Agent Pipeline'}
+                {busy === 'dispatch-run' ? (
+                  'Dispatching…'
+                ) : (
+                  <>
+                    <Rocket className="icon" aria-hidden /> Create Tickets &amp; Auto-Dispatch Multi-Agent Pipeline
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -929,7 +963,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <header className="panel-head" style={{ marginBottom: 0 }}>
             <div>
-              <h2>🧠 AI Brainstorming &amp; Feature Suggestions</h2>
+              <h2><Brain className="icon" aria-hidden /> AI Brainstorming &amp; Feature Suggestions</h2>
               <p className="muted">
                 Explore what to build next, customize each idea&apos;s CLI agent &amp; model route inline, or launch all ideas at once.
               </p>
@@ -945,9 +979,15 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                     onClick={handleToggleSelectAllSuggestions}
                     title="Select or deselect all visible brainstorming suggestions"
                   >
-                    {filteredSuggestions.every((s) => selectedSuggestions.has(s.id))
-                      ? '☐ Deselect All'
-                      : '☑ Select All'}
+                    {filteredSuggestions.every((s) => selectedSuggestions.has(s.id)) ? (
+                      <>
+                        <Square className="icon" aria-hidden /> Deselect All
+                      </>
+                    ) : (
+                      <>
+                        <SquareCheck className="icon" aria-hidden /> Select All
+                      </>
+                    )}
                   </button>
                   <button
                     type="button"
@@ -957,7 +997,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                     onClick={() => void handleClearAllSuggestions()}
                     title="Clear all current brainstorming suggestions"
                   >
-                    🗑 Clear
+                    <Trash2 className="icon" aria-hidden /> Clear
                   </button>
                   <button
                     id="brainstorm-build-all-btn"
@@ -968,9 +1008,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                     onClick={() => void handleBuildAllSuggestions()}
                     title="Create Kanban tickets for all visible suggestions and start autonomous execution"
                   >
-                    {busy === 'build-all-suggestions'
-                      ? 'Starting All…'
-                      : `🚀 Build All (${filteredSuggestions.length})`}
+                    {busy === 'build-all-suggestions' ? (
+                      'Starting All…'
+                    ) : (
+                      <>
+                        <Rocket className="icon" aria-hidden /> Build All ({filteredSuggestions.length})
+                      </>
+                    )}
                   </button>
                 </>
               )}
@@ -1032,7 +1076,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   onClick={() => void handleBrainstorm('instant')}
                   title="Analyze PROJECT.md & project domain to synthesize instant suggestions"
                 >
-                  {busy === 'brainstorm-instant' ? 'Synthesizing…' : '⚡ Synthesize Ideas'}
+                  {busy === 'brainstorm-instant' ? (
+                    'Synthesizing…'
+                  ) : (
+                    <>
+                      <Zap className="icon" aria-hidden /> Synthesize Ideas
+                    </>
+                  )}
                 </button>
                 <button
                   id="brainstorm-agent-btn"
@@ -1046,11 +1096,17 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                       : 'Launch a Product Owner (Claude Fable) agent to deeply inspect the codebase and write new suggestions'
                   }
                 >
-                  {busy === 'brainstorm-agent'
-                    ? 'Launching…'
-                    : isAgentBrainstorming
-                      ? '🧠 Brainstorming in Progress…'
-                      : '🤖 Deep Agent Brainstorm'}
+                  {busy === 'brainstorm-agent' ? (
+                    'Launching…'
+                  ) : isAgentBrainstorming ? (
+                    <>
+                      <Brain className="icon" aria-hidden /> Brainstorming in Progress…
+                    </>
+                  ) : (
+                    <>
+                      <Bot className="icon" aria-hidden /> Deep Agent Brainstorm
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -1061,8 +1117,8 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   marginTop: 4,
                   padding: '6px 10px',
                   borderRadius: 'var(--radius)',
-                  background: 'rgba(168, 85, 247, 0.12)',
-                  border: '1px solid rgba(168, 85, 247, 0.4)',
+                  background: 'color-mix(in srgb, var(--violet) 12%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--violet) 40%, transparent)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -1098,7 +1154,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   style={{
                     padding: '12px 14px',
                     borderRadius: 'var(--radius)',
-                    background: checked ? 'rgba(249, 115, 22, 0.08)' : 'var(--bg-elevated)',
+                    background: checked ? 'color-mix(in srgb, var(--ember-1) 8%, transparent)' : 'var(--bg-elevated)',
                     border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
                     display: 'flex',
                     flexDirection: 'column',
@@ -1187,7 +1243,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                         onClick={() => void handleQuickPromoteSuggestion(sug, true)}
                         title="Add to Roadmap, create Kanban ticket, and start the specialist agent immediately"
                       >
-                        {busy === `sug-${sug.id}` ? 'Starting…' : '🚀 Build Now'}
+                        {busy === `sug-${sug.id}` ? (
+                          'Starting…'
+                        ) : (
+                          <>
+                            <Rocket className="icon" aria-hidden /> Build Now
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -1207,13 +1269,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
               >
                 {isAgentBrainstorming ? (
                   <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
-                    🧠 <strong>Deep Brainstorming Agent</strong> is analyzing <strong>{project?.name ?? 'this project'}</strong>…
+                    <Brain className="icon" aria-hidden /> <strong>Deep Brainstorming Agent</strong> is analyzing <strong>{project?.name ?? 'this project'}</strong>…
                     Tailored suggestions will automatically appear here as soon as analysis finishes.
                   </p>
                 ) : (
                   <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
-                    Brainstorming list is empty. Click <strong>🤖 Deep Agent Brainstorm</strong> (for full AI codebase analysis)
-                    or <strong>⚡ Synthesize Ideas</strong> above to populate suggestions tailored to{' '}
+                    Brainstorming list is empty. Click <strong><Bot className="icon" aria-hidden /> Deep Agent Brainstorm</strong> (for full AI codebase analysis)
+                    or <strong><Zap className="icon" aria-hidden /> Synthesize Ideas</strong> above to populate suggestions tailored to{' '}
                     <strong>{project?.name ?? 'this project'}</strong>.
                   </p>
                 )}
@@ -1226,7 +1288,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <header className="panel-head" style={{ marginBottom: 0 }}>
             <div>
-              <h2>🗺 Project Milestones &amp; Roadmap</h2>
+              <h2><MapIcon className="icon" aria-hidden /> Project Milestones &amp; Roadmap</h2>
               <p className="muted">
                 Track milestone delivery, check off completed items, or dispatch any roadmap item to the Kanban board.
               </p>
@@ -1298,7 +1360,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                               );
                               setLocalRoadmap(res.roadmap);
                               setBanner(
-                                `🚀 Dispatched Milestone ${ms.code} (${res.createdTickets.length} new ticket(s)) to the AI Coding Factory!`,
+                                `Dispatched Milestone ${ms.code} (${res.createdTickets.length} new ticket(s)) to the AI Coding Factory!`,
                               );
                             } catch (err) {
                               setError(errorMessage(err));
@@ -1308,7 +1370,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                           }}
                           title={`Create Kanban tickets for all remaining items in ${ms.code} and start execution`}
                         >
-                          {busy === `ms-${ms.id}` ? 'Starting…' : `🚀 Run ${ms.code}`}
+                          {busy === `ms-${ms.id}` ? (
+                            'Starting…'
+                          ) : (
+                            <>
+                              <Rocket className="icon" aria-hidden /> Run {ms.code}
+                            </>
+                          )}
                         </button>
                       )}
                       {roadmap.milestones.length > 1 && (
@@ -1347,7 +1415,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   {/* Milestone Items */}
                   {ms.items.length === 0 ? (
                     <p className="muted small" style={{ margin: '2px 0' }}>
-                      No items in {ms.code} yet. Click <strong>✨ Auto-Generate Roadmap</strong> above, promote a brainstorm idea, or type below.
+                      No items in {ms.code} yet. Click <strong><Sparkles className="icon" aria-hidden /> Auto-Generate Roadmap</strong> above, promote a brainstorm idea, or type below.
                     </p>
                   ) : (
                     <ul className="list" style={{ margin: 0 }}>
@@ -1414,7 +1482,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                                   style={{ fontSize: '0.7rem', textDecoration: 'none' }}
                                   title="View linked ticket on Kanban Board"
                                 >
-                                  ▤ {item.ticketKey}
+                                  <SquareKanban className="icon" aria-hidden /> {item.ticketKey}
                                 </Link>
                               ) : (
                                 !isDone && (
@@ -1426,7 +1494,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                                     onClick={() => void handleDispatchSingleItem(item.id)}
                                     title="Create Kanban ticket and start specialist agent"
                                   >
-                                    {busy === `item-${item.id}` ? '…' : '🚀 Dispatch'}
+                                    {busy === `item-${item.id}` ? (
+                                      '…'
+                                    ) : (
+                                      <>
+                                        <Rocket className="icon" aria-hidden /> Dispatch
+                                      </>
+                                    )}
                                   </button>
                                 )
                               )}

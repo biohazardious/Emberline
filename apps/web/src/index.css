@@ -14,10 +14,27 @@
   --ok: hsl(150 62% 50%);
   --warn: hsl(40 96% 58%);
   --bad: hsl(355 78% 62%);
+  --info: hsl(210 90% 68%);
+  /* Text on ember-filled controls. */
+  --on-accent: #090a0d;
+  --violet: hsl(270 85% 76%);
   --radius: 8px;
   --radius-sm: 6px;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Aliases used by older components; they follow the theme tokens above. */
+  --accent: var(--ember-2);
+  --danger: var(--bad);
+  --panel: var(--surface);
+  --panel-elev: var(--surface-2);
+  --surface-1: var(--surface);
+  --bg-0: var(--bg);
+  --border-subtle: var(--border);
+  --text-0: var(--text);
+  --text-muted: var(--muted);
+  --text-secondary: var(--muted);
+  --radius-xs: 4px;
 
   color-scheme: dark;
   font-family: var(--font-sans);
@@ -44,6 +61,9 @@
   --ok: hsl(150 65% 34%);
   --warn: hsl(36 92% 40%);
   --bad: hsl(355 74% 48%);
+  --info: hsl(212 80% 42%);
+  --on-accent: #ffffff;
+  --violet: hsl(270 60% 45%);
   color-scheme: light;
 }
 
@@ -177,7 +197,7 @@ a {
 .btn-primary {
   border-color: color-mix(in hsl, var(--ember-1) 70%, #fff 15%);
   background: var(--ember-1);
-  color: #090a0d;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -2148,7 +2168,7 @@ dialog.cmd-dialog::backdrop {
 
 .key:active {
   background: var(--ember-1);
-  color: #090a0d;
+  color: var(--on-accent);
 }
 
 @media (pointer: coarse) {
@@ -2296,8 +2316,8 @@ dialog.cmd-dialog::backdrop {
   gap: 10px;
   padding: 6px 12px;
   font-size: 0.78rem;
-  background: rgb(34 197 94 / 0.12);
-  border-bottom: 1px solid rgb(34 197 94 / 0.3);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   color: var(--text);
 }
 
@@ -2373,7 +2393,7 @@ dialog.cmd-dialog::backdrop {
 }
 
 .review-file-item.active {
-  background: rgb(255 107 43 / 0.12);
+  background: color-mix(in srgb, var(--ember-1) 12%, transparent);
   border-left: 2px solid var(--accent);
 }
 
@@ -2407,18 +2427,18 @@ dialog.cmd-dialog::backdrop {
 .diff-status-badge.status-added,
 .diff-status-badge.status-untracked {
   color: var(--ok);
-  background: rgb(34 197 94 / 0.14);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
 }
 
 .diff-status-badge.status-deleted {
   color: var(--danger);
-  background: rgb(239 68 68 / 0.14);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
 }
 
 .diff-status-badge.status-modified,
 .diff-status-badge.status-renamed {
   color: var(--accent);
-  background: rgb(255 107 43 / 0.14);
+  background: color-mix(in srgb, var(--ember-1) 14%, transparent);
 }
 
 .review-diff-pane {
@@ -2461,7 +2481,7 @@ dialog.cmd-dialog::backdrop {
   gap: 4px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
-  background: rgb(255 107 43 / 0.06);
+  background: color-mix(in srgb, var(--ember-1) 6%, transparent);
   max-height: 120px;
   overflow-y: auto;
 }
@@ -2701,4 +2721,24 @@ dialog.cmd-dialog::backdrop {
 .fleet-bulk-bar .input {
   flex: 1;
   min-width: 0;
+}
+
+/* --- icons (lucide-react) ------------------------------------------------------- */
+
+/* Icons size with the surrounding text and inherit its color, so they follow the theme. */
+.icon {
+  flex: none;
+  width: 1.05em;
+  height: 1.05em;
+  vertical-align: -0.15em;
+}
+
+.icon-spin {
+  animation: icon-spin 1s linear infinite;
+}
+
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

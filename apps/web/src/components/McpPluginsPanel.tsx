@@ -7,6 +7,7 @@ import {
   type SkillPluginCategory,
   type SkillPluginEntry,
 } from '@emberline/protocol';
+import { Plug, Plus, Puzzle, Save, X } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { PERSONA_LIST } from './PersonaBadge';
 
@@ -192,7 +193,7 @@ export function McpPluginsPanel({
           <div>
             <span className="eyebrow">Model Context Protocol (MCP) Hub</span>
             <h3 style={{ margin: '4px 0 4px' }}>
-              🔌 MCP Tool Servers ({activeMcpCount} of {servers.length} Active)
+              <Plug className="icon" aria-hidden /> MCP Tool Servers ({activeMcpCount} of {servers.length} Active)
             </h3>
             <p className="muted small" style={{ maxWidth: 740, margin: 0 }}>
               Enable curated or custom MCP servers and scope them to specific specialist personas. Active MCP servers are automatically wired into <code>--mcp-config</code> and pre-authorized in autonomous runs.
@@ -203,7 +204,13 @@ export function McpPluginsPanel({
             className="btn btn-sm"
             onClick={() => setShowAddMcp((v) => !v)}
           >
-            {showAddMcp ? 'Cancel' : '➕ Add Custom MCP Server'}
+            {showAddMcp ? (
+              'Cancel'
+            ) : (
+              <>
+                <Plus className="icon" aria-hidden /> Add Custom MCP Server
+              </>
+            )}
           </button>
         </div>
 
@@ -359,9 +366,9 @@ export function McpPluginsPanel({
                 style={{
                   padding: '13px',
                   borderRadius: '8px',
-                  background: srv.enabled ? 'var(--surface-2)' : 'rgba(255,255,255,0.015)',
+                  background: srv.enabled ? 'var(--surface-2)' : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
                   border: srv.enabled
-                    ? '1px solid rgba(59, 130, 246, 0.45)'
+                    ? '1px solid color-mix(in srgb, var(--info) 45%, transparent)'
                     : '1px dashed var(--border)',
                   display: 'flex',
                   flexDirection: 'column',
@@ -396,8 +403,9 @@ export function McpPluginsPanel({
                           className="btn btn-xs btn-ghost"
                           onClick={() => removeCustomMcp(srv.id)}
                           title="Remove custom MCP server"
+                          aria-label="Remove custom MCP server"
                         >
-                          ✕
+                          <X className="icon" aria-hidden />
                         </button>
                       )}
                     </div>
@@ -411,7 +419,7 @@ export function McpPluginsPanel({
                       {srv.transport.toUpperCase()}
                     </span>
                     {!srv.builtIn && (
-                      <span className="badge mono" style={{ fontSize: '0.64rem', color: '#93c5fd' }}>
+                      <span className="badge mono" style={{ fontSize: '0.64rem', color: 'var(--info)' }}>
                         Custom
                       </span>
                     )}
@@ -427,7 +435,7 @@ export function McpPluginsPanel({
                       fontSize: '0.67rem',
                       padding: '4px 6px',
                       borderRadius: '4px',
-                      background: 'rgba(0,0,0,0.2)',
+                      background: 'var(--surface-2)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
@@ -454,12 +462,12 @@ export function McpPluginsPanel({
                         borderRadius: '4px',
                         cursor: 'pointer',
                         background:
-                          srv.personas.length === 0 ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                          srv.personas.length === 0 ? 'color-mix(in srgb, var(--info) 20%, transparent)' : 'transparent',
                         border:
                           srv.personas.length === 0
-                            ? '1px solid rgba(59, 130, 246, 0.5)'
+                            ? '1px solid color-mix(in srgb, var(--info) 50%, transparent)'
                             : '1px solid var(--border)',
-                        color: srv.personas.length === 0 ? '#93c5fd' : 'var(--text-muted)',
+                        color: srv.personas.length === 0 ? 'var(--info)' : 'var(--text-muted)',
                       }}
                     >
                       ALL
@@ -477,11 +485,11 @@ export function McpPluginsPanel({
                             padding: '2px 6px',
                             borderRadius: '4px',
                             cursor: 'pointer',
-                            background: active ? 'rgba(16, 185, 129, 0.18)' : 'transparent',
+                            background: active ? 'color-mix(in srgb, var(--ok) 18%, transparent)' : 'transparent',
                             border: active
-                              ? '1px solid rgba(16, 185, 129, 0.5)'
+                              ? '1px solid color-mix(in srgb, var(--ok) 50%, transparent)'
                               : '1px solid var(--border)',
-                            color: active ? '#6ee7b7' : 'var(--text-muted)',
+                            color: active ? 'var(--ok)' : 'var(--text-muted)',
                           }}
                           title={`Toggle ${p.label} access to ${srv.name}`}
                         >
@@ -513,7 +521,7 @@ export function McpPluginsPanel({
           <div>
             <span className="eyebrow">Reusable Agent Skills &amp; Craftsmanship Rules</span>
             <h3 style={{ margin: '4px 0 4px' }}>
-              🧩 Skill &amp; Rule Plugins ({activeSkillCount} of {skills.length} Active)
+              <Puzzle className="icon" aria-hidden /> Skill &amp; Rule Plugins ({activeSkillCount} of {skills.length} Active)
             </h3>
             <p className="muted small" style={{ maxWidth: 740, margin: 0 }}>
               Modular domain skills and coding standards injected into matching specialist personas on launch. Built-in skills come enabled out of the box; you can also author custom team rules below.
@@ -524,7 +532,13 @@ export function McpPluginsPanel({
             className="btn btn-sm"
             onClick={() => setShowAddSkill((v) => !v)}
           >
-            {showAddSkill ? 'Cancel' : '➕ Add Custom Skill Plugin'}
+            {showAddSkill ? (
+              'Cancel'
+            ) : (
+              <>
+                <Plus className="icon" aria-hidden /> Add Custom Skill Plugin
+              </>
+            )}
           </button>
         </div>
 
@@ -630,9 +644,9 @@ export function McpPluginsPanel({
               style={{
                 padding: '13px',
                 borderRadius: '8px',
-                background: sk.enabled ? 'var(--surface-2)' : 'rgba(255,255,255,0.015)',
+                background: sk.enabled ? 'var(--surface-2)' : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
                 border: sk.enabled
-                  ? '1px solid rgba(16, 185, 129, 0.45)'
+                  ? '1px solid color-mix(in srgb, var(--ok) 45%, transparent)'
                   : '1px dashed var(--border)',
                 display: 'flex',
                 flexDirection: 'column',
@@ -667,8 +681,9 @@ export function McpPluginsPanel({
                         className="btn btn-xs btn-ghost"
                         onClick={() => removeCustomSkill(sk.id)}
                         title="Remove custom skill plugin"
+                        aria-label="Remove custom skill plugin"
                       >
-                        ✕
+                        <X className="icon" aria-hidden />
                       </button>
                     )}
                   </div>
@@ -704,12 +719,12 @@ export function McpPluginsPanel({
                       borderRadius: '4px',
                       cursor: 'pointer',
                       background:
-                        sk.personas.length === 0 ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                        sk.personas.length === 0 ? 'color-mix(in srgb, var(--info) 20%, transparent)' : 'transparent',
                       border:
                         sk.personas.length === 0
-                          ? '1px solid rgba(59, 130, 246, 0.5)'
+                          ? '1px solid color-mix(in srgb, var(--info) 50%, transparent)'
                           : '1px solid var(--border)',
-                      color: sk.personas.length === 0 ? '#93c5fd' : 'var(--text-muted)',
+                      color: sk.personas.length === 0 ? 'var(--info)' : 'var(--text-muted)',
                     }}
                   >
                     ALL
@@ -727,11 +742,11 @@ export function McpPluginsPanel({
                           padding: '2px 6px',
                           borderRadius: '4px',
                           cursor: 'pointer',
-                          background: active ? 'rgba(16, 185, 129, 0.18)' : 'transparent',
+                          background: active ? 'color-mix(in srgb, var(--ok) 18%, transparent)' : 'transparent',
                           border: active
-                            ? '1px solid rgba(16, 185, 129, 0.5)'
+                            ? '1px solid color-mix(in srgb, var(--ok) 50%, transparent)'
                             : '1px solid var(--border)',
-                          color: active ? '#6ee7b7' : 'var(--text-muted)',
+                          color: active ? 'var(--ok)' : 'var(--text-muted)',
                         }}
                       >
                         {p.shortLabel}
@@ -747,7 +762,13 @@ export function McpPluginsPanel({
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button type="submit" className="btn btn-primary" disabled={saving}>
-          {saving ? 'Saving…' : '💾 Save MCP & Plugin Configuration'}
+          {saving ? (
+            'Saving…'
+          ) : (
+            <>
+              <Save className="icon" aria-hidden /> Save MCP &amp; Plugin Configuration
+            </>
+          )}
         </button>
       </div>
     </form>

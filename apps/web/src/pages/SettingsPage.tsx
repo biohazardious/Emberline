@@ -25,6 +25,39 @@ import {
   type ToolchainActionResponse,
   type ToolchainStatusResponse,
 } from '@emberline/protocol';
+import {
+  Bell,
+  Bot,
+  Brain,
+  Cpu,
+  Download,
+  FlaskConical,
+  Flame,
+  Folder,
+  Globe,
+  KeyRound,
+  Laptop,
+  LoaderCircle,
+  Lock,
+  type LucideIcon,
+  Moon,
+  Package,
+  Palette,
+  Plug,
+  RefreshCw,
+  RotateCw,
+  Save,
+  Scale,
+  Settings,
+  Shield,
+  Sun,
+  Terminal,
+  Timer,
+  Trash2,
+  TriangleAlert,
+  Wallet,
+  Zap,
+} from 'lucide-react';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -36,30 +69,30 @@ import { QuotaPanel } from '../components/QuotaPanel';
 const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
 const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot'];
 
-const CAPABILITY_TAG_META: Record<ModelCapabilityTag, { label: string; icon: string }> = {
-  reasoning: { label: 'Reasoning', icon: '🧠' },
-  code: { label: 'Code', icon: '💻' },
-  ui_ux: { label: 'UI/UX', icon: '🎨' },
-  fast: { label: 'Fast', icon: '⚡' },
+const CAPABILITY_TAG_META: Record<ModelCapabilityTag, { label: string; icon: LucideIcon }> = {
+  reasoning: { label: 'Reasoning', icon: Brain },
+  code: { label: 'Code', icon: Laptop },
+  ui_ux: { label: 'UI/UX', icon: Palette },
+  fast: { label: 'Fast', icon: Zap },
 };
 
 const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; text: string; label: string }> = {
   high: {
-    bg: 'rgba(168, 85, 247, 0.14)',
-    border: 'rgba(168, 85, 247, 0.45)',
-    text: '#d8b4fe',
+    bg: 'color-mix(in srgb, var(--violet) 14%, transparent)',
+    border: 'color-mix(in srgb, var(--violet) 45%, transparent)',
+    text: 'var(--violet)',
     label: 'HIGH (★4–5)',
   },
   medium: {
-    bg: 'rgba(59, 130, 246, 0.14)',
-    border: 'rgba(59, 130, 246, 0.45)',
-    text: '#93c5fd',
+    bg: 'color-mix(in srgb, var(--info) 14%, transparent)',
+    border: 'color-mix(in srgb, var(--info) 45%, transparent)',
+    text: 'var(--info)',
     label: 'MEDIUM (★3)',
   },
   low: {
-    bg: 'rgba(16, 185, 129, 0.14)',
-    border: 'rgba(16, 185, 129, 0.45)',
-    text: '#6ee7b7',
+    bg: 'color-mix(in srgb, var(--ok) 14%, transparent)',
+    border: 'color-mix(in srgb, var(--ok) 45%, transparent)',
+    text: 'var(--ok)',
     label: 'LOW (★1–2)',
   },
 };
@@ -437,7 +470,9 @@ export function SettingsPage({
       >
         <div>
           <span className="eyebrow">Control Center</span>
-          <h2 style={{ margin: '4px 0 0' }}>⚙ Factory Settings &amp; Multi-Agent Model Routing</h2>
+          <h2 style={{ margin: '4px 0 0' }}>
+            <Settings className="icon" aria-hidden /> Factory Settings &amp; Multi-Agent Model Routing
+          </h2>
         </div>
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -446,35 +481,35 @@ export function SettingsPage({
             className={`btn btn-sm ${activeTab === 'autopilot' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('autopilot')}
           >
-            ⚡ Auto-Pilot &amp; Theme
+            <Zap className="icon" aria-hidden /> Auto-Pilot &amp; Theme
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'providers' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('providers')}
           >
-            🤖 Multi-Agent &amp; Model Matrix
+            <Bot className="icon" aria-hidden /> Multi-Agent &amp; Model Matrix
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'mcp_plugins' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('mcp_plugins')}
           >
-            🔌 MCP &amp; Plugins
+            <Plug className="icon" aria-hidden /> MCP &amp; Plugins
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'quota' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('quota')}
           >
-            ⏱️ Quota &amp; Concurrency
+            <Timer className="icon" aria-hidden /> Quota &amp; Concurrency
           </button>
           <button
             type="button"
             className={`btn btn-sm ${activeTab === 'notifications' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('notifications')}
           >
-            🔔 Forge &amp; Webhooks
+            <Bell className="icon" aria-hidden /> Forge &amp; Webhooks
           </button>
         </div>
       </header>
@@ -500,7 +535,7 @@ export function SettingsPage({
                   onChangeTheme('dark');
                 }}
               >
-                🌙 Dark Workbench
+                <Moon className="icon" aria-hidden /> Dark Workbench
               </button>
               <button
                 type="button"
@@ -510,7 +545,7 @@ export function SettingsPage({
                   onChangeTheme('light');
                 }}
               >
-                ☀️ Light Workbench
+                <Sun className="icon" aria-hidden /> Light Workbench
               </button>
             </div>
           </div>
@@ -564,7 +599,9 @@ export function SettingsPage({
                 style={{ marginTop: '3px' }}
               />
               <div>
-                <strong>🧪 Self-Healing Build, Lint &amp; Unit Test Gate (Auto-Verify &amp; Auto-Fix)</strong>
+                <strong>
+                  <FlaskConical className="icon" aria-hidden /> Self-Healing Build, Lint &amp; Unit Test Gate (Auto-Verify &amp; Auto-Fix)
+                </strong>
                 <div className="muted small">
                   When a specialist finishes a run, automatically run the project&apos;s <code>build</code>/<code>typecheck</code>, <code>lint</code>, and <code>test</code> suites (`CI=true`). If any check fails, resume the agent with the exact compiler/linter/test failure output to self-heal before advancing.
                 </div>
@@ -579,7 +616,9 @@ export function SettingsPage({
                 style={{ marginTop: '3px' }}
               />
               <div>
-                <strong>🛡️ Anti-AI-Slop &amp; Anti-Vibe-Coding Gate (Deterministic Diff Audit &amp; Auto-Clean)</strong>
+                <strong>
+                  <Shield className="icon" aria-hidden /> Anti-AI-Slop &amp; Anti-Vibe-Coding Gate (Deterministic Diff Audit &amp; Auto-Clean)
+                </strong>
                 <div className="muted small">
                   Automatically scan every completed worktree diff for type evasion (<code>: any</code>, <code>as any</code>, <code>@ts-ignore</code>), unfinished <code>TODO</code>/<code>FIXME</code> stubs, skipped tests, leftover <code>console.log</code>/<code>debugger</code>, and generic AI gradient clichés. If blocked, auto-resume the agent once to clean its own code.
                 </div>
@@ -594,7 +633,9 @@ export function SettingsPage({
                 style={{ marginTop: '3px' }}
               />
               <div>
-                <strong>🔒 Pre-Commit Secret &amp; Credential Guard (Auto-Block &amp; Redact Leaked Keys)</strong>
+                <strong>
+                  <Lock className="icon" aria-hidden /> Pre-Commit Secret &amp; Credential Guard (Auto-Block &amp; Redact Leaked Keys)
+                </strong>
                 <div className="muted small">
                   Inspects diffs before commit and before <code>main</code> workspace sync for hardcoded API keys (<code>sk-...</code>, <code>AIza...</code>, <code>ghp_...</code>, <code>AKIA...</code>), private keys (<code>.pem</code>/<code>.key</code>), and tracked <code>.env</code> files. Blocks merging into <code>main</code> and instructs the agent to move secrets to <code>process.env</code> + <code>.env.example</code>.
                 </div>
@@ -609,7 +650,9 @@ export function SettingsPage({
                 style={{ marginTop: '3px' }}
               />
               <div>
-                <strong>⚖️ Cross-Provider AI Critic (Rival Provider Code Review)</strong>
+                <strong>
+                  <Scale className="icon" aria-hidden /> Cross-Provider AI Critic (Rival Provider Code Review)
+                </strong>
                 <div className="muted small">
                   When multiple providers are active (e.g. Claude + Google Antigravity), automatically have a rival provider audit the completed diff against the ticket specification before moving to <code>Done</code>.
                 </div>
@@ -685,7 +728,13 @@ export function SettingsPage({
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Saving…' : '💾 Save Auto-Pilot & Theme Settings'}
+              {saving ? (
+                'Saving…'
+              ) : (
+                <>
+                  <Save className="icon" aria-hidden /> Save Auto-Pilot &amp; Theme Settings
+                </>
+              )}
             </button>
           </div>
         </form>
@@ -716,12 +765,13 @@ export function SettingsPage({
                     style={{
                       fontSize: '0.68rem',
                       padding: '4px 8px',
-                      borderColor: 'rgba(16, 185, 129, 0.4)',
-                      color: '#6ee7b7',
+                      borderColor: 'color-mix(in srgb, var(--ok) 40%, transparent)',
+                      color: 'var(--ok)',
                     }}
                     title="Generic Runner Base OS & Node.js LTS Runtime"
                   >
-                    🐧 {toolchain.osInfo} · Node {toolchain.nodeVersion} · 📁 {toolchain.toolsDir}
+                    <Cpu className="icon" aria-hidden /> {toolchain.osInfo} · Node {toolchain.nodeVersion} · <Folder className="icon" aria-hidden />{' '}
+                    {toolchain.toolsDir}
                   </span>
                 )}
                 <button
@@ -731,7 +781,15 @@ export function SettingsPage({
                   onClick={() => void handleUpdateAllTools()}
                   title="Install missing enabled CLIs and update all installed AI CLIs in /opt/ai-tools to their latest release"
                 >
-                  {updatingAllTools ? '⏳ Updating All CLIs…' : '↻ Update All Active CLIs'}
+                  {updatingAllTools ? (
+                    <>
+                      <LoaderCircle className="icon icon-spin" aria-hidden /> Updating All CLIs…
+                    </>
+                  ) : (
+                    <>
+                      <RotateCw className="icon" aria-hidden /> Update All Active CLIs
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -739,7 +797,7 @@ export function SettingsPage({
                   onClick={() => void refreshToolchain()}
                   title="Refresh CLI installation & version status"
                 >
-                  ⟳ Refresh
+                  <RefreshCw className="icon" aria-hidden /> Refresh
                 </button>
               </div>
             </div>
@@ -788,9 +846,9 @@ export function SettingsPage({
                     style={{
                       padding: '12px 14px',
                       borderRadius: '8px',
-                      background: isEnabled ? 'var(--surface-2)' : 'rgba(255,255,255,0.015)',
+                      background: isEnabled ? 'var(--surface-2)' : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
                       border: isEnabled
-                        ? '1px solid rgba(59, 130, 246, 0.5)'
+                        ? '1px solid color-mix(in srgb, var(--info) 50%, transparent)'
                         : '1px dashed var(--border)',
                       opacity: isEnabled ? 1 : 0.75,
                       display: 'flex',
@@ -826,15 +884,15 @@ export function SettingsPage({
                           style={{
                             fontSize: '0.65rem',
                             borderColor: isToolBusy
-                              ? 'rgba(56, 189, 248, 0.5)'
+                              ? 'color-mix(in srgb, var(--info) 50%, transparent)'
                               : toolStatus?.installed
-                                ? 'rgba(16, 185, 129, 0.5)'
-                                : 'rgba(245, 158, 11, 0.45)',
+                                ? 'color-mix(in srgb, var(--ok) 50%, transparent)'
+                                : 'color-mix(in srgb, var(--warn) 45%, transparent)',
                             color: isToolBusy
-                              ? '#38bdf8'
+                              ? 'var(--info)'
                               : toolStatus?.installed
-                                ? '#6ee7b7'
-                                : '#fcd34d',
+                                ? 'var(--ok)'
+                                : 'var(--warn)',
                           }}
                           title={
                             toolStatus?.binaryPath
@@ -842,20 +900,28 @@ export function SettingsPage({
                               : `Install cmd: ${toolStatus?.installCommand ?? ''}`
                           }
                         >
-                          {isToolBusy
-                            ? `⏳ Installing ${toolStatus?.binaryName ?? providerId}…`
-                            : toolStatus?.installed
-                              ? `📦 ${toolStatus.binaryName} (${toolStatus.version ?? 'installed'})`
-                              : `⚠ CLI Not Installed`}
+                          {isToolBusy ? (
+                            <>
+                              <LoaderCircle className="icon icon-spin" aria-hidden /> Installing {toolStatus?.binaryName ?? providerId}…
+                            </>
+                          ) : toolStatus?.installed ? (
+                            <>
+                              <Package className="icon" aria-hidden /> {toolStatus.binaryName} ({toolStatus.version ?? 'installed'})
+                            </>
+                          ) : (
+                            <>
+                              <TriangleAlert className="icon" aria-hidden /> CLI Not Installed
+                            </>
+                          )}
                         </span>
                         <span
                           className="badge mono"
                           style={{
                             fontSize: '0.65rem',
                             borderColor: isAuthReady
-                              ? 'rgba(16, 185, 129, 0.45)'
-                              : 'rgba(245, 158, 11, 0.45)',
-                            color: isAuthReady ? '#6ee7b7' : '#fcd34d',
+                              ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
+                              : 'color-mix(in srgb, var(--warn) 45%, transparent)',
+                            color: isAuthReady ? 'var(--ok)' : 'var(--warn)',
                           }}
                         >
                           {authStatus?.label ?? (isKeyConfigured ? '✓ API Key Set' : 'OAuth CLI / API Key')}
@@ -907,9 +973,9 @@ export function SettingsPage({
                           }
                           style={{
                             borderColor: toolStatus?.installed
-                              ? 'rgba(16, 185, 129, 0.4)'
-                              : 'rgba(245, 158, 11, 0.5)',
-                            color: toolStatus?.installed ? '#6ee7b7' : '#fcd34d',
+                              ? 'color-mix(in srgb, var(--ok) 40%, transparent)'
+                              : 'color-mix(in srgb, var(--warn) 50%, transparent)',
+                            color: toolStatus?.installed ? 'var(--ok)' : 'var(--warn)',
                             fontSize: '0.71rem',
                           }}
                           title={
@@ -918,11 +984,19 @@ export function SettingsPage({
                               : `Install ${entry.shortLabel} CLI into /opt/ai-tools (${toolStatus?.installCommand ?? ''})`
                           }
                         >
-                          {isToolBusy
-                            ? '⏳ Working…'
-                            : toolStatus?.installed
-                              ? '↻ Update CLI'
-                              : '⬇ Install CLI'}
+                          {isToolBusy ? (
+                            <>
+                              <LoaderCircle className="icon icon-spin" aria-hidden /> Working…
+                            </>
+                          ) : toolStatus?.installed ? (
+                            <>
+                              <RotateCw className="icon" aria-hidden /> Update CLI
+                            </>
+                          ) : (
+                            <>
+                              <Download className="icon" aria-hidden /> Install CLI
+                            </>
+                          )}
                         </button>
                         <button
                           type="button"
@@ -938,7 +1012,7 @@ export function SettingsPage({
                           style={{ fontSize: '0.7rem' }}
                           title="Run CLI install/update inside an interactive terminal so you can watch live output"
                         >
-                          📟 Terminal
+                          <Terminal className="icon" aria-hidden /> Terminal
                         </button>
                         {toolStatus?.installed && (
                           <button
@@ -946,10 +1020,11 @@ export function SettingsPage({
                             className="btn btn-xs btn-ghost"
                             disabled={isToolBusy || updatingAllTools}
                             onClick={() => void handleToolchainAction(providerId, 'uninstall', false)}
-                            style={{ fontSize: '0.68rem', color: '#fca5a5' }}
+                            style={{ fontSize: '0.68rem', color: 'var(--bad)' }}
                             title={`Uninstall ${entry.shortLabel} CLI from /opt/ai-tools`}
+                            aria-label={`Uninstall ${entry.shortLabel} CLI`}
                           >
-                            🗑
+                            <Trash2 className="icon" aria-hidden />
                           </button>
                         )}
                       </div>
@@ -959,8 +1034,8 @@ export function SettingsPage({
                           className="mono"
                           style={{
                             fontSize: '0.65rem',
-                            color: '#fca5a5',
-                            background: 'rgba(239, 68, 68, 0.1)',
+                            color: 'var(--bad)',
+                            background: 'color-mix(in srgb, var(--bad) 10%, transparent)',
                             padding: '4px 6px',
                             borderRadius: '4px',
                             maxHeight: 54,
@@ -979,17 +1054,25 @@ export function SettingsPage({
                             disabled={launchingLoginProvider !== null}
                             onClick={() => void handleStartProviderLogin(providerId)}
                             style={{
-                              borderColor: 'rgba(59, 130, 246, 0.45)',
-                              color: '#93c5fd',
+                              borderColor: 'color-mix(in srgb, var(--info) 45%, transparent)',
+                              color: 'var(--info)',
                               fontSize: '0.72rem',
                             }}
                             title="Opens an interactive browser terminal inside the runner container to authenticate via official CLI OAuth (auto-installs CLI if missing)"
                           >
-                            {launchingLoginProvider === providerId
-                              ? '⏳ Opening Terminal…'
-                              : isAuthReady && authStatus?.method === 'oauth_cli'
-                                ? '🔄 Re-Login CLI Account'
-                                : '🔑 CLI OAuth Login (Terminal)'}
+                            {launchingLoginProvider === providerId ? (
+                              <>
+                                <LoaderCircle className="icon icon-spin" aria-hidden /> Opening Terminal…
+                              </>
+                            ) : isAuthReady && authStatus?.method === 'oauth_cli' ? (
+                              <>
+                                <RefreshCw className="icon" aria-hidden /> Re-Login CLI Account
+                              </>
+                            ) : (
+                              <>
+                                <KeyRound className="icon" aria-hidden /> CLI OAuth Login (Terminal)
+                              </>
+                            )}
                           </button>
                           {makeLoginCmd && (
                             <code
@@ -1077,7 +1160,7 @@ export function SettingsPage({
                   onClick={() => applyCapabilityPreset('auto-rank')}
                   title="Automatically match each persona to its optimal ★1-5 rank on its active provider"
                 >
-                  ⚡ Auto-Match by Persona Rank
+                  <Zap className="icon" aria-hidden /> Auto-Match by Persona Rank
                 </button>
                 {enabledProviders.length > 1 && (
                   <button
@@ -1086,7 +1169,7 @@ export function SettingsPage({
                     onClick={() => applyCapabilityPreset('multi-provider')}
                     title="Distribute UI/UX, QA, and Architecture across your enabled providers"
                   >
-                    🌐 Multi-Provider Split
+                    <Globe className="icon" aria-hidden /> Multi-Provider Split
                   </button>
                 )}
                 <button
@@ -1095,7 +1178,7 @@ export function SettingsPage({
                   onClick={() => applyCapabilityPreset('all-high')}
                   title="Assign High / Frontier (★4-5) models across all personas"
                 >
-                  🔥 All High (★4–5)
+                  <Flame className="icon" aria-hidden /> All High (★4–5)
                 </button>
                 <button
                   type="button"
@@ -1103,7 +1186,7 @@ export function SettingsPage({
                   onClick={() => applyCapabilityPreset('all-medium')}
                   title="Assign Medium / Balanced (★3) models across all personas"
                 >
-                  ⚖️ All Medium (★3)
+                  <Scale className="icon" aria-hidden /> All Medium (★3)
                 </button>
                 <button
                   type="button"
@@ -1111,7 +1194,7 @@ export function SettingsPage({
                   onClick={() => applyCapabilityPreset('all-low')}
                   title="Assign Low / Fast (★1-2) models across all personas to save tokens"
                 >
-                  💰 All Low / Fast (★1–2)
+                  <Wallet className="icon" aria-hidden /> All Low / Fast (★1–2)
                 </button>
               </div>
             </div>
@@ -1237,7 +1320,7 @@ export function SettingsPage({
                             justifyContent: 'space-between',
                             padding: '6px 10px',
                             fontSize: '0.8rem',
-                            background: 'rgba(255,255,255,0.03)',
+                            background: 'color-mix(in srgb, var(--text) 3%, transparent)',
                             cursor: 'default',
                           }}
                           title="Enable additional providers in Step 1 above to switch providers per persona"
@@ -1304,7 +1387,7 @@ export function SettingsPage({
                                 fontWeight: isCurrentTier ? 700 : 500,
                                 borderRadius: '5px',
                                 cursor: 'pointer',
-                                background: isCurrentTier ? tMeta.bg : 'rgba(255,255,255,0.02)',
+                                background: isCurrentTier ? tMeta.bg : 'color-mix(in srgb, var(--text) 2%, transparent)',
                                 border: isCurrentTier
                                   ? `1px solid ${tMeta.border}`
                                   : '1px solid var(--border)',
@@ -1353,7 +1436,7 @@ export function SettingsPage({
                           </option>
                         ))}
                         <option value="auto">
-                          ⚡ Auto (Match Persona Target Rank ★{targetSpec.recommendedRank})
+                          Auto (Match Persona Target Rank ★{targetSpec.recommendedRank})
                         </option>
                       </select>
                     </label>
@@ -1367,13 +1450,14 @@ export function SettingsPage({
                           gap: '5px',
                           padding: '7px 9px',
                           borderRadius: '6px',
-                          background: 'rgba(0, 0, 0, 0.18)',
+                          background: 'var(--surface-2)',
                           border: '1px solid var(--border)',
                         }}
                       >
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                           {modelInfo.capabilities.map((cap) => {
                             const cMeta = CAPABILITY_TAG_META[cap];
+                            const CapIcon = cMeta.icon;
                             return (
                               <span
                                 key={cap}
@@ -1382,11 +1466,11 @@ export function SettingsPage({
                                   fontSize: '0.64rem',
                                   padding: '1px 5px',
                                   borderRadius: '4px',
-                                  background: 'rgba(255,255,255,0.05)',
+                                  background: 'color-mix(in srgb, var(--text) 5%, transparent)',
                                   color: 'var(--text-secondary)',
                                 }}
                               >
-                                {cMeta.icon} {cMeta.label}
+                                <CapIcon className="icon" aria-hidden /> {cMeta.label}
                               </span>
                             );
                           })}
@@ -1404,7 +1488,13 @@ export function SettingsPage({
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Saving…' : '💾 Save Active Providers & Capability Matrix'}
+              {saving ? (
+                'Saving…'
+              ) : (
+                <>
+                  <Save className="icon" aria-hidden /> Save Active Providers &amp; Capability Matrix
+                </>
+              )}
             </button>
           </div>
         </form>

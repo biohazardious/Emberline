@@ -7,6 +7,23 @@ import type {
   Project,
 } from '@emberline/protocol';
 import { type FormEvent, type MouseEvent, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  Camera,
+  Circle,
+  Maximize2,
+  Minimize2,
+  Monitor,
+  Pause,
+  RotateCw,
+  Square,
+  Target,
+  Wrench,
+  X,
+  Zap,
+} from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from './PersonaBadge';
@@ -142,7 +159,7 @@ export function LiveBrowserStudio({
     await sendAction({ action: 'start_playtest', url: demoUrl });
     setBanner({
       kind: 'ok',
-      text: '🤖 Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
+      text: 'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
     });
   };
 
@@ -283,11 +300,15 @@ export function LiveBrowserStudio({
             }
           >
             <span className="dot" />
-            {snap?.agentActive
-              ? '⚡ Agent Driving Browser'
-              : snap?.available
-                ? '● Live Browser (Shared CDP · 1280×720)'
-                : '○ Starting Live Browser…'}
+            {snap?.agentActive ? (
+              <>
+                <Zap className="icon" aria-hidden /> Agent Driving Browser
+              </>
+            ) : snap?.available ? (
+              '● Live Browser (Shared CDP · 1280×720)'
+            ) : (
+              '○ Starting Live Browser…'
+            )}
           </span>
 
           {snap?.pageTitle && (
@@ -314,7 +335,21 @@ export function LiveBrowserStudio({
             onClick={() => setLiveFollow((v) => !v)}
             title="Continuously stream the shared Chromium viewport so you can watch agent actions in real time"
           >
-            {liveFollow ? '🔴 Live Follow: ON' : '⏸ Live Follow: Paused'}
+            {liveFollow ? (
+              <>
+                <Circle
+                  className="icon"
+                  fill="currentColor"
+                  style={{ color: 'var(--danger)' }}
+                  aria-hidden
+                />{' '}
+                Live Follow: ON
+              </>
+            ) : (
+              <>
+                <Pause className="icon" aria-hidden /> Live Follow: Paused
+              </>
+            )}
           </button>
           <button
             type="button"
@@ -323,7 +358,15 @@ export function LiveBrowserStudio({
             onClick={() => void handleTogglePlaytest()}
             title="Autonomously interact with the active page inside the shared browser"
           >
-            {snap?.playtestActive ? '⏹ Stop Auto-Interact' : '🤖 Auto-Interact'}
+            {snap?.playtestActive ? (
+              <>
+                <Square className="icon" aria-hidden /> Stop Auto-Interact
+              </>
+            ) : (
+              <>
+                <Bot className="icon" aria-hidden /> Auto-Interact
+              </>
+            )}
           </button>
           <button
             type="button"
@@ -332,7 +375,7 @@ export function LiveBrowserStudio({
             onClick={() => void handleOpenProjectDemo()}
             title="Build (if needed) and open this project's Live Demo inside the shared browser"
           >
-            🎯 Open Project Demo
+            <Target className="icon" aria-hidden /> Open Project Demo
           </button>
           <button
             type="button"
@@ -341,7 +384,13 @@ export function LiveBrowserStudio({
             onClick={() => void handleRunQaBrowserCheck()}
             title="Dispatch the QA Agent to open and interact with the app in this Live Browser while you watch"
           >
-            {launchingQa ? 'Dispatching…' : '🤖 Run QA Browser Check'}
+            {launchingQa ? (
+              'Dispatching…'
+            ) : (
+              <>
+                <Bot className="icon" aria-hidden /> Run QA Browser Check
+              </>
+            )}
           </button>
           <button
             type="button"
@@ -349,14 +398,22 @@ export function LiveBrowserStudio({
             disabled={loading || acting}
             onClick={() => void fetchSnapshot(false)}
           >
-            📸 Snapshot
+            <Camera className="icon" aria-hidden /> Snapshot
           </button>
           <button
             type="button"
             className="btn btn-sm"
             onClick={() => setFullscreen((f) => !f)}
           >
-            {fullscreen ? '🗗 Exit Fullscreen' : '⛶ Fullscreen'}
+            {fullscreen ? (
+              <>
+                <Minimize2 className="icon" aria-hidden /> Exit Fullscreen
+              </>
+            ) : (
+              <>
+                <Maximize2 className="icon" aria-hidden /> Fullscreen
+              </>
+            )}
           </button>
           {onClose && (
             <button
@@ -367,7 +424,7 @@ export function LiveBrowserStudio({
                 onClose();
               }}
             >
-              ✕ Close
+              <X className="icon" aria-hidden /> Close
             </button>
           )}
         </div>
@@ -431,8 +488,9 @@ export function LiveBrowserStudio({
                     fontSize: '0.72rem',
                   }}
                   title="Close tab"
+                  aria-label="Close tab"
                 >
-                  ✕
+                  <X className="icon" aria-hidden />
                 </button>
               )}
             </div>
@@ -467,8 +525,9 @@ export function LiveBrowserStudio({
           disabled={acting}
           onClick={() => void sendAction({ action: 'back' })}
           title="Back"
+          aria-label="Back"
         >
-          ←
+          <ArrowLeft className="icon" aria-hidden />
         </button>
         <button
           type="button"
@@ -476,8 +535,9 @@ export function LiveBrowserStudio({
           disabled={acting}
           onClick={() => void sendAction({ action: 'forward' })}
           title="Forward"
+          aria-label="Forward"
         >
-          →
+          <ArrowRight className="icon" aria-hidden />
         </button>
         <button
           type="button"
@@ -485,8 +545,9 @@ export function LiveBrowserStudio({
           disabled={acting}
           onClick={() => void sendAction({ action: 'reload' })}
           title="Reload current tab"
+          aria-label="Reload current tab"
         >
-          ↻
+          <RotateCw className="icon" aria-hidden />
         </button>
         <input
           type="text"
@@ -524,8 +585,9 @@ export function LiveBrowserStudio({
             type="button"
             className="btn btn-sm btn-ghost"
             onClick={() => setBanner(undefined)}
+            aria-label="Close"
           >
-            ✕
+            <X className="icon" aria-hidden />
           </button>
         </div>
       )}
@@ -599,7 +661,7 @@ export function LiveBrowserStudio({
                       marginTop: -11,
                       borderRadius: '50%',
                       border: '2px solid var(--ember-2)',
-                      background: 'rgba(255, 107, 43, 0.25)',
+                      background: 'color-mix(in srgb, var(--ember-1) 25%, transparent)',
                       pointerEvents: 'none',
                     }}
                   />
@@ -708,7 +770,7 @@ export function LiveBrowserStudio({
                 cursor: 'pointer',
               }}
             >
-              🤖 Agent Actions ({agentActions.length})
+              <Bot className="icon" aria-hidden /> Agent Actions ({agentActions.length})
             </button>
             <button
               type="button"
@@ -726,7 +788,7 @@ export function LiveBrowserStudio({
                 cursor: 'pointer',
               }}
             >
-              🖥 Console ({consoleLogs.length})
+              <Monitor className="icon" aria-hidden /> Console ({consoleLogs.length})
               {errorCount > 0 && (
                 <span
                   className="badge"
@@ -763,7 +825,9 @@ export function LiveBrowserStudio({
                   <p style={{ margin: 0 }}>
                     Every agent run connects to this exact shared Chromium instance via{' '}
                     <span className="mono">--cdp-endpoint http://127.0.0.1:9222</span>. Click{' '}
-                    <strong>🤖 Run QA Browser Check</strong> above to watch an agent navigate and
+                    <strong>
+                      <Bot className="icon" aria-hidden /> Run QA Browser Check
+                    </strong> above to watch an agent navigate and
                     test your app live!
                   </p>
                 </div>
@@ -879,7 +943,7 @@ export function LiveBrowserStudio({
                           disabled={launchingQa}
                           onClick={() => void handleFixConsoleError(entry)}
                         >
-                          🔧 Fix with Coder
+                          <Wrench className="icon" aria-hidden /> Fix with Coder
                         </button>
                       )}
                     </div>

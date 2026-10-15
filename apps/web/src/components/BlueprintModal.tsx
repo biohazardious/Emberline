@@ -1,4 +1,5 @@
 import type { Project, ProjectBlueprintResponse, Run } from '@emberline/protocol';
+import { Check, Sparkles, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from './PersonaBadge';
@@ -133,7 +134,7 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
           </div>
           {blueprintPath && <span className="badge badge-soft mono hide-sm">{blueprintPath}</span>}
           <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
-            ×
+            <X className="icon" aria-hidden />
           </button>
         </header>
 
@@ -160,8 +161,8 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
         )}
 
         {savedNotice && (
-          <p className="small" style={{ color: 'var(--ok, #4ade80)', margin: 0 }}>
-            ✓ Saved PROJECT.md and synced CLAUDE.md in workspace.
+          <p className="small" style={{ color: 'var(--ok, var(--ok))', margin: 0 }}>
+            <Check className="icon" aria-hidden /> Saved PROJECT.md and synced CLAUDE.md in workspace.
           </p>
         )}
         {error && <p className="form-error">{error}</p>}
@@ -174,7 +175,13 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
             onClick={() => void askProductOwner()}
             title="Save PROJECT.md and launch a Product Owner agent run to refine requirements and milestones"
           >
-            {busy === 'refine' ? 'Dispatching PO Agent…' : '✨ Ask Product Owner Agent to Refine'}
+            {busy === 'refine' ? (
+              'Dispatching PO Agent…'
+            ) : (
+              <>
+                <Sparkles className="icon" aria-hidden /> Ask Product Owner Agent to Refine
+              </>
+            )}
           </button>
           <div className="actions">
             <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>

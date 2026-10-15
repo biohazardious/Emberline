@@ -7,6 +7,34 @@ import type {
   WorkspaceFileEntry,
   WorkspaceFileListResponse,
 } from '@emberline/protocol';
+import {
+  Book,
+  ChevronDown,
+  ChevronRight,
+  Clapperboard,
+  Database,
+  Download,
+  FileArchive,
+  FileCode2,
+  FileText,
+  Folder,
+  FolderOpen,
+  Image as ImageIcon,
+  KeyRound,
+  type LucideIcon,
+  Package,
+  RefreshCw,
+  Rocket,
+  Save,
+  Settings,
+  SquareKanban,
+  Sparkles,
+  Trash2,
+  Type,
+  Upload,
+  Volume2,
+  X,
+} from 'lucide-react';
 import type * as Monaco from 'monaco-editor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
@@ -14,6 +42,8 @@ import { api } from '../api';
 import { PERSONA_BY_ID, PERSONA_LIST } from '../components/PersonaBadge';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
+import { useThemeMode } from '../hooks/useThemeMode';
+import { loadMonaco, monacoTheme } from '../monaco';
 
 interface OpenTab {
   path: string;
@@ -24,26 +54,6 @@ interface OpenTab {
   sizeBytes: number;
 }
 
-let monacoLoader: Promise<typeof Monaco> | null = null;
-function loadMonaco(): Promise<typeof Monaco> {
-  if (!monacoLoader) {
-    const globalScope = globalThis as unknown as {
-      MonacoEnvironment?: { getWorker: () => Worker };
-    };
-    if (!globalScope.MonacoEnvironment) {
-      globalScope.MonacoEnvironment = {
-        getWorker: () => {
-          const blob = new Blob(['self.onmessage = function() {};'], {
-            type: 'application/javascript',
-          });
-          return new Worker(URL.createObjectURL(blob));
-        },
-      };
-    }
-    monacoLoader = import('monaco-editor');
-  }
-  return monacoLoader;
-}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -62,8 +72,12 @@ function getFileExtension(filePath: string): string {
   return idx >= 0 ? base.slice(idx).toLowerCase() : '';
 }
 
+function FileTypeIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return <Icon className="icon" aria-hidden />;
+}
+
 function describeFileType(filePath: string): {
-  icon: string;
+  icon: LucideIcon;
   label: string;
   previewKind: 'image' | 'audio' | 'video' | 'none';
 } {
@@ -73,7 +87,7 @@ function describeFileType(filePath: string): {
     case '.aab':
     case '.ipa':
       return {
-        icon: '📦',
+        icon: Package,
         label: `Mobile Application Package (${ext})`,
         previewKind: 'none',
       };
@@ -88,7 +102,7 @@ function describeFileType(filePath: string): {
     case '.jar':
     case '.war':
       return {
-        icon: '🗜️',
+        icon: FileArchive,
         label: `Compressed Archive / Package (${ext})`,
         previewKind: 'none',
       };
@@ -106,7 +120,7 @@ function describeFileType(filePath: string): {
     case '.class':
     case '.dex':
       return {
-        icon: '⚙️',
+        icon: Settings,
         label: `Compiled Binary / Firmware Artifact (${ext})`,
         previewKind: 'none',
       };
@@ -120,7 +134,7 @@ function describeFileType(filePath: string): {
     case '.bmp':
     case '.avif':
       return {
-        icon: '🖼️',
+        icon: ImageIcon,
         label: `Image Asset (${ext})`,
         previewKind: 'image',
       };
@@ -131,7 +145,7 @@ function describeFileType(filePath: string): {
     case '.m4a':
     case '.aac':
       return {
-        icon: '🔊',
+        icon: Volume2,
         label: `Audio Asset (${ext})`,
         previewKind: 'audio',
       };
@@ -139,13 +153,13 @@ function describeFileType(filePath: string): {
     case '.webm':
     case '.mov':
       return {
-        icon: '🎬',
+        icon: Clapperboard,
         label: `Video Asset (${ext})`,
         previewKind: 'video',
       };
     case '.pdf':
       return {
-        icon: '📕',
+        icon: Book,
         label: 'PDF Document (.pdf)',
         previewKind: 'none',
       };
@@ -153,7 +167,7 @@ function describeFileType(filePath: string): {
     case '.sqlite3':
     case '.db':
       return {
-        icon: '🗄️',
+        icon: Database,
         label: `Database File (${ext})`,
         previewKind: 'none',
       };
@@ -163,7 +177,7 @@ function describeFileType(filePath: string): {
     case '.otf':
     case '.eot':
       return {
-        icon: '🔤',
+        icon: Type,
         label: `Font Asset (${ext})`,
         previewKind: 'none',
       };
@@ -172,13 +186,13 @@ function describeFileType(filePath: string): {
     case '.p12':
     case '.pfx':
       return {
-        icon: '🔑',
+        icon: KeyRound,
         label: `Cryptographic Keystore (${ext})`,
         previewKind: 'none',
       };
     default:
       return {
-        icon: '📄',
+        icon: FileText,
         label: ext ? `Workspace File (${ext})` : 'Workspace File',
         previewKind: 'none',
       };
@@ -297,13 +311,17 @@ function StandaloneMonacoEditor({
   filePath: string;
   language: string;
   value: string;
-  theme: 'vs-dark' | 'vs';
+  theme: string;
   onChange: (next: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  // The editor is (re)created per file/language/theme with the value at that moment; later edits
+  // flow in through the effect below, so the creation effect reads the value from a ref.
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => {
     let cancelled = false;
@@ -312,7 +330,7 @@ function StandaloneMonacoEditor({
 
     void loadMonaco().then((monaco) => {
       if (cancelled || !containerRef.current) return;
-      model = monaco.editor.createModel(value, language);
+      model = monaco.editor.createModel(valueRef.current, language);
       const editor = monaco.editor.create(containerRef.current, {
         model,
         theme,
@@ -660,8 +678,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     });
   };
 
-  const isLightTheme =
-    typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
+  const themeMode = useThemeMode();
 
   const activeFileDescriptor = useMemo(
     () => (activeTab ? describeFileType(activeTab.path) : null),
@@ -692,7 +709,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <span className="badge badge-soft mono" style={{ fontWeight: 600 }}>
-            ◫ Code Explorer
+            <FileCode2 className="icon" aria-hidden /> Code Explorer
           </span>
           <strong>{project?.name ?? projectId}</strong>
           <span className="muted mono small">{fileList.data?.workspacePath ?? project?.path}</span>
@@ -722,14 +739,14 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           </select>
 
           <Link href={`/projects/${projectId}/board`} className="btn btn-sm btn-ghost">
-            ▤ Kanban Board
+            <SquareKanban className="icon" aria-hidden /> Kanban Board
           </Link>
           <a
             href={`/api/projects/${projectId}/export.tar.gz`}
             className="btn btn-sm btn-ghost"
             title="Download workspace as .tar.gz archive"
           >
-            📦 Download .tar.gz
+            <Package className="icon" aria-hidden /> Download .tar.gz
           </a>
         </div>
       </div>
@@ -813,7 +830,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 title="Upload files (or drag and drop onto the sidebar)"
                 onClick={() => setShowUploadBox((v) => !v)}
               >
-                ⬆ Upload
+                <Upload className="icon" aria-hidden /> Upload
               </button>
               <button
                 type="button"
@@ -829,8 +846,9 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 style={{ padding: '2px 6px', fontSize: '0.72rem' }}
                 onClick={() => void fileList.refresh()}
                 title="Refresh workspace files"
+                aria-label="Refresh workspace files"
               >
-                ↻
+                <RefreshCw className="icon" aria-hidden />
               </button>
             </div>
           </div>
@@ -865,7 +883,13 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                   disabled={uploading}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {uploading ? 'Uploading…' : '⬆ Choose File(s)…'}
+                  {uploading ? (
+                    'Uploading…'
+                  ) : (
+                    <>
+                      <Upload className="icon" aria-hidden /> Choose File(s)…
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -963,11 +987,19 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         : `${entry.path} (${formatBytes(entry.sizeBytes)})`
                     }
                   >
-                    {isDir
-                      ? isCollapsed
-                        ? '▸ 📁 '
-                        : '▾ 📂 '
-                      : `${fileDesc?.icon ?? '📄'} `}
+                    {isDir ? (
+                      isCollapsed ? (
+                        <>
+                          <ChevronRight className="icon" aria-hidden /> <Folder className="icon" aria-hidden />
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown className="icon" aria-hidden /> <FolderOpen className="icon" aria-hidden />
+                        </>
+                      )
+                    ) : (
+                      <FileTypeIcon icon={fileDesc?.icon ?? FileText} />
+                    )}{' '}
                     {entry.name}
                   </span>
                   {!isDir && (
@@ -1000,19 +1032,20 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         title={`Download ${entry.path} (${formatBytes(entry.sizeBytes)})`}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        ⬇
+                        <Download className="icon" aria-hidden />
                       </a>
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
                         style={{ padding: '0 4px', fontSize: '0.68rem', opacity: 0.6 }}
                         title={`Delete ${entry.path}`}
+                        aria-label={`Delete ${entry.path}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           void handleDeleteFile(entry.path);
                         }}
                       >
-                        ×
+                        <X className="icon" aria-hidden />
                       </button>
                     </span>
                   )}
@@ -1071,7 +1104,9 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                       border: active ? '1px solid var(--border-strong)' : '1px solid transparent',
                     }}
                   >
-                    <span>{desc.icon}</span>
+                    <span>
+                      <FileTypeIcon icon={desc.icon} />
+                    </span>
                     <span className="mono">{tab.path}</span>
                     {isDirty && (
                       <span
@@ -1092,8 +1127,9 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         padding: 0,
                         fontSize: '0.82rem',
                       }}
+                      aria-label={`Close ${tab.path}`}
                     >
-                      ×
+                      <X className="icon" aria-hidden />
                     </button>
                   </div>
                 );
@@ -1118,7 +1154,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                   style={{ textDecoration: 'none' }}
                   title={`Download ${activeTab.path}`}
                 >
-                  ⬇ Download
+                  <Download className="icon" aria-hidden /> Download
                 </a>
                 {!activeTab.binary && (
                   <button
@@ -1127,7 +1163,13 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                     disabled={saving || activeTab.content === activeTab.savedContent}
                     onClick={() => void saveActiveFile()}
                   >
-                    {saving ? 'Saving…' : '💾 Save (⌘S)'}
+                    {saving ? (
+                      'Saving…'
+                    ) : (
+                      <>
+                        <Save className="icon" aria-hidden /> Save (⌘S)
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -1167,7 +1209,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                     }}
                   >
                     <div style={{ fontSize: '2.6rem', lineHeight: 1 }}>
-                      {activeFileDescriptor?.icon ?? '📦'}
+                      <FileTypeIcon icon={activeFileDescriptor?.icon ?? Package} />
                     </div>
                     <div>
                       <h3 style={{ margin: '0 0 4px 0', fontSize: '1.05rem' }}>
@@ -1250,7 +1292,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', padding: '8px 16px' }}
                       >
-                        ⬇ Download {activeTab.path.split('/').pop()} (
+                        <Download className="icon" aria-hidden /> Download {activeTab.path.split('/').pop()} (
                         {formatBytes(activeTab.sizeBytes)})
                       </a>
                       <button
@@ -1258,7 +1300,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         className="btn btn-ghost"
                         onClick={() => void handleDeleteFile(activeTab.path)}
                       >
-                        🗑 Delete File
+                        <Trash2 className="icon" aria-hidden /> Delete File
                       </button>
                     </div>
                   </div>
@@ -1267,7 +1309,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 <StandaloneMonacoEditor
                   filePath={`${targetId}:${activeTab.path}`}
                   language={detectLanguage(activeTab.path)}
-                  theme={isLightTheme ? 'vs' : 'vs-dark'}
+                  theme={monacoTheme(themeMode)}
                   value={activeTab.content}
                   onChange={(nextVal: string) => {
                     setTabs((prev) =>
@@ -1309,7 +1351,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               }}
             >
               <span className="small mono" style={{ fontWeight: 600 }}>
-                ✨ Ask Agent on `{activeTab.path}`:
+                <Sparkles className="icon" aria-hidden /> Ask Agent on `{activeTab.path}`:
               </span>
               <select
                 className="input"
@@ -1335,7 +1377,13 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 className="btn btn-sm btn-primary"
                 disabled={dispatchingAgent || !agentPrompt.trim()}
               >
-                {dispatchingAgent ? 'Dispatching…' : '🚀 Dispatch to Agent'}
+                {dispatchingAgent ? (
+                  'Dispatching…'
+                ) : (
+                  <>
+                    <Rocket className="icon" aria-hidden /> Dispatch to Agent
+                  </>
+                )}
               </button>
             </form>
           )}

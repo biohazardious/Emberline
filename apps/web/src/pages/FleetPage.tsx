@@ -1,4 +1,5 @@
 import type { GarbageCollectRunsResponse, Project, Run } from '@emberline/protocol';
+import { Check, Circle, Eraser, Hourglass, Maximize2, Package, RotateCw, Square, Trash, TriangleAlert, X } from 'lucide-react';
 import { type FormEvent, lazy, Suspense, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -124,7 +125,7 @@ export function FleetPage({
         pruneWorktrees: true,
       });
       setNotice(
-        `🧹 Garbage collection complete: removed ${res.removedRuns} finished session${res.removedRuns === 1 ? '' : 's'}, closed ${res.closedSessions} lingering terminal${res.closedSessions === 1 ? '' : 's'}, and pruned ${res.prunedWorktrees} git worktree${res.prunedWorktrees === 1 ? '' : 's'}.`,
+        `Garbage collection complete: removed ${res.removedRuns} finished session${res.removedRuns === 1 ? '' : 's'}, closed ${res.closedSessions} lingering terminal${res.closedSessions === 1 ? '' : 's'}, and pruned ${res.prunedWorktrees} git worktree${res.prunedWorktrees === 1 ? '' : 's'}.`,
       );
       if (filter === 'completed' && res.removedRuns > 0 && keepRecent === 0) {
         setFilter('active');
@@ -144,7 +145,7 @@ export function FleetPage({
     setNotice(undefined);
     try {
       await Promise.allSettled(activeList.map((r) => api(`/api/runs/${r.id}/stop`, 'POST')));
-      setNotice(`⏹ Stopped ${activeList.length} active session${activeList.length === 1 ? '' : 's'}.`);
+      setNotice(`Stopped ${activeList.length} active session${activeList.length === 1 ? '' : 's'}.`);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -170,7 +171,13 @@ export function FleetPage({
               onClick={() => void handleStopAllActive()}
               title="Stop all currently running or queued sessions in this project"
             >
-              {stoppingAll ? 'Stopping…' : `⏹ Stop All Active (${counts.active})`}
+              {stoppingAll ? (
+                'Stopping…'
+              ) : (
+                <>
+                  <Square className="icon" aria-hidden /> Stop All Active ({counts.active})
+                </>
+              )}
             </button>
           )}
 
@@ -186,7 +193,15 @@ export function FleetPage({
               }}
               title="Purge all finished/failed sessions, dispose exited PTY terminals, and prune their temporary git worktrees"
             >
-              {gcBusy ? '🧹 Cleaning…' : `🧹 Clean Up Finished (${counts.completed})`}
+              {gcBusy ? (
+                <>
+                  <Eraser className="icon" aria-hidden /> Cleaning…
+                </>
+              ) : (
+                <>
+                  <Eraser className="icon" aria-hidden /> Clean Up Finished ({counts.completed})
+                </>
+              )}
             </button>
           )}
 
@@ -200,7 +215,7 @@ export function FleetPage({
               onClick={() => setFilter('active')}
               title="Only live running, waiting, or queued sessions"
             >
-              🟢 Live ({counts.active})
+              <Circle className="icon" aria-hidden fill="currentColor" style={{ color: 'var(--ok)' }} /> Live ({counts.active})
             </button>
             <button
               id="fleet-filter-attention"
@@ -210,7 +225,7 @@ export function FleetPage({
               className={filter === 'attention' ? 'active' : ''}
               onClick={() => setFilter('attention')}
             >
-              ⚠️ Attention ({counts.attention})
+              <TriangleAlert className="icon" aria-hidden /> Attention ({counts.attention})
             </button>
             <button
               id="fleet-filter-queued"
@@ -231,7 +246,7 @@ export function FleetPage({
               onClick={() => setFilter('completed')}
               title="Archived completed & failed runs"
             >
-              📦 History ({counts.completed})
+              <Package className="icon" aria-hidden /> History ({counts.completed})
             </button>
             <button
               id="fleet-filter-all"
@@ -329,9 +344,9 @@ export function FleetPage({
         <div
           className="banner"
           style={{
-            background: 'rgba(16, 185, 129, 0.12)',
-            border: '1px solid rgba(16, 185, 129, 0.4)',
-            color: '#6ee7b7',
+            background: 'color-mix(in srgb, var(--ok) 12%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--ok) 40%, transparent)',
+            color: 'var(--ok)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -339,8 +354,13 @@ export function FleetPage({
           }}
         >
           <span>{notice}</span>
-          <button type="button" className="btn btn-xs btn-ghost" onClick={() => setNotice(undefined)}>
-            ✕
+          <button
+            type="button"
+            className="btn btn-xs btn-ghost"
+            aria-label="Close"
+            onClick={() => setNotice(undefined)}
+          >
+            <X className="icon" aria-hidden />
           </button>
         </div>
       )}
@@ -369,7 +389,7 @@ export function FleetPage({
             {filter === 'active' && counts.completed > 0 && (
               <>
                 <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFilter('completed')}>
-                  📦 View History ({counts.completed})
+                  <Package className="icon" aria-hidden /> View History ({counts.completed})
                 </button>
                 <button
                   type="button"
@@ -377,7 +397,7 @@ export function FleetPage({
                   disabled={gcBusy}
                   onClick={() => void handleGarbageCollect(0)}
                 >
-                  🧹 Clean Up Finished ({counts.completed})
+                  <Eraser className="icon" aria-hidden /> Clean Up Finished ({counts.completed})
                 </button>
               </>
             )}
@@ -520,7 +540,7 @@ function FleetPane({
               onClick={() => setShowReopenBar((v) => !v)}
               title="Re-open this finished session with a follow-up prompt"
             >
-              ↻ Re-open
+              <RotateCw className="icon" aria-hidden /> Re-open
             </button>
           )}
           {live && (
@@ -541,12 +561,12 @@ function FleetPane({
               onClick={() => void act('remove', () => api(`/api/runs/${run.id}`, 'DELETE'))}
               title="Remove this finished session from history"
             >
-              🗑
+              <Trash className="icon" aria-hidden />
             </button>
           )}
           {live && run.terminalId && (
             <Link href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost" title="Full-screen terminal">
-              ↗
+              <Maximize2 className="icon" aria-hidden />
             </Link>
           )}
         </div>
@@ -567,23 +587,31 @@ function FleetPane({
                 style={{
                   borderColor:
                     run.state === 'done'
-                      ? 'rgba(16, 185, 129, 0.45)'
+                      ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
                       : run.state === 'failed'
-                        ? 'rgba(239, 68, 68, 0.45)'
+                        ? 'color-mix(in srgb, var(--bad) 45%, transparent)'
                         : 'var(--border)',
                   color:
                     run.state === 'done'
-                      ? '#6ee7b7'
+                      ? 'var(--ok)'
                       : run.state === 'failed'
-                        ? '#fca5a5'
+                        ? 'var(--bad)'
                         : 'var(--muted)',
                 }}
               >
-                {run.state === 'queued'
-                  ? '⏳ Queued in Scheduler'
-                  : run.state === 'done'
-                    ? '✓ Completed & Terminal Closed'
-                    : '✕ Session Ended / Failed'}
+                {run.state === 'queued' ? (
+                  <>
+                    <Hourglass className="icon" aria-hidden /> Queued in Scheduler
+                  </>
+                ) : run.state === 'done' ? (
+                  <>
+                    <Check className="icon" aria-hidden /> Completed & Terminal Closed
+                  </>
+                ) : (
+                  <>
+                    <X className="icon" aria-hidden /> Session Ended / Failed
+                  </>
+                )}
               </span>
               <span className="muted small mono">
                 Provider: <strong>{run.agent}</strong>
@@ -596,8 +624,18 @@ function FleetPane({
               {run.state === 'queued'
                 ? 'Waiting in scheduler queue for an execution slot…'
                 : run.state === 'done'
-                  ? 'Task finished and changes synced. Click Review to inspect git changes, ↻ Re-open to send a follow-up prompt, or 🗑 to remove.'
-                  : 'Session stopped or exited with an error. Click Timeline to inspect events or 🗑 to remove.'}
+                  ? (
+                    <>
+                      Task finished and changes synced. Click Review to inspect git changes,{' '}
+                      <RotateCw className="icon" aria-hidden /> Re-open to send a follow-up prompt, or{' '}
+                      <Trash className="icon" aria-hidden /> to remove.
+                    </>
+                  ) : (
+                    <>
+                      Session stopped or exited with an error. Click Timeline to inspect events or{' '}
+                      <Trash className="icon" aria-hidden /> to remove.
+                    </>
+                  )}
             </p>
             {run.prompt && (
               <p className="muted small mono" style={{ margin: 0, opacity: 0.8 }}>

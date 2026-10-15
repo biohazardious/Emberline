@@ -10,6 +10,7 @@ import type {
   TerminalInfo,
 } from '@emberline/protocol';
 import { API_VERSION } from '@emberline/protocol';
+import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -231,7 +232,7 @@ export function Dashboard({
               className={overviewTab === 'studio' ? 'active' : ''}
               onClick={() => setOverviewTab('studio')}
             >
-              🚀 Command Center
+              <Rocket className="icon" aria-hidden /> Command Center
             </button>
             <button
               id="overview-tab-roadmap"
@@ -241,7 +242,7 @@ export function Dashboard({
               className={overviewTab === 'roadmap' ? 'active' : ''}
               onClick={() => setOverviewTab('roadmap')}
             >
-              🎯 Roadmap &amp; Brainstorm
+              <Target className="icon" aria-hidden /> Roadmap &amp; Brainstorm
             </button>
             <button
               id="overview-tab-runs"
@@ -251,7 +252,7 @@ export function Dashboard({
               className={overviewTab === 'runs' ? 'active' : ''}
               onClick={() => setOverviewTab('runs')}
             >
-              🤖 Runs &amp; Terminals ({stats.working + stats.attention + stats.queuedOrPaused} active / {visibleRuns.length} total)
+              <Bot className="icon" aria-hidden /> Runs &amp; Terminals ({stats.working + stats.attention + stats.queuedOrPaused} active / {visibleRuns.length} total)
             </button>
             <button
               id="overview-tab-automation"
@@ -261,7 +262,7 @@ export function Dashboard({
               className={overviewTab === 'automation' ? 'active' : ''}
               onClick={() => setOverviewTab('automation')}
             >
-              ⏱ Automation &amp; Cron
+              <Timer className="icon" aria-hidden /> Automation &amp; Cron
             </button>
             <button
               id="overview-tab-system"
@@ -271,7 +272,7 @@ export function Dashboard({
               className={overviewTab === 'system' ? 'active' : ''}
               onClick={() => setOverviewTab('system')}
             >
-              📊 Quota &amp; Alerts
+              <ChartColumn className="icon" aria-hidden /> Quota &amp; Alerts
             </button>
           </div>
 
@@ -284,7 +285,7 @@ export function Dashboard({
                   onClick={() => setBlueprintFor(activeProject)}
                   title="Open PROJECT.md Blueprint"
                 >
-                  📄 PROJECT.md
+                  <FileText className="icon" aria-hidden /> PROJECT.md
                 </button>
                 <button
                   type="button"
@@ -428,7 +429,7 @@ export function Dashboard({
                           await api(`/api/projects/${p.id}/cleanup-worktrees`, 'POST');
                         }}
                       >
-                        🧹 Clean Worktrees
+                        <Eraser className="icon" aria-hidden /> Clean Worktrees
                       </button>
                       <button
                         type="button"
@@ -452,7 +453,7 @@ export function Dashboard({
                           onSelectProject?.(res.nextActiveProjectId);
                         }}
                       >
-                        🗑 Delete
+                        <Trash className="icon" aria-hidden /> Delete
                       </button>
                       <button
                         id={`start-run-${p.slug}`}
@@ -549,7 +550,7 @@ export function Dashboard({
                       title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
                       onClick={() => void removeTerminal(t.id)}
                     >
-                      ×
+                      <X className="icon" aria-hidden />
                     </button>
                   </li>
                 ))}
@@ -757,7 +758,7 @@ function RunRow({
         title="Remove run (the worktree and branch are kept)"
         onClick={onRemove}
       >
-        ×
+        <X className="icon" aria-hidden />
       </button>
     </li>
   );

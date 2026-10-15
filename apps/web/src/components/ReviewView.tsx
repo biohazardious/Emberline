@@ -1,4 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Coins,
+  Eraser,
+  Lightbulb,
+  LoaderCircle,
+  Lock,
+  Rocket,
+  Scale,
+  Shield,
+  TriangleAlert,
+  Wrench,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   CrossCriticResult,
@@ -537,7 +549,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     run.telemetry.isEstimated ? ' (estimated)' : ''
                   }`}
                 >
-                  🪙 {(run.telemetry.totalTokens / 1000).toFixed(1)}k tok · 🔧 {run.telemetry.toolCalls}
+                  <Coins className="icon" aria-hidden /> {(run.telemetry.totalTokens / 1000).toFixed(1)}k tok · <Wrench className="icon" aria-hidden />{' '}
+                  {run.telemetry.toolCalls}
                 </span>
               )}
 
@@ -551,19 +564,25 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       cursor: 'pointer',
                       borderColor:
                         slopAudit.secretGuardPassed !== false
-                          ? 'rgba(16, 185, 129, 0.45)'
-                          : 'rgba(239, 68, 68, 0.65)',
-                      color: slopAudit.secretGuardPassed !== false ? '#6ee7b7' : '#fca5a5',
+                          ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
+                          : 'color-mix(in srgb, var(--bad) 65%, transparent)',
+                      color: slopAudit.secretGuardPassed !== false ? 'var(--ok)' : 'var(--bad)',
                       background:
                         slopAudit.secretGuardPassed !== false
-                          ? 'rgba(16, 185, 129, 0.08)'
-                          : 'rgba(239, 68, 68, 0.18)',
+                          ? 'color-mix(in srgb, var(--ok) 8%, transparent)'
+                          : 'color-mix(in srgb, var(--bad) 18%, transparent)',
                     }}
                     title="Pre-Commit Secret & Credential Guard — scans for leaked API keys, tokens, private keys, and .env files"
                   >
-                    {slopAudit.secretGuardPassed !== false
-                      ? '🔒 Secrets: CLEAN'
-                      : `🚨 Secret Leak (${slopAudit.secretLeakCount})`}
+                    {slopAudit.secretGuardPassed !== false ? (
+                      <>
+                        <Lock className="icon" aria-hidden /> Secrets: CLEAN
+                      </>
+                    ) : (
+                      <>
+                        <TriangleAlert className="icon" aria-hidden /> Secret Leak ({slopAudit.secretLeakCount})
+                      </>
+                    )}
                   </button>
 
                   <button
@@ -573,16 +592,16 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     style={{
                       cursor: 'pointer',
                       borderColor: slopAudit.passed
-                        ? 'rgba(16, 185, 129, 0.45)'
-                        : 'rgba(239, 68, 68, 0.5)',
-                      color: slopAudit.passed ? '#6ee7b7' : '#fca5a5',
+                        ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
+                        : 'color-mix(in srgb, var(--bad) 50%, transparent)',
+                      color: slopAudit.passed ? 'var(--ok)' : 'var(--bad)',
                       background: slopAudit.passed
-                        ? 'rgba(16, 185, 129, 0.1)'
-                        : 'rgba(239, 68, 68, 0.12)',
+                        ? 'color-mix(in srgb, var(--ok) 10%, transparent)'
+                        : 'color-mix(in srgb, var(--bad) 12%, transparent)',
                     }}
                     title="Click to inspect Anti-AI-Slop & Code Hygiene Audit Scorecard"
                   >
-                    {slopAudit.passed ? '🛡️' : '⚠️'} Hygiene {slopAudit.grade} · {slopAudit.score}/100
+                    {slopAudit.passed ? <Shield className="icon" aria-hidden /> : <TriangleAlert className="icon" aria-hidden />} Hygiene {slopAudit.grade} · {slopAudit.score}/100
                     {slopAudit.issues.length > 0 ? ` (${slopAudit.issues.length})` : ''}
                   </button>
                 </>
@@ -600,17 +619,18 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             style={{
               borderColor: crossCritic
                 ? crossCritic.verdict === 'PASS'
-                  ? 'rgba(16, 185, 129, 0.4)'
-                  : 'rgba(245, 158, 11, 0.5)'
+                  ? 'color-mix(in srgb, var(--ok) 40%, transparent)'
+                  : 'color-mix(in srgb, var(--warn) 50%, transparent)'
                 : undefined,
             }}
             title="Have a rival AI provider audit this run's diff against the ticket specification and Anti-Slop rules"
           >
+            <Scale className="icon" aria-hidden />{' '}
             {runningCritic
-              ? '⚖️ Auditing…'
+              ? 'Auditing…'
               : crossCritic
-                ? `⚖️ ${crossCritic.reviewSource === 'rival' ? crossCritic.reviewerAgent.toUpperCase() : 'Audit'}: ${crossCritic.verdict}`
-                : '⚖️ Cross-Provider Critic'}
+                ? `${crossCritic.reviewSource === 'rival' ? crossCritic.reviewerAgent.toUpperCase() : 'Audit'}: ${crossCritic.verdict}`
+                : 'Cross-Provider Critic'}
           </button>
 
           {previewStatus?.status === 'running' ? (
@@ -735,7 +755,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <strong style={{ fontSize: '0.84rem' }}>
-                🛡️ Anti-AI-Slop &amp; Code Craftsmanship Audit
+                <Shield className="icon" aria-hidden /> Anti-AI-Slop &amp; Code Craftsmanship Audit
               </strong>
               {slopAudit && (
                 <span className="badge mono" style={{ fontSize: '0.7rem' }}>
@@ -749,12 +769,12 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     fontSize: '0.7rem',
                     borderColor:
                       crossCritic.verdict === 'PASS'
-                        ? 'rgba(16, 185, 129, 0.45)'
-                        : 'rgba(245, 158, 11, 0.45)',
-                    color: crossCritic.verdict === 'PASS' ? '#6ee7b7' : '#fcd34d',
+                        ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
+                        : 'color-mix(in srgb, var(--warn) 45%, transparent)',
+                    color: crossCritic.verdict === 'PASS' ? 'var(--ok)' : 'var(--warn)',
                   }}
                 >
-                  ⚖️{' '}
+                  <Scale className="icon" aria-hidden />{' '}
                   {crossCritic.reviewSource === 'rival'
                     ? `${crossCritic.authorAgent.toUpperCase()} → reviewed by ${crossCritic.reviewerAgent.toUpperCase()} (${crossCritic.reviewerModel})`
                     : 'Deterministic audit only (rival review did not run)'}
@@ -772,7 +792,15 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                   onClick={() => void handleAutoCleanSlop(slopAudit.autoFixPrompt)}
                   title="Send all detected slop/hygiene findings back to the agent to clean automatically"
                 >
-                  {cleaningSlop ? '⏳ Dispatching…' : `🧹 Auto-Clean Slop (${slopAudit.issues.length})`}
+                  {cleaningSlop ? (
+                    <>
+                      <LoaderCircle className="icon icon-spin" aria-hidden /> Dispatching…
+                    </>
+                  ) : (
+                    <>
+                      <Eraser className="icon" aria-hidden /> Auto-Clean Slop ({slopAudit.issues.length})
+                    </>
+                  )}
                 </button>
               )}
               <button
@@ -781,7 +809,15 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 disabled={runningCritic}
                 onClick={() => void handleRunCrossCritic(false)}
               >
-                {runningCritic ? '⏳ Running Critic…' : '⚖️ Re-Run Cross-Provider Critic'}
+                {runningCritic ? (
+                  <>
+                    <LoaderCircle className="icon icon-spin" aria-hidden /> Running Critic…
+                  </>
+                ) : (
+                  <>
+                    <Scale className="icon" aria-hidden /> Re-Run Cross-Provider Critic
+                  </>
+                )}
               </button>
               <button
                 type="button"
@@ -809,7 +845,9 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               }}
             >
               <div>
-                <strong>⚖️ Cross-Provider Critic Summary:</strong> {crossCritic.summary}
+                <strong>
+                  <Scale className="icon" aria-hidden /> Cross-Provider Critic Summary:
+                </strong> {crossCritic.summary}
               </div>
               {crossCritic.followUpPrompt && (
                 <button
@@ -818,14 +856,14 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                   disabled={cleaningSlop}
                   onClick={() => void handleAutoCleanSlop(crossCritic.followUpPrompt)}
                 >
-                  🚀 Send Critic Fixes to {formatAgentDisplayName(run.agent)}
+                  <Rocket className="icon" aria-hidden /> Send Critic Fixes to {formatAgentDisplayName(run.agent)}
                 </button>
               )}
             </div>
           )}
 
           {slopAudit && slopAudit.issues.length === 0 ? (
-            <div className="muted small" style={{ color: '#6ee7b7' }}>
+            <div className="muted small" style={{ color: 'var(--ok)' }}>
               ✓ Clean diff: zero <code>any</code> evasions, zero unfinished <code>TODO</code>/<code>FIXME</code> stubs, zero skipped tests, and zero vibe-coding clichés detected.
             </div>
           ) : (
@@ -838,11 +876,11 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     style={{
                       padding: '6px 9px',
                       borderRadius: '6px',
-                      background: 'rgba(0,0,0,0.2)',
+                      background: 'var(--surface-2)',
                       border:
                         iss.severity === 'error'
-                          ? '1px solid rgba(239, 68, 68, 0.35)'
-                          : '1px solid rgba(245, 158, 11, 0.3)',
+                          ? '1px solid color-mix(in srgb, var(--bad) 35%, transparent)'
+                          : '1px solid color-mix(in srgb, var(--warn) 30%, transparent)',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '2px',
@@ -853,7 +891,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                       <span className="mono" style={{ fontWeight: 600 }}>
-                        <span style={{ color: iss.severity === 'error' ? '#fca5a5' : '#fcd34d' }}>
+                        <span style={{ color: iss.severity === 'error' ? 'var(--bad)' : 'var(--warn)' }}>
                           [{iss.severity.toUpperCase()} · {iss.category}]
                         </span>{' '}
                         {iss.file}:{iss.line} — {iss.message}
@@ -863,7 +901,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       </code>
                     </div>
                     <div className="muted small" style={{ fontSize: '0.71rem' }}>
-                      💡 Fix: {iss.fixHint}
+                      <Lightbulb className="icon" aria-hidden /> Fix: {iss.fixHint}
                     </div>
                   </div>
                 ))}

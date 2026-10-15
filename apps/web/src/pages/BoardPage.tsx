@@ -1,4 +1,5 @@
 import type { AgentPersona, PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
+import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -154,7 +155,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
                 onClick={() => setDemoPanelOpen((v) => !v)}
                 title="View Project Status, Sync Worktrees & Play Live Demo"
               >
-                ▶ Live Demo & Status
+                <Play className="icon" aria-hidden /> Live Demo & Status
               </button>
               <button
                 type="button"
@@ -174,7 +175,13 @@ export function BoardPage({ projectId }: { projectId: string }) {
               onClick={() => void seedTickets()}
               title="Seed 4 starter tickets across PO, Architect, Coder, and QA personas"
             >
-              {seeding ? 'Seeding…' : '✨ Seed Starter Backlog'}
+              {seeding ? (
+                'Seeding…'
+              ) : (
+                <>
+                  <Sparkles className="icon" aria-hidden /> Seed Starter Backlog
+                </>
+              )}
             </button>
           )}
           <button
@@ -408,8 +415,16 @@ function TicketCard({
                 style={{ fontVariantNumeric: 'tabular-nums' }}
                 title={`Input: ${run.telemetry.inputTokens.toLocaleString()} tok · Output: ${run.telemetry.outputTokens.toLocaleString()} tok · Tools: ${run.telemetry.toolCalls}`}
               >
-                🪙 {(run.telemetry.totalTokens / 1000).toFixed(1)}k
-                {run.telemetry.toolCalls > 0 ? ` · 🔧${run.telemetry.toolCalls}` : ''}
+                <Coins className="icon" aria-hidden /> {(run.telemetry.totalTokens / 1000).toFixed(1)}k
+                {run.telemetry.toolCalls > 0 ? (
+                  <>
+                    {' · '}
+                    <Wrench className="icon" aria-hidden />
+                    {run.telemetry.toolCalls}
+                  </>
+                ) : (
+                  ''
+                )}
               </span>
             )}
             {run.lastEvent && <span className="card-event mono">{run.lastEvent}</span>}
@@ -571,7 +586,7 @@ function TicketDrawer({
             </div>
           )}
           <button id="drawer-close" className="icon-btn" aria-label="Close" onClick={onClose}>
-            ×
+            <X className="icon" aria-hidden />
           </button>
         </header>
 

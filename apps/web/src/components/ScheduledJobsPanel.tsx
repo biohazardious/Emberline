@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import type { CronOverlapPolicy, CronPreviewResponse, PermissionMode, Project, Run, ScheduledJob } from '@emberline/protocol';
+import { X } from 'lucide-react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 
@@ -357,7 +358,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
                   disabled={busyId === job.id}
                   onClick={() => void handleDelete(job)}
                 >
-                  ×
+                  <X className="icon" aria-hidden />
                 </button>
               </div>
             </li>

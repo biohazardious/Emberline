@@ -4,6 +4,21 @@ import type {
   ProjectTechStack,
 } from '@emberline/protocol';
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Bot,
+  Building,
+  ChevronDown,
+  Gamepad2,
+  Globe,
+  Laptop,
+  type LucideIcon,
+  Package,
+  Plug,
+  Puzzle,
+  Wrench,
+  X,
+  Zap,
+} from 'lucide-react';
 import { api, errorMessage } from '../api';
 
 interface StackPreset {
@@ -32,7 +47,7 @@ interface LayerLabels {
 
 interface AppTypeProfile {
   id: ProjectAppType;
-  icon: string;
+  icon: LucideIcon;
   label: string;
   desc: string;
   layerLabels: LayerLabels;
@@ -76,7 +91,7 @@ const STANDARD_LAYER_LABELS: LayerLabels = {
 const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
   fullstack: {
     id: 'fullstack',
-    icon: '🏢',
+    icon: Building,
     label: 'Full-Stack Multi-Layer Platform',
     desc: 'Frontend + Backend API + Database monorepo (Portals, ERP/CRM, Workflow systems)',
     layerLabels: STANDARD_LAYER_LABELS,
@@ -209,7 +224,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   web_saas: {
     id: 'web_saas',
-    icon: '🌐',
+    icon: Globe,
     label: 'Web SaaS / Portal / Form App',
     desc: 'Dashboards, multi-step operational forms, incident tracking & client web apps',
     layerLabels: STANDARD_LAYER_LABELS,
@@ -298,7 +313,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   api_service: {
     id: 'api_service',
-    icon: '⚡',
+    icon: Zap,
     label: 'Backend API / Microservice',
     desc: 'REST/GraphQL/gRPC service, background workers, or distributed data pipeline',
     layerLabels: {
@@ -406,7 +421,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   ai_agents: {
     id: 'ai_agents',
-    icon: '🤖',
+    icon: Bot,
     label: 'Multi-Agent AI / Orchestrator',
     desc: 'Autonomous agent pipelines, MCP servers/tools, LLM routers & RAG systems',
     layerLabels: {
@@ -489,7 +504,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   mobile_desktop: {
     id: 'mobile_desktop',
-    icon: '💻',
+    icon: Laptop,
     label: 'Desktop / Mobile Application',
     desc: 'Tauri, Electron, Native GUI, Display/Overlay apps, Android APK, Flutter or React Native',
     layerLabels: {
@@ -619,7 +634,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   cli_tool: {
     id: 'cli_tool',
-    icon: '🛠️',
+    icon: Wrench,
     label: 'CLI / System & Infra Automation',
     desc: 'Linux/OS system utilities, driver & package updaters, DevOps & shell/Python/Go/Rust CLI tools',
     layerLabels: {
@@ -723,7 +738,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   embedded_iot: {
     id: 'embedded_iot',
-    icon: '🔌',
+    icon: Plug,
     label: 'Embedded / IoT / Hardware Firmware',
     desc: 'ESP32, PlatformIO, Arduino, STM32, C/C++ firmware & I2C/SPI/UART chip tools',
     layerLabels: {
@@ -818,7 +833,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   library: {
     id: 'library',
-    icon: '📦',
+    icon: Package,
     label: 'SDK / Package Library',
     desc: 'Reusable package, protocol SDK, or shared component library',
     layerLabels: {
@@ -881,7 +896,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   game_interactive: {
     id: 'game_interactive',
-    icon: '🎮',
+    icon: Gamepad2,
     label: 'Interactive Canvas / Simulation / Game',
     desc: '2D/3D WebGL, Canvas, Phaser/Three.js, physics simulation or mobile/web game',
     layerLabels: {
@@ -932,7 +947,7 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
 
   custom: {
     id: 'custom',
-    icon: '🧩',
+    icon: Puzzle,
     label: 'Custom Multi-Layer Project',
     desc: 'Tailored polyglot architecture and custom engineering workflow',
     layerLabels: STANDARD_LAYER_LABELS,
@@ -1055,9 +1070,10 @@ function TechStackComboField({
               className="btn btn-ghost btn-sm"
               style={{ padding: '2px 5px', fontSize: '0.72rem', opacity: 0.7 }}
               title="Clear field"
+              aria-label="Clear field"
               onClick={() => onChange('')}
             >
-              ×
+              <X className="icon" aria-hidden />
             </button>
           )}
           <button
@@ -1067,7 +1083,7 @@ function TechStackComboField({
             title="Toggle suggested options"
             onClick={() => setOpen((v) => !v)}
           >
-            ▾
+            <ChevronDown className="icon" aria-hidden />
           </button>
         </div>
       </div>
@@ -1084,7 +1100,7 @@ function TechStackComboField({
             maxHeight: '210px',
             overflowY: 'auto',
             padding: '4px',
-            background: 'var(--surface, #16181d)',
+            background: 'var(--surface)',
             border: '1px solid var(--border-strong)',
             boxShadow: '0 10px 28px rgba(0, 0, 0, 0.45)',
             display: 'flex',
@@ -1369,7 +1385,7 @@ export function ProjectWizardModal({
             </button>
           </div>
           <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
-            ×
+            <X className="icon" aria-hidden />
           </button>
         </header>
 
@@ -1486,7 +1502,7 @@ export function ProjectWizardModal({
                   className={step === 2 ? 'active' : ''}
                   onClick={() => setStep(2)}
                 >
-                  2. Tech Stack ({activeProfile.icon})
+                  2. Tech Stack (<activeProfile.icon className="icon" aria-hidden />)
                 </button>
                 <button
                   type="button"
@@ -1567,7 +1583,7 @@ export function ProjectWizardModal({
                               fontSize: '0.85rem',
                             }}
                           >
-                            <span>{t.icon}</span>
+                            <t.icon className="icon" aria-hidden />
                             <span>{t.label}</span>
                           </strong>
                           <span
@@ -1612,7 +1628,7 @@ export function ProjectWizardModal({
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '1.1rem' }}>{activeProfile.icon}</span>
+                      <activeProfile.icon className="icon" style={{ fontSize: '1.1rem' }} aria-hidden />
                       <div>
                         <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>
                           Tailored Stack for: {activeProfile.label}
@@ -1865,7 +1881,7 @@ export function ProjectWizardModal({
                       overflow: 'auto',
                       padding: '12px',
                       borderRadius: '8px',
-                      background: 'var(--bg-elevated, rgba(0,0,0,0.25))',
+                      background: 'var(--bg-elevated)',
                       border: '1px solid var(--border)',
                       fontSize: '0.78rem',
                       whiteSpace: 'pre-wrap',

@@ -1,3 +1,4 @@
+import { GitBranch } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import type { Run, RunDetail } from '@emberline/protocol';
@@ -60,7 +61,11 @@ export function ReviewPage({
           <strong style={{ fontSize: '0.88rem' }}>
             {run.title ?? run.prompt.slice(0, 72)}
           </strong>
-          {run.branch && <span className="badge badge-soft mono">⎇ {run.branch}</span>}
+          {run.branch && (
+            <span className="badge badge-soft mono">
+              <GitBranch className="icon" aria-hidden /> {run.branch}
+            </span>
+          )}
           {run.worktreePath && (
             <span className="mono muted small">{run.worktreePath}</span>
           )}

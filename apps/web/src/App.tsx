@@ -8,6 +8,24 @@ import {
   type Run,
   type SystemStatus,
 } from '@emberline/protocol';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  ChevronsLeft,
+  ChevronsRight,
+  Eraser,
+  FileCode,
+  Globe,
+  LayoutDashboard,
+  LayoutGrid,
+  Menu,
+  Moon,
+  Search,
+  Settings,
+  SquareKanban,
+  Sun,
+  Target,
+  Trash,
+} from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api, errorMessage } from './api';
@@ -102,6 +120,7 @@ function Shell() {
     }
   }, []);
 
+  const queryClient = useQueryClient();
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
       const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -112,30 +131,39 @@ function Shell() {
     return 'dark';
   });
 
+  /** The theme last seen on the server; a change there (another device) is adopted, a local toggle is not undone. */
+  const serverTheme = useRef<'dark' | 'light' | undefined>(undefined);
+
   const applyTheme = useCallback((next: 'dark' | 'light') => {
     setTheme(next);
+    serverTheme.current = next;
     document.documentElement.dataset.theme = next;
     try {
       localStorage.setItem(THEME_STORAGE_KEY, next);
     } catch {
       // ignore storage errors
     }
-    void api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next }).catch((e: unknown) =>
-      toastError(`Could not save the theme: ${errorMessage(e)}`),
-    );
-  }, []);
+    api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next })
+      .then((saved) => queryClient.setQueryData(['api', '/api/factory/settings'], saved))
+      .catch((e: unknown) => toastError(`Could not save the theme: ${errorMessage(e)}`));
+  }, [queryClient]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
   useEffect(() => {
-    const res = factorySettings.data;
-    if (res && (res.theme === 'light' || res.theme === 'dark') && res.theme !== theme) {
-      setTheme(res.theme);
-      document.documentElement.dataset.theme = res.theme;
+    const remote = factorySettings.data?.theme;
+    if (remote !== 'light' && remote !== 'dark') return;
+    if (remote === serverTheme.current) return;
+    serverTheme.current = remote;
+    setTheme(remote);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, remote);
+    } catch {
+      // ignore storage errors
     }
-  }, [factorySettings.data, theme]);
+  }, [factorySettings.data]);
 
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
     try {
@@ -316,7 +344,7 @@ function Shell() {
             title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             onClick={() => setSidebarCollapsed((c) => !c)}
           >
-            {sidebarCollapsed ? '»' : '«'}
+            {sidebarCollapsed ? <ChevronsRight className="icon" aria-hidden /> : <ChevronsLeft className="icon" aria-hidden />}
           </button>
         </div>
 
@@ -341,7 +369,7 @@ function Shell() {
                       onClick={() => void handleCleanupProjectWorktrees()}
                       title={`Prune finished git worktrees for ${activeProject.name}`}
                     >
-                      🧹
+                      <Eraser className="icon" aria-hidden />
                     </button>
                     <button
                       id="sidebar-delete-project"
@@ -351,7 +379,7 @@ function Shell() {
                       onClick={() => void handleDeleteActiveProject()}
                       title={`Delete project ${activeProject.name} and its workspace files`}
                     >
-                      🗑
+                      <Trash className="icon" aria-hidden />
                     </button>
                   </>
                 )}
@@ -393,14 +421,18 @@ function Shell() {
           onClick={() => setCmdOpen(true)}
           title="Open command palette (⌘K / Ctrl+K)"
         >
-          <span className="cmd-trigger-icon mono" aria-hidden="true">⌕</span>
+          <span className="cmd-trigger-icon mono" aria-hidden="true">
+            <Search className="icon" aria-hidden />
+          </span>
           <span className="cmd-trigger-text">Search or jump…</span>
           <kbd className="kbd">⌘K</kbd>
         </button>
 
         <nav className="sidebar-nav" aria-label="Main views">
           <Link href="/" className={`nav-item${location === '/' ? ' active' : ''}`} title="Factory Overview">
-            <span className="nav-icon mono">◈</span>
+            <span className="nav-icon mono">
+              <LayoutDashboard className="icon" aria-hidden />
+            </span>
             <span className="nav-label">Factory Overview</span>
           </Link>
           {activeProject && (
@@ -409,7 +441,9 @@ function Shell() {
               className={`nav-item${location === `/projects/${activeProject.id}/roadmap` ? ' active' : ''}`}
               title="Roadmap & AI Brainstorming Studio"
             >
-              <span className="nav-icon mono">🎯</span>
+              <span className="nav-icon mono">
+                <Target className="icon" aria-hidden />
+              </span>
               <span className="nav-label">Roadmap & Brainstorm</span>
             </Link>
           )}
@@ -419,7 +453,9 @@ function Shell() {
               className={`nav-item${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
               title="Kanban Board"
             >
-              <span className="nav-icon mono">▤</span>
+              <span className="nav-icon mono">
+                <SquareKanban className="icon" aria-hidden />
+              </span>
               <span className="nav-label">Kanban Board</span>
             </Link>
           )}
@@ -429,7 +465,9 @@ function Shell() {
               className={`nav-item${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
               title="Code Explorer"
             >
-              <span className="nav-icon mono">◫</span>
+              <span className="nav-icon mono">
+                <FileCode className="icon" aria-hidden />
+              </span>
               <span className="nav-label">Code Explorer</span>
             </Link>
           )}
@@ -439,7 +477,9 @@ function Shell() {
               className={`nav-item${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
               title="Live Browser Studio"
             >
-              <span className="nav-icon mono">🌐</span>
+              <span className="nav-icon mono">
+                <Globe className="icon" aria-hidden />
+              </span>
               <span className="nav-label">Live Browser</span>
             </Link>
           )}
@@ -449,7 +489,9 @@ function Shell() {
             className={`nav-item${location === '/fleet' ? ' active' : ''}`}
             title="Fleet Multiplexer"
           >
-            <span className="nav-icon mono">⊞</span>
+            <span className="nav-icon mono">
+              <LayoutGrid className="icon" aria-hidden />
+            </span>
             <span className="nav-label">Fleet Multiplexer</span>
             {activeRuns.length > 0 && (
               <span className={`nav-badge mono${waitingRuns.length > 0 ? ' nav-badge-warn' : ''}`}>
@@ -463,7 +505,9 @@ function Shell() {
             className={`nav-item${location === '/settings' ? ' active' : ''}`}
             title="Factory Settings"
           >
-            <span className="nav-icon mono">⚙</span>
+            <span className="nav-icon mono">
+              <Settings className="icon" aria-hidden />
+            </span>
             <span className="nav-label">Factory Settings</span>
           </Link>
         </nav>
@@ -610,7 +654,7 @@ function Shell() {
                               border: selected
                                 ? '1px solid var(--accent)'
                                 : '1px solid transparent',
-                              background: selected ? 'rgba(99, 102, 241, 0.16)' : 'transparent',
+                              background: selected ? 'color-mix(in srgb, var(--info) 16%, transparent)' : 'transparent',
                               color: selected ? 'var(--text)' : 'var(--text-muted)',
                               cursor: 'pointer',
                               display: 'flex',
@@ -693,7 +737,7 @@ function Shell() {
               aria-label="Toggle navigation"
               onClick={() => setMobileNavOpen((v) => !v)}
             >
-              ☰
+              <Menu className="icon" aria-hidden />
             </button>
             <div className="topbar-tabs">
               <Link href="/" className={`topbar-tab${location === '/' ? ' active' : ''}`}>
@@ -704,7 +748,7 @@ function Shell() {
                   href={`/projects/${activeProject.id}/roadmap`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/roadmap` ? ' active' : ''}`}
                 >
-                  🎯 Roadmap
+                  <Target className="icon" aria-hidden /> Roadmap
                 </Link>
               )}
               {activeProject && (
@@ -728,7 +772,7 @@ function Shell() {
                   href={`/projects/${activeProject.id}/browser`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
                 >
-                  🌐 Live Browser
+                  <Globe className="icon" aria-hidden /> Live Browser
                 </Link>
               )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
@@ -736,7 +780,7 @@ function Shell() {
                 {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
               </Link>
               <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`}>
-                ⚙ Settings
+                <Settings className="icon" aria-hidden /> Settings
               </Link>
             </div>
           </div>
@@ -757,7 +801,15 @@ function Shell() {
               onClick={() => applyTheme(theme === 'dark' ? 'light' : 'dark')}
               title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
             >
-              {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="icon" aria-hidden /> Light
+                </>
+              ) : (
+                <>
+                  <Moon className="icon" aria-hidden /> Dark
+                </>
+              )}
             </button>
             {waitingRuns[0] && (
               <button

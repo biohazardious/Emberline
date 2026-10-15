@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { Check, X } from 'lucide-react';
+import { useThemeMode } from '../hooks/useThemeMode';
+import { loadMonaco, monacoTheme } from '../monaco';
 import type * as Monaco from 'monaco-editor';
 
 export interface DiffAnnotation {
@@ -22,30 +25,6 @@ interface Props {
   onRemoveAnnotation: (id: string) => void;
 }
 
-let monacoPromise: Promise<typeof Monaco> | null = null;
-let themeDefined = false;
-
-function loadMonaco(): Promise<typeof Monaco> {
-  if (!monacoPromise) {
-    // Configure a lightweight no-op worker fallback so Monaco diff calculation
-    // works reliably without complex worker bundling in Vite.
-    const globalScope = globalThis as unknown as {
-      MonacoEnvironment?: { getWorker: () => Worker };
-    };
-    if (!globalScope.MonacoEnvironment) {
-      globalScope.MonacoEnvironment = {
-        getWorker: () => {
-          const blob = new Blob(['self.onmessage = function() {};'], {
-            type: 'application/javascript',
-          });
-          return new Worker(URL.createObjectURL(blob));
-        },
-      };
-    }
-    monacoPromise = import('monaco-editor');
-  }
-  return monacoPromise;
-}
 
 export function MonacoDiff({
   filePath,
@@ -70,6 +49,14 @@ export function MonacoDiff({
     side: 'modified' | 'original';
   } | null>(null);
   const [draftComment, setDraftComment] = useState('');
+  const themeMode = useThemeMode();
+  const themeRef = useRef(themeMode);
+  themeRef.current = themeMode;
+
+  // Monaco themes are global: switching applies to every open editor.
+  useEffect(() => {
+    if (ready) void loadMonaco().then((monaco) => monaco.editor.setTheme(monacoTheme(themeMode)));
+  }, [themeMode, ready]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,28 +65,9 @@ export function MonacoDiff({
       .then((monaco) => {
         if (cancelled || !containerRef.current) return;
 
-        if (!themeDefined) {
-          monaco.editor.defineTheme('emberline-dark', {
-            base: 'vs-dark',
-            inherit: true,
-            rules: [],
-            colors: {
-              'editor.background': '#090a0d',
-              'editor.lineHighlightBackground': '#111319',
-              'editorGutter.background': '#090a0d',
-              'diffEditor.insertedTextBackground': '#22c55e18',
-              'diffEditor.removedTextBackground': '#ef444418',
-              'diffEditor.insertedLineBackground': '#22c55e12',
-              'diffEditor.removedLineBackground': '#ef444412',
-              'editorLineNumber.foreground': '#555b6e',
-              'editorLineNumber.activeForeground': '#ff6b2b',
-            },
-          });
-          themeDefined = true;
-        }
 
         const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
-          theme: 'emberline-dark',
+          theme: monacoTheme(themeRef.current),
           readOnly: true,
           originalEditable: false,
           renderSideBySide,
@@ -265,8 +233,9 @@ export function MonacoDiff({
                 className="icon-btn"
                 onClick={() => onRemoveAnnotation(a.id)}
                 title={a.status === 'sent' ? 'Mark resolved' : 'Delete comment'}
+                aria-label={a.status === 'sent' ? 'Mark resolved' : 'Delete comment'}
               >
-                {a.status === 'sent' ? '✓' : '×'}
+                {a.status === 'sent' ? <Check className="icon" aria-hidden /> : <X className="icon" aria-hidden />}
               </button>
             </div>
           ))}

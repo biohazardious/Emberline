@@ -117,7 +117,7 @@ export function CommandPalette({
         group: 'Project Code Explorer',
         label: `Code Explorer · ${p.name}`,
         meta: p.path,
-        badge: '◫',
+        badge: 'code',
         run: () => navigate(`/projects/${p.id}/code`),
       });
     }

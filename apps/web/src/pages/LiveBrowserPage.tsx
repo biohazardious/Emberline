@@ -1,4 +1,5 @@
 import type { Project, ProjectStatusSummary } from '@emberline/protocol';
+import { Globe } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { LiveBrowserStudio } from '../components/LiveBrowserStudio';
@@ -25,7 +26,9 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
       <header className="page-header">
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <h1>🌐 Live Browser Studio · {project.name}</h1>
+            <h1>
+              <Globe className="icon" aria-hidden /> Live Browser Studio · {project.name}
+            </h1>
             <span className="badge badge-soft mono">Shared Runner Chromium + Playwright MCP</span>
           </div>
           <p className="sub">

@@ -1,4 +1,5 @@
 import type { Run, RunDetail, RunEvent } from '@emberline/protocol';
+import { Globe, KeyRound, Maximize2, TriangleAlert, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -170,8 +171,8 @@ export function RunFailureBanner({ run }: { run: Run }) {
       className="run-failure-banner"
       role="alert"
       style={{
-        background: 'rgba(239, 68, 68, 0.1)',
-        border: '1px solid rgba(239, 68, 68, 0.35)',
+        background: 'color-mix(in srgb, var(--bad) 10%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--bad) 35%, transparent)',
         borderRadius: '8px',
         padding: '10px 12px',
         marginBottom: '10px',
@@ -181,13 +182,13 @@ export function RunFailureBanner({ run }: { run: Run }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-        <strong style={{ color: '#f87171', fontSize: '0.85rem' }}>
-          ⚠ {formatAgentDisplayName(run.agent)} Run Failed
+        <strong style={{ color: 'var(--bad)', fontSize: '0.85rem' }}>
+          <TriangleAlert className="icon" aria-hidden /> {formatAgentDisplayName(run.agent)} Run Failed
           {exitCode !== undefined ? ` (exit code ${exitCode})` : ''}
         </strong>
         {needsAuth && (
           <Link href="/settings" className="btn btn-sm btn-primary" style={{ textDecoration: 'none' }}>
-            🔑 Configure Auth & Keys →
+            <KeyRound className="icon" aria-hidden /> Configure Auth & Keys →
           </Link>
         )}
       </div>
@@ -198,8 +199,8 @@ export function RunFailureBanner({ run }: { run: Run }) {
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
           fontSize: '0.78rem',
-          color: '#fca5a5',
-          background: 'rgba(0, 0, 0, 0.25)',
+          color: 'var(--bad)',
+          background: 'var(--surface-2)',
           padding: '6px 8px',
           borderRadius: '6px',
           maxHeight: '120px',
@@ -353,7 +354,7 @@ export function RunInspector({
             className="btn btn-sm btn-ghost"
             title="Watch shared Live Browser Studio"
           >
-            🌐 Live Browser
+            <Globe className="icon" aria-hidden /> Live Browser
           </Link>
           {run.worktreePath && (
             <Link href={`/runs/${run.id}/review`} className="btn btn-sm btn-ghost" title="Open Diff & Review workspace">
@@ -362,11 +363,11 @@ export function RunInspector({
           )}
           {run.terminalId && (
             <Link href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost" title="Open full-page terminal">
-              ↗
+              <Maximize2 className="icon" aria-hidden />
             </Link>
           )}
           <button type="button" className="icon-btn" aria-label="Close inspector" onClick={onClose}>
-            ×
+            <X className="icon" aria-hidden />
           </button>
         </div>
       </header>

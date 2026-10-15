@@ -7,7 +7,8 @@ import {
   PROVIDER_REGISTRY,
   type SchedulerState,
 } from '@emberline/protocol';
-import { useEffect, useMemo, useState } from 'react';
+import { Calendar, ChartColumn, Clock, CreditCard, RotateCw, Timer, Zap } from 'lucide-react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
 import { useRuns, useScheduler } from '../hooks/liveData';
@@ -71,7 +72,15 @@ const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-d
 const dateTimeShort = (iso: string) =>
   new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-function TokenBucketCard({ label, sublabel, bucket }: { label: string; sublabel: string; bucket: ClaudeTokenBucket }) {
+function TokenBucketCard({
+  label,
+  sublabel,
+  bucket,
+}: {
+  label: ReactNode;
+  sublabel: string;
+  bucket: ClaudeTokenBucket;
+}) {
   return (
     <div
       style={{
@@ -280,7 +289,7 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               className="badge mono"
               style={{
                 color: usage.authenticated ? 'var(--ok)' : 'var(--warn)',
-                borderColor: usage.authenticated ? 'rgba(63, 185, 80, 0.35)' : 'var(--warn)',
+                borderColor: usage.authenticated ? 'color-mix(in srgb, var(--ok) 35%, transparent)' : 'var(--warn)',
               }}
             >
               ● {formatClaudePlanLabel(usage)} · OAuth {usage.authenticated ? 'ACTIVE' : 'INACTIVE'}
@@ -294,7 +303,13 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
             onClick={() => void handleRefreshUsage()}
             title="Fetch live rate limits from Anthropic OAuth & recalculate token buckets"
           >
-            {refreshingUsage ? 'Refreshing…' : '↻ Refresh Usage'}
+            {refreshingUsage ? (
+              'Refreshing…'
+            ) : (
+              <>
+                <RotateCw className="icon" aria-hidden /> Refresh Usage
+              </>
+            )}
           </button>
           {window && (
             <span className="quota-stat" title="Runs waiting for the reset">
@@ -356,7 +371,9 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>⏱ 5-Hour Session Limit (Hourly / Rolling)</span>
+                <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                  <Timer className="icon" aria-hidden /> 5-Hour Session Limit (Hourly / Rolling)
+                </span>
                 <strong className="mono" style={{ fontSize: '1.05rem', color: barColor(fivePct) }}>
                   {usage.fiveHour ? `${fivePct}%` : '—'}
                 </strong>
@@ -402,7 +419,9 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>📅 7-Day Weekly Limit</span>
+                <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                  <Calendar className="icon" aria-hidden /> 7-Day Weekly Limit
+                </span>
                 <strong className="mono" style={{ fontSize: '1.05rem', color: barColor(sevenPct) }}>
                   {usage.sevenDay ? `${sevenPct}%` : '—'}
                 </strong>
@@ -449,7 +468,9 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>💳 Extra Usage Credits</span>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                    <CreditCard className="icon" aria-hidden /> Extra Usage Credits
+                  </span>
                   <strong className="mono" style={{ fontSize: '0.95rem' }}>
                     ${usage.extraUsage.usedUsd.toFixed(2)}
                     {usage.extraUsage.limitUsd > 0 ? ` / $${usage.extraUsage.limitUsd.toFixed(2)}` : ''}
@@ -495,9 +516,33 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               gap: 10,
             }}
           >
-            <TokenBucketCard label="⚡ Hourly Token Usage" sublabel="Last 1h" bucket={usage.hourlyTokens} />
-            <TokenBucketCard label="🕒 Daily Token Usage" sublabel="Last 24h" bucket={usage.dailyTokens} />
-            <TokenBucketCard label="📊 Weekly Token Usage" sublabel="Last 7d" bucket={usage.weeklyTokens} />
+            <TokenBucketCard
+              label={
+                <>
+                  <Zap className="icon" aria-hidden /> Hourly Token Usage
+                </>
+              }
+              sublabel="Last 1h"
+              bucket={usage.hourlyTokens}
+            />
+            <TokenBucketCard
+              label={
+                <>
+                  <Clock className="icon" aria-hidden /> Daily Token Usage
+                </>
+              }
+              sublabel="Last 24h"
+              bucket={usage.dailyTokens}
+            />
+            <TokenBucketCard
+              label={
+                <>
+                  <ChartColumn className="icon" aria-hidden /> Weekly Token Usage
+                </>
+              }
+              sublabel="Last 7d"
+              bucket={usage.weeklyTokens}
+            />
           </div>
         </>
       )}
@@ -533,7 +578,7 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
                   style={{
                     fontSize: '0.68rem',
                     color: p.authenticated ? 'var(--ok)' : 'var(--warn)',
-                    borderColor: p.authenticated ? 'rgba(63, 185, 80, 0.35)' : 'var(--warn)',
+                    borderColor: p.authenticated ? 'color-mix(in srgb, var(--ok) 35%, transparent)' : 'var(--warn)',
                   }}
                 >
                   ● {p.authenticated ? 'READY' : 'UNCONFIGURED'}

@@ -10,6 +10,31 @@ import type {
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
 import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeftRight,
+  Bug,
+  Clock,
+  ExternalLink,
+  FileCode,
+  FileText,
+  GitBranch,
+  Globe,
+  Hammer,
+  Maximize2,
+  MessageSquare,
+  Minimize2,
+  Package,
+  Paperclip,
+  Play,
+  Rocket,
+  RotateCcwClock,
+  RotateCw,
+  Settings,
+  Sparkles,
+  Wrench,
+  X,
+  Zap,
+} from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
@@ -534,9 +559,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               onClick={() => void handleRunPipeline()}
               title="Sequentially run Ready/Backlog tickets across their assigned personas and sync each to Main"
             >
-              {startingPipeline
-                ? 'Starting…'
-                : `⚡ Run Pipeline (${ticketCounts.ready || ticketCounts.backlog})`}
+              {startingPipeline ? (
+                'Starting…'
+              ) : (
+                <>
+                  <Zap className="icon" aria-hidden /> Run Pipeline (
+                  {ticketCounts.ready || ticketCounts.backlog})
+                </>
+              )}
             </button>
           )}
           <button
@@ -545,14 +575,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             onClick={() => navigate(`/projects/${project.id}/code`)}
             title="Open integrated Code Explorer & Monaco Editor"
           >
-            ◫ Code Explorer
+            <FileCode className="icon" aria-hidden /> Code Explorer
           </button>
           <a
             href={`/api/projects/${project.id}/export.tar.gz`}
             className="btn btn-sm"
             title="Download project workspace as .tar.gz archive"
           >
-            📦 .tar.gz
+            <Package className="icon" aria-hidden /> .tar.gz
           </a>
           <button
             type="button"
@@ -691,7 +721,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             className={activeTab === 'factory' ? 'active' : ''}
             onClick={() => setActiveTab('factory')}
           >
-            ⚡ AI Factory Prompt
+            <Zap className="icon" aria-hidden /> AI Factory Prompt
           </button>
           <button
             type="button"
@@ -700,7 +730,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             className={activeTab === 'demo' ? 'active' : ''}
             onClick={() => setActiveTab('demo')}
           >
-            ▶ Preview &amp; Build
+            <Play className="icon" aria-hidden /> Preview &amp; Build
           </button>
           <button
             type="button"
@@ -709,7 +739,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             className={activeTab === 'browser' ? 'active' : ''}
             onClick={() => setActiveTab('browser')}
           >
-            🌐 Live Browser
+            <Globe className="icon" aria-hidden /> Live Browser
           </button>
           <button
             type="button"
@@ -718,7 +748,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             className={activeTab === 'worktrees' ? 'active' : ''}
             onClick={() => setActiveTab('worktrees')}
           >
-            🌿 Worktrees ({visibleTargets.length}/{targets.length})
+            <GitBranch className="icon" aria-hidden /> Worktrees ({visibleTargets.length}/{targets.length})
           </button>
           <button
             type="button"
@@ -727,7 +757,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             className={activeTab === 'checkpoints' ? 'active' : ''}
             onClick={() => setActiveTab('checkpoints')}
           >
-            🕓 Checkpoints ({checkpoints.length})
+            <Clock className="icon" aria-hidden /> Checkpoints ({checkpoints.length})
           </button>
         </div>
 
@@ -735,7 +765,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           className="badge mono hide-sm"
           title="Host bind-mount directory mapped to container /workspaces"
         >
-          {summary.hostBindHint} ↔ {summary.workspaceRoot}
+          {summary.hostBindHint} <ArrowLeftRight className="icon" aria-hidden />{' '}
+          {summary.workspaceRoot}
         </span>
       </div>
 
@@ -754,8 +785,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             type="button"
             className="btn btn-sm btn-ghost"
             onClick={() => setBanner(undefined)}
+            aria-label="Close"
           >
-            ✕
+            <X className="icon" aria-hidden />
           </button>
         </div>
       )}
@@ -802,7 +834,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <strong style={{ fontSize: '0.8rem', color: 'var(--ember-2)' }}>
-                  ⚡ Ask AI Factory (PO Orchestrator → Specialist Personas)
+                  <Zap className="icon" aria-hidden /> Ask AI Factory (PO Orchestrator → Specialist
+                  Personas)
                 </strong>
                 <PersonaBadge persona="product_owner" />
                 <span className="muted small">→ delegates to</span>
@@ -894,7 +927,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                             flexShrink: 0,
                           }}
                         >
-                          📄
+                          <FileText className="icon" aria-hidden />
                         </span>
                       )}
                       <div
@@ -927,9 +960,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         className="btn btn-sm btn-ghost"
                         onClick={() => removeAttachment(att.id)}
                         title="Remove attachment"
+                        aria-label="Remove attachment"
                         style={{ padding: '1px 5px', fontSize: '0.72rem', marginLeft: 2 }}
                       >
-                        ✕
+                        <X className="icon" aria-hidden />
                       </button>
                     </div>
                   ))}
@@ -1006,7 +1040,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       fontSize: '0.75rem',
                     }}
                   >
-                    📎 Attach Files / Images
+                    <Paperclip className="icon" aria-hidden /> Attach Files / Images
                     {factoryAttachments.length > 0 && (
                       <span className="badge badge-accent" style={{ fontSize: '0.65rem' }}>
                         {factoryAttachments.length}/10
@@ -1027,7 +1061,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     (!factoryPrompt.trim() && factoryAttachments.length === 0)
                   }
                 >
-                  {submittingFactory ? 'Delegating…' : '🚀 Delegate to AI Factory'}
+                  {submittingFactory ? (
+                    'Delegating…'
+                  ) : (
+                    <>
+                      <Rocket className="icon" aria-hidden /> Delegate to AI Factory
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -1074,7 +1114,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 <span className="muted small">· {mainTarget.fileCount} files</span>
                 {mainTarget.detectedStack && (
                   <span className="badge mono" style={{ fontSize: '0.68rem' }}>
-                    ⚙ {mainTarget.detectedStack}
+                    <Settings className="icon" aria-hidden /> {mainTarget.detectedStack}
                   </span>
                 )}
                 {mainTarget.detectedLayers?.map((layer) => (
@@ -1107,11 +1147,17 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     disabled={buildingTargetId === bestPlayableTarget.id}
                     onClick={() => void handleOpenDemo(bestPlayableTarget)}
                   >
-                    {buildingTargetId === bestPlayableTarget.id
-                      ? 'Building…'
-                      : bestPlayableTarget.demoUrl
-                        ? '▶ Open Live Preview'
-                        : '🔨 Build & Verify'}
+                    {buildingTargetId === bestPlayableTarget.id ? (
+                      'Building…'
+                    ) : bestPlayableTarget.demoUrl ? (
+                      <>
+                        <Play className="icon" aria-hidden /> Open Live Preview
+                      </>
+                    ) : (
+                      <>
+                        <Hammer className="icon" aria-hidden /> Build &amp; Verify
+                      </>
+                    )}
                   </button>
                 )}
                 <button
@@ -1119,7 +1165,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   className="btn btn-sm"
                   onClick={() => setActiveTab('browser')}
                 >
-                  🌐 Open Live Browser Studio
+                  <Globe className="icon" aria-hidden /> Open Live Browser Studio
                 </button>
                 {mainTarget.hasBuildScript && (
                   <button
@@ -1129,11 +1175,17 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     onClick={() => void handleBuildAndPlay(mainTarget, false)}
                     title={mainTarget.buildCommand ? `Run ${mainTarget.buildCommand}` : 'Run build'}
                   >
-                    {buildingTargetId === mainTarget.id
-                      ? 'Building…'
-                      : mainTarget.demoUrl
-                        ? '🔨 Rebuild Bundle'
-                        : '🔨 Run Build / Check'}
+                    {buildingTargetId === mainTarget.id ? (
+                      'Building…'
+                    ) : mainTarget.demoUrl ? (
+                      <>
+                        <Hammer className="icon" aria-hidden /> Rebuild Bundle
+                      </>
+                    ) : (
+                      <>
+                        <Hammer className="icon" aria-hidden /> Run Build / Check
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -1211,14 +1263,22 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       setIframeNonce((n) => n + 1);
                     }}
                   >
-                    ↻ Reload
+                    <RotateCw className="icon" aria-hidden /> Reload
                   </button>
                   <button
                     type="button"
                     className="btn btn-sm"
                     onClick={() => setFullscreen((f) => !f)}
                   >
-                    {fullscreen ? '🗗 Exit Fullscreen' : '⛶ Fullscreen'}
+                    {fullscreen ? (
+                      <>
+                        <Minimize2 className="icon" aria-hidden /> Exit Fullscreen
+                      </>
+                    ) : (
+                      <>
+                        <Maximize2 className="icon" aria-hidden /> Fullscreen
+                      </>
+                    )}
                   </button>
                   <a
                     href={activeTarget.demoUrl}
@@ -1226,7 +1286,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     rel="noreferrer"
                     className="btn btn-sm"
                   >
-                    ↗ New Tab
+                    <ExternalLink className="icon" aria-hidden /> New Tab
                   </a>
                   <button
                     type="button"
@@ -1236,7 +1296,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       setActiveTab('factory');
                     }}
                   >
-                    ✕ Close
+                    <X className="icon" aria-hidden /> Close
                   </button>
                 </div>
               </div>
@@ -1255,7 +1315,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 >
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <strong>
-                      🐛 Runtime Error Detected in Live Preview ({demoErrors[0]!.timestamp}):
+                      <Bug className="icon" aria-hidden /> Runtime Error Detected in Live Preview ({demoErrors[0]!.timestamp}):
                     </strong>
                     <div
                       className="mono small"
@@ -1276,7 +1336,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       disabled={submittingTweak}
                       onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
                     >
-                      🔧 Fix Error with Coder Agent
+                      <Wrench className="icon" aria-hidden /> Fix Error with Coder Agent
                     </button>
                     <button
                       type="button"
@@ -1300,7 +1360,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   borderBottom: '1px solid var(--border)',
                 }}
               >
-                <span className="mono muted small">💬 Quick Live Tweak:</span>
+                <span className="mono muted small">
+                  <MessageSquare className="icon" aria-hidden /> Quick Live Tweak:
+                </span>
                 <input
                   type="text"
                   className="input"
@@ -1314,7 +1376,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   className="btn btn-sm btn-primary"
                   disabled={submittingTweak || !quickTweakPrompt.trim()}
                 >
-                  {submittingTweak ? 'Sending…' : '✨ Apply Tweak'}
+                  {submittingTweak ? (
+                    'Sending…'
+                  ) : (
+                    <>
+                      <Sparkles className="icon" aria-hidden /> Apply Tweak
+                    </>
+                  )}
                 </button>
               </form>
 
@@ -1329,7 +1397,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   height: fullscreen ? '100%' : 520,
                   flex: fullscreen ? 1 : undefined,
                   border: 'none',
-                  background: '#fff',
+                  background: 'var(--surface)',
                 }}
               />
             </div>
@@ -1356,7 +1424,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <strong style={{ fontSize: '0.88rem' }}>
-                    🛠 Workspace Build, Verification &amp; Architecture Console
+                    <Wrench className="icon" aria-hidden /> Workspace Build, Verification &amp;
+                    Architecture Console
                   </strong>
                   <select
                     className="input"
@@ -1380,9 +1449,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       disabled={buildingTargetId === activeTarget.id}
                       onClick={() => void handleBuildAndPlay(activeTarget, true)}
                     >
-                      {buildingTargetId === activeTarget.id
-                        ? 'Running Build / Verification…'
-                        : `🔨 Run Build & Verify${activeTarget.buildCommand ? ` (${activeTarget.buildCommand})` : ''}`}
+                      {buildingTargetId === activeTarget.id ? (
+                        'Running Build / Verification…'
+                      ) : (
+                        <>
+                          <Hammer className="icon" aria-hidden />{' '}
+                          {`Run Build & Verify${activeTarget.buildCommand ? ` (${activeTarget.buildCommand})` : ''}`}
+                        </>
+                      )}
                     </button>
                   )}
                   <button
@@ -1390,14 +1464,14 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     className="btn btn-sm"
                     onClick={() => setActiveTab('browser')}
                   >
-                    🌐 Live Browser Studio
+                    <Globe className="icon" aria-hidden /> Live Browser Studio
                   </button>
                   <button
                     type="button"
                     className="btn btn-sm"
                     onClick={() => navigate(`/projects/${project.id}/code`)}
                   >
-                    ◫ Code Explorer
+                    <FileCode className="icon" aria-hidden /> Code Explorer
                   </button>
                 </div>
               </div>
@@ -1437,8 +1511,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               <p className="muted small" style={{ margin: 0, lineHeight: 1.5 }}>
                 This workspace target does not expose a static HTML bundle yet (common for{' '}
                 <strong>Backend APIs, CLI / System Automation, Desktop &amp; Mobile Apps, Embedded / ESP32 Firmware</strong>,
-                or unbuilt web projects). Use <strong>🔨 Run Build &amp; Verify</strong> above to compile or syntax-check the
-                project, or open <strong>🌐 Live Browser Studio</strong> to inspect any running web server URL.
+                or unbuilt web projects). Use <strong>
+                  <Hammer className="icon" aria-hidden /> Run Build &amp; Verify
+                </strong> above to compile or syntax-check the
+                project, or open <strong>
+                  <Globe className="icon" aria-hidden /> Live Browser Studio
+                </strong> to inspect any running web server URL.
               </p>
 
               {lastBuildOutput && (
@@ -1601,7 +1679,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
                         {target.detectedStack && (
                           <span className="badge mono" style={{ fontSize: '0.66rem' }}>
-                            ⚙ {target.detectedStack}
+                            <Settings className="icon" aria-hidden /> {target.detectedStack}
                           </span>
                         )}
                         {target.detectedLayers?.map((layer) => (
@@ -1649,11 +1727,17 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         disabled={isBuilding}
                         onClick={() => void handleOpenDemo(target)}
                       >
-                        {isBuilding
-                          ? 'Building…'
-                          : target.demoUrl
-                            ? '▶ Open Preview'
-                            : '🔨 Build & Verify'}
+                        {isBuilding ? (
+                          'Building…'
+                        ) : target.demoUrl ? (
+                          <>
+                            <Play className="icon" aria-hidden /> Open Preview
+                          </>
+                        ) : (
+                          <>
+                            <Hammer className="icon" aria-hidden /> Build &amp; Verify
+                          </>
+                        )}
                       </button>
                     )}
                     {target.hasBuildScript && target.demoUrl && (
@@ -1663,7 +1747,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         disabled={isBuilding}
                         onClick={() => void handleBuildAndPlay(target, false)}
                       >
-                        {isBuilding ? 'Building…' : '🔨 Rebuild'}
+                        {isBuilding ? (
+                          'Building…'
+                        ) : (
+                          <>
+                            <Hammer className="icon" aria-hidden /> Rebuild
+                          </>
+                        )}
                       </button>
                     )}
                     {target.kind === 'worktree' && target.fileCount > 2 && (
@@ -1674,7 +1764,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         onClick={() => void handleSyncToMain(target.id)}
                         title="Copy/sync this worktree's files & compiled artifacts into the Main Project Workspace on host"
                       >
-                        {isSyncing ? 'Syncing…' : '⇄ Sync to Main'}
+                        {isSyncing ? (
+                          'Syncing…'
+                        ) : (
+                          <>
+                            <ArrowLeftRight className="icon" aria-hidden /> Sync to Main
+                          </>
+                        )}
                       </button>
                     )}
                     {target.kind === 'worktree' && (
@@ -1713,7 +1809,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             }}
           >
             <strong style={{ fontSize: '0.82rem' }}>
-              🕓 Workspace Git Checkpoints ({checkpoints.length})
+              <Clock className="icon" aria-hidden /> Workspace Git Checkpoints ({checkpoints.length})
             </strong>
           </div>
           {checkpoints.length === 0 ? (
@@ -1759,7 +1855,13 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         disabled={rollingBackSha === cp.sha}
                         onClick={() => void handleRollbackCheckpoint(cp.sha)}
                       >
-                        {rollingBackSha === cp.sha ? 'Rolling back…' : '⏪ Rollback here'}
+                        {rollingBackSha === cp.sha ? (
+                          'Rolling back…'
+                        ) : (
+                          <>
+                            <RotateCcwClock className="icon" aria-hidden /> Rollback here
+                          </>
+                        )}
                       </button>
                     )}
                   </div>
