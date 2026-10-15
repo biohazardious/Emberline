@@ -114,15 +114,25 @@ function hasValidGeminiOAuth(home: string): boolean {
   return false;
 }
 
+function hasClaudeAccount(home: string): boolean {
+  try {
+    const config = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8')) as { oauthAccount?: unknown };
+    return Boolean(config.oauthAccount);
+  } catch {
+    return false;
+  }
+}
+
 function detectRunnerProviderAuth(params: {
   anthropicKeyConfigured: boolean;
   openaiKeyConfigured: boolean;
   geminiKeyConfigured: boolean;
 }) {
-  const home = '/home/node';
-  const claudeOAuth =
-    existsSync(path.join(home, '.claude', '.credentials.json')) ||
-    existsSync(path.join(home, '.claude.json'));
+  // The runner's home, mounted read-only into core at the same path.
+  const home = process.env.EMBERLINE_RUNNER_HOME ?? '/home/node';
+  // ~/.claude.json appears as soon as Claude Code starts once, signed in or not: only a credentials
+  // file or a recorded account means a login.
+  const claudeOAuth = existsSync(path.join(home, '.claude', '.credentials.json')) || hasClaudeAccount(home);
   const geminiOAuth = hasValidGeminiOAuth(home);
   const antigravityOAuth = hasNonEmptyAntigravitySecrets(home) || geminiOAuth;
   const codexOAuth = existsSync(path.join(home, '.codex', 'auth.json'));

@@ -450,4 +450,29 @@ describe('runs', () => {
     expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=.gitignore`)).statusCode).toBe(404);
     expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=../../etc/passwd`)).statusCode).toBeGreaterThanOrEqual(400);
   });
+
+  it('fails a Claude run with a clear message instead of leaving it at the sign-in screen', async () => {
+    const home = path.join(t.dir, 'runner-home');
+    mkdirSync(home, { recursive: true });
+    const previousHome = process.env.EMBERLINE_RUNNER_HOME;
+    process.env.EMBERLINE_RUNNER_HOME = home;
+    const previousCommand = t.config.claudeCommand;
+    t.config.claudeCommand = 'claude';
+    try {
+      const project = await createProject('Not signed in', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await expect
+        .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).state, { timeout: 5_000 })
+        .toBe('failed');
+      const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+      expect(detail.terminalId).toBeNull();
+      expect(detail.events.find((e) => e.type === 'agent_not_signed_in')?.payload).toMatchObject({
+        reason: 'not_signed_in',
+      });
+    } finally {
+      t.config.claudeCommand = previousCommand;
+      if (previousHome === undefined) delete process.env.EMBERLINE_RUNNER_HOME;
+      else process.env.EMBERLINE_RUNNER_HOME = previousHome;
+    }
+  });
 });

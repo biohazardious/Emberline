@@ -594,6 +594,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   ): Promise<Run> {
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');
+    // Without a login Claude Code would sit at its sign-in screen in the run's terminal, which looks
+    // like a hang. Say so instead (the tests' fake CLI needs no login).
+    if (row.agent === 'claude' && (this.config.claudeCommand ?? 'claude') === 'claude') {
+      const auth = getFactorySettings(this.db).providerAuth?.claude;
+      if (auth && !auth.authenticated) {
+        const message =
+          'Claude Code is not signed in. Log in under Settings → Multi-Agent & Model Matrix (CLI OAuth Login) or add an Anthropic API key there, then start the run again.';
+        return this.record(row.id, {
+          source: 'system',
+          type: 'agent_not_signed_in',
+          state: 'failed',
+          payload: { reason: 'not_signed_in', message },
+          patch: { endedAt: new Date() },
+        });
+      }
+    }
     const ptyd = this.ptyd.get();
     const hookToken = randomBytes(32).toString('base64url');
     // Mark as starting first so concurrent ticks never launch the same run twice.
