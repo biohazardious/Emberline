@@ -76,6 +76,20 @@ describe('emberline-cli-seed', () => {
     expect(json(path.join(home, '.copilot', 'settings.json'))).toEqual({ banner: 'never', showTipsOnStartup: false, autoUpdate: false });
   });
 
+  it('antigravity: trusts the run worktree and forgets worktrees that are gone', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
+    const worktree = mkdtempSync(path.join(tmpdir(), 'wt-'));
+    mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true });
+    const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
+    writeFileSync(file, JSON.stringify({ trustedWorkspaces: ['/workspaces', '/workspaces/.worktrees/gone/1234'], theme: 'x' }));
+    const res = spawnSync(process.execPath, [path.join(wrappers, 'emberline-cli-seed.mjs'), 'antigravity'], {
+      cwd: worktree,
+      env: { PATH: process.env.PATH ?? '', HOME: home },
+    });
+    expect(res.status).toBe(0);
+    expect(json(file)).toEqual({ trustedWorkspaces: ['/workspaces', worktree], theme: 'x' });
+  });
+
   it('does nothing for agents without first-run config', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
     run('emberline-cli-seed.mjs', home, {}, ['codex']);

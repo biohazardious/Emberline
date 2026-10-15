@@ -73,6 +73,23 @@ if (agent === 'gemini' || agent === 'antigravity') {
   });
 }
 
+if (agent === 'antigravity') {
+  // agy asks "Do you trust the contents of this project?" for every new folder (an exact-path list;
+  // /workspaces does not cover its subfolders) before an interactive session. Trust this run's
+  // worktree, and drop entries of run worktrees that are gone so the list does not grow forever.
+  const cwd = process.cwd();
+  seed(path.join(home, '.gemini', 'antigravity-cli', 'settings.json'), (data) => {
+    const current = Array.isArray(data.trustedWorkspaces) ? data.trustedWorkspaces : [];
+    const kept = current.filter(
+      (entry) => typeof entry !== 'string' || !entry.startsWith('/workspaces/.worktrees/') || fs.existsSync(entry),
+    );
+    const next = kept.includes(cwd) ? kept : [...kept, cwd];
+    if (next.length === current.length && next.every((entry, i) => entry === current[i])) return false;
+    data.trustedWorkspaces = next;
+    return true;
+  });
+}
+
 if (agent === 'copilot') {
   // Copilot asks to trust every new folder; all workspaces and run worktrees live under /workspaces.
   seed(path.join(home, '.copilot', 'config.json'), (data) => {
