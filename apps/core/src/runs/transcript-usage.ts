@@ -85,3 +85,47 @@ export function readTranscriptUsage(filePath: string, root = TRANSCRIPTS_ROOT): 
     if (fd !== undefined) closeSync(fd);
   }
 }
+
+/** Only the tail of a transcript is searched for the final answer. */
+const FINAL_TEXT_TAIL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The text of the agent's last assistant message, read from the end of its transcript. Hook payloads
+ * only carry a truncated copy in older runs, so this is how the full final answer is recovered.
+ */
+export function readLastAssistantText(filePath: string, root = TRANSCRIPTS_ROOT): string | null {
+  if (!isAcceptableTranscriptPath(filePath, root)) return null;
+  let fd: number | undefined;
+  try {
+    const real = realpathSync(filePath);
+    if (!real.startsWith(`${realpathSync(root)}/`)) return null;
+    fd = openSync(real, 'r');
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    const length = Math.min(stat.size, FINAL_TEXT_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    const read = readSync(fd, buffer, 0, length, stat.size - length);
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line?.includes('"assistant"')) continue;
+      try {
+        const entry = JSON.parse(line) as { type?: string; message?: { content?: unknown } };
+        if (entry.type !== 'assistant' || !Array.isArray(entry.message?.content)) continue;
+        const text = (entry.message.content as { type?: string; text?: unknown }[])
+          .filter((part) => part.type === 'text' && typeof part.text === 'string')
+          .map((part) => part.text as string)
+          .join('\n')
+          .trim();
+        if (text) return text;
+      } catch {
+        // The first line of the tail can be cut in half; skip anything unparsable.
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}

@@ -544,7 +544,13 @@ export const RunEvent = z.object({
 });
 export type RunEvent = z.infer<typeof RunEvent>;
 
-export const RunDetail = Run.extend({ events: z.array(RunEvent) });
+export const RunDetail = Run.extend({
+  events: z.array(RunEvent),
+  /** The agent's last answer in full (from the transcript when the hook copy was truncated). */
+  finalMessage: z.string().nullable().default(null),
+  /** The terminal's last screen, kept when its session closed; null while it is still open. */
+  lastScreen: z.string().nullable().default(null),
+});
 export type RunDetail = z.infer<typeof RunDetail>;
 
 /** Continue a rate-limited or ended run; defaults to a generic "continue" prompt. */

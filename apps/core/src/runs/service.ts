@@ -32,6 +32,7 @@ import {
   type PruneWorktreeResponse,
   type Run,
   type RunArtifact,
+  type RunBuildOutputsResponse,
   type RunDetail,
   type RunDiffSummary,
   type RunEvent,
@@ -64,16 +65,18 @@ import {
   commitWorktree,
   inspectDiff,
   inspectFileDiff,
+  listBuildOutputs,
   listWorktreeArtifacts,
   prepareWorkspace,
   pruneWorktree,
   pushWorktreeBranch,
   readWorktreeArtifact,
+  resolveSafeWorktreePath,
   stageWorktreeFiles,
   worktreeHasUncommittedWork,
 } from './git.js';
 import { providerAdapter } from './providers.js';
-import { isAcceptableTranscriptPath, readTranscriptUsage } from './transcript-usage.js';
+import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
 
 type RunRow = typeof runs.$inferSelect;
 type EventSource = RunEvent['source'];
@@ -124,6 +127,17 @@ const PAYLOAD_KEYS = [
   'last_assistant_message',
 ];
 
+/** The agent's own words are kept in full (within reason); other payload strings stay short. */
+const LONG_PAYLOAD_KEYS = new Set(['last_assistant_message', 'prompt', 'message']);
+const LONG_PAYLOAD_MAX = 20_000;
+const PAYLOAD_MAX = 2_000;
+const TOOL_INPUT_SUMMARY_MAX = 2_000;
+/** Scrollback lines kept as a run's last screen when its terminal closes. */
+const LAST_SCREEN_LINES = 200;
+const LAST_SCREEN_MAX = 64 * 1024;
+
+const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}…` : value);
+
 /** Scrollback lines read when looking for a limit banner on screen. */
 const SCREEN_SCROLLBACK = 200;
 
@@ -155,7 +169,7 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
   const summary: Record<string, unknown> = {};
   for (const key of PAYLOAD_KEYS) {
     const value = payload[key];
-    if (typeof value === 'string') summary[key] = value.length > 500 ? `${value.slice(0, 500)}…` : value;
+    if (typeof value === 'string') summary[key] = clip(value, LONG_PAYLOAD_KEYS.has(key) ? LONG_PAYLOAD_MAX : PAYLOAD_MAX);
     else if (typeof value === 'number' || typeof value === 'boolean') summary[key] = value;
   }
   if (
@@ -172,7 +186,7 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
       }
     }
     const text = parts.length > 0 ? parts.join(' · ') : JSON.stringify(input);
-    summary.tool_input_summary = text.length > 240 ? `${text.slice(0, 240)}…` : text;
+    summary.tool_input_summary = clip(text, TOOL_INPUT_SUMMARY_MAX);
   } else if (
     payload.tool_name === 'Bash' &&
     payload.tool_input &&
@@ -181,7 +195,7 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
     const input = payload.tool_input as Record<string, unknown>;
     const cmd = typeof input.command === 'string' ? input.command : '';
     if (/(?:playwright|chromium|chrome|e2e|bot\.tmp)/i.test(cmd)) {
-      summary.tool_input_summary = cmd.length > 240 ? `${cmd.slice(0, 240)}…` : cmd;
+      summary.tool_input_summary = clip(cmd, TOOL_INPUT_SUMMARY_MAX);
     }
   }
   return summary;
@@ -279,7 +293,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           source: e.source as EventSource,
           type: e.type,
           state: (e.state as RunState | null) ?? null,
-          payload: e.payload ?? null,
+          // The saved screen travels once, as `lastScreen`, not with every timeline entry.
+          payload: e.type === 'last_screen' ? {} : (e.payload ?? null),
         }),
       );
     const toolCalls = events.filter((e) => e.type === 'PreToolUse').length;
@@ -287,7 +302,61 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       ...toRun(row),
       telemetry: this.computeTelemetryForRow(row, toolCalls),
       events,
+      finalMessage: this.finalMessage(row),
+      lastScreen: this.lastScreen(id),
     };
+  }
+
+  /**
+   * The agent's last answer: the newest Stop hook message, or the transcript's last assistant
+   * message when that copy is missing or was truncated (runs recorded before the limits were raised).
+   */
+  private finalMessage(row: RunRow): string | null {
+    const stop = this.db
+      .select()
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, row.id), eq(runEvents.type, 'Stop')))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get();
+    const payload = (stop?.payload ?? null) as { last_assistant_message?: unknown } | null;
+    const fromHook = typeof payload?.last_assistant_message === 'string' ? payload.last_assistant_message : null;
+    if (fromHook && !fromHook.endsWith('…')) return fromHook;
+    const fromTranscript = row.transcriptPath
+      ? readLastAssistantText(row.transcriptPath, this.config.transcriptsDir)
+      : null;
+    return fromTranscript ?? fromHook;
+  }
+
+  private lastScreen(runId: string): string | null {
+    const event = this.db
+      .select()
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'last_screen')))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get();
+    const screen = (event?.payload as { screen?: unknown } | null)?.screen;
+    return typeof screen === 'string' ? screen : null;
+  }
+
+  /**
+   * Keeps the last screen of an agent terminal as a run event before ptyd forgets the session, so
+   * the agent's closing output stays readable after the terminal is gone.
+   */
+  private async saveLastScreen(runId: string, sessionId: string): Promise<void> {
+    try {
+      const snap = await this.ptyd.get().snapshot(sessionId, LAST_SCREEN_LINES);
+      const lines = stripVTControlCharacters(snap.data ?? '')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((l) => l.trimEnd());
+      while (lines.length > 0 && !lines[lines.length - 1]) lines.pop();
+      const screen = lines.join('\n').slice(-LAST_SCREEN_MAX);
+      if (screen.trim()) this.record(runId, { source: 'system', type: 'last_screen', payload: { screen } });
+    } catch {
+      // Snapshot unavailable (session already gone): nothing to keep.
+    }
   }
 
   getTelemetry(id: string): RunTelemetry {
@@ -743,21 +812,24 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * terminates the agent process (reconciliation records the end). A stopped run never resumes,
    * and hooks arriving after the stop do not change its state.
    */
-  async stop(id: string): Promise<Run> {
+  async stop(id: string, opts: { source?: 'user' | 'system'; reason?: string } = {}): Promise<Run> {
+    const source = opts.source ?? 'user';
+    const reasonPayload = opts.reason ? { reason: opts.reason } : undefined;
     const row = this.row(id);
     const cancelledAt = row.cancelledAt ?? new Date();
     const live = Boolean(row.ptydSessionId && !row.endedAt);
     if (row.state === 'queued' || (!live && row.state === 'rate_limited')) {
       return this.record(id, {
-        source: 'user',
+        source,
         type: 'cancelled',
         state: 'failed',
+        payload: reasonPayload,
         patch: { endedAt: row.endedAt ?? new Date(), cancelledAt },
       });
     }
     if (row.endedAt) return toRun(row);
     // Live, or still spawning (no terminal yet): spawnAgent checks the flag once the terminal exists.
-    const run = this.record(id, { source: 'user', type: 'stop_requested', patch: { cancelledAt } });
+    const run = this.record(id, { source, type: 'stop_requested', payload: reasonPayload, patch: { cancelledAt } });
     const sessionId = row.ptydSessionId;
     if (sessionId) {
       await this.ptyd
@@ -918,6 +990,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async artifacts(id: string): Promise<RunArtifact[]> {
     const row = this.row(id);
     return listWorktreeArtifacts(row.worktreePath, this.defaultBranch(row.projectId));
+  }
+
+  async buildOutputs(id: string): Promise<RunBuildOutputsResponse> {
+    const row = this.row(id);
+    const hostRoot = this.config.workspacesHostDir;
+    const hostWorktreePath =
+      hostRoot && row.worktreePath.startsWith(`${this.config.workspacesDir}/`)
+        ? path.join(hostRoot, path.relative(this.config.workspacesDir, row.worktreePath))
+        : null;
+    return { worktreePath: row.worktreePath, hostWorktreePath, outputs: await listBuildOutputs(row.worktreePath) };
+  }
+
+  /** Opens a build output for download; only files the lister reports as deliverables qualify. */
+  async openBuildOutput(id: string, relPath: string): Promise<{ abs: string; fileName: string; size: number }> {
+    const row = this.row(id);
+    const { abs, rel } = resolveSafeWorktreePath(row.worktreePath, relPath);
+    const outputs = await listBuildOutputs(row.worktreePath);
+    const match = outputs.find((o) => o.path === rel);
+    if (!match) throw notFound('no such build output');
+    return { abs, fileName: match.name, size: match.sizeBytes };
   }
 
   async readArtifact(
@@ -1314,6 +1406,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // so it never lingers as a zombie process in Fleet Multiplexer.
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
           if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl) {
+            await this.saveLastScreen(row.id, row.ptydSessionId);
             await this.ptyd
               .get()
               .remove(row.ptydSessionId)
@@ -1353,6 +1446,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           }
         }
         if (session) {
+          await this.saveLastScreen(row.id, row.ptydSessionId);
           await this.ptyd
             .get()
             .remove(row.ptydSessionId)
@@ -1376,6 +1470,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       for (const row of attached) {
         if (!row.endedAt || !row.ptydSessionId) continue;
         if (byId.has(row.ptydSessionId)) {
+          await this.saveLastScreen(row.id, row.ptydSessionId);
           await this.ptyd
             .get()
             .remove(row.ptydSessionId)
@@ -1477,7 +1572,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           payload: event.payload ?? null,
         })
         .run();
-      const set: Partial<RunRow> = { ...event.patch, lastEvent: event.type };
+      // A saved screen is bookkeeping, not something the run did: it does not become its last event.
+      const set: Partial<RunRow> = {
+        ...event.patch,
+        lastEvent: event.type === 'last_screen' ? current.lastEvent : event.type,
+      };
       if (changed) Object.assign(set, { state: event.state, stateChangedAt: now });
       return tx.update(runs).set(set).where(eq(runs.id, id)).returning().get();
     });

@@ -21,6 +21,8 @@ services:
       TZ: ${TZ:-UTC}
       # Enables GET /metrics (Prometheus) for scrapers that send this bearer token.
       EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
+      # Host path of the workspaces bind mount, only to show where build outputs are on the host.
+      EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES_HOST_DIR:-${PWD}/workspaces}
     volumes:
       - ptyd-socket:/run/emberline
       - data:/data

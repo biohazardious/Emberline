@@ -393,7 +393,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         }
       }
       if (!run.endedAt) {
-        await this.runs.stop(run.id).catch(() => undefined);
+        await this.runs.stop(run.id, { source: 'system', reason: 'brainstorm_finished' }).catch(() => undefined);
       }
       return;
     }
@@ -618,7 +618,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // 5. Close the idle interactive CLI process for this completed factory step so it does not
     //    linger at the `>` prompt or fire idle notifications.
     if (!run.endedAt) {
-      await this.runs.stop(run.id).catch(() => undefined);
+      await this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' }).catch(() => undefined);
     }
 
     // 6. Dispatch the next specialist ticket in the project's queue if auto-chaining is active

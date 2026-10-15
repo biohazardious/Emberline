@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { Run, RunDetail } from '@emberline/protocol';
+import type { Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -358,5 +358,96 @@ describe('runs', () => {
 
   it('rejects runs for unknown projects', async () => {
     expect((await api('POST', '/api/runs', { projectId: 'nope' })).statusCode).toBe(404);
+  });
+
+  it('keeps the final answer in full and recovers truncated ones from the transcript', async () => {
+    const project = await createProject('Final answer', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    const answer = `Done. ${'All the details. '.repeat(200)}`.trim();
+    await hook(run.id, 'Stop', token, { last_assistant_message: answer });
+    expect(((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).finalMessage).toBe(answer);
+
+    // A run recorded before the limits were raised has a clipped copy; the transcript has the rest.
+    const transcript = path.join(t.config.transcriptsDir, 'proj', `${run.id}.jsonl`);
+    mkdirSync(path.dirname(transcript), { recursive: true });
+    const full = `The whole answer ${'with every path and number '.repeat(40)}`.trim();
+    writeFileSync(
+      transcript,
+      [
+        JSON.stringify({ type: 'user', message: { content: 'build it' } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: full }] } }),
+        '',
+      ].join('\n'),
+    );
+    await hook(run.id, 'UserPromptSubmit', token, { transcript_path: transcript });
+    await hook(run.id, 'Stop', token, { last_assistant_message: `${full.slice(0, 50)}…` });
+    expect(((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).finalMessage).toBe(full);
+  });
+
+  it('keeps the last screen when the terminal closes', async () => {
+    const project = await createProject('Last screen', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(run.id);
+    await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).lastScreen;
+        },
+        { timeout: 5_000 },
+      )
+      .toContain('fake claude ready');
+    const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+    expect(detail.terminalId).toBeNull();
+    expect(detail.lastEvent).not.toBe('last_screen');
+    // The screen travels once, not inside the timeline entry.
+    expect(detail.events.find((e) => e.type === 'last_screen')?.payload).toEqual({});
+  });
+
+  it('records an automatic stop as a system event with its reason', async () => {
+    const project = await createProject('Auto stop', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(run.id);
+    await t.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' });
+    const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+    expect(detail.events.find((e) => e.type === 'stop_requested')).toMatchObject({
+      source: 'system',
+      payload: { reason: 'factory_step_finished' },
+    });
+  });
+
+  it('lists the deliverables a run built, including git-ignored build directories', async () => {
+    const project = await createProject('Build outputs', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const wt = run.worktreePath;
+    const put = (rel: string, bytes: number) => {
+      mkdirSync(path.dirname(path.join(wt, rel)), { recursive: true });
+      writeFileSync(path.join(wt, rel), Buffer.alloc(bytes, 1));
+    };
+    writeFileSync(path.join(wt, '.gitignore'), 'build/\nnode_modules/\n');
+    put('app/build/outputs/apk/debug/app-debug.apk', 2048);
+    put('public/downloads/game.apk', 1024);
+    put('node_modules/some-dep/fixture.apk', 10);
+    put('notes/data.bin', 10); // a .bin outside build directories is not a deliverable
+    put('.pio/build/esp32dev/firmware.bin', 512);
+    execFileSync('git', ['-C', wt, 'add', '.gitignore', 'public/downloads/game.apk']);
+
+    const res = (await api('GET', `/api/runs/${run.id}/build-outputs`)).json() as RunBuildOutputsResponse;
+    expect(res.worktreePath).toBe(wt);
+    expect(Object.fromEntries(res.outputs.map((o) => [o.path, o.tracked]))).toEqual({
+      'app/build/outputs/apk/debug/app-debug.apk': false,
+      'public/downloads/game.apk': true,
+      '.pio/build/esp32dev/firmware.bin': false,
+    });
+
+    const download = await api('GET', `/api/runs/${run.id}/build-outputs/download?path=app/build/outputs/apk/debug/app-debug.apk`);
+    expect(download.statusCode).toBe(200);
+    expect(download.headers['content-disposition']).toContain('attachment; filename="app-debug.apk"');
+    expect(download.rawPayload.length).toBe(2048);
+    // Only deliverables can be downloaded through this route.
+    expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=.gitignore`)).statusCode).toBe(404);
+    expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=../../etc/passwd`)).statusCode).toBeGreaterThanOrEqual(400);
   });
 });

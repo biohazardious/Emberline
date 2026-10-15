@@ -88,6 +88,27 @@ export const RunArtifact = z.object({
 });
 export type RunArtifact = z.infer<typeof RunArtifact>;
 
+/** A deliverable a run produced (APK, installer, firmware image, ...), wherever the build wrote it. */
+export const RunBuildOutput = z.object({
+  /** Path relative to the run's worktree. */
+  path: z.string(),
+  name: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  mtime: z.string(),
+  /** False for files git ignores (build directories), which never reach the main workspace by merge. */
+  tracked: z.boolean(),
+});
+export type RunBuildOutput = z.infer<typeof RunBuildOutput>;
+
+export const RunBuildOutputsResponse = z.object({
+  /** The worktree inside the runner (`/workspaces/...`). */
+  worktreePath: z.string(),
+  /** The same directory on the host, when core knows the host path of the workspaces volume. */
+  hostWorktreePath: z.string().nullable(),
+  outputs: z.array(RunBuildOutput),
+});
+export type RunBuildOutputsResponse = z.infer<typeof RunBuildOutputsResponse>;
+
 export const PruneWorktreeResponse = z.object({
   runId: z.string(),
   worktreePath: z.string(),

@@ -11,6 +11,7 @@ import type {
   GitPushResponse,
   GitStageBody,
   RunArtifact,
+  RunBuildOutput,
   RunDiffSummary,
   RunFileDiff,
 } from '@emberline/protocol';
@@ -542,6 +543,68 @@ const MIME_BY_EXT: Record<string, string> = {
   '.log': 'text/plain; charset=utf-8',
   '.zip': 'application/zip',
 };
+
+/** Deliverables people install or flash, by extension (lowercase). */
+const BUILD_OUTPUT_EXTENSIONS = new Set([
+  '.apk', '.aab', '.ipa', '.appimage', '.deb', '.rpm', '.snap', '.flatpak', '.exe', '.msi', '.dmg', '.pkg',
+  '.elf', '.hex', '.uf2',
+]);
+/** `.bin` is too generic on its own; it counts inside build output directories (firmware images). */
+const FIRMWARE_BIN_DIR = /(^|\/)(\.pio\/build|build|firmware|out|dist)\//;
+/** Dependency, cache and intermediate directories: never deliverables, and often huge. */
+const BUILD_OUTPUT_SKIP_DIRS = new Set([
+  '.git', 'node_modules', '.pnpm-store', '.gradle', 'intermediates', 'tmp', 'generated', 'kotlin',
+  '.dart_tool', '.pub-cache', 'Pods', '.venv', 'venv', '__pycache__', '.next', '.turbo', '.cache',
+  'libdeps', 'deps', 'incremental', '.fingerprint',
+]);
+const MAX_BUILD_OUTPUTS = 50;
+const MAX_BUILD_OUTPUT_DIRS = 5000;
+
+function isBuildOutput(rel: string): boolean {
+  const ext = path.extname(rel).toLowerCase();
+  if (BUILD_OUTPUT_EXTENSIONS.has(ext)) return true;
+  return ext === '.bin' && FIRMWARE_BIN_DIR.test(rel);
+}
+
+/**
+ * Deliverables a run produced (APKs, installers, firmware images) anywhere in its worktree, newest
+ * first, including the ones in git-ignored build directories that a merge never carries to the main
+ * workspace. Read-only: it only walks the worktree, and asks git which of them are tracked.
+ */
+export async function listBuildOutputs(worktreePath: string): Promise<RunBuildOutput[]> {
+  if (!existsSync(worktreePath)) return [];
+  const found: { rel: string; size: number; mtime: Date }[] = [];
+  const queue: string[] = [''];
+  let visited = 0;
+  while (queue.length > 0 && visited < MAX_BUILD_OUTPUT_DIRS) {
+    const relDir = queue.shift() as string;
+    visited += 1;
+    const entries = await readdir(path.join(worktreePath, relDir), { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!BUILD_OUTPUT_SKIP_DIRS.has(entry.name)) queue.push(rel);
+      } else if (entry.isFile() && isBuildOutput(rel)) {
+        const info = await stat(path.join(worktreePath, rel)).catch(() => null);
+        if (info) found.push({ rel, size: info.size, mtime: info.mtime });
+      }
+    }
+  }
+  found.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  const outputs = found.slice(0, MAX_BUILD_OUTPUTS);
+  let tracked = new Set<string>();
+  if (outputs.length > 0 && existsSync(path.join(worktreePath, '.git'))) {
+    const listed = await git(worktreePath, ['ls-files', '-z', '--', ...outputs.map((o) => o.rel)]).catch(() => '');
+    tracked = new Set(listed.split('\0').filter(Boolean));
+  }
+  return outputs.map((o) => ({
+    path: o.rel,
+    name: path.basename(o.rel),
+    sizeBytes: o.size,
+    mtime: o.mtime.toISOString(),
+    tracked: tracked.has(o.rel),
+  }));
+}
 
 export async function readWorktreeArtifact(
   worktreePath: string,

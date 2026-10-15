@@ -35,6 +35,7 @@ export async function createTestApp(
     dataDir: dir,
     ptydSocket: path.join(dir, 'ptyd.sock'),
     workspacesDir: dir,
+    workspacesHostDir: undefined,
     secureCookies: false,
     trustProxy: false,
     sessionTtlMs: 60_000,

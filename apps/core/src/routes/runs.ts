@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import {
   DiffScope,
   GitCommitBody,
@@ -9,6 +10,7 @@ import {
   ResumeRunBody,
   type Run,
   type RunArtifact,
+  type RunBuildOutputsResponse,
   type RunDetail,
   type RunDiffSummary,
   type RunFileDiff,
@@ -104,6 +106,25 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
       // Agent-written HTML/SVG must not run with the Emberline origin.
       reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
       return reply.send(buffer);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/build-outputs',
+    async (request): Promise<RunBuildOutputsResponse> => runs.buildOutputs(request.params.id),
+  );
+
+  /** Streams a build output (APKs can be hundreds of MB) as a download, never inline. */
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    '/api/runs/:id/build-outputs/download',
+    async (request, reply) => {
+      if (!request.query.path) throw badRequest('query parameter "path" is required');
+      const { abs, fileName, size } = await runs.openBuildOutput(request.params.id, request.query.path);
+      reply.header('Content-Type', 'application/octet-stream');
+      reply.header('Content-Length', String(size));
+      reply.header('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`);
+      reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
+      return reply.send(createReadStream(abs));
     },
   );
 
