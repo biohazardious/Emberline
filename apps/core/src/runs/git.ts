@@ -565,6 +565,14 @@ export async function readWorktreeArtifact(
  * Safely removes a linked git worktree created for a run (`/workspaces/.worktrees/...`),
  * leaving the branch intact in the parent repository. Never touches the main project path.
  */
+/** True when removing the worktree would lose uncommitted or untracked (non-ignored) changes. */
+export async function worktreeHasUncommittedWork(worktreePath: string): Promise<boolean> {
+  if (!existsSync(path.join(worktreePath, '.git'))) return false;
+  const status = await git(worktreePath, ['status', '--porcelain']).catch(() => null);
+  // Unreadable status: keep the worktree rather than guess.
+  return status === null || status.trim().length > 0;
+}
+
 export async function pruneWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
   const resolvedProject = path.resolve(projectPath);
   const resolvedWorktree = path.resolve(worktreePath);

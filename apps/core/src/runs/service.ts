@@ -47,7 +47,7 @@ import {
 import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
-import { projects, runEvents, runs } from '../db/schema.js';
+import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
@@ -71,6 +71,7 @@ import {
   pushWorktreeBranch,
   readWorktreeArtifact,
   stageWorktreeFiles,
+  worktreeHasUncommittedWork,
 } from './git.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -1203,6 +1204,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const toRemove = list.slice(body.keepRecent);
       const proj = projectMap.get(projId);
       for (const row of toRemove) {
+        if (await this.mustKeepForReview(row, proj?.path)) continue;
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path) {
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
@@ -1369,6 +1371,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
           const proj = projectMap.get(projId);
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
+            if (await this.mustKeepForReview(stale, proj?.path)) continue;
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path) {
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
@@ -1381,6 +1384,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     } finally {
       this.reconciling = false;
     }
+  }
+
+  /**
+   * Garbage collection never deletes work a human still has to look at: runs of tickets that are
+   * not `done` yet (e.g. in Review after a refused merge) and worktrees with uncommitted changes.
+   */
+  private async mustKeepForReview(row: RunRow, projectPath: string | undefined): Promise<boolean> {
+    if (row.ticketId) {
+      const ticket = this.db.select({ status: tickets.status }).from(tickets).where(eq(tickets.id, row.ticketId)).get();
+      if (ticket && ticket.status !== 'done') return true;
+    }
+    if (row.worktreePath && row.worktreePath !== projectPath) {
+      return worktreeHasUncommittedWork(row.worktreePath);
+    }
+    return false;
   }
 
   private row(id: string): RunRow {

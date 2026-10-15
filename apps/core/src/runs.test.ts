@@ -241,6 +241,38 @@ describe('runs', () => {
     expect(after.events.map((e) => e.type)).toContain('spawn_lost');
   });
 
+  it('garbage collection keeps dirty worktrees and runs of tickets still under review', async () => {
+    const project = await createProject('GC', true);
+    const finish = async () => {
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(run.id);
+      await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return t.runs.getRun(run.id).endedAt;
+          },
+          { timeout: 5_000 },
+        )
+        .not.toBeNull();
+      return t.runs.getRun(run.id);
+    };
+    const clean = await finish();
+    const dirty = await finish();
+    const inReview = await finish();
+    writeFileSync(path.join(dirty.worktreePath, 'unsaved.txt'), 'work in progress\n');
+    const ticket = t.tickets.create(project.id, { title: 'Needs review', status: 'review' });
+    t.db.update(runs).set({ ticketId: ticket.id }).where(eq(runs.id, inReview.id)).run();
+
+    const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+    expect(res.removedRuns).toBe(1);
+    expect(existsSync(clean.worktreePath)).toBe(false);
+    expect(readFileSync(path.join(dirty.worktreePath, 'unsaved.txt'), 'utf8')).toContain('work in progress');
+    expect(existsSync(inReview.worktreePath)).toBe(true);
+    expect(t.runs.list().map((r) => r.id).sort()).toEqual([dirty.id, inReview.id].sort());
+  });
+
   it('pushes run updates over /api/events', async () => {
     const project = await createProject('Events', false);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
