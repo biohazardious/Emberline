@@ -37,6 +37,7 @@ describe('buildLaunchSpec', () => {
       EMBERLINE_HOOK_TOKEN: 'tok',
       EMBERLINE_CORE_URL: 'http://core:7420',
       DISABLE_AUTOUPDATER: '1',
+      CLAUDE_CODE_SANDBOXED: '1',
     });
   });
 

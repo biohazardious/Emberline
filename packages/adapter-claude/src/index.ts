@@ -348,6 +348,10 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
       EMBERLINE_HOOK_TOKEN: options.hookToken,
       EMBERLINE_CORE_URL: options.coreUrl,
       DISABLE_AUTOUPDATER: '1',
+      // Each run gets a fresh git worktree, and Claude Code (2.1.300+) only inherits folder trust up to
+      // the git root, so every run would stop at the "trust this folder?" dialog. The runner container
+      // is the sandbox boundary; this tells Claude Code so.
+      CLAUDE_CODE_SANDBOXED: '1',
     },
   };
 }
