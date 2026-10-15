@@ -1,16 +1,12 @@
 import type { Project, ProjectStatusSummary } from '@emberline/protocol';
 import { useState } from 'react';
 import { Link } from 'wouter';
-import { api } from '../api';
 import { LiveBrowserStudio } from '../components/LiveBrowserStudio';
-import { usePoll } from '../hooks/usePoll';
+import { useApi } from '../hooks/useApi';
 
 export function LiveBrowserPage({ projectId }: { projectId: string }) {
-  const projectsPoll = usePoll(() => api<Project[]>('/api/projects'), 10_000);
-  const statusPoll = usePoll(
-    () => api<ProjectStatusSummary>(`/api/projects/${projectId}/status`),
-    5_000,
-  );
+  const projectsPoll = useApi<Project[]>('/api/projects', 10_000);
+  const statusPoll = useApi<ProjectStatusSummary>(`/api/projects/${projectId}/status`, 5_000);
   const [targetId, setTargetId] = useState('main');
 
   const project = (projectsPoll.data ?? []).find((p) => p.id === projectId);

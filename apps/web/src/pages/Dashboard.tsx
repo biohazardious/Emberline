@@ -22,8 +22,8 @@ import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPan
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
 import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
+import { useApi } from '../hooks/useApi';
+import { useRuns } from '../hooks/liveData';
 import { timeAgo } from '../time';
 import { MODEL_LABELS, RoadmapStudioPanel } from './RoadmapPage';
 
@@ -50,8 +50,8 @@ export function Dashboard({
   onInspectRun?: (runId: string) => void;
 }) {
   const [, navigate] = useLocation();
-  const terminals = usePoll(() => api<TerminalInfo[]>('/api/terminals'), 3_000);
-  const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
+  const terminals = useApi<TerminalInfo[]>('/api/terminals', 3_000);
+  const projects = useApi<Project[]>('/api/projects', 10_000);
   const { runs } = useRuns();
   const [overviewTab, setOverviewTab] = useState<OverviewTab>('studio');
   const [hideCompletedRuns, setHideCompletedRuns] = useState<boolean>(false);

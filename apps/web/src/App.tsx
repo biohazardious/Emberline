@@ -18,9 +18,8 @@ import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
 import { RunInspector } from './components/RunInspector';
 import { RunStatePill } from './components/RunStatePill';
-import { usePoll } from './hooks/usePoll';
-import { useRuns } from './hooks/useRuns';
-import { useScheduler } from './hooks/useScheduler';
+import { useApi } from './hooks/useApi';
+import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
 import { Dashboard } from './pages/Dashboard';
 
 // xterm.js and Monaco are the bulk of the bundle; only load them when opened.
@@ -56,10 +55,10 @@ export function App() {
 function Shell() {
   const { logout } = useAuth();
   const [location, navigate] = useLocation();
-  const system = usePoll(() => api<SystemStatus>('/api/system'), 5_000);
-  const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
-  const claudeUsage = usePoll(() => api<ClaudeUsageTelemetry>('/api/factory/claude-usage'), 30_000);
-  const factorySettings = usePoll(() => api<FactorySettings>('/api/factory/settings'), 15_000);
+  const system = useApi<SystemStatus>('/api/system', 5_000);
+  const projects = useApi<Project[]>('/api/projects', 10_000);
+  const claudeUsage = useApi<ClaudeUsageTelemetry>('/api/factory/claude-usage', 30_000);
+  const factorySettings = useApi<FactorySettings>('/api/factory/settings', 15_000);
   const { runs } = useRuns();
   const { scheduler } = useScheduler();
 
@@ -276,6 +275,7 @@ function Shell() {
 
   return (
     <div className={`app workbench${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+      <LiveEvents />
       <aside className={`sidebar${mobileNavOpen ? ' sidebar-open' : ''}`} aria-label="Workspace navigation">
         <div className="sidebar-top">
           <Link href="/" className="brand" title="Emberline — AI Coding Factory">

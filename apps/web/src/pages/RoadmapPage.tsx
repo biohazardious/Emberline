@@ -20,8 +20,8 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from '../components/PersonaBadge';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
+import { useApi } from '../hooks/useApi';
+import { useRuns } from '../hooks/liveData';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   claude: 'Claude Code',
@@ -212,9 +212,9 @@ export function RouteBadgeSelect({
 
 export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [, navigate] = useLocation();
-  const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
-  const roadmapPoll = usePoll(() => api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap`), 6_000);
-  const factorySettingsPoll = usePoll(() => api<FactorySettings>('/api/factory/settings'), 20_000);
+  const projects = useApi<Project[]>('/api/projects', 15_000);
+  const roadmapPoll = useApi<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap`, 6_000);
+  const factorySettingsPoll = useApi<FactorySettings>('/api/factory/settings', 20_000);
   const enabledProviders: AgentId[] = useMemo(
     () =>
       factorySettingsPoll.data?.enabledProviders?.length

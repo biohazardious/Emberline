@@ -13,7 +13,7 @@ import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useRef,
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
-import { usePoll } from '../hooks/usePoll';
+import { useApi } from '../hooks/useApi';
 import { LiveBrowserStudio } from './LiveBrowserStudio';
 import { PersonaBadge } from './PersonaBadge';
 
@@ -121,18 +121,9 @@ type StudioTab = 'factory' | 'demo' | 'browser' | 'worktrees' | 'checkpoints';
 
 export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
-  const statusPoll = usePoll(
-    () => api<ProjectStatusSummary>(`/api/projects/${project.id}/status`),
-    4_000,
-  );
-  const ticketsPoll = usePoll(
-    () => api<Ticket[]>(`/api/projects/${project.id}/tickets`),
-    5_000,
-  );
-  const checkpointsPoll = usePoll(
-    () => api<ProjectCheckpoint[]>(`/api/projects/${project.id}/checkpoints`),
-    10_000,
-  );
+  const statusPoll = useApi<ProjectStatusSummary>(`/api/projects/${project.id}/status`, 4_000);
+  const ticketsPoll = useApi<Ticket[]>(`/api/projects/${project.id}/tickets`, 5_000);
+  const checkpointsPoll = useApi<ProjectCheckpoint[]>(`/api/projects/${project.id}/checkpoints`, 10_000);
 
   const [activeTab, setActiveTab] = useState<StudioTab>('factory');
   const [selectedTargetId, setSelectedTargetId] = useState<string>('main');

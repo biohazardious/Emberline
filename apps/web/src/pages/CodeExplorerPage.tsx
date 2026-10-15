@@ -12,8 +12,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api } from '../api';
 import { PERSONA_BY_ID, PERSONA_LIST } from '../components/PersonaBadge';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
+import { useApi } from '../hooks/useApi';
+import { useRuns } from '../hooks/liveData';
 
 interface OpenTab {
   path: string;
@@ -349,7 +349,7 @@ function StandaloneMonacoEditor({
 }
 
 export function CodeExplorerPage({ projectId }: { projectId: string }) {
-  const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
+  const projects = useApi<Project[]>('/api/projects', 15_000);
   const { runs } = useRuns();
   const project = useMemo(
     () => (projects.data ?? []).find((p) => p.id === projectId),
@@ -383,17 +383,11 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   const [agentPersona, setAgentPersona] = useState<AgentPersona>('coder');
   const [dispatchingAgent, setDispatchingAgent] = useState(false);
 
-  const fileList = usePoll(
-    () =>
-      api<WorkspaceFileListResponse>(
-        `/api/projects/${projectId}/files?targetId=${encodeURIComponent(targetId)}`,
-      ),
+  // Keyed by URL: switching project or target fetches the new list right away.
+  const fileList = useApi<WorkspaceFileListResponse>(
+    `/api/projects/${projectId}/files?targetId=${encodeURIComponent(targetId)}`,
     6_000,
   );
-
-  useEffect(() => {
-    void fileList.refresh();
-  }, [projectId, targetId]);
 
   const openFile = useCallback(
     async (relPath: string) => {

@@ -15,9 +15,8 @@ import {
   STAGE_TEMPLATES,
 } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
-import { useTickets } from '../hooks/useTickets';
+import { useApi } from '../hooks/useApi';
+import { useRuns, useTickets } from '../hooks/liveData';
 import { timeAgo } from '../time';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -54,7 +53,7 @@ interface DropTarget {
 }
 
 export function BoardPage({ projectId }: { projectId: string }) {
-  const projects = usePoll(() => api<Project[]>('/api/projects'), 30_000);
+  const projects = useApi<Project[]>('/api/projects', 30_000);
   const project = projects.data?.find((p) => p.id === projectId);
   const { tickets, patchLocal } = useTickets(projectId);
   const { runs } = useRuns();

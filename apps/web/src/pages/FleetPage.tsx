@@ -6,8 +6,8 @@ import { PersonaBadge } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { STAGE_TEMPLATES } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
+import { useApi } from '../hooks/useApi';
+import { useRuns } from '../hooks/liveData';
 import { timeAgo } from '../time';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -27,7 +27,7 @@ export function FleetPage({
   onInspectRun: (runId: string) => void;
 }) {
   const { runs } = useRuns();
-  const projects = usePoll(() => api<Project[]>('/api/projects'), 15_000);
+  const projects = useApi<Project[]>('/api/projects', 15_000);
   const [filter, setFilter] = useState<FleetFilter>('active');
   const [layout, setLayout] = useState<GridLayout>('grid');
   const [error, setError] = useState<string>();

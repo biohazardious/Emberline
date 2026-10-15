@@ -8,7 +8,7 @@ import type {
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
-import { usePoll } from '../hooks/usePoll';
+import { useApi } from '../hooks/useApi';
 import { PERSONA_LIST, PersonaBadge } from './PersonaBadge';
 
 export function ProjectAdvisorPanel({
@@ -25,10 +25,7 @@ export function ProjectAdvisorPanel({
   onRunStarted?: (run: Run) => void;
 }) {
   const [, navigate] = useLocation();
-  const recs = usePoll(
-    () => api<ProjectRecommendation[]>(`/api/projects/${project.id}/recommendations`),
-    8_000,
-  );
+  const recs = useApi<ProjectRecommendation[]>(`/api/projects/${project.id}/recommendations`, 8_000);
   const [busyId, setBusyId] = useState<string>();
   const [error, setError] = useState<string>();
 

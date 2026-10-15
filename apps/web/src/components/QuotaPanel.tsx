@@ -9,9 +9,8 @@ import {
 } from '@emberline/protocol';
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
-import { useScheduler } from '../hooks/useScheduler';
+import { useApi } from '../hooks/useApi';
+import { useRuns, useScheduler } from '../hooks/liveData';
 
 const SOURCE_LABEL = {
   hook: 'from Claude',
@@ -128,8 +127,8 @@ function TokenBucketCard({ label, sublabel, bucket }: { label: string; sublabel:
 export function QuotaPanel({ compact = false }: { compact?: boolean }) {
   const { scheduler, setScheduler } = useScheduler();
   const { runs } = useRuns();
-  const usagePoll = usePoll(() => api<ClaudeUsageTelemetry>('/api/factory/claude-usage'), 30_000);
-  const settingsPoll = usePoll(() => api<FactorySettings>('/api/factory/settings'), 25_000);
+  const usagePoll = useApi<ClaudeUsageTelemetry>('/api/factory/claude-usage', 30_000);
+  const settingsPoll = useApi<FactorySettings>('/api/factory/settings', 25_000);
   const [manualUsage, setManualUsage] = useState<ClaudeUsageTelemetry | null>(null);
   const [refreshingUsage, setRefreshingUsage] = useState(false);
   const now = useNow(1_000);

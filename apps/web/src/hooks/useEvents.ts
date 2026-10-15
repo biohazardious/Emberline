@@ -1,9 +1,10 @@
-import { ServerEvent } from '@emberline/protocol';
+import type { ServerEvent } from '@emberline/protocol';
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { subscribeEvents } from './eventHub';
 
 /**
- * Subscribes to the `/api/events` push channel. Reconnects with backoff; `onOpen` fires after every
- * (re)connect so callers can refetch and never miss an update that happened while disconnected.
+ * Subscribes to the `/api/events` push channel (one shared socket per tab). `onOpen` fires after
+ * every (re)connect so callers can refetch and never miss an update that happened while disconnected.
  */
 export function useEvents(onEvent: (event: ServerEvent) => void, onOpen: () => void): void {
   const handlers = useRef({ onEvent, onOpen });
@@ -11,37 +12,14 @@ export function useEvents(onEvent: (event: ServerEvent) => void, onOpen: () => v
     handlers.current = { onEvent, onOpen };
   });
 
-  useEffect(() => {
-    let socket: WebSocket | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let delay = 500;
-    let disposed = false;
-
-    const connect = () => {
-      const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/events`;
-      socket = new WebSocket(url);
-      socket.onopen = () => {
-        delay = 500;
-        handlers.current.onOpen();
-      };
-      socket.onmessage = (message) => {
-        const parsed = ServerEvent.safeParse(JSON.parse(String(message.data)));
-        if (parsed.success) handlers.current.onEvent(parsed.data);
-      };
-      socket.onclose = () => {
-        if (disposed) return;
-        timer = setTimeout(connect, delay);
-        delay = Math.min(delay * 2, 10_000);
-      };
-    };
-
-    connect();
-    return () => {
-      disposed = true;
-      clearTimeout(timer);
-      socket?.close();
-    };
-  }, []);
+  useEffect(
+    () =>
+      subscribeEvents({
+        onEvent: (event) => handlers.current.onEvent(event),
+        onOpen: () => handlers.current.onOpen(),
+      }),
+    [],
+  );
 }
 
 /** Replace-or-prepend by id. */

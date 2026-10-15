@@ -1,11 +1,10 @@
 import type { TerminalInfo } from '@emberline/protocol';
 import { useState } from 'react';
 import { Link } from 'wouter';
-import { api } from '../api';
 import { RunStatePill } from '../components/RunStatePill';
 import { type ConnectionState, TerminalView } from '../components/TerminalView';
-import { usePoll } from '../hooks/usePoll';
-import { useRuns } from '../hooks/useRuns';
+import { useApi } from '../hooks/useApi';
+import { useRuns } from '../hooks/liveData';
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connecting: 'connecting…',
@@ -16,7 +15,7 @@ const STATE_LABEL: Record<ConnectionState, string> = {
 
 export function TerminalPage({ id }: { id: string }) {
   const [state, setState] = useState<ConnectionState>('connecting');
-  const terminals = usePoll(() => api<TerminalInfo[]>('/api/terminals'), 5_000);
+  const terminals = useApi<TerminalInfo[]>('/api/terminals', 5_000);
   const info = terminals.data?.find((t) => t.id === id);
   const { runs } = useRuns();
   const run = info?.runId ? runs?.find((r) => r.id === info.runId) : undefined;

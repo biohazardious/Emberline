@@ -1,6 +1,5 @@
 import type { AgentPersona, TaskTemplate } from '@emberline/protocol';
-import { api } from '../api';
-import { usePoll } from '../hooks/usePoll';
+import { useApi } from '../hooks/useApi';
 
 export interface PersonaMeta {
   id: AgentPersona;
@@ -110,7 +109,7 @@ export function TaskTemplateBar({
 }: {
   onSelect: (template: TaskTemplate) => void;
 }) {
-  const templates = usePoll(() => api<TaskTemplate[]>('/api/factory/templates'), 60_000);
+  const templates = useApi<TaskTemplate[]>('/api/factory/templates', 60_000);
   const list = templates.data ?? [];
   if (list.length === 0) return null;
 
