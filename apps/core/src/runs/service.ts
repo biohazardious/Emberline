@@ -530,6 +530,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
   }
 
+  /**
+   * The last `lines` non-empty lines of the run's terminal as plain text (escape sequences
+   * stripped), for cheap Fleet thumbnails; null when the run has no live terminal.
+   */
+  async screenText(id: string, lines = 24): Promise<string | null> {
+    const screen = await this.screen(id);
+    if (screen === undefined) return null;
+    return stripVTControlCharacters(screen)
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/\s+$/, ''))
+      .filter((line) => line.trim().length > 0)
+      .slice(-lines)
+      .join('\n');
+  }
+
   private async spawnAgent(
     row: RunRow,
     options: { prompt?: string; resumeSessionId?: string; type: 'spawned' | 'resumed' },

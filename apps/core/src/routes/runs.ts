@@ -35,6 +35,13 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     return run;
   });
 
+  app.get<{ Params: { id: string }; Querystring: { lines?: string } }>(
+    '/api/runs/:id/screen-text',
+    async (request): Promise<{ text: string | null }> => ({
+      text: await runs.screenText(request.params.id, Math.min(80, Math.max(1, Number(request.query.lines ?? 24) || 24))),
+    }),
+  );
+
   app.post<{ Params: { id: string } }>('/api/runs/:id/stop', async (request): Promise<Run> => runs.stop(request.params.id));
 
   /** Manual resume (ignores the quota pause): live session gets a prompt, ended ones `--resume`. */

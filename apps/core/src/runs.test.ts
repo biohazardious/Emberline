@@ -273,6 +273,17 @@ describe('runs', () => {
     expect(t.runs.list().map((r) => r.id).sort()).toEqual([dirty.id, inReview.id].sort());
   });
 
+  it('serves the terminal as plain text for fleet thumbnails', async () => {
+    const project = await createProject('Thumb', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(run.id);
+    await expect
+      .poll(async () => (await api('GET', `/api/runs/${run.id}/screen-text?lines=5`)).json().text as string | null)
+      .toContain('fake claude ready');
+    const text = (await api('GET', `/api/runs/${run.id}/screen-text`)).json().text as string;
+    expect(text).not.toContain(String.fromCharCode(27));
+  });
+
   it('pushes run updates over /api/events', async () => {
     const project = await createProject('Events', false);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });

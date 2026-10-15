@@ -1,5 +1,5 @@
 import type { GarbageCollectRunsResponse, Project, Run } from '@emberline/protocol';
-import { type FormEvent, lazy, Suspense, useMemo, useState } from 'react';
+import { type FormEvent, lazy, Suspense, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from '../components/PersonaBadge';
@@ -8,6 +8,8 @@ import { STAGE_TEMPLATES } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
+import { useInView } from '../hooks/useInView';
+import { toastError, toastInfo } from '../toast';
 import { timeAgo } from '../time';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -30,6 +32,11 @@ export function FleetPage({
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const [filter, setFilter] = useState<FleetFilter>('active');
   const [layout, setLayout] = useState<GridLayout>('grid');
+  /** live: xterm on panes in view, text thumbnails elsewhere · thumbnails: text everywhere (cheap with many agents). */
+  const [view, setView] = useState<'live' | 'thumbnails'>('live');
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkPrompt, setBulkPrompt] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [gcBusy, setGcBusy] = useState(false);
@@ -72,6 +79,38 @@ export function FleetPage({
         return scopedRuns;
     }
   }, [scopedRuns, filter]);
+
+  const selectableIds = new Set(visibleRuns.filter((r) => !isRunCompleted(r) && r.state !== 'queued').map((r) => r.id));
+  const selectedIds = [...selected].filter((id) => selectableIds.has(id));
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  /** Sends the same follow-up to every selected live run; failures are reported per run. */
+  const sendBulkPrompt = async (e: FormEvent) => {
+    e.preventDefault();
+    const text = bulkPrompt.trim();
+    if (!text || selectedIds.length === 0) return;
+    setBulkBusy(true);
+    const results = await Promise.allSettled(
+      selectedIds.map((id) => api(`/api/runs/${id}/prompt`, 'POST', { text })),
+    );
+    setBulkBusy(false);
+    const failed = results.filter((r) => r.status === 'rejected');
+    if (failed.length > 0) {
+      toastError(
+        `Prompt failed for ${failed.length} of ${results.length} run(s): ${errorMessage((failed[0] as PromiseRejectedResult).reason)}`,
+      );
+    } else {
+      toastInfo(`Prompt sent to ${results.length} run(s).`);
+      setBulkPrompt('');
+      setSelected(new Set());
+    }
+  };
 
   const handleGarbageCollect = async (keepRecent = 0) => {
     setGcBusy(true);
@@ -238,8 +277,51 @@ export function FleetPage({
               1×1
             </button>
           </div>
+
+          <div className="segmented hide-sm" role="radiogroup" aria-label="Pane content">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={view === 'live'}
+              className={view === 'live' ? 'active' : ''}
+              onClick={() => setView('live')}
+              title="Live terminals for panes in view, text thumbnails elsewhere"
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={view === 'thumbnails'}
+              className={view === 'thumbnails' ? 'active' : ''}
+              onClick={() => setView('thumbnails')}
+              title="Text thumbnails only: cheapest view for many agents"
+            >
+              Thumbnails
+            </button>
+          </div>
         </div>
       </header>
+
+      {selectedIds.length > 0 && (
+        <form className="fleet-bulk-bar" onSubmit={(e) => void sendBulkPrompt(e)}>
+          <span className="mono">{selectedIds.length} selected</span>
+          <input
+            type="text"
+            className="input"
+            value={bulkPrompt}
+            onChange={(e) => setBulkPrompt(e.target.value)}
+            placeholder="Prompt to send to every selected agent…"
+            aria-label="Prompt for the selected agents"
+          />
+          <button type="submit" className="btn btn-sm btn-primary" disabled={bulkBusy || !bulkPrompt.trim()}>
+            {bulkBusy ? 'Sending…' : 'Send to selected'}
+          </button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </form>
+      )}
 
       <QuotaPanel compact />
 
@@ -307,6 +389,10 @@ export function FleetPage({
             <FleetPane
               key={run.id}
               run={run}
+              view={view}
+              selectable={selectableIds.has(run.id)}
+              selected={selected.has(run.id)}
+              onToggleSelected={() => toggleSelected(run.id)}
               project={projectById.get(run.projectId)}
               onInspect={() => onInspectRun(run.id)}
               onError={setError}
@@ -318,13 +404,31 @@ export function FleetPage({
   );
 }
 
+/** Plain-text screen of a run, polled while shown; far cheaper than an attached xterm. */
+function TerminalThumbnail({ runId }: { runId: string }) {
+  const screen = useApi<{ text: string | null }>(`/api/runs/${runId}/screen-text?lines=18`, 4_000);
+  return (
+    <pre className="fleet-thumbnail mono" aria-label="Terminal snapshot">
+      {screen.data?.text ?? (screen.loading ? 'Loading snapshot…' : 'No terminal output yet.')}
+    </pre>
+  );
+}
+
 function FleetPane({
   run,
+  view,
+  selectable,
+  selected,
+  onToggleSelected,
   project,
   onInspect,
   onError,
 }: {
   run: Run;
+  view: 'live' | 'thumbnails';
+  selectable: boolean;
+  selected: boolean;
+  onToggleSelected: () => void;
   project: Project | undefined;
   onInspect: () => void;
   onError: (msg: string | undefined) => void;
@@ -335,6 +439,9 @@ function FleetPane({
 
   const completed = isRunCompleted(run);
   const live = !completed;
+  const paneRef = useRef<HTMLElement>(null);
+  const inView = useInView(paneRef, '100px');
+  const attachTerminal = view === 'live' && inView;
   const showPromptFooter = (live && run.state !== 'queued') || (completed && showReopenBar && run.resumable);
 
   const act = async (name: string, fn: () => Promise<void>) => {
@@ -360,8 +467,17 @@ function FleetPane({
   };
 
   return (
-    <article id={`fleet-pane-${run.id}`} className={`fleet-pane fleet-pane-${run.state}`}>
+    <article ref={paneRef} id={`fleet-pane-${run.id}`} className={`fleet-pane fleet-pane-${run.state}`}>
       <header className="fleet-pane-head">
+        {selectable && (
+          <input
+            type="checkbox"
+            className="fleet-select"
+            checked={selected}
+            onChange={onToggleSelected}
+            aria-label={`Select ${run.title ?? 'run'} for a bulk prompt`}
+          />
+        )}
         <RunStatePill state={run.state} cancelled={run.cancelled} />
         <PersonaBadge persona={run.persona} />
         <button type="button" className="fleet-pane-title" onClick={onInspect} title="Open run inspector & timeline">
@@ -437,10 +553,12 @@ function FleetPane({
       </header>
 
       <div className="fleet-pane-body">
-        {live && run.terminalId ? (
+        {live && run.terminalId && attachTerminal ? (
           <Suspense fallback={<div className="term-shell term-shell-compact" aria-busy="true" />}>
             <TerminalView key={run.terminalId} terminalId={run.terminalId} compact autoFocus={false} />
           </Suspense>
+        ) : live && run.terminalId ? (
+          <TerminalThumbnail runId={run.id} />
         ) : (
           <div className="fleet-placeholder" style={{ padding: '18px 20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
