@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants as fsConstants, existsSync, readFileSync } from 'node:fs';
-import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
