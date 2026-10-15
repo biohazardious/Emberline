@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { constants as fsConstants, existsSync, readFileSync } from 'node:fs';
+import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -2162,6 +2162,36 @@ function resolveSafeWorkspaceFile(workspacePath: string, relPath: string): strin
   return resolved;
 }
 
+const isInside = (root: string, candidate: string) => candidate === root || candidate.startsWith(root + path.sep);
+
+/**
+ * `resolveSafeWorkspaceFile` plus symlink checks. Agents control the workspace, so a planted link
+ * (`README.md -> /data/emberline.db`, `src -> /opt`) must never let the explorer read or write
+ * outside it. The nearest existing ancestor must resolve inside the workspace and, unless
+ * `allowLinkTarget` (delete removes the link itself), the file must not be a symlink.
+ */
+async function resolveContainedWorkspaceFile(
+  workspacePath: string,
+  relPath: string,
+  { allowLinkTarget = false }: { allowLinkTarget?: boolean } = {},
+): Promise<string> {
+  const resolved = resolveSafeWorkspaceFile(workspacePath, relPath);
+  const realRoot = await realpath(path.resolve(workspacePath));
+  let ancestor = path.dirname(resolved);
+  while (!existsSync(ancestor) && ancestor !== path.dirname(ancestor)) ancestor = path.dirname(ancestor);
+  if (!isInside(realRoot, await realpath(ancestor))) {
+    throw new Error('Path resolves outside the workspace through a symlink');
+  }
+  const entry = await lstat(resolved).catch(() => null);
+  if (entry?.isSymbolicLink() && !allowLinkTarget) {
+    throw new Error(`Refusing to follow symlink: ${relPath}`);
+  }
+  return resolved;
+}
+
+/** Creates or truncates without following a symlink swapped in after the containment check. */
+const WRITE_NO_FOLLOW = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
+
 export async function listWorkspaceFilesFlat(workspacePath: string): Promise<WorkspaceFileEntry[]> {
   if (!existsSync(workspacePath)) return [];
   const entries: WorkspaceFileEntry[] = [];
@@ -2219,7 +2249,7 @@ export async function readWorkspaceFileContent(
   targetId: string,
   relPath: string,
 ): Promise<WorkspaceFileContentResponse> {
-  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath);
   if (!existsSync(absFile)) {
     throw new Error(`File not found: ${relPath}`);
   }
@@ -2259,7 +2289,7 @@ export async function readWorkspaceFileRaw(
   sizeBytes: number;
   buffer: Buffer;
 }> {
-  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath);
   if (!existsSync(absFile)) {
     throw new Error(`File not found: ${relPath}`);
   }
@@ -2287,13 +2317,13 @@ export async function uploadWorkspaceFiles(
   const uploadedPaths: string[] = [];
   for (const item of files) {
     const cleanRel = item.path.replace(/\\/g, '/').replace(/^\/+/, '');
-    const absFile = resolveSafeWorkspaceFile(workspacePath, cleanRel);
+    const absFile = await resolveContainedWorkspaceFile(workspacePath, cleanRel);
     await mkdir(path.dirname(absFile), { recursive: true });
     const rawBase64 = item.dataBase64.includes(',')
       ? (item.dataBase64.split(',')[1] ?? '')
       : item.dataBase64;
     const buf = Buffer.from(rawBase64, 'base64');
-    await writeFile(absFile, buf);
+    await writeFile(absFile, buf, { flag: WRITE_NO_FOLLOW });
     uploadedPaths.push(cleanRel);
   }
   return {
@@ -2308,9 +2338,9 @@ export async function writeWorkspaceFileContent(
   relPath: string,
   content: string,
 ): Promise<WorkspaceFileContentResponse> {
-  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath);
   await mkdir(path.dirname(absFile), { recursive: true });
-  await writeFile(absFile, content, 'utf-8');
+  await writeFile(absFile, content, { encoding: 'utf-8', flag: WRITE_NO_FOLLOW });
   const st = await stat(absFile);
   return {
     targetId,
@@ -2322,7 +2352,7 @@ export async function writeWorkspaceFileContent(
 }
 
 export async function deleteWorkspaceFileEntry(workspacePath: string, relPath: string): Promise<void> {
-  const absFile = resolveSafeWorkspaceFile(workspacePath, relPath);
+  const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath, { allowLinkTarget: true });
   await rm(absFile, { recursive: true, force: true });
 }
 
