@@ -93,46 +93,46 @@ export function inferPersonaAndCategoryFromText(text: string): {
   priority: 1 | 2 | 3;
 } {
   const lower = text.toLowerCase();
-  const priority: 1 | 2 | 3 = /\b(urgent|critical|core|blocker|security|crash|acil|kritik)\b/.test(lower)
+  const priority: 1 | 2 | 3 = /\b(urgent|critical|core|blocker|security|crash)\b/.test(lower)
     ? 3
     : 2;
 
   if (
-    /\b(test|qa|e2e|playwright|vitest|pytest|regression|coverage|assertion|verify|doğrulama)\b/.test(
+    /\b(test|qa|e2e|playwright|vitest|pytest|regression|coverage|assertion|verify)\b/.test(
       lower,
     )
   ) {
     return { persona: 'qa', category: 'qa_security', priority };
   }
   if (
-    /\b(security|auth|oauth|jwt|rbac|permission|csrf|xss|encryption|audit|checksum|sha256|güvenlik|yetki)\b/.test(
+    /\b(security|auth|oauth|jwt|rbac|permission|csrf|xss|encryption|audit|checksum|sha256)\b/.test(
       lower,
     )
   ) {
     return { persona: 'security', category: 'qa_security', priority: 3 };
   }
   if (
-    /\b(database|sql|sqlite|postgres|schema|migration|query|table|drizzle|prisma|redis|veritabanı|tablo)\b/.test(
+    /\b(database|sql|sqlite|postgres|schema|migration|query|table|drizzle|prisma|redis)\b/.test(
       lower,
     )
   ) {
     return { persona: 'dba', category: 'architecture', priority };
   }
   if (
-    /\b(ui|ux|css|layout|theme|dark mode|responsive|modal|animation|canvas|hud|menu|screen|widget|design|polish|arayüz|tasarım|ekran|görsel)\b/.test(
+    /\b(ui|ux|css|layout|theme|dark mode|responsive|modal|animation|canvas|hud|menu|screen|widget|design|polish)\b/.test(
       lower,
     )
   ) {
     return { persona: 'ui_ux', category: 'ui_ux', priority };
   }
   if (
-    /\b(architecture|blueprint|refactor|protocol|contract|openapi|pipeline|dag|router|orchestrator|sdk|mimari|altyapı)\b/.test(
+    /\b(architecture|blueprint|refactor|protocol|contract|openapi|pipeline|dag|router|orchestrator|sdk)\b/.test(
       lower,
     )
   ) {
     return { persona: 'architect', category: 'architecture', priority };
   }
-  if (/\b(performance|optimize|fps|latency|memory|cache|speed|performans|hız)\b/.test(lower)) {
+  if (/\b(performance|optimize|fps|latency|memory|cache|speed)\b/.test(lower)) {
     return { persona: 'coder', category: 'performance', priority };
   }
   return { persona: 'coder', category: 'feature', priority };
@@ -225,7 +225,7 @@ function detectPrimaryProjectDomain(
   // Inspect only the project name, description, and top heading of PROJECT.md with strict word boundaries
   const headerSnippet = `${project.name} ${project.description ?? ''} ${blueprintContent.slice(0, 600)}`.toLowerCase();
 
-  if (/\b(flappy|arcade|endless-runner|tower-defense|phaser|pixi|game|gameplay|oyun|zıplayan)\b/.test(headerSnippet)) {
+  if (/\b(flappy|arcade|endless-runner|tower-defense|phaser|pixi|game|gameplay)\b/.test(headerSnippet)) {
     return 'game_interactive';
   }
   if (

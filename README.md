@@ -20,7 +20,6 @@ Status: **MVP complete (M0–M6)**: PTY host, web terminal, Claude runs with hoo
 | `packages/adapter-sdk` | Agent adapter interface |
 | `packages/adapter-claude` | Claude Code adapter |
 | `packages/hook` | `emberline-hook`, forwards Claude Code hooks to core |
-| `deploy/truenas-compose.yaml` | TrueNAS SCALE dataset-backed Compose stack |
 
 ## Running (self-host)
 
@@ -36,23 +35,7 @@ make logs / make down
 
 Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinned Claude Code CLI, hosts the agents). They share only the ptyd socket and the workspaces volume (`runner-home` is mounted read-only into `core` so `git push` can use your runner's SSH/git credentials).
 
-### TrueNAS SCALE Deployment
-
-On TrueNAS SCALE 24.10+ (Electric Eel / Fangtooth), use [`deploy/truenas-compose.yaml`](deploy/truenas-compose.yaml) with dataset bind mounts:
-
-```bash
-# 1. Create datasets / directories on your pool and set ownership to node (1000:1000)
-mkdir -p /mnt/tank/apps/emberline/{data,runner-home,workspaces}
-chown -R 1000:1000 /mnt/tank/apps/emberline/{data,runner-home,workspaces}
-
-# 2. Build and launch the stack
-docker compose -f deploy/truenas-compose.yaml up -d --build
-
-# 3. Log in once with your personal Claude subscription inside the runner
-docker compose -f deploy/truenas-compose.yaml exec -it runner claude login
-```
-
-Set `EMBERLINE_BIND=0.0.0.0` (behind Tailscale or a TLS reverse proxy) and `TZ=Europe/Istanbul` (or your local IANA timezone) in your environment.
+To reach Emberline from other devices, set `EMBERLINE_BIND=0.0.0.0` (behind Tailscale or a TLS reverse proxy). Set `TZ` to your local IANA timezone (for example `Europe/Istanbul`) so quota reset times are parsed correctly.
 
 ### Runs & Fleet Multiplexer
 

@@ -8,11 +8,11 @@
 
 ## 1. Problem
 
-Current workflow: VS Code + Claude Code plugin on a local machine, code pushed to GitHub or a self-hosted Gitea, tests run in local Docker or on a TrueNAS homelab. Development is tied to the local machine.
+Current workflow: VS Code + Claude Code plugin on a local machine, code pushed to GitHub or a self-hosted Gitea, tests run in local Docker or on a homelab server. Development is tied to the local machine.
 
 Goals:
 
-- Move development to a self-hosted server (TrueNAS homelab) instead of the local machine.
+- Move development to a self-hosted server (homelab) instead of the local machine.
 - Track, schedule and automate coding work remotely, from any device (including mobile).
 - Handle the Claude subscription quota: when the 5-hour usage window is exhausted, work must resume automatically after it resets.
 - A clear dashboard showing tasks, results, and per-file changes.
@@ -275,7 +275,7 @@ Learned from evaluating adjacent orchestrators (`stablyai/orca`, `herdr` + `herd
 | M5 | Quota scheduler | Rate limit (fixture-simulated + real) pauses dispatch and auto-resumes at reset. |
 | M5.1 | Workbench UI v2 | Precision Dark theme, left sidebar shell, `⌘K` command palette, docked live terminal + hook event timeline, run `title` exposure. |
 | M5.2 | Fleet & Pipeline | `/fleet` multi-terminal grid multiplexer with attention filter; pipeline board auto-start on drop to `in_progress` + stage prompt templates. |
-| M6 | Review + deploy | Monaco diff + inline diff annotations sent to Claude, commit/push branch, artifacts view, `docker compose up` on TrueNAS. |
+| M6 | Review + deploy | Monaco diff + inline diff annotations sent to Claude, commit/push branch, artifacts view, `docker compose up` on a self-hosted server. |
 
 
 ## 7. Open questions
