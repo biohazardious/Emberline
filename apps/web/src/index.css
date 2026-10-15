@@ -3090,3 +3090,58 @@ dialog.cmd-dialog::backdrop {
 .provider-mark-codex { background: var(--ok); }
 .provider-mark-aider { background: var(--warn); }
 
+/* Settings > Quota: per-provider limit gauges (QuotaPanel.tsx) */
+.quota-provider-head {
+  display: flex;
+  align-items: center;
+  margin: 4px 0 -4px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.quota-gauges {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+.quota-gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.quota-gauge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.quota-gauge-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.quota-gauge-head strong {
+  font-size: 1.05rem;
+}
+.quota-gauge-bar {
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+}
+.quota-gauge-bar > div {
+  height: 100%;
+  transition: width 250ms ease;
+}
+.quota-gauge-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.73rem;
+}
+

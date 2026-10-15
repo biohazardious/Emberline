@@ -7,7 +7,7 @@ import {
   PROVIDER_REGISTRY,
   type SchedulerState,
 } from '@emberline/protocol';
-import { Calendar, ChartColumn, Clock, CreditCard, RotateCw, Timer, Zap } from 'lucide-react';
+import { Calendar, ChartColumn, Clock, CreditCard, Gauge, RotateCw, Timer, Zap } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { ProviderMark } from './ProviderMark';
@@ -72,6 +72,68 @@ function barColor(pct: number): string {
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const dateTimeShort = (iso: string) =>
   new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+function ProviderLimitsHeader({ id, title }: { id: AgentId; title: string }) {
+  return (
+    <h3 className="quota-provider-head">
+      <ProviderMark id={id} />
+      {title}
+    </h3>
+  );
+}
+
+/** One usage limit: percentage bar, what remains and when it resets. */
+function LimitGauge({
+  icon,
+  title,
+  percent,
+  value,
+  remaining,
+  resetsAt,
+  resetLabel,
+  status,
+  now,
+}: {
+  icon: ReactNode;
+  title: string;
+  /** null when the provider has not reported this limit. */
+  percent: number | null;
+  /** Headline instead of the percentage (e.g. spent credits). */
+  value?: string;
+  remaining: string;
+  resetsAt?: string | null;
+  resetLabel?: (iso: string) => string;
+  status?: string;
+  now: number;
+}) {
+  const pct = Math.min(100, Math.max(0, percent ?? 0));
+  return (
+    <div className="quota-gauge">
+      <div className="quota-gauge-head">
+        <span className="quota-gauge-title">
+          {icon} {title}
+        </span>
+        <strong className="mono" style={{ color: value ? undefined : barColor(pct) }}>
+          {value ?? (percent === null ? '—' : `${pct}%`)}
+        </strong>
+      </div>
+      <div className="quota-gauge-bar">
+        <div style={{ width: `${pct}%`, background: barColor(pct) }} />
+      </div>
+      <div className="quota-gauge-foot muted mono">
+        <span>{remaining}</span>
+        {resetsAt ? (
+          <span>
+            Resets in {formatCountdown(resetsAt, now)}
+            {resetLabel ? ` (${resetLabel(resetsAt)})` : ''}
+          </span>
+        ) : (
+          status && <span>{status}</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function TokenBucketCard({
   label,
@@ -256,6 +318,8 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
       style={{
         display: 'flex',
         flexDirection: 'column',
+        // .quota wraps for the compact bar; wrapping a column stretched every section vertically.
+        flexWrap: 'nowrap',
         alignItems: 'stretch',
         gap: 14,
       }}
@@ -352,171 +416,48 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
 
       {usage && (
         <>
-          {/* Live Rate-Limit Gauges (5-Hour Session + 7-Day Weekly + Extra Credits) */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: 10,
-            }}
-          >
-            <div
-              style={{
-                padding: '12px 14px',
-                borderRadius: 'var(--radius)',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
-                  <Timer className="icon" aria-hidden /> 5-Hour Session Limit (Hourly / Rolling)
-                </span>
-                <strong className="mono" style={{ fontSize: '1.05rem', color: barColor(fivePct) }}>
-                  {usage.fiveHour ? `${fivePct}%` : '—'}
-                </strong>
-              </div>
-              <div
-                style={{
-                  width: '100%',
-                  height: 8,
-                  borderRadius: 999,
-                  background: 'var(--bg)',
-                  overflow: 'hidden',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                <div
-                  style={{
-                    width: `${fivePct}%`,
-                    height: '100%',
-                    background: barColor(fivePct),
-                    transition: 'width 250ms ease',
-                  }}
-                />
-              </div>
-              <div className="muted mono" style={{ fontSize: '0.73rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span>{100 - fivePct}% remaining in 5h window</span>
-                {usage.fiveHour?.resetsAt && (
-                  <span>
-                    Resets in {formatCountdown(usage.fiveHour.resetsAt, now)} ({clock(usage.fiveHour.resetsAt)})
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '12px 14px',
-                borderRadius: 'var(--radius)',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
-                  <Calendar className="icon" aria-hidden /> 7-Day Weekly Limit
-                </span>
-                <strong className="mono" style={{ fontSize: '1.05rem', color: barColor(sevenPct) }}>
-                  {usage.sevenDay ? `${sevenPct}%` : '—'}
-                </strong>
-              </div>
-              <div
-                style={{
-                  width: '100%',
-                  height: 8,
-                  borderRadius: 999,
-                  background: 'var(--bg)',
-                  overflow: 'hidden',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                <div
-                  style={{
-                    width: `${sevenPct}%`,
-                    height: '100%',
-                    background: barColor(sevenPct),
-                    transition: 'width 250ms ease',
-                  }}
-                />
-              </div>
-              <div className="muted mono" style={{ fontSize: '0.73rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span>{100 - sevenPct}% remaining this week</span>
-                {usage.sevenDay?.resetsAt && (
-                  <span>
-                    Resets in {formatCountdown(usage.sevenDay.resetsAt, now)} ({dateTimeShort(usage.sevenDay.resetsAt)})
-                  </span>
-                )}
-              </div>
-            </div>
-
+          {/* Live rate-limit gauges, one section per provider that reports them. */}
+          <ProviderLimitsHeader id="claude" title={formatClaudePlanLabel(usage)} />
+          <div className="quota-gauges">
+            <LimitGauge
+              icon={<Timer className="icon" aria-hidden />}
+              title="5-Hour Session Limit (Rolling)"
+              percent={usage.fiveHour ? fivePct : null}
+              remaining={`${100 - fivePct}% remaining in 5h window`}
+              resetsAt={usage.fiveHour?.resetsAt ?? null}
+              resetLabel={clock}
+              now={now}
+            />
+            <LimitGauge
+              icon={<Calendar className="icon" aria-hidden />}
+              title="7-Day Weekly Limit"
+              percent={usage.sevenDay ? sevenPct : null}
+              remaining={`${100 - sevenPct}% remaining this week`}
+              resetsAt={usage.sevenDay?.resetsAt ?? null}
+              resetLabel={dateTimeShort}
+              now={now}
+            />
             {usage.extraUsage && (usage.extraUsage.enabled || usage.extraUsage.limitUsd > 0 || usage.extraUsage.usedUsd > 0) && (
-              <div
-                style={{
-                  padding: '12px 14px',
-                  borderRadius: 'var(--radius)',
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
-                    <CreditCard className="icon" aria-hidden /> Extra Usage Credits
-                  </span>
-                  <strong className="mono" style={{ fontSize: '0.95rem' }}>
-                    ${usage.extraUsage.usedUsd.toFixed(2)}
-                    {usage.extraUsage.limitUsd > 0 ? ` / $${usage.extraUsage.limitUsd.toFixed(2)}` : ''}
-                  </strong>
-                </div>
-                <div
-                  style={{
-                    width: '100%',
-                    height: 8,
-                    borderRadius: 999,
-                    background: 'var(--bg)',
-                    overflow: 'hidden',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${Math.min(100, Math.round(usage.extraUsage.utilizationPercent ?? 0))}%`,
-                      height: '100%',
-                      background: barColor(Math.round(usage.extraUsage.utilizationPercent ?? 0)),
-                    }}
-                  />
-                </div>
-                <div className="muted mono" style={{ fontSize: '0.73rem', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Monthly overflow ({Math.round(usage.extraUsage.utilizationPercent ?? 0)}%)</span>
-                  <span>
-                    {usage.extraUsage.enabled
-                      ? 'Active'
-                      : usage.extraUsage.disabledReason
-                        ? `Paused (${usage.extraUsage.disabledReason})`
-                        : 'Disabled'}
-                  </span>
-                </div>
-              </div>
+              <LimitGauge
+                icon={<CreditCard className="icon" aria-hidden />}
+                title="Extra Usage Credits"
+                percent={Math.round(usage.extraUsage.utilizationPercent ?? 0)}
+                value={`$${usage.extraUsage.usedUsd.toFixed(2)}${usage.extraUsage.limitUsd > 0 ? ` / $${usage.extraUsage.limitUsd.toFixed(2)}` : ''}`}
+                remaining={`Monthly overflow (${Math.round(usage.extraUsage.utilizationPercent ?? 0)}%)`}
+                status={
+                  usage.extraUsage.enabled
+                    ? 'Active'
+                    : usage.extraUsage.disabledReason
+                      ? `Paused (${usage.extraUsage.disabledReason})`
+                      : 'Disabled'
+                }
+                now={now}
+              />
             )}
           </div>
 
-          {/* Token Consumption Telemetry across 1h / 24h / 7d */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-              gap: 10,
-            }}
-          >
+          {/* Claude Code token consumption (from its transcripts) across 1h / 24h / 7d */}
+          <div className="quota-gauges">
             <TokenBucketCard
               label={
                 <>
@@ -545,6 +486,32 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               bucket={usage.weeklyTokens}
             />
           </div>
+
+          {providerTelemetry.some((p) => p.providerId === 'antigravity') && (
+            <>
+              <ProviderLimitsHeader id="antigravity" title="Antigravity" />
+              {usage.providerQuotas?.antigravity?.available ? (
+                <div className="quota-gauges">
+                  {usage.providerQuotas.antigravity.groups.map((g) => (
+                    <LimitGauge
+                      key={g.label}
+                      icon={<Gauge className="icon" aria-hidden />}
+                      title={`${g.label} Model Quota`}
+                      percent={Math.round(g.usedPercent)}
+                      remaining={`${Math.max(0, Math.round(100 - g.usedPercent))}% remaining`}
+                      resetsAt={g.resetsAt}
+                      resetLabel={dateTimeShort}
+                      now={now}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="muted small mono" style={{ margin: 0 }}>
+                  Quota unavailable: {usage.providerQuotas?.antigravity?.reason ?? 'not reported yet'}
+                </p>
+              )}
+            </>
+          )}
         </>
       )}
 
