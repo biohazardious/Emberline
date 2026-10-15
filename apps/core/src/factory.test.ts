@@ -369,7 +369,7 @@ describe('AI Coding Factory (F1–F4)', () => {
     // Verify Pre-Commit Secret & Credential Guard detects leaked keys and redacts the secret in snippet
     writeFileSync(
       path.join(p1.path, '.env'),
-      'OPENAI_API_KEY="sk-proj-1234567890abcdefghijklmnop"\n',
+      'OPENAI_API_KEY="sk-proj-1234567890abcdefghijklmnop"\n', // gitleaks:allow (fake key)
       'utf8',
     );
     const secretReport = await auditWorktreeSlop({
