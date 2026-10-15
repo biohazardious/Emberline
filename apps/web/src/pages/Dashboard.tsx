@@ -710,7 +710,7 @@ function RunRow({
           title={
             run.state === 'rate_limited'
               ? 'Try now instead of waiting for the reset'
-              : 'Continue this Claude session (claude --resume)'
+              : `Continue this ${run.agent ?? 'agent'} session`
           }
         >
           Resume

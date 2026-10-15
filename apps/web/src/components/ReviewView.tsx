@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type {
+  CrossCriticResult,
   DiffFile,
   DiffScope,
   GitCommitResponse,
@@ -10,10 +11,12 @@ import type {
   RunFileDiff,
   RunForgeStatus,
   RunPreviewStatus,
+  SlopAuditReport,
 } from '@emberline/protocol';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { MonacoDiff, type DiffAnnotation } from './MonacoDiff';
+import { formatAgentDisplayName } from './RunInspector';
 
 interface Props {
   run: Run;
@@ -102,6 +105,13 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   const [previewPort, setPreviewPort] = useState('');
   const [previewBusy, setPreviewBusy] = useState(false);
 
+  // Anti-AI-Slop Hygiene & Cross-Provider Critic state
+  const [slopAudit, setSlopAudit] = useState<SlopAuditReport | null>(null);
+  const [crossCritic, setCrossCritic] = useState<CrossCriticResult | null>(null);
+  const [hygieneDrawerOpen, setHygieneDrawerOpen] = useState(false);
+  const [runningCritic, setRunningCritic] = useState(false);
+  const [cleaningSlop, setCleaningSlop] = useState(false);
+
   // Artifacts state
   const [artifacts, setArtifacts] = useState<RunArtifact[]>([]);
   const [loadingArtifacts, setLoadingArtifacts] = useState(false);
@@ -185,12 +195,29 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   }, [run.id]);
 
+  const loadSlopAudit = useCallback(async () => {
+    try {
+      const [auditRes, criticRes] = await Promise.all([
+        api<SlopAuditReport>(`/api/runs/${run.id}/slop-audit`),
+        api<CrossCriticResult | null>(`/api/runs/${run.id}/cross-critic`).catch(() => null),
+      ]);
+      setSlopAudit(auditRes);
+      if (criticRes) setCrossCritic(criticRes);
+      if (!auditRes.passed && auditRes.issues.length > 0) {
+        setHygieneDrawerOpen(true);
+      }
+    } catch {
+      // Ignore if worktree not ready
+    }
+  }, [run.id]);
+
   useEffect(() => {
     void loadSummary(scope, false);
     void loadArtifacts();
     void loadForge();
     void loadPreview();
-  }, [scope, loadSummary, loadArtifacts, loadForge, loadPreview]);
+    void loadSlopAudit();
+  }, [scope, loadSummary, loadArtifacts, loadForge, loadPreview, loadSlopAudit]);
 
   useEffect(() => {
     if (selectedFile) {
@@ -245,12 +272,49 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       });
       setAnnotations([]);
       setGeneralNote('');
-      setGitNotice('Dispatched review annotations to Claude run.');
+      setGitNotice(`Dispatched review annotations to ${formatAgentDisplayName(run.agent)} run.`);
       onRunUpdated?.(next);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
       setSendingReview(false);
+    }
+  };
+
+  const handleAutoCleanSlop = async (customPrompt?: string | null) => {
+    const promptToSend = customPrompt ?? slopAudit?.autoFixPrompt;
+    if (!promptToSend) return;
+    setCleaningSlop(true);
+    setError(null);
+    try {
+      const next = await api<Run>(`/api/runs/${run.id}/prompt`, 'POST', {
+        text: promptToSend,
+      });
+      setGitNotice(`Dispatched Anti-Slop remediation prompt to ${formatAgentDisplayName(run.agent)}.`);
+      onRunUpdated?.(next);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setCleaningSlop(false);
+    }
+  };
+
+  const handleRunCrossCritic = async (autoDispatchFix = false) => {
+    setRunningCritic(true);
+    setHygieneDrawerOpen(true);
+    setError(null);
+    try {
+      const res = await api<CrossCriticResult>(`/api/runs/${run.id}/cross-critic`, 'POST', {
+        autoDispatchFix,
+      });
+      setCrossCritic(res);
+      setGitNotice(
+        `Cross-Provider Critic (${res.reviewerAgent.toUpperCase()} · ${res.reviewerModel}) verdict: ${res.verdict} (${res.score}/100)`,
+      );
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setRunningCritic(false);
     }
   };
 
@@ -442,11 +506,95 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               {summary && summary.aheadCount > 0 && (
                 <span className="badge badge-soft mono">{summary.aheadCount} ahead</span>
               )}
+
+              {run.telemetry && run.telemetry.totalTokens > 0 && (
+                <span
+                  className="badge badge-soft mono"
+                  style={{ fontVariantNumeric: 'tabular-nums' }}
+                  title={`Input: ${run.telemetry.inputTokens.toLocaleString()} tok · Output: ${run.telemetry.outputTokens.toLocaleString()} tok${
+                    run.telemetry.cachedTokens > 0
+                      ? ` · Cached: ${run.telemetry.cachedTokens.toLocaleString()} tok`
+                      : ''
+                  } · Tool Calls: ${run.telemetry.toolCalls} · Duration: ${run.telemetry.durationSec}s${
+                    run.telemetry.isEstimated ? ' (estimated)' : ''
+                  }`}
+                >
+                  🪙 {(run.telemetry.totalTokens / 1000).toFixed(1)}k tok · 🔧 {run.telemetry.toolCalls}
+                </span>
+              )}
+
+              {slopAudit && (
+                <>
+                  <button
+                    type="button"
+                    className="badge mono"
+                    onClick={() => setHygieneDrawerOpen((v) => !v)}
+                    style={{
+                      cursor: 'pointer',
+                      borderColor:
+                        slopAudit.secretGuardPassed !== false
+                          ? 'rgba(16, 185, 129, 0.45)'
+                          : 'rgba(239, 68, 68, 0.65)',
+                      color: slopAudit.secretGuardPassed !== false ? '#6ee7b7' : '#fca5a5',
+                      background:
+                        slopAudit.secretGuardPassed !== false
+                          ? 'rgba(16, 185, 129, 0.08)'
+                          : 'rgba(239, 68, 68, 0.18)',
+                    }}
+                    title="Pre-Commit Secret & Credential Guard — scans for leaked API keys, tokens, private keys, and .env files"
+                  >
+                    {slopAudit.secretGuardPassed !== false
+                      ? '🔒 Secrets: CLEAN'
+                      : `🚨 Secret Leak (${slopAudit.secretLeakCount})`}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="badge mono"
+                    onClick={() => setHygieneDrawerOpen((v) => !v)}
+                    style={{
+                      cursor: 'pointer',
+                      borderColor: slopAudit.passed
+                        ? 'rgba(16, 185, 129, 0.45)'
+                        : 'rgba(239, 68, 68, 0.5)',
+                      color: slopAudit.passed ? '#6ee7b7' : '#fca5a5',
+                      background: slopAudit.passed
+                        ? 'rgba(16, 185, 129, 0.1)'
+                        : 'rgba(239, 68, 68, 0.12)',
+                    }}
+                    title="Click to inspect Anti-AI-Slop & Code Hygiene Audit Scorecard"
+                  >
+                    {slopAudit.passed ? '🛡️' : '⚠️'} Hygiene {slopAudit.grade} · {slopAudit.score}/100
+                    {slopAudit.issues.length > 0 ? ` (${slopAudit.issues.length})` : ''}
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>
 
         <div className="review-toolbar-group">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            disabled={runningCritic}
+            onClick={() => void handleRunCrossCritic(false)}
+            style={{
+              borderColor: crossCritic
+                ? crossCritic.verdict === 'PASS'
+                  ? 'rgba(16, 185, 129, 0.4)'
+                  : 'rgba(245, 158, 11, 0.5)'
+                : undefined,
+            }}
+            title="Have a rival AI provider audit this run's diff against the ticket specification and Anti-Slop rules"
+          >
+            {runningCritic
+              ? '⚖️ Auditing…'
+              : crossCritic
+                ? `⚖️ Critic (${crossCritic.reviewerAgent.toUpperCase()}): ${crossCritic.verdict}`
+                : '⚖️ Cross-Provider Critic'}
+          </button>
+
           {previewStatus?.status === 'running' ? (
             <>
               {previewStatus.url && (
@@ -545,6 +693,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               void loadArtifacts();
               void loadForge();
               void loadPreview();
+              void loadSlopAudit();
             }}
             disabled={loadingDiff || loadingArtifacts}
           >
@@ -552,6 +701,155 @@ export function ReviewView({ run, onRunUpdated }: Props) {
           </button>
         </div>
       </div>
+
+      {hygieneDrawerOpen && (slopAudit || crossCritic) && (
+        <div
+          className="review-actions-bar"
+          style={{
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            gap: '10px',
+            padding: '12px 14px',
+            background: 'var(--bg-elevated)',
+            borderBottom: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: '0.84rem' }}>
+                🛡️ Anti-AI-Slop &amp; Code Craftsmanship Audit
+              </strong>
+              {slopAudit && (
+                <span className="badge mono" style={{ fontSize: '0.7rem' }}>
+                  Grade {slopAudit.grade} · {slopAudit.score}/100 · {slopAudit.filesAudited} file(s) · +{slopAudit.addedLinesAudited} lines scanned
+                </span>
+              )}
+              {crossCritic && (
+                <span
+                  className="badge mono"
+                  style={{
+                    fontSize: '0.7rem',
+                    borderColor:
+                      crossCritic.verdict === 'PASS'
+                        ? 'rgba(16, 185, 129, 0.45)'
+                        : 'rgba(245, 158, 11, 0.45)',
+                    color: crossCritic.verdict === 'PASS' ? '#6ee7b7' : '#fcd34d',
+                  }}
+                >
+                  ⚖️ {crossCritic.authorAgent.toUpperCase()} → Reviewed by {crossCritic.reviewerAgent.toUpperCase()} ({crossCritic.reviewerModel}): {crossCritic.verdict}
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {slopAudit?.autoFixPrompt && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={cleaningSlop}
+                  onClick={() => void handleAutoCleanSlop(slopAudit.autoFixPrompt)}
+                  title="Send all detected slop/hygiene findings back to the agent to clean automatically"
+                >
+                  {cleaningSlop ? '⏳ Dispatching…' : `🧹 Auto-Clean Slop (${slopAudit.issues.length})`}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={runningCritic}
+                onClick={() => void handleRunCrossCritic(false)}
+              >
+                {runningCritic ? '⏳ Running Critic…' : '⚖️ Re-Run Cross-Provider Critic'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => setHygieneDrawerOpen(false)}
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+
+          {crossCritic && (
+            <div
+              style={{
+                padding: '8px 10px',
+                borderRadius: '6px',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                fontSize: '0.78rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                <strong>⚖️ Cross-Provider Critic Summary:</strong> {crossCritic.summary}
+              </div>
+              {crossCritic.followUpPrompt && (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-primary"
+                  disabled={cleaningSlop}
+                  onClick={() => void handleAutoCleanSlop(crossCritic.followUpPrompt)}
+                >
+                  🚀 Send Critic Fixes to {formatAgentDisplayName(run.agent)}
+                </button>
+              )}
+            </div>
+          )}
+
+          {slopAudit && slopAudit.issues.length === 0 ? (
+            <div className="muted small" style={{ color: '#6ee7b7' }}>
+              ✓ Clean diff: zero <code>any</code> evasions, zero unfinished <code>TODO</code>/<code>FIXME</code> stubs, zero skipped tests, and zero vibe-coding clichés detected.
+            </div>
+          ) : (
+            slopAudit && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '190px', overflowY: 'auto' }}>
+                {slopAudit.issues.map((iss) => (
+                  <div
+                    key={iss.id}
+                    onClick={() => setSelectedFile(iss.file)}
+                    style={{
+                      padding: '6px 9px',
+                      borderRadius: '6px',
+                      background: 'rgba(0,0,0,0.2)',
+                      border:
+                        iss.severity === 'error'
+                          ? '1px solid rgba(239, 68, 68, 0.35)'
+                          : '1px solid rgba(245, 158, 11, 0.3)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '2px',
+                      cursor: 'pointer',
+                      fontSize: '0.76rem',
+                    }}
+                    title="Click to open file in diff viewer"
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <span className="mono" style={{ fontWeight: 600 }}>
+                        <span style={{ color: iss.severity === 'error' ? '#fca5a5' : '#fcd34d' }}>
+                          [{iss.severity.toUpperCase()} · {iss.category}]
+                        </span>{' '}
+                        {iss.file}:{iss.line} — {iss.message}
+                      </span>
+                      <code className="muted mono" style={{ fontSize: '0.68rem' }}>
+                        {iss.snippet}
+                      </code>
+                    </div>
+                    <div className="muted small" style={{ fontSize: '0.71rem' }}>
+                      💡 Fix: {iss.fixHint}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </div>
+      )}
 
       {previewDrawerOpen && (
         <form className="review-actions-bar" onSubmit={(e) => void handleStartPreview(e)}>

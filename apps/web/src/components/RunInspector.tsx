@@ -19,7 +19,7 @@ export const STAGE_TEMPLATES: StageTemplate[] = [
   {
     id: 'plan',
     label: 'Plan & Scope',
-    hint: 'Ask Claude to inspect the codebase and propose a plan first',
+    hint: 'Ask the agent to inspect the codebase and propose a plan first',
     prompt:
       'Analyze the task and relevant files first. Propose a concise step-by-step implementation plan and list the files to touch before making code changes.',
   },
@@ -45,19 +45,171 @@ export const STAGE_TEMPLATES: StageTemplate[] = [
   },
 ];
 
+export function formatAgentDisplayName(agent?: string | null): string {
+  switch (agent) {
+    case 'antigravity':
+      return 'Google Antigravity (agy)';
+    case 'gemini':
+      return 'Google Gemini';
+    case 'codex':
+      return 'OpenAI Codex';
+    case 'copilot':
+      return 'GitHub Copilot';
+    case 'aider':
+      return 'Aider';
+    default:
+      return 'Claude';
+  }
+}
+
+export function formatAgentResumePlaceholder(agent?: string | null): string {
+  switch (agent) {
+    case 'antigravity':
+      return 'Continue the ended session (agy --continue)…';
+    case 'gemini':
+      return 'Continue the ended session (gemini)…';
+    case 'codex':
+      return 'Continue the ended session (codex)…';
+    case 'copilot':
+      return 'Continue the ended session (copilot)…';
+    case 'aider':
+      return 'Continue the ended session (aider)…';
+    default:
+      return 'Continue the ended session (claude --resume)…';
+  }
+}
+
 function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
   if (!payload || typeof payload !== 'object') return {};
   const rec = payload as Record<string, unknown>;
   const tool = typeof rec.tool_name === 'string' ? rec.tool_name : undefined;
-  const detail =
+  const exitPrefix =
+    typeof rec.exitCode === 'number' && rec.exitCode !== 0 ? `Exit code ${rec.exitCode}` : undefined;
+  const msg =
     (typeof rec.tool_input_summary === 'string' && rec.tool_input_summary) ||
     (typeof rec.message === 'string' && rec.message) ||
     (typeof rec.error_details === 'string' && rec.error_details) ||
-    (typeof rec.error === 'string' && rec.error) ||
     (typeof rec.last_assistant_message === 'string' && rec.last_assistant_message) ||
     (typeof rec.reason === 'string' && rec.reason) ||
+    (typeof rec.error === 'string' && rec.error) ||
     undefined;
+  const detail = exitPrefix && msg ? `${exitPrefix}: ${msg}` : msg || exitPrefix;
   return { tool, detail };
+}
+
+export function extractFailureDetails(events: RunEvent[], agent?: string | null): {
+  reason: string;
+  exitCode?: number;
+  needsAuth: boolean;
+} {
+  let reason = '';
+  let exitCode: number | undefined;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (!ev || !ev.payload || typeof ev.payload !== 'object') continue;
+    const rec = ev.payload as Record<string, unknown>;
+    if (typeof rec.exitCode === 'number' && exitCode === undefined) {
+      exitCode = rec.exitCode;
+    }
+    if (!reason) {
+      const candidate =
+        (typeof rec.message === 'string' && rec.message) ||
+        (typeof rec.error_details === 'string' && rec.error_details) ||
+        (typeof rec.reason === 'string' && rec.reason) ||
+        (typeof rec.error === 'string' && rec.error !== 'cli_exit' ? rec.error : '');
+      if (candidate) {
+        reason = candidate;
+      }
+    }
+  }
+  const lower = reason.toLowerCase();
+  const needsAuth =
+    exitCode === 41 ||
+    lower.includes('api_key') ||
+    lower.includes('api key') ||
+    lower.includes('not authenticated') ||
+    lower.includes('authentication') ||
+    lower.includes('login') ||
+    lower.includes('oauth') ||
+    lower.includes('credentials');
+
+  if (!reason || reason === `${agent ?? 'Agent'} exited with non-zero code`) {
+    if (exitCode === 41) {
+      reason = `${formatAgentDisplayName(agent)} exited with code 41 (Authentication / API Key required). Open Factory Settings to sign in via Console Login or save your API key.`;
+    } else if (exitCode !== undefined) {
+      reason = `${formatAgentDisplayName(agent)} process exited unexpectedly with exit code ${exitCode}.`;
+    } else {
+      reason = `${formatAgentDisplayName(agent)} execution failed.`;
+    }
+  }
+  return { reason, exitCode, needsAuth };
+}
+
+export function RunFailureBanner({ run }: { run: Run }) {
+  const [detail, setDetail] = useState<RunDetail>();
+
+  useEffect(() => {
+    if (run.state !== 'failed') return;
+    let cancelled = false;
+    void api<RunDetail>(`/api/runs/${run.id}`)
+      .then((res) => {
+        if (!cancelled) setDetail(res);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, run.state, run.stateChangedAt]);
+
+  if (run.state !== 'failed') return null;
+
+  const { reason, exitCode, needsAuth } = extractFailureDetails(detail?.events ?? [], run.agent);
+
+  return (
+    <div
+      className="run-failure-banner"
+      role="alert"
+      style={{
+        background: 'rgba(239, 68, 68, 0.1)',
+        border: '1px solid rgba(239, 68, 68, 0.35)',
+        borderRadius: '8px',
+        padding: '10px 12px',
+        marginBottom: '10px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+        <strong style={{ color: '#f87171', fontSize: '0.85rem' }}>
+          ⚠ {formatAgentDisplayName(run.agent)} Run Failed
+          {exitCode !== undefined ? ` (exit code ${exitCode})` : ''}
+        </strong>
+        {needsAuth && (
+          <Link href="/settings" className="btn btn-sm btn-primary" style={{ textDecoration: 'none' }}>
+            🔑 Configure Auth & Keys →
+          </Link>
+        )}
+      </div>
+      <pre
+        className="mono"
+        style={{
+          margin: 0,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontSize: '0.78rem',
+          color: '#fca5a5',
+          background: 'rgba(0, 0, 0, 0.25)',
+          padding: '6px 8px',
+          borderRadius: '6px',
+          maxHeight: '120px',
+          overflowY: 'auto',
+        }}
+      >
+        {reason}
+      </pre>
+    </div>
+  );
 }
 
 export function RunEventTimeline({ run }: { run: Run }) {
@@ -229,6 +381,7 @@ export function RunInspector({
         )}
         {(tab === 'split' || tab === 'timeline' || !run.terminalId) && (
           <div className="dock-events-pane">
+            <RunFailureBanner run={run} />
             <div className="dock-section-head">
               <span className="eyebrow">Hook & Activity Stream</span>
               <span className="muted small mono">{run.lastEvent ?? 'idle'}</span>
@@ -262,9 +415,9 @@ export function RunInspector({
                 rows={2}
                 placeholder={
                   !live
-                    ? 'Continue ended session (claude --resume)…'
+                    ? formatAgentResumePlaceholder(run.agent)
                     : run.state === 'waiting_input'
-                      ? 'Reply to Claude…'
+                      ? `Reply to ${formatAgentDisplayName(run.agent)}…`
                       : 'Send follow-up instruction (⌘+Enter)…'
                 }
                 value={prompt}

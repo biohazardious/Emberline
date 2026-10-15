@@ -7,7 +7,13 @@ import { modeHint, PermissionModePicker } from '../components/PermissionModePick
 import { PERSONA_LIST, PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
-import { RunEventTimeline, STAGE_TEMPLATES } from '../components/RunInspector';
+import {
+  formatAgentDisplayName,
+  formatAgentResumePlaceholder,
+  RunEventTimeline,
+  RunFailureBanner,
+  STAGE_TEMPLATES,
+} from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
 import { usePoll } from '../hooks/usePoll';
 import { useRuns } from '../hooks/useRuns';
@@ -19,9 +25,9 @@ const ReviewView = lazy(() => import('../components/ReviewView').then((m) => ({ 
 
 const COLUMNS: { status: TicketStatus; label: string; hint: string }[] = [
   { status: 'backlog', label: 'Backlog', hint: 'Ideas and not-yet-ready work' },
-  { status: 'ready', label: 'Ready', hint: 'Specified and ready to hand to Claude' },
-  { status: 'in_progress', label: 'In progress', hint: 'Drop here to dispatch Claude (or monitor active run)' },
-  { status: 'review', label: 'Review', hint: 'Claude finished its turn; review or send a follow-up' },
+  { status: 'ready', label: 'Ready', hint: 'Specified and ready to hand to an agent' },
+  { status: 'in_progress', label: 'In progress', hint: 'Drop here to dispatch agent (or monitor active run)' },
+  { status: 'review', label: 'Review', hint: 'Agent finished its turn; review or send a follow-up' },
   { status: 'done', label: 'Done', hint: 'Accepted; runs never move tickets out of here' },
 ];
 
@@ -397,6 +403,16 @@ function TicketCard({
         {run && (
           <div className="card-foot">
             <RunStatePill state={run.state} />
+            {run.telemetry && run.telemetry.totalTokens > 0 && (
+              <span
+                className="card-event mono"
+                style={{ fontVariantNumeric: 'tabular-nums' }}
+                title={`Input: ${run.telemetry.inputTokens.toLocaleString()} tok · Output: ${run.telemetry.outputTokens.toLocaleString()} tok · Tools: ${run.telemetry.toolCalls}`}
+              >
+                🪙 {(run.telemetry.totalTokens / 1000).toFixed(1)}k
+                {run.telemetry.toolCalls > 0 ? ` · 🔧${run.telemetry.toolCalls}` : ''}
+              </span>
+            )}
             {run.lastEvent && <span className="card-event mono">{run.lastEvent}</span>}
             <span className="card-meta mono">{timeAgo(run.stateChangedAt)}</span>
           </div>
@@ -578,6 +594,7 @@ function TicketDrawer({
 
         {viewTab === 'events' && run && (
           <div className="drawer-events-pane">
+            <RunFailureBanner run={run} />
             <RunEventTimeline run={run} />
           </div>
         )}
@@ -603,7 +620,7 @@ function TicketDrawer({
               id="drawer-body"
               className="input drawer-body"
               rows={5}
-              placeholder="Details, acceptance criteria, files to look at… (sent to Claude with the title)"
+              placeholder="Details, acceptance criteria, files to look at… (sent to the assigned agent with the title)"
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
@@ -655,6 +672,7 @@ function TicketDrawer({
             {run && (
               <div className="agent-run">
                 <RunStatePill state={run.state} />
+                <span className="badge badge-soft mono">{formatAgentDisplayName(run.agent)}</span>
                 {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
                 {run.terminalId && (
                   <>
@@ -673,6 +691,7 @@ function TicketDrawer({
               </div>
             )}
           </div>
+          {run && <RunFailureBanner run={run} />}
           {queued && (
             <div className="agent-note">
               <span>Queued: starts as soon as a slot and quota are free.</span>
@@ -688,7 +707,10 @@ function TicketDrawer({
           )}
           {run?.state === 'rate_limited' && (
             <div className="agent-note agent-note-limit">
-              <span>Paused by the usage limit. Claude continues automatically when the window resets.</span>
+              <span>
+                Paused by the usage limit. {formatAgentDisplayName(run.agent)} continues automatically when the window
+                resets.
+              </span>
               <button
                 id="drawer-resume"
                 className="btn btn-sm"
@@ -721,10 +743,10 @@ function TicketDrawer({
                 rows={3}
                 placeholder={
                   !live
-                    ? 'Continue the ended session (claude --resume)…'
+                    ? formatAgentResumePlaceholder(run?.agent)
                     : run.state === 'waiting_input'
-                      ? 'Claude is waiting for you…'
-                      : 'Follow-up for Claude (sent to the live session)'
+                      ? `${formatAgentDisplayName(run.agent)} is waiting for you…`
+                      : `Follow-up for ${formatAgentDisplayName(run.agent)} (sent to the live session)`
                 }
                 value={followUp}
                 onChange={(e) => setFollowUp(e.target.value)}
@@ -758,11 +780,11 @@ function TicketDrawer({
                 <span />
                 <button
                   id="drawer-start"
-                  className={`btn btn-sm ${run?.resumable ? '' : 'btn-primary'}`}
+                  className={`btn btn-sm ${run?.resumable && run.state !== 'failed' ? '' : 'btn-primary'}`}
                   disabled={!!busy || !title.trim()}
                   onClick={() => void start()}
                 >
-                  {busy === 'start' ? 'Starting…' : run ? 'Start new run' : 'Start with Claude'}
+                  {busy === 'start' ? 'Starting…' : run ? 'Start new run' : 'Start Agent Run'}
                 </button>
               </div>
             </div>

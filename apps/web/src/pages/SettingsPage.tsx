@@ -2,11 +2,15 @@ import {
   type AgentId,
   type AgentModelId,
   type AgentPersona,
+  type CliToolStatus,
   coerceModelForProvider,
+  DEFAULT_MCP_SERVERS,
+  DEFAULT_SKILL_PLUGINS,
   type FactorySettings,
   formatRankStars,
   getModelInfoForProvider,
   getModelsForProvider,
+  type McpServerEntry,
   type ModelCapabilityTag,
   type ModelCapabilityTier,
   PERSONA_CAPABILITY_TARGETS,
@@ -14,13 +18,17 @@ import {
   type PersonaModelMap,
   PROVIDER_REGISTRY,
   type ProviderLoginResponse,
+  type SkillPluginEntry,
   selectProviderModelByRank,
   selectProviderModelByTier,
   type ThemeMode,
+  type ToolchainActionResponse,
+  type ToolchainStatusResponse,
 } from '@emberline/protocol';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
@@ -64,15 +72,18 @@ export function SettingsPage({
   onChangeTheme: (theme: 'dark' | 'light') => void;
 }) {
   const [, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState<'autopilot' | 'providers' | 'quota' | 'notifications'>(
-    'autopilot',
-  );
+  const [activeTab, setActiveTab] = useState<
+    'autopilot' | 'providers' | 'mcp_plugins' | 'quota' | 'notifications'
+  >('autopilot');
   const [settings, setSettings] = useState<FactorySettings | null>(null);
   const [themePref, setThemePref] = useState<ThemeMode>(theme);
   const [autoPickupReady, setAutoPickupReady] = useState(true);
   const [autoPickupBacklog, setAutoPickupBacklog] = useState(false);
   const [autoSyncToMain, setAutoSyncToMain] = useState(true);
   const [selfHealingBuildGate, setSelfHealingBuildGate] = useState(true);
+  const [antiSlopGate, setAntiSlopGate] = useState(true);
+  const [secretGuardGate, setSecretGuardGate] = useState(true);
+  const [crossProviderCritic, setCrossProviderCritic] = useState(false);
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
   const [quotaAutoDowngrade, setQuotaAutoDowngrade] = useState(true);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
@@ -95,15 +106,30 @@ export function SettingsPage({
     qa: 'sonnet',
     security: 'opus',
   });
+  const [mcpServers, setMcpServers] = useState<McpServerEntry[]>(DEFAULT_MCP_SERVERS);
+  const [skillPlugins, setSkillPlugins] = useState<SkillPluginEntry[]>(DEFAULT_SKILL_PLUGINS);
 
   const [anthropicApiKey, setAnthropicApiKey] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [geminiApiKey, setGeminiApiKey] = useState('');
 
+  const [toolchain, setToolchain] = useState<ToolchainStatusResponse | null>(null);
+  const [busyToolProvider, setBusyToolProvider] = useState<AgentId | null>(null);
+  const [updatingAllTools, setUpdatingAllTools] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [launchingLoginProvider, setLaunchingLoginProvider] = useState<AgentId | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshToolchain = useCallback(async () => {
+    try {
+      const res = await api<ToolchainStatusResponse>('/api/toolchain/status');
+      setToolchain(res);
+    } catch {
+      // ignore background poll errors
+    }
+  }, []);
 
   useEffect(() => {
     void api<FactorySettings>('/api/factory/settings')
@@ -114,15 +140,83 @@ export function SettingsPage({
         setAutoPickupBacklog(res.autoPickupBacklog);
         setAutoSyncToMain(res.autoSyncToMain);
         setSelfHealingBuildGate(res.selfHealingBuildGate);
+        setAntiSlopGate(res.antiSlopGate ?? true);
+        setSecretGuardGate(res.secretGuardGate ?? true);
+        setCrossProviderCritic(res.crossProviderCritic ?? false);
         setAutoMoveToDone(res.autoMoveToDone);
         setQuotaAutoDowngrade(res.quotaAutoDowngrade ?? true);
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
         setPersonaAgents(res.personaAgents);
         if (res.personaModels) setPersonaModels(res.personaModels);
+        if (res.mcpServers?.length) setMcpServers(res.mcpServers);
+        if (res.skillPlugins?.length) setSkillPlugins(res.skillPlugins);
       })
       .catch((err) => setError(errorMessage(err)));
-  }, []);
+    void refreshToolchain();
+  }, [refreshToolchain]);
+
+  useEffect(() => {
+    const anyInstalling = toolchain?.tools.some((t) => t.installing) ?? false;
+    if (!anyInstalling && activeTab !== 'providers') return;
+    const interval = setInterval(() => {
+      void refreshToolchain();
+    }, anyInstalling ? 2500 : 8000);
+    return () => clearInterval(interval);
+  }, [toolchain, activeTab, refreshToolchain]);
+
+  const handleToolchainAction = async (
+    providerId: AgentId,
+    action: 'install' | 'update' | 'uninstall',
+    spawnTerminal = false,
+  ) => {
+    setBusyToolProvider(providerId);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await api<ToolchainActionResponse>(`/api/toolchain/${providerId}/action`, 'POST', {
+        action,
+        spawnTerminal,
+      });
+      await refreshToolchain();
+      if (res.terminal) {
+        setLocation(`/terminals/${res.terminal.id}`);
+        return;
+      }
+      setNotice(
+        `${PROVIDER_REGISTRY[providerId].label} CLI ${action} completed${res.tool.version ? ` (${res.tool.version})` : ''}.`,
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+      await refreshToolchain();
+    } finally {
+      setBusyToolProvider(null);
+    }
+  };
+
+  const handleUpdateAllTools = async () => {
+    setUpdatingAllTools(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await api<{
+        updated: AgentId[];
+        errors: Record<string, string>;
+        status: ToolchainStatusResponse;
+      }>('/api/toolchain/update-all', 'POST', {});
+      setToolchain(res.status);
+      const errCount = Object.keys(res.errors).length;
+      if (errCount > 0) {
+        setError(`Updated ${res.updated.length} CLI(s), ${errCount} failed.`);
+      } else {
+        setNotice(`Updated ${res.updated.length} active/installed AI CLI(s) in ${res.status.toolsDir}.`);
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setUpdatingAllTools(false);
+    }
+  };
 
   const handleStartProviderLogin = async (providerId: AgentId) => {
     setLaunchingLoginProvider(providerId);
@@ -284,12 +378,17 @@ export function SettingsPage({
         autoPickupBacklog,
         autoSyncToMain,
         selfHealingBuildGate,
+        antiSlopGate,
+        secretGuardGate,
+        crossProviderCritic,
         autoMoveToDone,
         quotaAutoDowngrade,
         defaultAgent,
         enabledProviders,
         personaAgents,
         personaModels,
+        mcpServers,
+        skillPlugins,
       };
       if (anthropicApiKey.trim()) payload.anthropicApiKey = anthropicApiKey.trim();
       if (openaiApiKey.trim()) payload.openaiApiKey = openaiApiKey.trim();
@@ -301,13 +400,15 @@ export function SettingsPage({
       setDefaultAgent(updated.defaultAgent);
       setPersonaAgents(updated.personaAgents);
       setPersonaModels(updated.personaModels);
+      if (updated.mcpServers?.length) setMcpServers(updated.mcpServers);
+      if (updated.skillPlugins?.length) setSkillPlugins(updated.skillPlugins);
       setAnthropicApiKey('');
       setOpenaiApiKey('');
       setGeminiApiKey('');
       if (themePref === 'light' || themePref === 'dark') {
         onChangeTheme(themePref);
       }
-      setNotice('Factory settings, active AI providers & capability-ranked model matrix saved.');
+      setNotice('Factory settings, active AI providers, MCP registry & skill plugins saved.');
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -347,6 +448,13 @@ export function SettingsPage({
             onClick={() => setActiveTab('providers')}
           >
             🤖 Multi-Agent &amp; Model Matrix
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${activeTab === 'mcp_plugins' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('mcp_plugins')}
+          >
+            🔌 MCP &amp; Plugins
           </button>
           <button
             type="button"
@@ -450,9 +558,54 @@ export function SettingsPage({
                 style={{ marginTop: '3px' }}
               />
               <div>
-                <strong>Self-Healing Build Gate (Auto-Verify &amp; Auto-Fix Compile Errors)</strong>
+                <strong>🧪 Self-Healing Build, Lint &amp; Unit Test Gate (Auto-Verify &amp; Auto-Fix)</strong>
                 <div className="muted small">
-                  When a specialist finishes a run on a project with a <code>build</code> script, automatically run the build. If it fails, resume the agent with the compiler output to self-heal before advancing.
+                  When a specialist finishes a run, automatically run the project&apos;s <code>build</code>/<code>typecheck</code>, <code>lint</code>, and <code>test</code> suites (`CI=true`). If any check fails, resume the agent with the exact compiler/linter/test failure output to self-heal before advancing.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={antiSlopGate}
+                onChange={(e) => setAntiSlopGate(e.target.checked)}
+                style={{ marginTop: '3px' }}
+              />
+              <div>
+                <strong>🛡️ Anti-AI-Slop &amp; Anti-Vibe-Coding Gate (Deterministic Diff Audit &amp; Auto-Clean)</strong>
+                <div className="muted small">
+                  Automatically scan every completed worktree diff for type evasion (<code>: any</code>, <code>as any</code>, <code>@ts-ignore</code>), unfinished <code>TODO</code>/<code>FIXME</code> stubs, skipped tests, leftover <code>console.log</code>/<code>debugger</code>, and generic AI gradient clichés. If blocked, auto-resume the agent once to clean its own code.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={secretGuardGate}
+                onChange={(e) => setSecretGuardGate(e.target.checked)}
+                style={{ marginTop: '3px' }}
+              />
+              <div>
+                <strong>🔒 Pre-Commit Secret &amp; Credential Guard (Auto-Block &amp; Redact Leaked Keys)</strong>
+                <div className="muted small">
+                  Inspects diffs before commit and before <code>main</code> workspace sync for hardcoded API keys (<code>sk-...</code>, <code>AIza...</code>, <code>ghp_...</code>, <code>AKIA...</code>), private keys (<code>.pem</code>/<code>.key</code>), and tracked <code>.env</code> files. Blocks merging into <code>main</code> and instructs the agent to move secrets to <code>process.env</code> + <code>.env.example</code>.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={crossProviderCritic}
+                onChange={(e) => setCrossProviderCritic(e.target.checked)}
+                style={{ marginTop: '3px' }}
+              />
+              <div>
+                <strong>⚖️ Cross-Provider AI Critic (Rival Provider Code Review)</strong>
+                <div className="muted small">
+                  When multiple providers are active (e.g. Claude + Google Antigravity), automatically have a rival provider audit the completed diff against the ticket specification before moving to <code>Done</code>.
                 </div>
               </div>
             </label>
@@ -502,24 +655,57 @@ export function SettingsPage({
           className="panel"
           style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '22px' }}
         >
-          {/* STEP 1: ACTIVE AI PROVIDERS & CREDENTIALS */}
+          {/* STEP 1: ACTIVE AI PROVIDERS, PERSISTENT CLI VOLUME & CREDENTIALS */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
               <div>
-                <span className="eyebrow">Step 1 · Provider Registry &amp; Credentials</span>
+                <span className="eyebrow">Step 1 · Provider Registry, Persistent CLI Volume &amp; Credentials</span>
                 <h3 style={{ margin: '4px 0 4px' }}>
                   Active AI Providers ({enabledProviders.length} Enabled)
                 </h3>
                 <p className="muted small" style={{ maxWidth: 760, margin: 0 }}>
-                  Enable only the CLI providers you actually use. Disabled providers and their models stay completely hidden from persona routing, roadmap selectors, and brainstorming cards.
+                  Runner image is generic and CLI-agnostic. All AI CLIs are dynamically installed and updated inside the persistent <code>{toolchain?.toolsDir ?? '/opt/ai-tools'}</code> volume so container rebuilds never lose your tools.
                 </p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                {toolchain && (
+                  <span
+                    className="badge mono"
+                    style={{
+                      fontSize: '0.68rem',
+                      padding: '4px 8px',
+                      borderColor: 'rgba(16, 185, 129, 0.4)',
+                      color: '#6ee7b7',
+                    }}
+                    title="Generic Runner Base OS & Node.js LTS Runtime"
+                  >
+                    🐧 {toolchain.osInfo} · Node {toolchain.nodeVersion} · 📁 {toolchain.toolsDir}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-xs btn-primary"
+                  disabled={updatingAllTools || busyToolProvider !== null}
+                  onClick={() => void handleUpdateAllTools()}
+                  title="Install missing enabled CLIs and update all installed AI CLIs in /opt/ai-tools to their latest release"
+                >
+                  {updatingAllTools ? '⏳ Updating All CLIs…' : '↻ Update All Active CLIs'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost"
+                  onClick={() => void refreshToolchain()}
+                  title="Refresh CLI installation & version status"
+                >
+                  ⟳ Refresh
+                </button>
               </div>
             </div>
 
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(295px, 1fr))',
                 gap: '10px',
               }}
             >
@@ -527,6 +713,10 @@ export function SettingsPage({
                 const entry = PROVIDER_REGISTRY[providerId];
                 const isEnabled = enabledProviders.includes(providerId);
                 const authStatus = settings?.providerAuth?.[providerId];
+                const toolStatus: CliToolStatus | undefined = toolchain?.tools.find(
+                  (t) => t.provider === providerId,
+                );
+                const isToolBusy = busyToolProvider === providerId || Boolean(toolStatus?.installing);
                 const supportsOAuthLogin = OAUTH_LOGIN_PROVIDERS.includes(providerId);
                 const isKeyConfigured =
                   providerId === 'claude'
@@ -589,8 +779,32 @@ export function SettingsPage({
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <span className="badge mono" style={{ fontSize: '0.66rem' }}>
-                          {entry.badge}
+                        <span
+                          className="badge mono"
+                          style={{
+                            fontSize: '0.65rem',
+                            borderColor: isToolBusy
+                              ? 'rgba(56, 189, 248, 0.5)'
+                              : toolStatus?.installed
+                                ? 'rgba(16, 185, 129, 0.5)'
+                                : 'rgba(245, 158, 11, 0.45)',
+                            color: isToolBusy
+                              ? '#38bdf8'
+                              : toolStatus?.installed
+                                ? '#6ee7b7'
+                                : '#fcd34d',
+                          }}
+                          title={
+                            toolStatus?.binaryPath
+                              ? `Binary: ${toolStatus.binaryPath}\nInstall cmd: ${toolStatus.installCommand}`
+                              : `Install cmd: ${toolStatus?.installCommand ?? ''}`
+                          }
+                        >
+                          {isToolBusy
+                            ? `⏳ Installing ${toolStatus?.binaryName ?? providerId}…`
+                            : toolStatus?.installed
+                              ? `📦 ${toolStatus.binaryName} (${toolStatus.version ?? 'installed'})`
+                              : `⚠ CLI Not Installed`}
                         </span>
                         <span
                           className="badge mono"
@@ -635,8 +849,86 @@ export function SettingsPage({
                       </div>
                     </div>
 
-                    {/* Interactive OAuth CLI Login & Optional API Key Overrides */}
+                    {/* Dynamic CLI Install/Update + Interactive OAuth CLI Login & API Key Overrides */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-ghost"
+                          disabled={isToolBusy || updatingAllTools}
+                          onClick={() =>
+                            void handleToolchainAction(
+                              providerId,
+                              toolStatus?.installed ? 'update' : 'install',
+                              false,
+                            )
+                          }
+                          style={{
+                            borderColor: toolStatus?.installed
+                              ? 'rgba(16, 185, 129, 0.4)'
+                              : 'rgba(245, 158, 11, 0.5)',
+                            color: toolStatus?.installed ? '#6ee7b7' : '#fcd34d',
+                            fontSize: '0.71rem',
+                          }}
+                          title={
+                            toolStatus?.installed
+                              ? `Update ${entry.shortLabel} CLI in /opt/ai-tools (${toolStatus.updateCommand})`
+                              : `Install ${entry.shortLabel} CLI into /opt/ai-tools (${toolStatus?.installCommand ?? ''})`
+                          }
+                        >
+                          {isToolBusy
+                            ? '⏳ Working…'
+                            : toolStatus?.installed
+                              ? '↻ Update CLI'
+                              : '⬇ Install CLI'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-ghost"
+                          disabled={isToolBusy || updatingAllTools}
+                          onClick={() =>
+                            void handleToolchainAction(
+                              providerId,
+                              toolStatus?.installed ? 'update' : 'install',
+                              true,
+                            )
+                          }
+                          style={{ fontSize: '0.7rem' }}
+                          title="Run CLI install/update inside an interactive terminal so you can watch live output"
+                        >
+                          📟 Terminal
+                        </button>
+                        {toolStatus?.installed && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-ghost"
+                            disabled={isToolBusy || updatingAllTools}
+                            onClick={() => void handleToolchainAction(providerId, 'uninstall', false)}
+                            style={{ fontSize: '0.68rem', color: '#fca5a5' }}
+                            title={`Uninstall ${entry.shortLabel} CLI from /opt/ai-tools`}
+                          >
+                            🗑
+                          </button>
+                        )}
+                      </div>
+
+                      {toolStatus?.lastError && (
+                        <div
+                          className="mono"
+                          style={{
+                            fontSize: '0.65rem',
+                            color: '#fca5a5',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            padding: '4px 6px',
+                            borderRadius: '4px',
+                            maxHeight: 54,
+                            overflow: 'auto',
+                          }}
+                        >
+                          {toolStatus.lastError}
+                        </div>
+                      )}
+
                       {supportsOAuthLogin && (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
                           <button
@@ -649,7 +941,7 @@ export function SettingsPage({
                               color: '#93c5fd',
                               fontSize: '0.72rem',
                             }}
-                            title="Opens an interactive browser terminal inside the runner container to authenticate via official CLI OAuth (no API key required)"
+                            title="Opens an interactive browser terminal inside the runner container to authenticate via official CLI OAuth (auto-installs CLI if missing)"
                           >
                             {launchingLoginProvider === providerId
                               ? '⏳ Opening Terminal…'
@@ -1074,6 +1366,17 @@ export function SettingsPage({
             </button>
           </div>
         </form>
+      )}
+
+      {activeTab === 'mcp_plugins' && (
+        <McpPluginsPanel
+          mcpServers={mcpServers}
+          skillPlugins={skillPlugins}
+          onChangeMcpServers={setMcpServers}
+          onChangeSkillPlugins={setSkillPlugins}
+          onSave={(e) => void handleSaveFactorySettings(e)}
+          saving={saving}
+        />
       )}
 
       {activeTab === 'quota' && <QuotaPanel />}

@@ -196,139 +196,25 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
   const sevenPct = Math.min(100, Math.max(0, Math.round(usage?.sevenDay?.utilizationPercent ?? 0)));
 
   if (compact) {
+    if (!window) return null;
     return (
       <section
         id="quota-panel"
-        className={`quota ${window ? 'quota-paused' : 'quota-ok'} quota-compact`}
+        className="quota quota-paused quota-compact"
         aria-label="Quota scheduler"
         style={{ flexWrap: 'wrap', gap: 12 }}
       >
         <div className="quota-main">
           <span className="quota-orb" aria-hidden="true" />
-          {window ? (
-            <div className="quota-text">
-              <strong>Usage limit reached</strong>
-              <span className="muted">
-                Resuming in <span className="mono quota-countdown">{formatCountdown(window.resumeAt, now)}</span>
-                {' · '}
-                {window.resetsAt ? `resets ${clock(window.resetsAt)}` : 'next probe'} ({SOURCE_LABEL[window.resetSource]})
-              </span>
-            </div>
-          ) : (
-            <div className="quota-text">
-              <strong>Quota available</strong>
-              <span className="muted">
-                {scheduler.busy}/{scheduler.maxConcurrentRuns} slots busy
-                {scheduler.queued > 0 && ` · ${scheduler.queued} queued`}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {usage && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              flexWrap: 'wrap',
-              fontSize: '0.78rem',
-            }}
-          >
-            <span
-              className="badge mono"
-              style={{
-                color: usage.authenticated ? 'var(--ok)' : 'var(--warn)',
-                borderColor: usage.authenticated ? 'rgba(63, 185, 80, 0.35)' : 'var(--warn)',
-              }}
-              title={
-                usage.tokenExpiresAt
-                  ? `OAuth token ${usage.authenticated ? 'active' : 'inactive'} · expires ${dateTimeShort(usage.tokenExpiresAt)}`
-                  : `OAuth token ${usage.authenticated ? 'active' : 'inactive'}`
-              }
-            >
-              ⚡ {formatClaudePlanLabel(usage)}
-            </span>
-
-            {usage.fiveHour && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="5-Hour Session Rate Limit">
-                <span className="muted">5h Limit:</span>
-                <div
-                  style={{
-                    width: 56,
-                    height: 6,
-                    borderRadius: 999,
-                    background: 'var(--bg-elevated)',
-                    overflow: 'hidden',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${fivePct}%`,
-                      height: '100%',
-                      background: barColor(fivePct),
-                    }}
-                  />
-                </div>
-                <strong className="mono">{fivePct}%</strong>
-                {usage.fiveHour.resetsAt && (
-                  <span className="muted mono" style={{ fontSize: '0.72rem' }}>
-                    ({formatCountdown(usage.fiveHour.resetsAt, now)})
-                  </span>
-                )}
-              </div>
-            )}
-
-            {usage.sevenDay && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="7-Day Weekly Rate Limit">
-                <span className="muted">7d Weekly:</span>
-                <div
-                  style={{
-                    width: 56,
-                    height: 6,
-                    borderRadius: 999,
-                    background: 'var(--bg-elevated)',
-                    overflow: 'hidden',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${sevenPct}%`,
-                      height: '100%',
-                      background: barColor(sevenPct),
-                    }}
-                  />
-                </div>
-                <strong className="mono">{sevenPct}%</strong>
-              </div>
-            )}
-
-            <span className="muted mono" style={{ fontSize: '0.74rem' }} title="Local token consumption (1h / 7d)">
-              Tokens 1h: <strong style={{ color: 'var(--text)' }}>{formatTokensCompact(usage.hourlyTokens.totalTokens)}</strong>
+          <div className="quota-text">
+            <strong>Usage limit reached</strong>
+            <span className="muted">
+              Resuming in <span className="mono quota-countdown">{formatCountdown(window.resumeAt, now)}</span>
               {' · '}
-              7d: <strong style={{ color: 'var(--text)' }}>{formatTokensCompact(usage.weeklyTokens.totalTokens)}</strong>
+              {window.resetsAt ? `resets ${clock(window.resetsAt)}` : 'next probe'} ({SOURCE_LABEL[window.resetSource]})
             </span>
-
-            {providerTelemetry
-              .filter((p) => p.providerId !== 'claude')
-              .map((p) => (
-                <span
-                  key={p.providerId}
-                  className="badge mono"
-                  style={{
-                    color: p.authenticated ? 'var(--ok)' : 'var(--text-muted)',
-                    borderColor: p.authenticated ? 'rgba(63, 185, 80, 0.35)' : 'var(--border)',
-                  }}
-                  title={`${p.entry.label} — ${p.authLabel} · ${p.activeCount} active / ${p.doneCount} completed runs`}
-                >
-                  {p.entry.icon} {p.entry.shortLabel}
-                  {p.activeCount > 0 ? ` (${p.activeCount} active)` : p.doneCount > 0 ? ` (${p.doneCount} done)` : ''}
-                </span>
-              ))}
           </div>
-        )}
+        </div>
 
         <div className="quota-side">
           {window && (

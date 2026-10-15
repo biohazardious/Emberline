@@ -12,11 +12,11 @@ const LABEL: Record<RunState, string> = {
 
 const HINT: Record<RunState, string> = {
   queued: 'Waiting for a free slot and available quota',
-  starting: 'Claude is starting up',
-  working: 'Claude is working',
-  waiting_input: 'Claude is waiting for a prompt or a permission decision',
+  starting: 'Agent is starting up',
+  working: 'Agent is working',
+  waiting_input: 'Agent is waiting for a prompt or a permission decision',
   rate_limited: 'Usage limit reached; resumes automatically after the window resets',
-  done: 'Claude finished its turn; send a follow-up or review the changes',
+  done: 'Agent finished its turn; send a follow-up or review the changes',
   failed: 'The agent process failed',
 };
 

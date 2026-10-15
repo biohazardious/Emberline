@@ -1,4 +1,12 @@
-import type { ActiveProjectPreference, ClaudeUsageTelemetry, FactorySettings, Project, SystemStatus } from '@emberline/protocol';
+import {
+  type ActiveProjectPreference,
+  type AgentId,
+  type ClaudeUsageTelemetry,
+  type FactorySettings,
+  type Project,
+  PROVIDER_REGISTRY,
+  type SystemStatus,
+} from '@emberline/protocol';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api } from './api';
@@ -35,6 +43,7 @@ const SettingsPage = lazy(() =>
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'emberline.activeProjectId';
 const THEME_STORAGE_KEY = 'emberline.theme';
+const SIDEBAR_PROVIDER_STORAGE_KEY = 'emberline.sidebarProvider';
 
 export function App() {
   return (
@@ -50,8 +59,46 @@ function Shell() {
   const system = usePoll(() => api<SystemStatus>('/api/system'), 5_000);
   const projects = usePoll(() => api<Project[]>('/api/projects'), 10_000);
   const claudeUsage = usePoll(() => api<ClaudeUsageTelemetry>('/api/factory/claude-usage'), 30_000);
+  const factorySettings = usePoll(() => api<FactorySettings>('/api/factory/settings'), 15_000);
   const { runs } = useRuns();
   const { scheduler } = useScheduler();
+
+  const [sidebarProvider, setSidebarProvider] = useState<AgentId>(() => {
+    try {
+      const saved = localStorage.getItem(SIDEBAR_PROVIDER_STORAGE_KEY) as AgentId | null;
+      if (saved && saved in PROVIDER_REGISTRY) return saved;
+    } catch {
+      // ignore storage errors
+    }
+    return 'claude';
+  });
+
+  const activeSidebarProviders = useMemo<AgentId[]>(() => {
+    const set = new Set<AgentId>(
+      factorySettings.data?.enabledProviders?.length ? factorySettings.data.enabledProviders : ['claude'],
+    );
+    const personaAgents = factorySettings.data?.personaAgents;
+    if (personaAgents) {
+      for (const ag of Object.values(personaAgents)) {
+        if (ag in PROVIDER_REGISTRY) set.add(ag);
+      }
+    }
+    if (set.size === 0) set.add('claude');
+    return Array.from(set);
+  }, [factorySettings.data]);
+
+  const currentSidebarProvider: AgentId = activeSidebarProviders.includes(sidebarProvider)
+    ? sidebarProvider
+    : (activeSidebarProviders[0] ?? 'claude');
+
+  const selectSidebarProvider = useCallback((next: AgentId) => {
+    setSidebarProvider(next);
+    try {
+      localStorage.setItem(SIDEBAR_PROVIDER_STORAGE_KEY, next);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
 
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
@@ -79,15 +126,12 @@ function Shell() {
   }, [theme]);
 
   useEffect(() => {
-    void api<FactorySettings>('/api/factory/settings')
-      .then((res) => {
-        if (res.theme === 'light' || res.theme === 'dark') {
-          setTheme(res.theme);
-          document.documentElement.dataset.theme = res.theme;
-        }
-      })
-      .catch(() => undefined);
-  }, []);
+    const res = factorySettings.data;
+    if (res && (res.theme === 'light' || res.theme === 'dark') && res.theme !== theme) {
+      setTheme(res.theme);
+      document.documentElement.dataset.theme = res.theme;
+    }
+  }, [factorySettings.data, theme]);
 
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
     try {
@@ -436,38 +480,148 @@ function Shell() {
               </span>
             </div>
           )}
-          {claudeUsage.data && !sidebarCollapsed && (
-            <div
-              className="mono muted"
-              style={{
-                fontSize: '0.72rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 3,
-                padding: '6px 8px',
-                borderRadius: 'var(--radius)',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)',
-              }}
-              title="Live Claude OAuth 5-hour & 7-day utilization and token consumption"
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
-                <strong>⚡ {formatClaudePlanLabel(claudeUsage.data)}</strong>
-                <span style={{ color: claudeUsage.data.authenticated ? 'var(--ok)' : 'var(--warn)' }}>
-                  ● {claudeUsage.data.authenticated ? 'active' : 'offline'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>5h: {Math.round(claudeUsage.data.fiveHour?.utilizationPercent ?? 0)}%</span>
-                <span>7d: {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>1h: {formatTokensCompact(claudeUsage.data.hourlyTokens.totalTokens)}</span>
-                <span>7d: {formatTokensCompact(claudeUsage.data.weeklyTokens.totalTokens)}</span>
-              </div>
-            </div>
-          )}
-          <p className="footer">One installation = one user = your own Claude subscription. Not affiliated with Anthropic.</p>
+          {!sidebarCollapsed &&
+            (() => {
+              const entry = PROVIDER_REGISTRY[currentSidebarProvider];
+              const authInfo = factorySettings.data?.providerAuth?.[currentSidebarProvider];
+              const isClaude = currentSidebarProvider === 'claude';
+              const isAuthed =
+                authInfo?.authenticated ?? (isClaude ? Boolean(claudeUsage.data?.authenticated) : true);
+              const providerBucket =
+                claudeUsage.data?.providerTokens?.[currentSidebarProvider] ??
+                (isClaude && claudeUsage.data
+                  ? {
+                      hourlyTokens: claudeUsage.data.hourlyTokens,
+                      dailyTokens: claudeUsage.data.dailyTokens,
+                      weeklyTokens: claudeUsage.data.weeklyTokens,
+                    }
+                  : undefined);
+              const providerRuns = (runs ?? []).filter((r) => r.agent === currentSidebarProvider);
+              const activeProviderRuns = providerRuns.filter(
+                (r) => !r.endedAt && r.state !== 'done' && r.state !== 'failed',
+              ).length;
+              const doneProviderRuns = providerRuns.filter((r) => r.state === 'done').length;
+
+              return (
+                <div
+                  id="sidebar-provider-telemetry"
+                  className="mono muted"
+                  style={{
+                    fontSize: '0.72rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 5,
+                    padding: '7px 8px',
+                    borderRadius: 'var(--radius)',
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  {activeSidebarProviders.length > 1 && (
+                    <div
+                      role="tablist"
+                      aria-label="Active AI Providers"
+                      style={{
+                        display: 'flex',
+                        gap: 4,
+                        flexWrap: 'wrap',
+                        paddingBottom: 4,
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      {activeSidebarProviders.map((pid) => {
+                        const pEntry = PROVIDER_REGISTRY[pid];
+                        const pAuth =
+                          factorySettings.data?.providerAuth?.[pid]?.authenticated ??
+                          (pid === 'claude' ? Boolean(claudeUsage.data?.authenticated) : true);
+                        const selected = pid === currentSidebarProvider;
+                        return (
+                          <button
+                            key={pid}
+                            type="button"
+                            role="tab"
+                            aria-selected={selected}
+                            onClick={() => selectSidebarProvider(pid)}
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              padding: '3px 6px',
+                              fontSize: '0.68rem',
+                              fontFamily: 'inherit',
+                              fontWeight: selected ? 700 : 500,
+                              borderRadius: 5,
+                              border: selected
+                                ? '1px solid var(--accent)'
+                                : '1px solid transparent',
+                              background: selected ? 'rgba(99, 102, 241, 0.16)' : 'transparent',
+                              color: selected ? 'var(--text)' : 'var(--text-muted)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 4,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                            title={`Switch telemetry view to ${pEntry.label}`}
+                          >
+                            <span
+                              style={{
+                                width: 5,
+                                height: 5,
+                                borderRadius: '50%',
+                                background: pAuth ? 'var(--ok)' : 'var(--warn)',
+                                flexShrink: 0,
+                              }}
+                            />
+                            <span>
+                              {pEntry.icon} {pEntry.shortLabel}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
+                    <strong>
+                      {entry.icon}{' '}
+                      {isClaude ? formatClaudePlanLabel(claudeUsage.data) : entry.shortLabel}
+                    </strong>
+                    <span style={{ color: isAuthed ? 'var(--ok)' : 'var(--warn)' }}>
+                      ● {isAuthed ? 'active' : 'setup'}
+                    </span>
+                  </div>
+
+                  {isClaude && claudeUsage.data ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>5h: {Math.round(claudeUsage.data.fiveHour?.utilizationPercent ?? 0)}%</span>
+                      <span>7d: {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>
+                        Turns: {providerBucket ? providerBucket.weeklyTokens.turnCount : 0}
+                      </span>
+                      <span>
+                        Runs: {activeProviderRuns > 0 ? `${activeProviderRuns} live / ` : ''}
+                        {doneProviderRuns} done
+                      </span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>
+                      1h: {formatTokensCompact(providerBucket?.hourlyTokens.totalTokens ?? 0)}
+                    </span>
+                    <span>
+                      7d: {formatTokensCompact(providerBucket?.weeklyTokens.totalTokens ?? 0)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
         </footer>
       </aside>
 
@@ -531,23 +685,6 @@ function Shell() {
           </div>
 
           <div className="topbar-right">
-            {claudeUsage.data && (
-              <span
-                id="topbar-claude-usage"
-                className="pill hide-sm mono"
-                style={{ fontSize: '0.74rem', gap: 6 }}
-                title={`Claude OAuth (${formatClaudePlanLabel(claudeUsage.data)}) · 1h tokens: ${formatTokensCompact(claudeUsage.data.hourlyTokens.totalTokens)} · 7d tokens: ${formatTokensCompact(claudeUsage.data.weeklyTokens.totalTokens)}`}
-              >
-                <span
-                  className="dot"
-                  style={{
-                    background: claudeUsage.data.authenticated ? 'var(--ok)' : 'var(--warn)',
-                  }}
-                />
-                5h: {Math.round(claudeUsage.data.fiveHour?.utilizationPercent ?? 0)}% · 7d:{' '}
-                {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%
-              </span>
-            )}
             <button
               id="topbar-new-project"
               type="button"
