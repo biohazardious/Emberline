@@ -19,10 +19,13 @@ function writeFakeClaude(dir: string): string {
     file,
     [
       '#!/bin/sh',
-      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/token-$EMBERLINE_RUN_ID"`,
+      // Written whole and then renamed: the test reads the file as soon as it exists.
+      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
+      `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
       'echo "fake claude ready"',
       'read line',
-      `printf %s "$line" > "${dir}/line-$EMBERLINE_RUN_ID"`,
+      `printf %s "$line" > "${dir}/.line-$EMBERLINE_RUN_ID"`,
+      `mv "${dir}/.line-$EMBERLINE_RUN_ID" "${dir}/line-$EMBERLINE_RUN_ID"`,
       'exit 0',
       '',
     ].join('\n'),
