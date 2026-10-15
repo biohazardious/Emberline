@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import {
   type AgentId,
   type AgentModelId,
@@ -16,7 +14,6 @@ import {
 } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
 
-const execFileAsync = promisify(execFile);
 
 const IGNORED_PATH_SEGMENTS = [
   'node_modules/',
@@ -698,7 +695,7 @@ export async function runCrossProviderCritic(params: {
   settings: FactorySettings;
   preferredReviewer?: AgentId;
 }): Promise<CrossCriticResult> {
-  const { run, ticketTitle, ticketBody, workspacePath, settings, preferredReviewer } = params;
+  const { run, workspacePath, settings, preferredReviewer } = params;
   const authorAgent = (run.agent as AgentId) ?? 'claude';
   const { reviewerAgent, reviewerModel } = selectRivalCriticAgent(
     authorAgent,
@@ -708,16 +705,6 @@ export async function runCrossProviderCritic(params: {
 
   const slopReport = await auditWorktreeSlop({ runId: run.id, workspacePath });
 
-  let diffStat = '';
-  try {
-    const { stdout } = await execGitFile(['diff', '--stat', 'HEAD~1..HEAD'], {
-      cwd: workspacePath,
-    }).catch(() => execGitFile(['diff', '--stat', 'HEAD'], { cwd: workspacePath }));
-    diffStat = stdout.trim();
-  } catch {
-    diffStat = '';
-  }
-
   const criticIssues = slopReport.issues.map((iss) => ({
     severity: iss.severity === 'error' ? ('critical' as const) : ('warning' as const),
     category: iss.category,
@@ -726,46 +713,15 @@ export async function runCrossProviderCritic(params: {
     fixRecommendation: iss.fixHint,
   }));
 
-  // Try invoking rival CLI inside workspace if available and fast, otherwise synthesize from deterministic + structural audit
-  let llmSummary: string | null = null;
-  if (reviewerAgent === 'antigravity' || reviewerAgent === 'claude') {
-    const reviewPrompt = [
-      `You are acting as a strict Cross-Provider Principal Code Critic (${reviewerAgent.toUpperCase()} reviewing code written by ${authorAgent.toUpperCase()}).`,
-      `Ticket: ${ticketTitle ?? run.title ?? 'Implementation Task'}`,
-      ticketBody ? `Specification:\n${ticketBody.slice(0, 1500)}` : '',
-      `Diff Stat:\n${diffStat || `${slopReport.filesAudited} files, ${slopReport.addedLinesAudited} added lines`}`,
-      `Automated Slop Score: ${slopReport.score}/100 (Grade ${slopReport.grade}, ${slopReport.errorCount} errors, ${slopReport.warningCount} warnings).`,
-      'Provide a concise 2-sentence architectural & anti-slop review verdict.',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-
-    try {
-      const cmd = reviewerAgent === 'antigravity' ? '/usr/local/bin/agy-bin' : 'claude';
-      const args =
-        reviewerAgent === 'antigravity'
-          ? ['--mode', 'ask', '--output-format', 'text', '-p', reviewPrompt]
-          : ['--print', '--model', 'sonnet', '--', reviewPrompt];
-      const { stdout } = await execFileAsync(cmd, args, {
-        cwd: workspacePath,
-        timeout: 25_000,
-        maxBuffer: 2 * 1024 * 1024,
-      });
-      const cleaned = stdout.trim();
-      if (cleaned.length > 15 && cleaned.length < 2500) {
-        llmSummary = cleaned;
-      }
-    } catch {
-      // Fall back to deterministic synthesis when running inside core container or when CLI times out
-    }
-  }
+  // The verdict is synthesized from the deterministic audit. Core never runs the rival CLI itself:
+  // agent CLIs live on the runner-tools volume, which agents can write. Running the critic as a
+  // runner session is tracked for ROADMAP Phase 3.
 
   const verdict: 'PASS' | 'NEEDS_FIX' = slopReport.passed ? 'PASS' : 'NEEDS_FIX';
   const summary =
-    llmSummary ??
-    (verdict === 'PASS'
+    verdict === 'PASS'
       ? `Cross-provider audit by ${reviewerAgent.toUpperCase()} (${reviewerModel}) passed with Grade ${slopReport.grade} (${slopReport.score}/100) across ${slopReport.filesAudited} modified file(s). No type evasion, unfinished stubs, or vibe-coding bloat blocked approval.`
-      : `Cross-provider audit by ${reviewerAgent.toUpperCase()} (${reviewerModel}) flagged ${slopReport.errorCount} blocking hygiene error(s) and ${slopReport.warningCount} warning(s) (Score ${slopReport.score}/100 · Grade ${slopReport.grade}). Remediation required before completion.`);
+      : `Cross-provider audit by ${reviewerAgent.toUpperCase()} (${reviewerModel}) flagged ${slopReport.errorCount} blocking hygiene error(s) and ${slopReport.warningCount} warning(s) (Score ${slopReport.score}/100 · Grade ${slopReport.grade}). Remediation required before completion.`;
 
   const followUpPrompt =
     verdict === 'NEEDS_FIX' || criticIssues.length > 0

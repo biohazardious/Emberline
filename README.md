@@ -26,14 +26,14 @@ Status: **MVP complete (M0–M6)**: PTY host, web terminal, Claude runs with hoo
 Requirements: **Docker** with Compose v2 and `make`. Nothing else is installed on the host.
 
 ```bash
-cp .env.example .env     # optional: bind address, port, pinned Claude Code version
+cp .env.example .env     # optional: bind address, port, time zone
 make up                  # build + start core and runner → http://127.0.0.1:7420
 make claude-login        # one time: log in with YOUR Claude subscription inside the runner
 make upgrade-core        # rebuild/restart core only; running agents keep running
 make logs / make down
 ```
 
-Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinned Claude Code CLI, hosts the agents). They share only the ptyd socket and the workspaces volume (`runner-home` is mounted read-only into `core` so `git push` can use your runner's SSH/git credentials).
+Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + the AI CLIs, hosts the agents). They share the ptyd socket and the workspaces volume. `core` also mounts `runner-home` read-only (so `git push` can use your runner's SSH keys) and `runner-tools` read-only (to show installed CLI versions). Core never executes anything from those volumes: CLI installs run in the runner, and every git call core makes ignores repository hooks and command-running config.
 
 On first start, core prints a one-time **setup token** to its log (`make logs`); the setup page asks for it together with the new admin password, so nobody else on the network can claim a fresh instance. Set `EMBERLINE_SETUP_TOKEN` to choose it yourself.
 

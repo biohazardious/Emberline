@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { stripAnsi } from '@emberline/adapter-claude';
 import {
   type AgentId,
   type CliInstallMethod,
@@ -17,7 +15,6 @@ import type { Db } from '../db/index.js';
 import { getFactorySettings } from '../factory/service.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-const execFileAsync = promisify(execFile);
 
 interface ToolSpec {
   provider: AgentId;
@@ -113,27 +110,52 @@ export class ToolchainService {
     }
   }
 
-  private getToolEnv(): NodeJS.ProcessEnv {
-    const toolsDir = this.toolsDir;
-    return {
-      ...process.env,
-      HOME: path.join(toolsDir, 'home'),
-      EMBERLINE_TOOLS_DIR: toolsDir,
-      NPM_CONFIG_PREFIX: path.join(toolsDir, 'npm'),
-      NPM_CONFIG_CACHE: path.join(toolsDir, 'npm-cache'),
-      PIPX_HOME: path.join(toolsDir, 'pipx'),
-      PIPX_BIN_DIR: path.join(toolsDir, 'bin'),
-      PATH: `${path.join(toolsDir, 'bin')}:${path.join(toolsDir, 'npm', 'bin')}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`,
-    };
+  /** Exports that point npm/pipx at the persistent runner-tools volume. */
+  private toolsEnvSetup(): string {
+    return [
+      `mkdir -p "${this.toolsDir}/bin" "${this.toolsDir}/npm/bin" "${this.toolsDir}/npm/lib" "${this.toolsDir}/pipx"`,
+      `export EMBERLINE_TOOLS_DIR="${this.toolsDir}"`,
+      `export NPM_CONFIG_PREFIX="${path.join(this.toolsDir, 'npm')}"`,
+      `export PIPX_HOME="${path.join(this.toolsDir, 'pipx')}"`,
+      `export PIPX_BIN_DIR="${path.join(this.toolsDir, 'bin')}"`,
+      `export PATH="${path.join(this.toolsDir, 'bin')}:${path.join(this.toolsDir, 'npm', 'bin')}:$PATH"`,
+    ].join('; ');
   }
 
-  private async ensureDirs(): Promise<void> {
-    await mkdir(path.join(this.toolsDir, 'home'), { recursive: true }).catch(() => {});
-    await mkdir(path.join(this.toolsDir, 'bin'), { recursive: true }).catch(() => {});
-    await mkdir(path.join(this.toolsDir, 'npm', 'bin'), { recursive: true }).catch(() => {});
-    await mkdir(path.join(this.toolsDir, 'npm', 'lib'), { recursive: true }).catch(() => {});
-    await mkdir(path.join(this.toolsDir, 'npm-cache'), { recursive: true }).catch(() => {});
-    await mkdir(path.join(this.toolsDir, 'pipx'), { recursive: true }).catch(() => {});
+  /**
+   * Runs a shell script in the runner (through ptyd) and waits for it to exit. Core never executes
+   * anything from the runner-tools volume itself: agents can write there, and core holds the
+   * database, tokens and API keys.
+   */
+  private async runInRunner(script: string, title: string, timeoutMs: number): Promise<{ exitCode: number | null; output: string }> {
+    const client = this.ptyd.get();
+    const session = await client.spawn({
+      file: 'bash',
+      args: ['-c', script],
+      cwd: this.workspacesDir,
+      cols: 200,
+      meta: { kind: 'shell', title },
+    });
+    const deadline = Date.now() + timeoutMs;
+    try {
+      let exitCode: number | null = null;
+      for (;;) {
+        const info = (await client.list()).sessions.find((s) => s.id === session.id);
+        if (!info || info.status === 'exited') {
+          exitCode = info?.exitCode ?? null;
+          break;
+        }
+        if (Date.now() > deadline) {
+          await client.kill(session.id).catch(() => undefined);
+          throw new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      }
+      const snapshot = await client.snapshot(session.id, 2_000).catch(() => null);
+      return { exitCode, output: stripAnsi(snapshot?.data ?? '').trim() };
+    } finally {
+      await client.remove(session.id).catch(() => undefined);
+    }
   }
 
   private readOsInfo(): string {
@@ -184,23 +206,8 @@ export class ToolchainService {
       }
     }
 
-    const rt = this.state.get(spec.provider);
-    if (rt?.cachedVersion) return rt.cachedVersion;
-
-    try {
-      const { stdout, stderr } = await execFileAsync(binaryPath, ['--version'], {
-        timeout: 4_000,
-        env: this.getToolEnv(),
-      });
-      const combined = `${stdout}\n${stderr}`.trim();
-      const firstLine = combined.split('\n')[0]?.trim() ?? '';
-      const versionMatch = firstLine.match(/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/);
-      const detected = versionMatch ? versionMatch[0] : firstLine.slice(0, 48) || 'installed';
-      if (rt) rt.cachedVersion = detected;
-      return detected;
-    } catch {
-      return 'installed';
-    }
+    // Never execute the binary from core (see runInRunner).
+    return 'installed';
   }
 
   async getToolStatus(provider: AgentId): Promise<CliToolStatus> {
@@ -249,8 +256,9 @@ export class ToolchainService {
     const entry = PROVIDER_REGISTRY[provider];
     const rt = this.state.get(provider)!;
     const action = rawBody.action ?? 'install';
-
-    await this.ensureDirs();
+    if (rt.installing) {
+      throw new Error(`${entry.label} CLI ${rt.lastAction ?? 'install'} is already running`);
+    }
 
     const defaultCmd =
       action === 'uninstall'
@@ -261,13 +269,7 @@ export class ToolchainService {
     const commandToRun = rawBody.customCommand?.trim() || defaultCmd;
 
     if (rawBody.spawnTerminal) {
-      const envSetup = [
-        `export EMBERLINE_TOOLS_DIR="${this.toolsDir}"`,
-        `export NPM_CONFIG_PREFIX="${path.join(this.toolsDir, 'npm')}"`,
-        `export PIPX_HOME="${path.join(this.toolsDir, 'pipx')}"`,
-        `export PIPX_BIN_DIR="${path.join(this.toolsDir, 'bin')}"`,
-        `export PATH="${path.join(this.toolsDir, 'bin')}:${path.join(this.toolsDir, 'npm', 'bin')}:$PATH"`,
-      ].join('; ');
+      const envSetup = this.toolsEnvSetup();
 
       const shellScript = [
         envSetup,
@@ -317,17 +319,19 @@ export class ToolchainService {
     rt.cachedVersion = null;
 
     try {
-      const { stdout, stderr } = await execFileAsync('bash', ['-c', commandToRun], {
-        timeout: 180_000,
-        maxBuffer: 10 * 1024 * 1024,
-        env: this.getToolEnv(),
-      });
+      const { exitCode, output } = await this.runInRunner(
+        `${this.toolsEnvSetup()}; ${commandToRun}`,
+        `📦 ${action === 'update' ? 'Update' : 'Install'} · ${entry.shortLabel}`,
+        180_000,
+      );
+      if (exitCode !== 0) {
+        throw Object.assign(new Error(`exited with code ${exitCode ?? 'unknown'}`), { stdout: output.slice(-2000) });
+      }
       rt.installing = false;
       rt.lastUpdatedAt = new Date().toISOString();
-      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
       return {
         tool: await this.getToolStatus(provider),
-        output: output || `${entry.shortLabel} CLI ${action} completed.`,
+        output: output.slice(-4000) || `${entry.shortLabel} CLI ${action} completed.`,
         terminal: null,
       };
     } catch (err) {
@@ -372,7 +376,6 @@ export class ToolchainService {
   ensureEnabledProvidersInstalled(providers?: AgentId[]): void {
     const enabled = providers ?? getFactorySettings(this.db).enabledProviders;
     void (async () => {
-      await this.ensureDirs();
       for (const provider of enabled) {
         const spec = TOOL_SPECS[provider];
         if (!spec) continue;

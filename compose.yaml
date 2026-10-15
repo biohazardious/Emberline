@@ -24,7 +24,8 @@ services:
       - data:/data
       - ${EMBERLINE_WORKSPACES_HOST_DIR:-./workspaces}:/workspaces
       - runner-home:/home/node:ro
-      - runner-tools:/opt/ai-tools
+      # Read-only: core only inspects installed CLI versions; installs run in the runner via ptyd.
+      - runner-tools:/opt/ai-tools:ro
     depends_on:
       runner:
         condition: service_healthy

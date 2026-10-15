@@ -113,6 +113,10 @@ ENV EMBERLINE_TOOLS_DIR=/opt/ai-tools \
 # core
 # ---------------------------------------------------------------------------
 FROM runtime AS core
+# Core never executes anything from /opt/ai-tools: the runner (and its agents) can write that
+# volume, while core holds the database, tokens and API keys. System paths only.
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    NPM_CONFIG_PREFIX=/usr/local
 ENV NODE_ENV=production \
     EMBERLINE_HOST=0.0.0.0 \
     EMBERLINE_PORT=7420 \
