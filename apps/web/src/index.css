@@ -2602,3 +2602,23 @@ dialog.cmd-dialog::backdrop {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* --- persistent review ------------------------------------------------------ */
+
+.review-viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.review-viewed-stale {
+  color: var(--warn);
+}
+
+.diff-annotation-sent {
+  opacity: 0.75;
+}

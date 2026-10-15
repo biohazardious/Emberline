@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   CrossCriticResult,
   DiffFile,
@@ -11,6 +12,7 @@ import type {
   RunFileDiff,
   RunForgeStatus,
   RunPreviewStatus,
+  RunReviewState,
   SlopAuditReport,
 } from '@emberline/protocol';
 import { Link } from 'wouter';
@@ -80,8 +82,34 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   const [loadingFile, setLoadingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Inline diff review annotations
-  const [annotations, setAnnotations] = useState<DiffAnnotation[]>([]);
+  // Persistent line comments (stored by core, survive reloads).
+  const queryClient = useQueryClient();
+  const reviewKey = ['review', run.id] as const;
+  const reviewQuery = useQuery({
+    queryKey: reviewKey,
+    queryFn: () => api<RunReviewState>(`/api/runs/${run.id}/review`),
+  });
+  const refreshReview = () => queryClient.invalidateQueries({ queryKey: reviewKey });
+  const annotations = useMemo<DiffAnnotation[]>(
+    () =>
+      (reviewQuery.data?.comments ?? [])
+        .filter((c) => c.status !== 'resolved')
+        .map((c) => ({
+          id: c.id,
+          filePath: c.filePath,
+          line: c.line,
+          side: c.side,
+          comment: c.body,
+          status: c.status === 'sent' ? 'sent' : 'open',
+        })),
+    [reviewQuery.data],
+  );
+  const openCount = annotations.filter((a) => a.status === 'open').length;
+  const viewedSignature = (f: DiffFile) => `${f.status}:${f.additions}:${f.deletions}`;
+  const viewedByPath = useMemo(
+    () => new Map((reviewQuery.data?.viewed ?? []).map((v) => [v.filePath, v.signature])),
+    [reviewQuery.data],
+  );
   const [generalNote, setGeneralNote] = useState('');
   const [sendingReview, setSendingReview] = useState(false);
 
@@ -228,53 +256,40 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   }, [selectedFile, scope, loadFile]);
 
-  const handleAddAnnotation = (
-    line: number,
-    side: 'modified' | 'original',
-    comment: string,
-  ) => {
+  const handleAddAnnotation = (line: number, side: 'modified' | 'original', comment: string) => {
     if (!selectedFile) return;
-    setAnnotations((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        filePath: selectedFile,
-        line,
-        side,
-        comment,
-      },
-    ]);
+    api(`/api/runs/${run.id}/review/comments`, 'POST', { filePath: selectedFile, line, side, body: comment })
+      .then(refreshReview)
+      .catch((e: unknown) => setError(errorMessage(e)));
   };
 
+  /** Deletes an unsent comment; a sent one is marked resolved instead (it is part of the history). */
   const handleRemoveAnnotation = (id: string) => {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    const sent = annotations.find((a) => a.id === id)?.status === 'sent';
+    const request = sent
+      ? api(`/api/runs/${run.id}/review/comments/${id}`, 'PATCH', { status: 'resolved' })
+      : api(`/api/runs/${run.id}/review/comments/${id}`, 'DELETE');
+    request.then(refreshReview).catch((e: unknown) => setError(errorMessage(e)));
+  };
+
+  const handleToggleViewed = (f: DiffFile, viewed: boolean) => {
+    api(`/api/runs/${run.id}/review/viewed`, 'PUT', { filePath: f.path, signature: viewedSignature(f), viewed })
+      .then(refreshReview)
+      .catch((e: unknown) => setError(errorMessage(e)));
   };
 
   const handleSendReviewToClaude = async () => {
-    if (annotations.length === 0 && !generalNote.trim()) return;
+    if (openCount === 0 && !generalNote.trim()) return;
     setSendingReview(true);
     setError(null);
     try {
-      const lines: string[] = [
-        'Please address the following code review feedback on this branch:',
-        '',
-      ];
-      if (generalNote.trim()) {
-        lines.push(`Overall note: ${generalNote.trim()}`, '');
-      }
-      if (annotations.length > 0) {
-        lines.push('Inline diff annotations:');
-        for (const a of annotations) {
-          lines.push(`- \`${a.filePath}:${a.line}\` (${a.side}): ${a.comment}`);
-        }
-      }
-      const next = await api<Run>(`/api/runs/${run.id}/prompt`, 'POST', {
-        text: lines.join('\n'),
+      const res = await api<{ run: Run; sent: number }>(`/api/runs/${run.id}/review/request-changes`, 'POST', {
+        note: generalNote.trim(),
       });
-      setAnnotations([]);
       setGeneralNote('');
-      setGitNotice(`Dispatched review annotations to ${formatAgentDisplayName(run.agent)} run.`);
-      onRunUpdated?.(next);
+      await refreshReview();
+      setGitNotice(`Sent ${res.sent} review comment(s) to ${formatAgentDisplayName(run.agent)}.`);
+      onRunUpdated?.(res.run);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -980,20 +995,20 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 value={generalNote}
                 onChange={(e) => setGeneralNote(e.target.value)}
                 placeholder={
-                  annotations.length > 0
-                    ? `${annotations.length} line note(s) queued — optional summary…`
+                  openCount > 0
+                    ? `${openCount} line comment(s) ready to send — optional summary…`
                     : 'Quick review note or click lines in diff…'
                 }
               />
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
-                disabled={sendingReview || (annotations.length === 0 && !generalNote.trim())}
+                disabled={sendingReview || (openCount === 0 && !generalNote.trim())}
                 onClick={handleSendReviewToClaude}
               >
                 {sendingReview
                   ? 'Sending…'
-                  : `Request Changes (${annotations.length})`}
+                  : `Request Changes (${openCount})`}
               </button>
             </div>
           </div>
@@ -1031,6 +1046,22 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       {fileNoteCount > 0 && (
                         <span className="badge badge-soft mono">{fileNoteCount}</span>
                       )}
+                      <label
+                        className={`review-viewed${viewedByPath.has(f.path) && viewedByPath.get(f.path) !== viewedSignature(f) ? ' review-viewed-stale' : ''}`}
+                        title={
+                          viewedByPath.has(f.path) && viewedByPath.get(f.path) !== viewedSignature(f)
+                            ? 'Changed since you marked it viewed'
+                            : 'Mark as viewed'
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={viewedByPath.get(f.path) === viewedSignature(f)}
+                          onChange={(e) => handleToggleViewed(f, e.target.checked)}
+                        />
+                        {viewedByPath.has(f.path) && viewedByPath.get(f.path) !== viewedSignature(f) ? 'changed' : 'viewed'}
+                      </label>
                       <span className="review-file-stats mono">
                         <span style={{ color: 'var(--ok)' }}>+{f.additions}</span>{' '}
                         <span style={{ color: 'var(--danger)' }}>-{f.deletions}</span>

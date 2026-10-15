@@ -145,3 +145,39 @@ export const scheduledJobs = sqliteTable(
   (t) => [index('scheduled_jobs_project_idx').on(t.projectId)],
 );
 
+
+/** Persistent line comments on a run's diff (Phase 4 code review). */
+export const reviewComments = sqliteTable(
+  'review_comments',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    filePath: text('file_path').notNull(),
+    line: integer('line').notNull(),
+    /** `modified` (new code) or `original` (removed code). */
+    side: text('side').notNull(),
+    body: text('body').notNull(),
+    /** open -> sent (included in a "request changes" prompt) -> resolved. */
+    status: text('status').notNull().default('open'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    sentAt: integer('sent_at', { mode: 'timestamp_ms' }),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [index('review_comments_run_idx').on(t.runId)],
+);
+
+/** Files the user marked as viewed, with the diff signature they saw. */
+export const reviewFileViews = sqliteTable(
+  'review_file_views',
+  {
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    filePath: text('file_path').notNull(),
+    signature: text('signature').notNull(),
+    viewedAt: integer('viewed_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [uniqueIndex('review_file_views_run_file_idx').on(t.runId, t.filePath)],
+);

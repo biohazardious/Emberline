@@ -7,6 +7,8 @@ export interface DiffAnnotation {
   line: number;
   side: 'modified' | 'original';
   comment: string;
+  /** `sent` once it went to the agent in a "request changes" prompt. */
+  status?: 'open' | 'sent';
 }
 
 interface Props {
@@ -248,18 +250,23 @@ export function MonacoDiff({
       {fileAnnotations.length > 0 && (
         <div className="diff-file-annotations">
           {fileAnnotations.map((a) => (
-            <div key={a.id} className="diff-annotation-chip">
+            <div key={a.id} className={`diff-annotation-chip${a.status === 'sent' ? ' diff-annotation-sent' : ''}`}>
               <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>
                 L{a.line} ({a.side})
               </span>
               <span style={{ flex: 1 }}>{a.comment}</span>
+              {a.status === 'sent' && (
+                <span className="badge badge-soft" title="Sent to the agent; resolve it once addressed">
+                  sent
+                </span>
+              )}
               <button
                 type="button"
                 className="icon-btn"
                 onClick={() => onRemoveAnnotation(a.id)}
-                title="Remove annotation"
+                title={a.status === 'sent' ? 'Mark resolved' : 'Delete comment'}
               >
-                ×
+                {a.status === 'sent' ? '✓' : '×'}
               </button>
             </div>
           ))}

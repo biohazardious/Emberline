@@ -94,3 +94,66 @@ export const PruneWorktreeResponse = z.object({
   removed: z.boolean(),
 });
 export type PruneWorktreeResponse = z.infer<typeof PruneWorktreeResponse>;
+
+// --- persistent code review (Phase 4) ---------------------------------------
+
+export const ReviewCommentStatus = z.enum(['open', 'sent', 'resolved']);
+export type ReviewCommentStatus = z.infer<typeof ReviewCommentStatus>;
+
+export const ReviewComment = z.object({
+  id: z.string(),
+  runId: z.string(),
+  filePath: z.string(),
+  line: z.number().int(),
+  side: z.enum(['modified', 'original']),
+  body: z.string(),
+  /** open: not sent yet · sent: included in a "request changes" prompt · resolved: done. */
+  status: ReviewCommentStatus,
+  createdAt: z.string(),
+  sentAt: z.string().nullable(),
+  resolvedAt: z.string().nullable(),
+});
+export type ReviewComment = z.infer<typeof ReviewComment>;
+
+export const ReviewFileView = z.object({
+  filePath: z.string(),
+  /** Diff signature the user saw; a different current signature means "changed since viewed". */
+  signature: z.string(),
+  viewedAt: z.string(),
+});
+export type ReviewFileView = z.infer<typeof ReviewFileView>;
+
+export const RunReviewState = z.object({
+  comments: z.array(ReviewComment),
+  viewed: z.array(ReviewFileView),
+});
+export type RunReviewState = z.infer<typeof RunReviewState>;
+
+export const CreateReviewCommentBody = z.object({
+  filePath: z.string().trim().min(1).max(1024),
+  line: z.number().int().min(1),
+  side: z.enum(['modified', 'original']).default('modified'),
+  body: z.string().trim().min(1).max(10_000),
+});
+export type CreateReviewCommentBody = z.input<typeof CreateReviewCommentBody>;
+
+export const UpdateReviewCommentBody = z
+  .object({
+    body: z.string().trim().min(1).max(10_000),
+    status: z.enum(['open', 'resolved']),
+  })
+  .partial();
+export type UpdateReviewCommentBody = z.input<typeof UpdateReviewCommentBody>;
+
+export const RequestChangesBody = z.object({
+  /** Optional overall note sent before the line comments. */
+  note: z.string().trim().max(10_000).default(''),
+});
+export type RequestChangesBody = z.input<typeof RequestChangesBody>;
+
+export const MarkFileViewedBody = z.object({
+  filePath: z.string().trim().min(1).max(1024),
+  signature: z.string().max(200),
+  viewed: z.boolean(),
+});
+export type MarkFileViewedBody = z.input<typeof MarkFileViewedBody>;
