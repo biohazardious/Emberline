@@ -13,7 +13,7 @@ const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/state', '/api/auth/setu
 /** Machine-to-machine routes (runner -> core) that carry their own credentials. */
 const INTERNAL_PREFIX = '/api/internal/';
 /** Static project demo bundle assets rendered in iframes and runner Chromium / Playwright MCP. */
-const DEMO_ASSET_RE = /^\/api\/projects\/[^/]+\/demo\//;
+const DEMO_ASSET_ROUTES = new Set(['/api/projects/:id/demo/:targetId', '/api/projects/:id/demo/:targetId/*']);
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW_MS = 15 * 60_000;
@@ -47,10 +47,17 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   };
 
   app.addHook('onRequest', async (request, reply) => {
-    const url = request.url.split('?')[0] ?? '';
-    if (!url.startsWith('/api/')) return;
-    if (url.startsWith(INTERNAL_PREFIX)) return;
-    if (SAFE_METHODS.has(request.method) && DEMO_ASSET_RE.test(url)) return;
+    // Absolute-form targets (`GET http://host/api/...`) are only meant for proxies.
+    if (!request.raw.url?.startsWith('/')) {
+      return reply.code(400).send({ error: 'bad_request', message: 'origin-form request target required' });
+    }
+    // Decide on the route pattern the router actually matched, never on the raw URL: the router
+    // percent-decodes paths, so `/%61pi/...` reaches `/api/...` handlers. Unmatched requests only
+    // reach the 404 / SPA fallback handler.
+    const route = request.routeOptions.url;
+    if (!route?.startsWith('/api/')) return;
+    if (route.startsWith(INTERNAL_PREFIX)) return;
+    if (SAFE_METHODS.has(request.method) && DEMO_ASSET_ROUTES.has(route)) return;
 
     const origin = request.headers.origin;
     if (origin && !sameHost(origin, request.host)) {
@@ -59,7 +66,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     if (!SAFE_METHODS.has(request.method) && request.headers[CSRF_HEADER] !== '1') {
       return reply.code(403).send({ error: 'csrf', message: `missing ${CSRF_HEADER} header` });
     }
-    if (PUBLIC_ROUTES.has(url)) return;
+    if (PUBLIC_ROUTES.has(route)) return;
     if (!isAuthenticated(request)) {
       return reply.code(401).send({ error: 'unauthorized', message: 'login required' });
     }

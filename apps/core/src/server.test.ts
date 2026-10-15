@@ -108,4 +108,35 @@ describe('auth', () => {
     });
     expect(sameOrigin.statusCode).toBe(200);
   });
+
+  it.each(['/%61pi/projects', '/ap%69/projects', '/api/%70rojects'])(
+    'decides auth on the matched route, not the raw URL (%s)',
+    async (url) => {
+      t = await createTestApp();
+      await setupAndLogin(t.app);
+      const res = await t.app.inject({ url });
+      expect(res.statusCode).toBe(401);
+    },
+  );
+
+  it('rejects absolute-form request targets without a session', async () => {
+    t = await createTestApp();
+    await setupAndLogin(t.app);
+    await t.app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = t.app.server.address() as { port: number };
+    const { connect } = await import('node:net');
+    const status = await new Promise<string>((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1', () => {
+        socket.write(`GET http://127.0.0.1:${port}/api/projects HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+      });
+      let data = '';
+      socket.on('data', (chunk) => {
+        data += String(chunk);
+      });
+      socket.on('end', () => resolve(data.split('\r\n')[0] ?? ''));
+      socket.on('error', reject);
+    });
+    expect(status).not.toMatch(/ 200 /);
+    expect(status).toMatch(/ 40[0134] /);
+  });
 });
