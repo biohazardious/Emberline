@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -146,6 +146,36 @@ describe('tickets', () => {
     expect(await waitFile(`line-${run.id}`)).toBe('also add a license');
     const detail: RunDetail = (await api('GET', `/api/runs/${run.id}`)).json();
     expect(detail.events.map((e) => e.type)).toContain('prompt_sent');
+  });
+
+  it('ingests agent ticket drafts even when one sits at the body limit', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'Plan the work', status: 'ready' });
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+      JSON.stringify({
+        autoDispatch: false,
+        tickets: [
+          { title: 'Huge draft', body: 'x'.repeat(20_000), preferredAgent: 'codex' },
+          { title: 'Normal draft', body: 'small' },
+        ],
+      }),
+    );
+    const token = await waitFile(`token-${run.id}`);
+    await hook(run.id, 'SessionStart', token, { session_id: 's-drafts' });
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Stop', token);
+
+    await expect
+      .poll(async () => ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title))
+      .toEqual(expect.arrayContaining(['Huge draft', 'Normal draft']));
+    const huge = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).find(
+      (x) => x.title === 'Huge draft',
+    );
+    expect(huge?.body.length).toBeLessThanOrEqual(20_000);
+    expect(huge?.body).toContain('[Preferred Agent: codex');
   });
 
   it('dispatches one ticket per project even when dispatches race', async () => {

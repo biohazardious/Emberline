@@ -21,6 +21,10 @@ const app = await buildServer(
   { config, db, ptyd, runs, tickets, scheduler },
   { logger: { level: config.logLevel } },
 );
+// A background task that forgot a .catch must not take down every running agent's control plane.
+process.on('unhandledRejection', (reason) => {
+  app.log.error({ err: reason }, 'unhandled promise rejection');
+});
 ptyd.on('status', (status) => {
   app.log.info({ socket: config.ptydSocket }, `ptyd ${status}`);
   if (status === 'connected') {

@@ -131,6 +131,9 @@ function hasVerifiableBuildTarget(workspacePath: string): boolean {
  * column follows the run (working -> In progress, turn finished -> Review) unless the user
  * already moved it to Done.
  */
+/** CreateTicketBody's body limit. */
+const TICKET_BODY_MAX = 20_000;
+
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly autoChainProjects = new Set<string>();
   private readonly selfHealedRuns = new Set<string>();
@@ -170,7 +173,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .catch(() => undefined);
       }
       if (stateChanged && run.state === 'done' && run.projectId) {
-        void this.handleRunCompleted(run);
+        this.handleRunCompleted(run).catch((error: unknown) => {
+          // The pipeline is best effort per run; record why it stopped instead of crashing core.
+          this.runs.note(run.id, 'pipeline_failed', { message: (error as Error).message?.slice(0, 500) });
+        });
       }
     });
   }
@@ -399,15 +405,25 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
           const agentStr = draft.preferredAgent ?? 'claude';
           const modelStr = draft.preferredModel ?? 'auto';
-          body = `${body}\n\n[Preferred Agent: ${agentStr} · Model: ${modelStr}]`.trim();
+          const routeTag = `[Preferred Agent: ${agentStr} · Model: ${modelStr}]`;
+          // Keep the tag inside the body limit even for drafts that already use all of it.
+          body = `${body.slice(0, TICKET_BODY_MAX - routeTag.length - 2)}\n\n${routeTag}`.trim();
         }
-        this.create(run.projectId, {
-          title: draft.title,
-          body,
-          persona: draft.persona,
-          priority: draft.priority,
-          status: 'ready',
-        });
+        try {
+          this.create(run.projectId, {
+            title: draft.title,
+            body,
+            persona: draft.persona,
+            priority: draft.priority,
+            status: 'ready',
+          });
+        } catch (error) {
+          // The drafts file is already consumed: skip the bad draft, keep the others.
+          this.runs.note(run.id, 'ticket_draft_rejected', {
+            title: draft.title.slice(0, 200),
+            message: (error as Error).message.slice(0, 500),
+          });
+        }
       }
       if (ingested.autoDispatch) {
         this.autoChainProjects.add(run.projectId);
