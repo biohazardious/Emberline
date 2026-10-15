@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-16
+
 ### Added
 
 - Update tracking (Settings → Updates): checks GitHub for a newer Emberline release, npm and PyPI for the installed agent CLIs, and npm for the MCP servers run through npx. Checks run every 12 hours (can be turned off; then nothing is sent) and on demand. A newer Emberline shows its release notes and the upgrade commands; CLIs update with one click, and an npx MCP server's cached copy can be dropped so its next start fetches the latest version. A dot next to the version in the sidebar shows when updates are available. An optional GitHub token (only sent to api.github.com) is needed while the repository is private.
@@ -79,7 +81,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/biohazardious/emberline/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/biohazardious/emberline/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/biohazardious/emberline/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/biohazardious/emberline/releases/tag/v0.1.0
