@@ -708,6 +708,18 @@ export function formatRankStars(rank: number): string {
 }
 
 
+export const RunTelemetry = z.object({
+  runId: z.string(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cachedTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  toolCalls: z.number().int().nonnegative(),
+  durationSec: z.number().int().nonnegative(),
+  isEstimated: z.boolean(),
+});
+export type RunTelemetry = z.infer<typeof RunTelemetry>;
+
 export const Run = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -732,6 +744,8 @@ export const Run = z.object({
   endedAt: z.string().nullable(),
   /** True when an ended run can be continued with `claude --resume` (a session id is known). */
   resumable: z.boolean(),
+  /** Token & tool execution telemetry (no monetary pricing). */
+  telemetry: RunTelemetry.optional(),
 });
 export type Run = z.infer<typeof Run>;
 
@@ -1319,6 +1333,198 @@ export const ProviderAuthStatusMap = z.object({
 });
 export type ProviderAuthStatusMap = z.infer<typeof ProviderAuthStatusMap>;
 
+export const McpServerTransport = z.enum(['stdio', 'sse', 'http']);
+export type McpServerTransport = z.infer<typeof McpServerTransport>;
+
+export const McpServerEntry = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(500).default(''),
+  icon: z.string().max(16).default('🔌'),
+  transport: McpServerTransport.default('stdio'),
+  command: z.string().max(300).default(''),
+  args: z.array(z.string()).default([]),
+  url: z.string().max(500).nullable().default(null),
+  env: z.record(z.string(), z.string()).default({}),
+  enabled: z.boolean().default(false),
+  builtIn: z.boolean().default(false),
+  /** Empty array means available to ALL personas; non-empty restricts to selected personas. */
+  personas: z.array(AgentPersona).default([]),
+});
+export type McpServerEntry = z.infer<typeof McpServerEntry>;
+
+export const SkillPluginCategory = z.enum([
+  'ui_ux',
+  'architecture',
+  'security',
+  'qa',
+  'workflow',
+  'custom',
+]);
+export type SkillPluginCategory = z.infer<typeof SkillPluginCategory>;
+
+export const SkillPluginEntry = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(500).default(''),
+  icon: z.string().max(16).default('🧩'),
+  category: SkillPluginCategory.default('workflow'),
+  instructions: z.string().min(1).max(10_000),
+  enabled: z.boolean().default(true),
+  builtIn: z.boolean().default(false),
+  /** Empty array means injected for ALL personas; non-empty restricts to selected personas. */
+  personas: z.array(AgentPersona).default([]),
+});
+export type SkillPluginEntry = z.infer<typeof SkillPluginEntry>;
+
+export const DEFAULT_MCP_SERVERS: McpServerEntry[] = [
+  {
+    id: 'playwright',
+    name: 'Playwright Live Browser (CDP)',
+    description:
+      'Connects agents to the shared Chromium CDP instance (127.0.0.1:9222) for live visual QA, DOM snapshots, and interactive click/type testing.',
+    icon: '🌐',
+    transport: 'stdio',
+    command: 'playwright-mcp',
+    args: ['--cdp-endpoint', 'http://127.0.0.1:9222', '--output-dir', './artifacts'],
+    url: null,
+    env: {},
+    enabled: true,
+    builtIn: true,
+    personas: ['ui_ux', 'qa', 'coder'],
+  },
+  {
+    id: 'context7',
+    name: 'Context7 Live Library Docs',
+    description:
+      'Fetches up-to-date, version-accurate official documentation and code examples for npm/PyPI/Crate packages to eliminate hallucinated APIs.',
+    icon: '📚',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@upstash/context7-mcp'],
+    url: null,
+    env: {},
+    enabled: false,
+    builtIn: true,
+    personas: ['architect', 'coder', 'ui_ux', 'dba'],
+  },
+  {
+    id: 'sequential-thinking',
+    name: 'Sequential Thinking & Deep Planner',
+    description:
+      'Provides structured multi-step reasoning and hypothesis revision tools for complex system architecture and root-cause debugging.',
+    icon: '🧠',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
+    url: null,
+    env: {},
+    enabled: false,
+    builtIn: true,
+    personas: ['product_owner', 'architect', 'security'],
+  },
+  {
+    id: 'filesystem-inspector',
+    name: 'MCP Workspace & Reference Inspector',
+    description:
+      'Structured MCP filesystem operations for reading reference specifications, schemas, and multi-directory project layouts.',
+    icon: '📂',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
+    url: null,
+    env: {},
+    enabled: false,
+    builtIn: true,
+    personas: [],
+  },
+  {
+    id: 'postgres',
+    name: 'PostgreSQL Schema & Query Inspector',
+    description:
+      'Allows DBA and Backend agents to inspect live PostgreSQL schemas, indexes, and explain plans via DATABASE_URL.',
+    icon: '🐘',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-postgres'],
+    url: null,
+    env: {},
+    enabled: false,
+    builtIn: true,
+    personas: ['dba', 'coder'],
+  },
+  {
+    id: 'github',
+    name: 'GitHub Repository & PR MCP',
+    description:
+      'Queries GitHub issues, pull requests, workflow runs, and code search via GITHUB_PERSONAL_ACCESS_TOKEN.',
+    icon: '🐙',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
+    url: null,
+    env: {},
+    enabled: false,
+    builtIn: true,
+    personas: ['product_owner', 'architect', 'qa'],
+  },
+];
+
+export const DEFAULT_SKILL_PLUGINS: SkillPluginEntry[] = [
+  {
+    id: 'modern-ui-craft',
+    name: 'High-Craft UI & Design Systems Skill',
+    description:
+      'Enforces intentional design tokens, tabular numerals, keyboard navigation, responsive density, and bans generic AI purple-gradient templates.',
+    icon: '🎨',
+    category: 'ui_ux',
+    instructions:
+      'DESIGN SYSTEM SKILL: Build interfaces with Linear/Raycast/Stripe-level craft. Always reuse existing CSS custom properties (`var(--...)`), support keyboard shortcuts/focus rings, align numeric columns with `font-variant-numeric: tabular-nums`, and design explicit empty, loading, and error states.',
+    enabled: true,
+    builtIn: true,
+    personas: ['ui_ux', 'coder'],
+  },
+  {
+    id: 'strict-typescript-zod',
+    name: 'Strict Type-Safety & Boundary Validation Skill',
+    description:
+      'Mandates end-to-end type inference, Zod schema validation at API/IO boundaries, discriminated unions, and zero `any` casts.',
+    icon: '🛡️',
+    category: 'architecture',
+    instructions:
+      'STRICT TYPE-SAFETY SKILL: Validate all external inputs (HTTP bodies, query params, JSON files, env vars) with Zod schemas or explicit type guards at the boundary. Prefer discriminated unions for state machines and never use `any` or `@ts-ignore`.',
+    enabled: true,
+    builtIn: true,
+    personas: ['architect', 'coder', 'dba'],
+  },
+  {
+    id: 'owasp-security-hardening',
+    name: 'OWASP & Secret-Zero Security Skill',
+    description:
+      'Enforces parameterized queries, path-traversal prevention, CSRF/auth checks, and blocks hardcoded credentials.',
+    icon: '🔒',
+    category: 'security',
+    instructions:
+      'SECURITY HARDENING SKILL: Never hardcode secrets or tokens. Always normalize and validate file paths against the workspace root to prevent path traversal, use parameterized queries, and sanitize untrusted HTML/Markdown before rendering.',
+    enabled: true,
+    builtIn: true,
+    personas: ['security', 'coder', 'dba'],
+  },
+  {
+    id: 'playwright-visual-qa',
+    name: 'Playwright Live Browser Verification Skill',
+    description:
+      'Guides QA and UI engineers to verify rendered DOM states, console errors, and interactive flows in the live browser.',
+    icon: '🧪',
+    category: 'qa',
+    instructions:
+      'LIVE BROWSER QA SKILL: After building the project, verify both unit/integration tests and the rendered UI. Check browser console logs for runtime errors or unhandled promise rejections before marking work complete.',
+    enabled: true,
+    builtIn: true,
+    personas: ['qa', 'ui_ux'],
+  },
+];
+
 export const FactorySettings = z.object({
   theme: ThemeMode.default('dark'),
   defaultAgent: AgentId.default('claude'),
@@ -1338,7 +1544,12 @@ export const FactorySettings = z.object({
   autoPickupBacklog: z.boolean().default(false),
   autoSyncToMain: z.boolean().default(true),
   selfHealingBuildGate: z.boolean().default(true),
+  antiSlopGate: z.boolean().default(true),
+  secretGuardGate: z.boolean().default(true),
+  crossProviderCritic: z.boolean().default(false),
   autoMoveToDone: z.boolean().default(true),
+  mcpServers: z.array(McpServerEntry).default(DEFAULT_MCP_SERVERS),
+  skillPlugins: z.array(SkillPluginEntry).default(DEFAULT_SKILL_PLUGINS),
   anthropicKeyConfigured: z.boolean().default(false),
   openaiKeyConfigured: z.boolean().default(false),
   geminiKeyConfigured: z.boolean().default(false),
@@ -1371,7 +1582,12 @@ export const UpdateFactorySettingsBody = z
     autoPickupBacklog: z.boolean(),
     autoSyncToMain: z.boolean(),
     selfHealingBuildGate: z.boolean(),
+    antiSlopGate: z.boolean(),
+    secretGuardGate: z.boolean(),
+    crossProviderCritic: z.boolean(),
     autoMoveToDone: z.boolean(),
+    mcpServers: z.array(McpServerEntry),
+    skillPlugins: z.array(SkillPluginEntry),
     anthropicApiKey: z.string().trim().max(500).nullable(),
     openaiApiKey: z.string().trim().max(500).nullable(),
     geminiApiKey: z.string().trim().max(500).nullable(),
@@ -1538,6 +1754,13 @@ export const ClaudeUsageWindow = z.object({
 });
 export type ClaudeUsageWindow = z.infer<typeof ClaudeUsageWindow>;
 
+export const ProviderTokenTelemetry = z.object({
+  hourlyTokens: ClaudeTokenBucket,
+  dailyTokens: ClaudeTokenBucket,
+  weeklyTokens: ClaudeTokenBucket,
+});
+export type ProviderTokenTelemetry = z.infer<typeof ProviderTokenTelemetry>;
+
 export const ClaudeUsageTelemetry = z.object({
   available: z.boolean(),
   authenticated: z.boolean(),
@@ -1558,6 +1781,7 @@ export const ClaudeUsageTelemetry = z.object({
   hourlyTokens: ClaudeTokenBucket,
   dailyTokens: ClaudeTokenBucket,
   weeklyTokens: ClaudeTokenBucket,
+  providerTokens: z.record(z.string(), ProviderTokenTelemetry).optional(),
   updatedAt: z.string(),
 });
 export type ClaudeUsageTelemetry = z.infer<typeof ClaudeUsageTelemetry>;
@@ -1705,3 +1929,127 @@ export const DispatchRoadmapItemsResponse = z.object({
 });
 export type DispatchRoadmapItemsResponse = z.infer<typeof DispatchRoadmapItemsResponse>;
 
+// --- 3-Layer Anti-AI-Slop, Anti-Vibe-Coding & Cross-Provider Critic (F12) ---
+
+export const SlopIssueCategory = z.enum([
+  'secret_leak',
+  'type_evasion',
+  'unfinished_stub',
+  'debug_leftover',
+  'vibe_ui_cliche',
+  'comment_bloat',
+  'file_bloat',
+  'skipped_test',
+]);
+export type SlopIssueCategory = z.infer<typeof SlopIssueCategory>;
+
+export const SlopIssueSeverity = z.enum(['error', 'warning']);
+export type SlopIssueSeverity = z.infer<typeof SlopIssueSeverity>;
+
+export const SlopIssue = z.object({
+  id: z.string(),
+  category: SlopIssueCategory,
+  severity: SlopIssueSeverity,
+  file: z.string(),
+  line: z.number().int().nonnegative(),
+  snippet: z.string(),
+  message: z.string(),
+  fixHint: z.string(),
+});
+export type SlopIssue = z.infer<typeof SlopIssue>;
+
+export const SlopAuditGrade = z.enum(['A', 'B', 'C', 'D', 'F']);
+export type SlopAuditGrade = z.infer<typeof SlopAuditGrade>;
+
+export const SlopAuditReport = z.object({
+  runId: z.string(),
+  workspacePath: z.string(),
+  score: z.number().int().min(0).max(100),
+  grade: SlopAuditGrade,
+  passed: z.boolean(),
+  secretLeakCount: z.number().int().nonnegative().default(0),
+  secretGuardPassed: z.boolean().default(true),
+  filesAudited: z.number().int().nonnegative(),
+  addedLinesAudited: z.number().int().nonnegative(),
+  errorCount: z.number().int().nonnegative(),
+  warningCount: z.number().int().nonnegative(),
+  issues: z.array(SlopIssue),
+  autoFixPrompt: z.string().nullable(),
+  auditedAt: z.string(),
+});
+export type SlopAuditReport = z.infer<typeof SlopAuditReport>;
+
+export const CrossCriticIssue = z.object({
+  severity: z.enum(['critical', 'warning', 'nit']),
+  category: z.string(),
+  file: z.string().nullable().default(null),
+  description: z.string(),
+  fixRecommendation: z.string(),
+});
+export type CrossCriticIssue = z.infer<typeof CrossCriticIssue>;
+
+export const CrossCriticResult = z.object({
+  runId: z.string(),
+  authorAgent: AgentId,
+  reviewerAgent: AgentId,
+  reviewerModel: AgentModelId,
+  verdict: z.enum(['PASS', 'NEEDS_FIX']),
+  score: z.number().int().min(0).max(100),
+  summary: z.string(),
+  issues: z.array(CrossCriticIssue),
+  followUpPrompt: z.string().nullable(),
+  reviewedAt: z.string(),
+});
+export type CrossCriticResult = z.infer<typeof CrossCriticResult>;
+
+export const RunCrossCriticBody = z.object({
+  reviewerAgent: AgentId.optional(),
+  autoDispatchFix: z.boolean().default(false),
+});
+export type RunCrossCriticBody = z.input<typeof RunCrossCriticBody>;
+
+// --- Dynamic AI CLI Toolchain Manager (/opt/ai-tools persistent volume) -----
+
+export const CliInstallMethod = z.enum(['npm', 'script', 'pipx']);
+export type CliInstallMethod = z.infer<typeof CliInstallMethod>;
+
+export const CliToolStatus = z.object({
+  provider: AgentId,
+  label: z.string(),
+  binaryName: z.string(),
+  installed: z.boolean(),
+  version: z.string().nullable(),
+  binaryPath: z.string().nullable(),
+  installMethod: CliInstallMethod,
+  installCommand: z.string(),
+  updateCommand: z.string(),
+  uninstallCommand: z.string(),
+  installing: z.boolean(),
+  lastAction: z.enum(['install', 'update', 'uninstall']).nullable().default(null),
+  lastUpdatedAt: z.string().nullable().default(null),
+  lastError: z.string().nullable().default(null),
+});
+export type CliToolStatus = z.infer<typeof CliToolStatus>;
+
+export const ToolchainStatusResponse = z.object({
+  toolsDir: z.string(),
+  osInfo: z.string(),
+  nodeVersion: z.string(),
+  autoInstallEnabled: z.boolean().default(true),
+  tools: z.array(CliToolStatus),
+});
+export type ToolchainStatusResponse = z.infer<typeof ToolchainStatusResponse>;
+
+export const ToolchainActionBody = z.object({
+  action: z.enum(['install', 'update', 'uninstall']).default('install'),
+  spawnTerminal: z.boolean().default(false),
+  customCommand: z.string().trim().max(1000).optional(),
+});
+export type ToolchainActionBody = z.input<typeof ToolchainActionBody>;
+
+export const ToolchainActionResponse = z.object({
+  tool: CliToolStatus,
+  output: z.string(),
+  terminal: TerminalInfo.nullable().default(null),
+});
+export type ToolchainActionResponse = z.infer<typeof ToolchainActionResponse>;

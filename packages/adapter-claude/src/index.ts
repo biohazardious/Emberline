@@ -24,8 +24,24 @@ export interface PersonaSpec {
   systemPrompt: string;
 }
 
+export const ANTI_SLOP_ENGINEERING_RULES = [
+  '[ANTI-AI-SLOP & CODE HYGIENE CONSTITUTION — STRICTLY ENFORCED]:',
+  '1. ZERO TYPE EVASION: Never use `: any`, `as any`, `@ts-ignore`, `@ts-expect-error`, or `eslint-disable`. Always define explicit domain types, generics, or Zod schemas.',
+  '2. ZERO PLACEHOLDERS OR STUBS: Never leave `TODO`, `FIXME`, `HACK`, `PLACEHOLDER`, `// implement later`, or empty catch blocks. Implement every function completely.',
+  '3. ZERO PARROT COMMENTS & DEBUG GARBAGE: Do not write comments that merely restate what the next line of code does, and remove all `console.log` / `debugger` statements from production code.',
+  '4. ZERO OVER-ENGINEERING & FILE BLOAT: Do not invent speculative abstractions, unused wrapper classes, or redundant helper layers. Keep files focused and modular (< 450 lines); split large modules cleanly.',
+  '5. ZERO SKIPPED TESTS: Never commit `.skip(`, `xit(`, or `test.todo(`. Every test must run and assert real behavior.',
+].join('\n');
+
+export const ANTI_VIBE_UI_RULES = [
+  '[ANTI-VIBE-CODING & DESIGN CRAFTSMANSHIP CONSTITUTION — STRICTLY ENFORCED]:',
+  '1. BAN COOKIE-CUTTER AI AESTHETICS: Never default to generic purple/indigo-to-pink linear gradients (`#6366f1`, `#8b5cf6`, `#ec4899`), glowing neon glassmorphic slop, or 3 identical emoji-titled marketing cards.',
+  '2. USE PROJECT DESIGN TOKENS: Always inspect the project\'s existing CSS variables (`var(--...)`), theme palette, spacing scale, and typography first. Avoid scattering hardcoded hex colors when CSS tokens exist.',
+  '3. INTENTIONAL INFORMATION DENSITY: Build high-craft, functional interfaces (Linear / Raycast / Stripe / GitHub Workbench caliber) with clear typographic hierarchy, tabular numerals (`font-variant-numeric: tabular-nums`), keyboard accessibility, and real interactive states (loading, empty, error, active).',
+].join('\n');
+
 export const AUTONOMOUS_EXECUTION_POLICY =
-  'AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.';
+  `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}`;
 
 export const AUTONOMOUS_ALLOWED_TOOLS = [
   'Bash',
@@ -107,7 +123,13 @@ export function decoratePromptWithPersona(prompt: string | undefined, persona: A
   if (!prompt) return prompt;
   if (persona === 'coder') return prompt;
   const spec = PERSONA_CATALOG[persona] ?? PERSONA_CATALOG.coder;
-  return `[Role: ${spec.roleTitle}]\n${spec.systemPrompt}\n\n---\nTask:\n${prompt}`;
+  const qualityRules =
+    persona === 'ui_ux'
+      ? `\n\n${ANTI_VIBE_UI_RULES}\n\n${ANTI_SLOP_ENGINEERING_RULES}`
+      : persona === 'product_owner'
+        ? ''
+        : `\n\n${ANTI_SLOP_ENGINEERING_RULES}`;
+  return `[Role: ${spec.roleTitle}]\n${spec.systemPrompt}${qualityRules}\n\n---\nTask:\n${prompt}`;
 }
 
 /** Hooks Emberline listens to for state detection (PROJECT.md §3.3). */
@@ -170,8 +192,16 @@ export function buildHookSettings(hookCommand: string, timeoutSeconds = 5, auton
   return { hooks };
 }
 
+export interface ClaudeMcpServerSpec {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  type?: 'stdio' | 'sse' | 'http';
+}
+
 export interface ClaudeMcpConfig {
-  mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  mcpServers: Record<string, ClaudeMcpServerSpec>;
 }
 
 /**
@@ -233,6 +263,10 @@ export interface ClaudeLaunchOptions {
   resumeSessionId?: string;
   /** When true, passes `--mcp-config` wiring headless `@playwright/mcp`. */
   playwrightMcp?: boolean;
+  /** Optional persona-scoped MCP servers from the Factory MCP Registry. */
+  customMcpServers?: Record<string, ClaudeMcpServerSpec>;
+  /** Optional active Skill / Rule Plugin instructions to append to the system prompt. */
+  extraSystemPrompt?: string;
 }
 
 export function resolveClaudeCliModelFlag(model?: ClaudeModelTier): string | undefined {
@@ -255,8 +289,22 @@ export function resolveClaudeCliModelFlag(model?: ClaudeModelTier): string | und
 export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   const isAutonomous = Boolean(options.autonomous && options.permissionMode !== 'plan');
   const settings = buildHookSettings(options.hookCommand ?? 'emberline-hook', 5, isAutonomous);
+  const customServerKeys = options.customMcpServers ? Object.keys(options.customMcpServers) : [];
+  if (isAutonomous && settings.permissions?.allow && customServerKeys.length > 0) {
+    const allowSet = new Set(settings.permissions.allow);
+    for (const srvId of customServerKeys) {
+      allowSet.add(`mcp__${srvId}__*`);
+    }
+    settings.permissions.allow = Array.from(allowSet);
+  }
   const args = ['--settings', JSON.stringify(settings)];
-  if (options.playwrightMcp) {
+  if (customServerKeys.length > 0) {
+    const mergedServers: Record<string, ClaudeMcpServerSpec> = {
+      ...(options.playwrightMcp ? buildPlaywrightMcpConfig().mcpServers : {}),
+      ...options.customMcpServers,
+    };
+    args.push('--mcp-config', JSON.stringify({ mcpServers: mergedServers }));
+  } else if (options.playwrightMcp) {
     args.push('--mcp-config', JSON.stringify(buildPlaywrightMcpConfig()));
   }
   const cliModel = resolveClaudeCliModelFlag(options.model);
@@ -266,10 +314,13 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   if (isAutonomous) {
     const cliMode = options.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'auto';
     args.push('--permission-mode', cliMode);
-    const extraPolicy =
+    let extraPolicy =
       options.model === 'fable'
         ? `${AUTONOMOUS_EXECUTION_POLICY}\n[FABLE DEEP-ANALYSIS MODE: Perform deep architectural synthesis, edge-case analysis, and root-cause verification before writing code.]`
         : AUTONOMOUS_EXECUTION_POLICY;
+    if (options.extraSystemPrompt?.trim()) {
+      extraPolicy = `${extraPolicy}\n\n${options.extraSystemPrompt.trim()}`;
+    }
     args.push('--append-system-prompt', extraPolicy);
   } else if (options.permissionMode && options.permissionMode !== 'default') {
     args.push('--permission-mode', options.permissionMode);
@@ -298,6 +349,7 @@ export interface SecondaryCliLaunchOptions {
   hookCommand?: string;
   permissionMode?: ClaudePermissionMode;
   prompt?: string;
+  resumeSessionId?: string;
   extraEnv?: Record<string, string>;
 }
 
@@ -317,9 +369,10 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   if (options.agent === 'antigravity') {
     const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
     const modelFlag = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
+    const continueFlag = options.resumeSessionId ? '-c ' : '';
     cliCmd = options.prompt
-      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${modelFlag}-p "$EMBERLINE_PROMPT"; elif command -v antigravity >/dev/null 2>&1; then antigravity ${modelFlag}-p "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
-      : `if command -v ${bin} >/dev/null 2>&1; then ${bin}; else claude --model ${fallbackModel}; fi`;
+      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; elif command -v antigravity >/dev/null 2>&1; then antigravity ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
+      : `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}; else claude --model ${fallbackModel}; fi`;
   } else if (options.agent === 'copilot') {
     const bin = process.env.EMBERLINE_COPILOT_COMMAND?.trim() || 'copilot';
     cliCmd = options.prompt
@@ -361,6 +414,12 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     ? `( LAST_GIT=""; while sleep 2; do CUR_GIT=$(git status --porcelain 2>/dev/null | head -n 5 | tr '\\n' ' ' | sed 's/["\\\\]/ /g'); if [ -n "$CUR_GIT" ] && [ "$CUR_GIT" != "$LAST_GIT" ]; then LAST_GIT="$CUR_GIT"; echo "{\\"tool_name\\":\\"Edit\\",\\"message\\":\\"Worktree updated: $CUR_GIT\\"}" | ${hook} PreToolUse >/dev/null 2>&1 || true; echo "{\\"tool_name\\":\\"Edit\\",\\"message\\":\\"Worktree updated: $CUR_GIT\\"}" | ${hook} PostToolUse >/dev/null 2>&1 || true; fi; done ) & EMBERLINE_WATCH_PID=$!`
     : '';
 
+  const logFile = `/tmp/emberline-cli-${options.runId}.log`;
+  const statusFile = `/tmp/emberline-cli-${options.runId}.status`;
+  const wrappedExec = options.prompt
+    ? `rm -f "${logFile}" "${statusFile}"; { { ${cliCmd}; echo $? > "${statusFile}"; } 2>&1 | tee "${logFile}"; }; STATUS=$(cat "${statusFile}" 2>/dev/null || echo 1); rm -f "${statusFile}"`
+    : `${cliCmd}; STATUS=$?`;
+
   const script = [
     `echo '{"session_id":"'${options.agent}-${options.runId.slice(0, 8)}'"}' | ${hook} SessionStart >/dev/null 2>&1 || true`,
     options.prompt
@@ -370,10 +429,9 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
       ? `echo '{"tool_name":"${options.agent}","message":"Executing ${options.agent} CLI task"}' | ${hook} PreToolUse >/dev/null 2>&1 || true`
       : '',
     watcherSnippet,
-    cliCmd,
-    `STATUS=$?`,
+    wrappedExec,
     options.prompt ? `kill "$EMBERLINE_WATCH_PID" >/dev/null 2>&1 || true` : '',
-    `if [ "$STATUS" -eq 0 ]; then echo '{"tool_name":"${options.agent}","message":"Completed ${options.agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else echo '{"error":"cli_exit","reason":"${options.agent} exited with non-zero code"}' | ${hook} StopFailure >/dev/null 2>&1 || true; fi`,
+    `if [ "$STATUS" -eq 0 ]; then rm -f "${logFile}"; echo '{"tool_name":"${options.agent}","message":"Completed ${options.agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else ERR_DETAIL=$(sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' "${logFile}" 2>/dev/null | tr '\\r' '\\n' | sed '/^[[:space:]]*$/d' | tail -n 6 | tr '\\n' ' ' | sed 's/["\\\\]/ /g' | cut -c1-420); rm -f "${logFile}"; if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL="${options.agent} exited with code $STATUS"; fi; printf "\\n\\033[1;31m=== ❌ ${options.agent} exited with code %s ===\\033[0m\\n%s\\n" "$STATUS" "$ERR_DETAIL"; echo "{\\"error\\":\\"cli_exit\\",\\"reason\\":\\"$ERR_DETAIL\\",\\"message\\":\\"$ERR_DETAIL\\"}" | ${hook} StopFailure >/dev/null 2>&1 || true; sleep 4; fi`,
     `exit $STATUS`,
   ]
     .filter(Boolean)

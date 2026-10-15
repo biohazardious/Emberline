@@ -73,6 +73,37 @@ describe('buildLaunchSpec', () => {
     expect(spec.args).toContain('auto');
     expect(spec.args).toContain('--append-system-prompt');
   });
+
+  it('merges customMcpServers into --mcp-config, pre-allows mcp__<id>__* tools, and appends extraSystemPrompt', () => {
+    const spec = buildLaunchSpec({
+      ...base,
+      autonomous: true,
+      playwrightMcp: true,
+      customMcpServers: {
+        context7: {
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', '@upstash/context7-mcp'],
+        },
+      },
+      extraSystemPrompt: '## ACTIVE SKILL: Modern UI Craft',
+    });
+    const settings = JSON.parse(spec.args[1] ?? '');
+    expect(settings.permissions?.allow).toContain('mcp__context7__*');
+    expect(settings.permissions?.allow).toContain('mcp__playwright__*');
+    const mcpIdx = spec.args.indexOf('--mcp-config');
+    expect(mcpIdx).toBeGreaterThan(-1);
+    const mcpConfig = JSON.parse(spec.args[mcpIdx + 1] ?? '');
+    expect(mcpConfig.mcpServers).toHaveProperty('playwright');
+    expect(mcpConfig.mcpServers.context7).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@upstash/context7-mcp'],
+    });
+    const sysIdx = spec.args.indexOf('--append-system-prompt');
+    expect(sysIdx).toBeGreaterThan(-1);
+    expect(spec.args[sysIdx + 1]).toContain('## ACTIVE SKILL: Modern UI Craft');
+  });
 });
 
 describe('nextStateFromHook', () => {
