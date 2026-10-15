@@ -38,6 +38,7 @@ import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 're
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from '../components/PersonaBadge';
+import { ProviderMark } from '../components/ProviderMark';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
 
@@ -99,7 +100,8 @@ export function AgentModelBadge({ agent, model }: { agent: AgentId; model: Agent
       }}
       title={`Routed to ${prov.label} · Model: ${modelInfo ? `${modelInfo.label} (Rank ${modelInfo.rank}/5)` : validModel}`}
     >
-      {prov.icon} {prov.shortLabel.toLowerCase()}
+      <ProviderMark id={prov.id} />
+      {prov.shortLabel.toLowerCase()}
       {validModel && validModel !== 'auto'
         ? ` · ${modelInfo ? `★${modelInfo.rank} ${modelInfo.shortLabel}` : validModel}`
         : ''}
@@ -163,7 +165,8 @@ export function RouteBadgeSelect({
     >
       {activeProviders.length <= 1 ? (
         <span style={{ padding: '1px 2px' }}>
-          {providerEntry.icon} {providerEntry.shortLabel.toLowerCase()}
+          <ProviderMark id={providerEntry.id} />
+          {providerEntry.shortLabel.toLowerCase()}
         </span>
       ) : (
         <select
@@ -189,7 +192,7 @@ export function RouteBadgeSelect({
                 value={provId}
                 style={{ background: 'var(--bg-elevated)', color: 'var(--text)' }}
               >
-                {p.icon} {p.shortLabel.toLowerCase()}
+                {p.shortLabel.toLowerCase()}
               </option>
             );
           })}

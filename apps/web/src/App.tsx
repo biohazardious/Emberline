@@ -35,6 +35,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { PersonaBadge } from './components/PersonaBadge';
 import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
+import { ProviderMark } from './components/ProviderMark';
 import { RunInspector } from './components/RunInspector';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
@@ -678,7 +679,8 @@ function Shell() {
                               }}
                             />
                             <span>
-                              {pEntry.icon} {pEntry.shortLabel}
+                              <ProviderMark id={pEntry.id} />
+                              {pEntry.shortLabel}
                             </span>
                           </button>
                         );
@@ -688,7 +690,7 @@ function Shell() {
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                     <strong>
-                      {entry.icon}{' '}
+                      <ProviderMark id={entry.id} />
                       {isClaude ? formatClaudePlanLabel(claudeUsage.data) : entry.shortLabel}
                     </strong>
                     <span style={{ color: isAuthed ? 'var(--ok)' : 'var(--warn)' }}>
@@ -758,7 +760,7 @@ function Shell() {
             </button>
             <div className="topbar-tabs">
               <Link href="/" className={`topbar-tab${location === '/' ? ' active' : ''}`}>
-                Overview
+                <LayoutDashboard className="icon" aria-hidden /> Overview
               </Link>
               {activeProject && (
                 <Link
@@ -773,7 +775,7 @@ function Shell() {
                   href={`/projects/${activeProject.id}/board`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
                 >
-                  Board
+                  <SquareKanban className="icon" aria-hidden /> Board
                 </Link>
               )}
               {activeProject && (
@@ -781,7 +783,7 @@ function Shell() {
                   href={`/projects/${activeProject.id}/code`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
                 >
-                  Code Explorer
+                  <FileCode className="icon" aria-hidden /> Code Explorer
                 </Link>
               )}
               {activeProject && (
@@ -793,7 +795,7 @@ function Shell() {
                 </Link>
               )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
-                Fleet
+                <LayoutGrid className="icon" aria-hidden /> Fleet
                 {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
               </Link>
               <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`}>

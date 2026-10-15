@@ -280,7 +280,7 @@ export class ToolchainService {
 
       const shellScript = [
         envSetup,
-        `printf "\\033[1;36m=== 📦 ${entry.icon} ${entry.label} — CLI ${action.toUpperCase()} ===\\033[0m\\n"`,
+        `printf "\\033[1;36m=== ${entry.label} — CLI ${action.toUpperCase()} ===\\033[0m\\n"`,
         `printf "\\033[0;90mTarget volume: ${this.toolsDir}\\nCommand: ${commandToRun.replace(/"/g, '\\"')}\\033[0m\\n\\n"`,
         commandToRun,
         `STATUS=$?`,

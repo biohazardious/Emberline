@@ -52,7 +52,6 @@ export interface ProviderRegistryEntry {
   id: AgentId;
   label: string;
   shortLabel: string;
-  icon: string;
   badge: string;
   authKind: 'host_or_key' | 'api_key' | 'cli_auth';
   keyConfigField?: 'anthropicKeyConfigured' | 'openaiKeyConfigured' | 'geminiKeyConfigured';
@@ -65,7 +64,6 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     id: 'claude',
     label: 'Claude Code (Anthropic)',
     shortLabel: 'Claude',
-    icon: '🟣',
     badge: 'Primary Host CLI / API',
     authKind: 'host_or_key',
     keyConfigField: 'anthropicKeyConfigured',
@@ -117,7 +115,6 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     id: 'antigravity',
     label: 'Antigravity (AGY CLI)',
     shortLabel: 'AGY',
-    icon: '🚀',
     badge: 'Agentic UI/UX & Full-Stack',
     authKind: 'cli_auth',
     description: 'Google DeepMind Antigravity CLI specialized in visual UI/UX craftsmanship and full-stack flows.',
@@ -168,7 +165,6 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     id: 'gemini',
     label: 'Google Gemini CLI',
     shortLabel: 'Gemini',
-    icon: '♊',
     badge: 'Google Gemini API / CLI',
     authKind: 'api_key',
     keyConfigField: 'geminiKeyConfigured',
@@ -210,7 +206,6 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     id: 'codex',
     label: 'OpenAI Codex CLI',
     shortLabel: 'Codex',
-    icon: '🟢',
     badge: 'OpenAI API / CLI',
     authKind: 'api_key',
     keyConfigField: 'openaiKeyConfigured',
@@ -262,7 +257,6 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     id: 'copilot',
     label: 'GitHub Copilot CLI',
     shortLabel: 'Copilot',
-    icon: '🐙',
     badge: 'GitHub CLI Auth',
     authKind: 'cli_auth',
     description: 'GitHub Copilot agentic CLI using your GitHub subscription models.',
@@ -313,7 +307,6 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     id: 'aider',
     label: 'Aider Polyglot CLI',
     shortLabel: 'Aider',
-    icon: '🛠️',
     badge: 'Git-Aware Diff Agent',
     authKind: 'host_or_key',
     description: 'Aider AI pair-programming CLI with repository map and automatic git commits.',

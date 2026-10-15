@@ -10,6 +10,7 @@ import {
 import { Calendar, ChartColumn, Clock, CreditCard, RotateCw, Timer, Zap } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
+import { ProviderMark } from './ProviderMark';
 import { useApi } from '../hooks/useApi';
 import { useRuns, useScheduler } from '../hooks/liveData';
 
@@ -571,7 +572,8 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>
-                  {p.entry.icon} {p.entry.shortLabel}
+                  <ProviderMark id={p.entry.id} />
+                  {p.entry.shortLabel}
                 </span>
                 <span
                   className="badge mono"

@@ -49,6 +49,8 @@ export function AccountPanel() {
         </div>
       </header>
       <form className="form" style={{ maxWidth: 420 }} onSubmit={(e) => void submit(e)}>
+        {/* Single-user app: a fixed username lets password managers file the credential. */}
+        <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
         <PasswordField
           id="account-current"
           label="Current password"

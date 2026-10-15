@@ -294,6 +294,8 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
   return (
     <AuthLayout title="Set up Emberline" subtitle="Claim this installation and choose the admin password.">
       <form className="form auth-form" onSubmit={(e) => void submit(e)}>
+        {/* Single-user app: a fixed username lets password managers file the credential. */}
+        <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
         <section className="auth-step">
           <span className="auth-step-n">1</span>
           <div>
@@ -418,6 +420,8 @@ function LoginForm({ onDone }: { onDone: () => Promise<void> }) {
   return (
     <AuthLayout title="Welcome back" subtitle="Sign in to your Emberline control room.">
       <form className="form auth-form" onSubmit={(e) => void submit(e)}>
+        {/* Single-user app: a fixed username lets password managers file the credential. */}
+        <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
         <PasswordField
           id="login-password"
           label="Password"

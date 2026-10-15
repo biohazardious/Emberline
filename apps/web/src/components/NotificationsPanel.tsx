@@ -224,6 +224,7 @@ export function NotificationsPanel() {
               />
               <input
                 type="password"
+                autoComplete="new-password"
                 className="input"
                 placeholder={
                   settings?.tokenConfigured
@@ -324,6 +325,7 @@ export function NotificationsPanel() {
             <div className="form-row">
               <input
                 type="password"
+                autoComplete="new-password"
                 className="input"
                 placeholder={
                   forgeSettings?.tokenConfigured

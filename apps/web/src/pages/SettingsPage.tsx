@@ -66,6 +66,7 @@ import { AccountPanel } from '../components/AccountPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
+import { ProviderMark } from '../components/ProviderMark';
 
 const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
 const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot'];
@@ -869,7 +870,7 @@ export function SettingsPage({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                          <span style={{ fontSize: '1.05rem' }}>{entry.icon}</span>
+                          <ProviderMark id={entry.id} />
                           <strong style={{ fontSize: '0.9rem' }}>{entry.label}</strong>
                         </div>
                         <button
@@ -1101,6 +1102,7 @@ export function SettingsPage({
                           </span>
                           <input
                             type="password"
+                            autoComplete="new-password"
                             className="input mono"
                             style={{ padding: '5px 8px', fontSize: '0.76rem' }}
                             placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-ant-...'}
@@ -1117,6 +1119,7 @@ export function SettingsPage({
                           </span>
                           <input
                             type="password"
+                            autoComplete="new-password"
                             className="input mono"
                             style={{ padding: '5px 8px', fontSize: '0.76rem' }}
                             placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'AIzaSy...'}
@@ -1133,6 +1136,7 @@ export function SettingsPage({
                           </span>
                           <input
                             type="password"
+                            autoComplete="new-password"
                             className="input mono"
                             style={{ padding: '5px 8px', fontSize: '0.76rem' }}
                             placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-proj-...'}
@@ -1334,7 +1338,8 @@ export function SettingsPage({
                           title="Enable additional providers in Step 1 above to switch providers per persona"
                         >
                           <span>
-                            {providerEntry.icon} {providerEntry.label}
+                            <ProviderMark id={providerEntry.id} />
+                            {providerEntry.label}
                           </span>
                           <span className="badge mono" style={{ fontSize: '0.64rem' }}>
                             Active
@@ -1352,7 +1357,7 @@ export function SettingsPage({
                             const prov = PROVIDER_REGISTRY[provId];
                             return (
                               <option key={provId} value={provId}>
-                                {prov.icon} {prov.label}
+                                {prov.label}
                               </option>
                             );
                           })}

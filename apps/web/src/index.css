@@ -1040,7 +1040,13 @@ a {
 
 .sidebar-section-grow {
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* Grid items default to their min-content width; let long run titles ellipsize instead. */
+.sidebar-list > li {
+  min-width: 0;
 }
 
 .sidebar-section-head {
@@ -2646,7 +2652,8 @@ dialog.cmd-dialog::backdrop {
 
 .review-actions-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* The commit form holds an input and three controls; narrower columns cut its placeholder. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
   gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -3065,3 +3072,21 @@ dialog.cmd-dialog::backdrop {
     transform: rotate(360deg);
   }
 }
+
+/* Provider marks (ProviderMark.tsx) */
+.provider-mark {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 0.05em;
+  flex-shrink: 0;
+  background: var(--muted);
+}
+.provider-mark-claude { background: var(--violet); }
+.provider-mark-antigravity,
+.provider-mark-gemini { background: var(--info); }
+.provider-mark-codex { background: var(--ok); }
+.provider-mark-aider { background: var(--warn); }
+

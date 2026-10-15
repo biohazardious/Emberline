@@ -560,7 +560,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
     const spec = loginSpecs[provider];
     const shellScript = [
-      `printf "\\033[1;36m=== ${entry.icon} ${entry.label} — Interactive Account Login ===\\033[0m\\n"`,
+      `printf "\\033[1;36m=== ${entry.label} — Interactive Account Login ===\\033[0m\\n"`,
       `printf "${spec.instructions}\\n\\n"`,
       autoInstallStep,
       spec.cmd,
