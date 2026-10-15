@@ -14,6 +14,7 @@ import {
   type SlopIssue,
   selectProviderModelByRank,
 } from '@emberline/protocol';
+import { execGitFile } from '../git-exec.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -284,19 +285,17 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
   let rawDiff = '';
   if (hasGit) {
     try {
-      const { stdout: wtDiff } = await execFileAsync(
-        'git',
+      const { stdout: wtDiff } = await execGitFile(
         ['diff', 'HEAD', '--unified=0', '--no-color'],
         { cwd: workspacePath, maxBuffer: 8 * 1024 * 1024 },
       );
       rawDiff = wtDiff;
       if (!rawDiff.trim()) {
-        const { stdout: headDiff } = await execFileAsync(
-          'git',
+        const { stdout: headDiff } = await execGitFile(
           ['show', '--format=', '--unified=0', '--no-color', 'HEAD'],
           { cwd: workspacePath, maxBuffer: 8 * 1024 * 1024 },
         ).catch(async () =>
-          execFileAsync('git', ['diff', 'HEAD~1..HEAD', '--unified=0', '--no-color'], {
+          execGitFile(['diff', 'HEAD~1..HEAD', '--unified=0', '--no-color'], {
             cwd: workspacePath,
             maxBuffer: 8 * 1024 * 1024,
           }),
@@ -340,7 +339,7 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
 
   if (hasGit) {
     try {
-      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain', '-uall'], {
+      const { stdout: statusOut } = await execGitFile(['status', '--porcelain', '-uall'], {
         cwd: workspacePath,
       });
       for (const line of statusOut.split('\n')) {
@@ -711,9 +710,9 @@ export async function runCrossProviderCritic(params: {
 
   let diffStat = '';
   try {
-    const { stdout } = await execFileAsync('git', ['diff', '--stat', 'HEAD~1..HEAD'], {
+    const { stdout } = await execGitFile(['diff', '--stat', 'HEAD~1..HEAD'], {
       cwd: workspacePath,
-    }).catch(() => execFileAsync('git', ['diff', '--stat', 'HEAD'], { cwd: workspacePath }));
+    }).catch(() => execGitFile(['diff', '--stat', 'HEAD'], { cwd: workspacePath }));
     diffStat = stdout.trim();
   } catch {
     diffStat = '';

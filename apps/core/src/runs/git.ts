@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import type {
   ArtifactKind,
   DiffFile,
@@ -17,8 +15,8 @@ import type {
   RunFileDiff,
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { execGitFile } from '../git-exec.js';
 
-const execFileAsync = promisify(execFile);
 
 const MAX_TEXT_BYTES = 512 * 1024;
 const MAX_ARTIFACTS = 200;
@@ -27,7 +25,7 @@ const IGNORED_DIRS = new Set(['.git', 'node_modules', '.pnpm-store', '.turbo', '
 
 /** Runs git without ever prompting (no TTY in core) and returns trimmed stdout. */
 export async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+  const { stdout } = await execGitFile(['-C', cwd, ...args], {
     timeout: 30_000,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
@@ -37,7 +35,7 @@ export async function git(cwd: string, args: string[]): Promise<string> {
 
 /** Like {@link git}, but preserves leading/trailing whitespace and NUL delimiters. */
 async function gitRaw(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+  const { stdout } = await execGitFile(['-C', cwd, ...args], {
     timeout: 30_000,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
@@ -300,7 +298,7 @@ export async function inspectDiff(
 
 async function readGitBlob(worktreePath: string, spec: string): Promise<{ text: string; binary: boolean } | null> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', worktreePath, 'show', spec], {
+    const { stdout } = await execGitFile(['-C', worktreePath, 'show', spec], {
       timeout: 15_000,
       maxBuffer: 16 * 1024 * 1024,
       encoding: 'buffer',
@@ -439,8 +437,7 @@ export async function pushWorktreeBranch(
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync(
-      'git',
+    const { stdout, stderr } = await execGitFile(
       ['-C', worktreePath, 'push', '--porcelain', '-u', 'origin', `refs/heads/${branchToPush}:refs/heads/${branchToPush}`],
       {
         timeout: 60_000,

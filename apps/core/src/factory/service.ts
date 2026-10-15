@@ -41,6 +41,7 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
+import { execGitFile } from '../git-exec.js';
 import type { TicketService } from '../tickets/service.js';
 import { getLastKnownClaudeUtilizationPercent } from './browser-daemon.js';
 
@@ -301,10 +302,9 @@ export function generateClaudeInstructions(name: string): string {
 export async function initLocalGitRepository(projectPath: string, defaultBranch = 'main'): Promise<void> {
   if (existsSync(path.join(projectPath, '.git'))) return;
   try {
-    await execFileAsync('git', ['init', '-b', defaultBranch], { cwd: projectPath });
-    await execFileAsync('git', ['add', '-A'], { cwd: projectPath });
-    await execFileAsync(
-      'git',
+    await execGitFile(['init', '-b', defaultBranch], { cwd: projectPath });
+    await execGitFile(['add', '-A'], { cwd: projectPath });
+    await execGitFile(
       [
         '-c',
         'user.name=Emberline Factory',
@@ -1131,13 +1131,12 @@ export async function syncWorktreeToMainWorkspace(params: {
 
   if (existsSync(path.join(mainWorkspacePath, '.git'))) {
     try {
-      await execFileAsync('git', ['add', '-A'], { cwd: mainWorkspacePath });
-      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], {
+      await execGitFile(['add', '-A'], { cwd: mainWorkspacePath });
+      const { stdout: statusOut } = await execGitFile(['status', '--porcelain'], {
         cwd: mainWorkspacePath,
       });
       if (statusOut.trim().length > 0) {
-        await execFileAsync(
-          'git',
+        await execGitFile(
           [
             '-c',
             'user.name=Emberline AI Factory',
@@ -1150,7 +1149,7 @@ export async function syncWorktreeToMainWorkspace(params: {
           { cwd: mainWorkspacePath },
         );
       }
-      const { stdout: revOut } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
+      const { stdout: revOut } = await execGitFile(['rev-parse', '--short', 'HEAD'], {
         cwd: mainWorkspacePath,
       });
       commitSha = revOut.trim() || null;
@@ -2361,8 +2360,7 @@ export async function deleteWorkspaceFileEntry(workspacePath: string, relPath: s
 export async function listProjectCheckpoints(workspacePath: string): Promise<ProjectCheckpoint[]> {
   if (!existsSync(path.join(workspacePath, '.git'))) return [];
   try {
-    const { stdout } = await execFileAsync(
-      'git',
+    const { stdout } = await execGitFile(
       ['log', '-n', '25', '--pretty=format:%H%x09%h%x09%s%x09%an%x09%cI'],
       { cwd: workspacePath },
     );
@@ -2387,7 +2385,7 @@ export async function rollbackProjectCheckpoint(
   if (!/^[0-9a-f]{4,64}$/i.test(sha.trim())) {
     throw new Error('Invalid commit SHA');
   }
-  await execFileAsync('git', ['reset', '--hard', sha.trim()], { cwd: workspacePath });
+  await execGitFile(['reset', '--hard', sha.trim()], { cwd: workspacePath });
   return {
     ok: true,
     sha: sha.trim(),
