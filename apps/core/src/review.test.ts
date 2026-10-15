@@ -243,8 +243,13 @@ describe('M6 review, git commit/push, and artifacts', () => {
         enabled: true,
         provider: 'webhook',
         url: webhookUrl,
-        token: 'secret-tok',
+        tokenConfigured: true,
       });
+      // S14: the token is write-only.
+      expect(patchRes.json()).not.toHaveProperty('token');
+      const getRes = await api('GET', '/api/notifications');
+      expect(getRes.json()).not.toHaveProperty('token');
+      expect(getRes.json()).toMatchObject({ tokenConfigured: true });
 
       const testRes = await api('POST', '/api/notifications/test', {});
       expect(testRes.statusCode).toBe(200);

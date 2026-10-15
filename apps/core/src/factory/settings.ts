@@ -471,13 +471,25 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
   return getFactorySettings(db);
 }
 
-export function getProviderEnvFromSettings(db: Db): Record<string, string> {
+/** Which stored API keys each agent may see; aider talks to any vendor, copilot uses none of them. */
+const PROVIDER_KEY_ACCESS: Record<AgentId, readonly ('anthropic' | 'openai' | 'gemini')[]> = {
+  claude: ['anthropic'],
+  codex: ['openai'],
+  gemini: ['gemini'],
+  antigravity: ['gemini'],
+  aider: ['anthropic', 'openai', 'gemini'],
+  copilot: [],
+};
+
+/** S14: only the keys the launched agent needs go into its PTY environment, not every stored key. */
+export function getProviderEnvFromSettings(db: Db, agent: string): Record<string, string> {
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
   const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
+  const access: readonly string[] = PROVIDER_KEY_ACCESS[agent as AgentId] ?? [];
   const env: Record<string, string> = {};
-  if (keys.anthropicApiKey) env.ANTHROPIC_API_KEY = keys.anthropicApiKey;
-  if (keys.openaiApiKey) env.OPENAI_API_KEY = keys.openaiApiKey;
-  if (keys.geminiApiKey) {
+  if (keys.anthropicApiKey && access.includes('anthropic')) env.ANTHROPIC_API_KEY = keys.anthropicApiKey;
+  if (keys.openaiApiKey && access.includes('openai')) env.OPENAI_API_KEY = keys.openaiApiKey;
+  if (keys.geminiApiKey && access.includes('gemini')) {
     env.GEMINI_API_KEY = keys.geminiApiKey;
     env.GOOGLE_API_KEY = keys.geminiApiKey;
   }

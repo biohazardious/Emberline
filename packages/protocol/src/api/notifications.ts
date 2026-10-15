@@ -18,6 +18,12 @@ export const NotificationSettings = z.object({
 });
 export type NotificationSettings = z.infer<typeof NotificationSettings>;
 
+/** What the API returns: the token itself never leaves the server (S14). */
+export const NotificationSettingsView = NotificationSettings.omit({ token: true }).extend({
+  tokenConfigured: z.boolean(),
+});
+export type NotificationSettingsView = z.infer<typeof NotificationSettingsView>;
+
 export const UpdateNotificationSettingsBody = z
   .object({
     enabled: z.boolean(),

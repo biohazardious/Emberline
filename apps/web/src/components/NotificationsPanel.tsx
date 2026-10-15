@@ -3,13 +3,13 @@ import type {
   ForgeProviderPreference,
   ForgeSettings,
   NotificationProvider,
-  NotificationSettings,
+  NotificationSettingsView,
   TestNotificationResponse,
 } from '@emberline/protocol';
 import { api, errorMessage } from '../api';
 
 export function NotificationsPanel() {
-  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [settings, setSettings] = useState<NotificationSettingsView | null>(null);
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [provider, setProvider] = useState<NotificationProvider>('ntfy');
@@ -30,13 +30,12 @@ export function NotificationsPanel() {
   const [forgeToken, setForgeToken] = useState('');
 
   useEffect(() => {
-    void api<NotificationSettings>('/api/notifications')
+    void api<NotificationSettingsView>('/api/notifications')
       .then((res) => {
         setSettings(res);
         setEnabled(res.enabled);
         setProvider(res.provider);
         setUrl(res.url);
-        setToken(res.token ?? '');
         setOnRateLimited(res.onRateLimited);
         setOnQuotaResumed(res.onQuotaResumed);
         setOnWaitingInput(res.onWaitingInput);
@@ -59,17 +58,19 @@ export function NotificationsPanel() {
     setError(null);
     setNotice(null);
     try {
-      const updated = await api<NotificationSettings>('/api/notifications', 'PATCH', {
+      const updated = await api<NotificationSettingsView>('/api/notifications', 'PATCH', {
         enabled,
         provider,
         url: url.trim(),
-        token: token.trim() ? token.trim() : null,
+        // The stored token is never sent back, so a blank field keeps it.
+        ...(token.trim() ? { token: token.trim() } : {}),
         onRateLimited,
         onQuotaResumed,
         onWaitingInput,
         onRunFinished,
       });
       setSettings(updated);
+      setToken('');
       setNotice('Notification settings saved.');
     } catch (err) {
       setError(errorMessage(err));
@@ -111,6 +112,22 @@ export function NotificationsPanel() {
       setForgeSettings(updated);
       setForgeToken('');
       setNotice('Forge token cleared.');
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearToken = async () => {
+    setBusy('save');
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await api<NotificationSettingsView>('/api/notifications', 'PATCH', { token: null });
+      setSettings(updated);
+      setToken('');
+      setNotice('Notification token cleared.');
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -208,11 +225,25 @@ export function NotificationsPanel() {
               <input
                 type="password"
                 className="input"
-                placeholder="Optional Bearer token (private ntfy / webhook)"
+                placeholder={
+                  settings?.tokenConfigured
+                    ? 'Token set (leave blank to keep)'
+                    : 'Optional Bearer token (private ntfy / webhook)'
+                }
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 style={{ maxWidth: '260px' }}
               />
+              {settings?.tokenConfigured && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => void clearToken()}
+                  disabled={busy !== null}
+                >
+                  Clear Token
+                </button>
+              )}
             </div>
 
             <div className="form-row" style={{ gap: '14px', flexWrap: 'wrap' }}>

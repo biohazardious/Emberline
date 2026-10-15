@@ -545,7 +545,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const effectivePrompt =
       options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
 
-    const extraEnv = getProviderEnvFromSettings(this.db);
+    const extraEnv = getProviderEnvFromSettings(this.db, row.agent);
     const provider = providerAdapter(row.agent);
     // Tests substitute a fake `claude`; the Claude-specific extras need the real CLI.
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';

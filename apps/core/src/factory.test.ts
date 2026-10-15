@@ -15,7 +15,9 @@ import type {
   WorkspaceFileListResponse,
 } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import { openDb } from './db/index.js';
 import { auditWorktreeSlop } from './factory/service.js';
+import { getProviderEnvFromSettings, updateFactorySettings } from './factory/settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
@@ -378,5 +380,32 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(leakIssue).toBeDefined();
     expect(leakIssue?.snippet).not.toContain('1234567890abcdefghijklmnop');
     expect(secretReport.autoFixPrompt).toContain('PRE-COMMIT SECRET & CREDENTIAL GUARD BLOCK');
+  });
+
+  it('gives each agent only the API keys it needs (S14)', () => {
+    const { db, close } = openDb(':memory:');
+    try {
+      updateFactorySettings(db, {
+        anthropicApiKey: 'sk-ant-test',
+        openaiApiKey: 'sk-openai-test',
+        geminiApiKey: 'gem-test',
+      });
+      expect(getProviderEnvFromSettings(db, 'claude')).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+      expect(getProviderEnvFromSettings(db, 'codex')).toEqual({ OPENAI_API_KEY: 'sk-openai-test' });
+      expect(getProviderEnvFromSettings(db, 'antigravity')).toEqual({
+        GEMINI_API_KEY: 'gem-test',
+        GOOGLE_API_KEY: 'gem-test',
+      });
+      expect(Object.keys(getProviderEnvFromSettings(db, 'aider')).sort()).toEqual([
+        'ANTHROPIC_API_KEY',
+        'GEMINI_API_KEY',
+        'GOOGLE_API_KEY',
+        'OPENAI_API_KEY',
+      ]);
+      expect(getProviderEnvFromSettings(db, 'copilot')).toEqual({});
+      expect(getProviderEnvFromSettings(db, 'unknown-agent')).toEqual({});
+    } finally {
+      close();
+    }
   });
 });
