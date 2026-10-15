@@ -273,6 +273,25 @@ describe('runs', () => {
     expect(t.runs.list().map((r) => r.id).sort()).toEqual([dirty.id, inReview.id].sort());
   });
 
+  it('keeps a finished run done when a follow-up cannot resume it (B19)', async () => {
+    const project = await createProject('No session', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Stop', token);
+    await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return t.runs.getRun(run.id).endedAt;
+      })
+      .not.toBeNull();
+    // No SessionStart hook ever carried a session id, like secondary CLIs.
+    expect(t.runs.getRun(run.id).agentSessionId).toBeNull();
+    expect((await api('POST', `/api/runs/${run.id}/resume`, { text: 'more' })).statusCode).toBe(409);
+    expect(t.runs.getRun(run.id).state).toBe('done');
+  });
+
   it('serves the terminal as plain text for fleet thumbnails', async () => {
     const project = await createProject('Thumb', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();

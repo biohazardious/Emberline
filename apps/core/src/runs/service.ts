@@ -98,7 +98,13 @@ const SUBMIT_DELAY_MS = 150;
 
 const RECONCILE_INTERVAL_MS = 3_000;
 const AUTO_GC_INTERVAL_MS = 60_000;
-const IDLE_DONE_SESSION_TTL_MS = 25_000;
+/**
+ * An agent idling at its prompt after finishing is closed after this long. Sessions that can be
+ * resumed (`claude --resume`) close soon; CLIs without a session id would lose follow-ups, so they
+ * stay open much longer (B19).
+ */
+const IDLE_DONE_RESUMABLE_TTL_MS = 2 * 60_000;
+const IDLE_DONE_NON_RESUMABLE_TTL_MS = 30 * 60_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 /** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
 const STARTING_WATCHDOG_MS = 3 * 60_000;
@@ -504,7 +510,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
     }
     if (!row.agentSessionId) {
-      this.record(id, { source: 'system', type: 'resume_failed', state: 'failed', payload: { reason: 'no session' } });
+      if (row.state === 'done') {
+        // B19: a finished run's result stands; only this follow-up is impossible.
+        this.note(id, 'resume_failed', { reason: 'no session' });
+      } else {
+        // E.g. rate limited without a session: it can never continue, so end it (or the scheduler retries forever).
+        this.record(id, { source: 'system', type: 'resume_failed', state: 'failed', payload: { reason: 'no session' } });
+      }
       throw conflict('this run has no agent session to resume; start a new run');
     }
     const previous = row.ptydSessionId;
@@ -1305,9 +1317,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const session = byId.get(row.ptydSessionId);
         if (session?.status === 'running') {
           // If an interactive CLI finished its turn (`state === 'done'`) and has been sitting idle
-          // for over IDLE_DONE_SESSION_TTL_MS without any follow-up prompt, close & dispose its PTY
+          // for over its idle TTL without any follow-up prompt, close & dispose its PTY
           // so it never lingers as a zombie process in Fleet Multiplexer.
-          if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > IDLE_DONE_SESSION_TTL_MS) {
+          const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
+          if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl) {
             await this.ptyd
               .get()
               .remove(row.ptydSessionId)
