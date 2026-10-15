@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in Emberline doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a project from ...
+        2. Start a ticket with ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Emberline version or commit
+      placeholder: a release tag or commit hash
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent CLI involved
+      multiple: true
+      options:
+        - None / not agent related
+        - Claude Code
+        - Codex
+        - Gemini CLI
+        - Antigravity
+        - GitHub Copilot CLI
+        - Aider
+  - type: input
+    id: cli-version
+    attributes:
+      label: Agent CLI version
+      description: Shown in Settings → Multi-Agent & Model Matrix.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Docker version, host OS and architecture, browser, and whether you use a reverse proxy.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output of `make logs`. Remove tokens, keys and private paths first.
+      render: text

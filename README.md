@@ -1,118 +1,179 @@
 # Emberline
 
-Self-hosted orchestrator for AI coding agents: a ticket board drives the **real Claude Code CLI** running in persistent terminals on your own server, with automatic resume when your subscription's usage window resets.
+**A self-hosted workbench for AI coding agents.** Emberline runs the real agent CLIs (Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot CLI, Aider) in persistent terminals on your own server, and puts a ticket board, a review workflow and a usage-aware scheduler around them.
+
+Think of it as an issue tracker, an editor and a git client in one browser tab, with agents doing the work and you reviewing it.
+
+> [!NOTE]
+> **Early preview (0.x).** Emberline is used daily by its author, but it is young: expect rough edges, and back up before upgrading. Claude Code is the agent tested most; Codex, Gemini CLI, Antigravity, GitHub Copilot CLI and Aider support is **experimental**.
 
 > [!IMPORTANT]
-> **One installation = one user = that user's own Claude subscription.**
-> Emberline is not a SaaS and has no account sharing or rotation features.
-> Emberline is an independent project and is **not affiliated with or endorsed by Anthropic**.
+> **One installation = one user = that user's own subscriptions.**
+> Emberline drives the official CLIs with your own logins. It is not a SaaS and has no account sharing, pooling or rotation features.
+> Emberline is an independent project and is **not affiliated with or endorsed by** Anthropic, OpenAI, Google or GitHub.
 
-Status: **MVP complete (M0–M6)**: PTY host, web terminal, Claude runs with hook-driven state, Kanban ticket board, quota-aware scheduler, Fleet Multiplexer (`/fleet`), and Monaco diff review with inline review annotations, commit/push, and worktree artifacts. See [PROJECT.md](PROJECT.md) for the design.
+## Features
 
-## Layout
+- **Real CLIs in persistent terminals.** Agents run in a PTY daemon inside a separate `runner` container. Rebuilding or restarting the web app does not interrupt a running agent; you can attach to any session from the browser.
+- **Ticket board.** A Kanban board per project (Backlog → Ready → In progress → Review → Done). Starting a ticket launches an agent on its own git worktree and branch. The card then follows the agent: working, needs you, ready for review.
+- **Usage-aware scheduler.** Runs are queued with a concurrency limit. When a provider's usage limit is hit, Emberline reads the reset time, pauses dispatch and resumes the session automatically after the reset. **Settings → Quota & Concurrency** shows each provider's remaining limits.
+- **Review.** A Monaco diff of each run (branch vs. base, staged, unstaged), inline line comments that go back to the agent as a revision request, commit, push and pull requests to your forge. Finished runs are merged into the project's main workspace from the UI.
+- **Cross-provider review.** Optionally, a different CLI reviews a run's diff read-only before it is merged (for example, Codex reviewing Claude's work).
+- **Quality gates.** A build/lint/test gate, and a pre-merge check for leftover secrets and debug code.
+- **Fleet view.** Watch up to four agent terminals side by side, filter to the ones waiting for you and steer them inline.
+- **Project tooling.** A new-project wizard that writes a `PROJECT.md` blueprint and starter tickets, a roadmap and brainstorming page, a code explorer and editor, a live view of the agent's headless browser, checkpoints with rollback, scheduled jobs and project export.
+- **Personas.** Route roles (architect, coder, DBA, QA, security) to the agent and model you prefer.
+- **Notifications.** ntfy or a webhook (generic, Discord, Slack) for usage limits, resumes, agents waiting for input and finished runs.
+- **Operations.** Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 
-| Path | What |
-|---|---|
-| `apps/core` | API, board, scheduler, git diff/commit/push & artifact layer (Fastify) |
-| `apps/web` | ADE Workbench UI (React + Vite + xterm.js + Monaco Editor) |
-| `apps/ptyd` | PTY holder daemon — keeps agent sessions alive across core restarts |
-| `packages/protocol` | zod schemas for every wire contract |
-| `packages/adapter-sdk` | Agent adapter interface |
-| `packages/adapter-claude` | Claude Code adapter |
-| `packages/hook` | `emberline-hook`, forwards Claude Code hooks to core |
+## Quick start
 
-## Running (self-host)
+Requirements: **Docker** with Compose v2 on a Linux host. The images are `linux/amd64`.
 
-Requirements: **Docker** with Compose v2 and `make`. Nothing else is installed on the host.
+### From the published images
+
+[`deploy/compose.yaml`](deploy/compose.yaml) is a single file that runs the images from the GitHub Container Registry. It also works as a "custom app" on TrueNAS, Portainer or Dockge.
 
 ```bash
-cp .env.example .env     # optional: bind address, port, time zone
-make up                  # build + start core and runner → http://127.0.0.1:7420
-make claude-login        # one time: log in with YOUR Claude subscription inside the runner
-make upgrade-core        # rebuild/restart core only; running agents keep running
-make logs / make down
+curl -fsSLO https://raw.githubusercontent.com/biohazardious/emberline/main/deploy/compose.yaml
+EMBERLINE_VERSION=0.1.0 docker compose up -d
+docker compose logs core     # the first start prints a one-time setup token
 ```
 
-Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + the AI CLIs, hosts the agents). They share the ptyd socket and the workspaces volume. `core` also mounts `runner-home` read-only (to show provider login status) and `runner-tools` read-only (to show installed CLI versions). Core executes nothing for a workspace: git, package installs, builds, tests and CLI installs all run in the runner through ptyd, and the core image ships without git, ssh or build toolchains. Git calls additionally ignore repository hooks and command-running config, which protects the runner's own credentials.
+### From source
 
-On first start, core prints a one-time **setup token** to its log (`make logs`); the setup page asks for it together with the new admin password, so nobody else on the network can claim a fresh instance. Set `EMBERLINE_SETUP_TOKEN` to choose it yourself.
+Building from source additionally needs `make` and `git`; nothing else is installed on the host.
 
-To reach Emberline from other devices, set `EMBERLINE_BIND=0.0.0.0` (behind Tailscale or a TLS reverse proxy). Set `TZ` to your local IANA timezone (for example `Europe/Istanbul`) so quota reset times are parsed correctly.
+```bash
+git clone https://github.com/biohazardious/emberline.git
+cd emberline
+cp .env.example .env     # optional: bind address, port, time zone
+make up                  # build and start core + runner -> http://127.0.0.1:7420
+make logs                # the first start prints a one-time setup token
+```
 
-### Runs & Fleet Multiplexer
+### First steps
 
-**Start run** on a project launches Claude Code in the runner:
+Open `http://127.0.0.1:7420`, enter the setup token and choose the admin password. Then:
 
-- Git projects get an isolated worktree at `/workspaces/.worktrees/<project>/<id>` on a new branch `emberline/run-<id>`; plain directories run in place.
-- Claude Code hooks are wired per run via `--settings`. `emberline-hook` posts them to core (`EMBERLINE_HOOK_URL`, default `http://core:7420` in compose) with a per-run token, and the UI shows live state: `starting` → `working` / `needs you` → `done` (or `failed` if the process exits non-zero).
-- **Fleet Multiplexer (`/fleet`)** renders a `2×2`, `2×1`, or `1×1` grid of live agent terminals with an attention filter (`Waiting on you`) and inline steering prompts.
-- Removing a run keeps its worktree and branch.
+1. **Install the CLIs** you want from **Settings → Multi-Agent & Model Matrix**. They are installed into a persistent volume in the runner, so they survive image updates and can be updated from the same page.
+2. **Log in** to each provider once, with your own account: use the provider's **CLI OAuth Login (Terminal)** button on the same page, which opens a terminal in the runner, or run the CLI's login from a shell (`make claude-login`, `make codex-login`, `make gemini-login`, `make agy-login`, `make copilot-login` when built from source). Credentials stay in the runner's home volume. API keys, if you prefer them, can be set on the same page instead.
+3. **Create a project** (wizard, empty directory or `git clone`) and start a ticket.
 
-### Board
+The running version is shown next to the logo.
 
-Each project has a Kanban board (**Board** on the dashboard): Backlog → Ready → In progress → Review → Done.
+Day-to-day commands (from source):
 
-- Tickets get a key from the project name (`Demo Project` → `DP-1`). Drag cards to reorder or move them; dropping a `backlog`/`ready` card without an active run onto **In progress** automatically launches Claude.
-- **Start with Claude** launches a run on branch `emberline/<key>-<title-slug>` with the title + description as the prompt. The card then follows the run live: working / needs you → *In progress*, turn finished → *Review*.
-- From *Review*, a follow-up prompt is typed into the same live Claude session and the card moves back to *In progress*. Permission prompts are answered in the run's terminal.
-- Runs never move a ticket out of *Done*. Deleting a ticket keeps its runs, branches and worktrees.
+```bash
+make upgrade-core        # rebuild and restart core only; running agents keep running
+make backup              # consistent database snapshot, copied to ./backups/
+make reset-password      # forgot the admin password: clears it, then use the new setup token
+make down
+```
 
-### Diff Review, Inline Annotations, Commit/Push & Artifacts (M6)
+## Configuration
 
-Every git-backed run has a **Review & Diff** workspace (available as a tab inside the Ticket Drawer and at `/runs/:id/review`):
+Set these in `.env` (read by `compose.yaml`):
 
-- **Monaco Diff Editor:** Inspect side-by-side or inline diffs across `Branch vs base`, `Unstaged`, or `Staged` scopes with per-file `+additions / -deletions` and stage/unstage toggles.
-- **Inline Diff Annotations:** Click any line in the Monaco diff to queue line-specific review notes (`path:line`) and click **Request Changes** to dispatch structured revision instructions directly to the live or resumable Claude session.
-- **Commit & Push:** Stage and commit working-tree changes and push the run branch (`emberline/...`) to `origin` directly from the UI. Pushing to `main`, `master`, or the project's `defaultBranch` is blocked.
-- **Worktree Artifacts & Pruning:** Browse and preview screenshots, Playwright traces, logs, and newly created files from the run's worktree. When `EMBERLINE_PLAYWRIGHT_MCP=1` is set on `core`, runs launch with headless `@playwright/mcp` (`playwright-mcp --headless --no-sandbox --output-dir ./artifacts`) wired via `--mcp-config`. Ended runs can prune their linked `.worktrees/` directory from the dashboard (`Prune worktree`) while preserving the git branch.
+| Variable                        | Default        | Purpose                                                                                                                                                  |
+| ------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMBERLINE_BIND`                | `127.0.0.1`    | Host interface the web UI binds to. `0.0.0.0` exposes it to your network; see [Security](#security).                                                     |
+| `EMBERLINE_PORT`                | `7420`         | Host port.                                                                                                                                               |
+| `TZ`                            | `UTC`          | Your IANA time zone (for example `Europe/Berlin`). CLIs print reset times as wall-clock times ("resets 2pm"), and the scheduler reads them in this zone. |
+| `EMBERLINE_WORKSPACES_HOST_DIR` | `./workspaces` | Host directory that holds the project workspaces.                                                                                                        |
+| `EMBERLINE_METRICS_TOKEN`       | unset          | Enables `GET /metrics` for scrapers sending `Authorization: Bearer <token>`.                                                                             |
 
-### Quota scheduler & Notifications
+Core also understands the following variables. They are not passed through by `compose.yaml`; add them to the `core` service's `environment` if you need them:
 
-Every new run (from the dashboard or a ticket) is **queued** and dispatched by the scheduler:
+| Variable                     | Default | Purpose                                                                          |
+| ---------------------------- | ------- | -------------------------------------------------------------------------------- |
+| `EMBERLINE_SETUP_TOKEN`      | random  | Choose the first-run setup token instead of reading it from the log.             |
+| `EMBERLINE_TRUST_PROXY`      | `false` | Trust `X-Forwarded-*` from a reverse proxy in front of core.                     |
+| `EMBERLINE_SECURE_COOKIES`   | `false` | Force `Secure` session cookies. Requests that arrive over HTTPS get them anyway. |
+| `EMBERLINE_SESSION_TTL_DAYS` | `30`    | Login session lifetime.                                                          |
+| `EMBERLINE_NOTIFY_URL`       | unset   | Default ntfy topic or webhook URL. It can also be set in the UI.                 |
+| `EMBERLINE_BACKUP_KEEP`      | `10`    | Number of `make backup` snapshots to keep.                                       |
+| `EMBERLINE_LOG_LEVEL`        | `info`  | pino log level.                                                                  |
 
-- At most *N* agents run at once (default 2; picker on the dashboard, 1–4 there, API allows up to 8). Waiting for a prompt doesn't hold a slot.
-- When any run hits the usage limit (Claude Code's `StopFailure` hook with `rate_limit`, or a "limit reached" banner on `Stop`), the run turns **rate limited**, a quota window opens and dispatch pauses.
-- The reset time comes from the hook message or the terminal banner (`resets 2pm (Europe/Istanbul)`, `resets in 2h 5m`, …), read in `TZ` / `EMBERLINE_TIMEZONE`. If none can be read, it probes again every 15 minutes.
-- At reset plus 30–120 s jitter, rate-limited runs get *"Continue where you left off."* (ended sessions are resumed with `claude --resume`), then the queue continues, in ticket priority order. If the limit hits again within 5 minutes, the same window reopens.
-- **Resume now** (dashboard or ticket drawer) ends the pause early. Windows are stored in SQLite, so a core restart keeps the timer.
-- **Notifications (`ntfy` / Webhook):** Configure an `ntfy.sh` topic or generic/Discord/Slack webhook URL on the Overview dashboard (or via `EMBERLINE_NOTIFY_URL`) to receive push notifications on quota limit reached, quota reset & auto-resume, agent waiting for input, or run completion.
+## Desktop, mobile and embedded projects
 
-### Operations
+Agents are not limited to web apps. The runner ships the system libraries that need root (Xvfb, GTK and webkit2gtk, clang and ninja), and the large SDKs are one click away in **Settings → Multi-Agent & Model Matrix → SDKs for Non-Web Projects** (agents can also run `emberline-sdk install <id>`):
 
-- **Health:** `GET /api/health` is the cheap liveness check Docker uses. `GET /api/health/deep` also checks the database, the runner connection and its protocol version, that the workspaces volume is writable and free disk space; it answers 503 with the failing check when degraded.
-- **Metrics:** set `EMBERLINE_METRICS_TOKEN` and scrape `GET /metrics` with `Authorization: Bearer <token>` (runs by state, tickets by column, scheduler slots/queue/quota pause, runner connection, database size, HTTP responses). Without the token the endpoint does not exist.
-- **Backups:** `make backup` writes a consistent snapshot (`VACUUM INTO`, safe while running) to `/data/backups` in the data volume, keeps the newest 10 (`EMBERLINE_BACKUP_KEEP`) and copies it to `./backups/`. Core also snapshots the database automatically before applying migrations (`emberline.db.pre-migration-<ts>.bak`, newest 3).
-- **Logs:** core logs structured JSON (pino) to stdout: `make logs`.
-- **End-to-end check:** `make e2e` starts an isolated core + runner stack on port 7498 and runs the smoke test (also in CI).
+| Project type                            | What the runner provides                                                                                   | Build & verify gate                               |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Electron                                | Node, Xvfb (`xvfb-run`) to launch the app and its UI tests                                                 | `npm run build` / `lint` / `test`                 |
+| Tauri                                   | Rust, webkit2gtk and the other Tauri system libraries                                                      | npm steps, then `cargo check` in `src-tauri`      |
+| Flutter (web, Linux, Android)           | `emberline-sdk install flutter`, clang/ninja/GTK; APKs need the Android SDK                                | `flutter analyze`, `flutter test`                 |
+| Android, Capacitor, React Native / Expo | `emberline-sdk install android` (JDK 21 + Android SDK)                                                     | `./gradlew assembleDebug`                         |
+| ESP32 / Arduino / STM32 (PlatformIO)    | `emberline-sdk install platformio`; `emberline-sdk install esp-qemu` to run ESP32 firmware without a board | `pio run`, plus `pio test -e native` when present |
+
+A missing toolchain fails the gate with the command that installs it, so an agent can fix it itself. There is no display or Android emulator in the runner: GUI apps run under Xvfb and APKs are built, not run.
+
+**Flashing a real board.** To let agents flash and monitor a USB serial board, enable [`compose.usb.yaml`](compose.usb.yaml) in `.env` (it is commented out in `.env.example`): set `EMBERLINE_SERIAL_DEVICE` to the board's `/dev/ttyUSB*` or `/dev/ttyACM*` device and `EMBERLINE_SERIAL_GID` to the group that owns it on the host (`stat -c %g /dev/ttyACM0`), then run `make up` with the board plugged in. With the published images, uncomment the `devices` and `group_add` lines in `deploy/compose.yaml` instead. The device keeps its name inside the runner. This works on Linux hosts; Docker Desktop on macOS and Windows cannot pass USB devices through.
+
+## Security
+
+Emberline gives AI agents a shell, your git credentials and your provider logins. Treat it like SSH access to the machine it runs on.
+
+- **Keep it private.** By default it listens on `127.0.0.1` only. To reach it from other devices, put it behind a VPN (Tailscale, WireGuard) or a TLS reverse proxy. Plain HTTP on a LAN is tolerated, but passwords and session cookies then travel unencrypted.
+- **Single admin account.** The first visitor needs the setup token from the server log, so nobody else on the network can claim a fresh instance.
+- **Two containers, two roles.** `core` (API and UI) runs no workspace processes and ships without git, ssh or build tools. Everything that runs in a workspace (agents, git, installs, builds, tests) runs in `runner`. Git commands ignore repository hooks and command-running config.
+- **The runner is one trust domain.** All agents and terminals run as the same user and can read each other's workspaces and the provider logins in the runner's home. Don't run agents for projects you don't trust next to ones you do.
+- **Secrets are stored in plaintext** in the SQLite database in core's data volume. They are never sent back to the browser, but anyone with access to that volume or a backup can read them.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## Architecture
+
+```
+ browser ──HTTP/WebSocket──▶ core (Fastify API + React UI, SQLite)
+                               │  unix socket (ptyd protocol)
+                               ▼
+                             runner (Ubuntu + Node, ptyd, agent CLIs, Chromium)
+                               │  agent hooks ──HTTP──▶ core
+                               ▼
+                             /workspaces (shared volume: projects and run worktrees)
+```
+
+| Path                      | What                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------- |
+| `apps/core`               | API, board, scheduler, review/git layer and the factory services (Fastify, Drizzle, SQLite) |
+| `apps/web`                | Web UI (React, Vite, xterm.js, Monaco)                                                      |
+| `apps/ptyd`               | PTY daemon in the runner; keeps agent sessions alive across core restarts                   |
+| `packages/protocol`       | zod schemas for every wire contract                                                         |
+| `packages/adapter-sdk`    | Agent adapter interface                                                                     |
+| `packages/adapter-claude` | Claude Code adapter (hooks, settings, personas)                                             |
+| `packages/hook`           | `emberline-hook` and CLI wrappers; forward agent events from the runner to core             |
+
+Design decisions and the reasons behind them are in [docs/DESIGN.md](docs/DESIGN.md).
+
+## Operations
+
+- **Health:** `GET /api/health` is the liveness check Docker uses. `GET /api/health/deep` also checks the database, the runner connection and protocol version, the workspaces volume and free disk space, and answers 503 with the failing check.
+- **Metrics:** with `EMBERLINE_METRICS_TOKEN` set, `GET /metrics` exposes runs by state, tickets by column, scheduler queue and quota pause, runner connection, database size and HTTP responses.
+- **Backups:** `make backup` takes a consistent snapshot (`VACUUM INTO`, safe while running), keeps the newest `EMBERLINE_BACKUP_KEEP` in the data volume and copies it to `./backups/`. Core also snapshots the database before applying migrations.
+- **Logs:** structured JSON on stdout, `make logs`.
+- **Upgrades:** with the published images, change `EMBERLINE_VERSION` (or keep `latest`), then `docker compose pull && docker compose up -d`; from source, `git pull && make up`. Core snapshots the database before it applies migrations. Restarting the runner stops running agents, so upgrade when they are idle. See [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Development
 
-All tooling runs in the `dev` image. Source is bind-mounted; `node_modules` and the pnpm store live in Docker volumes.
+All tooling runs in Docker; the source is bind-mounted and `node_modules` lives in volumes.
 
 ```bash
-make dev                 # ptyd + core + web dev servers → http://localhost:5173
+make dev                 # ptyd + core + web dev servers -> http://localhost:5173
 make check               # lint + typecheck + test + build
-make test | lint | typecheck | build | format
-make shell               # bash inside the toolbox
-make attach              # interactive shell inside the dev ptyd (Ctrl-] detaches)
-make lock                # after editing a package.json: update pnpm-lock.yaml
-make ci                  # same gate CI runs (Dockerfile `check` target)
-make clean               # drop dev volumes
+make e2e                 # isolated core + runner stack and an end-to-end smoke test
+make shell               # shell inside the toolbox
+make lock                # after editing a package.json
+make help                # everything else
 ```
 
-> [!NOTE]
-> Docker creates empty, root-owned `node_modules/` mount points in the repo. They are git-ignored and harmless.
-> Editor IntelliSense has no host `node_modules`; use a Dev Container / remote container attach if you need it.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-Emberline is licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](LICENSE)).
-If you run a modified Emberline as a network service, you must offer its source to the users of that service.
+Emberline is licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](LICENSE)). If you run a modified Emberline as a network service, you must offer its source code to the users of that service.
 
-The plugin/adapter contract packages are **Apache-2.0** so third-party adapters and plugins can use any license:
+The contract packages [`packages/protocol`](packages/protocol/LICENSE) and [`packages/adapter-sdk`](packages/adapter-sdk/LICENSE) are licensed under **Apache-2.0**, so third-party adapters can use any license.
 
-- [`packages/protocol`](packages/protocol/LICENSE)
-- [`packages/adapter-sdk`](packages/adapter-sdk/LICENSE)
-
-Claude Code is proprietary software by Anthropic. It is **not** covered by these licenses. The `runner` image installs it at build time
-from npm under Anthropic's own terms. Emberline is not affiliated with or endorsed by Anthropic.
+The agent CLIs are third-party software under their vendors' own terms and are not part of Emberline. They are not included in the images; you install them from **Settings → Multi-Agent & Model Matrix**. The runner image includes the open-source Chromium browser.
