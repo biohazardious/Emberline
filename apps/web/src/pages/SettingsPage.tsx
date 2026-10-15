@@ -85,6 +85,8 @@ export function SettingsPage({
   const [secretGuardGate, setSecretGuardGate] = useState(true);
   const [crossProviderCritic, setCrossProviderCritic] = useState(false);
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
+  const [maxTicketDepth, setMaxTicketDepth] = useState(3);
+  const [maxAutoRunsPerDay, setMaxAutoRunsPerDay] = useState(40);
   const [quotaAutoDowngrade, setQuotaAutoDowngrade] = useState(true);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
@@ -144,6 +146,8 @@ export function SettingsPage({
         setSecretGuardGate(res.secretGuardGate ?? true);
         setCrossProviderCritic(res.crossProviderCritic ?? false);
         setAutoMoveToDone(res.autoMoveToDone);
+        setMaxTicketDepth(res.maxTicketDepth);
+        setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
         setQuotaAutoDowngrade(res.quotaAutoDowngrade ?? true);
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
@@ -382,6 +386,8 @@ export function SettingsPage({
         secretGuardGate,
         crossProviderCritic,
         autoMoveToDone,
+        maxTicketDepth,
+        maxAutoRunsPerProjectPerDay: maxAutoRunsPerDay,
         quotaAutoDowngrade,
         defaultAgent,
         enabledProviders,
@@ -620,7 +626,7 @@ export function SettingsPage({
               <div>
                 <strong>Auto-Sync Completed Worktrees into Main Host Workspace</strong>
                 <div className="muted small">
-                  Automatically copy &amp; commit completed specialist files into <code>/workspaces/&lt;slug&gt;</code> so subsequent specialists and the Live Demo stay up to date.
+                  Merge each completed specialist's branch into <code>/workspaces/&lt;slug&gt;</code> with git so subsequent specialists and the Live Demo stay up to date. Conflicts keep the ticket in Review; untracked files such as <code>.env</code> are never touched.
                 </div>
               </div>
             </label>
@@ -636,6 +642,42 @@ export function SettingsPage({
                 <strong>Auto-Move Verified Factory Tickets to Done</strong>
                 <div className="muted small">
                   Move factory pipeline tickets directly to the <code>Done</code> column once their build and sync succeed.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="number"
+                className="input mono"
+                min={0}
+                max={1000}
+                value={maxAutoRunsPerDay}
+                onChange={(e) => setMaxAutoRunsPerDay(Math.max(0, Math.min(1000, Number(e.target.value) || 0)))}
+                style={{ width: '90px' }}
+              />
+              <div>
+                <strong>Daily run budget per project</strong>
+                <div className="muted small">
+                  Auto-dispatch stops starting new runs for a project once this many runs started in the last 24 hours (0 = unlimited). Manual starts are not limited.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="number"
+                className="input mono"
+                min={1}
+                max={10}
+                value={maxTicketDepth}
+                onChange={(e) => setMaxTicketDepth(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                style={{ width: '90px' }}
+              />
+              <div>
+                <strong>Agent ticket depth limit</strong>
+                <div className="muted small">
+                  How many generations of agent-created tickets may follow a ticket you created. Drafts beyond it are dropped and noted on the run.
                 </div>
               </div>
             </label>

@@ -178,6 +178,64 @@ describe('tickets', () => {
     expect(huge?.body).toContain('[Preferred Agent: codex');
   });
 
+  it('limits agent ticket generations to maxTicketDepth (S16)', async () => {
+    const project = await createProject();
+    await api('PATCH', '/api/factory/settings', { maxTicketDepth: 2, autoPickupReady: false });
+    const runTicketWithDrafts = async (ticket: Ticket, titles: string[]) => {
+      const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+      mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+      writeFileSync(
+        path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+        JSON.stringify({ autoDispatch: false, tickets: titles.map((title) => ({ title })) }),
+      );
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${ticket.key}` });
+      await hook(run.id, 'UserPromptSubmit', token);
+      await hook(run.id, 'Stop', token);
+      return run;
+    };
+    const titles = async () => ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]);
+
+    const root = await createTicket(project.id, { title: 'Human ticket', status: 'ready' });
+    expect(root.depth).toBe(0);
+    await runTicketWithDrafts(root, ['Child']);
+    await expect.poll(async () => (await titles()).find((t) => t.title === 'Child')?.depth).toBe(1);
+
+    const child = (await titles()).find((t) => t.title === 'Child')!;
+    await runTicketWithDrafts(child, ['Grandchild']);
+    await expect.poll(async () => (await titles()).find((t) => t.title === 'Grandchild')?.depth).toBe(2);
+
+    const grandchild = (await titles()).find((t) => t.title === 'Grandchild')!;
+    const run = await runTicketWithDrafts(grandchild, ['Too deep']);
+    await expect
+      .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type))
+      .toContain('ticket_depth_limit');
+    expect((await titles()).some((t) => t.title === 'Too deep')).toBe(false);
+  });
+
+  it('stops auto-dispatch once the daily run budget is used and reports usage', async () => {
+    const project = await createProject();
+    await api('PATCH', '/api/factory/settings', { maxAutoRunsPerProjectPerDay: 1 });
+    await createTicket(project.id, { title: 'First', status: 'ready' });
+    await createTicket(project.id, { title: 'Second', status: 'ready' });
+    const first = await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(first).not.toBeNull();
+    await t.runs.stop(first!.run.id);
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return t.runs.getRun(first!.run.id).endedAt;
+      })
+      .not.toBeNull();
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toBeNull();
+
+    const usage = (await api('GET', `/api/projects/${project.id}/usage?days=3`)).json();
+    expect(usage).toMatchObject({ runsLast24h: 1, maxAutoRunsPerProjectPerDay: 1, budgetExhausted: true });
+    expect(usage.days).toHaveLength(3);
+    expect(usage.days.at(-1).runs).toBe(1);
+    expect(usage.days.at(-1).estimatedRuns).toBe(1);
+  });
+
   it('dispatches one ticket per project even when dispatches race', async () => {
     const project = await createProject();
     await createTicket(project.id, { title: 'First', status: 'ready' });

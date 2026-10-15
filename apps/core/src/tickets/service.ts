@@ -63,6 +63,7 @@ export const toTicket = (row: TicketRow): Ticket => ({
   priority: row.priority,
   persona: (row.persona as AgentPersona) ?? 'coder',
   position: row.position,
+  depth: row.depth,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -315,6 +316,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const projectRow = this.project(projectId);
     const allTickets = this.list(projectId);
 
+    // S16: a daily run budget per project stops an auto-chaining factory from draining the quota.
+    if (this.dailyBudgetExhausted(projectId, fSettings.maxAutoRunsPerProjectPerDay)) {
+      this.autoChainProjects.delete(projectId);
+      return null;
+    }
+
     // Finalize any tickets left in 'review' with a completed run (e.g. if core restarted mid-pipeline)
     if (fSettings.autoMoveToDone) {
       for (const reviewTicket of allTickets.filter((t) => t.status === 'review')) {
@@ -399,7 +406,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         : null;
     const ingested = fromWorktree ?? fromMain;
 
-    if (ingested && ingested.tickets.length > 0) {
+    const draftDepth = (ticketRow?.depth ?? 0) + 1;
+    const fSettingsForDepth = getFactorySettings(this.db);
+    if (ingested && ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
+      // S16: agent tickets spawning agent tickets must not grow without bound.
+      this.runs.note(run.id, 'ticket_depth_limit', {
+        drafts: ingested.tickets.length,
+        depth: draftDepth,
+        maxTicketDepth: fSettingsForDepth.maxTicketDepth,
+      });
+    } else if (ingested && ingested.tickets.length > 0) {
       for (const draft of ingested.tickets) {
         let body = draft.body ?? '';
         if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
@@ -410,13 +426,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           body = `${body.slice(0, TICKET_BODY_MAX - routeTag.length - 2)}\n\n${routeTag}`.trim();
         }
         try {
-          this.create(run.projectId, {
-            title: draft.title,
-            body,
-            persona: draft.persona,
-            priority: draft.priority,
-            status: 'ready',
-          });
+          this.create(
+            run.projectId,
+            {
+              title: draft.title,
+              body,
+              persona: draft.persona,
+              priority: draft.priority,
+              status: 'ready',
+            },
+            draftDepth,
+          );
         } catch (error) {
           // The drafts file is already consumed: skip the bad draft, keep the others.
           this.runs.note(run.id, 'ticket_draft_rejected', {
@@ -631,13 +651,24 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return toTicket(this.row(id));
   }
 
+  /** Runs created for the project in the last 24 hours. */
+  runsLast24h(projectId: string): number {
+    const since = Date.now() - 24 * 60 * 60_000;
+    return this.runs.list().filter((r) => r.projectId === projectId && Date.parse(r.createdAt) >= since).length;
+  }
+
+  dailyBudgetExhausted(projectId: string, max = getFactorySettings(this.db).maxAutoRunsPerProjectPerDay): boolean {
+    return max > 0 && this.runsLast24h(projectId) >= max;
+  }
+
   /** Like {@link get}, but `undefined` instead of a 404 for a deleted ticket. */
   find(id: string): Ticket | undefined {
     const row = this.db.select().from(tickets).where(eq(tickets.id, id)).get();
     return row ? toTicket(row) : undefined;
   }
 
-  create(projectId: string, input: CreateTicketBody): Ticket {
+  /** `depth` is set by the factory for agent-created tickets; people always create depth 0. */
+  create(projectId: string, input: CreateTicketBody, depth = 0): Ticket {
     const project = this.project(projectId);
     const body = CreateTicketBodySchema.parse(input);
     const now = new Date();
@@ -661,6 +692,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           priority: body.priority,
           persona: body.persona,
           position: this.edgePosition(projectId, body.status, 'bottom'),
+          depth,
           createdAt: now,
           updatedAt: now,
         })

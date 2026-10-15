@@ -2622,3 +2622,46 @@ dialog.cmd-dialog::backdrop {
 .diff-annotation-sent {
   opacity: 0.75;
 }
+
+/* --- usage & budget ---------------------------------------------------------- */
+
+.usage-bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 4px 0;
+}
+
+.usage-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.usage-bar-track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 36px;
+  height: 64px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.usage-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 6px;
+  background: color-mix(in hsl, var(--ember-2) 70%, transparent);
+}
+
+.usage-day-label,
+.usage-day-runs {
+  font-size: 11px;
+}
+
+.badge-warn {
+  color: var(--warn);
+  border-color: color-mix(in hsl, var(--warn) 50%, var(--border));
+}

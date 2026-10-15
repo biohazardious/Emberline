@@ -24,6 +24,8 @@ export const Ticket = z.object({
   priority: TicketPriority,
   /** Sort order inside a column (ascending). */
   position: z.number(),
+  /** 0 for tickets people create; agent-created tickets are one deeper than the ticket that spawned them. */
+  depth: z.number().int(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

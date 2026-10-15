@@ -360,6 +360,8 @@ export function getFactorySettings(db: Db): FactorySettings {
     secretGuardGate: raw.secretGuardGate ?? true,
     crossProviderCritic: raw.crossProviderCritic ?? false,
     autoMoveToDone: raw.autoMoveToDone ?? true,
+    maxTicketDepth: raw.maxTicketDepth ?? 3,
+    maxAutoRunsPerProjectPerDay: raw.maxAutoRunsPerProjectPerDay ?? 40,
     mcpServers: mergedMcpServers,
     skillPlugins: mergedSkillPlugins,
     anthropicKeyConfigured,
@@ -428,6 +430,8 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     secretGuardGate: body.secretGuardGate ?? current.secretGuardGate,
     crossProviderCritic: body.crossProviderCritic ?? current.crossProviderCritic,
     autoMoveToDone: body.autoMoveToDone ?? current.autoMoveToDone,
+    maxTicketDepth: body.maxTicketDepth ?? current.maxTicketDepth,
+    maxAutoRunsPerProjectPerDay: body.maxAutoRunsPerProjectPerDay ?? current.maxAutoRunsPerProjectPerDay,
     mcpServers: body.mcpServers ?? current.mcpServers,
     skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };

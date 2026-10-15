@@ -14,6 +14,7 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
+import { BudgetPanel } from '../components/BudgetPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
@@ -622,7 +623,10 @@ export function Dashboard({
 
       {/* TAB 3: Automation & Cron */}
       {overviewTab === 'automation' && (
-        <ScheduledJobsPanel projects={visibleProjects} />
+        <>
+          {activeProject && <BudgetPanel key={`budget-${activeProject.id}`} project={activeProject} />}
+          <ScheduledJobsPanel projects={visibleProjects} />
+        </>
       )}
 
       {/* TAB 4: Quota & Alerts */}

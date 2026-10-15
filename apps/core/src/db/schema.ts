@@ -46,6 +46,8 @@ export const tickets = sqliteTable(
     status: text('status').notNull(),
     priority: integer('priority').notNull().default(1),
     position: real('position').notNull(),
+    /** Agent-ticket generation: 0 = created by a person, n + 1 = created by a run of a depth-n ticket. */
+    depth: integer('depth').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },

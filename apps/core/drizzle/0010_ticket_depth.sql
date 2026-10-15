@@ -1,0 +1,1 @@
+ALTER TABLE `tickets` ADD `depth` integer DEFAULT 0 NOT NULL;

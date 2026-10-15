@@ -263,6 +263,13 @@ export const FactorySettings = z.object({
   secretGuardGate: z.boolean().default(true),
   crossProviderCritic: z.boolean().default(false),
   autoMoveToDone: z.boolean().default(true),
+  /**
+   * Guardrails against runaway factories (S16): how many generations of agent-created tickets
+   * may follow a human ticket, and how many runs auto-dispatch may start per project per 24 h
+   * (0 = unlimited).
+   */
+  maxTicketDepth: z.number().int().min(1).max(10).default(3),
+  maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000).default(40),
   mcpServers: z.array(McpServerEntry).default(DEFAULT_MCP_SERVERS),
   skillPlugins: z.array(SkillPluginEntry).default(DEFAULT_SKILL_PLUGINS),
   anthropicKeyConfigured: z.boolean().default(false),
@@ -301,6 +308,8 @@ export const UpdateFactorySettingsBody = z
     secretGuardGate: z.boolean(),
     crossProviderCritic: z.boolean(),
     autoMoveToDone: z.boolean(),
+    maxTicketDepth: z.number().int().min(1).max(10),
+    maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000),
     mcpServers: z.array(McpServerEntry),
     skillPlugins: z.array(SkillPluginEntry),
     anthropicApiKey: z.string().trim().max(500).nullable(),
@@ -449,3 +458,29 @@ export const BrowserActionBody = z.object({
   targetId: z.string().optional(),
 });
 export type BrowserActionBody = z.input<typeof BrowserActionBody>;
+
+export const ProjectUsageDay = z.object({
+  /** Local date (core's time zone), YYYY-MM-DD. */
+  date: z.string(),
+  runs: z.number().int(),
+  inputTokens: z.number().int(),
+  outputTokens: z.number().int(),
+  cachedTokens: z.number().int(),
+  toolCalls: z.number().int(),
+  durationSec: z.number().int(),
+  /** Runs whose token counts are estimated because no transcript usage was available. */
+  estimatedRuns: z.number().int(),
+});
+export type ProjectUsageDay = z.infer<typeof ProjectUsageDay>;
+
+export const ProjectUsageResponse = z.object({
+  projectId: z.string(),
+  days: z.array(ProjectUsageDay),
+  /** Runs created in the last 24 h, against `maxAutoRunsPerProjectPerDay`. */
+  runsLast24h: z.number().int(),
+  maxAutoRunsPerProjectPerDay: z.number().int(),
+  maxTicketDepth: z.number().int(),
+  /** Auto-dispatch is paused for this project because the daily run budget is used up. */
+  budgetExhausted: z.boolean(),
+});
+export type ProjectUsageResponse = z.infer<typeof ProjectUsageResponse>;

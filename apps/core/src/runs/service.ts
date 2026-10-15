@@ -41,8 +41,9 @@ import {
   type RunTelemetry,
   type StartPreviewBody,
   StartPreviewBody as StartPreviewBodySchema,
+  type ProjectUsageDay,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -289,6 +290,48 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .where(and(eq(runEvents.runId, id), eq(runEvents.type, 'PreToolUse')))
       .all().length;
     return this.computeTelemetryForRow(row, toolCalls);
+  }
+
+  /**
+   * Token, tool and time usage of a project's runs over the last `days` days, bucketed by local
+   * date in core's time zone (oldest first, empty days included).
+   */
+  usageByDay(projectId: string, days: number): ProjectUsageDay[] {
+    const dateOf = (d: Date) =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: this.config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+    const buckets = new Map<string, ProjectUsageDay>();
+    for (let i = days - 1; i >= 0; i--) {
+      const date = dateOf(new Date(Date.now() - i * 86_400_000));
+      buckets.set(date, {
+        date,
+        runs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        toolCalls: 0,
+        durationSec: 0,
+        estimatedRuns: 0,
+      });
+    }
+    const since = new Date(Date.now() - days * 86_400_000);
+    const rows = this.db
+      .select()
+      .from(runs)
+      .where(and(eq(runs.projectId, projectId), gte(runs.createdAt, since)))
+      .all();
+    for (const row of rows) {
+      const bucket = buckets.get(dateOf(row.createdAt));
+      if (!bucket) continue;
+      const telemetry = this.getTelemetry(row.id);
+      bucket.runs += 1;
+      bucket.inputTokens += telemetry.inputTokens;
+      bucket.outputTokens += telemetry.outputTokens;
+      bucket.cachedTokens += telemetry.cachedTokens;
+      bucket.toolCalls += telemetry.toolCalls;
+      bucket.durationSec += telemetry.durationSec;
+      if (telemetry.isEstimated) bucket.estimatedRuns += 1;
+    }
+    return [...buckets.values()];
   }
 
   private computeTelemetryForRow(row: RunRow, toolCalls: number): RunTelemetry {

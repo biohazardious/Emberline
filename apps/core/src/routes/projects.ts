@@ -56,6 +56,7 @@ import {
   type WorkspaceFileContentResponse,
   type WorkspaceFileListResponse,
   WriteWorkspaceFileBody,
+  type ProjectUsageResponse,
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -468,6 +469,24 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   });
 
   app.get('/api/factory/settings', async (): Promise<FactorySettings> => getFactorySettings(db));
+
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/api/projects/:id/usage',
+    async (request): Promise<ProjectUsageResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const days = Math.min(90, Math.max(1, Number(request.query.days ?? 7) || 7));
+      const fSettings = getFactorySettings(db);
+      return {
+        projectId: row.id,
+        days: runs.usageByDay(row.id, days),
+        runsLast24h: tickets.runsLast24h(row.id),
+        maxAutoRunsPerProjectPerDay: fSettings.maxAutoRunsPerProjectPerDay,
+        maxTicketDepth: fSettings.maxTicketDepth,
+        budgetExhausted: tickets.dailyBudgetExhausted(row.id, fSettings.maxAutoRunsPerProjectPerDay),
+      };
+    },
+  );
 
   app.patch('/api/factory/settings', async (request): Promise<FactorySettings> => {
     const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
