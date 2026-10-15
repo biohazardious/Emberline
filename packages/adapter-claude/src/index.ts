@@ -40,6 +40,20 @@ export const ANTI_VIBE_UI_RULES = [
   '3. INTENTIONAL INFORMATION DENSITY: Build high-craft, functional interfaces (Linear / Raycast / Stripe / GitHub Workbench caliber) with clear typographic hierarchy, tabular numerals (`font-variant-numeric: tabular-nums`), keyboard accessibility, and real interactive states (loading, empty, error, active).',
 ].join('\n');
 
+/** What every agent needs to know about the runner it works in; appended to the system prompt. */
+export const RUNNER_ENVIRONMENT = [
+  '[RUNNER ENVIRONMENT]:',
+  "You work inside Emberline's runner container: Ubuntu 26.04 as user `node`, with no root and no sudo. `apt-get` is not available; never try it.",
+  '- Preinstalled: Node 24 + npm, Python 3 + pipx, Go, Rust + cargo, gcc/clang/cmake/ninja, git, headless Chromium, Xvfb, and the GTK/webkit2gtk libraries Tauri and Flutter Linux builds need.',
+  '- More SDKs: `emberline-sdk list` shows them and `emberline-sdk install platformio|android|flutter|esp-qemu` installs one at a pinned version into a persistent volume that is already on PATH (JAVA_HOME and ANDROID_HOME are set). Use it instead of downloading SDKs yourself.',
+  '- `npm install -g` and `pipx install` also land in that persistent volume, on PATH. For Python libraries use a venv or pipx; `pip install --user` is blocked.',
+  '- There is no display: run GUI apps and their tests with `xvfb-run -a` (Electron also needs `--no-sandbox --disable-gpu`). There is no Android emulator (no KVM): build APKs and rely on unit and widget tests.',
+  '- Hardware: serial boards show up as `/dev/ttyUSB*` or `/dev/ttyACM*` only when the owner attached them to the runner; check with `ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and never assume one is there.',
+  '- Without a board, test ESP32 / ESP32-S3 / ESP32-C3 firmware in QEMU (`emberline-sdk install esp-qemu`): create a blank flash with `truncate -s 4M flash.bin`, start `qemu-system-xtensa -nographic -machine esp32 -drive file=flash.bin,if=mtd,format=raw -global driver=esp32.gpio,property=strap_mode,value=0x0f -serial tcp::5555,server,nowait` in the background, flash with `pio run -t upload --upload-port socket://localhost:5555`, then stop it and boot normally (without the strap_mode option) with `-serial file:uart.log` under `timeout` to read the serial output.',
+  '- PlatformIO notes: the stock `espressif32` platform only has Arduino core 2.x; for Arduino on ESP32-C6 and other newer chips use the pioarduino platform (`platform = https://github.com/pioarduino/platform-espressif32/releases/download/<release>/platform-espressif32.zip`). Boards with native USB (ESP32-C3/C6/S3) need `-DARDUINO_USB_CDC_ON_BOOT=1` for `Serial` on that port. `pio device monitor` needs a TTY; read a port non-interactively with pyserial under `timeout`.',
+  '- Anything that never exits on its own (serial monitors, dev servers, emulators) must run with `timeout` or in the background and be stopped before your turn ends.',
+].join('\n');
+
 export const AUTONOMOUS_EXECUTION_POLICY =
   `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}`;
 
@@ -63,7 +77,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'PO',
     roleTitle: 'Senior Technical Product Owner & Requirements Architect',
     systemPrompt:
-      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & `npm run build` verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`. Do NOT ask clarifying questions—choose pragmatic self-contained defaults and write `.emberline/new-tickets.json` in this turn.',
+      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & build verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`. Do NOT ask clarifying questions—choose pragmatic self-contained defaults and write `.emberline/new-tickets.json` in this turn.',
   },
   architect: {
     id: 'architect',
@@ -79,7 +93,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'UI/UX',
     roleTitle: 'Staff Design Systems & Frontend UX Engineer',
     systemPrompt:
-      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. If `package.json` has a `build` script, run `npm run build` after your changes so the Live Demo preview updates, and if `$EMBERLINE_DEMO_URL` is set, open `$EMBERLINE_DEMO_URL` with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. Execute autonomously without asking whether to commit.',
+      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project\'s build after your changes. For a web UI with a `build` script, run it so the Live Demo preview updates, and if `$EMBERLINE_DEMO_URL` is set, open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.',
   },
   coder: {
     id: 'coder',
@@ -87,7 +101,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'DEV',
     roleTitle: 'Senior Full-Stack Software Engineer',
     systemPrompt:
-      'You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. If `package.json` has a `build` script, run `npm run build` when done. Execute autonomously without asking clarifying questions or asking whether to commit.',
+      'You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. When done, run the project\'s own build and tests for its stack (for example `npm run build`, `pio run`, `cargo check`, `flutter test` or `./gradlew assembleDebug`). Execute autonomously without asking clarifying questions or asking whether to commit.',
   },
   dba: {
     id: 'dba',
@@ -103,7 +117,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'QA',
     roleTitle: 'Staff Quality Assurance & Verification Engineer',
     systemPrompt:
-      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and `npm run build` (if present) so the production demo bundle is verified and up to date, then open `$EMBERLINE_DEMO_URL` using `mcp__playwright__browser_navigate`, interact with the app via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. Execute autonomously without asking whether to commit.',
+      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and the build for the project\'s stack. For a web app, then open `$EMBERLINE_DEMO_URL` using `mcp__playwright__browser_navigate`, interact with it via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. For a desktop app, run it and its UI tests under `xvfb-run -a`. For firmware, build it and, when no board is attached, run it in QEMU and check its serial output. Execute autonomously without asking whether to commit.',
   },
   security: {
     id: 'security',
@@ -325,6 +339,7 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
       options.model === 'fable'
         ? `${AUTONOMOUS_EXECUTION_POLICY}\n[FABLE DEEP-ANALYSIS MODE: Perform deep architectural synthesis, edge-case analysis, and root-cause verification before writing code.]`
         : AUTONOMOUS_EXECUTION_POLICY;
+    extraPolicy = `${extraPolicy}\n\n${RUNNER_ENVIRONMENT}`;
     if (options.extraSystemPrompt?.trim()) {
       extraPolicy = `${extraPolicy}\n\n${options.extraSystemPrompt.trim()}`;
     }
@@ -333,9 +348,8 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
     if (options.permissionMode && options.permissionMode !== 'default') {
       args.push('--permission-mode', options.permissionMode);
     }
-    if (options.extraSystemPrompt?.trim()) {
-      args.push('--append-system-prompt', options.extraSystemPrompt.trim());
-    }
+    const extra = options.extraSystemPrompt?.trim();
+    args.push('--append-system-prompt', extra ? `${RUNNER_ENVIRONMENT}\n\n${extra}` : RUNNER_ENVIRONMENT);
   }
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId);
   // `--` ends option parsing so a prompt starting with "-" is never read as a flag.

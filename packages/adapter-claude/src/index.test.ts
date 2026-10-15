@@ -5,6 +5,7 @@ import {
   buildPlaywrightMcpConfig,
   buildSecondaryCliLaunchSpec,
   nextStateFromHook,
+  RUNNER_ENVIRONMENT,
   stateAfterExit,
   WATCHED_HOOKS,
 } from './index.js';
@@ -31,7 +32,7 @@ describe('buildLaunchSpec', () => {
     expect(spec.file).toBe('claude');
     expect(spec.args[0]).toBe('--settings');
     expect(JSON.parse(spec.args[1] ?? '')).toEqual(buildHookSettings('emberline-hook'));
-    expect(spec.args).toHaveLength(2);
+    expect(spec.args.slice(2)).toEqual(['--append-system-prompt', RUNNER_ENVIRONMENT]);
     expect(spec.env).toMatchObject({
       EMBERLINE_RUN_ID: 'r1',
       EMBERLINE_HOOK_TOKEN: 'tok',
@@ -48,7 +49,16 @@ describe('buildLaunchSpec', () => {
       resumeSessionId: 'sess-1',
       prompt: '--help me',
     });
-    expect(spec.args.slice(2)).toEqual(['--permission-mode', 'acceptEdits', '--resume', 'sess-1', '--', '--help me']);
+    expect(spec.args.slice(2)).toEqual([
+      '--permission-mode',
+      'acceptEdits',
+      '--append-system-prompt',
+      RUNNER_ENVIRONMENT,
+      '--resume',
+      'sess-1',
+      '--',
+      '--help me',
+    ]);
   });
 
   it('wires headless Playwright MCP via --mcp-config when playwrightMcp is enabled', () => {
@@ -73,6 +83,15 @@ describe('buildLaunchSpec', () => {
     expect(spec.args).toContain('--permission-mode');
     expect(spec.args).toContain('auto');
     expect(spec.args).toContain('--append-system-prompt');
+    expect(spec.args[spec.args.indexOf('--append-system-prompt') + 1]).toContain(RUNNER_ENVIRONMENT);
+  });
+
+  it('tells every Claude run about the runner, even without other system prompts', () => {
+    const spec = buildLaunchSpec({ ...base, permissionMode: 'default', prompt: 'Flash the ESP32' });
+    const promptIdx = spec.args.indexOf('--append-system-prompt');
+    expect(spec.args[promptIdx + 1]).toBe(RUNNER_ENVIRONMENT);
+    expect(RUNNER_ENVIRONMENT).toContain('emberline-sdk install');
+    expect(RUNNER_ENVIRONMENT).toContain('xvfb-run');
   });
 
   it.each(['default', 'acceptEdits', 'plan'] as const)(
@@ -90,7 +109,7 @@ describe('buildLaunchSpec', () => {
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
       const promptIdx = spec.args.indexOf('--append-system-prompt');
-      expect(spec.args[promptIdx + 1]).toBe('## ACTIVE SKILL: Modern UI Craft');
+      expect(spec.args[promptIdx + 1]).toBe(`${RUNNER_ENVIRONMENT}\n\n## ACTIVE SKILL: Modern UI Craft`);
     },
   );
 
