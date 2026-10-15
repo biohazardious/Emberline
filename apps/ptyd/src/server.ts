@@ -41,6 +41,8 @@ interface Connection {
   socket: net.Socket;
   /** sessionId -> unsubscribe */
   attachments: Map<string, () => void>;
+  /** sessionId -> number of the latest attach request; an older one finishing late is dropped (B22). */
+  attachSeq: Map<string, number>;
 }
 
 type Handler<M extends PtydMethod> = (
@@ -92,7 +94,7 @@ export class PtydServer {
   }
 
   private onConnection(socket: net.Socket): void {
-    const conn: Connection = { socket, attachments: new Map() };
+    const conn: Connection = { socket, attachments: new Map(), attachSeq: new Map() };
     this.connections.add(conn);
     const decoder = new FrameDecoder();
 
@@ -211,6 +213,8 @@ export class PtydServer {
     const session = this.get(sessionId);
     conn.attachments.get(sessionId)?.();
     conn.attachments.delete(sessionId);
+    const seq = (conn.attachSeq.get(sessionId) ?? 0) + 1;
+    conn.attachSeq.set(sessionId, seq);
 
     let ready = false;
     const pending: PtydEvent[] = [];
@@ -220,6 +224,14 @@ export class PtydServer {
       onOutput: (data) => emit({ type: 'event', event: 'output', sessionId, data }),
       onExit: (exitCode, signal) => emit({ type: 'event', event: 'exit', sessionId, exitCode, signal }),
     });
+    // The client went away, or attached again, while we waited for the snapshot.
+    if (conn.socket.destroyed || conn.attachSeq.get(sessionId) !== seq) {
+      unsubscribe();
+      if (!conn.socket.destroyed) {
+        this.send(conn, { type: 'response', id, ok: true, result: { session: session.info(), snapshot } });
+      }
+      return;
+    }
     conn.attachments.set(sessionId, unsubscribe);
     const result: PtydResult<'attach'> = { session: session.info(), snapshot };
     this.send(conn, { type: 'response', id, ok: true, result } satisfies PtydResponse);

@@ -10,9 +10,12 @@ import {
 } from '@emberline/protocol';
 import { encodeFrame, FrameDecoder } from './framing.js';
 
+/** Answers normally take milliseconds; this only bounds requests that would otherwise hang. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 export class PtydClientError extends Error {
   constructor(
-    readonly code: PtydErrorCode | 'disconnected',
+    readonly code: PtydErrorCode | 'disconnected' | 'timeout',
     message: string,
   ) {
     super(message);
@@ -85,11 +88,30 @@ export class PtydClient extends EventEmitter<ClientEvents> {
     return this.closed;
   }
 
-  request<M extends PtydMethod>(method: M, params: PtydParams<M>): Promise<PtydResult<M>> {
+  /**
+   * Sends one request. It rejects with `timeout` when no answer arrives in time, so a request ptyd
+   * never answers cannot stall its caller (e.g. core's reconcile loop) forever (B21).
+   */
+  request<M extends PtydMethod>(
+    method: M,
+    params: PtydParams<M>,
+    { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }: { timeoutMs?: number } = {},
+  ): Promise<PtydResult<M>> {
     if (this.closed) return Promise.reject(new PtydClientError('disconnected', 'ptyd connection is closed'));
     const id = this.nextId++;
     return new Promise<PtydResult<M>>((resolve, reject) => {
-      this.pending.set(id, { method, resolve: resolve as (value: unknown) => void, reject });
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new PtydClientError('timeout', `ptyd did not answer ${method} within ${timeoutMs} ms`));
+      }, timeoutMs);
+      timer.unref?.();
+      const settle =
+        <T>(fn: (value: T) => void) =>
+        (value: T) => {
+          clearTimeout(timer);
+          fn(value);
+        };
+      this.pending.set(id, { method, resolve: settle(resolve as (value: unknown) => void), reject: settle(reject) });
       this.socket.write(encodeFrame({ type: 'request', id, method, params }));
     });
   }
@@ -125,7 +147,8 @@ export class PtydClient extends EventEmitter<ClientEvents> {
     return this.request('remove', { sessionId });
   }
   exec(params: PtydParams<'exec'>) {
-    return this.request('exec', params);
+    // ptyd enforces the command's own timeout; allow for it plus transfer.
+    return this.request('exec', params, { timeoutMs: (params.timeoutMs ?? 60_000) + 15_000 });
   }
 
   close(): void {

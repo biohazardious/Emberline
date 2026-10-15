@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
 import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -119,6 +120,49 @@ describe('ptyd', () => {
     expect(sessions.find((s) => s.id === session.id)?.status).toBe('exited');
     await a.remove(session.id);
     expect((await a.list()).sessions).toHaveLength(0);
+  });
+
+  it('settles a pending snapshot when the session is disposed (B21 guard)', async () => {
+    const { PtySession } = await import('./session.js');
+    const session = new PtySession('b21', { file: 'sh', args: [], cwd: dir, env: {}, cols: 80, rows: 24, meta: {} }, {});
+    // The flush callback is asynchronous; disposing in the same tick used to drop it for good.
+    const pending = session.snapshot().then(
+      () => 'answered',
+      () => 'rejected',
+    );
+    session.dispose();
+    const outcome = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('hung'), 2_000))]);
+    expect(outcome).not.toBe('hung');
+  });
+
+  it('times out a request ptyd never answers', async () => {
+    const a = await connect();
+    const blackhole = net.createServer(() => {});
+    const path2 = `${socketPath}.silent`;
+    await new Promise<void>((resolve) => blackhole.listen(path2, resolve));
+    try {
+      const silent = await PtydClient.connect(path2);
+      await expect(silent.request('list', {}, { timeoutMs: 200 })).rejects.toMatchObject({ code: 'timeout' });
+      silent.close();
+    } finally {
+      blackhole.close();
+    }
+    expect((await a.list()).sessions).toBeDefined();
+  });
+
+  it('streams output once when a client attaches twice at the same time (B22)', async () => {
+    const a = await connect();
+    const session = await spawnShell(a);
+    let marks = 0;
+    a.on('output', (id, data) => {
+      if (id === session.id) marks += data.split(MARK).length - 1;
+    });
+    await Promise.all([a.attach(session.id), a.attach(session.id)]);
+    await a.write(session.id, MARK_CMD);
+    await expect.poll(() => marks, { timeout: 5_000 }).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // MARK only appears in the command's output (the echoed command line has $((40+2))): once per listener.
+    expect(marks).toBe(1);
   });
 
   it('resizes the session', async () => {

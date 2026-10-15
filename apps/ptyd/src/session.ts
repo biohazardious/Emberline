@@ -48,6 +48,7 @@ export class PtySession {
   private exitCode: number | null = null;
   private signal: number | null = null;
   private disposed = false;
+  private readonly flushWaiters = new Set<{ reject: (error: Error) => void }>();
 
   constructor(id: string, params: PtydParsedParams<'spawn'>, config: SessionConfig = {}) {
     this.id = id;
@@ -117,21 +118,34 @@ export class PtySession {
     };
   }
 
-  /** Registers a listener and returns the screen state at that exact point in the stream. */
-  subscribe(listener: SessionListener): Promise<{ snapshot: ScreenSnapshot; unsubscribe: () => void }> {
+  /**
+   * Resolves once the emulator has processed everything written so far. Rejects when the session
+   * is disposed first: xterm drops pending write callbacks on dispose, which used to leave
+   * attach/snapshot requests unanswered forever (B21).
+   */
+  private flushed(): Promise<void> {
     this.assertNotDisposed();
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      const waiter = { reject };
+      this.flushWaiters.add(waiter);
       this.term.write('', () => {
-        const snapshot = this.serialize(DEFAULT_SNAPSHOT_SCROLLBACK);
-        this.listeners.add(listener);
-        resolve({ snapshot, unsubscribe: () => this.listeners.delete(listener) });
+        this.flushWaiters.delete(waiter);
+        resolve();
       });
     });
   }
 
-  snapshot(scrollback = DEFAULT_SNAPSHOT_SCROLLBACK): Promise<ScreenSnapshot> {
-    this.assertNotDisposed();
-    return new Promise((resolve) => this.term.write('', () => resolve(this.serialize(scrollback))));
+  /** Registers a listener and returns the screen state at that exact point in the stream. */
+  async subscribe(listener: SessionListener): Promise<{ snapshot: ScreenSnapshot; unsubscribe: () => void }> {
+    await this.flushed();
+    const snapshot = this.serialize(DEFAULT_SNAPSHOT_SCROLLBACK);
+    this.listeners.add(listener);
+    return { snapshot, unsubscribe: () => this.listeners.delete(listener) };
+  }
+
+  async snapshot(scrollback = DEFAULT_SNAPSHOT_SCROLLBACK): Promise<ScreenSnapshot> {
+    await this.flushed();
+    return this.serialize(scrollback);
   }
 
   write(data: string): void {
@@ -153,6 +167,8 @@ export class PtySession {
     if (this.disposed) return;
     this.kill();
     this.disposed = true;
+    for (const waiter of this.flushWaiters) waiter.reject(new Error(`session ${this.id} was removed`));
+    this.flushWaiters.clear();
     this.listeners.clear();
     this.term.dispose();
     this.log?.close();
