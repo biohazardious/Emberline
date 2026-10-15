@@ -713,20 +713,20 @@ export async function runCrossProviderCritic(params: {
     fixRecommendation: iss.fixHint,
   }));
 
-  // The verdict is synthesized from the deterministic audit. Core never runs the rival CLI itself:
-  // agent CLIs live on the runner-tools volume, which agents can write. Running the critic as a
-  // runner session is tracked for ROADMAP Phase 3.
+  // The verdict comes from the deterministic audit; the rival CLI is only selected, not run (a real
+  // rival review as a runner session needs provider credentials and is on the Phase 4 roadmap).
+  // The wording below must not claim that the rival reviewed the code.
 
   const verdict: 'PASS' | 'NEEDS_FIX' = slopReport.passed ? 'PASS' : 'NEEDS_FIX';
   const summary =
     verdict === 'PASS'
-      ? `Cross-provider audit by ${reviewerAgent.toUpperCase()} (${reviewerModel}) passed with Grade ${slopReport.grade} (${slopReport.score}/100) across ${slopReport.filesAudited} modified file(s). No type evasion, unfinished stubs, or vibe-coding bloat blocked approval.`
-      : `Cross-provider audit by ${reviewerAgent.toUpperCase()} (${reviewerModel}) flagged ${slopReport.errorCount} blocking hygiene error(s) and ${slopReport.warningCount} warning(s) (Score ${slopReport.score}/100 · Grade ${slopReport.grade}). Remediation required before completion.`;
+      ? `Deterministic code audit passed with Grade ${slopReport.grade} (${slopReport.score}/100) across ${slopReport.filesAudited} modified file(s). No type evasion, unfinished stubs, or vibe-coding bloat blocked approval. (Designated rival reviewer: ${reviewerAgent} ${reviewerModel}; it does not run yet.)`
+      : `Deterministic code audit flagged ${slopReport.errorCount} blocking hygiene error(s) and ${slopReport.warningCount} warning(s) (Score ${slopReport.score}/100 · Grade ${slopReport.grade}). Remediation required before completion. (Designated rival reviewer: ${reviewerAgent} ${reviewerModel}; it does not run yet.)`;
 
   const followUpPrompt =
     verdict === 'NEEDS_FIX' || criticIssues.length > 0
       ? [
-          `[Cross-Provider Critic Review · ${reviewerAgent.toUpperCase()} (${reviewerModel}) -> ${authorAgent.toUpperCase()}]`,
+          `[Code Audit · deterministic checks -> ${authorAgent.toUpperCase()}]`,
           summary,
           '',
           ...criticIssues.slice(0, 15).map(
