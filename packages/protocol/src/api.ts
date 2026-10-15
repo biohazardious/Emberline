@@ -1233,6 +1233,8 @@ export const SyncWorktreeResponse = z.object({
   runId: z.string(),
   filesSynced: z.number().int().nonnegative(),
   commitSha: z.string().nullable(),
+  /** Files that conflicted when the merge was refused (the main workspace is left unchanged). */
+  conflicts: z.array(z.string()).default([]),
   summary: z.string(),
 });
 export type SyncWorktreeResponse = z.infer<typeof SyncWorktreeResponse>;

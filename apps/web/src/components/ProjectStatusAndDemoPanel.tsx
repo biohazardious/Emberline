@@ -436,8 +436,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       );
       await statusPoll.refresh();
       await checkpointsPoll.refresh();
-      setSelectedTargetId('main');
-      setBanner({ kind: 'ok', text: res.summary });
+      if (res.ok) setSelectedTargetId('main');
+      setBanner({ kind: res.ok ? 'ok' : 'err', text: res.summary });
     } catch (e) {
       setBanner({ kind: 'err', text: errorMessage(e) });
     } finally {

@@ -726,6 +726,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return run;
   }
 
+  /** Appends an informational system event (no state change) to a run's timeline. */
+  note(id: string, type: string, payload?: unknown): void {
+    try {
+      this.record(id, { source: 'system', type, payload });
+    } catch {
+      // The run was removed meanwhile.
+    }
+  }
+
   /** The newest run of a ticket whose agent process is still alive, if any. */
   activeRunForTicket(ticketId: string): Run | undefined {
     const row = this.db

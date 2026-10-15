@@ -310,12 +310,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             latestRun.worktreePath &&
             latestRun.worktreePath !== projectRow.path
           ) {
-            await syncWorktreeToMainWorkspace({
-              worktreePath: latestRun.worktreePath,
-              mainWorkspacePath: projectRow.path,
-              ticketKey: reviewTicket.key,
-              runId: latestRun.id,
-            }).catch(() => undefined);
+            const merged = await this.mergeRunIntoMain(latestRun, projectRow.path, reviewTicket.key);
+            if (!merged) continue;
           }
           try {
             this.moveToTop(reviewTicket.id, 'done');
@@ -543,24 +539,21 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
 
-    // 3. Auto-sync worktree into main workspace so subsequent specialist personas branch off the
-    //    updated codebase and Live Demo stays current — UNLESS Secret Guard blocked a credential leak!
+    // 3. Auto-merge the worktree into the main workspace so subsequent specialist personas branch off
+    //    the updated codebase and Live Demo stays current — UNLESS Secret Guard blocked a credential leak!
+    let mergeBlocked = secretGuardBlockedMerge;
     if (
       !secretGuardBlockedMerge &&
       fSettings.autoSyncToMain &&
       run.worktreePath &&
       run.worktreePath !== projectRow.path
     ) {
-      await syncWorktreeToMainWorkspace({
-        worktreePath: run.worktreePath,
-        mainWorkspacePath: projectRow.path,
-        ticketKey: ticketRow?.key ?? null,
-        runId: run.id,
-      }).catch(() => undefined);
+      mergeBlocked = !(await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null));
     }
 
-    // 4. Auto-move completed factory ticket to Done when enabled (keep in Review if Secret Guard blocked merge)
-    if (!secretGuardBlockedMerge && fSettings.autoMoveToDone && run.ticketId) {
+    // 4. Auto-move completed factory ticket to Done when enabled (keep it in Review when the merge was
+    //    blocked by Secret Guard or refused because of conflicts, so a human resolves it).
+    if (!mergeBlocked && fSettings.autoMoveToDone && run.ticketId) {
       try {
         this.moveToTop(run.ticketId, 'done');
       } catch {
@@ -578,6 +571,24 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     }
+  }
+
+  /**
+   * Merges a finished run's worktree into the main workspace. Failures are recorded on the run
+   * (`merge_failed`) instead of thrown; returns whether the work landed in main.
+   */
+  private async mergeRunIntoMain(run: Run, mainWorkspacePath: string, ticketKey: string | null): Promise<boolean> {
+    const res = await syncWorktreeToMainWorkspace({
+      worktreePath: run.worktreePath,
+      mainWorkspacePath,
+      ticketKey,
+      runId: run.id,
+    }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[] }));
+    this.runs.note(run.id, res.ok ? 'merged_to_main' : 'merge_failed', {
+      summary: res.summary,
+      ...(res.conflicts.length > 0 ? { conflicts: res.conflicts } : {}),
+    });
+    return res.ok;
   }
 
   list(projectId: string): Ticket[] {
