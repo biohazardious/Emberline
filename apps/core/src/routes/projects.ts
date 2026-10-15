@@ -62,7 +62,12 @@ import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { projects, settings } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
-import { getRunnerBrowserState, getRunnerClaudeUsage, performRunnerBrowserAction } from '../factory/browser-daemon.js';
+import {
+  getRunnerBrowserState,
+  getRunnerClaudeUsage,
+  isBrowsableUrl,
+  performRunnerBrowserAction,
+} from '../factory/browser-daemon.js';
 import {
   addRoadmapItem,
   addRoadmapMilestone,
@@ -773,6 +778,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     '/api/projects/:id/browser-action',
     async (request): Promise<BrowserViewportSnapshot> => {
       const body = BrowserActionBody.parse(request.body);
+      if (body.url !== undefined && !isBrowsableUrl(body.url)) {
+        throw badRequest('only http(s) URLs can be opened in the live browser');
+      }
       const targetId = body.targetId ?? 'main';
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
       const demoUrl = agentDemoUrl(project.id, targetId);

@@ -15,6 +15,22 @@ import type { PtydBridge } from '../ptyd-bridge.js';
 export const BROWSER_DAEMON_VERSION = '1.3.2';
 
 /**
+ * S17: the same rule the daemon applies before navigating (`normalizeNavigateUrl`), checked in core
+ * so a refused URL comes back as a 400 the UI can show instead of a silent no-op.
+ */
+export function isBrowsableUrl(raw: string): boolean {
+  const u = raw.trim();
+  if (!u || u === 'about:blank') return true;
+  const candidate = !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) || /^[^:/]+:[0-9]/.test(u) ? `http://${u}` : u;
+  try {
+    const { protocol } = new URL(candidate);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Preload hook (`NODE_OPTIONS="--require /run/emberline/playwright-hook.cjs"`) injected into
  * agent processes so any custom Playwright script (`chromium.launch()`) or `npx playwright test`
  * executed via `Bash` automatically exposes `--remote-debugging-port=9223` for live streaming!

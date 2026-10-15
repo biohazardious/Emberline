@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BROWSER_DAEMON_SCRIPT } from './factory/browser-daemon.js';
+import { BROWSER_DAEMON_SCRIPT, isBrowsableUrl } from './factory/browser-daemon.js';
 
 /** The daemon is a standalone script run in the runner; its URL guard is evaluated from the source. */
 function loadNormalizeNavigateUrl(): (raw: string) => string {
@@ -22,6 +22,16 @@ describe('browser daemon navigation (S17)', () => {
   it('refuses file, javascript, data and browser-internal URLs', () => {
     for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,<b>x</b>', 'chrome://settings']) {
       expect(() => normalize(url)).toThrow(/only http\(s\) URLs/);
+    }
+  });
+
+  it('core applies the same rule before forwarding an action', () => {
+    for (const url of ['', 'about:blank', 'https://example.com', 'localhost:5173', 'example.com']) {
+      expect(isBrowsableUrl(url)).toBe(true);
+      expect(() => normalize(url)).not.toThrow();
+    }
+    for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,x', 'chrome://settings']) {
+      expect(isBrowsableUrl(url)).toBe(false);
     }
   });
 });
