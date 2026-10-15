@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import { ToolchainService } from './toolchain/service.js';
 let t: TestApp;
 let ptydServer: PtydServer;
 let previousToolsDir: string | undefined;
+let previousSdkCommand: string | undefined;
 
 beforeEach(async () => {
   t = await createTestApp();
@@ -18,11 +19,28 @@ beforeEach(async () => {
   previousToolsDir = process.env.EMBERLINE_TOOLS_DIR;
   process.env.EMBERLINE_TOOLS_DIR = path.join(t.dir, 'ai-tools');
   mkdirSync(t.config.workspacesDir, { recursive: true });
+  // Stands in for the runner's emberline-sdk: `<action> <id>`, writes the version marker on install.
+  previousSdkCommand = process.env.EMBERLINE_SDK_COMMAND;
+  const fakeSdk = path.join(t.dir, 'fake-sdk');
+  writeFileSync(
+    fakeSdk,
+    [
+      '#!/usr/bin/env bash',
+      'sleep "${FAKE_SDK_SLEEP:-0}"',
+      'mkdir -p "$EMBERLINE_TOOLS_DIR/sdk/.installed"',
+      'echo "installing $2"',
+      'echo "9.9.9" > "$EMBERLINE_TOOLS_DIR/sdk/.installed/$2"',
+    ].join('\n'),
+  );
+  chmodSync(fakeSdk, 0o755);
+  process.env.EMBERLINE_SDK_COMMAND = fakeSdk;
 });
 
 afterEach(async () => {
   if (previousToolsDir === undefined) delete process.env.EMBERLINE_TOOLS_DIR;
   else process.env.EMBERLINE_TOOLS_DIR = previousToolsDir;
+  if (previousSdkCommand === undefined) delete process.env.EMBERLINE_SDK_COMMAND;
+  else process.env.EMBERLINE_SDK_COMMAND = previousSdkCommand;
   await t.close();
   await ptydServer.close();
 });
@@ -58,5 +76,32 @@ describe('ToolchainService', () => {
     expect((await toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' })).output).toContain(
       'second',
     );
+  });
+
+  it('installs SDKs in a runner terminal and reads the installed version from its marker', async () => {
+    const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+    expect((await toolchain.getSdkStatuses()).find((s) => s.id === 'platformio')).toMatchObject({
+      installed: false,
+      version: null,
+    });
+    const res = await toolchain.executeSdkAction('platformio', { action: 'install' });
+    expect(res.terminal.title).toContain('PlatformIO');
+    await expect
+      .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'platformio'))
+      .toMatchObject({ installed: true, version: '9.9.9', installing: false });
+  });
+
+  it('runs one SDK action at a time', async () => {
+    process.env.FAKE_SDK_SLEEP = '1';
+    try {
+      const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+      await toolchain.executeSdkAction('flutter', { action: 'install' });
+      expect((await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing).toBe(true);
+      await expect(toolchain.executeSdkAction('android', { action: 'install' })).rejects.toMatchObject({
+        statusCode: 409,
+      });
+    } finally {
+      delete process.env.FAKE_SDK_SLEEP;
+    }
   });
 });

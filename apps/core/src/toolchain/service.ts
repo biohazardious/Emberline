@@ -6,6 +6,10 @@ import {
   type CliInstallMethod,
   type CliToolStatus,
   PROVIDER_REGISTRY,
+  type SdkActionBody,
+  type SdkActionResponse,
+  type SdkId,
+  type SdkStatus,
   type TerminalInfo,
   type ToolchainActionBody,
   type ToolchainActionResponse,
@@ -15,7 +19,6 @@ import type { Db } from '../db/index.js';
 import { conflict } from '../errors.js';
 import { getFactorySettings } from '../factory/service.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
-
 
 interface ToolSpec {
   provider: AgentId;
@@ -82,6 +85,29 @@ const TOOL_SPECS: Record<AgentId, ToolSpec> = {
   },
 };
 
+const SDK_SPECS: Record<SdkId, Pick<SdkStatus, 'label' | 'description' | 'sizeHint'>> = {
+  platformio: {
+    label: 'PlatformIO',
+    description: 'Firmware builds, uploads and serial monitor for ESP32, Arduino, STM32 and RP2040 (pio).',
+    sizeHint: '~100 MB, plus each board platform on first build',
+  },
+  android: {
+    label: 'Android SDK + JDK 21',
+    description: 'APK builds for Android, Capacitor, React Native / Expo and Flutter projects (gradle, adb).',
+    sizeHint: '~800 MB; Gradle adds the NDK and other platforms on demand (up to ~3 GB)',
+  },
+  flutter: {
+    label: 'Flutter',
+    description: 'Flutter and Dart for web, Linux desktop and (with the Android SDK) APK builds.',
+    sizeHint: '~2.5 GB',
+  },
+  'esp-qemu': {
+    label: 'ESP32 QEMU',
+    description: "Espressif's QEMU: run, flash and read ESP32 / ESP32-S3 / ESP32-C3 firmware without a board.",
+    sizeHint: '~150 MB',
+  },
+};
+
 interface ToolRuntimeState {
   installing: boolean;
   lastAction: 'install' | 'update' | 'uninstall' | null;
@@ -93,6 +119,9 @@ interface ToolRuntimeState {
 export class ToolchainService {
   private readonly toolsDir: string;
   private readonly state = new Map<AgentId, ToolRuntimeState>();
+  /** Runner terminal of each SDK's last action. */
+  private readonly sdkTerminals = new Map<SdkId, string>();
+  private readonly sdkCommand = process.env.EMBERLINE_SDK_COMMAND ?? 'emberline-sdk';
 
   constructor(
     private readonly db: Db,
@@ -246,6 +275,76 @@ export class ToolchainService {
       nodeVersion: process.version,
       autoInstallEnabled: true,
       tools,
+      sdks: await this.getSdkStatuses(),
+    };
+  }
+
+  /** Reads the version marker `emberline-sdk` writes after a successful install (read-only mount). */
+  private readSdkVersion(id: SdkId): string | null {
+    try {
+      const raw = readFileSync(path.join(this.toolsDir, 'sdk', '.installed', id), 'utf8').trim();
+      return raw || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getSdkStatuses(): Promise<SdkStatus[]> {
+    const sessions = this.ptyd.status === 'connected' ? (await this.ptyd.get().list()).sessions : [];
+    return (Object.keys(SDK_SPECS) as SdkId[]).map((id) => {
+      const terminalId = this.sdkTerminals.get(id) ?? null;
+      const session = terminalId ? sessions.find((s) => s.id === terminalId) : undefined;
+      const version = this.readSdkVersion(id);
+      return {
+        id,
+        ...SDK_SPECS[id],
+        installed: version !== null,
+        version,
+        installing: session?.status === 'running',
+        terminalId: session ? terminalId : null,
+      };
+    });
+  }
+
+  /**
+   * Runs `emberline-sdk <action> <id>` in a runner terminal and returns right away: downloads take
+   * minutes, and the UI follows the terminal. Only one SDK or CLI action runs at a time.
+   */
+  async executeSdkAction(id: SdkId, body: SdkActionBody): Promise<SdkActionResponse> {
+    const action = body.action ?? 'install';
+    const busyCli = [...this.state.entries()].find(([, state]) => state.installing);
+    if (busyCli) throw conflict(`${PROVIDER_REGISTRY[busyCli[0]].label} CLI install is still running; wait for it to finish`);
+    const busySdk = (await this.getSdkStatuses()).find((sdk) => sdk.installing);
+    if (busySdk) throw conflict(`${busySdk.label} ${action} is still running; wait for it to finish`);
+
+    const label = SDK_SPECS[id].label;
+    const script = [
+      `${this.sdkCommand} ${action} ${id}`,
+      'STATUS=$?',
+      `if [ $STATUS -eq 0 ]; then printf "\\n\\033[1;32m✓ ${label} ${action} finished.\\033[0m\\n"; else printf "\\n\\033[1;31m✗ ${label} ${action} failed (exit $STATUS).\\033[0m\\n"; fi`,
+      'exit $STATUS',
+    ].join('\n');
+    const session = await this.ptyd.get().spawn({
+      file: 'bash',
+      args: ['-c', script],
+      cwd: this.workspacesDir,
+      cols: 160,
+      meta: { kind: 'shell', title: `SDK ${action} · ${label}` },
+    });
+    this.sdkTerminals.set(id, session.id);
+    const sdk = (await this.getSdkStatuses()).find((s) => s.id === id)!;
+    return {
+      sdk,
+      terminal: {
+        id: session.id,
+        title: session.meta.title ?? `SDK ${action} · ${label}`,
+        kind: 'shell',
+        projectId: null,
+        runId: null,
+        status: session.status,
+        exitCode: session.exitCode,
+        createdAt: session.createdAt,
+      },
     };
   }
 

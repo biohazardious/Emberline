@@ -143,23 +143,47 @@ CMD ["node", "dist/main.js"]
 # AI CLIs are installed dynamically into the persistent /opt/ai-tools volume.
 # ---------------------------------------------------------------------------
 FROM runtime AS runner
+# Besides the usual toolchains: xvfb for desktop apps without a display (Electron, Tauri, Flutter),
+# webkit2gtk/GTK/clang/ninja for Tauri and Flutter Linux builds, and the runtime libraries of
+# Espressif's ESP32 QEMU (`emberline-sdk install esp-qemu`). Agents have no root to add these later.
+#
+# Chromium (open source, not Google Chrome) for the agents' headless browser. Ubuntu ships it only
+# as a snap, which cannot run in a container, so it comes from the xtradeb PPA (Launchpad builds of
+# the upstream source, kept current, amd64 and arm64). apt pinning takes nothing else from the PPA.
+ARG XTRADEB_KEY_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
 RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${XTRADEB_KEY_FINGERPRINT}" \
+    -o /usr/share/keyrings/xtradeb-apps.asc \
+  && . /etc/os-release \
+  && printf 'Types: deb\nURIs: https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/xtradeb-apps.asc\n' "$VERSION_CODENAME" \
+    > /etc/apt/sources.list.d/xtradeb-apps.sources \
+  && printf 'Package: *\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: -1\n\nPackage: chromium chromium-common chromium-sandbox chromium-l10n\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: 700\n' \
+    > /etc/apt/preferences.d/xtradeb-chromium \
+  && apt-get update \
   && apt-get install -y --no-install-recommends \
     bash less procps openssh-client \
     build-essential pkg-config cmake \
     golang-go rustc cargo \
     python3-pip python3-venv python3-pytest pipx \
     ripgrep fd-find sqlite3 curl wget jq zip unzip xz-utils \
-  && curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-  && apt-get install -y --no-install-recommends /tmp/chrome.deb \
-  && rm -f /tmp/chrome.deb \
-  && ln -sf /usr/bin/google-chrome-stable /usr/bin/chromium \
+    xvfb xauth \
+    libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev libdbus-1-dev libxdo-dev file \
+    clang ninja-build libgtk-3-dev \
+    libsdl2-2.0-0 libslirp0 \
+    chromium fonts-liberation \
+  && chromium --version \
   && rm -rf /var/lib/apt/lists/*
 # Headless browser MCP server wired by adapter-claude (`playwright-mcp`). Installed into /usr/local,
 # not the runner-tools volume, so it is versioned with the image and cannot be shadowed by a stale volume.
 ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN npm install -g --prefix /usr/local --no-fund --no-audit @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
   && test -x /usr/local/bin/playwright-mcp
+# SDKs that `emberline-sdk` installs into the runner-tools volume, at fixed paths.
+ENV JAVA_HOME=/opt/ai-tools/sdk/jdk \
+    ANDROID_HOME=/opt/ai-tools/sdk/android \
+    ANDROID_SDK_ROOT=/opt/ai-tools/sdk/android \
+    PATH="/opt/emberline/wrappers:/opt/ai-tools/bin:/opt/ai-tools/npm/bin:/opt/ai-tools/sdk/jdk/bin:/opt/ai-tools/sdk/android/cmdline-tools/latest/bin:/opt/ai-tools/sdk/android/platform-tools:/opt/ai-tools/sdk/flutter/bin:/opt/ai-tools/sdk/esp-qemu/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENV SHELL=/bin/bash \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
     EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd.sock \
@@ -172,7 +196,7 @@ RUN chmod +x /opt/emberline/hook/dist/main.js \
   && cp /opt/emberline/hook/wrappers/* /opt/emberline/wrappers/ \
   && chmod +x /opt/emberline/wrappers/* \
   && ln -sf /opt/emberline/wrappers/agy /opt/emberline/wrappers/antigravity \
-  && mkdir -p /run/emberline /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx \
+  && mkdir -p /run/emberline /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx /opt/ai-tools/sdk \
   && chown -R node:node /run/emberline /var/log/emberline /workspaces /opt/ai-tools
 USER node
 WORKDIR /workspaces

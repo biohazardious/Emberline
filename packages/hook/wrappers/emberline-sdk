@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Installs the large SDKs that agents need for non-web projects into the persistent runner-tools
+# volume (/opt/ai-tools/sdk), at fixed paths the runner image already puts on PATH:
+#
+#   emberline-sdk list                  every SDK with its pinned version and whether it is installed
+#   emberline-sdk status <id>           prints the installed version, exit 1 when missing
+#   emberline-sdk install|update <id>   (re)installs the pinned version
+#   emberline-sdk uninstall <id>
+#
+# Downloads are pinned and checked against their sha256. Core runs this through ptyd; agents may
+# run it themselves.
+set -euo pipefail
+
+TOOLS_DIR="${EMBERLINE_TOOLS_DIR:-/opt/ai-tools}"
+SDK_DIR="${TOOLS_DIR}/sdk"
+MARKERS="${SDK_DIR}/.installed"
+export PIPX_HOME="${TOOLS_DIR}/pipx" PIPX_BIN_DIR="${TOOLS_DIR}/bin"
+
+PLATFORMIO_VERSION="6.2.0"
+
+JDK_VERSION="21.0.12.1+1"
+JDK_URL="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz"
+JDK_SHA256="ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94"
+ANDROID_CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
+ANDROID_CMDLINE_TOOLS_SHA256="7ec965280a073311c339e571cd5de778b9975026cfcbe79f2b1cdcb1e15317ee"
+ANDROID_PACKAGES=("platform-tools" "platforms;android-35" "build-tools;35.0.0")
+
+FLUTTER_VERSION="3.47.5"
+FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.5-stable.tar.xz"
+FLUTTER_SHA256="2132e990f236f8d22e7c6314b29a191a95b10d7cbcfec9b4e2e303d996652cbb"
+
+QEMU_VERSION="esp-develop-9.2.2-20260417"
+QEMU_BASE="https://github.com/espressif/qemu/releases/download/${QEMU_VERSION}"
+QEMU_XTENSA_X64_SHA256="0eecb2a34a5586c0e59110f77b9343b7b336e82fdb0e1a30e1dc1bab8a547e35"
+QEMU_RISCV_X64_SHA256="547f03e04701a92cbb699f7f7d015adc1f5b5ef93cbb94c0dd9b7107e2d84e77"
+QEMU_XTENSA_ARM64_SHA256="00de5985094c14e47d1b38464a006b8ed64fd0fa7a289c56da24f3a329f65339"
+QEMU_RISCV_ARM64_SHA256="a9f7b98636008edcf7a11c96f10b3a3ec83c2a890fc54c3e3ceb3ec9edace427"
+
+SDK_IDS=(platformio android flutter esp-qemu)
+
+die() { echo "emberline-sdk: $*" >&2; exit 1; }
+
+pinned_version() {
+  case "$1" in
+    platformio) echo "$PLATFORMIO_VERSION" ;;
+    android) echo "JDK ${JDK_VERSION}, ${ANDROID_PACKAGES[*]}" ;;
+    flutter) echo "$FLUTTER_VERSION" ;;
+    esp-qemu) echo "$QEMU_VERSION" ;;
+    *) die "unknown SDK '$1' (known: ${SDK_IDS[*]})" ;;
+  esac
+}
+
+installed_version() { cat "${MARKERS}/$1" 2>/dev/null || true; }
+
+require_x86_64() {
+  [ "$(uname -m)" = "x86_64" ] || die "$1 is only available for x86_64 runners"
+}
+
+# download <url> <sha256> <dest>
+download() {
+  echo "Downloading $1"
+  curl -fL --retry 3 --progress-bar -o "$3" "$1"
+  echo "$2  $3" | sha256sum -c --quiet - || die "checksum mismatch for $1"
+}
+
+fresh_tmp() {
+  rm -rf "${SDK_DIR}/.tmp"
+  mkdir -p "${SDK_DIR}/.tmp"
+  echo "${SDK_DIR}/.tmp"
+}
+
+install_platformio() {
+  pipx install --force "platformio==${PLATFORMIO_VERSION}"
+  "${PIPX_BIN_DIR}/pio" --version
+}
+
+uninstall_platformio() {
+  pipx uninstall platformio || true
+  echo "PlatformIO packages in ~/.platformio were kept; delete that directory to free their space."
+}
+
+install_android() {
+  require_x86_64 "The Android SDK"
+  local tmp
+  tmp="$(fresh_tmp)"
+  download "$JDK_URL" "$JDK_SHA256" "${tmp}/jdk.tar.gz"
+  rm -rf "${SDK_DIR}/jdk"
+  mkdir -p "${SDK_DIR}/jdk"
+  tar -xzf "${tmp}/jdk.tar.gz" -C "${SDK_DIR}/jdk" --strip-components=1
+  download "$ANDROID_CMDLINE_TOOLS_URL" "$ANDROID_CMDLINE_TOOLS_SHA256" "${tmp}/cmdline-tools.zip"
+  rm -rf "${SDK_DIR}/android/cmdline-tools"
+  mkdir -p "${SDK_DIR}/android/cmdline-tools"
+  unzip -q "${tmp}/cmdline-tools.zip" -d "${tmp}"
+  mv "${tmp}/cmdline-tools" "${SDK_DIR}/android/cmdline-tools/latest"
+  rm -rf "$tmp"
+  export JAVA_HOME="${SDK_DIR}/jdk" ANDROID_HOME="${SDK_DIR}/android"
+  local sdkmanager="${SDK_DIR}/android/cmdline-tools/latest/bin/sdkmanager"
+  # Gradle installs further platforms and the NDK on demand, which needs the licenses accepted.
+  yes | "$sdkmanager" --licenses >/dev/null || true
+  "$sdkmanager" "${ANDROID_PACKAGES[@]}"
+  "${SDK_DIR}/jdk/bin/java" -version
+}
+
+uninstall_android() {
+  rm -rf "${SDK_DIR}/android" "${SDK_DIR}/jdk"
+  echo "The Gradle cache in ~/.gradle was kept; delete it to free its space."
+}
+
+install_flutter() {
+  require_x86_64 "Flutter"
+  local tmp
+  tmp="$(fresh_tmp)"
+  download "$FLUTTER_URL" "$FLUTTER_SHA256" "${tmp}/flutter.tar.xz"
+  rm -rf "${SDK_DIR}/flutter"
+  tar -xJf "${tmp}/flutter.tar.xz" -C "${SDK_DIR}"
+  rm -rf "$tmp"
+  # The archive is a git checkout; it is owned by this user, but git may still ask for this.
+  git config --global --add safe.directory "${SDK_DIR}/flutter"
+  "${SDK_DIR}/flutter/bin/flutter" --disable-analytics >/dev/null 2>&1 || true
+  "${SDK_DIR}/flutter/bin/flutter" --version
+}
+
+uninstall_flutter() {
+  rm -rf "${SDK_DIR}/flutter"
+  echo "The pub cache in ~/.pub-cache was kept; delete it to free its space."
+}
+
+install_esp_qemu() {
+  local arch xtensa_sha riscv_sha tmp
+  case "$(uname -m)" in
+    x86_64) arch="x86_64"; xtensa_sha="$QEMU_XTENSA_X64_SHA256"; riscv_sha="$QEMU_RISCV_X64_SHA256" ;;
+    aarch64) arch="aarch64"; xtensa_sha="$QEMU_XTENSA_ARM64_SHA256"; riscv_sha="$QEMU_RISCV_ARM64_SHA256" ;;
+    *) die "Espressif QEMU is not available for $(uname -m)" ;;
+  esac
+  local tag="${QEMU_VERSION#esp-develop-}"
+  tag="esp_develop_${tag//-/_}"
+  tmp="$(fresh_tmp)"
+  download "${QEMU_BASE}/qemu-xtensa-softmmu-${tag}-${arch}-linux-gnu.tar.xz" "$xtensa_sha" "${tmp}/xtensa.tar.xz"
+  download "${QEMU_BASE}/qemu-riscv32-softmmu-${tag}-${arch}-linux-gnu.tar.xz" "$riscv_sha" "${tmp}/riscv32.tar.xz"
+  rm -rf "${SDK_DIR}/esp-qemu"
+  mkdir -p "${SDK_DIR}/esp-qemu/xtensa" "${SDK_DIR}/esp-qemu/riscv32" "${SDK_DIR}/esp-qemu/bin"
+  tar -xJf "${tmp}/xtensa.tar.xz" -C "${SDK_DIR}/esp-qemu/xtensa" --strip-components=1
+  tar -xJf "${tmp}/riscv32.tar.xz" -C "${SDK_DIR}/esp-qemu/riscv32" --strip-components=1
+  rm -rf "$tmp"
+  ln -sf ../xtensa/bin/qemu-system-xtensa "${SDK_DIR}/esp-qemu/bin/qemu-system-xtensa"
+  ln -sf ../riscv32/bin/qemu-system-riscv32 "${SDK_DIR}/esp-qemu/bin/qemu-system-riscv32"
+  "${SDK_DIR}/esp-qemu/bin/qemu-system-xtensa" --version | head -1
+}
+
+uninstall_esp_qemu() {
+  rm -rf "${SDK_DIR}/esp-qemu"
+}
+
+cmd="${1:-list}"
+id="${2:-}"
+
+case "$cmd" in
+  list)
+    for sdk in "${SDK_IDS[@]}"; do
+      printf '%-12s pinned: %-45s installed: %s\n' "$sdk" "$(pinned_version "$sdk")" "$(installed_version "$sdk" || true)"
+    done
+    ;;
+  status)
+    [ -n "$id" ] || die "usage: emberline-sdk status <id>"
+    pinned_version "$id" >/dev/null
+    v="$(installed_version "$id")"
+    [ -n "$v" ] || exit 1
+    echo "$v"
+    ;;
+  install|update|uninstall)
+    [ -n "$id" ] || die "usage: emberline-sdk $cmd <id>"
+    pinned_version "$id" >/dev/null
+    mkdir -p "$MARKERS"
+    exec 9>"${SDK_DIR}/.lock"
+    flock -n 9 || die "another SDK install is running"
+    fn="${id//-/_}"
+    if [ "$cmd" = "uninstall" ]; then
+      "uninstall_${fn}"
+      rm -f "${MARKERS}/${id}"
+      echo "Uninstalled ${id}."
+    else
+      "install_${fn}"
+      pinned_version "$id" >"${MARKERS}/${id}"
+      echo "Installed ${id} ($(pinned_version "$id"))."
+    fi
+    ;;
+  *)
+    die "usage: emberline-sdk list | status <id> | install|update|uninstall <id>"
+    ;;
+esac

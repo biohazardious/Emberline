@@ -40,6 +40,9 @@ import {
   RollbackCheckpointBody,
   RunCrossCriticBody,
   type RunTelemetry,
+  SdkActionBody,
+  type SdkActionResponse,
+  SdkId,
   type SlopAuditReport,
   SyncWorktreeBody,
   type SyncWorktreeResponse,
@@ -467,6 +470,12 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         throw badRequest((err as Error).message);
       }
     },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/toolchain/sdk/:id/action',
+    async (request): Promise<SdkActionResponse> =>
+      toolchain.executeSdkAction(SdkId.parse(request.params.id), SdkActionBody.parse(request.body ?? {})),
   );
 
   app.post('/api/toolchain/update-all', async () => {

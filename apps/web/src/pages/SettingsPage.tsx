@@ -66,6 +66,7 @@ import { AccountPanel } from '../components/AccountPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
+import { SdkToolchainPanel } from '../components/SdkToolchainPanel';
 import { ProviderMark } from '../components/ProviderMark';
 
 const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
@@ -196,7 +197,8 @@ export function SettingsPage({
   }, [refreshToolchain]);
 
   useEffect(() => {
-    const anyInstalling = toolchain?.tools.some((t) => t.installing) ?? false;
+    const anyInstalling =
+      (toolchain?.tools.some((t) => t.installing) ?? false) || (toolchain?.sdks.some((s) => s.installing) ?? false);
     if (!anyInstalling && activeTab !== 'providers') return;
     const interval = setInterval(() => {
       void refreshToolchain();
@@ -814,7 +816,7 @@ export function SettingsPage({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(295px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(295px, 100%), 1fr))',
                 gap: '10px',
               }}
             >
@@ -1154,6 +1156,10 @@ export function SettingsPage({
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: 0 }} />
 
+          <SdkToolchainPanel sdks={toolchain?.sdks ?? []} onChanged={refreshToolchain} />
+
+          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: 0 }} />
+
           {/* STEP 2: CAPABILITY-RANKED PERSONA ROUTING MATRIX */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
@@ -1236,7 +1242,7 @@ export function SettingsPage({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))',
                 gap: '12px',
               }}
             >
