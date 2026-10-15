@@ -25,6 +25,7 @@ import {
 } from '../components/RunInspector';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
+import { BuildOutputsList } from '../components/RunOutcome';
 import { useRuns, useTickets } from '../hooks/liveData';
 import { timeAgo } from '../time';
 import { toastInfo } from '../toast';
@@ -733,6 +734,8 @@ function TicketDrawer({
             )}
           </div>
           {run && <RunFailureBanner run={run} />}
+          {/* The Events tab shows these itself, next to the final answer. */}
+          {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}
           {queued && (
             <div className="agent-note">
               <span>Queued: starts as soon as a slot and quota are free.</span>

@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { timeAgo } from '../time';
+import { BuildOutputsList, ExpandableText, FinalAnswer, LastScreen } from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
 
 const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -233,7 +234,8 @@ export function RunEventTimeline({ run }: { run: Run }) {
     };
   }, [run.id, run.state, run.stateChangedAt, run.lastEvent]);
 
-  const events: RunEvent[] = detail?.events ?? [];
+  // The saved last screen is shown on its own above the timeline, not as an entry in it.
+  const events: RunEvent[] = (detail?.events ?? []).filter((e) => e.type !== 'last_screen');
 
   if (loading && events.length === 0) {
     return <p className="muted small">Loading activity timeline…</p>;
@@ -244,7 +246,13 @@ export function RunEventTimeline({ run }: { run: Run }) {
   }
 
   return (
-    <ol className="event-timeline" aria-label="Agent event timeline">
+    <>
+      {detail?.finalMessage && (run.state === 'done' || run.state === 'failed' || run.endedAt) && (
+        <FinalAnswer text={detail.finalMessage} />
+      )}
+      <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />
+      {detail?.lastScreen && !run.terminalId && <LastScreen text={detail.lastScreen} />}
+      <ol className="event-timeline" aria-label="Agent event timeline">
       {[...events].reverse().map((ev) => {
         const { tool, detail: text } = payloadSummary(ev.payload);
         return (
@@ -256,11 +264,12 @@ export function RunEventTimeline({ run }: { run: Run }) {
               {ev.state && <RunStatePill state={ev.state} />}
               <span className="event-time mono">{timeAgo(ev.ts)}</span>
             </div>
-            {text && <p className="event-detail mono">{text}</p>}
+            {text && <ExpandableText text={text} />}
           </li>
         );
       })}
-    </ol>
+      </ol>
+    </>
   );
 }
 

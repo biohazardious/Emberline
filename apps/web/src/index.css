@@ -2294,6 +2294,125 @@ a {
   overflow-wrap: anywhere;
 }
 
+/* --- run outcome: final answer, last screen, build outputs ------------------ */
+
+/* A finished Fleet pane reads top to bottom and scrolls when its answer is long. */
+.fleet-placeholder:has(.fleet-outcome) {
+  place-content: start stretch;
+  overflow-y: auto;
+}
+
+.fleet-outcome {
+  margin-top: 10px;
+  text-align: left;
+}
+
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ember-2);
+  font-family: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.expandable {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.expandable-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  overflow: hidden;
+}
+
+.run-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.run-outcome > .link-btn {
+  align-self: flex-start;
+}
+
+.run-outcome .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.run-outcome-text {
+  margin: 0;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-outcome-screen {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.72rem;
+  white-space: pre;
+}
+
+.build-outputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.build-output {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.build-output-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.build-output-path {
+  font-size: 0.7rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.build-output-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
 /* --- fleet multiplexer (/fleet) -------------------------------------------- */
 
 .fleet-page {

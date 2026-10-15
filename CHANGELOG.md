@@ -4,6 +4,18 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Runs show their full final answer (Events, Run Inspector, Fleet), recovered from the transcript for runs recorded before this change.
+- The terminal's last screen is kept when an agent session closes.
+- "Build outputs" list the APKs, installers and firmware images a run produced, with their full paths (host path when known), in Review, the ticket drawer and Fleet; they can be downloaded.
+- Finished runs stay in Fleet's Live view for 15 minutes with their final answer; they can be hidden.
+
+### Fixed
+
+- Event details are no longer cut at 500 characters; long ones collapse with "Show more".
+- Stops made by the factory pipeline are recorded as system events with their reason, not as user stops.
+
 ## [0.1.0] - 2026-10-15
 
 First public preview.

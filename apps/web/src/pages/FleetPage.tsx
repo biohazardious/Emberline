@@ -1,11 +1,25 @@
-import type { GarbageCollectRunsResponse, Project, Run } from '@emberline/protocol';
-import { Check, Circle, Eraser, Hourglass, Maximize2, Package, RotateCw, Square, Trash, TriangleAlert, X } from 'lucide-react';
-import { type FormEvent, lazy, Suspense, useMemo, useRef, useState } from 'react';
+import type { GarbageCollectRunsResponse, Project, Run, RunDetail } from '@emberline/protocol';
+import {
+  Check,
+  Circle,
+  Eraser,
+  EyeOff,
+  Hourglass,
+  Maximize2,
+  Package,
+  RotateCw,
+  Square,
+  Trash,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
+import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { STAGE_TEMPLATES } from '../components/RunInspector';
+import { BuildOutputsList, FinalAnswer, LastScreen } from '../components/RunOutcome';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
@@ -20,6 +34,35 @@ type GridLayout = 'grid' | 'cols' | 'single';
 
 function isRunCompleted(r: Run): boolean {
   return Boolean(r.endedAt) || r.state === 'done' || r.state === 'failed';
+}
+
+/** A finished run stays in the Active view this long, so its last answer can still be read. */
+const FINISHED_GRACE_MS = 15 * 60_000;
+const DISMISSED_KEY = 'emberline.fleet.dismissed';
+
+function readDismissed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function finishedAt(r: Run): number {
+  return Date.parse(r.endedAt ?? r.stateChangedAt);
+}
+
+/** The agent's final answer, last screen and build outputs, for a pane whose session finished. */
+function FinishedOutcome({ run }: { run: Run }) {
+  const detail = useApi<RunDetail>(`/api/runs/${run.id}`, 10_000);
+  return (
+    <div className="fleet-outcome">
+      {detail.data?.finalMessage && <FinalAnswer text={detail.data.finalMessage} />}
+      <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />
+      {detail.data?.lastScreen && !run.terminalId && <LastScreen text={detail.data.lastScreen} />}
+    </div>
+  );
 }
 
 export function FleetPage({
@@ -42,6 +85,26 @@ export function FleetPage({
   const [notice, setNotice] = useState<string>();
   const [gcBusy, setGcBusy] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
+  const [dismissed, setDismissed] = useState<Set<string>>(readDismissed);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const recentlyFinished = useCallback(
+    (r: Run) => isRunCompleted(r) && !dismissed.has(r.id) && now - finishedAt(r) < FINISHED_GRACE_MS,
+    [dismissed, now],
+  );
+  const dismiss = (id: string) =>
+    setDismissed((prev) => {
+      const next = new Set(prev).add(id);
+      try {
+        localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next].slice(-200)));
+      } catch {
+        // Storage unavailable: the pane is hidden for this visit only.
+      }
+      return next;
+    });
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
 
@@ -53,7 +116,7 @@ export function FleetPage({
   const counts = useMemo(() => {
     const all = scopedRuns;
     const completed = all.filter((r) => isRunCompleted(r)).length;
-    const active = all.filter((r) => !isRunCompleted(r)).length;
+    const active = all.filter((r) => !isRunCompleted(r) || recentlyFinished(r)).length;
     return {
       active,
       attention: all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed')
@@ -62,12 +125,12 @@ export function FleetPage({
       completed,
       total: all.length,
     };
-  }, [scopedRuns]);
+  }, [scopedRuns, recentlyFinished]);
 
   const visibleRuns = useMemo(() => {
     switch (filter) {
       case 'active':
-        return scopedRuns.filter((r) => !isRunCompleted(r));
+        return scopedRuns.filter((r) => !isRunCompleted(r) || recentlyFinished(r));
       case 'attention':
         return scopedRuns.filter(
           (r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed',
@@ -79,7 +142,7 @@ export function FleetPage({
       case 'all':
         return scopedRuns;
     }
-  }, [scopedRuns, filter]);
+  }, [scopedRuns, filter, recentlyFinished]);
 
   const selectableIds = new Set(visibleRuns.filter((r) => !isRunCompleted(r) && r.state !== 'queued').map((r) => r.id));
   const selectedIds = [...selected].filter((id) => selectableIds.has(id));
@@ -416,6 +479,7 @@ export function FleetPage({
               project={projectById.get(run.projectId)}
               onInspect={() => onInspectRun(run.id)}
               onError={setError}
+              onDismiss={filter === 'active' && isRunCompleted(run) ? () => dismiss(run.id) : undefined}
             />
           ))}
         </div>
@@ -443,6 +507,7 @@ function FleetPane({
   project,
   onInspect,
   onError,
+  onDismiss,
 }: {
   run: Run;
   view: 'live' | 'thumbnails';
@@ -452,6 +517,8 @@ function FleetPane({
   project: Project | undefined;
   onInspect: () => void;
   onError: (msg: string | undefined) => void;
+  /** Hides a recently finished run from the Active view. */
+  onDismiss?: () => void;
 }) {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState<string>();
@@ -553,6 +620,16 @@ function FleetPane({
               {run.state === 'queued' ? 'Cancel' : 'Stop'}
             </button>
           )}
+          {onDismiss && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={onDismiss}
+              title="Hide this finished run from the Active view (it stays under Completed)"
+            >
+              <EyeOff className="icon" aria-hidden />
+            </button>
+          )}
           {completed && (
             <button
               type="button"
@@ -643,6 +720,7 @@ function FleetPane({
                 {run.prompt.length > 260 ? '…' : ''}
               </p>
             )}
+            {completed && <FinishedOutcome run={run} />}
           </div>
         )}
       </div>

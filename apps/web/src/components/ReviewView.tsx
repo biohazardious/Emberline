@@ -32,6 +32,7 @@ import { api, errorMessage } from '../api';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { MonacoDiff, type DiffAnnotation } from './MonacoDiff';
 import { formatAgentDisplayName } from './RunInspector';
+import { BuildOutputsList } from './RunOutcome';
 
 interface Props {
   run: Run;
@@ -1170,6 +1171,9 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       ) : (
         <div className="review-split-pane">
           <aside className="review-file-list">
+            <div style={{ padding: '8px 8px 0' }}>
+              <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />
+            </div>
             <div className="review-file-list-header">
               <span className="eyebrow">Worktree Artifacts ({artifacts.length})</span>
             </div>
