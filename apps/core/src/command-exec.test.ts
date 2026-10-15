@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -57,6 +58,14 @@ describe('command execution through the runner', () => {
       expect(request.file).toBe('git');
       expect(Object.keys(request.env ?? {}).every((key) => key.startsWith('GIT_'))).toBe(true);
     }
+  });
+
+  it('reports the runner protocol and refuses exec on an outdated runner', async () => {
+    expect(bridge.protocolVersion).toBe(PTYD_PROTOCOL_VERSION);
+    const outdated = { get: () => bridge.get(), protocolVersion: 1 } as unknown as PtydBridge;
+    await expect(ptydCommandExecutor(outdated)({ file: 'true', args: [], cwd: dir })).rejects.toMatchObject({
+      code: 'runner_outdated',
+    });
   });
 
   it('rejects non-zero exits with the command output, like execFile', async () => {

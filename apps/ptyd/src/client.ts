@@ -97,6 +97,9 @@ export class PtydClient extends EventEmitter<ClientEvents> {
   spawn(params: PtydParams<'spawn'>) {
     return this.request('spawn', params);
   }
+  hello() {
+    return this.request('hello', {});
+  }
   list() {
     return this.request('list', {});
   }

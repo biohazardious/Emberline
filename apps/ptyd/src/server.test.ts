@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PtydClient, PtydClientError } from './client.js';
 import { PtydServer } from './server.js';
@@ -161,6 +162,7 @@ describe('ptyd', () => {
     const missing = await client.exec({ file: 'definitely-not-a-binary', cwd: dir });
     expect(missing.exitCode).toBe(127);
     await expect(client.exec({ file: 'true', cwd: path.join(dir, 'nope') })).rejects.toMatchObject({ code: 'bad_request' });
+    expect(await client.hello()).toEqual({ protocolVersion: PTYD_PROTOCOL_VERSION });
     // exec never creates a session.
     expect((await client.list()).sessions).toHaveLength(0);
   });

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { MAX_EXEC_OUTPUT_BYTES, type PtydResult } from '@emberline/protocol';
+import { MAX_EXEC_OUTPUT_BYTES, PTYD_PROTOCOL_VERSION, type PtydResult } from '@emberline/protocol';
+import { unavailable } from './errors.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 
 /**
@@ -23,6 +24,8 @@ export type ExecResult = PtydResult<'exec'>;
 export type CommandExecutor = (request: ExecRequest) => Promise<ExecResult>;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+/** First ptyd protocol with the `exec` method. */
+const EXEC_PROTOCOL_VERSION = 2;
 
 let executor: CommandExecutor = () =>
   Promise.reject(new Error('command execution is not configured; core runs commands in the runner'));
@@ -38,8 +41,15 @@ export function execCommand(request: ExecRequest): Promise<ExecResult> {
 /** Runs commands in the runner container through ptyd. */
 export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
   return async (request) => {
+    const client = ptyd.get();
+    if ((ptyd.protocolVersion ?? 0) < EXEC_PROTOCOL_VERSION) {
+      throw unavailable(
+        'runner_outdated',
+        `the runner image is older than core (ptyd protocol ${ptyd.protocolVersion} < ${PTYD_PROTOCOL_VERSION}); rebuild it with \`make up\``,
+      );
+    }
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const call = ptyd.get().exec({
+    const call = client.exec({
       file: request.file,
       args: request.args,
       cwd: request.cwd,

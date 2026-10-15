@@ -9,6 +9,7 @@ import type {
   SystemStatus,
   TerminalInfo,
 } from '@emberline/protocol';
+import { API_VERSION } from '@emberline/protocol';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -140,6 +141,17 @@ export function Dashboard({
       {runnerDown && (
         <div className="banner banner-warn" role="status">
           Runner (ptyd) is {system?.ptyd ?? 'unknown'} — terminals are unavailable until it reconnects.
+        </div>
+      )}
+      {system?.runnerOutdated && (
+        <div className="banner banner-warn" role="status">
+          The runner image is older than core: git, builds and tests cannot run until it is rebuilt (
+          <code>make up</code>).
+        </div>
+      )}
+      {system && system.apiVersion !== API_VERSION && (
+        <div className="banner banner-warn" role="status">
+          Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the new version.
         </div>
       )}
       {actionError && (

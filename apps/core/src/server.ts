@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import type { HealthResponse, SystemStatus } from '@emberline/protocol';
+import { API_VERSION, type HealthResponse, PTYD_PROTOCOL_VERSION, type SystemStatus } from '@emberline/protocol';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
@@ -67,7 +67,12 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
 
   registerAuth(app, deps);
 
-  app.get('/api/system', async (): Promise<SystemStatus> => ({ version: VERSION, ptyd: deps.ptyd.status }));
+  app.get('/api/system', async (): Promise<SystemStatus> => ({
+    version: VERSION,
+    apiVersion: API_VERSION,
+    ptyd: deps.ptyd.status,
+    runnerOutdated: deps.ptyd.status === 'connected' && (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
+  }));
   registerProjectRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);

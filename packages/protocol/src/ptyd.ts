@@ -44,6 +44,13 @@ export const ScreenSnapshot = z.object({
 });
 export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
 
+/**
+ * Bumped whenever ptyd gains or changes a method. Core reads it on connect (`hello`) and refuses
+ * features the runner does not have yet, instead of failing with an unknown-method error.
+ * 1: sessions only · 2: `exec` + `hello`.
+ */
+export const PTYD_PROTOCOL_VERSION = 2;
+
 /** Per stream; keeps a base64 stdout plus stderr inside one 16 MiB frame. */
 export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;
 
@@ -65,6 +72,8 @@ export const ptydMethods = {
     }),
     result: SessionInfo,
   },
+  /** Protocol handshake; ptyd builds older than version 2 reject it as an unknown method. */
+  hello: { params: Empty, result: z.object({ protocolVersion: z.number().int() }) },
   list: { params: Empty, result: z.object({ sessions: z.array(SessionInfo) }) },
   attach: {
     params: BySession,

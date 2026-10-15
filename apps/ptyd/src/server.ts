@@ -10,6 +10,7 @@ import {
   type PtydParsedParams,
   type PtydResponse,
   type PtydResult,
+  PTYD_PROTOCOL_VERSION,
   PtydRequest,
   ptydMethods,
 } from '@emberline/protocol';
@@ -155,6 +156,7 @@ export class PtydServer {
       this.options.log?.(`spawned ${id} (pid ${session.info().pid}): ${params.file}`);
       return session.info();
     },
+    hello: () => ({ protocolVersion: PTYD_PROTOCOL_VERSION }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
       try {

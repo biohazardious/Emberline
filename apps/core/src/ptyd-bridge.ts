@@ -20,6 +20,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   private stopped = false;
   private _status: PtydStatus = 'connecting';
   private wake?: () => void;
+  private _protocolVersion: number | null = null;
 
   constructor(private readonly socketPath: string) {
     super();
@@ -27,6 +28,11 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
 
   get status(): PtydStatus {
     return this._status;
+  }
+
+  /** ptyd protocol version of the connected runner (1 = before the handshake existed). */
+  get protocolVersion(): number | null {
+    return this._protocolVersion;
   }
 
   start(): void {
@@ -91,6 +97,10 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
         }
         this.client = client;
         delay = 250;
+        this._protocolVersion = await client.hello().then(
+          (res) => res.protocolVersion,
+          () => 1,
+        );
         this.setStatus('connected');
         await new Promise<void>((resolve) => client.once('close', resolve));
       } catch {

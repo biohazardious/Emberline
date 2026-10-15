@@ -14,8 +14,17 @@ export const HealthResponse = z.object({
 });
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
+/**
+ * Bumped when the REST/WebSocket contract changes incompatibly. The web bundle compares it with
+ * core's to ask for a reload after an upgrade instead of failing on changed payloads.
+ */
+export const API_VERSION = 1;
+
 export const SystemStatus = z.object({
   version: z.string(),
+  apiVersion: z.number().int(),
   ptyd: z.enum(['connecting', 'connected', 'disconnected']),
+  /** True when the connected runner speaks an older ptyd protocol than this core needs. */
+  runnerOutdated: z.boolean(),
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;
