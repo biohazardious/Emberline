@@ -99,6 +99,8 @@ const RECONCILE_INTERVAL_MS = 3_000;
 const AUTO_GC_INTERVAL_MS = 60_000;
 const IDLE_DONE_SESSION_TTL_MS = 25_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
+/** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
+const STARTING_WATCHDOG_MS = 3 * 60_000;
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -137,7 +139,7 @@ export const toRun = (row: RunRow): Run => ({
   stateChangedAt: row.stateChangedAt.toISOString(),
   createdAt: row.createdAt.toISOString(),
   endedAt: row.endedAt?.toISOString() ?? null,
-  resumable: row.endedAt !== null && row.agentSessionId !== null,
+  resumable: row.endedAt !== null && row.agentSessionId !== null && row.cancelledAt === null,
 });
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -198,12 +200,37 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** Starts periodic reconciliation with ptyd. */
   startReconciler(): void {
+    this.failOrphanedSpawns();
     this.timer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
     this.timer.unref();
   }
 
   dispose(): void {
     clearInterval(this.timer);
+  }
+
+  /**
+   * Runs left `starting` without a terminal hold a concurrency slot but are invisible to
+   * reconciliation. At boot no spawn can be in flight, so all of them are orphans; later only the
+   * ones older than {@link STARTING_WATCHDOG_MS}.
+   */
+  private failOrphanedSpawns(olderThanMs = 0): void {
+    const cutoff = Date.now() - olderThanMs;
+    const stuck = this.db
+      .select()
+      .from(runs)
+      .where(and(eq(runs.state, 'starting'), isNull(runs.ptydSessionId), isNull(runs.endedAt)))
+      .all()
+      .filter((row) => row.stateChangedAt.getTime() <= cutoff);
+    for (const row of stuck) {
+      this.record(row.id, {
+        source: 'system',
+        type: 'spawn_lost',
+        state: 'failed',
+        payload: { reason: 'the agent never got a terminal' },
+        patch: { endedAt: new Date() },
+      });
+    }
   }
 
   list(): Run[] {
@@ -426,6 +453,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
     const row = this.row(id);
+    if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
     if (row.state === 'queued') return this.launch(id);
     if (row.ptydSessionId && !row.endedAt) {
       await this.typePrompt(row.ptydSessionId, text);
@@ -578,12 +606,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           title: `${personaPrefix}${agentLabel}${modelSuffix} · ${row.title ?? project.name}`,
         },
       });
-      return this.record(row.id, {
+      const run = this.record(row.id, {
         source: 'system',
         type: options.type,
         payload: options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : undefined,
         patch: { ptydSessionId: session.id },
       });
+      if (this.row(row.id).cancelledAt) {
+        // Stopped while the terminal was being created: end it now instead of letting it work.
+        await ptyd.kill(session.id, 'SIGKILL').catch(() => undefined);
+        void this.reconcile();
+      }
+      return run;
     } catch (error) {
       this.record(row.id, {
         source: 'system',
@@ -675,7 +709,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (typeof payload.transcript_path === 'string' && payload.transcript_path !== row.transcriptPath) {
       patch.transcriptPath = payload.transcript_path;
     }
-    const next = nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload);
+    // A late hook (e.g. SessionEnd after a kill) must not revive an ended or stopped run.
+    const next =
+      row.endedAt || row.cancelledAt
+        ? undefined
+        : nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload);
     const run = this.record(row.id, {
       source: 'hook',
       type: envelope.event,
@@ -689,14 +727,28 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return run;
   }
 
-  /** Terminates the agent process (or cancels a queued run); reconciliation records the end. */
+  /**
+   * Stops a run for good: cancels a queued run, ends a rate-limited one waiting for its window, or
+   * terminates the agent process (reconciliation records the end). A stopped run never resumes,
+   * and hooks arriving after the stop do not change its state.
+   */
   async stop(id: string): Promise<Run> {
     const row = this.row(id);
-    if (row.state === 'queued') {
-      return this.record(id, { source: 'user', type: 'cancelled', state: 'failed', patch: { endedAt: new Date() } });
+    const cancelledAt = row.cancelledAt ?? new Date();
+    const live = Boolean(row.ptydSessionId && !row.endedAt);
+    if (row.state === 'queued' || (!live && row.state === 'rate_limited')) {
+      return this.record(id, {
+        source: 'user',
+        type: 'cancelled',
+        state: 'failed',
+        patch: { endedAt: row.endedAt ?? new Date(), cancelledAt },
+      });
     }
+    if (row.endedAt) return toRun(row);
+    // Live, or still spawning (no terminal yet): spawnAgent checks the flag once the terminal exists.
+    const run = this.record(id, { source: 'user', type: 'stop_requested', patch: { cancelledAt } });
     const sessionId = row.ptydSessionId;
-    if (sessionId && !row.endedAt) {
+    if (sessionId) {
       await this.ptyd
         .get()
         .kill(sessionId)
@@ -721,7 +773,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }, 1_200);
       fallbackTimer.unref();
     }
-    const run = this.record(id, { source: 'user', type: 'stop_requested' });
     void this.reconcile();
     return run;
   }
@@ -759,6 +810,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async sendPrompt(id: string, text: string): Promise<Run> {
     const row = this.row(id);
     if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
+    if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
     await this.typePrompt(row.ptydSessionId, text);
     return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
   }
@@ -1179,6 +1231,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (this.reconciling || this.ptyd.status !== 'connected') return;
     this.reconciling = true;
     try {
+      this.failOrphanedSpawns(STARTING_WATCHDOG_MS);
       const open = this.db.select().from(runs).where(isNull(runs.endedAt)).orderBy(asc(runs.createdAt)).all();
       const attached = this.db
         .select()
@@ -1225,9 +1278,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           continue;
         }
         const exitCode = session ? session.exitCode : null;
-        const nextAfterExit = stateAfterExit(row.state as AgentState, exitCode);
+        const nextAfterExit: AgentState = row.cancelledAt
+          ? row.state === 'done'
+            ? 'done'
+            : 'failed'
+          : stateAfterExit(row.state as AgentState, exitCode);
         let exitMessage: string | undefined;
-        if (session && nextAfterExit === 'failed') {
+        if (session && nextAfterExit === 'failed' && !row.cancelledAt) {
           try {
             const snap = await this.ptyd.get().snapshot(row.ptydSessionId, 40);
             const cleaned = stripVTControlCharacters(snap.data ?? '')
@@ -1253,7 +1310,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         }
         this.record(row.id, {
           source: 'system',
-          type: session ? 'process_exited' : 'session_lost',
+          type: row.cancelledAt ? 'cancelled' : session ? 'process_exited' : 'session_lost',
           state: nextAfterExit,
           payload: session
             ? {

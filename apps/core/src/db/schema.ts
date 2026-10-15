@@ -79,6 +79,8 @@ export const runs = sqliteTable(
     stateChangedAt: integer('state_changed_at', { mode: 'timestamp_ms' }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     endedAt: integer('ended_at', { mode: 'timestamp_ms' }),
+    /** Set when a user stopped the run; a cancelled run never resumes or turns `done` again. */
+    cancelledAt: integer('cancelled_at', { mode: 'timestamp_ms' }),
   },
   (t) => [index('runs_project_idx').on(t.projectId)],
 );

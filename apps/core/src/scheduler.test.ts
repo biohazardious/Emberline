@@ -239,6 +239,63 @@ describe('scheduler', () => {
     expect((await api('GET', '/api/terminals')).json()).toHaveLength(1);
   });
 
+  it('a stopped rate-limited run is final: the reset never resumes it', async () => {
+    const a = await submit();
+    const tokenA = await work(a);
+    const resetAt = Math.floor(Date.now() / 1000) + 2;
+    await hook(a.id, 'StopFailure', tokenA, {
+      error: 'rate_limit',
+      last_assistant_message: `Claude AI usage limit reached|${resetAt}`,
+    });
+    expect((await getRun(a.id)).state).toBe('rate_limited');
+
+    await api('POST', `/api/runs/${a.id}/stop`);
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return (await getRun(a.id)).state;
+        },
+        { timeout: 5_000 },
+      )
+      .toBe('failed');
+    // The agent's exit hooks arrive late; they must not revive the run.
+    await hook(a.id, 'SessionEnd', tokenA);
+    await hook(a.id, 'UserPromptSubmit', tokenA);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+    await t.scheduler.tick();
+    const after = await getRun(a.id);
+    expect(after).toMatchObject({ state: 'failed', resumable: false });
+    expect(after.events.map((e) => e.type)).toContain('cancelled');
+    expect(after.events.map((e) => e.type)).not.toContain('resumed');
+    expect((await api('POST', `/api/runs/${a.id}/resume`, { text: 'go on' })).statusCode).toBe(409);
+  });
+
+  it('ends a rate-limited run whose process already exited when stopped', async () => {
+    const a = await submit();
+    const tokenA = await work(a);
+    await hook(a.id, 'StopFailure', tokenA, {
+      error: 'rate_limit',
+      last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}`,
+    });
+    await t.ptyd.get().write((await getRun(a.id)).terminalId ?? '', 'exit\r');
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return (await getRun(a.id)).endedAt;
+        },
+        { timeout: 5_000 },
+      )
+      .not.toBeNull();
+    expect((await getRun(a.id)).state).toBe('rate_limited');
+
+    const stopped: Run = (await api('POST', `/api/runs/${a.id}/stop`)).json();
+    expect(stopped).toMatchObject({ state: 'failed', resumable: false });
+    expect((await scheduler()).rateLimited).toBe(0);
+  });
+
   it('cancels a queued run on stop', async () => {
     await api('PATCH', '/api/scheduler', { maxConcurrentRuns: 1 });
     await submit();

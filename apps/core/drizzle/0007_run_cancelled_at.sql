@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `cancelled_at` integer;

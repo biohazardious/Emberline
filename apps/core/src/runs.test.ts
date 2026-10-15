@@ -5,6 +5,8 @@ import type { Run, RunDetail } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { eq } from 'drizzle-orm';
+import { runs } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -140,7 +142,7 @@ describe('runs', () => {
     const project = await createProject('Exit', false);
     const ok: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     const bad: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
-    await tokenFor(ok.id);
+    const okToken = await tokenFor(ok.id);
     await tokenFor(bad.id);
 
     const ptyd = t.ptyd.get();
@@ -154,6 +156,8 @@ describe('runs', () => {
     await expect.poll(() => stateOf(ok.id), { timeout: 5_000 }).toBe('done');
     await expect.poll(() => stateOf(bad.id), { timeout: 5_000 }).toBe('failed');
     expect(((await api('GET', `/api/runs/${bad.id}`)).json() as Run).endedAt).not.toBeNull();
+    // A hook that arrives after the process ended does not flip the finished run back to working.
+    expect((await hook(ok.id, 'UserPromptSubmit', okToken)).json()).toMatchObject({ state: 'done' });
   });
 
   it('stops and removes runs', async () => {
@@ -175,6 +179,66 @@ describe('runs', () => {
     expect((await api('DELETE', `/api/runs/${run.id}`)).statusCode).toBe(200);
     expect((await api('GET', '/api/runs')).json()).toHaveLength(0);
     expect((await api('GET', '/api/terminals')).json()).toHaveLength(0);
+  });
+
+  it('a stop is final: late hooks do not revive the run and it cannot be resumed', async () => {
+    const project = await createProject('Final stop', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'SessionStart', token, { session_id: 'sess-final' });
+    await hook(run.id, 'UserPromptSubmit', token);
+
+    await api('POST', `/api/runs/${run.id}/stop`);
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return ((await api('GET', `/api/runs/${run.id}`)).json() as Run).endedAt;
+        },
+        { timeout: 5_000 },
+      )
+      .not.toBeNull();
+    for (const event of ['Stop', 'SessionEnd', 'UserPromptSubmit']) await hook(run.id, event, token);
+
+    const after = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+    expect(after).toMatchObject({ state: 'failed', resumable: false });
+    expect(after.events.map((e) => e.type)).toContain('cancelled');
+    expect((await api('POST', `/api/runs/${run.id}/prompt`, { text: 'more' })).statusCode).toBe(409);
+  });
+
+  it('honours a stop that arrives while the terminal is being spawned', async () => {
+    const project = await createProject('Spawn window', false);
+    const queued = await t.runs.enqueue({ projectId: project.id, prompt: 'x' });
+    const launching = t.runs.launch(queued.id);
+    // launch() marks the run `starting` synchronously; the terminal does not exist yet.
+    expect(t.runs.getRun(queued.id)).toMatchObject({ state: 'starting', terminalId: null });
+    await t.runs.stop(queued.id);
+    await launching;
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return t.runs.getRun(queued.id).state;
+        },
+        { timeout: 5_000 },
+      )
+      .toBe('failed');
+    expect((await api('GET', '/api/terminals')).json()).toHaveLength(0);
+  });
+
+  it('fails runs stuck in starting without a terminal (watchdog)', async () => {
+    const project = await createProject('Stuck', false);
+    const queued = await t.runs.enqueue({ projectId: project.id, prompt: 'x' });
+    t.db
+      .update(runs)
+      .set({ state: 'starting', stateChangedAt: new Date(Date.now() - 10 * 60_000) })
+      .where(eq(runs.id, queued.id))
+      .run();
+    await t.runs.reconcile();
+    const after = t.runs.get(queued.id);
+    expect(after).toMatchObject({ state: 'failed' });
+    expect(after.endedAt).not.toBeNull();
+    expect(after.events.map((e) => e.type)).toContain('spawn_lost');
   });
 
   it('pushes run updates over /api/events', async () => {
