@@ -148,6 +148,28 @@ describe('tickets', () => {
     expect(detail.events.map((e) => e.type)).toContain('prompt_sent');
   });
 
+  it('dispatches one ticket per project even when dispatches race', async () => {
+    const project = await createProject();
+    await createTicket(project.id, { title: 'First', status: 'ready' });
+    await createTicket(project.id, { title: 'Second', status: 'ready' });
+    const results = await Promise.all([
+      t.tickets.dispatchNextReadyTicket(project.id),
+      t.tickets.dispatchNextReadyTicket(project.id),
+      t.tickets.dispatchNextReadyTicket(project.id),
+    ]);
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    expect(t.runs.list().filter((r) => r.projectId === project.id)).toHaveLength(1);
+  });
+
+  it('refuses a second start of the same ticket while the first is still preparing', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'Only once', status: 'ready' });
+    const results = await Promise.allSettled([t.tickets.start(ticket.id, {}), t.tickets.start(ticket.id, {})]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect((rejected.reason as Error).message).toMatch(/already has a running agent/);
+  });
+
   it('never pulls a ticket out of Done', async () => {
     const project = await createProject();
     const ticket = await createTicket(project.id, { title: 'Ship' });

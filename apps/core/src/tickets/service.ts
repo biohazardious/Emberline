@@ -38,6 +38,7 @@ import {
   runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -136,6 +137,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly slopHealedRuns = new Set<string>();
   private readonly criticReviewedRuns = new Set<string>();
   private readonly autoNudgedRuns = new Set<string>();
+  private readonly dispatchLock = new KeyedMutex();
+  /** Tickets whose start() is between its active-run check and the run being recorded. */
+  private readonly startingTickets = new Set<string>();
 
   constructor(
     private readonly db: Db,
@@ -284,7 +288,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * Starts the highest-priority `ready` (or `backlog` when `autoPickupBacklog` is enabled) ticket
    * for `projectId` if no run is currently active on the project.
    */
-  async dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
+  dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
+    // Check-then-start spans several awaits; two completions (or a click) must not both dispatch.
+    return this.dispatchLock.run(projectId, () => this.dispatchNextReadyTicketUnlocked(projectId));
+  }
+
+  private async dispatchNextReadyTicketUnlocked(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
     const projectRuns = this.runs.list().filter((r) => r.projectId === projectId);
     const hasActive = projectRuns.some(
       (r) =>
@@ -662,7 +671,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   async start(id: string, input: StartTicketBody): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
-    if (this.runs.activeRunForTicket(id)) throw conflict('this ticket already has a running agent');
+    if (this.runs.activeRunForTicket(id) || this.startingTickets.has(id)) {
+      throw conflict('this ticket already has a running agent');
+    }
+    this.startingTickets.add(id);
+    try {
+      return await this.startUnguarded(ticket, input);
+    } finally {
+      this.startingTickets.delete(id);
+    }
+  }
+
+  private async startUnguarded(ticket: Ticket, input: StartTicketBody): Promise<{ ticket: Ticket; run: Run }> {
+    const id = ticket.id;
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
     const effectivePersona = persona ?? ticket.persona;
     const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
