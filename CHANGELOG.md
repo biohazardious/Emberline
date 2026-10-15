@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-16
+
 ### Added
 
 - Runs show their full final answer (Events, Run Inspector, Fleet), recovered from the transcript for runs recorded before this change.
@@ -54,5 +56,6 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/biohazardious/emberline/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/biohazardious/emberline/releases/tag/v0.1.0

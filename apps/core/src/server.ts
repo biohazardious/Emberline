@@ -29,7 +29,7 @@ import type { Scheduler } from './scheduler/service.js';
 import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.js';
 import type { TicketService } from './tickets/service.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 export interface CoreDeps {
   config: CoreConfig;

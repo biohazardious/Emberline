@@ -1,7 +1,7 @@
 {
   "name": "@emberline/hook",
   "license": "AGPL-3.0-or-later",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "emberline-hook: forwards Claude Code hook payloads to Emberline core.",
