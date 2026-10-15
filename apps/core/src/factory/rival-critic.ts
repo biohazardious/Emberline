@@ -5,6 +5,7 @@ import { resolveClaudeCliModelFlag } from '@emberline/adapter-claude';
 import { z } from 'zod';
 import { execCommand } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
+import { branchBase } from './slop-guard.js';
 
 /** Total diff text handed to the reviewer; it can read more files itself (read-only tools). */
 const MAX_DIFF_CHARS = 60_000;
@@ -102,14 +103,7 @@ export function supportsRivalReview(agent: AgentId): boolean {
 /** The run's changes against the branch it started from, plus untracked files, capped in size. */
 export async function collectReviewDiff(workspacePath: string): Promise<{ diff: string; truncated: boolean }> {
   const git = (args: string[]) => execGitFile(['-C', workspacePath, ...args], { timeout: 30_000 }).then((r) => r.stdout);
-  let base = 'HEAD';
-  for (const candidate of ['main', 'master']) {
-    const mergeBase = await git(['merge-base', 'HEAD', candidate]).catch(() => '');
-    if (mergeBase.trim()) {
-      base = mergeBase.trim();
-      break;
-    }
-  }
+  const base = (await branchBase(workspacePath)) ?? 'HEAD';
   let diff = await git(['diff', '--no-color', base]).catch(() => '');
   const untracked = (await git(['ls-files', '--others', '--exclude-standard']).catch(() => ''))
     .split('\n')

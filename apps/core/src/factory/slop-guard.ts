@@ -272,6 +272,21 @@ async function walkWorkspaceAuditableFiles(
   return found;
 }
 
+/**
+ * The commit a run's branch started from (merge-base with main or master), or null when it is the
+ * main line itself or has no such branch.
+ */
+export async function branchBase(workspacePath: string): Promise<string | null> {
+  const head = (await execGitFile(['rev-parse', 'HEAD'], { cwd: workspacePath }).catch(() => ({ stdout: '' }))).stdout.trim();
+  for (const candidate of ['main', 'master']) {
+    const base = (
+      await execGitFile(['merge-base', 'HEAD', candidate], { cwd: workspacePath }).catch(() => ({ stdout: '' }))
+    ).stdout.trim();
+    if (base) return base === head ? null : base;
+  }
+  return null;
+}
+
 async function collectDiffAddedLines(workspacePath: string): Promise<{
   files: string[];
   addedLines: DiffAddedLine[];
@@ -284,8 +299,11 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
   let rawDiff = '';
   if (hasGit) {
     try {
+      // B18: audit everything the branch changed since it left main (all its commits plus
+      // uncommitted work), not just the last commit: a secret committed early stays found.
+      const base = await branchBase(workspacePath);
       const { stdout: wtDiff } = await execGitFile(
-        ['diff', 'HEAD', '--unified=0', '--no-color'],
+        ['diff', base ?? 'HEAD', '--unified=0', '--no-color'],
         { cwd: workspacePath, maxBuffer: 8 * 1024 * 1024 },
       );
       rawDiff = wtDiff;

@@ -115,3 +115,20 @@ describe('cross-provider critic', () => {
     expect(readFileSync(path.join(dir, 'claude.args'), 'utf8')).toMatch(/--permission-mode\nplan/);
   });
 });
+
+describe('slop / secret audit scope', () => {
+  it('finds a secret committed earlier on the branch, not only in the last commit (B18)', async () => {
+    const { auditWorktreeSlop } = await import('./factory/slop-guard.js');
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', repo, ...args]);
+    writeFileSync(path.join(repo, 'config.js'), 'export const api_key = "abcdefghijklmnopqrstuvwxyz123456";\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add config');
+    writeFileSync(path.join(repo, 'feature.js'), 'export const feature = () => 1;\n');
+    rmSync(path.join(repo, 'new-file.js'));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add feature');
+    const report = await auditWorktreeSlop({ runId: 'b18', workspacePath: repo });
+    expect(report.secretGuardPassed).toBe(false);
+  });
+});
