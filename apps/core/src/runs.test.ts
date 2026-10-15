@@ -241,6 +241,17 @@ describe('runs', () => {
     expect(after.events.map((e) => e.type)).toContain('spawn_lost');
   });
 
+  it('ignores hook transcript paths outside the transcripts directory (S9)', async () => {
+    const project = await createProject('Transcript', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'SessionStart', token, { session_id: 's', transcript_path: '/dev/zero' });
+    expect(t.db.select().from(runs).where(eq(runs.id, run.id)).get()?.transcriptPath).toBeNull();
+    const good = path.join(t.config.transcriptsDir, 'proj', 'run.jsonl');
+    await hook(run.id, 'UserPromptSubmit', token, { transcript_path: good });
+    expect(t.db.select().from(runs).where(eq(runs.id, run.id)).get()?.transcriptPath).toBe(good);
+  });
+
   it('garbage collection keeps dirty worktrees and runs of tickets still under review', async () => {
     const project = await createProject('GC', true);
     const finish = async () => {

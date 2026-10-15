@@ -78,6 +78,13 @@
       "when": 1792052528099,
       "tag": "0010_ticket_depth",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1792062175986,
+      "tag": "0011_run_events_type_index",
+      "breakpoints": true
     }
   ]
 }

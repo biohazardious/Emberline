@@ -43,7 +43,7 @@ import {
   StartPreviewBody as StartPreviewBodySchema,
   type ProjectUsageDay,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gte, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -73,6 +73,7 @@ import {
   worktreeHasUncommittedWork,
 } from './git.js';
 import { providerAdapter } from './providers.js';
+import { isAcceptableTranscriptPath, readTranscriptUsage } from './transcript-usage.js';
 
 type RunRow = typeof runs.$inferSelect;
 type EventSource = RunEvent['source'];
@@ -244,15 +245,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   list(): Run[] {
     const rows = this.db.select().from(runs).orderBy(desc(runs.createdAt)).all();
     if (rows.length === 0) return [];
-    const allPreToolEvents = this.db
-      .select({ runId: runEvents.runId })
-      .from(runEvents)
-      .where(eq(runEvents.type, 'PreToolUse'))
-      .all();
-    const toolCountByRun = new Map<string, number>();
-    for (const ev of allPreToolEvents) {
-      toolCountByRun.set(ev.runId, (toolCountByRun.get(ev.runId) ?? 0) + 1);
-    }
+    // Counted in SQL (indexed by type, run) instead of loading every tool event into memory (B15).
+    const toolCountByRun = new Map(
+      this.db
+        .select({ runId: runEvents.runId, n: sql<number>`count(*)` })
+        .from(runEvents)
+        .where(eq(runEvents.type, 'PreToolUse'))
+        .groupBy(runEvents.runId)
+        .all()
+        .map((row) => [row.runId, row.n]),
+    );
     return rows.map((row) => ({
       ...toRun(row),
       telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0),
@@ -344,57 +346,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const endMs = row.endedAt ? row.endedAt.getTime() : Date.now();
     const durationSec = Math.max(0, Math.round((endMs - row.createdAt.getTime()) / 1000));
 
-    if (row.transcriptPath && existsSync(row.transcriptPath)) {
-      try {
-        const raw = readFileSync(row.transcriptPath, 'utf8');
-        let inputTokens = 0;
-        let outputTokens = 0;
-        let cachedTokens = 0;
-        for (const line of raw.split('\n')) {
-          if (!line.trim()) continue;
-          try {
-            const parsed = JSON.parse(line) as {
-              message?: {
-                usage?: {
-                  input_tokens?: number;
-                  output_tokens?: number;
-                  cache_read_input_tokens?: number;
-                  cache_creation_input_tokens?: number;
-                };
-              };
-              usage?: {
-                input_tokens?: number;
-                output_tokens?: number;
-                cache_read_input_tokens?: number;
-              };
-            };
-            const u = parsed.message?.usage ?? parsed.usage;
-            if (u) {
-              inputTokens += Number(u.input_tokens ?? 0);
-              outputTokens += Number(u.output_tokens ?? 0);
-              cachedTokens +=
-                Number(u.cache_read_input_tokens ?? 0) +
-                Number((u as { cache_creation_input_tokens?: number }).cache_creation_input_tokens ?? 0);
-            }
-          } catch {
-            // ignore malformed JSONL line
-          }
-        }
-        if (inputTokens + outputTokens > 0) {
-          return {
-            runId: row.id,
-            inputTokens,
-            outputTokens,
-            cachedTokens,
-            totalTokens: inputTokens + outputTokens + cachedTokens,
-            toolCalls,
-            durationSec,
-            isEstimated: false,
-          };
-        }
-      } catch {
-        // fallback to estimation
-      }
+    const usage = row.transcriptPath ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir) : null;
+    if (usage && usage.inputTokens + usage.outputTokens > 0) {
+      return {
+        runId: row.id,
+        ...usage,
+        totalTokens: usage.inputTokens + usage.outputTokens + usage.cachedTokens,
+        toolCalls,
+        durationSec,
+        isEstimated: false,
+      };
     }
 
     if (row.state === 'queued') {
@@ -752,7 +713,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (typeof payload.session_id === 'string' && payload.session_id !== row.agentSessionId) {
       patch.agentSessionId = payload.session_id;
     }
-    if (typeof payload.transcript_path === 'string' && payload.transcript_path !== row.transcriptPath) {
+    if (
+      typeof payload.transcript_path === 'string' &&
+      payload.transcript_path !== row.transcriptPath &&
+      isAcceptableTranscriptPath(payload.transcript_path, this.config.transcriptsDir)
+    ) {
       patch.transcriptPath = payload.transcript_path;
     }
     // A late hook (e.g. SessionEnd after a kill) must not revive an ended or stopped run.

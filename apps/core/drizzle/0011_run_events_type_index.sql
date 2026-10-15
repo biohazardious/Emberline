@@ -1,0 +1,1 @@
+CREATE INDEX `run_events_type_run_idx` ON `run_events` (`type`,`run_id`);

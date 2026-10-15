@@ -44,6 +44,7 @@ export async function createTestApp(
     claudeCommand: 'claude',
     timeZone: 'UTC',
     setupToken: TEST_SETUP_TOKEN,
+    transcriptsDir: path.join(dir, 'transcripts'),
     ...overrides,
   };
   const opened: OpenedDb = openDb(':memory:');

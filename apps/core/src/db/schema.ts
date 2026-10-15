@@ -101,7 +101,7 @@ export const runEvents = sqliteTable(
     state: text('state'),
     payload: text('payload', { mode: 'json' }).$type<unknown>(),
   },
-  (t) => [index('run_events_run_idx').on(t.runId, t.id)],
+  (t) => [index('run_events_run_idx').on(t.runId, t.id), index('run_events_type_run_idx').on(t.type, t.runId)],
 );
 
 /**
