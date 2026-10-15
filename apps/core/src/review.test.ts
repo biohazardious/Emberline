@@ -46,7 +46,7 @@ const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =
   t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
 
 async function createGitProjectWithBareRemote(name: string) {
-  const { project } = (await api('POST', '/api/projects', { name })).json() as {
+  const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json() as {
     project: { id: string; path: string };
   };
   const remoteDir = path.join(t.dir, 'remote.git');

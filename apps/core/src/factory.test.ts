@@ -159,6 +159,8 @@ describe('AI Coding Factory (F1–F4)', () => {
       payload: { name: 'Blank Service', mode: 'manual', seedStarterTickets: false },
     });
     const p1 = (p1Res.json() as CreateProjectResponse).project;
+    // Runs need git for worktrees and review, so manual projects get a repository too.
+    expect(existsSync(path.join(p1.path, '.git'))).toBe(true);
 
     // Advisor should recommend creating PROJECT.md and seeding starter backlog
     const recsBefore = (

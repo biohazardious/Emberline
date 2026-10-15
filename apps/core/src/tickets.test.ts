@@ -58,7 +58,7 @@ const hook = (runId: string, event: string, token: string, payload: object = {})
   });
 
 async function createProject(name = 'Demo Project') {
-  const { project } = (await api('POST', '/api/projects', { name })).json();
+  const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json();
   const git = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
   git('init', '-q', '-b', 'main');
   git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');

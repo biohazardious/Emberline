@@ -993,7 +993,15 @@ export function ReviewView({ run, onRunUpdated }: Props) {
         </div>
       )}
 
-      {subTab === 'diff' ? (
+      {subTab === 'diff' && summary && !summary.isGitRepo ? (
+        <div className="review-split-pane">
+          <div className="muted small" style={{ padding: '1rem' }}>
+            This workspace is not a git repository, so the agent's changes cannot be listed, reviewed,
+            committed or merged. Run <code>git init</code> in the project&apos;s shell (or create the
+            project with a repository URL) to enable review.
+          </div>
+        </div>
+      ) : subTab === 'diff' ? (
         <>
           {/* Commit & Push bar + Inline Review Dispatch */}
           <div className="review-actions-bar">

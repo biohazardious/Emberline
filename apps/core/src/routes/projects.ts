@@ -221,7 +221,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         await writeFile(path.join(projectPath, 'PROJECT.md'), blueprintContent, 'utf8');
         await writeFile(path.join(projectPath, 'CLAUDE.md'), generateClaudeInstructions(body.name), 'utf8');
       }
-      const shouldInitGit = body.initGit ?? body.mode === 'wizard';
+      // Runs need git for worktree isolation, review and merge, so new projects get a repository
+      // unless the caller opts out.
+      const shouldInitGit = body.initGit ?? true;
       if (shouldInitGit) {
         await initLocalGitRepository(projectPath, body.defaultBranch);
       }

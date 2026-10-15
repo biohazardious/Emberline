@@ -62,7 +62,7 @@ const hook = (runId: string, event: string, token: string | undefined, payload: 
   });
 
 async function createProject(name: string, withGit: boolean) {
-  const { project } = (await api('POST', '/api/projects', { name })).json();
+  const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json();
   if (withGit) {
     const run = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
     run('init', '-q', '-b', 'main');
