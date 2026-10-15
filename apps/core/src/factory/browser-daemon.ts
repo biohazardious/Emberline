@@ -12,7 +12,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.3.1';
+export const BROWSER_DAEMON_VERSION = '1.3.2';
 
 /**
  * Preload hook (`NODE_OPTIONS="--require /run/emberline/playwright-hook.cjs"`) injected into
@@ -62,7 +62,7 @@ try {
  *    agents can watch an autonomous AI playtest games and web apps live in the browser.
  * 4. Exposes `/health`, `/state`, `/action`, and `/shutdown` over `/run/emberline/browser.sock`.
  */
-const BROWSER_DAEMON_SCRIPT = `#!/usr/bin/env node
+export const BROWSER_DAEMON_SCRIPT = `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -215,11 +215,22 @@ async function ensureChromium() {
 
 function normalizeNavigateUrl(rawUrl) {
   let u = String(rawUrl || '').trim();
-  if (!u) return 'about:blank';
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) {
+  if (!u || u === 'about:blank') return 'about:blank';
+  // A bare host ("localhost:5173", "example.com") gets http://; "host:port" is not a scheme.
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) || /^[^:/]+:[0-9]/.test(u)) {
     u = 'http://' + u;
   }
-  return u;
+  // S17: only web pages. file:, javascript:, data: or chrome: URLs would expose the runner's files.
+  let parsed;
+  try {
+    parsed = new URL(u);
+  } catch {
+    throw new Error('invalid URL: ' + u);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('only http(s) URLs can be opened, not ' + parsed.protocol);
+  }
+  return parsed.href;
 }
 
 function attachConsoleListener(tab) {
@@ -1106,7 +1117,9 @@ export async function ensureRunnerBrowserDaemon(
   const hookPath = path.join(socketDir, 'playwright-hook.cjs');
 
   try {
-    if (!existsSync(hookPath)) {
+    // S15: the hook is preloaded into every agent's node processes; a copy edited by one agent is
+    // put back before the next launch. (The runner is one trust domain: agents and ptyd share a uid.)
+    if (!existsSync(hookPath) || readFileSync(hookPath, 'utf8') !== PLAYWRIGHT_HOOK_SCRIPT) {
       await mkdir(socketDir, { recursive: true });
       await writeFile(hookPath, PLAYWRIGHT_HOOK_SCRIPT, { encoding: 'utf8', mode: 0o644 });
     }
