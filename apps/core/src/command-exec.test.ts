@@ -87,4 +87,15 @@ describe('command execution through the runner', () => {
     expect(seen.map((r) => [r.file, ...r.args].join(' '))).toContain('npm run build');
     expect(seen.find((r) => r.args.includes('build'))?.env).toMatchObject({ CI: 'true' });
   });
+
+  it('judges a chatty build by its exit code, not by its output size (B17)', async () => {
+    const ws = path.join(dir, 'chatty');
+    execFileSync('mkdir', ['-p', path.join(ws, 'node_modules')]);
+    writeFileSync(
+      path.join(ws, 'package.json'),
+      JSON.stringify({ scripts: { build: 'node -e "process.stdout.write(\'x\'.repeat(9000000))"' } }),
+    );
+    const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws });
+    expect(res.ok).toBe(true);
+  });
 });

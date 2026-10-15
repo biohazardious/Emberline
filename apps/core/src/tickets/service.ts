@@ -508,8 +508,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         projectId: run.projectId,
         targetId: run.id,
         workspacePath: run.worktreePath,
-      }).catch(() => null);
-      if (buildRes && !buildRes.ok) {
+      }).catch((error: unknown) => {
+        this.runs.note(run.id, 'build_gate_error', { message: (error as Error).message?.slice(0, 500) });
+        return null;
+      });
+      // B17: a gate that could not run is not a pass; leave the ticket for a person.
+      if (!buildRes) return;
+      if (!buildRes.ok) {
         const errorExcerpt = buildRes.output.slice(-2_400);
         await this.runs
           .prompt(

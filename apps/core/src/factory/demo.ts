@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { type BrowserViewportSnapshot, type BuildDemoResponse } from '@emberline/protocol';
-import { execCommand, execFileChecked } from '../command-exec.js';
+import { CommandFailedError, execCommand } from '../command-exec.js';
 import {
   collectWorkspaceFiles,
   detectDemoEntryRelPath,
@@ -14,18 +14,25 @@ import {
  * Build, lint and test steps run the workspace's own scripts (package.json, Makefile, ...), so they
  * execute in the runner, never in core (S6). Only the given variables are passed, plus CI flags.
  */
-function runWorkspaceCommand(
+async function runWorkspaceCommand(
   file: string,
   args: string[],
   options: { cwd?: string; timeout?: number; env?: Record<string, string> } = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  return execFileChecked({
+  const request = {
     file,
     args,
     cwd: options.cwd ?? '/',
     timeoutMs: options.timeout ?? 60_000,
     env: { CI: 'true', FORCE_COLOR: '0', ...options.env },
-  });
+  };
+  const result = await execCommand(request);
+  // B17: a build is judged by its exit code; very chatty output only gets cut, it is not a failure.
+  if (result.exitCode !== 0 || result.timedOut) {
+    throw new CommandFailedError(request, result, result.exitCode, result.stdout, result.stderr);
+  }
+  const note = result.truncated ? '\n[output truncated]' : '';
+  return { stdout: result.stdout + note, stderr: result.stderr };
 }
 
 export async function buildWorkspaceDemo(params: {
