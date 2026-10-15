@@ -41,6 +41,7 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
+import { execCommand, execFileChecked } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { TicketService } from '../tickets/service.js';
@@ -49,6 +50,24 @@ import { getLastKnownClaudeUtilizationPercent } from './browser-daemon.js';
 export * from './slop-guard.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Build, lint and test steps run the workspace's own scripts (package.json, Makefile, ...), so they
+ * execute in the runner, never in core (S6). Only the given variables are passed, plus CI flags.
+ */
+function runWorkspaceCommand(
+  file: string,
+  args: string[],
+  options: { cwd?: string; timeout?: number; env?: Record<string, string> } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileChecked({
+    file,
+    args,
+    cwd: options.cwd ?? '/',
+    timeoutMs: options.timeout ?? 60_000,
+    env: { CI: 'true', FORCE_COLOR: '0', ...options.env },
+  });
+}
 
 export const APP_TYPE_LABELS: Record<ProjectAppType, string> = {
   web_saas: 'Web SaaS / Enterprise Portal',
@@ -1206,7 +1225,7 @@ export async function buildWorkspaceDemo(params: {
         pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
 
       if (!hasNodeModules) {
-        const { stdout, stderr } = await execFileAsync(pkgManager, installArgs, {
+        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, installArgs, {
           cwd: workspacePath,
           timeout: 120_000,
         });
@@ -1217,7 +1236,7 @@ export async function buildWorkspaceDemo(params: {
       const rawPkg = await readFile(path.join(workspacePath, 'package.json'), 'utf-8');
       const parsedPkg = JSON.parse(rawPkg) as { scripts?: Record<string, string> };
       const scripts = parsedPkg.scripts ?? {};
-      const ciEnv = { ...process.env, CI: 'true', FORCE_COLOR: '0' };
+      const ciEnv = { CI: 'true', FORCE_COLOR: '0' };
 
       const buildScriptName =
         typeof scripts.build === 'string'
@@ -1230,7 +1249,7 @@ export async function buildWorkspaceDemo(params: {
 
       if (buildScriptName) {
         logs.push(`$ ${pkgManager} run ${buildScriptName}`);
-        const { stdout, stderr } = await execFileAsync(pkgManager, ['run', buildScriptName], {
+        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, ['run', buildScriptName], {
           cwd: workspacePath,
           timeout: 120_000,
           env: ciEnv,
@@ -1245,7 +1264,7 @@ export async function buildWorkspaceDemo(params: {
         !scripts.lint.includes('--watch')
       ) {
         logs.push(`$ ${pkgManager} run lint`);
-        const { stdout, stderr } = await execFileAsync(pkgManager, ['run', 'lint'], {
+        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, ['run', 'lint'], {
           cwd: workspacePath,
           timeout: 90_000,
           env: ciEnv,
@@ -1265,7 +1284,7 @@ export async function buildWorkspaceDemo(params: {
             ? ['run', 'test', '--', '--run']
             : ['run', 'test'];
         logs.push(`$ ${pkgManager} ${testArgs.join(' ')}`);
-        const { stdout, stderr } = await execFileAsync(pkgManager, testArgs, {
+        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, testArgs, {
           cwd: workspacePath,
           timeout: 120_000,
           env: ciEnv,
@@ -1275,10 +1294,10 @@ export async function buildWorkspaceDemo(params: {
       }
       buildCommandSucceeded = true;
     } else if (existsSync(path.join(workspacePath, 'platformio.ini'))) {
-      const hasPio = await execFileAsync('sh', ['-c', 'command -v pio || command -v platformio']).then(() => true, () => false);
+      const hasPio = await runWorkspaceCommand('sh', ['-c', 'command -v pio || command -v platformio']).then(() => true, () => false);
       if (hasPio) {
         logs.push('$ pio run');
-        const { stdout, stderr } = await execFileAsync('sh', ['-c', 'pio run || platformio run'], {
+        const { stdout, stderr } = await runWorkspaceCommand('sh', ['-c', 'pio run || platformio run'], {
           cwd: workspacePath,
           timeout: 180_000,
         });
@@ -1289,10 +1308,10 @@ export async function buildWorkspaceDemo(params: {
       }
       buildCommandSucceeded = true;
     } else if (existsSync(path.join(workspacePath, 'Cargo.toml'))) {
-      const hasCargo = await execFileAsync('sh', ['-c', 'command -v cargo']).then(() => true, () => false);
+      const hasCargo = await runWorkspaceCommand('sh', ['-c', 'command -v cargo']).then(() => true, () => false);
       if (hasCargo) {
         logs.push('$ cargo check');
-        const { stdout, stderr } = await execFileAsync('cargo', ['check'], {
+        const { stdout, stderr } = await runWorkspaceCommand('cargo', ['check'], {
           cwd: workspacePath,
           timeout: 120_000,
         });
@@ -1303,10 +1322,10 @@ export async function buildWorkspaceDemo(params: {
       }
       buildCommandSucceeded = true;
     } else if (existsSync(path.join(workspacePath, 'go.mod'))) {
-      const hasGo = await execFileAsync('sh', ['-c', 'command -v go']).then(() => true, () => false);
+      const hasGo = await runWorkspaceCommand('sh', ['-c', 'command -v go']).then(() => true, () => false);
       if (hasGo) {
         logs.push('$ go build ./... && go test ./...');
-        const { stdout, stderr } = await execFileAsync('sh', ['-c', 'go build ./... && go test ./...'], {
+        const { stdout, stderr } = await runWorkspaceCommand('sh', ['-c', 'go build ./... && go test ./...'], {
           cwd: workspacePath,
           timeout: 120_000,
         });
@@ -1318,7 +1337,7 @@ export async function buildWorkspaceDemo(params: {
       buildCommandSucceeded = true;
     } else if (filesInfo.topFiles.some((f) => f.endsWith('.py'))) {
       logs.push('$ python3 -m compileall -q .');
-      const { stdout, stderr } = await execFileAsync('python3', ['-m', 'compileall', '-q', '.'], {
+      const { stdout, stderr } = await runWorkspaceCommand('python3', ['-m', 'compileall', '-q', '.'], {
         cwd: workspacePath,
         timeout: 60_000,
       });
@@ -1328,7 +1347,7 @@ export async function buildWorkspaceDemo(params: {
     } else if (filesInfo.topFiles.some((f) => f.endsWith('.sh'))) {
       const shFiles = filesInfo.topFiles.filter((f) => f.endsWith('.sh'));
       logs.push(`$ bash -n ${shFiles.join(' ')}`);
-      const { stdout, stderr } = await execFileAsync('bash', ['-n', ...shFiles], {
+      const { stdout, stderr } = await runWorkspaceCommand('bash', ['-n', ...shFiles], {
         cwd: workspacePath,
         timeout: 30_000,
       });
@@ -1337,7 +1356,7 @@ export async function buildWorkspaceDemo(params: {
       buildCommandSucceeded = true;
     } else if (existsSync(path.join(workspacePath, 'Makefile'))) {
       logs.push('$ make');
-      const { stdout, stderr } = await execFileAsync('make', [], {
+      const { stdout, stderr } = await runWorkspaceCommand('make', [], {
         cwd: workspacePath,
         timeout: 120_000,
       });
@@ -2408,6 +2427,8 @@ export async function rollbackProjectCheckpoint(
 export async function exportProjectTarGz(workspacePath: string): Promise<Buffer> {
   const tmpFile = path.join(os.tmpdir(), `emberline-export-${Date.now()}.tar.gz`);
   try {
+    // The one local process core still starts: the image's own tar only reads files (symlinks are
+    // archived as links, never followed), so nothing from the workspace executes.
     await execFileAsync(
       'tar',
       [
@@ -2432,55 +2453,43 @@ export async function captureBrowserViewportSnapshot(params: {
   targetUrl: string | null;
 }): Promise<BrowserViewportSnapshot> {
   const nowIso = new Date().toISOString();
-  const tmpPng = path.join(os.tmpdir(), `emberline-viewport-${Date.now()}.png`);
-
-  try {
-    // 1. If a demo or preview URL is available, capture live Chromium screenshot
-    if (params.targetUrl) {
-      const bins = ['chromium', 'chromium-browser', 'google-chrome'];
-      for (const bin of bins) {
-        try {
-          await execFileAsync(
-            bin,
-            [
-              '--headless',
-              '--no-sandbox',
-              '--disable-gpu',
-              '--hide-scrollbars',
-              '--window-size=1280,720',
-              `--screenshot=${tmpPng}`,
-              params.targetUrl,
-            ],
-            { timeout: 15_000 },
-          );
-          if (existsSync(tmpPng)) {
-            const buf = await readFile(tmpPng);
-            return {
-              available: true,
-              source: 'headless_browser',
-              targetUrl: params.targetUrl,
-              imageDataUrl: `data:image/png;base64,${buf.toString('base64')}`,
-              capturedAt: nowIso,
-              message: `Captured live Chromium frame from ${params.targetUrl}`,
-            };
-          }
-        } catch {
-          // try next binary
-        }
-      }
+  // Chromium lives in the runner; the screenshot comes back on stdout (base64), no shared temp file.
+  if (params.targetUrl) {
+    const script = [
+      'f=$(mktemp --suffix=.png) || exit 1',
+      'for b in chromium chromium-browser google-chrome; do',
+      '  command -v "$b" >/dev/null 2>&1 || continue',
+      '  "$b" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1280,720 --screenshot="$f" "$1" >/dev/null 2>&1 && [ -s "$f" ] && break',
+      'done',
+      'cat "$f"; rm -f "$f"',
+    ].join('\n');
+    const shot = await execCommand({
+      file: 'sh',
+      args: ['-c', script, 'sh', params.targetUrl],
+      cwd: '/',
+      timeoutMs: 20_000,
+      encoding: 'base64',
+    }).catch(() => null);
+    if (shot && shot.exitCode === 0 && !shot.truncated && shot.stdout.length > 0) {
+      return {
+        available: true,
+        source: 'headless_browser',
+        targetUrl: params.targetUrl,
+        imageDataUrl: `data:image/png;base64,${shot.stdout}`,
+        capturedAt: nowIso,
+        message: `Captured live Chromium frame from ${params.targetUrl}`,
+      };
     }
-
-    return {
-      available: false,
-      source: 'none',
-      targetUrl: params.targetUrl,
-      imageDataUrl: null,
-      capturedAt: nowIso,
-      message: 'Use the embedded Live Demo Player above or start a Playwright/Preview session.',
-    };
-  } finally {
-    await rm(tmpPng, { force: true }).catch(() => undefined);
   }
+
+  return {
+    available: false,
+    source: 'none',
+    targetUrl: params.targetUrl,
+    imageDataUrl: null,
+    capturedAt: nowIso,
+    message: 'Use the embedded Live Demo Player above or start a Playwright/Preview session.',
+  };
 }
 
 

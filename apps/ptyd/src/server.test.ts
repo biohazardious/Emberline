@@ -138,6 +138,33 @@ describe('ptyd', () => {
     await expect(spawnShellWithId(a, session.id)).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  it('runs commands to completion without a terminal (exec)', async () => {
+    const client = await connect();
+    const ok = await client.exec({
+      file: 'sh',
+      args: ['-c', 'printf "%s|%s" "$PWD" "$EXTRA"; echo oops >&2; exit 4'],
+      cwd: dir,
+      env: { EXTRA: 'set' },
+    });
+    expect(ok).toMatchObject({ exitCode: 4, stdout: `${dir}|set`, stderr: 'oops\n', timedOut: false, truncated: false });
+
+    const binary = await client.exec({ file: 'printf', args: ['\\377\\000\\001'], cwd: dir, encoding: 'base64' });
+    expect([...Buffer.from(binary.stdout, 'base64')]).toEqual([255, 0, 1]);
+
+    const capped = await client.exec({ file: 'sh', args: ['-c', 'yes | head -c 5000'], cwd: dir, maxOutputBytes: 100 });
+    expect(capped).toMatchObject({ truncated: true });
+    expect(capped.stdout).toHaveLength(100);
+
+    const slow = await client.exec({ file: 'sh', args: ['-c', 'sleep 5 & sleep 5'], cwd: dir, timeoutMs: 200 });
+    expect(slow.timedOut).toBe(true);
+
+    const missing = await client.exec({ file: 'definitely-not-a-binary', cwd: dir });
+    expect(missing.exitCode).toBe(127);
+    await expect(client.exec({ file: 'true', cwd: path.join(dir, 'nope') })).rejects.toMatchObject({ code: 'bad_request' });
+    // exec never creates a session.
+    expect((await client.list()).sessions).toHaveLength(0);
+  });
+
   it('refuses to start a second server on a live socket', async () => {
     const second = new PtydServer({ socketPath });
     await expect(second.listen()).rejects.toThrow(/already listening/);

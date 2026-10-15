@@ -538,7 +538,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
 
     const demoToken = this.demoTokens.mint({ projectId: row.projectId, targetId: 'main' }, AGENT_DEMO_TOKEN_TTL_MS);
-    const demoUrl = `http://localhost:${this.config.port}${demoBasePath(demoToken)}`;
+    // hookUrl is how the runner reaches core (`http://core:7420` in compose); localhost is the runner itself.
+    const demoUrl = `${this.config.hookUrl}${demoBasePath(demoToken)}`;
     const spec = isSecondary
       ? buildSecondaryCliLaunchSpec({
           agent: row.agent as 'antigravity' | 'copilot' | 'gemini' | 'codex' | 'aider',

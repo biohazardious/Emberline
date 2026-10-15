@@ -15,7 +15,8 @@ import {
 } from '@emberline/protocol';
 import { z } from 'zod';
 import { encodeFrame, FrameDecoder } from './framing.js';
-import { PtySession, type SessionConfig } from './session.js';
+import { ExecCwdError, runExec } from './exec.js';
+import { PtySession, pickBaseEnv, type SessionConfig } from './session.js';
 
 /** Clients that let this much output pile up unread are disconnected. */
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
@@ -155,6 +156,18 @@ export class PtydServer {
       return session.info();
     },
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
+    exec: async (_conn, params) => {
+      try {
+        const result = await runExec(params, pickBaseEnv());
+        this.options.log?.(
+          `exec ${params.file} ${params.args.slice(0, 3).join(' ')} -> ${result.timedOut ? 'timeout' : (result.exitCode ?? result.signal)}`,
+        );
+        return result;
+      } catch (error) {
+        if (error instanceof ExecCwdError) throw new PtydError('bad_request', error.message);
+        throw error;
+      }
+    },
     detach: (conn, { sessionId }) => {
       conn.attachments.get(sessionId)?.();
       conn.attachments.delete(sessionId);

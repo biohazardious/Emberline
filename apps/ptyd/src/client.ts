@@ -121,6 +121,9 @@ export class PtydClient extends EventEmitter<ClientEvents> {
   remove(sessionId: string) {
     return this.request('remove', { sessionId });
   }
+  exec(params: PtydParams<'exec'>) {
+    return this.request('exec', params);
+  }
 
   close(): void {
     this.socket.end();

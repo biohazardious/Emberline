@@ -112,11 +112,15 @@ ENV EMBERLINE_TOOLS_DIR=/opt/ai-tools \
 # ---------------------------------------------------------------------------
 # core
 # ---------------------------------------------------------------------------
-FROM runtime AS core
-# Core never executes anything from /opt/ai-tools: the runner (and its agents) can write that
-# volume, while core holds the database, tokens and API keys. System paths only.
+FROM ubuntu_node AS core
+# Core holds the database, tokens and API keys and executes nothing from a workspace: git, builds,
+# tests and agent CLIs all run in the runner via ptyd (apps/core/src/command-exec.ts). So the image
+# carries no git, ssh, compilers or language toolchains, and nothing from /opt/ai-tools is on PATH.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    NPM_CONFIG_PREFIX=/usr/local
+    EMBERLINE_TOOLS_DIR=/opt/ai-tools
 ENV NODE_ENV=production \
     EMBERLINE_HOST=0.0.0.0 \
     EMBERLINE_PORT=7420 \

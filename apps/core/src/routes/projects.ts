@@ -396,7 +396,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   /** URL agents and the runner browser use to reach the demo (no session cookie there). */
   const agentDemoUrl = (projectId: string, targetId: string) =>
-    `http://localhost:${config.port}${demoBasePath(demoTokens.mint({ projectId, targetId }, AGENT_DEMO_TOKEN_TTL_MS))}`;
+    `${config.hookUrl}${demoBasePath(demoTokens.mint({ projectId, targetId }, AGENT_DEMO_TOKEN_TTL_MS))}`;
 
   // Authenticated entry point: hands the browser a short-lived capability URL. Demo documents run
   // sandboxed with an opaque origin, so they cannot reuse the session to call the API.

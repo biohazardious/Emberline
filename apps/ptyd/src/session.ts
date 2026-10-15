@@ -167,7 +167,7 @@ export class PtySession {
   }
 }
 
-function pickBaseEnv(): Record<string, string> {
+export function pickBaseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of BASE_ENV_KEYS) {
     const value = process.env[key];

@@ -1,7 +1,4 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { execCommand, execFileChecked } from './command-exec.js';
 
 /**
  * Core runs git inside repositories that agents control: worktrees share the main repo's
@@ -9,7 +6,8 @@ const execFileAsync = promisify(execFile);
  * commands, so every git call from core neutralizes them on the command line (highest precedence)
  * and refuses repos whose config sets the ones that cannot be neutralized generically.
  *
- * The lasting fix is running git in the runner (ROADMAP Phase 3); this closes the known paths.
+ * Since Phase 3 every git process runs in the runner (command-exec.ts), so these settings protect
+ * the runner's own credentials (SSH keys, OAuth tokens) from a repo planted by another agent.
  */
 const OVERRIDES: Record<string, string> = {
   'core.fsmonitor': 'false',
@@ -35,9 +33,9 @@ export const HARDENED_GIT_ARGS: readonly string[] = Object.entries(OVERRIDES).fl
 const BLOCKED_CONFIG_KEY =
   /^(diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|include\.path|includeif\..+\.path|remote\..+\.(uploadpack|receivepack|vcs)|url\..+\.(insteadof|pushinsteadof)|core\.(gitproxy|alternaterefscommand)|gpg\.program|gpg\..+\.program)$/i;
 
-export function hardenedGitEnv(): NodeJS.ProcessEnv {
+/** Hardening variables for every git process; nothing else from core's environment is forwarded. */
+export function hardenedGitEnv(): Record<string, string> {
   return {
-    ...process.env,
     // System and global config live in images/volumes the runner can influence.
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: '/dev/null',
@@ -54,19 +52,19 @@ export class UnsafeGitConfigError extends Error {
 
 /** Throws when the repository config (including files it includes) sets a blocked key. */
 export async function assertSafeGitConfig(cwd: string): Promise<void> {
-  let listing: string;
-  try {
-    ({ stdout: listing } = await execFileAsync('git', ['-C', cwd, 'config', '--list', '--name-only'], {
-      timeout: 10_000,
-      env: hardenedGitEnv(),
-    }));
-  } catch (err) {
+  const res = await execCommand({
+    file: 'git',
+    args: ['-C', cwd, 'config', '--list', '--name-only'],
+    cwd: '/',
+    env: hardenedGitEnv(),
+    timeoutMs: 10_000,
+  });
+  if (res.exitCode !== 0) {
     // Outside a repository this still succeeds (system/global config are disabled), so a failure
     // means config git cannot parse, e.g. an include pointing at a non-config file. Fail closed.
-    const detail = (err as { stderr?: string }).stderr?.trim().split('\n')[0] ?? 'unreadable config';
-    throw new UnsafeGitConfigError([detail]);
+    throw new UnsafeGitConfigError([res.stderr.trim().split('\n')[0] || 'unreadable config']);
   }
-  const blocked = listing
+  const blocked = res.stdout
     .split('\n')
     .map((key) => key.trim())
     .filter((key) => key && BLOCKED_CONFIG_KEY.test(key));
@@ -80,25 +78,12 @@ export interface RunGitOptions {
 
 /** Runs `git -C cwd <args>` with the hardened config and environment; returns raw stdout. */
 export async function runGit(cwd: string, args: string[], options: RunGitOptions = {}): Promise<string> {
-  await assertSafeGitConfig(cwd);
-  const { stdout } = await execFileAsync('git', [...HARDENED_GIT_ARGS, '-C', cwd, ...args], {
-    timeout: options.timeout ?? 30_000,
-    maxBuffer: options.maxBuffer ?? 16 * 1024 * 1024,
-    env: hardenedGitEnv(),
-  });
-  return stdout;
+  return (await execGitFile(['-C', cwd, ...args], options)).stdout;
 }
 
 /** Binary-safe variant of {@link runGit} (e.g. `git show <blob>`). */
 export async function runGitBuffer(cwd: string, args: string[], options: RunGitOptions = {}): Promise<Buffer> {
-  await assertSafeGitConfig(cwd);
-  const { stdout } = await execFileAsync('git', [...HARDENED_GIT_ARGS, '-C', cwd, ...args], {
-    timeout: options.timeout ?? 30_000,
-    maxBuffer: options.maxBuffer ?? 16 * 1024 * 1024,
-    env: hardenedGitEnv(),
-    encoding: 'buffer',
-  });
-  return stdout;
+  return (await execGitFile(['-C', cwd, ...args], { ...options, encoding: 'buffer' })).stdout;
 }
 
 export interface ExecGitOptions {
@@ -106,39 +91,47 @@ export interface ExecGitOptions {
   cwd?: string;
   timeout?: number;
   maxBuffer?: number;
-  env?: NodeJS.ProcessEnv;
+  /** Extra `GIT_*` variables (other keys are dropped); hardening variables always win. */
+  env?: Record<string, string | undefined>;
 }
 
 function repoDirOf(args: string[], options: ExecGitOptions): string {
   if (options.cwd) return options.cwd;
   if (args[0] === '-C' && args[1]) return args[1];
-  return process.cwd();
+  throw new Error('execGitFile needs a repository: pass options.cwd or start args with -C <dir>');
+}
+
+function gitVariables(env: ExecGitOptions['env']): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (key.startsWith('GIT_') && value !== undefined) picked[key] = value;
+  }
+  return picked;
 }
 
 /**
- * Drop-in for `execFileAsync('git', args, options)` with the hardened config and environment.
- * Caller env vars are kept, but cannot re-enable system/global config.
+ * Hardened replacement for `execFileAsync('git', args, options)`: runs in the runner (see
+ * command-exec.ts), resolves on exit code 0 and rejects with stdout/stderr/code otherwise.
  */
 export async function execGitFile(
   args: string[],
   options: ExecGitOptions & { encoding: 'buffer' },
-): Promise<{ stdout: Buffer; stderr: Buffer }>;
+): Promise<{ stdout: Buffer; stderr: string }>;
 export async function execGitFile(args: string[], options?: ExecGitOptions): Promise<{ stdout: string; stderr: string }>;
 export async function execGitFile(
   args: string[],
   options: ExecGitOptions & { encoding?: 'buffer' } = {},
-): Promise<{ stdout: string | Buffer; stderr: string | Buffer }> {
-  await assertSafeGitConfig(repoDirOf(args, options));
-  const { env, encoding, ...rest } = options;
-  return execFileAsync('git', [...HARDENED_GIT_ARGS, ...args], {
-    timeout: 30_000,
-    maxBuffer: 16 * 1024 * 1024,
-    ...rest,
-    ...(encoding ? { encoding } : {}),
-    env: { ...(env ?? process.env), ...pick(hardenedGitEnv(), ['GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT']) },
+): Promise<{ stdout: string | Buffer; stderr: string }> {
+  const repo = repoDirOf(args, options);
+  await assertSafeGitConfig(repo);
+  const { stdout, stderr } = await execFileChecked({
+    file: 'git',
+    args: [...HARDENED_GIT_ARGS, ...args],
+    cwd: options.cwd ?? '/',
+    env: { ...gitVariables(options.env), ...hardenedGitEnv() },
+    timeoutMs: options.timeout ?? 30_000,
+    maxOutputBytes: options.maxBuffer,
+    encoding: options.encoding === 'buffer' ? 'base64' : 'utf8',
   });
-}
-
-function pick(env: NodeJS.ProcessEnv, keys: string[]): NodeJS.ProcessEnv {
-  return Object.fromEntries(keys.map((key) => [key, env[key]]));
+  return { stdout: options.encoding === 'buffer' ? Buffer.from(stdout, 'base64') : stdout, stderr };
 }

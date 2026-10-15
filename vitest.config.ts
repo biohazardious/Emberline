@@ -20,5 +20,7 @@ export default defineConfig({
     environment: 'node',
     pool: 'forks',
     testTimeout: 15_000,
+    // Core runs workspace commands in the runner; unit tests run them in-process instead.
+    setupFiles: [r('./apps/core/src/test-setup.ts')],
   },
 });

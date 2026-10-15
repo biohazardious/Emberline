@@ -44,6 +44,9 @@ export const ScreenSnapshot = z.object({
 });
 export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
 
+/** Per stream; keeps a base64 stdout plus stderr inside one 16 MiB frame. */
+export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;
+
 const Empty = z.object({});
 const BySession = z.object({ sessionId: SessionId });
 
@@ -77,6 +80,32 @@ export const ptydMethods = {
   kill: { params: BySession.extend({ signal: z.string().optional() }), result: Empty },
   /** Kills the process if still running and forgets the session. */
   remove: { params: BySession, result: Empty },
+  /**
+   * Runs a command to completion without a terminal (git, builds) and returns its output. A
+   * non-zero exit is a normal result, not an error. Output beyond `maxOutputBytes` is dropped and
+   * flagged as `truncated`; the process is killed after `timeoutMs`.
+   */
+  exec: {
+    params: z.object({
+      file: z.string().min(1),
+      args: z.array(z.string()).default([]),
+      cwd: z.string().min(1),
+      /** Merged over the same minimal base environment as `spawn`. */
+      env: StringMap.default({}),
+      timeoutMs: z.number().int().min(1).max(60 * 60_000).default(60_000),
+      maxOutputBytes: z.number().int().min(1).max(MAX_EXEC_OUTPUT_BYTES).default(MAX_EXEC_OUTPUT_BYTES),
+      /** `base64` for binary stdout (e.g. `git show <blob>`); stderr is always UTF-8. */
+      encoding: z.enum(['utf8', 'base64']).default('utf8'),
+    }),
+    result: z.object({
+      exitCode: z.number().int().nullable(),
+      signal: z.string().nullable(),
+      stdout: z.string(),
+      stderr: z.string(),
+      timedOut: z.boolean(),
+      truncated: z.boolean(),
+    }),
+  },
 } as const;
 
 export type PtydMethod = keyof typeof ptydMethods;

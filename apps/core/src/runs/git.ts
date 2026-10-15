@@ -28,7 +28,6 @@ export async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execGitFile(['-C', cwd, ...args], {
     timeout: 30_000,
     maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
   return stdout.trim();
 }
@@ -38,7 +37,6 @@ async function gitRaw(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execGitFile(['-C', cwd, ...args], {
     timeout: 30_000,
     maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
   return stdout;
 }
@@ -302,7 +300,6 @@ async function readGitBlob(worktreePath: string, spec: string): Promise<{ text: 
       timeout: 15_000,
       maxBuffer: 16 * 1024 * 1024,
       encoding: 'buffer',
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     });
     if (isBinaryBuffer(stdout)) return { text: '', binary: true };
     const slice = stdout.length > MAX_TEXT_BYTES ? stdout.subarray(0, MAX_TEXT_BYTES) : stdout;
@@ -441,7 +438,6 @@ export async function pushWorktreeBranch(
       ['-C', worktreePath, 'push', '--porcelain', '-u', 'origin', `refs/heads/${branchToPush}:refs/heads/${branchToPush}`],
       {
         timeout: 60_000,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       },
     );
     return {

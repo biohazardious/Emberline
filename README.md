@@ -33,7 +33,7 @@ make upgrade-core        # rebuild/restart core only; running agents keep runnin
 make logs / make down
 ```
 
-Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + the AI CLIs, hosts the agents). They share the ptyd socket and the workspaces volume. `core` also mounts `runner-home` read-only (so `git push` can use your runner's SSH keys) and `runner-tools` read-only (to show installed CLI versions). Core never executes anything from those volumes: CLI installs run in the runner, and every git call core makes ignores repository hooks and command-running config.
+Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + the AI CLIs, hosts the agents). They share the ptyd socket and the workspaces volume. `core` also mounts `runner-home` read-only (to show provider login status) and `runner-tools` read-only (to show installed CLI versions). Core executes nothing for a workspace: git, package installs, builds, tests and CLI installs all run in the runner through ptyd, and the core image ships without git, ssh or build toolchains. Git calls additionally ignore repository hooks and command-running config, which protects the runner's own credentials.
 
 On first start, core prints a one-time **setup token** to its log (`make logs`); the setup page asks for it together with the new admin password, so nobody else on the network can claim a fresh instance. Set `EMBERLINE_SETUP_TOKEN` to choose it yourself.
 
