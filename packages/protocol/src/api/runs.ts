@@ -1,0 +1,576 @@
+/** API contracts: runs. */
+import { z } from 'zod';
+import { AgentPersona, PermissionMode } from './projects.js';
+
+/**
+ * Mirrors `AgentState` in @emberline/adapter-sdk. `queued` waits for a free slot (and quota);
+ * `rate_limited` waits for the usage window to reset.
+ */
+export const RunState = z.enum(['queued', 'starting', 'working', 'waiting_input', 'rate_limited', 'done', 'failed']);
+export type RunState = z.infer<typeof RunState>;
+
+/** Supported CLI coding agent adapters. */
+export const AgentId = z.enum(['claude', 'antigravity', 'copilot', 'gemini', 'codex', 'aider']);
+export type AgentId = z.infer<typeof AgentId>;
+
+/** Model IDs across all supported CLI providers. */
+export const AgentModelId = z.enum([
+  'auto',
+  'fable',
+  'opus',
+  'sonnet',
+  'haiku',
+  'argon',
+  'gemini-pro',
+  'gemini-flash',
+  'gemini-flash-lite',
+  'o3',
+  'gpt-4o',
+  'o4-mini',
+  'gpt-4o-mini',
+]);
+export type AgentModelId = z.infer<typeof AgentModelId>;
+
+/** Capability tier and 1-5 star rank for the multi-provider model matrix. */
+export const ModelCapabilityTier = z.enum(['high', 'medium', 'low']);
+export type ModelCapabilityTier = z.infer<typeof ModelCapabilityTier>;
+export type ModelRank = 1 | 2 | 3 | 4 | 5;
+export type ModelCapabilityTag = 'reasoning' | 'code' | 'ui_ux' | 'fast';
+
+export interface ProviderModelInfo {
+  id: Exclude<AgentModelId, 'auto'>;
+  label: string;
+  shortLabel: string;
+  rank: ModelRank;
+  tier: ModelCapabilityTier;
+  badge: string;
+  capabilities: ModelCapabilityTag[];
+  description: string;
+}
+
+export interface ProviderRegistryEntry {
+  id: AgentId;
+  label: string;
+  shortLabel: string;
+  icon: string;
+  badge: string;
+  authKind: 'host_or_key' | 'api_key' | 'cli_auth';
+  keyConfigField?: 'anthropicKeyConfigured' | 'openaiKeyConfigured' | 'geminiKeyConfigured';
+  description: string;
+  models: ProviderModelInfo[];
+}
+
+export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
+  claude: {
+    id: 'claude',
+    label: 'Claude Code (Anthropic)',
+    shortLabel: 'Claude',
+    icon: '🟣',
+    badge: 'Primary Host CLI / API',
+    authKind: 'host_or_key',
+    keyConfigField: 'anthropicKeyConfigured',
+    description: 'Official Anthropic Claude Code CLI with deep worktree tool execution and host OAuth / API key support.',
+    models: [
+      {
+        id: 'fable',
+        label: 'Claude Fable',
+        shortLabel: 'fable',
+        rank: 5,
+        tier: 'high',
+        badge: '★5 · HIGH · FRONTIER',
+        capabilities: ['reasoning', 'code'],
+        description: 'Frontier architectural synthesis, multi-step system planning & deep reasoning.',
+      },
+      {
+        id: 'opus',
+        label: 'Claude Opus',
+        shortLabel: 'opus',
+        rank: 4,
+        tier: 'high',
+        badge: '★4 · HIGH · FLAGSHIP',
+        capabilities: ['reasoning', 'code', 'ui_ux'],
+        description: 'Flagship full-stack engineering, complex backend logic, security & DB design.',
+      },
+      {
+        id: 'sonnet',
+        label: 'Claude Sonnet',
+        shortLabel: 'sonnet',
+        rank: 3,
+        tier: 'medium',
+        badge: '★3 · MEDIUM · BALANCED',
+        capabilities: ['code', 'ui_ux', 'fast'],
+        description: 'Balanced high-speed coding, test automation, UI components & daily feature work.',
+      },
+      {
+        id: 'haiku',
+        label: 'Claude Haiku',
+        shortLabel: 'haiku',
+        rank: 2,
+        tier: 'low',
+        badge: '★2 · LOW · FAST',
+        capabilities: ['fast', 'code'],
+        description: 'Ultra-fast, token-efficient model for quick fixes, linting & lightweight tasks.',
+      },
+    ],
+  },
+  antigravity: {
+    id: 'antigravity',
+    label: 'Antigravity (AGY CLI)',
+    shortLabel: 'AGY',
+    icon: '🚀',
+    badge: 'Agentic UI/UX & Full-Stack',
+    authKind: 'cli_auth',
+    description: 'Google DeepMind Antigravity CLI specialized in visual UI/UX craftsmanship and full-stack flows.',
+    models: [
+      {
+        id: 'argon',
+        label: 'Antigravity Argon Pro',
+        shortLabel: 'argon',
+        rank: 5,
+        tier: 'high',
+        badge: '★5 · HIGH · FRONTIER',
+        capabilities: ['ui_ux', 'reasoning', 'code'],
+        description: 'Frontier creative UI/UX design systems, interactive layouts & full-stack architecture.',
+      },
+      {
+        id: 'gemini-pro',
+        label: 'Antigravity Gemini Pro',
+        shortLabel: 'gemini-pro',
+        rank: 4,
+        tier: 'high',
+        badge: '★4 · HIGH · DEEP CONTEXT',
+        capabilities: ['reasoning', 'code', 'ui_ux'],
+        description: 'Large-context multi-file reasoning and complex web/mobile engineering.',
+      },
+      {
+        id: 'gemini-flash',
+        label: 'Antigravity Flash',
+        shortLabel: 'gemini-flash',
+        rank: 3,
+        tier: 'medium',
+        badge: '★3 · MEDIUM · BALANCED',
+        capabilities: ['fast', 'ui_ux', 'code'],
+        description: 'High-speed UI iteration, styling polish & component verification.',
+      },
+      {
+        id: 'gemini-flash-lite',
+        label: 'Antigravity Flash-Lite',
+        shortLabel: 'flash-lite',
+        rank: 1,
+        tier: 'low',
+        badge: '★1 · LOW · LIGHT',
+        capabilities: ['fast'],
+        description: 'Lightweight rapid tasks and quick syntax checks.',
+      },
+    ],
+  },
+  gemini: {
+    id: 'gemini',
+    label: 'Google Gemini CLI',
+    shortLabel: 'Gemini',
+    icon: '♊',
+    badge: 'Google Gemini API / CLI',
+    authKind: 'api_key',
+    keyConfigField: 'geminiKeyConfigured',
+    description: 'Google Gemini CLI with 1M+ token context window for massive repository analysis and coding.',
+    models: [
+      {
+        id: 'gemini-pro',
+        label: 'Gemini Pro',
+        shortLabel: 'gemini-pro',
+        rank: 5,
+        tier: 'high',
+        badge: '★5 · HIGH · FRONTIER',
+        capabilities: ['reasoning', 'code', 'ui_ux'],
+        description: 'Maximum reasoning depth and massive codebase context comprehension.',
+      },
+      {
+        id: 'gemini-flash',
+        label: 'Gemini Flash',
+        shortLabel: 'gemini-flash',
+        rank: 3,
+        tier: 'medium',
+        badge: '★3 · MEDIUM · BALANCED',
+        capabilities: ['code', 'fast', 'ui_ux'],
+        description: 'Fast agentic coding, tool execution & test verification.',
+      },
+      {
+        id: 'gemini-flash-lite',
+        label: 'Gemini Flash-Lite',
+        shortLabel: 'flash-lite',
+        rank: 1,
+        tier: 'low',
+        badge: '★1 · LOW · FAST',
+        capabilities: ['fast'],
+        description: 'Ultra-low latency and high-efficiency execution for simple tasks.',
+      },
+    ],
+  },
+  codex: {
+    id: 'codex',
+    label: 'OpenAI Codex CLI',
+    shortLabel: 'Codex',
+    icon: '🟢',
+    badge: 'OpenAI API / CLI',
+    authKind: 'api_key',
+    keyConfigField: 'openaiKeyConfigured',
+    description: 'OpenAI Codex terminal agent powered by o-series reasoning and GPT-4.1/4o models.',
+    models: [
+      {
+        id: 'o3',
+        label: 'OpenAI o3',
+        shortLabel: 'o3',
+        rank: 5,
+        tier: 'high',
+        badge: '★5 · HIGH · FRONTIER',
+        capabilities: ['reasoning', 'code'],
+        description: 'Frontier analytical reasoning, complex algorithms & system architecture.',
+      },
+      {
+        id: 'gpt-4o',
+        label: 'GPT-4o / GPT-4.1',
+        shortLabel: 'gpt-4o',
+        rank: 4,
+        tier: 'high',
+        badge: '★4 · HIGH · FLAGSHIP',
+        capabilities: ['code', 'ui_ux', 'reasoning'],
+        description: 'Flagship general-purpose full-stack engineering and API design.',
+      },
+      {
+        id: 'o4-mini',
+        label: 'OpenAI o4-mini',
+        shortLabel: 'o4-mini',
+        rank: 3,
+        tier: 'medium',
+        badge: '★3 · MEDIUM · BALANCED',
+        capabilities: ['code', 'fast', 'reasoning'],
+        description: 'Fast reasoning model optimized for code generation and automated testing.',
+      },
+      {
+        id: 'gpt-4o-mini',
+        label: 'GPT-4o Mini',
+        shortLabel: '4o-mini',
+        rank: 2,
+        tier: 'low',
+        badge: '★2 · LOW · FAST',
+        capabilities: ['fast', 'code'],
+        description: 'Compact, low-cost model for quick edits and boilerplate tasks.',
+      },
+    ],
+  },
+  copilot: {
+    id: 'copilot',
+    label: 'GitHub Copilot CLI',
+    shortLabel: 'Copilot',
+    icon: '🐙',
+    badge: 'GitHub CLI Auth',
+    authKind: 'cli_auth',
+    description: 'GitHub Copilot agentic CLI using your GitHub subscription models.',
+    models: [
+      {
+        id: 'opus',
+        label: 'Copilot · Claude Opus',
+        shortLabel: 'opus',
+        rank: 4,
+        tier: 'high',
+        badge: '★4 · HIGH · FLAGSHIP',
+        capabilities: ['reasoning', 'code'],
+        description: 'High-capability architectural and backend engineering via Copilot.',
+      },
+      {
+        id: 'gpt-4o',
+        label: 'Copilot · GPT-4o',
+        shortLabel: 'gpt-4o',
+        rank: 4,
+        tier: 'high',
+        badge: '★4 · HIGH · FLAGSHIP',
+        capabilities: ['code', 'ui_ux'],
+        description: 'Full-stack implementation and UI workflows via Copilot.',
+      },
+      {
+        id: 'sonnet',
+        label: 'Copilot · Claude Sonnet',
+        shortLabel: 'sonnet',
+        rank: 3,
+        tier: 'medium',
+        badge: '★3 · MEDIUM · BALANCED',
+        capabilities: ['code', 'fast'],
+        description: 'Balanced speed and accuracy for daily coding & QA.',
+      },
+      {
+        id: 'gpt-4o-mini',
+        label: 'Copilot · GPT-4o Mini',
+        shortLabel: '4o-mini',
+        rank: 2,
+        tier: 'low',
+        badge: '★2 · LOW · FAST',
+        capabilities: ['fast'],
+        description: 'Fast lightweight completions and shell assistance.',
+      },
+    ],
+  },
+  aider: {
+    id: 'aider',
+    label: 'Aider Polyglot CLI',
+    shortLabel: 'Aider',
+    icon: '🛠️',
+    badge: 'Git-Aware Diff Agent',
+    authKind: 'host_or_key',
+    description: 'Aider AI pair-programming CLI with repository map and automatic git commits.',
+    models: [
+      {
+        id: 'opus',
+        label: 'Aider · Claude Opus',
+        shortLabel: 'opus',
+        rank: 5,
+        tier: 'high',
+        badge: '★5 · HIGH · ARCHITECT',
+        capabilities: ['reasoning', 'code'],
+        description: 'Deep multi-file refactoring with Architect + Editor mode.',
+      },
+      {
+        id: 'o3',
+        label: 'Aider · OpenAI o3',
+        shortLabel: 'o3',
+        rank: 5,
+        tier: 'high',
+        badge: '★5 · HIGH · REASONING',
+        capabilities: ['reasoning', 'code'],
+        description: 'Analytical multi-file code synthesis with o3 reasoning.',
+      },
+      {
+        id: 'sonnet',
+        label: 'Aider · Claude Sonnet',
+        shortLabel: 'sonnet',
+        rank: 3,
+        tier: 'medium',
+        badge: '★3 · MEDIUM · BALANCED',
+        capabilities: ['code', 'fast'],
+        description: 'Fast diff-based editing and test fixing.',
+      },
+      {
+        id: 'haiku',
+        label: 'Aider · Claude Haiku',
+        shortLabel: 'haiku',
+        rank: 2,
+        tier: 'low',
+        badge: '★2 · LOW · FAST',
+        capabilities: ['fast'],
+        description: 'Lightweight patches and quick edits.',
+      },
+    ],
+  },
+};
+
+export const PERSONA_CAPABILITY_TARGETS: Record<
+  AgentPersona,
+  { recommendedRank: ModelRank; recommendedTier: ModelCapabilityTier; summary: string }
+> = {
+  product_owner: {
+    recommendedRank: 5,
+    recommendedTier: 'high',
+    summary: 'Rank 5 (High) · Product strategy, requirement decomposition & backlog orchestration',
+  },
+  architect: {
+    recommendedRank: 5,
+    recommendedTier: 'high',
+    summary: 'Rank 5 (High) · System blueprint, module boundaries & technical trade-offs',
+  },
+  coder: {
+    recommendedRank: 4,
+    recommendedTier: 'high',
+    summary: 'Rank 4 (High) · Full-stack implementation, complex logic & self-healing builds',
+  },
+  dba: {
+    recommendedRank: 4,
+    recommendedTier: 'high',
+    summary: 'Rank 4 (High) · Data modeling, migrations, indexing & query optimization',
+  },
+  security: {
+    recommendedRank: 4,
+    recommendedTier: 'high',
+    summary: 'Rank 4 (High) · Threat modeling, auth hardening & vulnerability auditing',
+  },
+  ui_ux: {
+    recommendedRank: 4,
+    recommendedTier: 'high',
+    summary: 'Rank 4 (High) · Design systems, responsive layouts, accessibility & visual polish',
+  },
+  qa: {
+    recommendedRank: 3,
+    recommendedTier: 'medium',
+    summary: 'Rank 3 (Medium) · Fast unit/integration/E2E testing & regression verification',
+  },
+};
+
+/** Returns strictly the models supported by the given CLI provider. */
+export function getModelsForProvider(agent: AgentId): ProviderModelInfo[] {
+  return PROVIDER_REGISTRY[agent]?.models ?? PROVIDER_REGISTRY.claude.models;
+}
+
+/** Checks whether a model ID is valid for the given CLI provider (`auto` is valid for all). */
+export function isModelValidForProvider(agent: AgentId, model: AgentModelId): boolean {
+  if (model === 'auto') return true;
+  return getModelsForProvider(agent).some((m) => m.id === model);
+}
+
+/** Looks up metadata for a model across a specific provider (or globally as fallback). */
+export function getModelInfoForProvider(agent: AgentId, model: AgentModelId): ProviderModelInfo | null {
+  if (model === 'auto') return null;
+  const direct = getModelsForProvider(agent).find((m) => m.id === model);
+  if (direct) return direct;
+  for (const entry of Object.values(PROVIDER_REGISTRY)) {
+    const found = entry.models.find((m) => m.id === model);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Selects the best model from `agent` whose rank is closest to `targetRank` (1..5). */
+export function selectProviderModelByRank(agent: AgentId, targetRank: number): Exclude<AgentModelId, 'auto'> {
+  const models = getModelsForProvider(agent);
+  const clamped = Math.max(1, Math.min(5, Math.round(targetRank)));
+  let best = models[0]!;
+  let bestDiff = Math.abs(best.rank - clamped);
+  for (const candidate of models) {
+    const diff = Math.abs(candidate.rank - clamped);
+    if (diff < bestDiff || (diff === bestDiff && candidate.rank > best.rank)) {
+      best = candidate;
+      bestDiff = diff;
+    }
+  }
+  return best.id;
+}
+
+/** Selects the best model from `agent` matching a capability tier ('high' | 'medium' | 'low') and optional persona. */
+export function selectProviderModelByTier(
+  agent: AgentId,
+  tier: ModelCapabilityTier,
+  persona?: AgentPersona,
+): Exclude<AgentModelId, 'auto'> {
+  const models = getModelsForProvider(agent);
+  const tierMatches = models.filter((m) => m.tier === tier);
+  if (tierMatches.length > 0) {
+    if (tier === 'high' && persona) {
+      const targetRank = PERSONA_CAPABILITY_TARGETS[persona]?.recommendedRank ?? 4;
+      const exact = tierMatches.find((m) => m.rank === targetRank);
+      if (exact) return exact.id;
+    }
+    return tierMatches[0]!.id;
+  }
+  const fallbackRank = tier === 'high' ? (persona ? PERSONA_CAPABILITY_TARGETS[persona].recommendedRank : 4) : tier === 'medium' ? 3 : 2;
+  return selectProviderModelByRank(agent, fallbackRank);
+}
+
+/**
+ * Ensures `currentModel` is valid for `agent`. If `currentModel` belongs to another provider,
+ * automatically maps it to the equivalent rank/tier model on `agent`!
+ */
+export function coerceModelForProvider(
+  agent: AgentId,
+  currentModel: AgentModelId,
+  persona?: AgentPersona,
+): AgentModelId {
+  if (currentModel === 'auto') return 'auto';
+  if (isModelValidForProvider(agent, currentModel)) return currentModel;
+  // Find the rank of currentModel in whichever provider it came from, or use the persona's recommended rank
+  const priorInfo = getModelInfoForProvider(agent, currentModel);
+  const targetRank =
+    priorInfo?.rank ?? (persona ? PERSONA_CAPABILITY_TARGETS[persona].recommendedRank : 4);
+  return selectProviderModelByRank(agent, targetRank);
+}
+
+/** Formats a star rating string like `★★★★★` for a 1-5 rank. */
+export function formatRankStars(rank: number): string {
+  const filled = Math.max(1, Math.min(5, Math.round(rank)));
+  return '★'.repeat(filled) + '☆'.repeat(5 - filled);
+}
+
+
+export const RunTelemetry = z.object({
+  runId: z.string(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cachedTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  toolCalls: z.number().int().nonnegative(),
+  durationSec: z.number().int().nonnegative(),
+  isEstimated: z.boolean(),
+});
+export type RunTelemetry = z.infer<typeof RunTelemetry>;
+
+export const Run = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  /** Ticket this run works on; null for ad-hoc runs. */
+  ticketId: z.string().nullable(),
+  /** Display title (e.g. "DP-1 Fix login" for ticket runs); null for ad-hoc runs. */
+  title: z.string().nullable(),
+  agent: z.string(),
+  persona: AgentPersona,
+  state: RunState,
+  prompt: z.string(),
+  permissionMode: PermissionMode,
+  /** Null when the project is not a git repository (the run works in the project directory). */
+  branch: z.string().nullable(),
+  worktreePath: z.string(),
+  terminalId: z.string().nullable(),
+  agentSessionId: z.string().nullable(),
+  /** Last hook / system event type, for display. */
+  lastEvent: z.string().nullable(),
+  stateChangedAt: z.string(),
+  createdAt: z.string(),
+  endedAt: z.string().nullable(),
+  /** True when an ended run can be continued with `claude --resume` (a session id is known). */
+  resumable: z.boolean(),
+  /** Token & tool execution telemetry (no monetary pricing). */
+  telemetry: RunTelemetry.optional(),
+});
+export type Run = z.infer<typeof Run>;
+
+export const CreateRunBody = z.object({
+  projectId: z.string().min(1),
+  agent: AgentId.default('claude'),
+  model: AgentModelId.default('auto'),
+  persona: AgentPersona.default('coder'),
+  prompt: z.string().trim().max(20_000).default(''),
+  permissionMode: PermissionMode.default('default'),
+});
+export type CreateRunBody = z.input<typeof CreateRunBody>;
+
+export const RunEvent = z.object({
+  id: z.number().int(),
+  runId: z.string(),
+  ts: z.string(),
+  source: z.enum(['hook', 'transcript', 'screen', 'user', 'system']),
+  type: z.string(),
+  state: RunState.nullable(),
+  payload: z.unknown(),
+});
+export type RunEvent = z.infer<typeof RunEvent>;
+
+export const RunDetail = Run.extend({ events: z.array(RunEvent) });
+export type RunDetail = z.infer<typeof RunDetail>;
+
+/** Continue a rate-limited or ended run; defaults to a generic "continue" prompt. */
+export const ResumeRunBody = z.object({ text: z.string().trim().max(20_000).optional() });
+export type ResumeRunBody = z.input<typeof ResumeRunBody>;
+
+export const GarbageCollectRunsBody = z.object({
+  projectId: z.string().min(1).optional(),
+  /** Number of most-recent completed runs to retain (0 = purge all completed/failed runs). */
+  keepRecent: z.number().int().min(0).max(500).default(0),
+  /** Whether to also delete failed runs. Defaults to true. */
+  includeFailed: z.boolean().default(true),
+  /** Whether to prune git worktrees of removed runs. Defaults to true. */
+  pruneWorktrees: z.boolean().default(true),
+});
+export type GarbageCollectRunsBody = z.input<typeof GarbageCollectRunsBody>;
+
+export const GarbageCollectRunsResponse = z.object({
+  removedRuns: z.number().int(),
+  closedSessions: z.number().int(),
+  prunedWorktrees: z.number().int(),
+  remainingRuns: z.number().int(),
+});
+export type GarbageCollectRunsResponse = z.infer<typeof GarbageCollectRunsResponse>;
