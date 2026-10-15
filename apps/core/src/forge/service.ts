@@ -125,6 +125,48 @@ export function parseForgeRemote(
   };
 }
 
+function hostOf(url: string | null | undefined): string | null {
+  if (!url?.trim()) return null;
+  const trimmed = url.trim();
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return new URL(trimmed).host.toLowerCase();
+  } catch {
+    return null;
+  }
+  // SCP-style SSH: git@host:owner/repo.git
+  return /^(?:[^@/]+@)?([^:/]+):/.exec(trimmed)?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * The remote URL comes from the worktree's git config, which the agent can rewrite. The token is
+ * only sent to the public GitHub API, the API URL the user configured, the host of the repo URL
+ * the project was cloned from, or hosts listed in EMBERLINE_FORGE_ALLOWED_HOSTS.
+ */
+export function assertTrustedForgeApi(
+  remote: ParsedForgeRemote,
+  trust: { apiUrl: string | null; projectRepoUrl: string | null },
+): void {
+  const apiHost = hostOf(remote.apiBaseUrl);
+  const configuredHost = hostOf(trust.apiUrl);
+  const repoHost = hostOf(trust.projectRepoUrl);
+  const extra = (process.env.EMBERLINE_FORGE_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  const trusted = new Set<string>(['api.github.com', ...extra]);
+  if (configuredHost) trusted.add(configuredHost);
+  if (repoHost) trusted.add(repoHost);
+  if (!apiHost || !trusted.has(apiHost)) {
+    throw conflict(
+      `forge API host ${apiHost ?? remote.apiBaseUrl} is not trusted for your token; set the Forge API URL in settings`,
+    );
+  }
+  // Plain HTTP is only acceptable when the user configured that exact API URL themselves.
+  if (remote.apiBaseUrl.startsWith('http://') && apiHost !== configuredHost) {
+    throw conflict('refusing to send the forge token over plain HTTP; set an https Forge API URL in settings');
+  }
+}
+
 export class ForgeService {
   constructor(
     private readonly db: Db,
@@ -236,7 +278,15 @@ export class ForgeService {
       : null;
 
     let pullRequest = this.recordedPullRequest(runId);
-    if (pullRequest && parsed && stored.token) {
+    const trusted = (remote: ParsedForgeRemote) => {
+      try {
+        assertTrustedForgeApi(remote, { apiUrl: stored.apiUrl, projectRepoUrl: project?.repoUrl ?? null });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (pullRequest && parsed && stored.token && trusted(parsed)) {
       const refreshed = await this.refreshPullRequest(parsed, stored.token, pullRequest).catch(() => null);
       if (refreshed) pullRequest = refreshed;
     }
@@ -278,6 +328,7 @@ export class ForgeService {
     if (!parsed) {
       throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
     }
+    assertTrustedForgeApi(parsed, { apiUrl: stored.apiUrl, projectRepoUrl: project?.repoUrl ?? null });
 
     if (body.pushFirst) {
       try {

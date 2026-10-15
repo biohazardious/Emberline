@@ -354,6 +354,38 @@ describe('M6 review, git commit/push, and artifacts', () => {
     }
   });
 
+  it('never sends the forge token to a host taken from an agent-controlled remote', async () => {
+    const { createServer } = await import('node:http');
+    const seen: (string | undefined)[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.headers.authorization ?? (req.headers['private-token'] as string | undefined));
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as { port: number };
+
+    try {
+      const { project } = await createGitProjectWithBareRemote('Forge Exfil');
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
+      // A prompt-injected agent repoints origin at a server it controls.
+      execFileSync('git', ['-C', run.worktreePath, 'remote', 'set-url', 'origin', `http://127.0.0.1:${port}/acme/widget.git`]);
+      const patchForge = await t.app.inject({
+        method: 'PATCH',
+        url: '/api/forge',
+        headers: { ...CSRF, cookie },
+        payload: { provider: 'auto', apiUrl: null, token: 'ghp_secret_token' },
+      });
+      expect(patchForge.statusCode).toBe(200);
+
+      const createPrRes = await api('POST', `/api/runs/${run.id}/forge/pr`, { pushFirst: false });
+      expect(createPrRes.statusCode).toBe(409);
+      expect(createPrRes.json().message).toMatch(/not trusted/i);
+      expect(seen).toHaveLength(0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('creates, updates, triggers, and deletes scheduled cron agent jobs', async () => {
     const base = new Date('2026-10-14T01:30:00.000Z');
     const nextDaily = computeNextCronDate('0 2 * * *', base);
