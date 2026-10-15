@@ -12,6 +12,7 @@ import {
   type ToolchainStatusResponse,
 } from '@emberline/protocol';
 import type { Db } from '../db/index.js';
+import { conflict } from '../errors.js';
 import { getFactorySettings } from '../factory/service.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
@@ -256,8 +257,14 @@ export class ToolchainService {
     const entry = PROVIDER_REGISTRY[provider];
     const rt = this.state.get(provider)!;
     const action = rawBody.action ?? 'install';
-    if (rt.installing) {
-      throw new Error(`${entry.label} CLI ${rt.lastAction ?? 'install'} is already running`);
+    // B24: every CLI installs into the same npm/pipx prefix on the runner-tools volume, so two
+    // installs at once (even for different providers) can corrupt it. One at a time, globally.
+    const busy = [...this.state.entries()].find(([, state]) => state.installing);
+    if (busy) {
+      const [busyProvider, busyState] = busy;
+      throw conflict(
+        `${PROVIDER_REGISTRY[busyProvider].label} CLI ${busyState.lastAction ?? 'install'} is still running; wait for it to finish`,
+      );
     }
 
     const defaultCmd =
