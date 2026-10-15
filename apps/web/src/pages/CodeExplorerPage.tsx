@@ -707,22 +707,24 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           gap: '10px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', minWidth: 0 }}>
           <span className="badge badge-soft mono" style={{ fontWeight: 600 }}>
             <FileCode2 className="icon" aria-hidden /> Code Explorer
           </span>
           <strong>{project?.name ?? projectId}</strong>
-          <span className="muted mono small">{fileList.data?.workspacePath ?? project?.path}</span>
+          <span className="muted mono small" style={{ overflowWrap: 'anywhere' }}>
+            {fileList.data?.workspacePath ?? project?.path}
+          </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
           <label className="small muted" htmlFor="code-target-select">
             Target:
           </label>
           <select
             id="code-target-select"
             className="input"
-            style={{ width: 'auto', padding: '4px 8px', fontSize: '0.78rem' }}
+            style={{ width: 'auto', maxWidth: 'min(320px, 100%)', padding: '4px 8px', fontSize: '0.78rem' }}
             value={targetId}
             onChange={(e) => {
               setTargetId(e.target.value);
@@ -764,11 +766,11 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
 
       {/* Main Split Workbench */}
       <div
+        className="code-explorer-grid"
         style={{
           flex: 1,
           minHeight: 0,
           display: 'grid',
-          gridTemplateColumns: '290px 1fr',
           gap: '10px',
         }}
       >
@@ -1355,7 +1357,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               </span>
               <select
                 className="input"
-                style={{ width: 'auto', padding: '4px 8px', fontSize: '0.76rem' }}
+                style={{ width: 'auto', maxWidth: 'min(320px, 100%)', padding: '4px 8px', fontSize: '0.76rem' }}
                 value={agentPersona}
                 onChange={(e) => setAgentPersona(e.target.value as AgentPersona)}
               >

@@ -337,6 +337,7 @@ function Shell() {
           <Link href="/" className="brand" title="Emberline — AI Coding Factory">
             <BrandLogo size={24} />
             <span className="brand-name">Emberline</span>
+            {system.data?.version && <span className="brand-version mono">v{system.data.version}</span>}
           </Link>
           <button
             type="button"
@@ -742,6 +743,19 @@ function Shell() {
                 </div>
               );
             })()}
+          <div className="sidebar-mobile-actions">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => applyTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? <Sun className="icon" aria-hidden /> : <Moon className="icon" aria-hidden />}
+              {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logout()}>
+              Sign out
+            </button>
+          </div>
         </footer>
       </aside>
 
@@ -759,47 +773,51 @@ function Shell() {
               <Menu className="icon" aria-hidden />
             </button>
             <div className="topbar-tabs">
-              <Link href="/" className={`topbar-tab${location === '/' ? ' active' : ''}`}>
-                <LayoutDashboard className="icon" aria-hidden /> Overview
+              <Link href="/" className={`topbar-tab${location === '/' ? ' active' : ''}`} title="Overview">
+                <LayoutDashboard className="icon" aria-hidden /> <span className="tab-label">Overview</span>
               </Link>
               {activeProject && (
                 <Link
                   href={`/projects/${activeProject.id}/roadmap`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/roadmap` ? ' active' : ''}`}
+                  title="Roadmap"
                 >
-                  <Target className="icon" aria-hidden /> Roadmap
+                  <Target className="icon" aria-hidden /> <span className="tab-label">Roadmap</span>
                 </Link>
               )}
               {activeProject && (
                 <Link
                   href={`/projects/${activeProject.id}/board`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
+                  title="Board"
                 >
-                  <SquareKanban className="icon" aria-hidden /> Board
+                  <SquareKanban className="icon" aria-hidden /> <span className="tab-label">Board</span>
                 </Link>
               )}
               {activeProject && (
                 <Link
                   href={`/projects/${activeProject.id}/code`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
+                  title="Code Explorer"
                 >
-                  <FileCode className="icon" aria-hidden /> Code Explorer
+                  <FileCode className="icon" aria-hidden /> <span className="tab-label">Code Explorer</span>
                 </Link>
               )}
               {activeProject && (
                 <Link
                   href={`/projects/${activeProject.id}/browser`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
+                  title="Live Browser"
                 >
-                  <Globe className="icon" aria-hidden /> Live Browser
+                  <Globe className="icon" aria-hidden /> <span className="tab-label">Live Browser</span>
                 </Link>
               )}
-              <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}>
-                <LayoutGrid className="icon" aria-hidden /> Fleet
+              <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`} title="Fleet">
+                <LayoutGrid className="icon" aria-hidden /> <span className="tab-label">Fleet</span>
                 {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
               </Link>
-              <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`}>
-                <Settings className="icon" aria-hidden /> Settings
+              <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`} title="Settings">
+                <Settings className="icon" aria-hidden /> <span className="tab-label">Settings</span>
               </Link>
             </div>
           </div>
@@ -816,17 +834,17 @@ function Shell() {
             <button
               id="theme-toggle"
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-sm hide-mobile"
               onClick={() => applyTheme(theme === 'dark' ? 'light' : 'dark')}
               title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
             >
               {theme === 'dark' ? (
                 <>
-                  <Sun className="icon" aria-hidden /> Light
+                  <Sun className="icon" aria-hidden /> <span className="tab-label">Light</span>
                 </>
               ) : (
                 <>
-                  <Moon className="icon" aria-hidden /> Dark
+                  <Moon className="icon" aria-hidden /> <span className="tab-label">Dark</span>
                 </>
               )}
             </button>
@@ -850,11 +868,11 @@ function Shell() {
             >
               <span className="mono">⌘K</span>
             </button>
-            <span id="runner-status" className={`pill pill-runner-${ptyd}`} title="Runner (ptyd) connection">
+            <span id="runner-status" className={`pill pill-runner-${ptyd}`} title={`Runner (ptyd): ${ptyd}`}>
               <span className="dot" />
-              runner {ptyd}
+              <span className="tab-label">runner {ptyd}</span>
             </span>
-            <button id="logout" className="btn btn-ghost btn-sm" onClick={() => void logout()}>
+            <button id="logout" className="btn btn-ghost btn-sm hide-mobile" onClick={() => void logout()}>
               Sign out
             </button>
           </div>

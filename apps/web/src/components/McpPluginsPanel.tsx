@@ -230,7 +230,7 @@ export function McpPluginsPanel({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))',
                 gap: '10px',
               }}
             >
@@ -351,7 +351,7 @@ export function McpPluginsPanel({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(310px, 100%), 1fr))',
             gap: '10px',
           }}
         >
@@ -558,7 +558,7 @@ export function McpPluginsPanel({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
                 gap: '10px',
               }}
             >
@@ -634,7 +634,7 @@ export function McpPluginsPanel({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(310px, 100%), 1fr))',
             gap: '10px',
           }}
         >

@@ -362,7 +362,7 @@ function QuickAdd({
       <select
         className="input"
         aria-label="Ticket persona"
-        style={{ width: 'auto', padding: '6px 8px', fontSize: '0.82rem' }}
+        style={{ width: 'auto', maxWidth: 'min(320px, 100%)', padding: '6px 8px', fontSize: '0.82rem' }}
         value={persona}
         onChange={(e) => setPersona(e.target.value as AgentPersona)}
         title="Assign specialist persona for this ticket"

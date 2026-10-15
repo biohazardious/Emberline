@@ -529,7 +529,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     <section className="panel" aria-label="Project status and live demo">
       {/* Top Header: Project Status & Quick Actions */}
       <div className="panel-head">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
           <span
             className="pill pill-live"
             style={{
@@ -538,9 +538,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               color: 'var(--ok)',
               fontWeight: 600,
             }}
+            title={project.name}
           >
             <span className="dot" />
-            {project.name}
+            <span className="pill-text">{project.name}</span>
           </span>
           {summary.autoChainActive && (
             <span className="badge badge-soft mono">⟳ Auto-Pipeline Active</span>
@@ -1244,7 +1245,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       setIframeNonce((n) => n + 1);
                       setDemoErrors([]);
                     }}
-                    style={{ width: 'auto', fontSize: '0.78rem', padding: '4px 8px' }}
+                    style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
                   >
                     {targets.map((t) => (
                       <option key={t.id} value={t.id}>
@@ -1431,7 +1432,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     className="input"
                     value={activeTarget.id}
                     onChange={(e) => setSelectedTargetId(e.target.value)}
-                    style={{ width: 'auto', fontSize: '0.78rem', padding: '4px 8px' }}
+                    style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
                   >
                     {targets.map((t) => (
                       <option key={t.id} value={t.id}>
@@ -1606,7 +1607,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
               gap: 10,
             }}
           >

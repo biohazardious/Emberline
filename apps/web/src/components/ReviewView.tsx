@@ -1146,7 +1146,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 </div>
               ) : !fileDiff ? (
                 <div className="empty" style={{ margin: '1rem' }}>
-                  Select a changed file on the left to inspect its diff and attach inline review annotations.
+                  Select a changed file to inspect its diff and attach inline review annotations.
                 </div>
               ) : fileDiff.binary ? (
                 <div className="empty" style={{ margin: '1rem' }}>

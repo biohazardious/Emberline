@@ -594,9 +594,9 @@ export function LiveBrowserStudio({
 
       {/* Main Split: Interactive Viewport Canvas (Left) + Agent Activity & Console (Right) */}
       <div
+        className="browser-studio-grid"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) 330px',
           flex: fullscreen ? 1 : undefined,
           minHeight: fullscreen ? 0 : 480,
         }}

@@ -43,7 +43,7 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
               className="input"
               value={targetId}
               onChange={(e) => setTargetId(e.target.value)}
-              style={{ width: 'auto', fontSize: '0.78rem', padding: '5px 10px' }}
+              style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '5px 10px' }}
             >
               {targets.map((t) => (
                 <option key={t.id} value={t.id}>
