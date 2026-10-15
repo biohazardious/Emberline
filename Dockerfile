@@ -147,6 +147,11 @@ RUN apt-get update \
   && rm -f /tmp/chrome.deb \
   && ln -sf /usr/bin/google-chrome-stable /usr/bin/chromium \
   && rm -rf /var/lib/apt/lists/*
+# Headless browser MCP server wired by adapter-claude (`playwright-mcp`). Installed into /usr/local,
+# not the runner-tools volume, so it is versioned with the image and cannot be shadowed by a stale volume.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.83
+RUN npm install -g --prefix /usr/local --no-fund --no-audit @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
+  && test -x /usr/local/bin/playwright-mcp
 ENV SHELL=/bin/bash \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
     EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd.sock \
