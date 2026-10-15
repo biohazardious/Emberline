@@ -16,7 +16,8 @@ export default defineConfig({
   },
   test: {
     include: ['{apps,packages}/*/src/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', 'apps/web/**', 'workspaces/**'],
+    // apps/web only has DOM-free helper tests; components are checked in the browser.
+    exclude: ['**/node_modules/**', '**/dist/**', 'workspaces/**'],
     environment: 'node',
     pool: 'forks',
     testTimeout: 15_000,

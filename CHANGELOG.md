@@ -10,11 +10,13 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - The terminal's last screen is kept when an agent session closes.
 - "Build outputs" list the APKs, installers and firmware images a run produced, with their full paths (host path when known), in Review, the ticket drawer and Fleet; they can be downloaded.
 - Finished runs stay in Fleet's Live view for 15 minutes with their final answer; they can be hidden.
+- Roadmap milestones can be filtered by status (several at once, e.g. everything but Done) and category, and searched by item, ticket key or milestone; the choice is remembered per project.
 
 ### Fixed
 
 - Event details are no longer cut at 500 characters; long ones collapse with "Show more".
 - Stops made by the factory pipeline are recorded as system events with their reason, not as user stops.
+- Roadmap items labelled both Idea and Planned as "TODO"; they now read Idea, To do, In progress and Done.
 
 ## [0.1.0] - 2026-10-15
 

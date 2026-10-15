@@ -14,6 +14,7 @@ import {
   type ProjectRoadmapState,
   PROVIDER_REGISTRY,
   type RoadmapCategory,
+  type RoadmapItemStatus,
   type RoadmapItem,
 } from '@emberline/protocol';
 import {
@@ -25,6 +26,7 @@ import {
   Map as MapIcon,
   Palette,
   Rocket,
+  Search,
   Shield,
   Sparkles,
   Square,
@@ -32,6 +34,7 @@ import {
   SquareKanban,
   Target,
   Trash2,
+  X,
   Zap,
 } from 'lucide-react';
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
@@ -41,6 +44,18 @@ import { PersonaBadge } from '../components/PersonaBadge';
 import { ProviderMark } from '../components/ProviderMark';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
+import {
+  countRoadmapCategories,
+  countRoadmapStatuses,
+  EMPTY_ROADMAP_FILTER,
+  filterRoadmap,
+  isRoadmapFilterActive,
+  parseRoadmapFilter,
+  ROADMAP_CATEGORIES,
+  ROADMAP_STATUSES,
+  type RoadmapFilter,
+  toggled,
+} from '../roadmapFilter';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   claude: 'Claude Code',
@@ -65,6 +80,20 @@ export const MODEL_LABELS: Record<AgentModelId, string> = {
   'gpt-4o': 'GPT-4o / 4.1 (★4 Flagship)',
   'o4-mini': 'OpenAI o4-mini (★3 Balanced)',
   'gpt-4o-mini': 'GPT-4o Mini (★2 Fast)',
+};
+
+const ROADMAP_STATUS_LABEL: Record<RoadmapItemStatus, string> = {
+  idea: 'Idea',
+  planned: 'To do',
+  in_progress: 'In progress',
+  done: 'Done',
+};
+
+const ROADMAP_STATUS_MARK: Record<RoadmapItemStatus, string> = {
+  idea: '◇',
+  planned: '○',
+  in_progress: '●',
+  done: '✓',
 };
 
 const CATEGORY_META: Record<RoadmapCategory, { label: string; icon: ReactNode }> = {
@@ -294,6 +323,30 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     [projects.data, projectId],
   );
   const roadmap = localRoadmap ?? roadmapPoll.data;
+
+  // Milestone item filter, remembered per project in this browser.
+  const filterKey = `emberline.roadmap.filter.${projectId}`;
+  const [itemFilter, setItemFilter] = useState<RoadmapFilter>(() => {
+    try {
+      return parseRoadmapFilter(localStorage.getItem(filterKey));
+    } catch {
+      return EMPTY_ROADMAP_FILTER;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(filterKey, JSON.stringify(itemFilter));
+    } catch {
+      // Storage unavailable: the filter lasts for this visit only.
+    }
+  }, [filterKey, itemFilter]);
+  const filteredRoadmap = useMemo(
+    () => filterRoadmap(roadmap?.milestones ?? [], itemFilter),
+    [roadmap?.milestones, itemFilter],
+  );
+  const statusCounts = useMemo(() => countRoadmapStatuses(roadmap?.milestones ?? []), [roadmap?.milestones]);
+  const categoryCounts = useMemo(() => countRoadmapCategories(roadmap?.milestones ?? []), [roadmap?.milestones]);
+  const filterActive = isRoadmapFilterActive(itemFilter);
 
   const filteredSuggestions = useMemo(() => {
     const list = roadmap?.suggestions ?? [];
@@ -1299,8 +1352,58 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             <span className="badge mono">{roadmap.milestones.length} milestones</span>
           </header>
 
+          <div className="roadmap-filter" aria-label="Filter roadmap items">
+            <div className="roadmap-filter-row">
+              <label className="roadmap-search">
+                <Search className="icon" aria-hidden />
+                <input
+                  className="input"
+                  type="search"
+                  placeholder="Search items, ticket keys or milestones…"
+                  value={itemFilter.query}
+                  onChange={(e) => setItemFilter((f) => ({ ...f, query: e.target.value }))}
+                />
+              </label>
+              {filterActive && (
+                <>
+                  <span className="muted small mono">
+                    {filteredRoadmap.shown} of {filteredRoadmap.total} items
+                  </span>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setItemFilter(EMPTY_ROADMAP_FILTER)}>
+                    <X className="icon" aria-hidden /> Clear
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="roadmap-filter-row" role="group" aria-label="Status">
+              {ROADMAP_STATUSES.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className={`chip-btn${itemFilter.statuses.includes(status) ? ' chip-on' : ''}`}
+                  aria-pressed={itemFilter.statuses.includes(status)}
+                  onClick={() => setItemFilter((f) => ({ ...f, statuses: toggled(f.statuses, status) }))}
+                >
+                  {ROADMAP_STATUS_LABEL[status]} {statusCounts[status]}
+                </button>
+              ))}
+              <span className="roadmap-filter-sep" aria-hidden />
+              {ROADMAP_CATEGORIES.map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  className={`chip-btn${itemFilter.categories.includes(category) ? ' chip-on' : ''}`}
+                  aria-pressed={itemFilter.categories.includes(category)}
+                  onClick={() => setItemFilter((f) => ({ ...f, categories: toggled(f.categories, category) }))}
+                >
+                  {CATEGORY_META[category].label} {categoryCounts[category]}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {roadmap.milestones.map((ms) => {
+            {filteredRoadmap.milestones.map(({ milestone: ms, items: shownItems }) => {
               const doneCount = ms.items.filter((i) => i.status === 'done').length;
               const pct = ms.items.length > 0 ? Math.round((doneCount / ms.items.length) * 100) : 0;
               const undispatchedIds = ms.items.filter((i) => i.status !== 'done').map((i) => i.id);
@@ -1416,13 +1519,17 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   </div>
 
                   {/* Milestone Items */}
-                  {ms.items.length === 0 ? (
+                  {ms.items.length > 0 && shownItems.length === 0 ? (
+                    <p className="muted small" style={{ margin: '2px 0' }}>
+                      No items in {ms.code} match the filter.
+                    </p>
+                  ) : ms.items.length === 0 ? (
                     <p className="muted small" style={{ margin: '2px 0' }}>
                       No items in {ms.code} yet. Click <strong><Sparkles className="icon" aria-hidden /> Auto-Generate Roadmap</strong> above, promote a brainstorm idea, or type below.
                     </p>
                   ) : (
                     <ul className="list" style={{ margin: 0 }}>
-                      {ms.items.map((item) => {
+                      {shownItems.map((item) => {
                         const isDone = item.status === 'done';
                         const isChecked = selectedItems.has(item.id);
                         return (
@@ -1453,7 +1560,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                                 onClick={() => void handleToggleItemDone(item)}
                                 title={isDone ? 'Mark as planned' : 'Mark as done'}
                               >
-                                {isDone ? '✓ DONE' : item.status === 'in_progress' ? '● ACTIVE' : '○ TODO'}
+                                {ROADMAP_STATUS_MARK[item.status]} {ROADMAP_STATUS_LABEL[item.status].toUpperCase()}
                               </button>
                               <span
                                 style={{

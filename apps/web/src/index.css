@@ -2294,6 +2294,49 @@ a {
   overflow-wrap: anywhere;
 }
 
+/* --- roadmap item filter ---------------------------------------------------- */
+
+.roadmap-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.roadmap-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.roadmap-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.roadmap-search .input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 0.8rem;
+}
+
+.chip-btn.chip-on {
+  color: var(--ember-2);
+  border-color: color-mix(in hsl, var(--ember-1) 55%, var(--border));
+  background: color-mix(in hsl, var(--ember-1) 14%, var(--surface-2));
+}
+
+.roadmap-filter-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+
 /* --- run outcome: final answer, last screen, build outputs ------------------ */
 
 /* A finished Fleet pane reads top to bottom and scrolls when its answer is long. */
