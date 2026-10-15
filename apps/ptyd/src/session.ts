@@ -11,8 +11,30 @@ const { SerializeAddon } = serializePkg;
 type HeadlessTerminal = InstanceType<typeof Terminal>;
 type Serializer = InstanceType<typeof SerializeAddon>;
 
-/** Environment variables inherited from ptyd; everything else must be passed explicitly. */
-const BASE_ENV_KEYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'TMPDIR'];
+/**
+ * Environment variables inherited from ptyd; everything else must be passed explicitly. Besides the
+ * basics, this carries the runner image's tool locations: npm/pipx install into the runner-tools
+ * volume (which is on PATH) and the SDKs from `emberline-sdk` are found by their usual variables.
+ */
+const BASE_ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'TMPDIR',
+  'EMBERLINE_TOOLS_DIR',
+  'NPM_CONFIG_PREFIX',
+  'PIPX_HOME',
+  'PIPX_BIN_DIR',
+  'JAVA_HOME',
+  'ANDROID_HOME',
+  'ANDROID_SDK_ROOT',
+];
 
 export interface SessionConfig {
   /** Directory for raw output logs; logging is disabled when omitted. */
