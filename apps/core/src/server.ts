@@ -49,7 +49,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const startedAt = Date.now();
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler);
   const forge = new ForgeService(deps.db, deps.runs);
-  const cron = new CronService(deps.db, deps.runs, deps.scheduler);
+  const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);
   cron.start();
   app.addHook('onClose', async () => {
     cron.stop();

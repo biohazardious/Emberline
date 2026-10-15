@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import {
   type CreateScheduledJobBody,
   CreateScheduledJobBody as CreateScheduledJobBodySchema,
+  type CronOverlapPolicy,
+  CronPreviewBody,
+  type CronPreviewResponse,
   type PermissionMode,
   type Run,
   type ScheduledJob,
@@ -10,134 +13,17 @@ import {
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, scheduledJobs } from '../db/schema.js';
+import { projects, runs as runsTable, scheduledJobs } from '../db/schema.js';
 import { badRequest, notFound } from '../errors.js';
+import { assertTimeZone, computeNextCronDate, previewCronRuns } from './schedule.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
 type ScheduledJobRow = typeof scheduledJobs.$inferSelect;
 
-const ALIASES: Record<string, string> = {
-  '@hourly': '0 * * * *',
-  '@daily': '0 0 * * *',
-  '@midnight': '0 0 * * *',
-  '@weekly': '0 0 * * 0',
-  '@monthly': '0 0 1 * *',
-};
+export { computeNextCronDate, parseCronExpression } from './schedule.js';
 
-interface ParsedCron {
-  minutes: Set<number>;
-  hours: Set<number>;
-  daysOfMonth: Set<number>;
-  months: Set<number>;
-  daysOfWeek: Set<number>;
-}
-
-function parseCronField(field: string, min: number, max: number, label: string): Set<number> {
-  const result = new Set<number>();
-  const parts = field.split(',');
-  for (const part of parts) {
-    const trimmed = part.trim();
-    if (!trimmed) throw badRequest(`invalid cron ${label} field: "${field}"`);
-
-    const [rangePart, stepPart] = trimmed.split('/');
-    if (trimmed.split('/').length > 2) {
-      throw badRequest(`invalid cron step syntax in ${label}: "${trimmed}"`);
-    }
-    const step = stepPart !== undefined ? Number(stepPart) : 1;
-    if (!Number.isInteger(step) || step <= 0) {
-      throw badRequest(`invalid cron step in ${label}: "${trimmed}"`);
-    }
-
-    let start = min;
-    let end = max;
-    if (rangePart !== '*') {
-      if (rangePart!.includes('-')) {
-        const [a, b] = rangePart!.split('-').map((n) => Number(n));
-        if (!Number.isInteger(a) || !Number.isInteger(b) || a! < min || b! > max || a! > b!) {
-          throw badRequest(`invalid cron range in ${label}: "${trimmed}"`);
-        }
-        start = a!;
-        end = b!;
-      } else {
-        const val = Number(rangePart);
-        if (!Number.isInteger(val) || val < min || val > max) {
-          throw badRequest(`invalid cron value in ${label}: "${trimmed}"`);
-        }
-        start = val;
-        end = stepPart !== undefined ? max : val;
-      }
-    }
-
-    for (let v = start; v <= end; v += step) {
-      result.add(label === 'dayOfWeek' && v === 7 ? 0 : v);
-    }
-  }
-  if (result.size === 0) throw badRequest(`empty cron field ${label}`);
-  return result;
-}
-
-export function parseCronExpression(expr: string): ParsedCron {
-  const normalized = ALIASES[expr.trim().toLowerCase()] ?? expr.trim();
-  const fields = normalized.split(/\s+/);
-  if (fields.length !== 5) {
-    throw badRequest('cron expression must have 5 fields (minute hour day-of-month month day-of-week) or a @daily/@hourly alias');
-  }
-  return {
-    minutes: parseCronField(fields[0]!, 0, 59, 'minute'),
-    hours: parseCronField(fields[1]!, 0, 23, 'hour'),
-    daysOfMonth: parseCronField(fields[2]!, 1, 31, 'dayOfMonth'),
-    months: parseCronField(fields[3]!, 1, 12, 'month'),
-    daysOfWeek: parseCronField(fields[4]!, 0, 7, 'dayOfWeek'),
-  };
-}
-
-/**
- * Computes the next matching timestamp strictly after `fromDate` (rounded to the next minute).
- */
-export function computeNextCronDate(cronExpr: string, fromDate: Date = new Date()): Date {
-  const parsed = parseCronExpression(cronExpr);
-  const candidate = new Date(fromDate.getTime());
-  candidate.setUTCSeconds(0, 0);
-  candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
-
-  // Search up to 366 days ahead (527,040 minutes)
-  const maxIterations = 366 * 24 * 60;
-  for (let i = 0; i < maxIterations; i++) {
-    const month = candidate.getUTCMonth() + 1;
-    if (!parsed.months.has(month)) {
-      candidate.setUTCMonth(candidate.getUTCMonth() + 1, 1);
-      candidate.setUTCHours(0, 0, 0, 0);
-      continue;
-    }
-
-    const dom = candidate.getUTCDate();
-    const dow = candidate.getUTCDay();
-    if (!parsed.daysOfMonth.has(dom) || !parsed.daysOfWeek.has(dow)) {
-      candidate.setUTCDate(candidate.getUTCDate() + 1);
-      candidate.setUTCHours(0, 0, 0, 0);
-      continue;
-    }
-
-    const hour = candidate.getUTCHours();
-    if (!parsed.hours.has(hour)) {
-      candidate.setUTCHours(candidate.getUTCHours() + 1, 0, 0, 0);
-      continue;
-    }
-
-    const minute = candidate.getUTCMinutes();
-    if (!parsed.minutes.has(minute)) {
-      candidate.setUTCMinutes(candidate.getUTCMinutes() + 1, 0, 0);
-      continue;
-    }
-
-    return candidate;
-  }
-
-  throw badRequest(`unable to find next run time for cron expression "${cronExpr}" within 1 year`);
-}
-
-function toScheduledJob(row: ScheduledJobRow): ScheduledJob {
+function toScheduledJob(row: ScheduledJobRow, defaultTimeZone: string): ScheduledJob {
   return {
     id: row.id,
     projectId: row.projectId,
@@ -146,6 +32,8 @@ function toScheduledJob(row: ScheduledJobRow): ScheduledJob {
     prompt: row.prompt,
     permissionMode: row.permissionMode as PermissionMode,
     enabled: row.enabled,
+    timeZone: row.timeZone ?? defaultTimeZone,
+    overlapPolicy: row.overlapPolicy as CronOverlapPolicy,
     lastRunId: row.lastRunId,
     lastRunAt: row.lastRunAt?.toISOString() ?? null,
     nextRunAt: row.nextRunAt.toISOString(),
@@ -161,10 +49,50 @@ export class CronService {
     private readonly db: Db,
     private readonly runs: RunService,
     private readonly scheduler?: Scheduler,
+    /** Zone for jobs without their own (core's EMBERLINE_TIMEZONE / TZ). */
+    private readonly defaultTimeZone = 'UTC',
   ) {}
+
+  private zoneOf(row: Pick<ScheduledJobRow, 'timeZone'>): string {
+    return row.timeZone ?? this.defaultTimeZone;
+  }
+
+  private next(row: Pick<ScheduledJobRow, 'cronExpr' | 'timeZone'>, from: Date): Date {
+    return computeNextCronDate(row.cronExpr, from, this.zoneOf(row));
+  }
+
+  /** The next fire times of an expression, for the editor's preview. */
+  preview(rawBody: unknown, now: Date = new Date()): CronPreviewResponse {
+    const parsed = CronPreviewBody.safeParse(rawBody);
+    if (!parsed.success) throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
+    const timeZone = parsed.data.timeZone ?? this.defaultTimeZone;
+    return {
+      timeZone,
+      nextRuns: previewCronRuns(parsed.data.cronExpr, timeZone, 5, now).map((d) => d.toISOString()),
+    };
+  }
+
+  /**
+   * Re-plans upcoming occurrences, e.g. after an upgrade changed how expressions are evaluated.
+   * Occurrences already due are left alone so the next tick still fires them.
+   */
+  replan(now: Date = new Date()): void {
+    for (const row of this.db.select().from(scheduledJobs).where(eq(scheduledJobs.enabled, true)).all()) {
+      if (row.nextRunAt.getTime() <= now.getTime()) continue;
+      try {
+        const nextRunAt = this.next(row, now);
+        if (nextRunAt.getTime() !== row.nextRunAt.getTime()) {
+          this.db.update(scheduledJobs).set({ nextRunAt }).where(eq(scheduledJobs.id, row.id)).run();
+        }
+      } catch {
+        // An expression that no longer parses keeps its old time; editing the job fixes it.
+      }
+    }
+  }
 
   start(intervalMs = 30_000): void {
     if (this.timer) return;
+    this.replan();
     this.timer = setInterval(() => {
       void this.tick();
     }, intervalMs);
@@ -187,7 +115,7 @@ export class CronService {
           .orderBy(asc(scheduledJobs.createdAt))
           .all()
       : this.db.select().from(scheduledJobs).orderBy(asc(scheduledJobs.createdAt)).all();
-    return rows.map(toScheduledJob);
+    return rows.map((row) => toScheduledJob(row, this.defaultTimeZone));
   }
 
   create(rawBody: unknown, now: Date = new Date()): ScheduledJob {
@@ -199,7 +127,9 @@ export class CronService {
     const project = this.db.select().from(projects).where(eq(projects.id, body.projectId)).get();
     if (!project) throw notFound('no such project');
 
-    const nextRunAt = computeNextCronDate(body.cronExpr, now);
+    if (body.timeZone) assertTimeZone(body.timeZone);
+    const timeZone = body.timeZone ?? null;
+    const nextRunAt = computeNextCronDate(body.cronExpr, now, timeZone ?? this.defaultTimeZone);
     const id = randomUUID();
     const row: ScheduledJobRow = {
       id,
@@ -209,13 +139,15 @@ export class CronService {
       prompt: body.prompt,
       permissionMode: body.permissionMode ?? 'auto',
       enabled: body.enabled ?? true,
+      timeZone,
+      overlapPolicy: body.overlapPolicy ?? 'skip',
       lastRunId: null,
       lastRunAt: null,
       nextRunAt,
       createdAt: now,
     };
     this.db.insert(scheduledJobs).values(row).run();
-    return toScheduledJob(row);
+    return toScheduledJob(row, this.defaultTimeZone);
   }
 
   update(id: string, rawBody: unknown, now: Date = new Date()): ScheduledJob {
@@ -229,10 +161,12 @@ export class CronService {
     const body: UpdateScheduledJobBody = parsed.data;
     const nextCron = body.cronExpr ?? existing.cronExpr;
     const nextEnabled = body.enabled ?? existing.enabled;
+    if (body.timeZone) assertTimeZone(body.timeZone);
+    const timeZone = body.timeZone ?? existing.timeZone;
 
     let nextRunAt = existing.nextRunAt;
-    if (body.cronExpr !== undefined || (body.enabled === true && !existing.enabled)) {
-      nextRunAt = computeNextCronDate(nextCron, now);
+    if (body.cronExpr !== undefined || body.timeZone !== undefined || (body.enabled === true && !existing.enabled)) {
+      nextRunAt = this.next({ cronExpr: nextCron, timeZone }, now);
     }
 
     const patch: Partial<ScheduledJobRow> = {
@@ -241,12 +175,14 @@ export class CronService {
       prompt: body.prompt ?? existing.prompt,
       permissionMode: body.permissionMode ?? existing.permissionMode,
       enabled: nextEnabled,
+      timeZone,
+      overlapPolicy: body.overlapPolicy ?? existing.overlapPolicy,
       nextRunAt,
     };
 
     this.db.update(scheduledJobs).set(patch).where(eq(scheduledJobs.id, id)).run();
     const updated = this.db.select().from(scheduledJobs).where(eq(scheduledJobs.id, id)).get()!;
-    return toScheduledJob(updated);
+    return toScheduledJob(updated, this.defaultTimeZone);
   }
 
   remove(id: string): void {
@@ -260,7 +196,7 @@ export class CronService {
     if (!row) throw notFound('no such scheduled job');
     const run = await this.dispatchJobRun(row, now);
     const updated = this.db.select().from(scheduledJobs).where(eq(scheduledJobs.id, id)).get()!;
-    return { job: toScheduledJob(updated), run };
+    return { job: toScheduledJob(updated, this.defaultTimeZone), run };
   }
 
   /**
@@ -286,12 +222,21 @@ export class CronService {
 
       for (const row of rows) {
         if (row.nextRunAt.getTime() > now.getTime()) continue;
+        if (row.overlapPolicy === 'skip' && this.previousRunStillGoing(row)) {
+          // B13: a long run must not pile up new worktrees every interval.
+          this.db
+            .update(scheduledJobs)
+            .set({ nextRunAt: this.next(row, now) })
+            .where(eq(scheduledJobs.id, row.id))
+            .run();
+          continue;
+        }
         try {
           const run = await this.dispatchJobRun(row, now);
           spawned.push(run);
         } catch {
           // Advance nextRunAt even if spawning failed (e.g. missing repo) so we don't spin every tick
-          const nextRunAt = computeNextCronDate(row.cronExpr, now);
+          const nextRunAt = this.next(row, now);
           this.db
             .update(scheduledJobs)
             .set({ nextRunAt })
@@ -305,6 +250,13 @@ export class CronService {
     return spawned;
   }
 
+  /** The job's last run is queued or its agent is still working (not ended, not finished). */
+  private previousRunStillGoing(row: ScheduledJobRow): boolean {
+    if (!row.lastRunId) return false;
+    const last = this.db.select().from(runsTable).where(eq(runsTable.id, row.lastRunId)).get();
+    return Boolean(last && !last.endedAt && last.state !== 'done' && last.state !== 'failed');
+  }
+
   private async dispatchJobRun(row: ScheduledJobRow, now: Date): Promise<Run> {
     const input = {
       projectId: row.projectId,
@@ -312,7 +264,7 @@ export class CronService {
       permissionMode: row.permissionMode as PermissionMode,
     };
     const run = this.scheduler ? await this.scheduler.submit(input) : await this.runs.enqueue(input);
-    const nextRunAt = computeNextCronDate(row.cronExpr, now);
+    const nextRunAt = this.next(row, now);
     this.db
       .update(scheduledJobs)
       .set({

@@ -134,6 +134,9 @@ export const scheduledJobs = sqliteTable(
     prompt: text('prompt').notNull(),
     permissionMode: text('permission_mode').notNull().default('acceptEdits'),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    /** IANA zone; null means core's configured zone. */
+    timeZone: text('time_zone'),
+    overlapPolicy: text('overlap_policy').notNull().default('skip'),
     lastRunId: text('last_run_id').references(() => runs.id, { onDelete: 'set null' }),
     lastRunAt: integer('last_run_at', { mode: 'timestamp_ms' }),
     nextRunAt: integer('next_run_at', { mode: 'timestamp_ms' }).notNull(),

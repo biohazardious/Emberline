@@ -2,6 +2,15 @@
 import { z } from 'zod';
 import { PermissionMode } from './projects.js';
 
+/**
+ * What a due job does while its previous run is still going: `skip` this occurrence (default) or
+ * `queue` another run anyway.
+ */
+export const CronOverlapPolicy = z.enum(['skip', 'queue']);
+export type CronOverlapPolicy = z.infer<typeof CronOverlapPolicy>;
+
+const TimeZoneName = z.string().trim().min(1).max(64);
+
 export const ScheduledJob = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -10,6 +19,9 @@ export const ScheduledJob = z.object({
   prompt: z.string(),
   permissionMode: PermissionMode,
   enabled: z.boolean(),
+  /** IANA zone the expression is evaluated in. */
+  timeZone: z.string(),
+  overlapPolicy: CronOverlapPolicy,
   lastRunId: z.string().nullable(),
   lastRunAt: z.string().nullable(),
   nextRunAt: z.string(),
@@ -24,6 +36,9 @@ export const CreateScheduledJobBody = z.object({
   prompt: z.string().trim().min(1).max(20_000),
   permissionMode: PermissionMode.default('auto'),
   enabled: z.boolean().default(true),
+  /** Defaults to core's zone (`EMBERLINE_TIMEZONE` / `TZ`). */
+  timeZone: TimeZoneName.optional(),
+  overlapPolicy: CronOverlapPolicy.default('skip'),
 });
 export type CreateScheduledJobBody = z.input<typeof CreateScheduledJobBody>;
 
@@ -34,6 +49,20 @@ export const UpdateScheduledJobBody = z
     prompt: z.string().trim().min(1).max(20_000),
     permissionMode: PermissionMode,
     enabled: z.boolean(),
+    timeZone: TimeZoneName,
+    overlapPolicy: CronOverlapPolicy,
   })
   .partial();
 export type UpdateScheduledJobBody = z.input<typeof UpdateScheduledJobBody>;
+
+export const CronPreviewBody = z.object({
+  cronExpr: z.string().trim().min(1).max(100),
+  timeZone: TimeZoneName.optional(),
+});
+export type CronPreviewBody = z.input<typeof CronPreviewBody>;
+
+export const CronPreviewResponse = z.object({
+  timeZone: z.string(),
+  nextRuns: z.array(z.string()),
+});
+export type CronPreviewResponse = z.infer<typeof CronPreviewResponse>;

@@ -1,5 +1,6 @@
 import type {
   CreateScheduledJobBody,
+  CronPreviewResponse,
   Run,
   ScheduledJob,
   UpdateScheduledJobBody,
@@ -20,6 +21,8 @@ export function registerCronRoutes(app: FastifyInstance, cron: CronService): voi
       return reply.code(201).send(job);
     },
   );
+
+  app.post('/api/cron/preview', async (request): Promise<CronPreviewResponse> => cron.preview(request.body ?? {}));
 
   app.patch<{ Params: { id: string }; Body: UpdateScheduledJobBody }>(
     '/api/cron/:id',

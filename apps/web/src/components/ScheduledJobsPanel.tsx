@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import type { PermissionMode, Project, Run, ScheduledJob } from '@emberline/protocol';
+import type { CronOverlapPolicy, CronPreviewResponse, PermissionMode, Project, Run, ScheduledJob } from '@emberline/protocol';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 
@@ -10,20 +10,31 @@ interface Props {
 
 const PRESETS = [
   {
-    label: 'Nightly Test & Lint Fix (02:00 UTC)',
+    label: 'Nightly Test & Lint Fix (02:00)',
     name: 'Nightly Test & Lint Maintenance',
     cronExpr: '0 2 * * *',
     prompt:
       'Run the test suite and linter. If any tests or lint checks fail, investigate the root cause and commit a minimal fix.',
   },
   {
-    label: 'Weekly Dependency & Security Audit (Mon 04:00 UTC)',
+    label: 'Weekly Dependency & Security Audit (Mon 04:00)',
     name: 'Weekly Security & Dependency Audit',
     cronExpr: '0 4 * * 1',
     prompt:
       'Audit project dependencies and recent changes for security vulnerabilities or outdated packages, and summarize findings.',
   },
 ];
+
+/** The viewer's zone; schedules default to it so "02:00" means their 02:00. */
+const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+const formatInZone = (iso: string, timeZone: string) => {
+  try {
+    return new Date(iso).toLocaleString(undefined, { timeZone, dateStyle: 'medium', timeStyle: 'short' });
+  } catch {
+    return new Date(iso).toLocaleString();
+  }
+};
 
 export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
@@ -33,6 +44,9 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   const [cronExpr, setCronExpr] = useState('0 2 * * *');
   const [prompt, setPrompt] = useState('');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto');
+  const [timeZone, setTimeZone] = useState(browserTimeZone);
+  const [overlapPolicy, setOverlapPolicy] = useState<CronOverlapPolicy>('skip');
+  const [preview, setPreview] = useState<{ runs: string[]; error: string | null }>({ runs: [], error: null });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +71,25 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
     }
   }, [projects, projectId]);
 
+  // Live "next 5 runs" preview while the expression or zone is edited.
+  useEffect(() => {
+    if (!formOpen || !cronExpr.trim()) return;
+    let stale = false;
+    const timer = setTimeout(() => {
+      api<CronPreviewResponse>('/api/cron/preview', 'POST', { cronExpr: cronExpr.trim(), timeZone: timeZone.trim() })
+        .then((res) => {
+          if (!stale) setPreview({ runs: res.nextRuns, error: null });
+        })
+        .catch((err: unknown) => {
+          if (!stale) setPreview({ runs: [], error: errorMessage(err) });
+        });
+    }, 350);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [formOpen, cronExpr, timeZone]);
+
   const visibleJobs = jobs.filter((j) => projects.some((p) => p.id === j.projectId));
 
   const handleCreate = async (e: FormEvent) => {
@@ -73,6 +106,8 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
         prompt: prompt.trim(),
         permissionMode,
         enabled: true,
+        timeZone: timeZone.trim() || undefined,
+        overlapPolicy,
       });
       setJobs((prev) => [...prev, created]);
       setName('');
@@ -205,6 +240,25 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
               style={{ maxWidth: '180px' }}
               required
             />
+            <input
+              type="text"
+              className="input mono"
+              placeholder="Time zone (e.g. Europe/Istanbul)"
+              value={timeZone}
+              onChange={(e) => setTimeZone(e.target.value)}
+              style={{ maxWidth: '180px' }}
+              title="IANA time zone the schedule is evaluated in"
+            />
+            <select
+              className="input"
+              value={overlapPolicy}
+              onChange={(e) => setOverlapPolicy(e.target.value as CronOverlapPolicy)}
+              style={{ maxWidth: '200px' }}
+              title="What happens when the job is due while its previous run is still going"
+            >
+              <option value="skip">Skip if still running</option>
+              <option value="queue">Queue another run</option>
+            </select>
             <select
               className="input"
               value={permissionMode}
@@ -218,6 +272,14 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
               <option value="bypassPermissions">Bypass permissions</option>
             </select>
           </div>
+
+          <p className="muted small mono" aria-live="polite">
+            {preview.error
+              ? `Invalid schedule: ${preview.error}`
+              : preview.runs.length > 0
+                ? `Next runs: ${preview.runs.map((iso) => formatInZone(iso, timeZone)).join(' · ')}`
+                : ' '}
+          </p>
 
           <textarea
             className="input textarea"
@@ -255,11 +317,17 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
                 <span className="row-title">{job.name}</span>
                 <span className="badge badge-soft">{projectName(job.projectId)}</span>
                 <span className="badge mono">{job.cronExpr}</span>
-                <span className="row-meta mono">
-                  next: {new Date(job.nextRunAt).toLocaleString()}
+                <span className="badge badge-soft mono" title="Time zone the schedule runs in">
+                  {job.timeZone}
                 </span>
+                {job.overlapPolicy === 'queue' && (
+                  <span className="badge badge-soft" title="Due runs are queued even while the previous one runs">
+                    queues overlaps
+                  </span>
+                )}
+                <span className="row-meta mono">next: {formatInZone(job.nextRunAt, job.timeZone)}</span>
                 {job.lastRunId && (
-                  <Link href={`/runs/${job.lastRunId}`} className="badge mono">
+                  <Link href={`/runs/${job.lastRunId}/review`} className="badge mono">
                     last run ↗
                   </Link>
                 )}
