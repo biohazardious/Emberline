@@ -16,7 +16,7 @@ afterEach(async () => {
   await t.close();
 });
 
-const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
+const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
   t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
 
 async function createProject(): Promise<{ id: string; path: string }> {
@@ -52,5 +52,25 @@ describe('roadmap.json', () => {
     expect(res.statusCode).toBe(200);
     const backups = readdirSync(path.dirname(file)).filter((f) => f.startsWith('roadmap.json.corrupt-'));
     expect(backups).toHaveLength(1);
+  });
+
+  it('re-creates the ticket of a dispatched item when it was deleted from the board', async () => {
+    const project = await createProject();
+    const added: ProjectRoadmapState = (
+      await api('POST', `/api/projects/${project.id}/roadmap/items`, { title: 'Ship the thing' })
+    ).json();
+    const item = added.milestones.flatMap((m) => m.items).find((i) => i.title === 'Ship the thing')!;
+    const dispatch = () =>
+      api('POST', `/api/projects/${project.id}/roadmap/dispatch`, { itemIds: [item.id], autoStart: false });
+
+    const first = await dispatch();
+    expect(first.statusCode).toBe(200);
+    const ticketId = first.json().createdTickets[0].id as string;
+    expect((await api('DELETE', `/api/tickets/${ticketId}`)).statusCode).toBeLessThan(300);
+
+    const second = await dispatch();
+    expect(second.statusCode).toBe(200);
+    expect(second.json().createdTickets).toHaveLength(1);
+    expect(second.json().createdTickets[0].id).not.toBe(ticketId);
   });
 });

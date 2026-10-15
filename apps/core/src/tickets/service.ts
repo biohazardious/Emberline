@@ -631,6 +631,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return toTicket(this.row(id));
   }
 
+  /** Like {@link get}, but `undefined` instead of a 404 for a deleted ticket. */
+  find(id: string): Ticket | undefined {
+    const row = this.db.select().from(tickets).where(eq(tickets.id, id)).get();
+    return row ? toTicket(row) : undefined;
+  }
+
   create(projectId: string, input: CreateTicketBody): Ticket {
     const project = this.project(projectId);
     const body = CreateTicketBodySchema.parse(input);

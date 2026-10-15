@@ -1736,14 +1736,15 @@ async function dispatchRoadmapItemsUnlocked(
   for (const ms of stored.milestones) {
     for (const item of ms.items) {
       if (!itemIdsToDispatch.has(item.id)) continue;
-      if (item.ticketId && ticketService.get(item.ticketId)) {
+      const existing = item.ticketId ? ticketService.find(item.ticketId) : undefined;
+      if (existing) {
         // Ensure existing ticket is at least 'ready' if it was in 'backlog'
-        const existing = ticketService.get(item.ticketId)!;
         if (existing.status === 'backlog') {
-          await ticketService.update(existing.id, { status: 'ready' });
+          ticketService.update(existing.id, { status: 'ready' });
         }
         continue;
       }
+      // No ticket yet, or it was deleted from the board: create a fresh one below.
       const routeTag = `[Preferred Agent: ${item.preferredAgent} · Model: ${item.preferredModel}]`;
       const ticket = ticketService.create(project.id, {
         title: item.title,
