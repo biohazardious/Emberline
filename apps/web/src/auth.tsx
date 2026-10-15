@@ -69,6 +69,7 @@ function AuthShell({ title, children }: { title: string; children: ReactNode }) 
 }
 
 function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
+  const [setupToken, setSetupToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string>();
@@ -79,7 +80,7 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
     if (password !== confirm) return setError('Passwords do not match.');
     setBusy(true);
     try {
-      await api('/api/auth/setup', 'POST', { password });
+      await api('/api/auth/setup', 'POST', { password, setupToken: setupToken.trim() });
       await onDone();
     } catch (e) {
       setError(errorMessage(e));
@@ -97,6 +98,21 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
         </span>
       </div>
       <form className="form" onSubmit={(e) => void submit(e)}>
+        <label className="field">
+          <span>Setup token</span>
+          <input
+            id="setup-token"
+            className="input mono"
+            autoComplete="off"
+            spellCheck={false}
+            required
+            value={setupToken}
+            onChange={(e) => setSetupToken(e.target.value)}
+          />
+          <small className="muted">
+            Printed in the core log on first start: <code>make logs</code> or <code>docker compose logs core</code>.
+          </small>
+        </label>
         <label className="field">
           <span>Admin password</span>
           <input

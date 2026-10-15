@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { CSRF, createTestApp, setupAndLogin, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -81,13 +81,28 @@ describe('auth', () => {
     expect((await t.app.inject({ url: '/api/projects', headers: { cookie } })).statusCode).toBe(200);
   });
 
+  it('requires the one-time setup token printed in the core log', async () => {
+    t = await createTestApp();
+    for (const setupToken of [undefined, 'wrong-token']) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/setup',
+        headers: CSRF,
+        payload: { password: 'long enough password', setupToken },
+      });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      expect(res.statusCode).toBeLessThan(404);
+    }
+    expect((await t.app.inject({ url: '/api/auth/state' })).json()).toMatchObject({ setupRequired: true });
+  });
+
   it('rejects a second setup and short passwords', async () => {
     t = await createTestApp();
     const short = await t.app.inject({
       method: 'POST',
       url: '/api/auth/setup',
       headers: CSRF,
-      payload: { password: 'short' },
+      payload: { password: 'short', setupToken: TEST_SETUP_TOKEN },
     });
     expect(short.statusCode).toBe(400);
     await setupAndLogin(t.app);
@@ -95,7 +110,7 @@ describe('auth', () => {
       method: 'POST',
       url: '/api/auth/setup',
       headers: CSRF,
-      payload: { password: 'another long password' },
+      payload: { password: 'another long password', setupToken: TEST_SETUP_TOKEN },
     });
     expect(again.statusCode).toBe(409);
   });

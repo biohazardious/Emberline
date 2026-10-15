@@ -1,4 +1,5 @@
 import { type AuthState, CSRF_HEADER, LoginBody, SetupBody } from '@emberline/protocol';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { hash, verify } from '@node-rs/argon2';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CoreConfig } from '../config.js';
@@ -36,6 +37,13 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   const store = new SessionStore(db, config.sessionTtlMs);
   store.purgeExpired();
   const failures = new Map<string, { count: number; since: number }>();
+
+  // Without this, whoever reaches a fresh instance first (a LAN peer, an agent in the runner, a
+  // DNS-rebinding page) could claim it.
+  const setupToken = config.setupToken ?? randomBytes(18).toString('base64url');
+  if (getSetting<string>(db, PASSWORD_KEY) === undefined) {
+    app.log.warn(`First-run setup token: ${setupToken} (enter it on the setup page)`);
+  }
 
   const isAuthenticated = (request: FastifyRequest) => store.validate(request.cookies[SESSION_COOKIE]);
 
@@ -83,7 +91,10 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
 
   app.post('/api/auth/setup', async (request, reply) => {
     if (getSetting<string>(db, PASSWORD_KEY) !== undefined) throw conflict('setup already completed');
-    const { password } = SetupBody.parse(request.body);
+    const { password, setupToken: provided } = SetupBody.parse(request.body);
+    if (!sameSecret(provided, setupToken)) {
+      throw new HttpError(403, 'forbidden', 'invalid setup token (see the core log)');
+    }
     setSetting(db, PASSWORD_KEY, await hash(password));
     issueSession(request, reply);
     return { ok: true };
@@ -126,4 +137,10 @@ function sameHost(origin: string, host: string): boolean {
   } catch {
     return false;
   }
+}
+
+function sameSecret(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }

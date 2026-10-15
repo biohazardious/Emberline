@@ -35,6 +35,8 @@ make logs / make down
 
 Two containers: `core` (API + web UI, restart freely) and `runner` (ptyd + pinned Claude Code CLI, hosts the agents). They share only the ptyd socket and the workspaces volume (`runner-home` is mounted read-only into `core` so `git push` can use your runner's SSH/git credentials).
 
+On first start, core prints a one-time **setup token** to its log (`make logs`); the setup page asks for it together with the new admin password, so nobody else on the network can claim a fresh instance. Set `EMBERLINE_SETUP_TOKEN` to choose it yourself.
+
 To reach Emberline from other devices, set `EMBERLINE_BIND=0.0.0.0` (behind Tailscale or a TLS reverse proxy). Set `TZ` to your local IANA timezone (for example `Europe/Istanbul`) so quota reset times are parsed correctly.
 
 ### Runs & Fleet Multiplexer

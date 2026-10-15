@@ -43,6 +43,7 @@ export async function createTestApp(
     hookCommand: 'emberline-hook',
     claudeCommand: 'claude',
     timeZone: 'UTC',
+    setupToken: TEST_SETUP_TOKEN,
     ...overrides,
   };
   const opened: OpenedDb = openDb(':memory:');
@@ -80,8 +81,15 @@ export async function createTestApp(
 export const CSRF = { [CSRF_HEADER]: '1' };
 
 /** Runs first-time setup and returns the session cookie header value. */
+export const TEST_SETUP_TOKEN = 'test-setup-token';
+
 export async function setupAndLogin(app: FastifyInstance, password = 'correct horse battery'): Promise<string> {
-  const res = await app.inject({ method: 'POST', url: '/api/auth/setup', headers: CSRF, payload: { password } });
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    headers: CSRF,
+    payload: { password, setupToken: TEST_SETUP_TOKEN },
+  });
   if (res.statusCode !== 200) throw new Error(`setup failed: ${res.statusCode} ${res.body}`);
   const cookie = res.cookies.find((c) => c.name === 'emberline_session');
   if (!cookie) throw new Error('no session cookie');

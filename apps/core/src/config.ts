@@ -24,6 +24,11 @@ export interface CoreConfig {
   claudeCommand: string;
   /** IANA zone for limit reset times printed without one (should match the runner's TZ). */
   timeZone: string;
+  /**
+   * One-time token that first-run setup requires. When unset, core generates one per boot and
+   * prints it to its log while no password exists.
+   */
+  setupToken?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
@@ -43,5 +48,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
+    setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
   };
 }
