@@ -8,7 +8,9 @@ const BASE_TITLE = 'Emberline';
 
 /** States in which a run needs a human: an answer, a fix, or awareness of a paused quota. */
 export function needsAttention(run: Run, now = Date.now()): boolean {
-  if (run.state === 'waiting_input' || run.state === 'rate_limited') return true;
+  // A fresh session reports waiting_input until its first prompt lands: not a person's turn yet.
+  if (run.state === 'waiting_input') return run.lastEvent !== 'SessionStart';
+  if (run.state === 'rate_limited') return true;
   if (run.state === 'failed' && !run.cancelled)
     return now - Date.parse(run.stateChangedAt) < FAILED_RECENT_MS;
   return false;

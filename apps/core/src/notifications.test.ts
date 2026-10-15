@@ -42,3 +42,41 @@ describe('NotificationService.dispatch', () => {
     }
   });
 });
+
+describe('NotificationService run events', () => {
+  it('does not page on session startup or on runs the user cancelled (B14)', async () => {
+    const { EventEmitter } = await import('node:events');
+    const runs = new EventEmitter();
+    const service = new NotificationService({} as Db, runs as never);
+    const sent: string[] = [];
+    service.getSettings = () =>
+      ({
+        enabled: true,
+        provider: 'webhook',
+        url: 'http://127.0.0.1:9/unused',
+        token: null,
+        onRateLimited: true,
+        onQuotaResumed: true,
+        onWaitingInput: true,
+        onRunFinished: true,
+      }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push(msg.event);
+      return { ok: true, status: 200, error: null };
+    };
+    const run = (state: string, lastEvent: string, cancelled = false) => ({
+      id: 'r1',
+      title: 'T',
+      branch: null,
+      state,
+      lastEvent,
+      cancelled,
+    });
+    runs.emit('run', run('waiting_input', 'SessionStart'), true);
+    runs.emit('run', run('failed', 'cancelled', true), true);
+    expect(sent).toEqual([]);
+    runs.emit('run', run('waiting_input', 'Notification'), true);
+    runs.emit('run', run('failed', 'process_exited'), true);
+    expect(sent).toEqual(['waiting_input', 'run_finished']);
+  });
+});

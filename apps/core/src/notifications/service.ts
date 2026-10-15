@@ -51,7 +51,9 @@ export class NotificationService {
       runs.on('run', (run, stateChanged) => {
         if (!stateChanged) return;
         const label = run.title ?? run.branch ?? run.id.slice(0, 8);
-        if (run.state === 'waiting_input') {
+        // B14: every session reports waiting_input on SessionStart before its first prompt arrives;
+        // that is startup, not an agent waiting on a person.
+        if (run.state === 'waiting_input' && run.lastEvent !== 'SessionStart') {
           const cfg = this.getSettings();
           if (cfg.enabled && cfg.onWaitingInput) {
             void this.dispatch(cfg, {
@@ -62,7 +64,7 @@ export class NotificationService {
               tags: ['hourglass_flowing_sand', 'emberline'],
             });
           }
-        } else if (run.state === 'done' || run.state === 'failed') {
+        } else if ((run.state === 'done' || run.state === 'failed') && !run.cancelled) {
           const cfg = this.getSettings();
           if (cfg.enabled && cfg.onRunFinished) {
             const failed = run.state === 'failed';
