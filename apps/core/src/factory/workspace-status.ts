@@ -214,6 +214,9 @@ export async function inspectWorkspaceProject(
     existsSync(path.join(workspacePath, 'Cargo.toml')) ||
     existsSync(path.join(workspacePath, 'src-tauri', 'Cargo.toml'));
   const hasPlatformIo = existsSync(path.join(workspacePath, 'platformio.ini'));
+  const hasFlutter = existsSync(path.join(workspacePath, 'pubspec.yaml'));
+  const hasGradle =
+    existsSync(path.join(workspacePath, 'gradlew')) || existsSync(path.join(workspacePath, 'android', 'gradlew'));
   const hasCMake = existsSync(path.join(workspacePath, 'CMakeLists.txt'));
   const hasMakefile = existsSync(path.join(workspacePath, 'Makefile'));
   const hasIno = topFiles.some((f) => f.endsWith('.ino') || f.endsWith('.c') || f.endsWith('.cpp') || f.endsWith('.h'));
@@ -263,7 +266,9 @@ export async function inspectWorkspaceProject(
     existsSync(path.join(workspacePath, 'src-tauri')) ||
     existsSync(path.join(workspacePath, 'electron')) ||
     existsSync(path.join(workspacePath, 'android')) ||
-    existsSync(path.join(workspacePath, 'ios'))
+    existsSync(path.join(workspacePath, 'ios')) ||
+    hasFlutter ||
+    hasGradle
   ) {
     layers.add('Desktop / Mobile Native');
   }
@@ -296,7 +301,12 @@ export async function inspectWorkspaceProject(
       };
       const scripts = parsed.scripts ?? {};
       const deps = { ...(parsed.dependencies ?? {}), ...(parsed.devDependencies ?? {}) };
-      if (deps.electron || deps['@tauri-apps/api']) layers.add('Desktop / Mobile Native');
+      if (deps.electron || deps['@tauri-apps/api'] || deps['@capacitor/core'] || deps.expo || deps['react-native']) {
+        layers.add('Desktop / Mobile Native');
+      }
+      if (deps.electron) detectedStack = `Electron Desktop (${pkgManager})`;
+      else if (deps['@capacitor/core']) detectedStack = `Capacitor Mobile (${pkgManager})`;
+      else if (deps.expo || deps['react-native']) detectedStack = `React Native / Expo (${pkgManager})`;
       if (deps.fastify || deps.express || deps['@nestjs/core'] || deps.hono) layers.add('Backend / Service');
       if (deps['drizzle-orm'] || deps.prisma || deps['@prisma/client'] || deps.pg || deps['better-sqlite3']) {
         layers.add('Database / Schema');
@@ -323,10 +333,18 @@ export async function inspectWorkspaceProject(
     detectedStack = 'PlatformIO / Embedded Firmware (ESP32/MCU)';
     hasBuildScript = true;
     buildCommand = buildCommand ?? 'pio run';
+  } else if (hasFlutter) {
+    detectedStack = 'Flutter (Dart)';
+    hasBuildScript = true;
+    buildCommand = buildCommand ?? 'flutter analyze && flutter test';
   } else if (hasCargo) {
     detectedStack = existsSync(path.join(workspacePath, 'src-tauri')) ? 'Rust + Tauri Desktop' : 'Rust / Cargo';
     hasBuildScript = true;
     buildCommand = buildCommand ?? 'cargo check';
+  } else if (hasGradle && !hasPackageJson) {
+    detectedStack = 'Android (Gradle)';
+    hasBuildScript = true;
+    buildCommand = './gradlew assembleDebug';
   } else if (hasGoMod) {
     detectedStack = 'Go Module';
     hasBuildScript = true;

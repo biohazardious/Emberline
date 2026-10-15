@@ -35,6 +35,123 @@ async function runWorkspaceCommand(
   return { stdout: result.stdout + note, stderr: result.stderr };
 }
 
+/** One command of the build/lint/test gate. */
+export interface GateStep {
+  /** Shown in the gate log as `$ <display>`. */
+  display: string;
+  file: string;
+  args: string[];
+  cwd: string;
+  timeout: number;
+  env?: Record<string, string>;
+  /** A binary the step needs, and how to get it when the runner lacks it. */
+  requires?: { binary: string; hint: string };
+}
+
+const sh = (display: string, cwd: string, timeout: number, requires?: GateStep['requires']): GateStep => ({
+  display,
+  file: 'sh',
+  args: ['-c', display],
+  cwd,
+  timeout,
+  requires,
+});
+
+const PLATFORMIO = { binary: 'pio', hint: 'Install it with `emberline-sdk install platformio`, then verify again.' };
+const FLUTTER = { binary: 'flutter', hint: 'Install it with `emberline-sdk install flutter`, then verify again.' };
+const JAVA = { binary: 'java', hint: 'Install the JDK and Android SDK with `emberline-sdk install android`, then verify again.' };
+const CARGO = { binary: 'cargo', hint: 'Rust ships with the runner image; rebuild the runner.' };
+const GO = { binary: 'go', hint: 'Go ships with the runner image; rebuild the runner.' };
+
+/**
+ * Plans the gate for every ecosystem the workspace contains, not just the first one found: a
+ * firmware repo with a package.json for its web companion gets both `npm run build` and `pio run`.
+ */
+export async function planGateSteps(workspacePath: string, topFiles: readonly string[]): Promise<GateStep[]> {
+  const steps: GateStep[] = [];
+  const has = (...rel: string[]) => existsSync(path.join(workspacePath, ...rel));
+  const ciEnv = { CI: 'true', FORCE_COLOR: '0' };
+
+  if (has('package.json')) {
+    const pkgManager = has('pnpm-lock.yaml') || has('pnpm-workspace.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : 'npm';
+    if (!has('node_modules')) {
+      const installArgs = pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
+      steps.push({
+        display: `${pkgManager} ${installArgs.join(' ')}`,
+        file: pkgManager,
+        args: installArgs,
+        cwd: workspacePath,
+        timeout: 120_000,
+      });
+    }
+    const rawPkg = await readFile(path.join(workspacePath, 'package.json'), 'utf-8');
+    const scripts = (JSON.parse(rawPkg) as { scripts?: Record<string, string> }).scripts ?? {};
+    const buildScriptName =
+      typeof scripts.build === 'string'
+        ? 'build'
+        : typeof scripts.typecheck === 'string'
+          ? 'typecheck'
+          : typeof scripts.check === 'string'
+            ? 'check'
+            : null;
+    const npmStep = (args: string[], timeout: number): GateStep => ({
+      display: `${pkgManager} ${args.join(' ')}`,
+      file: pkgManager,
+      args,
+      cwd: workspacePath,
+      timeout,
+      env: ciEnv,
+    });
+    if (buildScriptName) steps.push(npmStep(['run', buildScriptName], 120_000));
+    if (typeof scripts.lint === 'string' && buildScriptName !== 'check' && !scripts.lint.includes('--watch')) {
+      steps.push(npmStep(['run', 'lint'], 90_000));
+    }
+    if (
+      typeof scripts.test === 'string' &&
+      !scripts.test.includes('no test specified') &&
+      !scripts.test.includes('--watch') &&
+      buildScriptName !== 'check'
+    ) {
+      steps.push(npmStep(scripts.test.trim() === 'vitest' ? ['run', 'test', '--', '--run'] : ['run', 'test'], 120_000));
+    }
+  }
+
+  if (has('platformio.ini')) {
+    // The first build downloads the board's toolchain and framework.
+    steps.push(sh('pio run', workspacePath, 900_000, PLATFORMIO));
+    const ini = await readFile(path.join(workspacePath, 'platformio.ini'), 'utf-8');
+    if (/^\[env:native\]/m.test(ini) && has('test')) {
+      steps.push(sh('pio test -e native', workspacePath, 600_000, PLATFORMIO));
+    }
+  }
+  // Tauri's crate needs the frontend built first, so it comes after the npm steps.
+  if (has('src-tauri', 'Cargo.toml')) steps.push(sh('cargo check', path.join(workspacePath, 'src-tauri'), 900_000, CARGO));
+  if (has('Cargo.toml')) steps.push(sh('cargo check', workspacePath, 900_000, CARGO));
+  if (has('go.mod')) steps.push(sh('go build ./... && go test ./...', workspacePath, 300_000, GO));
+  if (has('pubspec.yaml')) {
+    steps.push(sh('flutter pub get', workspacePath, 600_000, FLUTTER));
+    steps.push(sh('flutter analyze --no-fatal-infos --no-fatal-warnings', workspacePath, 600_000, FLUTTER));
+    if (has('test')) steps.push(sh('flutter test', workspacePath, 600_000, FLUTTER));
+  } else {
+    // Native Android, Capacitor and React Native projects; Flutter drives Gradle itself.
+    const gradleDir = has('gradlew') ? workspacePath : has('android', 'gradlew') ? path.join(workspacePath, 'android') : null;
+    if (gradleDir) {
+      steps.push(sh('bash ./gradlew assembleDebug --no-daemon --console=plain', gradleDir, 1_800_000, JAVA));
+    }
+  }
+  if (steps.length > 0) return steps;
+
+  if (topFiles.some((f) => f.endsWith('.py'))) {
+    return [{ display: 'python3 -m compileall -q .', file: 'python3', args: ['-m', 'compileall', '-q', '.'], cwd: workspacePath, timeout: 60_000 }];
+  }
+  const shFiles = topFiles.filter((f) => f.endsWith('.sh'));
+  if (shFiles.length > 0) {
+    return [{ display: `bash -n ${shFiles.join(' ')}`, file: 'bash', args: ['-n', ...shFiles], cwd: workspacePath, timeout: 30_000 }];
+  }
+  if (has('Makefile')) return [{ display: 'make', file: 'make', args: [], cwd: workspacePath, timeout: 120_000 }];
+  return [];
+}
+
 export async function buildWorkspaceDemo(params: {
   projectId: string;
   targetId: string;
@@ -51,159 +168,35 @@ export async function buildWorkspaceDemo(params: {
   let buildCommandSucceeded = false;
 
   try {
-    if (inspection.hasPackageJson) {
-      const hasNodeModules = existsSync(path.join(workspacePath, 'node_modules'));
-      const hasPnpmLock =
-        existsSync(path.join(workspacePath, 'pnpm-lock.yaml')) ||
-        existsSync(path.join(workspacePath, 'pnpm-workspace.yaml'));
-      const hasYarnLock = existsSync(path.join(workspacePath, 'yarn.lock'));
-      const pkgManager = hasPnpmLock ? 'pnpm' : hasYarnLock ? 'yarn' : 'npm';
-      const installArgs =
-        pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
-
-      if (!hasNodeModules) {
-        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, installArgs, {
-          cwd: workspacePath,
-          timeout: 120_000,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      }
-
-      const rawPkg = await readFile(path.join(workspacePath, 'package.json'), 'utf-8');
-      const parsedPkg = JSON.parse(rawPkg) as { scripts?: Record<string, string> };
-      const scripts = parsedPkg.scripts ?? {};
-      const ciEnv = { CI: 'true', FORCE_COLOR: '0' };
-
-      const buildScriptName =
-        typeof scripts.build === 'string'
-          ? 'build'
-          : typeof scripts.typecheck === 'string'
-            ? 'typecheck'
-            : typeof scripts.check === 'string'
-              ? 'check'
-              : null;
-
-      if (buildScriptName) {
-        logs.push(`$ ${pkgManager} run ${buildScriptName}`);
-        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, ['run', buildScriptName], {
-          cwd: workspacePath,
-          timeout: 120_000,
-          env: ciEnv,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      }
-
-      if (
-        typeof scripts.lint === 'string' &&
-        buildScriptName !== 'check' &&
-        !scripts.lint.includes('--watch')
-      ) {
-        logs.push(`$ ${pkgManager} run lint`);
-        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, ['run', 'lint'], {
-          cwd: workspacePath,
-          timeout: 90_000,
-          env: ciEnv,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      }
-
-      if (
-        typeof scripts.test === 'string' &&
-        !scripts.test.includes('no test specified') &&
-        !scripts.test.includes('--watch') &&
-        buildScriptName !== 'check'
-      ) {
-        const testArgs =
-          scripts.test.trim() === 'vitest'
-            ? ['run', 'test', '--', '--run']
-            : ['run', 'test'];
-        logs.push(`$ ${pkgManager} ${testArgs.join(' ')}`);
-        const { stdout, stderr } = await runWorkspaceCommand(pkgManager, testArgs, {
-          cwd: workspacePath,
-          timeout: 120_000,
-          env: ciEnv,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      }
-      buildCommandSucceeded = true;
-    } else if (existsSync(path.join(workspacePath, 'platformio.ini'))) {
-      const hasPio = await runWorkspaceCommand('sh', ['-c', 'command -v pio || command -v platformio']).then(() => true, () => false);
-      if (hasPio) {
-        logs.push('$ pio run');
-        const { stdout, stderr } = await runWorkspaceCommand('sh', ['-c', 'pio run || platformio run'], {
-          cwd: workspacePath,
-          timeout: 180_000,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      } else {
-        logs.push('Verified PlatformIO firmware structure (platformio.ini present).');
-      }
-      buildCommandSucceeded = true;
-    } else if (existsSync(path.join(workspacePath, 'Cargo.toml'))) {
-      const hasCargo = await runWorkspaceCommand('sh', ['-c', 'command -v cargo']).then(() => true, () => false);
-      if (hasCargo) {
-        logs.push('$ cargo check');
-        const { stdout, stderr } = await runWorkspaceCommand('cargo', ['check'], {
-          cwd: workspacePath,
-          timeout: 120_000,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      } else {
-        logs.push('Verified Rust Cargo workspace structure (Cargo.toml present).');
-      }
-      buildCommandSucceeded = true;
-    } else if (existsSync(path.join(workspacePath, 'go.mod'))) {
-      const hasGo = await runWorkspaceCommand('sh', ['-c', 'command -v go']).then(() => true, () => false);
-      if (hasGo) {
-        logs.push('$ go build ./... && go test ./...');
-        const { stdout, stderr } = await runWorkspaceCommand('sh', ['-c', 'go build ./... && go test ./...'], {
-          cwd: workspacePath,
-          timeout: 120_000,
-        });
-        if (stdout) logs.push(stdout);
-        if (stderr) logs.push(stderr);
-      } else {
-        logs.push('Verified Go module structure (go.mod present).');
-      }
-      buildCommandSucceeded = true;
-    } else if (filesInfo.topFiles.some((f) => f.endsWith('.py'))) {
-      logs.push('$ python3 -m compileall -q .');
-      const { stdout, stderr } = await runWorkspaceCommand('python3', ['-m', 'compileall', '-q', '.'], {
-        cwd: workspacePath,
-        timeout: 60_000,
-      });
-      if (stdout) logs.push(stdout);
-      if (stderr) logs.push(stderr);
-      buildCommandSucceeded = true;
-    } else if (filesInfo.topFiles.some((f) => f.endsWith('.sh'))) {
-      const shFiles = filesInfo.topFiles.filter((f) => f.endsWith('.sh'));
-      logs.push(`$ bash -n ${shFiles.join(' ')}`);
-      const { stdout, stderr } = await runWorkspaceCommand('bash', ['-n', ...shFiles], {
-        cwd: workspacePath,
-        timeout: 30_000,
-      });
-      if (stdout) logs.push(stdout);
-      if (stderr) logs.push(stderr);
-      buildCommandSucceeded = true;
-    } else if (existsSync(path.join(workspacePath, 'Makefile'))) {
-      logs.push('$ make');
-      const { stdout, stderr } = await runWorkspaceCommand('make', [], {
-        cwd: workspacePath,
-        timeout: 120_000,
-      });
-      if (stdout) logs.push(stdout);
-      if (stderr) logs.push(stderr);
-      buildCommandSucceeded = true;
-    } else {
+    const steps = await planGateSteps(workspacePath, filesInfo.topFiles);
+    if (steps.length === 0) {
       logs.push(`Verified workspace structure (${filesInfo.fileCount} files, stack: ${inspection.detectedStack}).`);
-      buildCommandSucceeded = true;
     }
+    const checkedBinaries = new Set<string>();
+    for (const step of steps) {
+      if (step.requires && !checkedBinaries.has(step.requires.binary)) {
+        // A missing toolchain fails the gate: passing it would ship firmware or apps nobody compiled.
+        const present = await runWorkspaceCommand('sh', ['-c', `command -v ${step.requires.binary}`]).then(
+          () => true,
+          () => false,
+        );
+        if (!present) {
+          throw new Error(
+            `\`${step.requires.binary}\` is not installed in the runner, so \`${step.display}\` cannot run. ${step.requires.hint}`,
+          );
+        }
+        checkedBinaries.add(step.requires.binary);
+      }
+      logs.push(`$ ${step.display}`);
+      const { stdout, stderr } = await runWorkspaceCommand(step.file, step.args, {
+        cwd: step.cwd,
+        timeout: step.timeout,
+        env: step.env,
+      });
+      if (stdout) logs.push(stdout);
+      if (stderr) logs.push(stderr);
+    }
+    buildCommandSucceeded = true;
   } catch (err) {
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
     if (typeof execErr.stdout === 'string' && execErr.stdout.trim()) logs.push(execErr.stdout);

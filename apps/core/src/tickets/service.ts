@@ -123,6 +123,10 @@ function hasVerifiableBuildTarget(workspacePath: string): boolean {
     existsSync(path.join(workspacePath, 'requirements.txt')) ||
     existsSync(path.join(workspacePath, 'setup.py')) ||
     existsSync(path.join(workspacePath, 'platformio.ini')) ||
+    existsSync(path.join(workspacePath, 'src-tauri', 'Cargo.toml')) ||
+    existsSync(path.join(workspacePath, 'pubspec.yaml')) ||
+    existsSync(path.join(workspacePath, 'gradlew')) ||
+    existsSync(path.join(workspacePath, 'android', 'gradlew')) ||
     existsSync(path.join(workspacePath, 'Makefile'))
   );
 }
