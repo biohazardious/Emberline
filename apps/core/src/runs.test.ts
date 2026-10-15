@@ -292,6 +292,27 @@ describe('runs', () => {
     expect(t.runs.getRun(run.id).state).toBe('done');
   });
 
+  it('gives concurrent previews distinct ports and stops them with their run (B16)', async () => {
+    const project = await createProject('Previews', true);
+    const a: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const b: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const start = async (run: Run, port?: number) =>
+      (await api('POST', `/api/runs/${run.id}/preview/start`, { command: 'sleep 30', ...(port ? { port } : {}) })).json();
+    // Occupy exactly the port b hashes to, so the allocator has to move b.
+    let hash = 0;
+    for (const ch of b.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    const pa = await start(a, 3100 + (hash % 800));
+    const pb = await start(b);
+    expect(pb.port).not.toBe(pa.port);
+    expect((await api('GET', '/api/terminals')).json().some((x: { id: string }) => x.id === pa.terminalId)).toBe(true);
+
+    await t.runs.stop(a.id);
+    await api('DELETE', `/api/runs/${a.id}`);
+    const terminals = (await api('GET', '/api/terminals')).json() as { id: string }[];
+    expect(terminals.some((x) => x.id === pa.terminalId)).toBe(false);
+    expect(terminals.some((x) => x.id === pb.terminalId)).toBe(true);
+  });
+
   it('serves the terminal as plain text for fleet thumbnails', async () => {
     const project = await createProject('Thumb', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();

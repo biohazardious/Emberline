@@ -1007,12 +1007,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return null;
   }
 
-  private defaultPreviewPort(runId: string): number {
+  /**
+   * A stable port per run (3100-3899), moved to the next free one when another running preview
+   * already holds it (B16: two runs could hash to the same port).
+   */
+  private async allocatePreviewPort(runId: string): Promise<number> {
     let hash = 0;
     for (let i = 0; i < runId.length; i++) {
       hash = (hash * 31 + runId.charCodeAt(i)) >>> 0;
     }
-    return 3100 + (hash % 800);
+    const { sessions } = await this.ptyd.get().list();
+    const taken = new Set(
+      sessions
+        .filter((s) => s.status === 'running' && s.meta.previewPort && s.meta.runId !== runId)
+        .map((s) => Number(s.meta.previewPort)),
+    );
+    for (let i = 0; i < 800; i++) {
+      const port = 3100 + ((hash + i) % 800);
+      if (!taken.has(port)) return port;
+    }
+    throw conflict('no free preview port in 3100-3899');
   }
 
   async previewStatus(id: string): Promise<RunPreviewStatus> {
@@ -1087,7 +1101,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
     const detectedCommand = this.detectPreviewCommand(row.worktreePath);
     const command = body.command?.trim() || detectedCommand || 'npm run dev';
-    const port = body.port ?? this.defaultPreviewPort(id);
+    const port = body.port ?? (await this.allocatePreviewPort(id));
     const hostBase = process.env.EMBERLINE_PREVIEW_HOST?.trim() || 'http://localhost';
     const url = `${hostBase.replace(/\/+$/, '')}:${port}`;
 
@@ -1103,6 +1117,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         kind: 'shell',
         runId: row.id,
         projectId: row.projectId,
+        previewPort: String(port),
         title: `Preview :${port} · ${row.branch ?? row.id.slice(0, 8)}`,
       },
     });
@@ -1153,9 +1168,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     };
   }
 
-  /** Forgets the run and its terminal. The worktree and branch are kept on purpose. */
+  /** Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose. */
   async remove(id: string): Promise<void> {
     const row = this.row(id);
+    // B16: GC and project deletion go through here; a preview server must not outlive its run.
+    if (this.ptyd.status === 'connected') {
+      const { sessions } = await this.ptyd
+        .get()
+        .list()
+        .catch(() => ({ sessions: [] as { id: string; meta: Record<string, string> }[] }));
+      for (const s of sessions.filter((x) => x.meta.runId === id && x.meta.previewPort)) {
+        await this.ptyd
+          .get()
+          .remove(s.id)
+          .catch(() => undefined);
+      }
+    }
     if (row.ptydSessionId) {
       await this.ptyd
         .get()
