@@ -1317,7 +1317,7 @@ a {
 }
 
 .stat-card-warn {
-  border-color: color-mix(in hsl, var(--warn) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
   background: color-mix(in hsl, var(--warn) 6%, var(--surface));
 }
 
@@ -3237,7 +3237,7 @@ dialog.cmd-dialog::backdrop {
   gap: 8px;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid color-mix(in hsl, var(--warn) 45%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
   border-radius: 8px;
   background: color-mix(in hsl, var(--warn) 10%, transparent);
   color: inherit;
@@ -3464,3 +3464,97 @@ dialog.cmd-dialog::backdrop {
   font-size: 0.73rem;
 }
 
+
+/* --- updates ----------------------------------------------------------------- */
+
+.update-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: auto;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.sidebar-collapsed .update-dot {
+  display: none;
+}
+
+.update-release {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-bottom: 1rem;
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.update-commands,
+.update-notes {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-notes {
+  margin-top: 6px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--font-sans);
+}
+
+.update-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 1rem;
+}
+
+.update-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.update-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 92px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.update-row + .update-row {
+  border-top: 1px solid var(--border);
+}
+
+.update-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.update-action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .update-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .update-versions {
+    grid-column: 1;
+  }
+
+  .update-action {
+    grid-column: 2;
+  }
+}

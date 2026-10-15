@@ -23,11 +23,13 @@ import { registerRunRoutes } from './routes/runs.js';
 import { registerSchedulerRoutes } from './routes/scheduler.js';
 import { registerTerminalRoutes } from './routes/terminals.js';
 import { registerTicketRoutes } from './routes/tickets.js';
+import { registerUpdateRoutes } from './routes/updates.js';
 import { ReviewService } from './review/service.js';
 import type { RunService } from './runs/service.js';
 import type { Scheduler } from './scheduler/service.js';
 import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.js';
 import type { TicketService } from './tickets/service.js';
+import { UpdateService } from './updates/service.js';
 
 export const VERSION = '0.1.2';
 
@@ -52,9 +54,12 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler);
   const forge = new ForgeService(deps.db, deps.runs);
   const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);
+  const updates = new UpdateService(deps.db, { version: VERSION });
   cron.start();
+  updates.start();
   app.addHook('onClose', async () => {
     cron.stop();
+    updates.stop();
   });
 
   installErrorHandler(app);
@@ -86,6 +91,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
   registerCronRoutes(app, cron);
+  registerUpdateRoutes(app, updates);
   registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler);
 
   const { webDir } = deps.config;

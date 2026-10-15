@@ -19,3 +19,4 @@ export * from './api/usage.js';
 export * from './api/roadmap.js';
 export * from './api/slop-guard.js';
 export * from './api/toolchain.js';
+export * from './api/updates.js';

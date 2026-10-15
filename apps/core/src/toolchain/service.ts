@@ -109,6 +109,14 @@ const SDK_SPECS: Record<SdkId, Pick<SdkStatus, 'label' | 'description' | 'sizeHi
   },
 };
 
+/** Where each CLI is published, for update checks: its npm package or PyPI project. */
+export const CLI_PACKAGES: Record<AgentId, { npm?: string; pypi?: string }> = Object.fromEntries(
+  (Object.keys(TOOL_SPECS) as AgentId[]).map((id) => [
+    id,
+    TOOL_SPECS[id].npmPackage ? { npm: TOOL_SPECS[id].npmPackage } : id === 'aider' ? { pypi: 'aider-chat' } : {},
+  ]),
+) as Record<AgentId, { npm?: string; pypi?: string }>;
+
 interface ToolRuntimeState {
   installing: boolean;
   lastAction: 'install' | 'update' | 'uninstall' | null;

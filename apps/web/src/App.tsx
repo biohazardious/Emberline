@@ -7,6 +7,7 @@ import {
   PROVIDER_REGISTRY,
   type Run,
   type SystemStatus,
+  type UpdatesResponse,
 } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -80,6 +81,8 @@ function Shell() {
   const [location, navigate] = useLocation();
   useTrackPageViews();
   const system = useApi<SystemStatus>('/api/system', 5_000);
+  const updates = useApi<UpdatesResponse>('/api/updates', 5 * 60_000);
+  const updatesAvailable = updates.data?.status.available ?? 0;
   const projects = useApi<Project[]>('/api/projects', 10_000);
   const claudeUsage = useApi<ClaudeUsageTelemetry>('/api/factory/claude-usage', 30_000);
   const factorySettings = useApi<FactorySettings>('/api/factory/settings', 15_000);
@@ -341,6 +344,14 @@ function Shell() {
             <span className="brand-name">Emberline</span>
             {system.data?.version && <span className="brand-version mono">v{system.data.version}</span>}
           </Link>
+          {updatesAvailable > 0 && (
+            <Link
+              href="/settings?tab=updates"
+              className="update-dot"
+              aria-label={`${updatesAvailable} update${updatesAvailable === 1 ? '' : 's'} available`}
+              title={`${updatesAvailable} update${updatesAvailable === 1 ? '' : 's'} available`}
+            />
+          )}
           <button
             type="button"
             className="icon-btn sidebar-collapse-btn hide-sm"

@@ -29,6 +29,7 @@ import {
   Bell,
   Bot,
   Brain,
+  CircleArrowUp,
   Cpu,
   Download,
   FlaskConical,
@@ -68,6 +69,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { SdkToolchainPanel } from '../components/SdkToolchainPanel';
+import { UpdatesPanel } from '../components/UpdatesPanel';
 import { ProviderMark } from '../components/ProviderMark';
 
 const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
@@ -101,7 +103,7 @@ const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; tex
   },
 };
 
-const SETTINGS_TABS = ['autopilot', 'providers', 'mcp_plugins', 'quota', 'notifications', 'account'] as const;
+const SETTINGS_TABS = ['autopilot', 'providers', 'mcp_plugins', 'quota', 'notifications', 'updates', 'account'] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export function SettingsPage({
@@ -519,6 +521,13 @@ export function SettingsPage({
             onClick={() => setActiveTab('notifications')}
           >
             <Bell className="icon" aria-hidden /> Forge &amp; Webhooks
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${activeTab === 'updates' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('updates')}
+          >
+            <CircleArrowUp className="icon" aria-hidden /> Updates
           </button>
           <button
             type="button"
@@ -1537,6 +1546,7 @@ export function SettingsPage({
 
       {activeTab === 'quota' && <QuotaPanel />}
       {activeTab === 'notifications' && <NotificationsPanel />}
+      {activeTab === 'updates' && <UpdatesPanel />}
       {activeTab === 'account' && <AccountPanel />}
     </div>
   );
