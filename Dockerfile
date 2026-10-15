@@ -150,10 +150,10 @@ FROM runtime AS runner
 # Chromium (open source, not Google Chrome) for the agents' headless browser. Ubuntu ships it only
 # as a snap, which cannot run in a container, so it comes from the xtradeb PPA (Launchpad builds of
 # the upstream source, kept current, amd64 and arm64). apt pinning takes nothing else from the PPA.
-ARG XTRADEB_KEY_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
+ARG XTRADEB_SIGNER_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
-  && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${XTRADEB_KEY_FINGERPRINT}" \
+  && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${XTRADEB_SIGNER_FINGERPRINT}" \
     -o /usr/share/keyrings/xtradeb-apps.asc \
   && . /etc/os-release \
   && printf 'Types: deb\nURIs: https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/xtradeb-apps.asc\n' "$VERSION_CODENAME" \
