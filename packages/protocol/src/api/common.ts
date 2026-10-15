@@ -28,3 +28,27 @@ export const SystemStatus = z.object({
   runnerOutdated: z.boolean(),
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;
+
+/**
+ * A branch name that git accepts and that can never be read as an option (S19): no leading `-`,
+ * no `..`, `//`, `@{`, trailing `/` or `.lock` (see git-check-ref-format).
+ */
+export const GitBranchName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9._/-]+$/, 'branch names may contain letters, digits, ".", "_", "/" and "-"')
+  .refine(
+    (name) =>
+      !name.startsWith('-') &&
+      !name.startsWith('/') &&
+      !name.startsWith('.') &&
+      !name.endsWith('/') &&
+      !name.endsWith('.') &&
+      !name.endsWith('.lock') &&
+      !name.includes('..') &&
+      !name.includes('//') &&
+      !name.includes('/.'),
+    'not a valid git branch name',
+  );

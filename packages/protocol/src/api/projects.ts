@@ -1,5 +1,6 @@
 /** API contracts: projects & AI factory metadata. */
 import { z } from 'zod';
+import { GitBranchName } from './common.js';
 
 /** Specialized AI Coding Factory agent personas. */
 export const AgentPersona = z.enum([
@@ -63,12 +64,7 @@ export const CreateProjectBody = z.object({
   name: z.string().trim().min(1).max(80),
   mode: z.enum(['manual', 'wizard']).default('manual'),
   repoUrl: RepoUrl.optional().or(z.literal('').transform(() => undefined)),
-  defaultBranch: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z0-9._/-]+$/)
-    .max(200)
-    .default('main'),
+  defaultBranch: GitBranchName.default('main'),
   appType: ProjectAppType.default('custom'),
   description: z.string().trim().max(4000).default(''),
   techStack: ProjectTechStack.optional(),

@@ -1,7 +1,7 @@
 /** Main-workspace checkpoints (git history), rollback and project archive export. */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -49,7 +49,9 @@ export async function rollbackProjectCheckpoint(
 }
 
 export async function exportProjectTarGz(workspacePath: string): Promise<Buffer> {
-  const tmpFile = path.join(os.tmpdir(), `emberline-export-${Date.now()}.tar.gz`);
+  // S19: a private directory per export; a shared timestamped name collided for concurrent exports.
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'emberline-export-'));
+  const tmpFile = path.join(tmpDir, 'export.tar.gz');
   try {
     // The one local process core still starts: the image's own tar only reads files (symlinks are
     // archived as links, never followed), so nothing from the workspace executes.
@@ -67,6 +69,6 @@ export async function exportProjectTarGz(workspacePath: string): Promise<Buffer>
     );
     return await readFile(tmpFile);
   } finally {
-    await rm(tmpFile, { force: true }).catch(() => undefined);
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { decoratePromptWithPersona, PERSONA_CATALOG } from '@emberline/adapter-claude';
+import { GitBranchName } from '@emberline/protocol';
 import type {
   ActiveProjectPreference,
   CreateProjectResponse,
@@ -406,6 +407,15 @@ describe('AI Coding Factory (F1–F4)', () => {
       expect(getProviderEnvFromSettings(db, 'unknown-agent')).toEqual({});
     } finally {
       close();
+    }
+  });
+
+  it('accepts only branch names that git cannot read as options (S19)', () => {
+    for (const ok of ['main', 'release/1.2', 'feature/a_b-c', 'v1.0']) {
+      expect(GitBranchName.safeParse(ok).success).toBe(true);
+    }
+    for (const bad of ['-x', '--output=x', 'a..b', 'a//b', 'a/', '.hidden', 'a/.b', 'x.lock', 'a b', '']) {
+      expect(GitBranchName.safeParse(bad).success).toBe(false);
     }
   });
 });

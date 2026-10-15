@@ -1,5 +1,6 @@
 /** API contracts: forge integration (GitHub / GitLab / Gitea PR & MR). */
 import { z } from 'zod';
+import { GitBranchName } from './common.js';
 
 export const ForgeProvider = z.enum(['github', 'gitlab', 'gitea']);
 export type ForgeProvider = z.infer<typeof ForgeProvider>;
@@ -57,7 +58,7 @@ export type RunForgeStatus = z.infer<typeof RunForgeStatus>;
 export const CreatePullRequestBody = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   body: z.string().max(30_000).optional(),
-  baseBranch: z.string().trim().min(1).max(200).optional(),
+  baseBranch: GitBranchName.optional(),
   draft: z.boolean().default(false),
   /** Push the run branch to `origin` before creating the PR/MR. */
   pushFirst: z.boolean().default(true),
