@@ -256,6 +256,9 @@ describe('tickets', () => {
     expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
     const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
     expect((rejected.reason as Error).message).toMatch(/already has a running agent/);
+    // Let the started agent finish spawning: it writes into the test directory, which teardown removes.
+    const started = results.find((r) => r.status === 'fulfilled') as PromiseFulfilledResult<{ run: Run }>;
+    await waitFile(`token-${started.value.run.id}`);
   });
 
   it('never pulls a ticket out of Done', async () => {

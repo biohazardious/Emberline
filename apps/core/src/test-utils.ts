@@ -75,7 +75,8 @@ export async function createTestApp(
       scheduler.dispose();
       ptyd.stop();
       opened.close();
-      rmSync(dir, { recursive: true, force: true });
+      // A process that is still exiting may add a file while the tree is removed (ENOTEMPTY): retry.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }
