@@ -20,7 +20,16 @@ const HINT: Record<RunState, string> = {
   failed: 'The agent process failed',
 };
 
-export function RunStatePill({ state }: { state: RunState }) {
+/** A user stop ends a run as `failed`; it is shown as cancelled instead. */
+export function RunStatePill({ state, cancelled = false }: { state: RunState; cancelled?: boolean }) {
+  if (cancelled && state === 'failed') {
+    return (
+      <span className="run-pill run-cancelled" title="Stopped by you; this run will not resume">
+        <span className="dot" />
+        cancelled
+      </span>
+    );
+  }
   return (
     <span className={`run-pill run-${state}`} title={HINT[state]}>
       <span className="dot" />

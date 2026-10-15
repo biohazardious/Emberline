@@ -401,7 +401,7 @@ function TicketCard({
         <p className="card-title">{ticket.title}</p>
         {run && (
           <div className="card-foot">
-            <RunStatePill state={run.state} />
+            <RunStatePill state={run.state} cancelled={run.cancelled} />
             {run.telemetry && run.telemetry.totalTokens > 0 && (
               <span
                 className="card-event mono"
@@ -523,7 +523,7 @@ function TicketDrawer({
             {ticket.key}
           </span>
           <PersonaBadge persona={persona} showFull />
-          {run && <RunStatePill state={run.state} />}
+          {run && <RunStatePill state={run.state} cancelled={run.cancelled} />}
           {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
           <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
           {run && (
@@ -670,7 +670,7 @@ function TicketDrawer({
             <h2>Agent Execution</h2>
             {run && (
               <div className="agent-run">
-                <RunStatePill state={run.state} />
+                <RunStatePill state={run.state} cancelled={run.cancelled} />
                 <span className="badge badge-soft mono">{formatAgentDisplayName(run.agent)}</span>
                 {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
                 {run.terminalId && (

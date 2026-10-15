@@ -201,7 +201,7 @@ describe('runs', () => {
     for (const event of ['Stop', 'SessionEnd', 'UserPromptSubmit']) await hook(run.id, event, token);
 
     const after = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
-    expect(after).toMatchObject({ state: 'failed', resumable: false });
+    expect(after).toMatchObject({ state: 'failed', resumable: false, cancelled: true });
     expect(after.events.map((e) => e.type)).toContain('cancelled');
     expect((await api('POST', `/api/runs/${run.id}/prompt`, { text: 'more' })).statusCode).toBe(409);
   });

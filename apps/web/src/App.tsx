@@ -5,11 +5,12 @@ import {
   type FactorySettings,
   type Project,
   PROVIDER_REGISTRY,
+  type Run,
   type SystemStatus,
 } from '@emberline/protocol';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
-import { api } from './api';
+import { api, errorMessage } from './api';
 import { AuthGate, useAuth } from './auth';
 import { BrandLogo } from './components/BrandLogo';
 import { CommandPalette } from './components/CommandPalette';
@@ -20,7 +21,9 @@ import { RunInspector } from './components/RunInspector';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
+import { attentionReason, notificationsSupported, useAttention } from './hooks/useAttention';
 import { Dashboard } from './pages/Dashboard';
+import { Toasts, toastError, toastInfo } from './toast';
 
 // xterm.js and Monaco are the bulk of the bundle; only load them when opened.
 const TerminalPage = lazy(() => import('./pages/TerminalPage').then((m) => ({ default: m.TerminalPage })));
@@ -117,7 +120,9 @@ function Shell() {
     } catch {
       // ignore storage errors
     }
-    void api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next }).catch(() => undefined);
+    void api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next }).catch((e: unknown) =>
+      toastError(`Could not save the theme: ${errorMessage(e)}`),
+    );
   }, []);
 
   useEffect(() => {
@@ -156,7 +161,9 @@ function Shell() {
       } catch {
         // ignore storage errors
       }
-      void api<ActiveProjectPreference>('/api/projects/active', 'PUT', { activeProjectId: id }).catch(() => undefined);
+      void api<ActiveProjectPreference>('/api/projects/active', 'PUT', { activeProjectId: id }).catch((e: unknown) =>
+        toastError(`Could not remember the active project: ${errorMessage(e)}`),
+      );
     },
     [],
   );
@@ -192,6 +199,9 @@ function Shell() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setCmdOpen((open) => !open);
+      } else if (e.altKey && e.code === 'KeyN') {
+        e.preventDefault();
+        openNextAttentionRef.current();
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -226,6 +236,21 @@ function Shell() {
   const waitingRuns = useMemo(() => activeRuns.filter((r) => r.state === 'waiting_input'), [activeRuns]);
   const inspectedRun = useMemo(() => (runs ?? []).find((r) => r.id === inspectRunId), [runs, inspectRunId]);
 
+  const openRun = useCallback((run: Run) => setInspectRunId(run.id), []);
+  const attention = useAttention(runs, openRun);
+  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(() =>
+    notificationsSupported() ? Notification.permission : 'denied',
+  );
+  /** Docks the longest-waiting run that needs the user and marks it seen. */
+  const openNextAttention = useCallback(() => {
+    const next = attention.items[0];
+    if (!next) return;
+    attention.acknowledge(next);
+    setInspectRunId(next.id);
+  }, [attention]);
+  const openNextAttentionRef = useRef(openNextAttention);
+  openNextAttentionRef.current = openNextAttention;
+
   const handleSwitchProject = (nextId: string) => {
     if (nextId === '__new__') {
       setWizardOpen(true);
@@ -249,8 +274,9 @@ function Shell() {
     if (!activeProject) return;
     try {
       await api(`/api/projects/${activeProject.id}/cleanup-worktrees`, 'POST');
-    } catch {
-      // ignore
+      toastInfo('Finished worktrees cleaned up.');
+    } catch (e) {
+      toastError(`Cleanup failed: ${errorMessage(e)}`);
     }
   };
 
@@ -268,14 +294,15 @@ function Shell() {
       await projects.refresh();
       handleSwitchProject(res.nextActiveProjectId ?? '');
       if (!res.nextActiveProjectId) navigate('/');
-    } catch {
-      // ignore
+    } catch (e) {
+      toastError(`Could not delete the project: ${errorMessage(e)}`);
     }
   };
 
   return (
     <div className={`app workbench${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <LiveEvents />
+      <Toasts />
       <aside className={`sidebar${mobileNavOpen ? ' sidebar-open' : ''}`} aria-label="Workspace navigation">
         <div className="sidebar-top">
           <Link href="/" className="brand" title="Emberline — AI Coding Factory">
@@ -441,6 +468,36 @@ function Shell() {
           </Link>
         </nav>
 
+        {attention.items.length > 0 && (
+          <div className="sidebar-section">
+            <button
+              type="button"
+              className="attention-next"
+              onClick={openNextAttention}
+              title="Open the agent that has waited longest for you (Alt+N)"
+            >
+              <span className="dot run-waiting_input" />
+              <span>
+                <span className="attention-count">{attention.items.length} need you</span>
+                <span className="muted">
+                  {' '}
+                  · {attention.items[0]?.title ?? 'Agent run'} {attention.items[0] && attentionReason(attention.items[0])}
+                </span>
+              </span>
+              <kbd>Alt+N</kbd>
+            </button>
+            {notificationsSupported() && notifyPermission === 'default' && (
+              <button
+                type="button"
+                className="attention-enable"
+                onClick={() => void Notification.requestPermission().then(setNotifyPermission)}
+              >
+                Enable desktop alerts
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="sidebar-section sidebar-section-grow">
           <div className="sidebar-section-head">
             <span className="eyebrow">Active Fleet</span>
@@ -460,7 +517,7 @@ function Shell() {
                     <span className={`dot run-${r.state}`} />
                     <span className="nav-label">{title}</span>
                     {r.persona && r.persona !== 'coder' && <PersonaBadge persona={r.persona} />}
-                    <RunStatePill state={r.state} />
+                    <RunStatePill state={r.state} cancelled={r.cancelled} />
                   </button>
                 </li>
               );

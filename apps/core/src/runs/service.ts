@@ -140,6 +140,7 @@ export const toRun = (row: RunRow): Run => ({
   createdAt: row.createdAt.toISOString(),
   endedAt: row.endedAt?.toISOString() ?? null,
   resumable: row.endedAt !== null && row.agentSessionId !== null && row.cancelledAt === null,
+  cancelled: row.cancelledAt !== null,
 });
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {

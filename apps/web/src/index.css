@@ -1077,6 +1077,12 @@ a {
   background: var(--bad);
 }
 
+.run-cancelled {
+  --tone: var(--muted);
+  background: var(--muted);
+}
+
+.run-pill.run-cancelled,
 .run-pill.run-starting,
 .run-pill.run-working,
 .run-pill.run-waiting_input,
@@ -2513,3 +2519,86 @@ dialog.cmd-dialog::backdrop {
   }
 }
 
+/* --- toasts & attention ---------------------------------------------------- */
+
+.toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+}
+
+.toast-error {
+  border-left-color: var(--bad);
+}
+
+.toast span {
+  flex: 1;
+}
+
+.toast-close {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.attention-next {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in hsl, var(--warn) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in hsl, var(--warn) 10%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.attention-next:hover {
+  background: color-mix(in hsl, var(--warn) 18%, transparent);
+}
+
+.attention-next .attention-count {
+  font-weight: 600;
+}
+
+.attention-next kbd {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.attention-enable {
+  margin-top: 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}

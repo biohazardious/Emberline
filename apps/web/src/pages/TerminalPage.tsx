@@ -28,7 +28,7 @@ export function TerminalPage({ id }: { id: string }) {
         </Link>
         <h1 className="terminal-title">{info?.title ?? 'Terminal'}</h1>
         {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
-        {run && <RunStatePill state={run.state} />}
+        {run && <RunStatePill state={run.state} cancelled={run.cancelled} />}
         <span className={`pill pill-${state}`}>
           <span className="dot" />
           {STATE_LABEL[state]}

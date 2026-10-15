@@ -523,6 +523,8 @@ export const Run = z.object({
   endedAt: z.string().nullable(),
   /** True when an ended run can be continued with `claude --resume` (a session id is known). */
   resumable: z.boolean(),
+  /** The user stopped this run; it ended as `failed` (or `done` if its work was finished) and never resumes. */
+  cancelled: z.boolean(),
   /** Token & tool execution telemetry (no monetary pricing). */
   telemetry: RunTelemetry.optional(),
 });

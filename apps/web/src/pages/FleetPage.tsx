@@ -362,7 +362,7 @@ function FleetPane({
   return (
     <article id={`fleet-pane-${run.id}`} className={`fleet-pane fleet-pane-${run.state}`}>
       <header className="fleet-pane-head">
-        <RunStatePill state={run.state} />
+        <RunStatePill state={run.state} cancelled={run.cancelled} />
         <PersonaBadge persona={run.persona} />
         <button type="button" className="fleet-pane-title" onClick={onInspect} title="Open run inspector & timeline">
           {run.title ?? project?.name ?? 'Agent Run'}
