@@ -8,6 +8,8 @@ import { conflict, HttpError } from '../errors.js';
 import { SessionStore } from './sessions.js';
 
 export const SESSION_COOKIE = 'emberline_session';
+/** Over HTTPS the cookie carries the `__Host-` prefix: Secure, host-only, path `/` (S18). */
+export const SECURE_SESSION_COOKIE = `__Host-${SESSION_COOKIE}`;
 const PASSWORD_KEY = 'auth.passwordHash';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PUBLIC_ROUTES = new Set([
@@ -54,14 +56,19 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     app.log.warn(`First-run setup token: ${setupToken} (enter it on the setup page)`);
   }
 
-  const isAuthenticated = (request: FastifyRequest) => store.validate(request.cookies[SESSION_COOKIE]);
+  const sessionToken = (request: FastifyRequest) =>
+    request.cookies[SECURE_SESSION_COOKIE] ?? request.cookies[SESSION_COOKIE];
+  const isAuthenticated = (request: FastifyRequest) => store.validate(sessionToken(request));
 
   const issueSession = (request: FastifyRequest, reply: FastifyReply) => {
     const { token, expiresAt } = store.create(request.headers['user-agent']);
-    reply.setCookie(SESSION_COOKIE, token, {
+    // HTTPS is detected per request (X-Forwarded-Proto counts with EMBERLINE_TRUST_PROXY), so a TLS
+    // proxy gets Secure cookies without extra configuration; plain-HTTP LAN access keeps working.
+    const secure = config.secureCookies || request.protocol === 'https';
+    reply.setCookie(secure ? SECURE_SESSION_COOKIE : SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: config.secureCookies,
+      secure,
       path: '/',
       expires: expiresAt,
     });
@@ -90,6 +97,10 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     if (PUBLIC_ROUTES.has(route)) return;
     if (!isAuthenticated(request)) {
       return reply.code(401).send({ error: 'unauthorized', message: 'login required' });
+    }
+    // Terminals and the event stream stay open for hours: logout or a password change closes them.
+    if (request.headers.upgrade?.toLowerCase() === 'websocket') {
+      store.bindConnection(sessionToken(request)!, request.raw.socket);
     }
   });
 
@@ -178,8 +189,11 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   });
 
   app.post('/api/auth/logout', async (request, reply) => {
-    store.revoke(request.cookies[SESSION_COOKIE]);
+    store.revoke(sessionToken(request));
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    if (request.cookies[SECURE_SESSION_COOKIE] !== undefined) {
+      reply.clearCookie(SECURE_SESSION_COOKIE, { path: '/', secure: true });
+    }
     return { ok: true };
   });
 

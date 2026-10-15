@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
 import { CSRF, createTestApp, setupAndLogin, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
@@ -161,6 +162,37 @@ describe('auth', () => {
       t!.app.inject({ method: 'POST', url: '/api/auth/login', headers: CSRF, payload: { password } });
     expect((await login('the first password')).statusCode).toBe(401);
     expect((await login('a brand new password')).statusCode).toBe(200);
+  });
+
+  it('uses a Secure __Host- cookie behind an HTTPS proxy (S18)', async () => {
+    t = await createTestApp({ trustProxy: true });
+    await setupAndLogin(t.app, 'the right password');
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { ...CSRF, 'x-forwarded-proto': 'https' },
+      payload: { password: 'the right password' },
+    });
+    const cookie = res.cookies.find((c) => c.name === '__Host-emberline_session');
+    expect(cookie).toMatchObject({ secure: true, httpOnly: true, path: '/' });
+    expect(res.cookies.find((c) => c.name === 'emberline_session')).toBeUndefined();
+    const auth = `__Host-emberline_session=${cookie?.value}`;
+    expect((await t.app.inject({ url: '/api/projects', headers: { cookie: auth } })).statusCode).toBe(200);
+  });
+
+  it('closes open WebSockets when their session logs out (S18)', async () => {
+    t = await createTestApp();
+    const cookie = await setupAndLogin(t.app);
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    const closed = new Promise((resolve) => ws.once('close', resolve));
+    await t.app.inject({ method: 'POST', url: '/api/auth/logout', headers: { ...CSRF, cookie } });
+    await closed;
+    expect(ws.readyState).toBe(WebSocket.CLOSED);
   });
 
   it('says how long a throttled client has to wait', async () => {
