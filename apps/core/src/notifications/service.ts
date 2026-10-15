@@ -15,6 +15,16 @@ import type { Scheduler } from '../scheduler/service.js';
 
 const SETTINGS_KEY = 'notifications.config';
 
+/**
+ * HTTP header values must be Latin-1 (fetch throws otherwise). ntfy accepts RFC 2047
+ * encoded-words, so anything outside printable ASCII is sent as `=?UTF-8?B?...?=`.
+ */
+export function encodeHeaderValue(value: string): string {
+  const flat = value.replace(/[\r\n]+/g, ' ');
+  if (/^[\x20-\x7e]*$/.test(flat)) return flat;
+  return `=?UTF-8?B?${Buffer.from(flat, 'utf8').toString('base64')}?=`;
+}
+
 export interface NotificationMessage {
   event: 'rate_limited' | 'quota_resumed' | 'waiting_input' | 'run_finished' | 'test';
   title: string;
@@ -185,9 +195,9 @@ export class NotificationService {
     try {
       let body: string;
       if (cfg.provider === 'ntfy') {
-        headers.Title = msg.title;
+        headers.Title = encodeHeaderValue(msg.title);
         headers.Priority = msg.priority ?? 'default';
-        if (msg.tags?.length) headers.Tags = msg.tags.join(',');
+        if (msg.tags?.length) headers.Tags = encodeHeaderValue(msg.tags.join(','));
         body = msg.body;
       } else {
         headers['Content-Type'] = 'application/json';
