@@ -60,6 +60,7 @@ import {
 } from 'lucide-react';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
+import { useQueryParam } from '../hooks/navigation';
 import { api, errorMessage } from '../api';
 import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { AccountPanel } from '../components/AccountPanel';
@@ -100,6 +101,9 @@ const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; tex
   },
 };
 
+const SETTINGS_TABS = ['autopilot', 'providers', 'mcp_plugins', 'quota', 'notifications', 'account'] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
+
 export function SettingsPage({
   theme,
   onChangeTheme,
@@ -108,9 +112,10 @@ export function SettingsPage({
   onChangeTheme: (theme: 'dark' | 'light') => void;
 }) {
   const [, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState<
-    'autopilot' | 'providers' | 'mcp_plugins' | 'quota' | 'notifications' | 'account'
-  >('autopilot');
+  // The tab lives in the address, so coming back from a login or install terminal returns to it.
+  const [tabParam, setTabParam] = useQueryParam('tab');
+  const activeTab: SettingsTab = SETTINGS_TABS.includes(tabParam as SettingsTab) ? (tabParam as SettingsTab) : 'autopilot';
+  const setActiveTab = (tab: SettingsTab) => setTabParam(tab === 'autopilot' ? null : tab);
   const [settings, setSettings] = useState<FactorySettings | null>(null);
   const [themePref, setThemePref] = useState<ThemeMode>(theme);
   const [autoPickupReady, setAutoPickupReady] = useState(true);

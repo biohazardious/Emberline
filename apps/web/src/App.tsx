@@ -40,6 +40,7 @@ import { RunInspector } from './components/RunInspector';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
+import { useTrackPageViews } from './hooks/navigation';
 import { attentionReason, notificationsSupported, useAttention } from './hooks/useAttention';
 import { Dashboard } from './pages/Dashboard';
 import { Toasts, toastError, toastInfo } from './toast';
@@ -77,6 +78,7 @@ export function App() {
 function Shell() {
   const { logout } = useAuth();
   const [location, navigate] = useLocation();
+  useTrackPageViews();
   const system = useApi<SystemStatus>('/api/system', 5_000);
   const projects = useApi<Project[]>('/api/projects', 10_000);
   const claudeUsage = useApi<ClaudeUsageTelemetry>('/api/factory/claude-usage', 30_000);

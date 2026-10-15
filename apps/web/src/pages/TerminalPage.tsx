@@ -1,10 +1,10 @@
 import type { TerminalInfo } from '@emberline/protocol';
 import { useState } from 'react';
-import { Link } from 'wouter';
 import { RunStatePill } from '../components/RunStatePill';
 import { type ConnectionState, TerminalView } from '../components/TerminalView';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
+import { useGoBack } from '../hooks/navigation';
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connecting: 'connecting…',
@@ -20,12 +20,14 @@ export function TerminalPage({ id }: { id: string }) {
   const { runs } = useRuns();
   const run = info?.runId ? runs?.find((r) => r.id === info.runId) : undefined;
 
+  const goBack = useGoBack();
+
   return (
     <div className="terminal-page">
       <header className="terminal-head">
-        <Link href="/" className="btn btn-ghost btn-sm" aria-label="Back to dashboard">
+        <button type="button" className="btn btn-ghost btn-sm" aria-label="Back to the previous page" onClick={goBack}>
           ← Back
-        </Link>
+        </button>
         <h1 className="terminal-title">{info?.title ?? 'Terminal'}</h1>
         {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
         {run && <RunStatePill state={run.state} cancelled={run.cancelled} />}

@@ -26,6 +26,7 @@ import { RunStatePill } from '../components/RunStatePill';
 import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
+import { useQueryParam } from '../hooks/navigation';
 import { timeAgo } from '../time';
 import { MODEL_LABELS, RoadmapStudioPanel } from './RoadmapPage';
 
@@ -36,7 +37,8 @@ const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   agent: 'agent',
 };
 
-type OverviewTab = 'studio' | 'roadmap' | 'runs' | 'automation' | 'system';
+const OVERVIEW_TABS = ['studio', 'roadmap', 'runs', 'automation', 'system'] as const;
+type OverviewTab = (typeof OVERVIEW_TABS)[number];
 
 export function Dashboard({
   system,
@@ -55,7 +57,12 @@ export function Dashboard({
   const terminals = useApi<TerminalInfo[]>('/api/terminals', 3_000);
   const projects = useApi<Project[]>('/api/projects', 10_000);
   const { runs } = useRuns();
-  const [overviewTab, setOverviewTab] = useState<OverviewTab>('studio');
+  // The section lives in the address, so coming back from a run's terminal returns to it.
+  const [sectionParam, setSectionParam] = useQueryParam('section');
+  const overviewTab: OverviewTab = OVERVIEW_TABS.includes(sectionParam as OverviewTab)
+    ? (sectionParam as OverviewTab)
+    : 'studio';
+  const setOverviewTab = (tab: OverviewTab) => setSectionParam(tab === 'studio' ? null : tab);
   const [hideCompletedRuns, setHideCompletedRuns] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string>();
   const [runFormFor, setRunFormFor] = useState<string>();

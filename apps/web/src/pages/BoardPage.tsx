@@ -27,6 +27,7 @@ import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { BuildOutputsList } from '../components/RunOutcome';
 import { useRuns, useTickets } from '../hooks/liveData';
+import { useGoBack, useQueryParam, useUpdateQuery } from '../hooks/navigation';
 import { timeAgo } from '../time';
 import { toastInfo } from '../toast';
 
@@ -68,7 +69,13 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const project = projects.data?.find((p) => p.id === projectId);
   const { tickets, patchLocal } = useTickets(projectId);
   const { runs } = useRuns();
-  const [openId, setOpenId] = useState<string>();
+  // The open ticket lives in the address, so coming back from its terminal or review reopens it.
+  const [openParam] = useQueryParam('ticket');
+  const updateQuery = useUpdateQuery();
+  const openId = openParam ?? undefined;
+  // Opening or closing a ticket starts its drawer on its default tab.
+  const setOpenId = (id: string | undefined) => updateQuery({ ticket: id ?? null, view: null });
+  const goBack = useGoBack();
   const [dragId, setDragId] = useState<string>();
   const [drop, setDrop] = useState<DropTarget>();
   const [autoStart, setAutoStart] = useState(true);
@@ -166,9 +173,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
     <div className="board-page">
       <header className="board-head">
         <div className="board-title">
-          <Link href="/" className="btn btn-ghost btn-sm" aria-label="Back to dashboard">
+          <button type="button" className="btn btn-ghost btn-sm" aria-label="Back to the previous page" onClick={goBack}>
             ←
-          </Link>
+          </button>
           <div>
             <p className="eyebrow">{project?.name ?? 'Project'} · Pipeline Board</p>
             <h1>{project?.name ?? 'Board'}</h1>
@@ -464,6 +471,9 @@ function TicketCard({
   );
 }
 
+
+const DRAWER_VIEWS = ['details', 'review', 'terminal', 'events'] as const;
+type DrawerView = (typeof DRAWER_VIEWS)[number];
 function TicketDrawer({
   ticket,
   run,
@@ -483,9 +493,11 @@ function TicketDrawer({
   const [persona, setPersona] = useState<AgentPersona>(ticket.persona ?? 'coder');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [followUp, setFollowUp] = useState('');
-  const [viewTab, setViewTab] = useState<'details' | 'review' | 'terminal' | 'events'>(
-    ticket.status === 'review' && run?.worktreePath ? 'review' : 'details',
-  );
+  // The drawer tab lives in the address too (`?view=events`), next to the open ticket.
+  const defaultView: DrawerView = ticket.status === 'review' && run?.worktreePath ? 'review' : 'details';
+  const [viewParam, setViewParam] = useQueryParam('view');
+  const viewTab: DrawerView = DRAWER_VIEWS.includes(viewParam as DrawerView) ? (viewParam as DrawerView) : defaultView;
+  const setViewTab = (view: DrawerView) => setViewParam(view === defaultView ? null : view);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const live = run && !run.endedAt;
