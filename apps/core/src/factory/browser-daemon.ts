@@ -12,7 +12,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.2.0';
+export const BROWSER_DAEMON_VERSION = '1.3.1';
 
 /**
  * Preload hook (`NODE_OPTIONS="--require /run/emberline/playwright-hook.cjs"`) injected into
@@ -813,6 +813,84 @@ function scanTranscriptTokens(nowMs) {
   return { hourly, daily, weekly };
 }
 
+// Antigravity quota: the same call agy makes for its own usage view (fetchAvailableModels returns a
+// quotaInfo {remainingFraction, resetTime} per model). Read-only, with agy's own OAuth token, which
+// agy refreshes while it runs; an expired token is reported instead of refreshed here.
+let cachedAgyQuota = null;
+let cachedAgyQuotaAt = 0;
+const AGY_API = 'https://daily-cloudcode-pa.googleapis.com/v1internal:';
+
+async function agyCall(method, body, accessToken) {
+  const res = await fetch(AGY_API + method, {
+    method: 'POST',
+    // The service only answers requests that identify as the Antigravity client.
+    headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json', 'User-Agent': 'antigravity' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(6000),
+  });
+  if (!res.ok) throw new Error(method + ' HTTP ' + res.status);
+  return res.json();
+}
+
+function agyGroupLabel(ids) {
+  const text = ids.join(' ').toLowerCase();
+  const parts = [];
+  if (text.includes('gemini')) parts.push('Gemini');
+  if (text.includes('claude')) parts.push('Claude');
+  if (text.includes('gpt')) parts.push('GPT');
+  return parts.length ? parts.join('/') : 'Models';
+}
+
+async function getAntigravityQuota(forceRefresh = false) {
+  const nowMs = Date.now();
+  if (!forceRefresh && cachedAgyQuota && nowMs - cachedAgyQuotaAt < 60_000) return cachedAgyQuota;
+  const result = { available: false, groups: [], reason: null, updatedAt: new Date(nowMs).toISOString() };
+  try {
+    const tokenPath = '/home/node/.gemini/antigravity-cli/antigravity-oauth-token';
+    if (!fs.existsSync(tokenPath)) {
+      result.reason = 'not logged in';
+    } else {
+      const token = JSON.parse(fs.readFileSync(tokenPath, 'utf8'))?.token;
+      const expiry = token?.expiry ? Date.parse(token.expiry) : NaN;
+      if (!token?.access_token) {
+        result.reason = 'not logged in';
+      } else if (Number.isFinite(expiry) && expiry <= nowMs) {
+        result.reason = 'token expired; start an Antigravity session to refresh it';
+      } else {
+        const load = await agyCall('loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' } }, token.access_token);
+        const project = typeof load?.cloudaicompanionProject === 'string' ? load.cloudaicompanionProject : load?.cloudaicompanionProject?.id;
+        const data = await agyCall('fetchAvailableModels', project ? { project } : {}, token.access_token);
+        const models = data?.models && typeof data.models === 'object' ? Object.entries(data.models) : [];
+        // Models that share a pool report the same fraction and reset time; models without a reset
+        // time are unmetered (fraction 1) and are left out.
+        const pools = new Map();
+        for (const [id, model] of models) {
+          const q = model?.quotaInfo;
+          if (!q || !q.resetTime || typeof q.remainingFraction !== 'number') continue;
+          const key = q.resetTime + '|' + q.remainingFraction;
+          const pool = pools.get(key) || { ids: [], remaining: q.remainingFraction, resetsAt: q.resetTime };
+          pool.ids.push(id);
+          pools.set(key, pool);
+        }
+        result.groups = [...pools.values()]
+          .map((p) => ({
+            label: agyGroupLabel(p.ids),
+            usedPercent: Math.min(100, Math.max(0, Math.round((1 - p.remaining) * 1000) / 10)),
+            resetsAt: p.resetsAt,
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label));
+        result.available = result.groups.length > 0;
+        if (!result.available) result.reason = 'no metered models reported';
+      }
+    }
+  } catch (err) {
+    result.reason = 'quota request failed: ' + (err && err.message ? err.message : String(err));
+  }
+  cachedAgyQuota = result;
+  cachedAgyQuotaAt = nowMs;
+  return result;
+}
+
 async function getClaudeUsage(forceRefresh = false) {
   const nowMs = Date.now();
   if (!forceRefresh && cachedClaudeUsage && nowMs - cachedClaudeUsageAt < 25_000) {
@@ -899,6 +977,7 @@ async function getClaudeUsage(forceRefresh = false) {
     hourlyTokens: hourly,
     dailyTokens: daily,
     weeklyTokens: weekly,
+    providerQuotas: { antigravity: await getAntigravityQuota(forceRefresh) },
     updatedAt: new Date(nowMs).toISOString(),
   };
 
