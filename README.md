@@ -40,8 +40,6 @@ EMBERLINE_VERSION=0.1.0 docker compose up -d
 docker compose logs core     # the first start prints a one-time setup token
 ```
 
-While the packages are private, the host has to log in to the registry first. GHCR needs a **classic** personal access token with the `read:packages` scope (fine-grained tokens are not accepted): `echo <token> | docker login ghcr.io -u <github-user> --password-stdin`, or add `ghcr.io` with that token as a registry in your container manager.
-
 ### From source
 
 Building from source additionally needs `make` and `git`; nothing else is installed on the host.

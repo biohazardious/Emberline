@@ -8,8 +8,6 @@
 #     path (for example a TrueNAS dataset such as /mnt/tank/apps/emberline/workspaces) to see and
 #     back them up from the host. The runner works as uid 1000, so that path must be writable by it.
 #   - The first start prints a one-time setup token in the core log.
-#   - Private images: log in to ghcr.io with a classic token that has read:packages (fine-grained
-#     tokens do not work with GHCR).
 # See SECURITY.md before exposing it beyond localhost.
 name: emberline
 
