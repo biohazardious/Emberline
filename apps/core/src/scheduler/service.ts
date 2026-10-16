@@ -7,6 +7,7 @@ import {
   laneCovers,
   laneOf,
   MAX_HANDOFFS,
+  PROVIDER_RUNTIME,
   type QuotaWindow,
   type ResetSource,
   type Route,
@@ -107,7 +108,12 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     super();
     this.setMaxListeners(0);
     this.options = { ...DEFAULT_SCHEDULER_OPTIONS, ...options };
-    runs.on('rateLimited', (run, info) => void this.onRateLimited(run, info));
+    runs.on('rateLimited', (run, info) => {
+      // A failure (e.g. the DB) is noted on the run instead of escaping as an unhandled rejection.
+      this.onRateLimited(run, info).catch((error: unknown) =>
+        this.runs.note(run.id, 'rate_limit_failed', { message: error instanceof Error ? error.message : String(error) }),
+      );
+    });
     runs.on('run', (_run, stateChanged) => {
       if (stateChanged) this.kick();
     });
@@ -183,8 +189,19 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     return this.publish(true);
   }
 
-  /** A person hands a waiting run to another route; refused while that route is out of quota too. */
+  /**
+   * A person hands a waiting run to another route. Refused (before the run is touched) when the
+   * agent cannot sign in that way, when an API-key route has no key saved, or while that route is
+   * out of quota too.
+   */
   async handOff(runId: string, route: Route): Promise<Run> {
+    this.runs.getRun(runId); // 404 for an unknown run first
+    if (!PROVIDER_RUNTIME[route.agent]?.credentials.includes(route.credential)) {
+      throw new HttpError(400, 'route_unsupported', `${route.agent} cannot run with credential ${route.credential}`);
+    }
+    if (!routeUsable(this.db, route)) {
+      throw new HttpError(409, 'route_unusable', `${route.agent} (${route.model}) needs an API key; none is saved`);
+    }
     if (this.laneClosed(laneOf(route), this.openWindows())) {
       throw new HttpError(409, 'lane_exhausted', `${route.agent} (${route.model}) is out of quota too`);
     }

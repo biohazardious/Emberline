@@ -200,19 +200,15 @@ export class CronService {
   }
 
   /**
-   * Evaluates all enabled scheduled jobs whose `nextRunAt <= now` and spawns agent runs
-   * unless a subscription quota window is currently active.
+   * Evaluates all enabled scheduled jobs whose `nextRunAt <= now` and submits their runs. Quota is
+   * the scheduler's business: a run whose lane is exhausted waits queued there (other providers
+   * keep running), and the `skip` overlap policy sees that queued run as still going.
    */
   async tick(now: Date = new Date()): Promise<Run[]> {
     if (this.ticking) return [];
     this.ticking = true;
     const spawned: Run[] = [];
     try {
-      // Respect active quota pause window
-      if (this.scheduler && this.scheduler.state().window !== null) {
-        return [];
-      }
-
       const rows = this.db
         .select()
         .from(scheduledJobs)

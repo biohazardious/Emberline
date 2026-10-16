@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CronService } from './cron/service.js';
 import { computeNextCronDate, previewCronRuns } from './cron/schedule.js';
-import { scheduledJobs } from './db/schema.js';
+import { quotaWindows, scheduledJobs } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const next = (expr: string, from: string, zone = 'UTC') => computeNextCronDate(expr, new Date(from), zone).toISOString();
@@ -101,6 +101,38 @@ describe('cron jobs', () => {
     expect(runsOf('check')).toBe(3);
     const skipped = t.db.select().from(scheduledJobs).where(eq(scheduledJobs.id, skip.id)).get()!;
     expect(skipped.nextRunAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("another provider's quota window does not hold back a Claude job; its own lane queues it and skips the next tick", async () => {
+    const { api, projectId } = await start();
+    const cron = new CronService(t.db, t.runs, t.scheduler, 'UTC');
+    const job: ScheduledJob = (await api('POST', '/api/cron', { projectId, name: 'nightly', cronExpr: '*/5 * * * *', prompt: 'nightly' })).json();
+    const due = () => t.db.update(scheduledJobs).set({ nextRunAt: new Date(Date.now() - 60_000) }).run();
+    const window = (agent: string) =>
+      t.db.insert(quotaWindows).values({ id: agent, agent, credential: 'login', pool: '*', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+
+    window('antigravity');
+    due();
+    const [run] = await cron.tick();
+    expect(run).toMatchObject({ agent: 'claude' });
+    await expect.poll(() => t.runs.getRun(run!.id).state, { timeout: 5_000 }).toBe('starting');
+    await t.runs.stop(run!.id);
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return t.runs.getRun(run!.id).endedAt;
+      }, { timeout: 5_000 })
+      .not.toBeNull();
+
+    // Claude's own lane closed: the job's run waits queued, and the next occurrence is skipped behind it.
+    window('claude');
+    due();
+    const [queued] = await cron.tick();
+    expect(t.runs.getRun(queued!.id).state).toBe('queued');
+    due();
+    expect(await cron.tick()).toHaveLength(0);
+    expect(t.runs.list().filter((r) => r.prompt === 'nightly')).toHaveLength(2);
+    expect(job.overlapPolicy).toBe('skip');
   });
 
   it('stores a job time zone and previews runs over the API', async () => {

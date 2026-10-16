@@ -1,6 +1,7 @@
 import {
   type NotificationSettings,
   NotificationSettings as NotificationSettingsSchema,
+  type QuotaWindow,
   type SchedulerState,
   type TestNotificationResponse,
   type UpdateNotificationSettingsBody,
@@ -10,6 +11,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
 import { badRequest } from '../errors.js';
+import { providerAdapter } from '../runs/providers.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -33,8 +35,20 @@ export interface NotificationMessage {
   tags?: string[];
 }
 
+const laneKey = (w: QuotaWindow) => `${w.agent}|${w.credential}|${w.pool}`;
+
+const CREDENTIAL_LABEL: Record<string, string> = { api_key: ' API key', credits: ' AI credits' };
+
+/** E.g. "Antigravity (all models)", "Claude API key (opus)". */
+function laneLabel(w: QuotaWindow): string {
+  const adapter = providerAdapter(w.agent);
+  const name = adapter.id === w.agent ? adapter.displayName : w.agent;
+  return `${name}${CREDENTIAL_LABEL[w.credential] ?? ''} (${w.pool === '*' ? 'all models' : w.pool})`;
+}
+
 export class NotificationService {
-  private lastWindowId: string | null = null;
+  /** Exhausted lanes as of the last scheduler state, by lane key. */
+  private lastLanes = new Map<string, QuotaWindow>();
 
   constructor(
     private readonly db: Db,
@@ -42,7 +56,7 @@ export class NotificationService {
     scheduler?: Scheduler,
   ) {
     if (scheduler) {
-      this.lastWindowId = scheduler.state().window?.id ?? null;
+      this.lastLanes = new Map(scheduler.state().windows.map((w) => [laneKey(w), w]));
       scheduler.on('state', (state) => {
         void this.onSchedulerState(state);
       });
@@ -83,32 +97,35 @@ export class NotificationService {
     }
   }
 
+  /** One page per quota lane that runs out, and one when it is back; other lanes keep running meanwhile. */
   private async onSchedulerState(state: SchedulerState): Promise<void> {
-    const prevId = this.lastWindowId;
-    const nextWindow = state.window;
-    this.lastWindowId = nextWindow?.id ?? null;
+    const prev = this.lastLanes;
+    const next = new Map(state.windows.map((w) => [laneKey(w), w]));
+    this.lastLanes = next;
 
     const cfg = this.getSettings();
     if (!cfg.enabled) return;
 
-    if (!prevId && nextWindow && cfg.onRateLimited) {
-      const resetNote = nextWindow.resetsAt
-        ? `Resets at ${new Date(nextWindow.resetsAt).toLocaleTimeString()} (auto-resume scheduled at ${new Date(
-            nextWindow.resumeAt,
-          ).toLocaleTimeString()}).`
-        : `Reset time unknown; probing again at ${new Date(nextWindow.resumeAt).toLocaleTimeString()}.`;
+    for (const [key, window] of next) {
+      if (prev.has(key) || !cfg.onRateLimited) continue;
+      const resumeAt = new Date(window.resumeAt).toLocaleTimeString();
+      const resetNote = window.resetsAt
+        ? `Resets at ${new Date(window.resetsAt).toLocaleTimeString()}.`
+        : `Reset time unknown; probing again at ${resumeAt}.`;
       await this.dispatch(cfg, {
         event: 'rate_limited',
-        title: 'Claude quota limit reached — dispatch paused',
-        body: `${nextWindow.message ? `${nextWindow.message}\n` : ''}${resetNote}`,
+        title: `${laneLabel(window)} quota reached`,
+        body: `${window.message ? `${window.message}\n` : ''}Its runs wait until ${resumeAt}; other providers keep running. ${resetNote}`,
         priority: 'default',
         tags: ['warning', 'emberline'],
       });
-    } else if (prevId && !nextWindow && cfg.onQuotaResumed) {
+    }
+    for (const [key, window] of prev) {
+      if (next.has(key) || !cfg.onQuotaResumed) continue;
       await this.dispatch(cfg, {
         event: 'quota_resumed',
-        title: 'Claude quota window reset — runs resumed',
-        body: `Quota pause ended. Active slots: ${state.busy}/${state.maxConcurrentRuns}, queued: ${state.queued}.`,
+        title: `${laneLabel(window)} quota is back`,
+        body: `Its runs resume. Active slots: ${state.busy}/${state.maxConcurrentRuns}, queued: ${state.queued}.`,
         priority: 'default',
         tags: ['rocket', 'emberline'],
       });

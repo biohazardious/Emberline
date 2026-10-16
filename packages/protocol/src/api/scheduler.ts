@@ -38,9 +38,9 @@ export const SchedulerState = z.object({
 });
 export type SchedulerState = z.infer<typeof SchedulerState>;
 
-/** Ends the pause of one lane (or of every lane when empty). */
+/** Ends the pause of one lane (or of every lane when empty); a given field must not be blank. */
 export const ResumeSchedulerBody = z
-  .object({ agent: z.string(), credential: z.string(), pool: z.string() })
+  .object({ agent: z.string().min(1), credential: z.string().min(1), pool: z.string().min(1) })
   .partial();
 export type ResumeSchedulerBody = z.input<typeof ResumeSchedulerBody>;
 

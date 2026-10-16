@@ -363,9 +363,43 @@ describe('lanes and policy', () => {
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
     const closed = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'antigravity', model: 'gemini-pro', credential: 'login' } });
     expect(closed.statusCode).toBe(409);
+    expect(closed.json().error).toBe('lane_exhausted');
     const ok = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'claude', model: 'sonnet', credential: 'login' } });
     expect(ok.statusCode).toBe(201);
     expect(ok.json()).toMatchObject({ agent: 'claude', model: 'sonnet', predecessorRunId: run.id });
+  });
+
+  it('manual handoff: 404 for an unknown run, refuses routes that cannot run, and leaves the run alone', async () => {
+    const { run } = await startTicket('Manual guards');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    const missing = await api('POST', '/api/runs/no-such-run/handoff', { route: { agent: 'antigravity', model: 'argon', credential: 'login' } });
+    expect(missing.statusCode).toBe(404);
+    const unsupported = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'antigravity', model: 'argon', credential: 'api_key' } });
+    expect(unsupported.statusCode).toBe(400);
+    expect(unsupported.json().error).toBe('route_unsupported');
+    const noKey = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'claude', model: 'opus', credential: 'api_key' } });
+    expect(noKey.statusCode).toBe(409);
+    expect(noKey.json().error).toBe('route_unusable');
+    expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+  });
+
+  it('resume-now rejects an empty lane field instead of resuming every lane', async () => {
+    const { run } = await startTicket('UI');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    const res = await api('POST', '/api/scheduler/resume', { agent: '' });
+    expect(res.statusCode).toBe(400);
+    expect((await scheduler()).windows).toHaveLength(1);
+  });
+
+  it('a failure while recording a limit is noted on the run, not left as an unhandled rejection', async () => {
+    const { run } = await startTicket('Broken DB');
+    const token = await work(run);
+    const sched = t.scheduler as unknown as { recordLimit: () => void };
+    sched.recordLimit = () => {
+      throw new Error('disk I/O error');
+    };
+    await hook(run.id, 'StopFailure', token, AGY_QUOTA);
+    await expect.poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 }).toContain('rate_limit_failed');
   });
 
   it('resume-now ends one lane only', async () => {
