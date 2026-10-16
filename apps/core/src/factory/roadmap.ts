@@ -58,17 +58,9 @@ function defaultRoutingForPersona(
     const enabled: AgentId[] = fSettings.enabledProviders?.length
       ? fSettings.enabledProviders
       : ['claude'];
-    const rawAgent = fSettings.personaAgents[persona] ?? fSettings.defaultAgent ?? 'claude';
-    const preferredAgent: AgentId = enabled.includes(rawAgent)
-      ? rawAgent
-      : (enabled[0] ?? 'claude');
-    const rawModel =
-      fSettings.personaModels?.[persona] ??
-      (persona === 'product_owner' || persona === 'architect'
-        ? 'fable'
-        : persona === 'qa'
-          ? 'sonnet'
-          : 'opus');
+    const route = fSettings.personaRoutes[persona][0]!;
+    const preferredAgent: AgentId = enabled.includes(route.agent) ? route.agent : (enabled[0] ?? 'claude');
+    const rawModel = route.model;
     const preferredModel = coerceModelForProvider(preferredAgent, rawModel, persona);
     return { preferredAgent, preferredModel };
   }

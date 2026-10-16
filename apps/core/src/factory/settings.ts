@@ -2,14 +2,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  type AgentId,
-  type AgentModelId,
+  AgentId,
+  AgentModelId,
   type AgentPersona,
   coerceModelForProvider,
+  type Credential,
   DEFAULT_MCP_SERVERS,
   DEFAULT_SKILL_PLUGINS,
   FactorySettings,
+  MAX_ROUTES,
   type McpServerEntry,
+  PROVIDER_RUNTIME,
+  type QuotaPolicy,
+  type Route,
+  sameRoute,
   selectProviderModelByRank,
   type SkillPluginEntry,
   UpdateFactorySettingsBody,
@@ -17,7 +23,6 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
-import { getLastKnownClaudeUtilizationPercent } from './browser-daemon.js';
 
 // --- F7 & F10: Unified Factory Settings & Multi-Provider Routing ------------
 
@@ -30,14 +35,23 @@ interface StoredProviderKeys {
   geminiApiKey?: string | null;
 }
 
-const DEFAULT_PERSONA_AGENTS: Record<AgentPersona, AgentId> = {
-  product_owner: 'claude',
-  architect: 'claude',
-  ui_ux: 'claude',
-  coder: 'claude',
-  dba: 'claude',
-  qa: 'claude',
-  security: 'claude',
+type StoredRoute = { agent?: string; model?: string; credential?: string };
+
+/** What `factory.settings` holds: the 0.2 chains, plus the 0.1.x per-persona fields until they are rewritten. */
+type StoredFactorySettings = Partial<Omit<FactorySettings, 'personaRoutes' | 'quotaPolicy'>> & {
+  personaRoutes?: Partial<Record<AgentPersona, StoredRoute[]>>;
+  quotaPolicy?: Partial<QuotaPolicy>;
+  quotaAutoDowngrade?: boolean;
+};
+
+/** Which stored API keys each agent may see; aider talks to any vendor, copilot uses none of them. */
+const PROVIDER_KEY_ACCESS: Record<AgentId, readonly ('anthropic' | 'openai' | 'gemini')[]> = {
+  claude: ['anthropic'],
+  codex: ['openai'],
+  gemini: ['gemini'],
+  antigravity: ['gemini'],
+  aider: ['anthropic', 'openai', 'gemini'],
+  copilot: [],
 };
 
 const DEFAULT_PERSONA_MODELS: Record<AgentPersona, AgentModelId> = {
@@ -59,6 +73,55 @@ const ALL_PERSONA_KEYS: readonly AgentPersona[] = [
   'qa',
   'security',
 ];
+
+/** Keeps a chain usable: enabled providers only, valid model and credential, no duplicates, at most MAX_ROUTES. */
+function normalizeChain(
+  chain: readonly StoredRoute[],
+  persona: AgentPersona,
+  enabled: ReadonlySet<string>,
+  fallback: Route,
+): Route[] {
+  const out: Route[] = [];
+  for (const step of chain) {
+    const agent = AgentId.safeParse(step.agent);
+    if (!agent.success || !enabled.has(agent.data)) continue;
+    const model = coerceModelForProvider(agent.data, AgentModelId.safeParse(step.model).data ?? 'auto', persona);
+    const allowed = PROVIDER_RUNTIME[agent.data].credentials;
+    const credential = allowed.includes(step.credential as Credential) ? (step.credential as Credential) : allowed[0]!;
+    const route: Route = { agent: agent.data, model, credential };
+    if (!out.some((r) => sameRoute(r, route))) out.push(route);
+    if (out.length === MAX_ROUTES) break;
+  }
+  return out.length > 0 ? out : [fallback];
+}
+
+/** Whether today's runs of `agent` get a stored key (then a migrated route keeps using it). */
+function keyStoredFor(agent: AgentId, keys: StoredProviderKeys): boolean {
+  const access = PROVIDER_KEY_ACCESS[agent];
+  return (
+    (access.includes('anthropic') && Boolean(keys.anthropicApiKey)) ||
+    (access.includes('openai') && Boolean(keys.openaiApiKey)) ||
+    (access.includes('gemini') && Boolean(keys.geminiApiKey))
+  );
+}
+
+/** 0.1.x stored one agent + model per persona (and a Claude auto-downgrade switch). */
+function legacyChain(
+  persona: AgentPersona,
+  raw: StoredFactorySettings,
+  keys: StoredProviderKeys,
+  defaultAgent: AgentId,
+): StoredRoute[] {
+  const agent = raw.personaAgents?.[persona] ?? defaultAgent;
+  const model = raw.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona];
+  const credential: Credential =
+    PROVIDER_RUNTIME[agent]?.credentials.includes('api_key') && keyStoredFor(agent, keys) ? 'api_key' : 'login';
+  const chain: StoredRoute[] = [{ agent, model, credential }];
+  if ((raw.quotaAutoDowngrade ?? true) && agent === 'claude' && (model === 'fable' || model === 'opus')) {
+    chain.push({ agent, model: selectProviderModelByRank('claude', 3), credential });
+  }
+  return chain;
+}
 
 function hasNonEmptyAntigravitySecrets(home: string): boolean {
   try {
@@ -271,7 +334,7 @@ function detectRunnerProviderAuth(params: {
 export function getFactorySettings(db: Db): FactorySettings {
   const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
-  const raw = (row?.value ?? {}) as Partial<FactorySettings>;
+  const raw = (row?.value ?? {}) as StoredFactorySettings;
   const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
 
   const anthropicKeyConfigured = Boolean(keys.anthropicApiKey || process.env.ANTHROPIC_API_KEY);
@@ -303,24 +366,19 @@ export function getFactorySettings(db: Db): FactorySettings {
       ? raw.defaultAgent
       : (enabledProviders[0] ?? 'claude');
 
-  const rawPersonaAgents = {
-    ...DEFAULT_PERSONA_AGENTS,
-    ...(raw.personaAgents ?? {}),
-  };
-  const rawPersonaModels = {
-    ...DEFAULT_PERSONA_MODELS,
-    ...(raw.personaModels ?? {}),
-  };
-
-  const normalizedAgents = { ...DEFAULT_PERSONA_AGENTS };
-  const normalizedModels = { ...DEFAULT_PERSONA_MODELS };
-
+  const personaRoutes = {} as Record<AgentPersona, Route[]>;
+  const normalizedAgents = {} as Record<AgentPersona, AgentId>;
+  const normalizedModels = {} as Record<AgentPersona, AgentModelId>;
   for (const p of ALL_PERSONA_KEYS) {
-    const candidateAgent = rawPersonaAgents[p] ?? defaultAgent;
-    const validAgent = enabledSet.has(candidateAgent) ? candidateAgent : defaultAgent;
-    normalizedAgents[p] = validAgent;
-    const candidateModel = rawPersonaModels[p] ?? DEFAULT_PERSONA_MODELS[p];
-    normalizedModels[p] = coerceModelForProvider(validAgent, candidateModel, p);
+    const fallback: Route = {
+      agent: defaultAgent,
+      model: coerceModelForProvider(defaultAgent, DEFAULT_PERSONA_MODELS[p], p),
+      credential: PROVIDER_RUNTIME[defaultAgent].credentials[0]!,
+    };
+    const stored = raw.personaRoutes?.[p] ?? legacyChain(p, raw, keys, defaultAgent);
+    personaRoutes[p] = normalizeChain(stored, p, enabledSet, fallback);
+    normalizedAgents[p] = personaRoutes[p][0]!.agent;
+    normalizedModels[p] = personaRoutes[p][0]!.model;
   }
 
   const storedMcpList = Array.isArray(raw.mcpServers) ? raw.mcpServers : [];
@@ -361,14 +419,8 @@ export function getFactorySettings(db: Db): FactorySettings {
     enabledProviders,
     personaAgents: normalizedAgents,
     personaModels: normalizedModels,
-    // Interim until personaRoutes are stored (routing task): one login step per persona.
-    personaRoutes: Object.fromEntries(
-      ALL_PERSONA_KEYS.map((p) => [
-        p,
-        [{ agent: normalizedAgents[p], model: normalizedModels[p], credential: 'login' }],
-      ]),
-    ),
-    quotaPolicy: { newRuns: 'wait', inFlight: 'wait' },
+    personaRoutes,
+    quotaPolicy: { newRuns: raw.quotaPolicy?.newRuns ?? 'wait', inFlight: raw.quotaPolicy?.inFlight ?? 'wait' },
     autoPickupReady: raw.autoPickupReady ?? true,
     autoPickupBacklog: raw.autoPickupBacklog ?? false,
     autoSyncToMain: raw.autoSyncToMain ?? true,
@@ -414,30 +466,23 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
         ? current.defaultAgent
         : (enabledProviders[0] ?? 'claude');
 
-  const mergedAgents = {
-    ...current.personaAgents,
-    ...(body.personaAgents ?? {}),
-  };
-  const mergedModels = {
-    ...current.personaModels,
-    ...(body.personaModels ?? {}),
-  };
-
-  const normalizedAgents = { ...mergedAgents };
-  const normalizedModels = { ...mergedModels };
+  const nextRoutes = { ...current.personaRoutes };
   for (const p of ALL_PERSONA_KEYS) {
-    const requestedAgent = mergedAgents[p] ?? nextDefaultAgent;
-    const validAgent = enabledSet.has(requestedAgent) ? requestedAgent : nextDefaultAgent;
-    normalizedAgents[p] = validAgent;
-    normalizedModels[p] = coerceModelForProvider(validAgent, mergedModels[p] ?? DEFAULT_PERSONA_MODELS[p], p);
+    const chain = body.personaRoutes?.[p] ?? nextRoutes[p];
+    const legacyAgent = body.personaAgents?.[p];
+    const legacyModel = body.personaModels?.[p];
+    nextRoutes[p] =
+      !body.personaRoutes?.[p] && (legacyAgent || legacyModel)
+        ? [{ ...chain[0]!, agent: legacyAgent ?? chain[0]!.agent, model: legacyModel ?? chain[0]!.model }, ...chain.slice(1)]
+        : chain;
   }
 
   const nextValue = {
     theme: body.theme ?? current.theme,
     defaultAgent: nextDefaultAgent,
     enabledProviders,
-    personaAgents: normalizedAgents,
-    personaModels: normalizedModels,
+    personaRoutes: nextRoutes,
+    quotaPolicy: { ...current.quotaPolicy, ...(body.quotaPolicy ?? {}) },
     autoPickupReady: body.autoPickupReady ?? current.autoPickupReady,
     autoPickupBacklog: body.autoPickupBacklog ?? current.autoPickupBacklog,
     autoSyncToMain: body.autoSyncToMain ?? current.autoSyncToMain,
@@ -487,18 +532,31 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
   return getFactorySettings(db);
 }
 
-/** Which stored API keys each agent may see; aider talks to any vendor, copilot uses none of them. */
-const PROVIDER_KEY_ACCESS: Record<AgentId, readonly ('anthropic' | 'openai' | 'gemini')[]> = {
-  claude: ['anthropic'],
-  codex: ['openai'],
-  gemini: ['gemini'],
-  antigravity: ['gemini'],
-  aider: ['anthropic', 'openai', 'gemini'],
-  copilot: [],
-};
+/** The chain a new run follows: an explicit/tagged route first, then the persona's chain. */
+export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { agent?: string; model?: string }): Route[] {
+  const cfg = getFactorySettings(db);
+  const chain = cfg.personaRoutes[persona];
+  const enabled = new Set<string>(cfg.enabledProviders);
+  const head: StoredRoute[] = preferred?.agent
+    ? [{ agent: preferred.agent, model: preferred.model ?? 'auto', credential: chain[0]?.credential }]
+    : [];
+  return normalizeChain([...head, ...chain], persona, enabled, chain[0]!);
+}
+
+/** An API-key route is only usable while its provider's key is stored; login and credits routes always are. */
+export function routeUsable(db: Db, route: Route): boolean {
+  if (route.credential !== 'api_key') return true;
+  const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
+  return keyStoredFor(route.agent, keys);
+}
 
 /** S14: only the keys the launched agent needs go into its PTY environment, not every stored key. */
-export function getProviderEnvFromSettings(db: Db, agent: string): Record<string, string> {
+export function getProviderEnvFromSettings(
+  db: Db,
+  agent: string,
+  credential: Credential = 'api_key',
+): Record<string, string> {
+  if (credential !== 'api_key') return {};
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
   const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
   const access: readonly string[] = PROVIDER_KEY_ACCESS[agent as AgentId] ?? [];
@@ -531,26 +589,12 @@ export function resolveModelForPersona(
   explicitAgent?: AgentId,
 ): AgentModelId {
   const cfg = getFactorySettings(db);
-  // The setting is no longer exposed; keep honouring a value that is still stored.
-  const storedDowngrade = (
-    db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get()?.value as
-      | { quotaAutoDowngrade?: boolean }
-      | undefined
-  )?.quotaAutoDowngrade;
   const agent = resolveAgentForPersona(db, persona, explicitAgent);
   const rawCandidate =
     explicitModel && explicitModel !== 'auto'
       ? explicitModel
       : (cfg.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona] ?? 'opus');
   const candidate = coerceModelForProvider(agent, rawCandidate, persona);
-  if (
-    (storedDowngrade ?? true) &&
-    agent === 'claude' &&
-    getLastKnownClaudeUtilizationPercent() >= 80 &&
-    (candidate === 'fable' || candidate === 'opus')
-  ) {
-    return selectProviderModelByRank(agent, 3);
-  }
   return candidate;
 }
 
