@@ -5,6 +5,7 @@ import {
   type GitCommitResponse,
   type GitPushResponse,
   GitStageBody,
+  HandoffBody,
   HookEnvelope,
   type PruneWorktreeResponse,
   ResumeRunBody,
@@ -50,6 +51,14 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
   app.post<{ Params: { id: string } }>('/api/runs/:id/resume', async (request): Promise<Run> => {
     const { text } = ResumeRunBody.parse(request.body ?? {});
     return runs.resume(request.params.id, text || undefined);
+  });
+
+  /** Continues a waiting run on another provider/model in the same worktree. */
+  app.post<{ Params: { id: string } }>('/api/runs/:id/handoff', async (request, reply): Promise<Run> => {
+    const { route } = HandoffBody.parse(request.body ?? {});
+    const run = await scheduler.handOff(request.params.id, route);
+    reply.code(201);
+    return run;
   });
 
   /** Sends a follow-up prompt into a live run (or resumes an ended session with that prompt). */

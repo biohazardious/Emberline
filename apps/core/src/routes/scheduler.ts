@@ -1,4 +1,4 @@
-import type { SchedulerState } from '@emberline/protocol';
+import { ResumeSchedulerBody, type SchedulerState } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -7,6 +7,8 @@ export function registerSchedulerRoutes(app: FastifyInstance, scheduler: Schedul
 
   app.patch('/api/scheduler', async (request): Promise<SchedulerState> => scheduler.update((request.body ?? {}) as never));
 
-  /** Ends a quota pause now instead of waiting for the reset time. */
-  app.post('/api/scheduler/resume', async (): Promise<SchedulerState> => scheduler.resumeNow());
+  /** Ends a quota pause now (one lane, or every lane) instead of waiting for the reset time. */
+  app.post('/api/scheduler/resume', async (request): Promise<SchedulerState> =>
+    scheduler.resumeNow(ResumeSchedulerBody.parse(request.body ?? {})),
+  );
 }

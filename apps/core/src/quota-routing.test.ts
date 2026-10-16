@@ -4,7 +4,7 @@ import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runs as runsTable } from './db/schema.js';
+import { quotaWindows, runs as runsTable } from './db/schema.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -294,6 +294,107 @@ describe('handoff', () => {
     const queued = await t.runs.enqueue({ projectId, agent: 'claude', prompt: 'q' } as never);
     t.db.update(runsTable).set({ cancelledAt: new Date() }).where(eq(runsTable.id, queued.id)).run();
     expect(() => t.runs.bindRoute(queued.id, 0)).toThrow(expect.objectContaining({ statusCode: 409 }));
+  });
+});
+
+describe('lanes and policy', () => {
+  it('an Antigravity quota waits on its own lane while Claude keeps dispatching (wait policy)', async () => {
+    const { run } = await startTicket('Colour-blind cats');
+    const token = await work(run);
+    const res = await hook(run.id, 'StopFailure', token, AGY_QUOTA);
+    expect(res.json().state).toBe('rate_limited');
+
+    const state = await scheduler();
+    expect(state.windows).toHaveLength(1);
+    expect(state.windows[0]).toMatchObject({ agent: 'antigravity', credential: 'login', pool: '*', resetSource: 'hook' });
+
+    // Claude work is not paused…
+    const coder = await startTicket('Coder work', 'coder');
+    await expect.poll(async () => (await getRun(coder.run.id)).state, { timeout: 5_000 }).toBe('starting');
+    // …but new Antigravity work waits (policy newRuns = wait).
+    const second = await startTicket('More UI', 'ui_ux');
+    expect((await getRun(second.run.id)).state).toBe('queued');
+    // and the limited run was not handed off (policy inFlight = wait).
+    expect((await getRun(run.id)).handedOffTo).toBeNull();
+  });
+
+  it('a Claude provider-wide window does not stop Antigravity', async () => {
+    updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
+    const coder = await startTicket('Coder', 'coder');
+    const token = await work(coder.run);
+    await hook(coder.run.id, 'StopFailure', token, { error: 'rate_limit', last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}` });
+    const ui = await startTicket('UI', 'ui_ux');
+    await expect.poll(async () => (await getRun(ui.run.id)).state, { timeout: 5_000 }).toBe('starting');
+  });
+
+  it('newRuns = fallback starts a queued run on the next open route', async () => {
+    updateFactorySettings(t.db, { quotaPolicy: { newRuns: 'fallback' } });
+    const first = await startTicket('First UI');
+    await hook(first.run.id, 'StopFailure', await work(first.run), AGY_QUOTA);
+    const second = await startTicket('Second UI');
+    await expect.poll(async () => (await getRun(second.run.id)).state, { timeout: 5_000 }).toBe('starting');
+    const bound = await getRun(second.run.id);
+    expect(bound).toMatchObject({ agent: 'claude', model: 'opus', routeIndex: 1 });
+    expect(bound.events.map((e) => e.type)).toContain('route_bound');
+    expect(await waitFile(`args-${second.run.id}`)).toContain('fake-claude');
+  });
+
+  it('inFlight = fallback hands a limited run off to the next route at once', async () => {
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    const { run } = await startTicket('Colour-blind cats');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    await expect.poll(async () => (await getRun(run.id)).handedOffTo, { timeout: 5_000 }).not.toBeNull();
+    const successorId = (await getRun(run.id)).handedOffTo ?? '';
+    await expect.poll(async () => (await getRun(successorId)).state, { timeout: 5_000 }).toBe('starting');
+    expect(await getRun(successorId)).toMatchObject({ agent: 'claude', predecessorRunId: run.id, worktreePath: run.worktreePath });
+  });
+
+  it('stops handing off after MAX_HANDOFFS and waits instead', async () => {
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    const { run } = await startTicket('Ping pong');
+    t.db.update(runsTable).set({ handoffCount: 3 }).where(eq(runsTable.id, run.id)).run();
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+  });
+
+  it('manual handoff: refused onto a closed lane, accepted onto an open one', async () => {
+    const { run } = await startTicket('Manual');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    const closed = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'antigravity', model: 'gemini-pro', credential: 'login' } });
+    expect(closed.statusCode).toBe(409);
+    const ok = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'claude', model: 'sonnet', credential: 'login' } });
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json()).toMatchObject({ agent: 'claude', model: 'sonnet', predecessorRunId: run.id });
+  });
+
+  it('resume-now ends one lane only', async () => {
+    const { run } = await startTicket('UI');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    const coder = await startTicket('Coder', 'coder');
+    await hook(coder.run.id, 'StopFailure', await work(coder.run), { error: 'rate_limit', last_assistant_message: '5-hour limit reached ∙ resets 11:59pm (UTC)' });
+    expect((await scheduler()).windows).toHaveLength(2);
+    const after: SchedulerState = (await api('POST', '/api/scheduler/resume', { agent: 'antigravity', credential: 'login', pool: '*' })).json();
+    expect(after.windows.map((w) => w.agent)).toEqual(['claude']);
+  });
+
+  it('a pre-0.2.0 Claude window (default lane columns) still pauses Claude and resumes it', async () => {
+    t.db.insert(quotaWindows).values({ id: 'legacy', exhaustedAt: new Date(), resumeAt: new Date(Date.now() - 1_000), source: 'hook' }).run();
+    const state = await scheduler();
+    expect(state.windows[0]).toMatchObject({ agent: 'claude', credential: 'login', pool: '*' });
+    await t.scheduler.tick();
+    expect((await scheduler()).windows).toHaveLength(0);
+  });
+
+  it('skips an API-key fallback whose key was deleted', async () => {
+    updateFactorySettings(t.db, {
+      quotaPolicy: { inFlight: 'fallback' },
+      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'api_key' }] },
+    });
+    const { run } = await startTicket('No key');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    await expect.poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 }).toContain('route_skipped');
+    expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
   });
 });
 

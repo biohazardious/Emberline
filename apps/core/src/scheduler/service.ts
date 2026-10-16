@@ -3,10 +3,16 @@ import { EventEmitter } from 'node:events';
 import { type RateLimitInfo, rateLimitFromScreen } from '@emberline/adapter-claude';
 import {
   type CreateRunBody,
+  type Lane,
+  laneCovers,
+  laneOf,
+  MAX_HANDOFFS,
   type QuotaWindow,
   type ResetSource,
+  type Route,
   type Run,
   type SchedulerState,
+  sameRoute,
   type UpdateSchedulerBody,
   UpdateSchedulerBody as UpdateSchedulerBodySchema,
 } from '@emberline/protocol';
@@ -14,7 +20,10 @@ import { and, asc, desc, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { quotaWindows, runs, settings, tickets } from '../db/schema.js';
+import { HttpError } from '../errors.js';
+import { getFactorySettings, routeUsable } from '../factory/settings.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
+import { currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 
 type WindowRow = typeof quotaWindows.$inferSelect;
@@ -46,9 +55,9 @@ const DEFAULT_MAX_CONCURRENCY = 2;
 
 const toWindow = (row: WindowRow): QuotaWindow => ({
   id: row.id,
-  agent: 'claude',
-  credential: 'login',
-  pool: '*',
+  agent: row.agent,
+  credential: row.credential,
+  pool: row.pool,
   exhaustedAt: row.exhaustedAt.toISOString(),
   resetsAt: row.resetsAt?.toISOString() ?? null,
   resumeAt: row.resumeAt.toISOString(),
@@ -62,13 +71,18 @@ interface SchedulerEvents {
 }
 
 /**
- * Quota-aware dispatcher for the single subscription lane (PROJECT.md §5.5).
+ * Quota-aware dispatcher with one quota lane per (agent, credential, pool) (PROJECT.md §5.5).
  *
  * - Runs start `queued`; a slot is free while fewer than `maxConcurrentRuns` runs are busy
  *   (starting / working, or spawned with a prompt that hasn't been submitted yet).
- * - A rate limit in any run opens a quota window: dispatch pauses until `resumeAt`
- *   (reset + jitter, or a 15-min probe when the reset time is unknown).
- * - When the window closes, rate-limited runs resume first (by ticket priority), then the queue.
+ * - A rate limit in a run opens a quota window for that run's lane only, until `resumeAt`
+ *   (reset + jitter, or a 15-min probe when the reset time is unknown). Pool `*` closes every
+ *   pool of the agent + credential; other lanes keep dispatching.
+ * - Policy `newRuns`: a queued run whose lane is closed waits, or (`fallback`) starts on the first
+ *   route of its chain whose lane is open. Policy `inFlight`: a limited run waits, or (`fallback`)
+ *   is handed off to such a route in the same worktree, at most `MAX_HANDOFFS` times automatically.
+ * - When a window closes, its lane's rate-limited runs resume first (by ticket priority), then the
+ *   queue; handed-off successors go before other queued runs.
  * - A run hit by a temporary provider error also waits as `rate_limited`, without opening a window,
  *   and is retried once its own `autoRetryAt` has passed.
  * All state lives in SQLite; `tick()` derives everything from it, so restarts lose nothing.
@@ -79,6 +93,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   private ticking?: Promise<void>;
   private tickAgain = false;
   private lastPublished = '';
+  /** `runId|route` pairs already noted as `route_skipped`. */
+  private readonly skipped = new Set<string>();
   private readonly options: SchedulerOptions;
 
   constructor(
@@ -117,7 +133,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   }
 
   state(): SchedulerState {
-    const open = this.openWindow();
+    const windows = this.openWindows().map(toWindow);
     const counts = this.db
       .select({ state: runs.state, n: sql<number>`count(*)` })
       .from(runs)
@@ -132,8 +148,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       // Rate-limited runs may have lost their process (endedAt set) and still wait to resume.
       rateLimited:
         this.db.select({ n: sql<number>`count(*)` }).from(runs).where(eq(runs.state, 'rate_limited')).get()?.n ?? 0,
-      window: open ? toWindow(open) : null,
-      windows: open ? [toWindow(open)] : [],
+      window: windows[0] ?? null,
+      windows,
     };
   }
 
@@ -148,14 +164,33 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     return this.publish(true);
   }
 
-  /** User override: end the pause now (the next limit hit simply re-opens the window). */
-  async resumeNow(): Promise<SchedulerState> {
-    const open = this.openWindow();
-    if (open) {
-      this.db.update(quotaWindows).set({ resumeAt: new Date() }).where(eq(quotaWindows.id, open.id)).run();
+  /**
+   * User override: end the pause of the lanes matching `lane` now (every lane when empty); the
+   * next limit hit simply re-opens the window.
+   */
+  async resumeNow(lane: Partial<Lane> = {}): Promise<SchedulerState> {
+    for (const w of this.openWindows()) {
+      if (
+        (lane.agent && w.agent !== lane.agent) ||
+        (lane.credential && w.credential !== lane.credential) ||
+        (lane.pool && w.pool !== lane.pool)
+      ) {
+        continue;
+      }
+      this.db.update(quotaWindows).set({ resumeAt: new Date() }).where(eq(quotaWindows.id, w.id)).run();
     }
     await this.tick();
     return this.publish(true);
+  }
+
+  /** A person hands a waiting run to another route; refused while that route is out of quota too. */
+  async handOff(runId: string, route: Route): Promise<Run> {
+    if (this.laneClosed(laneOf(route), this.openWindows())) {
+      throw new HttpError(409, 'lane_exhausted', `${route.agent} (${route.model}) is out of quota too`);
+    }
+    const successor = await this.runs.handOff(runId, route, { reason: 'handed off by you', source: 'user', automatic: false });
+    await this.tick();
+    return this.runs.getRun(successor.id);
   }
 
   /** Serialized dispatch pass; concurrent calls coalesce into one extra pass. */
@@ -186,20 +221,28 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   }
 
   private async dispatch(): Promise<void> {
-    const now = new Date();
-    const open = this.openWindow();
-    if (open && open.resumeAt.getTime() <= now.getTime()) {
-      this.db.update(quotaWindows).set({ resumedAt: now }).where(eq(quotaWindows.id, open.id)).run();
-    } else if (open) {
-      return; // paused until the window resets
-    }
+    this.closeExpired(new Date());
     if (this.ptyd.status !== 'connected') return;
 
+    const policy = getFactorySettings(this.db).quotaPolicy;
     let slots = this.maxConcurrentRuns() - this.busyCount();
     for (const candidate of this.candidates()) {
       if (slots <= 0) break;
-      // A limit hit by a run we just resumed pauses everything again.
-      if (this.openWindow()) break;
+      // Re-read: a limit hit by a run we just started closes its lane synchronously.
+      const closed = this.openWindows();
+      const row = this.db.select().from(runs).where(eq(runs.id, candidate.id)).get();
+      if (!row || row.handedOffTo) continue;
+      if (this.laneClosed(laneOf(currentRoute(row)), closed)) {
+        // Rate-limited runs wait for their own lane; a queued run may start on a fallback route.
+        if (candidate.state !== 'queued' || policy.newRuns !== 'fallback') continue;
+        const index = runRoutes(row).findIndex((r) => this.routeOpen(row.id, r, closed));
+        if (index < 0) continue;
+        try {
+          this.runs.bindRoute(row.id, index);
+        } catch {
+          continue; // stopped meanwhile
+        }
+      }
       slots--;
       try {
         if (candidate.state === 'queued') await this.runs.launch(candidate.id);
@@ -210,10 +253,14 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     }
   }
 
-  /** Rate-limited runs first, then the queue; each by ticket priority, oldest first. */
+  /**
+   * Rate-limited runs first, then the queue (handed-off successors before other queued runs);
+   * each by ticket priority, oldest first.
+   */
   private candidates(): { id: string; state: string }[] {
     const priority = sql<number>`coalesce(${tickets.priority}, 1)`;
-    const select = (state: string, order: typeof runs.createdAt | typeof runs.stateChangedAt) =>
+    const successor = sql<number>`${runs.predecessorRunId} is not null`;
+    const select = (state: string, order: typeof runs.createdAt | typeof runs.stateChangedAt, successorsFirst: boolean) =>
       this.db
         .select({ id: runs.id, state: runs.state })
         .from(runs)
@@ -221,13 +268,14 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         .where(
           and(
             eq(runs.state, state),
+            isNull(runs.handedOffTo),
             // An automatic retry waits for its own time, independent of quota windows.
             or(isNull(runs.autoRetryAt), lte(runs.autoRetryAt, new Date())),
           ),
         )
-        .orderBy(desc(priority), asc(order))
+        .orderBy(...(successorsFirst ? [desc(successor)] : []), desc(priority), asc(order))
         .all();
-    return [...select('rate_limited', runs.stateChangedAt), ...select('queued', runs.createdAt)];
+    return [...select('rate_limited', runs.stateChangedAt, false), ...select('queued', runs.createdAt, true)];
   }
 
   private busyCount(): number {
@@ -249,30 +297,79 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     return typeof row?.value === 'number' ? row.value : DEFAULT_MAX_CONCURRENCY;
   }
 
-  private openWindow(): WindowRow | undefined {
+  /** Every window not yet marked resumed, the soonest-resuming first. */
+  private openWindows(): WindowRow[] {
     return this.db
       .select()
       .from(quotaWindows)
       .where(isNull(quotaWindows.resumedAt))
-      .orderBy(desc(quotaWindows.exhaustedAt))
-      .get();
+      .orderBy(asc(quotaWindows.resumeAt))
+      .all();
+  }
+
+  /** Marks windows whose resume time has come; returns the ones still closed. */
+  private closeExpired(now: Date): WindowRow[] {
+    const open = this.openWindows();
+    const due = open.filter((w) => w.resumeAt.getTime() <= now.getTime());
+    for (const w of due) this.db.update(quotaWindows).set({ resumedAt: now }).where(eq(quotaWindows.id, w.id)).run();
+    return open.filter((w) => w.resumeAt.getTime() > now.getTime());
+  }
+
+  /** Whether an open window (resume time still ahead) blocks work on `lane`. */
+  private laneClosed(lane: Lane, closed: readonly WindowRow[]): boolean {
+    const now = Date.now();
+    return closed.some((w) => w.resumeAt.getTime() > now && laneCovers(w, lane));
+  }
+
+  /** A fallback route can take work: its lane has quota and, for an API-key route, the key still exists. */
+  private routeOpen(runId: string, route: Route, closed: readonly WindowRow[]): boolean {
+    if (this.laneClosed(laneOf(route), closed)) return false;
+    if (routeUsable(this.db, route)) return true;
+    // Once per run and route: dispatch re-checks queued runs on every pass.
+    const key = `${runId}|${route.agent}|${route.model}|${route.credential}`;
+    if (!this.skipped.has(key)) {
+      this.skipped.add(key);
+      this.runs.note(runId, 'route_skipped', { route, message: `Skipped ${route.agent} (${route.model}): no API key saved` });
+    }
+    return false;
   }
 
   private async onRateLimited(run: Run, fromHook: RateLimitInfo | undefined): Promise<void> {
+    const lane: Lane = { agent: run.agent, credential: run.credential, pool: fromHook?.pool ?? '*' };
     // Synchronously, so no dispatch pass can resume this run before the window exists.
-    this.recordLimit(run.id, fromHook, 'hook');
+    this.recordLimit(run.id, lane, fromHook, 'hook');
+    void this.maybeHandOff(run, fromHook).catch(() => undefined);
     if (fromHook?.resetsAt) return;
     // The hook didn't say when; the banner on screen usually does.
     await new Promise((resolve) => setTimeout(resolve, this.options.screenSettleMs));
     if (this.disposed) return;
     const screen = await this.runs.screen(run.id).catch(() => undefined);
     if (this.disposed) return;
-    const onScreen = screen ? rateLimitFromScreen(screen, new Date(), this.config.timeZone) : undefined;
-    if (onScreen?.resetsAt) this.recordLimit(run.id, onScreen, 'screen');
+    const onScreen = screen
+      ? rateLimitFromScreen(screen, new Date(), this.config.timeZone, { agent: run.agent, model: run.model })
+      : undefined;
+    if (onScreen?.resetsAt) this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen');
   }
 
-  /** Opens (or refines / re-opens) the quota window for a limit hit. */
-  private recordLimit(runId: string, info: RateLimitInfo | undefined, source: ResetSource): void {
+  /** Policy `inFlight = fallback`: move the limited run to the first route whose lane is open. */
+  private async maybeHandOff(run: Run, info: RateLimitInfo | undefined): Promise<void> {
+    if (getFactorySettings(this.db).quotaPolicy.inFlight !== 'fallback') return;
+    const row = this.db.select().from(runs).where(eq(runs.id, run.id)).get();
+    if (!row || row.cancelledAt || row.handedOffTo || row.handoffCount >= MAX_HANDOFFS) return;
+    const closed = this.openWindows();
+    const current = currentRoute(row);
+    const next = runRoutes(row).find((r) => !sameRoute(r, current) && this.routeOpen(row.id, r, closed));
+    if (!next) return;
+    try {
+      await this.runs.handOff(row.id, next, { reason: info?.message ?? 'usage limit reached', source: 'system', automatic: true });
+    } catch (error) {
+      this.runs.note(row.id, 'handoff_failed', { message: (error as Error).message });
+    }
+    this.kick();
+  }
+
+  /** Opens (or refines / re-opens) the quota window of `lane` for a limit hit. */
+  private recordLimit(runId: string, lane: Lane, info: RateLimitInfo | undefined, source: ResetSource): void {
     const now = new Date();
     const known = info?.resetsAt && info.resetsAt.getTime() > now.getTime() ? info.resetsAt : undefined;
     const effectiveSource: ResetSource = known ? source : 'probe';
@@ -287,7 +384,12 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       message: info?.message ?? null,
     };
 
-    const open = this.openWindow();
+    const sameLane = and(
+      eq(quotaWindows.agent, lane.agent),
+      eq(quotaWindows.credential, lane.credential),
+      eq(quotaWindows.pool, lane.pool),
+    );
+    const open = this.db.select().from(quotaWindows).where(and(sameLane, isNull(quotaWindows.resumedAt))).get();
     if (open) {
       // Already paused: only a better (known) reset time changes anything.
       if (known && !open.resetsAt) {
@@ -297,7 +399,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       return;
     }
 
-    const latest = this.db.select().from(quotaWindows).orderBy(desc(quotaWindows.exhaustedAt)).get();
+    const latest = this.db.select().from(quotaWindows).where(sameLane).orderBy(desc(quotaWindows.exhaustedAt)).get();
     if (latest?.resumedAt && now.getTime() - latest.resumedAt.getTime() < this.options.reopenWithinMs) {
       // The resume (or probe) came too early: same window, try again later.
       this.db
@@ -308,7 +410,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     } else {
       this.db
         .insert(quotaWindows)
-        .values({ id: randomUUID(), exhaustedAt: now, runId, ...fields })
+        .values({ id: randomUUID(), exhaustedAt: now, runId, agent: lane.agent, credential: lane.credential, pool: lane.pool, ...fields })
         .run();
     }
     this.publish(true);

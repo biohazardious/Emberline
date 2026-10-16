@@ -974,10 +974,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // A late hook (e.g. SessionEnd after a kill) must not revive an ended or stopped run.
     const live = !row.endedAt && !row.cancelledAt;
-    let next = live ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload) : undefined;
+    // The run's agent and model decide how its limit messages read and which quota pool they hit.
+    const limitCtx = { agent: row.agent, model: runModel(row) };
+    let next = live ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload, limitCtx) : undefined;
     // A temporary provider error: wait as `rate_limited` (no slot, no quota window) and let the
     // scheduler retry the turn, a few times with growing delays.
-    const transient = live ? transientErrorFromHook(envelope.event, envelope.payload) : undefined;
+    const transient = live ? transientErrorFromHook(envelope.event, envelope.payload, limitCtx) : undefined;
     let retry: { attempt: number; at: Date } | undefined;
     if (transient && row.autoRetryCount < AUTO_RETRY_DELAYS_MS.length) {
       const attempt = row.autoRetryCount + 1;
@@ -1017,7 +1019,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     if (next === 'rate_limited') {
-      this.emit('rateLimited', run, rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone));
+      this.emit('rateLimited', run, rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone, limitCtx));
     }
     return run;
   }
