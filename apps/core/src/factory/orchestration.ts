@@ -64,6 +64,7 @@ export function buildFactoryOrchestratorPrompt(
   userRequest: string,
   autoDispatch = true,
   attachmentContext = '',
+  maxParallelTickets = 3,
 ): string {
   const attachmentSection = attachmentContext.trim()
     ? `\n### Attached Reference Files & Visual Assets (Uploaded by User):\n${attachmentContext.trim()}\n`
@@ -81,40 +82,32 @@ ${attachmentSection}
 2. **Refine Specification:** Translate the user's request (and any attached specs/diagrams/screenshots) into a clear engineering specification and update \`PROJECT.md\` if needed.
 3. **Delegate to Specialist Personas (DO NOT implement the entire feature yourself):**
    Break the work down into concrete, non-overlapping sub-tasks for the relevant specialist personas based on the project's architecture:
-   - \`architect\` (Priority 3 - High, when cross-layer contracts, monorepo packages, or system protocols change): Module boundaries, shared schemas/types, or hardware/IPC contracts.
-   - \`dba\` (Priority 3 - High, when persistence/database schemas change): Database tables, migrations, indexes, or storage models.
-   - \`coder\` (Priority 3 - High): Core business logic, backend services/APIs, CLI/system automation scripts, desktop/native state, or embedded firmware implementation.
-   - \`ui_ux\` (Priority 2 - Normal, when user-facing surfaces exist): Web/Portal pages, forms, dashboards, desktop/mobile GUI views, or interactive CLI/TUI output ergonomics.
-   - \`qa\` (Priority 1 - Low): Unit/integration/E2E tests, safety/regression checks, and running the project's build/compile verification pipeline.
+   - \`architect\` (when cross-layer contracts, monorepo packages, or system protocols change): Module boundaries, shared schemas/types, or hardware/IPC contracts.
+   - \`dba\` (when persistence/database schemas change): Database tables, migrations, indexes, or storage models.
+   - \`coder\`: Core business logic, backend services/APIs, CLI/system automation scripts, desktop/native state, build/packaging, or embedded firmware implementation.
+   - \`ui_ux\` (when user-facing surfaces exist): Web/Portal pages, forms, dashboards, desktop/mobile GUI views, brand assets, or interactive CLI/TUI output ergonomics.
+   - \`qa\`: Unit/integration/E2E tests, safety/regression checks, and running the project's build/compile verification pipeline.
+   **Order the work:** give every ticket a short unique \`ref\` (lowercase letters, digits and hyphens, e.g. \`brand-assets\`) and list the refs of the tickets it needs in \`dependsOn\` (you may also name the key of an existing ticket).
+   - Producers come before consumers: assets, schemas, contracts, and migrations first, then the code that uses them.
+   - Builds, packaging, and integration depend on everything they package or wire together.
+   - QA depends on the tickets whose work it verifies.
+   - Work that is truly independent gets no \`dependsOn\`, so it can run in parallel.
+   - Keep chains short; do not chain tickets that do not need each other's output.
    *(If the user attached images, screenshots, schemas, logs, or reference files above, ALWAYS copy their exact Absolute Paths into the \`body\` of the relevant delegated tickets so those specialists can inspect or use them!)*
 4. **Write Delegated Tickets to \`.emberline/new-tickets.json\`:**
-   Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below (include only the personas relevant to this request):
+   Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below (include only the tickets relevant to this request; this example builds an Android APK):
    \`\`\`json
    {
      "autoDispatch": ${autoDispatch ? 'true' : 'false'},
      "tickets": [
-       {
-         "title": "Core / Backend: <concise title>",
-         "persona": "coder",
-         "priority": 3,
-         "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..."
-       },
-       {
-         "title": "UI/UX or Surface: <concise title>",
-         "persona": "ui_ux",
-         "priority": 2,
-         "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..."
-       },
-       {
-         "title": "QA & Build Verification: <concise title>",
-         "persona": "qa",
-         "priority": 1,
-         "body": "## Objective\\nAdd tests for the new changes and verify the project's build/test pipeline succeeds cleanly."
-       }
+       { "ref": "brand-assets", "title": "UI/UX: app icon, splash and store graphics", "persona": "ui_ux", "priority": 2, "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..." },
+       { "ref": "android-shell", "title": "Core / Build: Capacitor Android shell", "persona": "coder", "priority": 2, "body": "## Objective\\n..." },
+       { "ref": "apk-build", "title": "Core / Build: wire the branding into android/ and build the signed APK", "persona": "coder", "priority": 2, "dependsOn": ["brand-assets", "android-shell"], "body": "## Objective\\n..." },
+       { "ref": "qa", "title": "QA & Build Verification: install and smoke-test the APK", "persona": "qa", "priority": 1, "dependsOn": ["apk-build"], "body": "## Objective\\n..." }
      ]
    }
    \`\`\`
-   *(Keep \`.emberline/new-tickets.json\` on disk when you finish; Emberline Core will automatically ingest it, create the tickets on the Kanban Board, sync your \`PROJECT.md\` update to \`main\`, and dispatch each specialist persona in priority order!)*
+   *(Keep \`.emberline/new-tickets.json\` on disk when you finish; Emberline Core will automatically ingest it, create the tickets on the Kanban Board, and sync your \`PROJECT.md\` update to \`main\`. Emberline starts each ticket as soon as every ticket it depends on is merged into main, up to ${maxParallelTickets} tickets of this project at once; tickets without dependencies start right away.)*
 5. **Autonomous Execution Rule (CRITICAL):** Do NOT ask the user clarifying questions and do NOT wait for confirmation. Always select the cleanest architecture-appropriate design that fits \`PROJECT.md\` and write \`.emberline/new-tickets.json\` in this turn.`;
 }
 

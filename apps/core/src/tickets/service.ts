@@ -229,7 +229,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const firstLine = body.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Feature Request';
     const ticket = this.create(projectId, {
       title: `[Factory] ${firstLine}`,
-      body: buildFactoryOrchestratorPrompt(body.prompt, body.autoDispatch, attachmentContext),
+      body: buildFactoryOrchestratorPrompt(
+        body.prompt,
+        body.autoDispatch,
+        attachmentContext,
+        getFactorySettings(this.db).maxParallelTicketsPerProject,
+      ),
       persona: body.leadPersona,
       priority: 3,
       status: 'ready',

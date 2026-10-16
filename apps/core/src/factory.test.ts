@@ -421,3 +421,27 @@ describe('AI Coding Factory (F1–F4)', () => {
     }
   });
 });
+
+describe('dependency-aware PO prompt', () => {
+  it('orders work with ref/dependsOn instead of persona priorities', async () => {
+    const { buildFactoryOrchestratorPrompt } = await import('./factory/orchestration.js');
+    const prompt = buildFactoryOrchestratorPrompt('Build an APK', true, '', 4);
+    expect(prompt).toContain('"ref"');
+    expect(prompt).toContain('"dependsOn"');
+    for (const ref of ['brand-assets', 'android-shell', 'apk-build']) expect(prompt).toContain(ref);
+    expect(prompt).toContain(
+      'Emberline starts each ticket as soon as every ticket it depends on is merged into main, up to 4 tickets of this project at once; tickets without dependencies start right away.',
+    );
+    expect(prompt).not.toContain('Priority 3 - High');
+    expect(prompt).toContain('Order the work');
+    expect(prompt).toContain('Autonomous Execution Rule');
+  });
+
+  it('blueprint instructions no longer promise sequential dispatch', async () => {
+    const { generateClaudeInstructions } = await import('./factory/blueprint.js');
+    const text = generateClaudeInstructions('Demo');
+    expect(text).not.toContain('sequentially');
+    expect(text).toContain('"ref"');
+    expect(text).toContain('"dependsOn"');
+  });
+});
