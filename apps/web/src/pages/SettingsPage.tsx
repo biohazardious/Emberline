@@ -970,6 +970,21 @@ export function SettingsPage({
                         {entry.description}
                       </div>
 
+                      <div className="small" style={{ fontSize: '0.72rem', lineHeight: 1.35 }}>
+                        <span className="muted">Terms: </span>
+                        <span
+                          className={`badge ${entry.terms.risk === 'low' ? 'badge-ok' : entry.terms.risk === 'medium' ? 'badge-warn' : 'badge-bad'}`}
+                        >
+                          {entry.terms.risk} risk
+                        </span>{' '}
+                        <span className="muted">
+                          {entry.terms.summary} · checked {entry.terms.checked} ·{' '}
+                        </span>
+                        <a href={entry.terms.url} target="_blank" rel="noreferrer">
+                          terms
+                        </a>
+                      </div>
+
                       {authStatus?.warning && (
                         <div className="small" style={{ fontSize: '0.72rem', lineHeight: 1.35, color: 'var(--warn)' }}>
                           {authStatus.warning}

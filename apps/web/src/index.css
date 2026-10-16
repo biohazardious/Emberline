@@ -3396,6 +3396,16 @@ dialog.cmd-dialog::backdrop {
   border-color: color-mix(in hsl, var(--warn) 50%, var(--border));
 }
 
+.badge-ok {
+  color: var(--ok);
+  border-color: color-mix(in hsl, var(--ok) 50%, var(--border));
+}
+
+.badge-bad {
+  color: var(--bad);
+  border-color: color-mix(in hsl, var(--bad) 50%, var(--border));
+}
+
 /* --- fleet v2 ---------------------------------------------------------------- */
 
 .fleet-thumbnail {

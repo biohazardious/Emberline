@@ -129,7 +129,10 @@ Emberline runs each vendor's official CLI, signed in with your own account, and 
 
 - **Claude Code:** Anthropic allows running the unmodified Claude Code binary with your own Claude subscription, including on a platform that hosts it. Their plans are sized for ordinary individual use, so keep concurrency and automatic runs reasonable.
 - **Antigravity:** Google does not support using an Antigravity consumer login (Google AI Pro/Ultra) inside third-party tools and has suspended accounts for it. Settings asks you to accept that risk before Antigravity can be enabled, and Emberline never adds it to a fallback chain for you.
+- **Gemini CLI:** Google ended consumer Google logins in Gemini CLI on 2026-06-18. Use a Gemini API key or a Gemini Code Assist Standard/Enterprise account.
 - **Others:** check the current terms of each CLI you enable. An API key is always the safest route.
+
+Last checked 2026-10-16. Vendors change these terms without notice; Settings shows the current notes per provider.
 
 ## Architecture
 

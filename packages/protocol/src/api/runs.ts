@@ -48,6 +48,17 @@ export interface ProviderModelInfo {
   description: string;
 }
 
+export type ProviderTermsRisk = 'low' | 'medium' | 'high';
+
+/** What the vendor's terms say about running its CLI inside a platform like Emberline. */
+export interface ProviderTerms {
+  url: string;
+  /** YYYY-MM-DD the note was last checked against the vendor's page. */
+  checked: string;
+  risk: ProviderTermsRisk;
+  summary: string;
+}
+
 export interface ProviderRegistryEntry {
   id: AgentId;
   label: string;
@@ -56,6 +67,7 @@ export interface ProviderRegistryEntry {
   authKind: 'host_or_key' | 'api_key' | 'cli_auth';
   keyConfigField?: 'anthropicKeyConfigured' | 'openaiKeyConfigured' | 'geminiKeyConfigured';
   description: string;
+  terms: ProviderTerms;
   models: ProviderModelInfo[];
 }
 
@@ -68,6 +80,12 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     authKind: 'host_or_key',
     keyConfigField: 'anthropicKeyConfigured',
     description: 'Official Anthropic Claude Code CLI with deep worktree tool execution and host OAuth / API key support.',
+    terms: {
+      url: 'https://code.claude.com/docs/en/legal-and-compliance',
+      checked: '2026-10-16',
+      risk: 'low',
+      summary: 'Unmodified Claude Code with your own subscription is allowed, also when a platform hosts it.',
+    },
     models: [
       {
         id: 'fable',
@@ -118,6 +136,12 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     badge: 'Agentic UI/UX & Full-Stack',
     authKind: 'cli_auth',
     description: 'Google DeepMind Antigravity CLI specialized in visual UI/UX craftsmanship and full-stack flows.',
+    terms: {
+      url: 'https://antigravity.google/docs/faq/',
+      checked: '2026-10-16',
+      risk: 'high',
+      summary: 'Consumer logins inside third-party tools are not supported; Google has suspended accounts.',
+    },
     models: [
       {
         id: 'argon',
@@ -169,6 +193,12 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     authKind: 'api_key',
     keyConfigField: 'geminiKeyConfigured',
     description: 'Google Gemini CLI with 1M+ token context window for massive repository analysis and coding.',
+    terms: {
+      url: 'https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals',
+      checked: '2026-10-16',
+      risk: 'medium',
+      summary: 'Consumer Google login ended on 2026-06-18; use an API key or Code Assist Standard/Enterprise.',
+    },
     models: [
       {
         id: 'gemini-pro',
@@ -210,6 +240,12 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     authKind: 'api_key',
     keyConfigField: 'openaiKeyConfigured',
     description: 'OpenAI Codex terminal agent powered by o-series reasoning and GPT-4.1/4o models.',
+    terms: {
+      url: 'https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan',
+      checked: '2026-10-16',
+      risk: 'low',
+      summary: 'Codex CLI is included in ChatGPT plans.',
+    },
     models: [
       {
         id: 'o3',
@@ -260,6 +296,12 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     badge: 'GitHub CLI Auth',
     authKind: 'cli_auth',
     description: 'GitHub Copilot agentic CLI using your GitHub subscription models.',
+    terms: {
+      url: 'https://docs.github.com/en/copilot',
+      checked: '2026-10-16',
+      risk: 'medium',
+      summary: 'No explicit policy for hosted use found; check your plan.',
+    },
     models: [
       {
         id: 'opus',
@@ -310,6 +352,12 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     badge: 'Git-Aware Diff Agent',
     authKind: 'host_or_key',
     description: 'Aider AI pair-programming CLI with repository map and automatic git commits.',
+    terms: {
+      url: 'https://aider.chat/docs/',
+      checked: '2026-10-16',
+      risk: 'low',
+      summary: 'Uses your own API keys.',
+    },
     models: [
       {
         id: 'opus',

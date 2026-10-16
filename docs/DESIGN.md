@@ -161,6 +161,6 @@ TypeScript everywhere in a pnpm monorepo on Node.js LTS. Backend: Fastify, node-
 
 ## 5. Risks
 
-- **Provider terms.** Providers' terms for automated use of subscriptions change. Emberline's value depends on them. Mitigation: always run the official CLIs, keep unattended prompting minimal and transparent, and follow policy changes.
+- **Provider terms.** Providers' terms for automated use of subscriptions change. Emberline's value depends on them. Mitigation: always run the official CLIs, keep unattended prompting minimal and transparent, and follow policy changes. Settings shows a dated terms note with a link per provider, and several accounts per provider, account rotation and quota pooling are a non-goal (see [Non-goals](#non-goals) and 2.2) so Emberline never works around a vendor's limits.
 - **Fragile detection.** CLI output and behavior change between releases. Mitigation: hooks first, transcripts second, the screen last, with fixture tests.
 - **Security.** Agents run arbitrary commands. Mitigation: agents only in the runner; core runs nothing in a workspace; per-run worktrees; no Docker socket in the runner; protected default branches; scoped forge tokens.
