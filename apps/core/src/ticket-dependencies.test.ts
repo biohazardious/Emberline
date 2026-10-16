@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setSetting } from './db/index.js';
+import { settings } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { TicketService } from './tickets/service.js';
 
@@ -871,6 +874,37 @@ describe('factory chain robustness', () => {
     expect(runsFor(x.id)).toHaveLength(1);
     expect(runsFor(y.id)).toHaveLength(0);
     await settle(project.id);
+  });
+
+  it('the first start after an upgrade (no remembered chains) resumes projects with factory tickets waiting', async () => {
+    const project = await createProject();
+    const board = await createProject('Board Project');
+    await createTicket(project.id, { title: '[Factory] Build the app', status: 'done' });
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    // No factory ticket: a hand-run board, not a chain to resume.
+    const y = await createTicket(board.id, { title: 'Y', status: 'ready' });
+    // 0.1.3 kept its chains in memory only: the database has no key.
+    t.db.delete(settings).where(eq(settings.key, 'factory.activeChains')).run();
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    expect(restarted.isAutoChainActive(project.id)).toBe(true);
+    expect(restarted.isAutoChainActive(board.id)).toBe(false);
+    await restarted.resumeChains();
+    expect(runsFor(x.id)).toHaveLength(1);
+    expect(runsFor(y.id)).toHaveLength(0);
+    await settle(project.id);
+  });
+
+  it('a remembered empty chain list is not seeded again', async () => {
+    const project = await createProject();
+    await createTicket(project.id, { title: '[Factory] Build the app', status: 'done' });
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    setSetting(t.db, 'factory.activeChains', []);
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    expect(restarted.isAutoChainActive(project.id)).toBe(false);
+    await restarted.resumeChains();
+    expect(runsFor(x.id)).toHaveLength(0);
   });
 
   it('a failed ticket run lets the chain go on with the other ready tickets', async () => {

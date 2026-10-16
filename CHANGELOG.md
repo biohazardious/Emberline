@@ -42,6 +42,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Migration 0014 adds ticket dependencies. Factory projects now run up to 2 tickets at once; set Parallel tickets per project to 1 for the previous one-at-a-time behaviour. Existing tickets have no dependencies.
 - Moving a ticket to Done by hand only starts the tickets that were waiting for it (or continues a factory chain that is already running); other ready tickets are not started by it.
 - A ticket waiting for a provider's quota holds one of its project's parallel ticket slots unless the persona has a fallback route and a policy is set to use it.
+- Factory chains are remembered across restarts. 0.1.3 kept them in memory only, so the first 0.2.0 start resumes every project that has factory tickets waiting (a "[Factory]" ticket and a ticket that is ready to start), as long as Auto-Pickup Ready Queue is on.
+- A ticket started by hand no longer starts the rest of the queue when it finishes; only the tickets that depend on it start.
 
 ## [0.1.3] - 2026-10-16
 

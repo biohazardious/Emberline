@@ -306,7 +306,32 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   private loadActiveChains(): Set<string> {
     const value = getSetting<unknown>(this.db, ACTIVE_CHAINS_KEY);
+    if (value === undefined) return this.seedActiveChains();
     return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []);
+  }
+
+  /**
+   * The first start of a version that remembers chains (an upgrade from 0.1.3, which kept them in
+   * memory): a project with a factory ticket and a ticket dispatch could start is taken as chaining,
+   * so the factory carries on after the upgrade. Written at once, so later starts never seed again.
+   */
+  private seedActiveChains(): Set<string> {
+    const seeded = new Set<string>();
+    const fSettings = getFactorySettings(this.db);
+    if (fSettings.autoPickupReady) {
+      const startable = new Set<TicketStatus>(fSettings.autoPickupBacklog ? ['ready', 'backlog'] : ['ready']);
+      for (const { id } of this.db.select({ id: projects.id }).from(projects).all()) {
+        const list = this.list(id);
+        if (
+          list.some((t) => t.title.startsWith('[Factory]')) &&
+          list.some((t) => startable.has(t.status) && t.blockedBy.length === 0)
+        ) {
+          seeded.add(id);
+        }
+      }
+    }
+    setSetting(this.db, ACTIVE_CHAINS_KEY, [...seeded]);
+    return seeded;
   }
 
   private chainOn(projectId: string): void {
