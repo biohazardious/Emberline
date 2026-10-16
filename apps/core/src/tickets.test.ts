@@ -393,4 +393,62 @@ describe('tickets', () => {
     expect(prompts()).toBe(1);
     void restarted;
   });
+
+  describe('pipeline settle (R8)', () => {
+    const SETTLE_MS = 400;
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    beforeEach(async () => {
+      // Rebuilt with a short settle window; the default for tests is no wait.
+      await t.close();
+      await ptydServer.close();
+      t = await createTestApp({}, {}, { pipelineSettleMs: SETTLE_MS });
+      t.config.claudeCommand = writeFakeClaude(t.dir);
+      ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+      await ptydServer.listen();
+      t.ptyd.start();
+      await t.ptyd.waitUntilConnected();
+      cookie = await setupAndLogin(t.app);
+    });
+
+    /** Counts completion pipeline passes (gates, merge, Done). */
+    function trackPipelines(): Run[] {
+      const passes: Run[] = [];
+      const svc = t.tickets as unknown as { handleRunCompleted(r: Run, opts?: object): Promise<void> };
+      const original = svc.handleRunCompleted.bind(t.tickets);
+      svc.handleRunCompleted = (r, opts) => {
+        passes.push(r);
+        return original(r, opts);
+      };
+      return passes;
+    }
+
+    it('waits for the agent to settle before gates and merge; a turn that resumes skips them', async () => {
+      const project = await createProject();
+      const ticket = await createTicket(project.id, { title: 'Settle' });
+      const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+      const passes = trackPipelines();
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: 's-settle' });
+      await hook(run.id, 'UserPromptSubmit', token);
+
+      await hook(run.id, 'Stop', token);
+      // Review follows the Stop at once; only the pipeline waits.
+      expect((await getTicket(ticket.id)).status).toBe('review');
+      expect(passes).toHaveLength(0);
+      // The CLI wakes up for background work inside the window.
+      await hook(run.id, 'PreToolUse', token, { tool_name: 'Bash' });
+      await pause(SETTLE_MS * 2);
+      expect(passes).toHaveLength(0);
+
+      // Two Stops inside one window: one pass, for the last one.
+      await hook(run.id, 'Stop', token);
+      await hook(run.id, 'UserPromptSubmit', token);
+      await hook(run.id, 'Stop', token);
+      await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(1);
+      await pause(SETTLE_MS * 2);
+      expect(passes).toHaveLength(1);
+      expect(passes[0]).toMatchObject({ id: run.id, state: 'done' });
+    });
+  });
 });

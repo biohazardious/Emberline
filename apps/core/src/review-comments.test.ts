@@ -11,9 +11,21 @@ let cookie: string;
 
 beforeEach(async () => {
   t = await createTestApp();
-  // Agent stand-in: records the first prompt line it receives.
+  // Agent stand-in: leaks its hook token, records the first prompt line it receives.
   const fake = path.join(t.dir, 'fake-claude.sh');
-  writeFileSync(fake, `#!/bin/sh\nread line\nprintf %s "$line" > "${t.dir}/prompt-$EMBERLINE_RUN_ID"\nsleep 5\n`, { mode: 0o755 });
+  writeFileSync(
+    fake,
+    [
+      '#!/bin/sh',
+      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${t.dir}/.token-$EMBERLINE_RUN_ID"`,
+      `mv "${t.dir}/.token-$EMBERLINE_RUN_ID" "${t.dir}/token-$EMBERLINE_RUN_ID"`,
+      'read line',
+      `printf %s "$line" > "${t.dir}/prompt-$EMBERLINE_RUN_ID"`,
+      'sleep 5',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
   t.config.claudeCommand = fake;
   server = new PtydServer({ socketPath: t.config.ptydSocket });
   await server.listen();
@@ -35,6 +47,19 @@ async function startRun(name = 'Review Project'): Promise<Run> {
   return (await api('POST', '/api/runs', { projectId: project.id })).json();
 }
 
+/** Lets the stand-in report that it is up and at its prompt (prompts to a starting agent are refused). */
+async function ready(run: Run): Promise<void> {
+  const file = path.join(t.dir, `token-${run.id}`);
+  await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
+  const res = await t.app.inject({
+    method: 'POST',
+    url: '/api/internal/hooks',
+    headers: { authorization: `Bearer ${readFileSync(file, 'utf8')}` },
+    payload: { runId: run.id, event: 'SessionStart', receivedAt: new Date().toISOString(), payload: { session_id: 's' } },
+  });
+  expect(res.json().state).toBe('waiting_input');
+}
+
 describe('persistent code review', () => {
   it('stores comments, sends open ones as one prompt and tracks their status', async () => {
     const run = await startRun();
@@ -50,6 +75,7 @@ describe('persistent code review', () => {
       [40, 'open'],
     ]);
 
+    await ready(run);
     const sent = await api('POST', `/api/runs/${run.id}/review/request-changes`, { note: 'Nearly there' });
     expect(sent.statusCode).toBe(200);
     expect(sent.json().sent).toBe(2);

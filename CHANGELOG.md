@@ -16,6 +16,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - Runs that start on their own (scheduled jobs and the factory's automatic ticket runs) no longer sit forever on a permission prompt. If one waits for 30 minutes with nobody answering, Emberline stops it as failed, frees its slot and sends a notification. Runs you started by hand are never stopped this way. Scheduled jobs can only use "Autonomous" or "Bypass permissions"; an older job saved with another mode now runs as Autonomous and the run says so. The factory's one-time "keep going" nudge is now remembered per run, so a restart no longer repeats it.
 
+- A run that looks busy but has done nothing for 20 minutes (no agent activity and an unchanged terminal) no longer holds its slot forever. It is marked as waiting on you, which frees the slot and sends the "agent waiting" notification. If the agent was only slow, it goes back to working as soon as it does something.
+- Build checks, guards and the merge now wait 20 seconds after an agent finishes its turn. If the agent picks up work again in that time, they wait for its next finish instead of checking half-done work. The ticket still moves to Review right away.
+- A follow-up prompt sent while the agent is still starting is refused with a clear message instead of being lost. "Continue" and Emberline's own automatic prompts (factory nudges, fix requests from the build check and guards) are only typed when the agent is idle, never into the middle of a turn. Your own prompts while the agent works still go through.
+
 ### Changed
 
 - Settings shows a short terms note per provider: a risk level (low, medium, high), what the vendor's terms say about running its CLI inside a platform like Emberline, the date it was checked and a link to the source. The README lists the same. Several accounts per provider stays a non-goal.

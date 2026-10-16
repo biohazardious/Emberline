@@ -73,7 +73,10 @@ export class NotificationService {
             void this.dispatch(cfg, {
               event: 'waiting_input',
               title: `Agent waiting on you: ${label}`,
-              body: `Run "${label}" (${run.lastEvent ?? 'prompt'}) is waiting for your input or permission.`,
+              body:
+                run.lastEvent === 'stall_detected'
+                  ? `Run "${label}" showed no activity for 20 minutes and may be stuck. Have a look at its terminal.`
+                  : `Run "${label}" (${run.lastEvent ?? 'prompt'}) is waiting for your input or permission.`,
               priority: 'high',
               tags: ['hourglass_flowing_sand', 'emberline'],
             });

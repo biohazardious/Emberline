@@ -9,7 +9,7 @@ import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
 import { Scheduler, type SchedulerOptions } from './scheduler/service.js';
 import { buildServer } from './server.js';
-import { TicketService } from './tickets/service.js';
+import { TicketService, type TicketServiceOptions } from './tickets/service.js';
 
 export interface TestApp {
   app: FastifyInstance;
@@ -27,6 +27,7 @@ export interface TestApp {
 export async function createTestApp(
   overrides: Partial<CoreConfig> = {},
   schedulerOptions: Partial<SchedulerOptions> = {},
+  ticketOptions: Partial<TicketServiceOptions> = {},
 ): Promise<TestApp> {
   const dir = mkdtempSync(path.join(tmpdir(), 'core-'));
   const config: CoreConfig = {
@@ -59,7 +60,8 @@ export async function createTestApp(
     screenSettleMs: 200,
     ...schedulerOptions,
   });
-  const tickets = new TicketService(opened.db, runs, scheduler);
+  // Pipelines run right after a Stop unless a test asks for the settle window.
+  const tickets = new TicketService(opened.db, runs, scheduler, { pipelineSettleMs: 0, ...ticketOptions });
   const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler });
   return {
     app,
@@ -72,6 +74,7 @@ export async function createTestApp(
     scheduler,
     async close() {
       await app.close();
+      tickets.dispose();
       runs.dispose();
       scheduler.dispose();
       ptyd.stop();

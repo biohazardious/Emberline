@@ -78,6 +78,17 @@ interface PipelineOptions {
   finalizing?: boolean;
 }
 
+/**
+ * How long a finished turn must stay finished before its gates and merge run (R8): a CLI may wake up
+ * again for background work right after its Stop hook, and its next Stop starts the wait over.
+ */
+export const PIPELINE_SETTLE_MS = 20_000;
+
+export interface TicketServiceOptions {
+  /** See {@link PIPELINE_SETTLE_MS}. */
+  pipelineSettleMs: number;
+}
+
 /** See {@link TicketService.dispatchNextReadyTicket}. */
 interface DispatchOptions {
   only?: ReadonlySet<string>;
@@ -196,14 +207,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly resumedPipelines = new Set<string>();
   /** Per chaining project: ticket runs that failed since a ticket last moved to Done. */
   private readonly failedInARow = new Map<string, number>();
+  /** Finished runs waiting out the settle window before their pipeline (R8). */
+  private readonly settlingRuns = new Map<string, NodeJS.Timeout>();
+  private readonly pipelineSettleMs: number;
 
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
     private readonly scheduler: Scheduler,
+    options: Partial<TicketServiceOptions> = {},
   ) {
     super();
     this.setMaxListeners(0);
+    this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
@@ -225,10 +241,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .sendPrompt(
             run.id,
             'Autonomous Factory Mode: Proceed automatically using the simplest self-contained local option that satisfies PROJECT.md. Do not wait for user confirmation.',
+            { automatic: true },
           )
           .catch(() => undefined);
       }
-      if (stateChanged && run.state === 'done' && run.projectId) this.completeRun(run);
+      if (stateChanged && run.state === 'done' && run.projectId) this.completeRunWhenSettled(run);
       if (
         stateChanged &&
         run.state === 'failed' &&
@@ -240,6 +257,42 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         this.ticketRunFailed(run, run.projectId);
       }
     });
+  }
+
+  /** Drops pending settle timers (shutdown, tests). */
+  dispose(): void {
+    for (const timer of this.settlingRuns.values()) clearTimeout(timer);
+    this.settlingRuns.clear();
+  }
+
+  /**
+   * Runs the completion pipeline once the run has stayed `done` for the settle window (R8). The
+   * ticket already moved to Review; only gates and merge wait. A newer `done` of the same run
+   * replaces the wait, so one finished turn gets at most one pass. A run whose process is gone
+   * cannot wake up again and goes straight on.
+   */
+  private completeRunWhenSettled(run: Run): void {
+    clearTimeout(this.settlingRuns.get(run.id));
+    this.settlingRuns.delete(run.id);
+    if (this.pipelineSettleMs <= 0 || run.endedAt) {
+      this.completeRun(run);
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (this.settlingRuns.get(run.id) !== timer) return;
+      this.settlingRuns.delete(run.id);
+      let fresh: Run;
+      try {
+        fresh = this.runs.getRun(run.id);
+      } catch {
+        return; // removed meanwhile
+      }
+      // Woke up again (its next Stop starts a new wait), or finished differently in the meantime.
+      if (fresh.state !== 'done' || fresh.stateChangedAt !== run.stateChangedAt || fresh.handedOffTo) return;
+      this.completeRun(fresh);
+    }, this.pipelineSettleMs);
+    timer.unref();
+    this.settlingRuns.set(run.id, timer);
   }
 
   /** Runs the completion pipeline in the background; it is best effort per run. */
@@ -550,8 +603,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (fSettings.autoMoveToDone && !only) {
       for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
         const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
-        // A run whose own pipeline is still going (gates, merge) is not left over: leave it alone.
-        if (!latestRun || latestRun.state !== 'done' || latestRun.handedOffTo || this.pipelineRuns.has(latestRun.id)) {
+        // A run whose own pipeline is still going (gates, merge) or waiting to settle is not left over.
+        if (
+          !latestRun ||
+          latestRun.state !== 'done' ||
+          latestRun.handedOffTo ||
+          this.pipelineRuns.has(latestRun.id) ||
+          this.settlingRuns.has(latestRun.id)
+        ) {
           continue;
         }
         // A run still resolving its conflict is finished by its own pipeline when it stops again.
@@ -731,6 +790,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         .prompt(
           run.id,
           'Autonomous Factory Mode: Do not ask clarifying questions or wait for user confirmation. Choose the simplest self-contained local option (e.g., localStorage / existing stack in PROJECT.md), update PROJECT.md, and write .emberline/new-tickets.json now so the specialist pipeline can start.',
+          { automatic: true },
         )
         .catch(() => undefined);
       return;
@@ -791,6 +851,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .prompt(
             run.id,
             `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.`,
+            { automatic: true },
           )
           .catch(() => undefined);
         return;
@@ -832,7 +893,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         this.slopHealedRuns.add(run.id);
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
         if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', {});
-        await this.runs.prompt(run.id, slopReport.autoFixPrompt).catch(() => undefined);
+        await this.runs.prompt(run.id, slopReport.autoFixPrompt, { automatic: true }).catch(() => undefined);
         return;
       }
 
@@ -862,7 +923,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         (!run.endedAt || run.resumable)
       ) {
         this.runs.note(run.id, 'critic_blocked', {});
-        await this.runs.prompt(run.id, criticRes.followUpPrompt).catch(() => undefined);
+        await this.runs.prompt(run.id, criticRes.followUpPrompt, { automatic: true }).catch(() => undefined);
         return;
       }
     }
@@ -991,7 +1052,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
     const text = conflictResolutionPrompt(branch, conflicts);
     try {
-      await this.runs.sendPrompt(run.id, text);
+      await this.runs.sendPrompt(run.id, text, { automatic: true });
     } catch (error) {
       this.runs.note(run.id, 'conflict_resolution_failed', { conflicts, message: error instanceof Error ? error.message : String(error) });
       return false;

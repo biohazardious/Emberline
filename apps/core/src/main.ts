@@ -54,6 +54,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     if (stopping) return;
     stopping = true;
     void app.close().finally(() => {
+      tickets.dispose();
       runs.dispose();
       scheduler.dispose();
       ptyd.stop();

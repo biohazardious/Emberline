@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { eq } from 'drizzle-orm';
 import { projects, runs } from './db/schema.js';
@@ -721,6 +721,95 @@ describe('runs', () => {
       expect(after).toMatchObject({ state: 'done', terminalId: null, resumable: true });
       expect(after.endedAt).not.toBeNull();
       expect(after.events.map((e) => e.type)).toContain('idle_session_closed');
+    });
+  });
+
+  describe('stall watchdog (R7)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('marks a working run with no hooks and a frozen screen for 20 minutes as waiting', async () => {
+      const project = await createProject('Stalled', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: 's-stall' });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+      const later = (minutes: number) => vi.setSystemTime(Date.now() + minutes * 60_000);
+      const state = async () => {
+        await t.runs.reconcile();
+        return t.runs.getRun(run.id).state;
+      };
+      vi.useFakeTimers({ toFake: ['Date'] });
+
+      expect(await state()).toBe('working');
+      later(10);
+      // The screen changes (typed text is echoed): the agent is doing something.
+      await t.ptyd.get().write(run.terminalId ?? '', 'x');
+      await new Promise((r) => setTimeout(r, 300));
+      expect(await state()).toBe('working');
+      later(11);
+      // 21 minutes without a hook, but the screen changed 11 minutes ago.
+      expect(await state()).toBe('working');
+      later(10);
+      expect(await state()).toBe('waiting_input');
+      const detail = t.runs.get(run.id);
+      expect(detail.lastEvent).toBe('stall_detected');
+      expect(detail.events.filter((e) => e.type === 'stall_detected')).toHaveLength(1);
+      expect(detail.endedAt).toBeNull();
+
+      // The agent was alive after all: its next hook moves it back as usual.
+      expect((await hook(run.id, 'PreToolUse', token, { tool_name: 'Bash' })).json()).toMatchObject({ state: 'working' });
+      later(5);
+      expect(await state()).toBe('working');
+    });
+
+    it('any hook restarts the stall timer', async () => {
+      const project = await createProject('Busy', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: 's-busy' });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      await t.runs.reconcile();
+      vi.setSystemTime(Date.now() + 15 * 60_000);
+      await hook(run.id, 'PostToolUse', token, { tool_name: 'Bash' });
+      await t.runs.reconcile();
+      vi.setSystemTime(Date.now() + 15 * 60_000);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).state).toBe('working');
+    });
+  });
+
+  describe('prompts wait for a ready CLI (R9)', () => {
+    const screen = async (run: Run) => (await t.ptyd.get().snapshot(run.terminalId ?? '', 50)).data ?? '';
+
+    it('refuses a follow-up prompt while the agent is still starting', async () => {
+      const project = await createProject('Starting prompt', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(run.id);
+      expect(t.runs.getRun(run.id).state).toBe('starting');
+      const res = await api('POST', `/api/runs/${run.id}/prompt`, { text: 'too early' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toMatch(/still starting/i);
+      expect(await screen(run)).not.toContain('too early');
+    });
+
+    it('does not type CONTINUE into a working agent, but lets a user prompt through', async () => {
+      const project = await createProject('Working resume', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: 's-working' });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+
+      expect((await api('POST', `/api/runs/${run.id}/resume`, {})).statusCode).toBe(409);
+      await expect(t.runs.sendPrompt(run.id, 'nudge', { automatic: true })).rejects.toMatchObject({ statusCode: 409 });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(await screen(run)).not.toMatch(/Continue where you left off|nudge/);
+      expect(t.runs.getRun(run.id).state).toBe('working');
+
+      // A person's prompt while the agent works is queued by the CLI.
+      expect((await api('POST', `/api/runs/${run.id}/prompt`, { text: 'also this' })).statusCode).toBe(200);
     });
   });
 });

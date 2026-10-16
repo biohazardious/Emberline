@@ -141,6 +141,20 @@ type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['r
 const STARTING_WATCHDOG_MS = 3 * 60_000;
 /** An unattended run waiting on a permission prompt this long is stopped as failed (R6). */
 const WAITING_INPUT_TIMEOUT_MS = 30 * 60_000;
+/**
+ * A `working` run with no hook and an unchanged screen this long is taken as stalled (a missed Stop
+ * hook, a hung CLI): it becomes `waiting_input`, which frees its slot and pages the user (R7).
+ */
+const STALL_WATCHDOG_MS = 20 * 60_000;
+/** How often the stall watchdog looks at a working run's screen. */
+const STALL_SCREEN_SAMPLE_MS = 60_000;
+/** Screen lines hashed by the stall watchdog. */
+const STALL_SCREEN_LINES = 50;
+/**
+ * States in which the CLI sits at its prompt, so text typed by Emberline itself (CONTINUE, nudges,
+ * gate follow-ups) is read as the next turn. A rate-limited turn has ended on its limit.
+ */
+const IDLE_STATES: ReadonlySet<string> = new Set<RunState>(['waiting_input', 'done', 'rate_limited']);
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -268,6 +282,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private lastAutoGcAt = 0;
   private readonly handoffLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
+  /** Stall watchdog per working run: the screen hash, since when it is unchanged, when it was last read. */
+  private readonly stallWatch = new Map<string, { hash: string | null; since: number; sampledAt: number }>();
 
   constructor(
     private readonly db: Db,
@@ -632,6 +648,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (row.autoRetryAt) this.db.update(runs).set({ autoRetryAt: null }).where(eq(runs.id, id)).run();
     if (row.state === 'queued') return this.launch(id);
     if (row.ptydSessionId && !row.endedAt) {
+      // Typed into a CLI that is starting or mid-turn, it would be taken as part of that turn (R9).
+      if (!IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; continue it once it is waiting`);
       await this.typePrompt(row.ptydSessionId, text);
       return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
     }
@@ -1033,6 +1051,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // A late hook (e.g. SessionEnd after a kill) must not revive an ended or stopped run.
     const live = !row.endedAt && !row.cancelledAt;
+    // The agent is alive: the stall watchdog starts over.
+    if (live) this.stallWatch.delete(row.id);
     // The run's agent and model decide how its limit messages read and which quota pool they hit.
     const limitCtx = { agent: row.agent, model: runModel(row) };
     let next = live ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload, limitCtx) : undefined;
@@ -1178,11 +1198,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Types a follow-up prompt into the live agent session and submits it. Multi-line text is
    * sent as a bracketed paste so embedded newlines don't submit early. The resulting
    * `UserPromptSubmit` hook moves the run back to `working`.
+   *
+   * A CLI that is still starting may drop typed text, so prompts wait until it is ready. A person's
+   * prompt during a turn is queued by the CLI; Emberline's own (`automatic`) prompts wait for an
+   * idle CLI instead, so they never land in the middle of a turn (R9).
    */
-  async sendPrompt(id: string, text: string): Promise<Run> {
+  async sendPrompt(id: string, text: string, opts: { automatic?: boolean } = {}): Promise<Run> {
     const row = this.row(id);
     if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
+    if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
+    if (opts.automatic && !IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; not interrupting it`);
     await this.typePrompt(row.ptydSessionId, text);
     return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
   }
@@ -1191,10 +1217,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Sends a follow-up prompt to a run: types into the live PTY when running, or respawns
    * `claude --resume` when the process has ended.
    */
-  async prompt(id: string, text: string): Promise<Run> {
+  async prompt(id: string, text: string, opts: { automatic?: boolean } = {}): Promise<Run> {
     const row = this.row(id);
     if (row.state === 'queued') throw conflict('the agent has not started yet; it is queued');
-    if (row.ptydSessionId && !row.endedAt) return this.sendPrompt(id, text);
+    // Also while it respawns for a resume: a second resume would start another agent.
+    if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
+    if (row.ptydSessionId && !row.endedAt) return this.sendPrompt(id, text, opts);
     if (!row.agentSessionId) throw conflict('no agent session to continue; start a new run');
     return this.resume(id, text);
   }
@@ -1683,6 +1711,50 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     };
   }
 
+  /**
+   * Stall watchdog (R7): reads a working run's screen at most once a minute and tells whether it has
+   * neither changed nor had a hook for {@link STALL_WATCHDOG_MS}. Hooks reset the watch (ingestHook);
+   * a core restart starts it over.
+   */
+  private async stalled(row: RunRow, nowMs: number): Promise<boolean> {
+    if (!row.ptydSessionId) return false;
+    let watch = this.stallWatch.get(row.id);
+    if (!watch) {
+      watch = { hash: null, since: nowMs, sampledAt: 0 };
+      this.stallWatch.set(row.id, watch);
+    }
+    if (nowMs - watch.sampledAt < STALL_SCREEN_SAMPLE_MS) return false;
+    let hash: string;
+    try {
+      hash = sha256((await this.ptyd.get().snapshot(row.ptydSessionId, STALL_SCREEN_LINES)).data ?? '');
+    } catch {
+      return false; // the session is going away; the exit path handles it
+    }
+    // A hook that arrived while the screen was read started a new watch.
+    if (this.stallWatch.get(row.id) !== watch) return false;
+    watch.sampledAt = nowMs;
+    if (hash !== watch.hash) {
+      watch.hash = hash;
+      watch.since = nowMs;
+      return false;
+    }
+    return nowMs - watch.since >= STALL_WATCHDOG_MS;
+  }
+
+  /** A stalled run waits for the user: its slot is free and the "agent waiting" page goes out. */
+  private markStalled(id: string): void {
+    this.stallWatch.delete(id);
+    // Re-read: the screen was read asynchronously and the run may have moved on meanwhile.
+    const row = this.db.select().from(runs).where(eq(runs.id, id)).get();
+    if (row?.state !== 'working' || row.endedAt || row.cancelledAt) return;
+    this.record(id, {
+      source: 'system',
+      type: 'stall_detected',
+      state: 'waiting_input',
+      payload: { message: 'No agent activity and an unchanged screen for 20 minutes; it may be stuck' },
+    });
+  }
+
   /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
   async reconcile(): Promise<void> {
     if (this.reconciling || this.ptyd.status !== 'connected') return;
@@ -1700,6 +1772,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const { sessions } = await this.ptyd.get().list();
       const byId = new Map(sessions.map((s) => [s.id, s]));
       const nowMs = Date.now();
+      const stillWorking = new Set<string>();
 
       for (const row of open) {
         if (!row.ptydSessionId) {
@@ -1716,9 +1789,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         }
         const session = byId.get(row.ptydSessionId);
         if (session?.status === 'running') {
-          // If an interactive CLI finished its turn (`state === 'done'`) and has been sitting idle
-          // for over its idle TTL without any follow-up prompt, close & dispose its PTY
-          // so it never lingers as a zombie process in Fleet Multiplexer.
+          if (row.state === 'working') {
+            stillWorking.add(row.id);
+            if (await this.stalled(row, nowMs)) this.markStalled(row.id);
+            continue;
+          }
           if (
             row.state === 'waiting_input' &&
             row.lastEvent === 'Notification' &&
@@ -1741,6 +1816,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             });
             continue;
           }
+          // If an interactive CLI finished its turn (`state === 'done'`) and has been sitting idle
+          // for over its idle TTL without any follow-up prompt, close & dispose its PTY
+          // so it never lingers as a zombie process in Fleet Multiplexer.
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
           if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl) {
             await this.saveLastScreen(row.id, row.ptydSessionId);
@@ -1803,6 +1881,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             : {},
           patch: { endedAt: new Date(), ptydSessionId: null },
         });
+      }
+      for (const runId of this.stallWatch.keys()) {
+        if (!stillWorking.has(runId)) this.stallWatch.delete(runId);
       }
       for (const row of attached) {
         if (!row.endedAt || !row.ptydSessionId) continue;

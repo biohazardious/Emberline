@@ -257,4 +257,22 @@ describe('NotificationService quota lanes', () => {
     expect(sent[0]!.body).toMatch(/permission/i);
     expect(sent[0]!.body).toMatch(/30 minutes/);
   });
+
+  it('says a stalled run may be stuck, through the waiting-input switch', async () => {
+    const { EventEmitter } = await import('node:events');
+    const runs = new EventEmitter();
+    const service = new NotificationService({} as Db, runs as never);
+    const sent: { event: string; body: string }[] = [];
+    service.getSettings = () =>
+      ({ enabled: true, provider: 'webhook', url: 'http://127.0.0.1:9/unused', token: null, onRateLimited: true, onQuotaResumed: true, onWaitingInput: true, onRunFinished: false }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push({ event: msg.event, body: msg.body });
+      return { ok: true, status: 200, error: null };
+    };
+    runs.emit('run', { id: 'r1', title: 'Big job', branch: null, state: 'waiting_input', lastEvent: 'stall_detected', cancelled: false }, true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.event).toBe('waiting_input');
+    expect(sent[0]!.body).toMatch(/20 minutes/);
+    expect(sent[0]!.body).toMatch(/stuck/i);
+  });
 });
