@@ -4,11 +4,23 @@ import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setSetting } from './db/index.js';
 import { settings } from './db/schema.js';
+import type * as FactoryService from './factory/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { TicketService } from './tickets/service.js';
+
+/** A critic verdict for the next pipelines to get instead of running the real critic (null: the real one). */
+const critic = vi.hoisted(() => ({ result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null } }));
+vi.mock('./factory/service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof FactoryService>();
+  return {
+    ...actual,
+    runCrossProviderCritic: (async (params) =>
+      critic.result ?? actual.runCrossProviderCritic(params)) as typeof actual.runCrossProviderCritic,
+  };
+});
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -47,6 +59,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  critic.result = null;
   await t.close();
   await ptydServer.close();
 });
@@ -1127,6 +1140,30 @@ describe('factory chain robustness', () => {
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
     await Promise.all(passes);
     expect(await eventTypes(run)).toContain('slop_guard_blocked');
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(passes).toHaveLength(1);
+    expect(await statusOf(a.id)).toBe('review');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    await settle(project.id);
+  });
+
+  it('the critic holds the ticket even when its follow-up request cannot be delivered', async () => {
+    await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+    critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async () => {
+      throw new Error('no live session');
+    };
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await eventTypes(run)).toContain('critic_blocked');
 
     await t.tickets.dispatchNextReadyTicket(project.id);
     expect(passes).toHaveLength(1);
