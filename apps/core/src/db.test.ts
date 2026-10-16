@@ -51,6 +51,21 @@ describe('openDb', () => {
     db.close();
   });
 
+  it('0014: ticket_dependencies exists and deleting a ticket removes its edges both ways', () => {
+    const db = openDb(':memory:');
+    const run = (query: string) => db.db.run(sql.raw(query));
+    run(`insert into projects (id, name, slug, path, created_at) values ('p', 'P', 'p', '/p', 0)`);
+    for (const [id, n] of [['a', 1], ['b', 2], ['c', 3]] as const) {
+      run(`insert into tickets (id, project_id, number, key, title, status, position, created_at, updated_at) values ('${id}', 'p', ${n}, 'P-${n}', '${id}', 'ready', ${n}, 0, 0)`);
+    }
+    run(`insert into ticket_dependencies (ticket_id, depends_on_id, created_at) values ('b', 'a', 0), ('c', 'b', 0)`);
+    const count = () => (db.db.all(sql.raw('select count(*) as n from ticket_dependencies')) as { n: number }[])[0]?.n;
+    expect(count()).toBe(2);
+    run(`delete from tickets where id = 'b'`);
+    expect(count()).toBe(0);
+    db.close();
+  });
+
   it('does not back up a fresh or up-to-date database', () => {
     const file = path.join(dir, 'emberline.db');
     openDb(file).close();

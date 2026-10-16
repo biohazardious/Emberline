@@ -275,6 +275,8 @@ export const FactorySettings = z.object({
    */
   maxTicketDepth: z.number().int().min(1).max(10).default(3),
   maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000).default(40),
+  /** Tickets of one project that may run at the same time. */
+  maxParallelTicketsPerProject: z.number().int().min(1).max(4).default(2),
   mcpServers: z.array(McpServerEntry).default(DEFAULT_MCP_SERVERS),
   skillPlugins: z.array(SkillPluginEntry).default(DEFAULT_SKILL_PLUGINS),
   anthropicKeyConfigured: z.boolean().default(false),
@@ -316,6 +318,7 @@ export const UpdateFactorySettingsBody = z
     autoMoveToDone: z.boolean(),
     maxTicketDepth: z.number().int().min(1).max(10),
     maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000),
+    maxParallelTicketsPerProject: z.number().int().min(1).max(4),
     mcpServers: z.array(McpServerEntry),
     skillPlugins: z.array(SkillPluginEntry),
     anthropicApiKey: z.string().trim().max(500).nullable(),

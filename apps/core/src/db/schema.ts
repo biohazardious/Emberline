@@ -1,6 +1,6 @@
 import type { Route } from '@emberline/protocol';
 import { sql } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /** Free-form key/value settings (JSON values). */
 export const settings = sqliteTable('settings', {
@@ -207,4 +207,14 @@ export const reviewFileViews = sqliteTable(
     viewedAt: integer('viewed_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => [uniqueIndex('review_file_views_run_file_idx').on(t.runId, t.filePath)],
+);
+
+export const ticketDependencies = sqliteTable(
+  'ticket_dependencies',
+  {
+    ticketId: text('ticket_id').notNull().references(() => tickets.id, { onDelete: 'cascade' }),
+    dependsOnId: text('depends_on_id').notNull().references(() => tickets.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ticketId, t.dependsOnId] }), index('ticket_dependencies_depends_on_idx').on(t.dependsOnId)],
 );

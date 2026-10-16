@@ -446,6 +446,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     autoMoveToDone: raw.autoMoveToDone ?? true,
     maxTicketDepth: raw.maxTicketDepth ?? 3,
     maxAutoRunsPerProjectPerDay: raw.maxAutoRunsPerProjectPerDay ?? 40,
+    maxParallelTicketsPerProject: raw.maxParallelTicketsPerProject ?? 2,
     mcpServers: mergedMcpServers,
     skillPlugins: mergedSkillPlugins,
     anthropicKeyConfigured,
@@ -508,6 +509,7 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     autoMoveToDone: body.autoMoveToDone ?? current.autoMoveToDone,
     maxTicketDepth: body.maxTicketDepth ?? current.maxTicketDepth,
     maxAutoRunsPerProjectPerDay: body.maxAutoRunsPerProjectPerDay ?? current.maxAutoRunsPerProjectPerDay,
+    maxParallelTicketsPerProject: body.maxParallelTicketsPerProject ?? current.maxParallelTicketsPerProject,
     mcpServers: body.mcpServers ?? current.mcpServers,
     skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };

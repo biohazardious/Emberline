@@ -11,6 +11,15 @@ export const AgentTicketDraft = z.object({
   priority: TicketPriority.default(2),
   preferredAgent: AgentId.optional(),
   preferredModel: AgentModelId.optional(),
+  /** Batch-local handle other drafts can name in `dependsOn`. */
+  ref: z
+    .string()
+    .trim()
+    .transform((v) => v.toLowerCase())
+    .pipe(z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/))
+    .optional(),
+  /** Refs of drafts in the batch, or keys of existing tickets of the project. */
+  dependsOn: z.array(z.string().trim().min(1).max(60)).max(10).optional(),
 });
 export type AgentTicketDraft = z.infer<typeof AgentTicketDraft>;
 

@@ -64,6 +64,8 @@ export const toTicket = (row: TicketRow): Ticket => ({
   persona: (row.persona as AgentPersona) ?? 'coder',
   position: row.position,
   depth: row.depth,
+  dependsOn: [],
+  blockedBy: [],
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

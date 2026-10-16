@@ -26,6 +26,12 @@ export const Ticket = z.object({
   position: z.number(),
   /** 0 for tickets people create; agent-created tickets are one deeper than the ticket that spawned them. */
   depth: z.number().int(),
+  /** Ids of the tickets this one waits for. */
+  dependsOn: z.array(z.string()).default([]),
+  /** Dependencies that are not done yet. */
+  blockedBy: z
+    .array(z.object({ id: z.string(), key: z.string(), title: z.string(), status: TicketStatus }))
+    .default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -48,6 +54,8 @@ export const UpdateTicketBody = z
     priority: TicketPriority,
     status: TicketStatus,
     position: z.number().finite(),
+    /** Ticket ids or keys. */
+    dependsOn: z.array(z.string().trim().min(1).max(60)).max(20),
   })
   .partial();
 export type UpdateTicketBody = z.input<typeof UpdateTicketBody>;
