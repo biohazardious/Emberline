@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { coerceModelForProvider, selectProviderModelByRank } from '@emberline/protocol';
 import { settings } from './db/schema.js';
@@ -260,5 +263,47 @@ describe('Antigravity terms acknowledgement', () => {
     const cfg = updateFactorySettings(t.db, { autoPickupReady: false });
     expect(cfg.enabledProviders).toEqual(['claude', 'antigravity']);
     expect(cfg.antigravityTermsAcknowledged).toBe(false);
+  });
+});
+
+describe('Gemini auth reality', () => {
+  const withHome = (files: Record<string, string>, fn: () => void) => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ember-home-'));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
+      writeFileSync(path.join(home, rel), body);
+    }
+    const saved = { home: process.env.EMBERLINE_RUNNER_HOME, g: process.env.GEMINI_API_KEY, k: process.env.GOOGLE_API_KEY };
+    process.env.EMBERLINE_RUNNER_HOME = home;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    try {
+      fn();
+    } finally {
+      for (const [name, v] of [['EMBERLINE_RUNNER_HOME', saved.home], ['GEMINI_API_KEY', saved.g], ['GOOGLE_API_KEY', saved.k]] as const) {
+        if (v === undefined) delete process.env[name];
+        else process.env[name] = v;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+
+  it('consumer OAuth files alone are signed in with a Code Assist warning, and never count for Antigravity', () => {
+    withHome({ '.gemini/oauth_creds.json': '{}' }, () => {
+      const auth = getFactorySettings(t.db).providerAuth!;
+      expect(auth.gemini).toMatchObject({ authenticated: true, method: 'oauth_cli' });
+      expect(auth.gemini.warning).toMatch(/Code Assist/);
+      expect(auth.gemini.warning).toMatch(/2026-06-18/);
+      expect(auth.antigravity.authenticated).toBe(false);
+    });
+  });
+
+  it('a stored Gemini key wins over OAuth files and carries no warning', () => {
+    withHome({ '.gemini/oauth_creds.json': '{}' }, () => {
+      updateFactorySettings(t.db, { geminiApiKey: 'k' });
+      const auth = getFactorySettings(t.db).providerAuth!;
+      expect(auth.gemini.method).toBe('api_key');
+      expect(auth.gemini.warning).toBeUndefined();
+    });
   });
 });

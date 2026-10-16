@@ -552,7 +552,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       gemini: {
         cmd: 'gemini',
         instructions:
-          'Configure Gemini CLI authentication or enter your Gemini API Key (for personal Google OAuth without an API key, use Google Antigravity CLI).',
+          'Sign in with a Gemini Code Assist Standard/Enterprise account, or save a Gemini API key in Settings. Consumer Google logins stopped working on 2026-06-18.',
       },
       codex: {
         cmd: 'codex login',

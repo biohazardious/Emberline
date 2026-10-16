@@ -970,6 +970,12 @@ export function SettingsPage({
                         {entry.description}
                       </div>
 
+                      {authStatus?.warning && (
+                        <div className="small" style={{ fontSize: '0.72rem', lineHeight: 1.35, color: 'var(--warn)' }}>
+                          {authStatus.warning}
+                        </div>
+                      )}
+
                       {/* Scoped Models Preview */}
                       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
                         {entry.models.map((m) => {
@@ -1144,7 +1150,7 @@ export function SettingsPage({
                       {isEnabled && (providerId === 'gemini' || providerId === 'antigravity') && (
                         <label className="field" style={{ gap: 3, marginTop: 2 }}>
                           <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-                            Google Gemini API Key (Optional Override · Google Account OAuth supported)
+                            Google Gemini API Key (recommended)
                           </span>
                           <input
                             type="password"

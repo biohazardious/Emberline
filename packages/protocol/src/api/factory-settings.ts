@@ -36,6 +36,7 @@ export const ProviderAuthStatus = z.object({
   label: z.string(),
   cliInstalled: z.boolean().default(true),
   loginCommandHint: z.string(),
+  warning: z.string().optional(),
 });
 export type ProviderAuthStatus = z.infer<typeof ProviderAuthStatus>;
 

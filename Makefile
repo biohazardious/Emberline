@@ -82,7 +82,7 @@ backup: ## Consistent SQLite snapshot (VACUUM INTO) in the data volume, copied t
 claude-login: ## One-time `claude login` inside the runner (Anthropic OAuth credentials)
 	$(PROD) exec runner claude login
 
-gemini-login: ## Interactive Google OAuth login (`gemini`) inside the runner (no API key needed)
+gemini-login: ## Google login (Code Assist Standard/Enterprise only) via `gemini` inside the runner
 	$(PROD) exec runner gemini
 
 agy-login: ## Interactive Antigravity / Google OAuth login (`agy login`) inside the runner

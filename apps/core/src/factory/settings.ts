@@ -203,7 +203,7 @@ function detectRunnerProviderAuth(params: {
   // file or a recorded account means a login.
   const claudeOAuth = existsSync(path.join(home, '.claude', '.credentials.json')) || hasClaudeAccount(home);
   const geminiOAuth = hasValidGeminiOAuth(home);
-  const antigravityOAuth = hasNonEmptyAntigravitySecrets(home) || geminiOAuth;
+  const antigravityOAuth = hasNonEmptyAntigravitySecrets(home);
   const codexOAuth = existsSync(path.join(home, '.codex', 'auth.json'));
   const copilotOAuth =
     existsSync(path.join(home, '.copilot')) ||
@@ -257,26 +257,30 @@ function detectRunnerProviderAuth(params: {
             cliInstalled: true,
             loginCommandHint: 'agy',
           },
-    gemini: geminiOAuth
+    // A key wins. Consumer Google logins stopped working in Gemini CLI on 2026-06-18; only Code Assist
+    // Standard/Enterprise accounts still work, and the files cannot tell the two apart.
+    gemini: params.geminiKeyConfigured
       ? {
           authenticated: true,
-          method: 'oauth_cli' as const,
-          label: '✓ Google Account OAuth',
+          method: 'api_key' as const,
+          label: '✓ Gemini API Key',
           cliInstalled: true,
           loginCommandHint: 'gemini',
         }
-      : params.geminiKeyConfigured
+      : geminiOAuth
         ? {
             authenticated: true,
-            method: 'api_key' as const,
-            label: '✓ Gemini API Key',
+            method: 'oauth_cli' as const,
+            label: 'Google login (Code Assist Standard/Enterprise only)',
             cliInstalled: true,
             loginCommandHint: 'gemini',
+            warning:
+              'Google login works only with Gemini Code Assist Standard/Enterprise. Consumer Google logins stopped working on 2026-06-18. Save a Gemini API key to be sure.',
           }
         : {
             authenticated: false,
             method: 'none' as const,
-            label: 'API Key Recommended (or use Antigravity)',
+            label: 'API Key Recommended',
             cliInstalled: true,
             loginCommandHint: 'gemini',
           },

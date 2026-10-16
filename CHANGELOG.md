@@ -6,6 +6,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Changed
 
+- Gemini: a Google login found in the runner home no longer counts as a working sign-in on its own. Consumer Google logins stopped working in Gemini CLI on 2026-06-18, so the card shows a warning (only Code Assist Standard/Enterprise accounts still work), a saved API key takes priority, and Antigravity is no longer marked signed in because of Gemini login files.
 - Claude's 5-hour, weekly and spend limits now come from what Claude Code itself reports to its status line during a run (Emberline sets the run's status line). The runner no longer reads the Claude login token to query Anthropic's usage endpoint. Settings shows when the limits were last reported.
 - Antigravity's model quota percentages are gone: they came from Google's internal quota service, queried with your Antigravity login while posing as the Antigravity client. A limit still shows up when a run hits it.
 - Enabling Antigravity (or signing in to it from Settings) first asks you to accept that Google does not support its consumer logins inside third-party tools and may suspend the account. Installs that already use it keep running. Antigravity steps in a fallback chain carry an "account risk" badge, and the multi-provider preset no longer picks Antigravity.
