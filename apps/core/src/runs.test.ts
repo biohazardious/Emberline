@@ -686,4 +686,41 @@ describe('runs', () => {
       expect(t.runs.getRun(run.id).state).toBe('waiting_input');
     });
   });
+
+  describe('hook states without other coverage', () => {
+    async function working(name: string) {
+      const project = await createProject(name, false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${name}` });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+      return { run, token };
+    }
+
+    it('leaves a turn that failed for a non-limit, non-temporary reason waiting for the user', async () => {
+      const { run, token } = await working('Stop failure');
+      const res = await hook(run.id, 'StopFailure', token, { error: 'invalid_request', error_details: 'prompt is too long' });
+      expect(res.json()).toMatchObject({ state: 'waiting_input' });
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'waiting_input', autoRetry: null, endedAt: null });
+      expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('retry_scheduled');
+    });
+
+    it('treats SessionEnd of a live session as done', async () => {
+      const { run, token } = await working('Session end');
+      expect((await hook(run.id, 'SessionEnd', token, { reason: 'other' })).json()).toMatchObject({ state: 'done' });
+    });
+
+    it('closes an idle finished session after its TTL and keeps the run resumable', async () => {
+      const { run, token } = await working('Idle close');
+      await hook(run.id, 'Stop', token);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'done', endedAt: null });
+      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) }).where(eq(runs.id, run.id)).run();
+      await t.runs.reconcile();
+      const after = t.runs.get(run.id);
+      expect(after).toMatchObject({ state: 'done', terminalId: null, resumable: true });
+      expect(after.endedAt).not.toBeNull();
+      expect(after.events.map((e) => e.type)).toContain('idle_session_closed');
+    });
+  });
 });

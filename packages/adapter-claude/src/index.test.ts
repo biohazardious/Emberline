@@ -206,6 +206,18 @@ describe('nextStateFromHook', () => {
     );
   });
 
+  it('leaves a turn that failed for another reason than a limit waiting for the user', () => {
+    expect(nextStateFromHook('working', 'StopFailure', { error: 'invalid_request', error_details: 'prompt is too long' })).toBe(
+      'waiting_input',
+    );
+  });
+
+  it('treats the end of a live session as done, but keeps a limit wait', () => {
+    expect(nextStateFromHook('working', 'SessionEnd', { reason: 'other' })).toBe('done');
+    expect(nextStateFromHook('waiting_input', 'SessionEnd', { reason: 'prompt_input_exit' })).toBe('done');
+    expect(nextStateFromHook('rate_limited', 'SessionEnd')).toBeUndefined();
+  });
+
   it('never leaves failed and ignores a repeated SessionStart', () => {
     expect(nextStateFromHook('failed', 'UserPromptSubmit')).toBeUndefined();
     expect(nextStateFromHook('done', 'SessionStart')).toBeUndefined();
