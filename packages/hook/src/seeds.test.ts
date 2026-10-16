@@ -25,6 +25,7 @@ describe('claude-seed', () => {
     const config = json(path.join(home, '.claude.json'));
     expect(config).toMatchObject({ numStartups: 7, theme: 'dark', resumeReturnDismissed: true, lspRecommendationDisabled: true });
     expect(config.hasCompletedOnboarding).toBeUndefined();
+    expect(config).toMatchObject({ hasCompletedClaudeInChromeOnboarding: true, claudeInChromeDefaultEnabled: false });
 
     mkdirSync(path.join(home, '.claude'));
     writeFileSync(path.join(home, '.claude', '.credentials.json'), '{}');
@@ -40,6 +41,16 @@ describe('claude-seed', () => {
     expect(json(path.join(home, '.claude.json'))).toMatchObject({
       hasCompletedOnboarding: true,
       customApiKeyResponses: { approved: [key.slice(-20)], rejected: [] },
+    });
+  });
+
+  it('keeps a Claude in Chrome answer the user already gave', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
+    writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ claudeInChromeDefaultEnabled: true }));
+    run('claude-seed.mjs', home);
+    expect(json(path.join(home, '.claude.json'))).toMatchObject({
+      claudeInChromeDefaultEnabled: true,
+      hasCompletedClaudeInChromeOnboarding: true,
     });
   });
 

@@ -4,7 +4,7 @@
  * These live only in that file (settings and env cannot turn them off), and each would otherwise
  * wait in the run's terminal for a keypress nobody gives: the onboarding screen of an API-key-only
  * install, the "use this API key?" question (default "No"), the effort and auto-mode nudges, the
- * resume screens and LSP plugin offers.
+ * resume screens, LSP plugin offers and the Claude in Chrome offer.
  *
  * Only missing keys are added and nothing is removed. The file is replaced atomically, so Claude Code
  * (which re-reads it before writing) keeps its own changes; a file that cannot be parsed is left alone.
@@ -41,6 +41,10 @@ const signedIn =
 if (signedIn) ensure('hasCompletedOnboarding', true);
 
 ensure('resumeReturnDismissed', true);
+// Claude in Chrome: its onboarding and its "use my browser?" offer (shown when the account has the
+// extension somewhere). An answer the user already gave is kept.
+ensure('hasCompletedClaudeInChromeOnboarding', true);
+if (config.claudeInChromeDefaultEnabled === undefined) ensure('claudeInChromeDefaultEnabled', false);
 ensure('lspRecommendationDisabled', true);
 ensure('hasSeenEffortMediumNudge', true);
 ensure('hasSeenAutoDefaultNudge', true);

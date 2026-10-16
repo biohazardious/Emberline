@@ -359,7 +359,9 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
     }
     settings.permissions.allow = Array.from(allowSet);
   }
-  const args = ['--settings', JSON.stringify(settings)];
+  // Claude in Chrome would offer to drive the user's own browser (its extension is found through the
+  // account) in a dialog nobody answers; runs use the runner's headless Chromium instead.
+  const args = ['--settings', JSON.stringify(settings), '--no-chrome'];
   if (customServerKeys.length > 0) {
     const mergedServers: Record<string, ClaudeMcpServerSpec> = {
       ...(options.playwrightMcp ? buildPlaywrightMcpConfig().mcpServers : {}),
@@ -451,7 +453,7 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
   // The Claude fallback gets the same pre-answered dialogs as a Claude run (its state comes from this
   // script's hooks, so not Claude's own).
-  const claudeFallback = `claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
+  const claudeFallback = `claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --no-chrome --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
   const extraEnv: Record<string, string> = {};
 
   // Every CLI below has first-run questions (folder trust, update offers, onboarding) that would wait

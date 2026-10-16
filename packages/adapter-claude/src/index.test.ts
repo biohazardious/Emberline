@@ -47,7 +47,7 @@ describe('buildLaunchSpec', () => {
     expect(spec.file).toBe('claude');
     expect(spec.args[0]).toBe('--settings');
     expect(JSON.parse(spec.args[1] ?? '')).toEqual(buildHookSettings('emberline-hook'));
-    expect(spec.args.slice(2)).toEqual(['--append-system-prompt', RUNNER_ENVIRONMENT]);
+    expect(spec.args.slice(2)).toEqual(['--no-chrome', '--append-system-prompt', RUNNER_ENVIRONMENT]);
     expect(spec.env).toMatchObject({
       EMBERLINE_RUN_ID: 'r1',
       EMBERLINE_HOOK_TOKEN: 'tok',
@@ -65,6 +65,7 @@ describe('buildLaunchSpec', () => {
       prompt: '--help me',
     });
     expect(spec.args.slice(2)).toEqual([
+      '--no-chrome',
       '--permission-mode',
       'acceptEdits',
       '--append-system-prompt',
@@ -81,8 +82,8 @@ describe('buildLaunchSpec', () => {
       ...base,
       playwrightMcp: true,
     });
-    expect(spec.args[2]).toBe('--mcp-config');
-    expect(JSON.parse(spec.args[3] ?? '')).toEqual(buildPlaywrightMcpConfig());
+    expect(spec.args[3]).toBe('--mcp-config');
+    expect(JSON.parse(spec.args[4] ?? '')).toEqual(buildPlaywrightMcpConfig());
   });
 
   it('enables auto permission mode, pre-allowed tools, and autonomous system prompt in auto mode', () => {
@@ -250,7 +251,7 @@ describe('secondary CLIs start without first-run questions', () => {
 
   it('the Claude fallback gets the same pre-answered dialogs', () => {
     const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot' });
-    expect(script(spec)).toContain('claude --settings "$EMBERLINE_CLAUDE_SETTINGS"');
+    expect(script(spec)).toContain('claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --no-chrome');
     const settings = JSON.parse(spec.env.EMBERLINE_CLAUDE_SETTINGS ?? '{}');
     expect(settings).toMatchObject({ tui: 'default', skipDangerousModePermissionPrompt: true });
     expect(settings).not.toHaveProperty('hooks');
