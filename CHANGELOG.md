@@ -11,6 +11,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Quota limits are tracked per provider, sign-in and model pool: one provider running out no longer pauses the others. Each exhausted lane has its own countdown and "Try now".
 - Notifications name the lane that ran out ("Antigravity (all models) quota reached …") and say when it is back.
 - Settings shows the Claude account's extra usage (it is set on claude.ai).
+- Tickets can depend on other tickets. The product owner orders the tickets it creates (for example: icons and the Android shell in parallel, the APK build after both, QA last); without explicit order a default applies (architecture and database first, code and UI in parallel, QA last). Independent tickets of a project run at the same time, up to "Parallel tickets per project" (default 2). The board shows what a ticket waits for, and dependencies can be edited in the ticket drawer. A merge conflict between parallel tickets gets one automatic resolution attempt by the agent before it waits for you in Review.
 
 ### Fixed
 
@@ -28,7 +29,9 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Antigravity runs no longer receive the Gemini API key; they use the Antigravity sign-in.
 - Antigravity's "Use AI credits" is now set by Emberline for each run: off for "Sign-in" routes, on for "AI credits" routes. A value switched by hand in agy is overwritten by the next run; add an "AI credits" route to the chain instead.
 - Both policies default to "wait": work whose provider is out of quota waits for that provider's reset while the other providers keep working.
-- The factory still works on one ticket at a time per project, so a ticket waiting for a provider's quota holds that project's queue unless the persona has a fallback route and a policy is set to use it.
+- Migration 0014 adds ticket dependencies. Factory projects now run up to 2 tickets at once; set Parallel tickets per project to 1 for the previous one-at-a-time behaviour. Existing tickets have no dependencies.
+- Moving a ticket to Done by hand only starts the tickets that were waiting for it (or continues a factory chain that is already running); other ready tickets are not started by it.
+- A ticket waiting for a provider's quota holds one of its project's parallel ticket slots unless the persona has a fallback route and a policy is set to use it.
 
 ## [0.1.3] - 2026-10-16
 
