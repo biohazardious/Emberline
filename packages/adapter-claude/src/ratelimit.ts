@@ -21,11 +21,37 @@ export interface RateLimitInfo {
   message: string;
   /** Parsed reset time, when the text contained one. */
   resetsAt?: Date;
+  /** Quota pool the limit applies to; `*` = every model of the provider. */
+  pool: string;
+}
+
+/** Which run hit the limit: decides the patterns and the pool. */
+export interface LimitContext {
+  agent?: string;
+  model?: string | null;
 }
 
 /** Matches the limit banners of the pinned CLI (and the older "usage limit reached|<epoch>" form). */
 const LIMIT_PATTERN =
-  /(usage limit reached|(?:5-hour|weekly|opus|sonnet|session|daily)\s+limit reached|you'?ve (?:hit|reached) your (?:usage )?limit|rate limit reached|limit will reset)/i;
+  /(usage limit reached|(?:5-hour|weekly|opus|sonnet|session|daily)\s+limit reached|you'?ve (?:hit|reached) your (?:usage )?limit|rate limit reached|limit will reset|you'?ve hit your (?:monthly|individual|organization'?s?|team'?s?) spend limit)/i;
+
+/** Usage limits reported by any CLI or API: HTTP 429, rate limits, exhausted quotas. Checked on StopFailure only. */
+const GENERIC_LIMIT_PATTERN =
+  /\b429\b|RESOURCE_EXHAUSTED|too many requests|rate[ _-]?limit(?:ed| exceeded| reached)?|quota (?:has been |was |is )?(?:reached|exceeded|exhausted)|individual quota reached/i;
+
+/** Quota words that are really billing problems; never a limit that resets. */
+const BILLING_PATTERN = /insufficient[_ ]quota|billing|credit balance|payment required/i;
+
+/** Claude limits tied to one model family ("Opus weekly limit reached"). */
+const CLAUDE_MODEL_POOL = /\b(opus|sonnet|haiku|fable)\b[^.\n]{0,20}\blimit\b/i;
+
+function poolFor(ctx: LimitContext | undefined, text: string): string {
+  if ((ctx?.agent ?? 'claude') === 'claude') {
+    const match = CLAUDE_MODEL_POOL.exec(text);
+    return match ? (match[1] ?? '').toLowerCase() : '*';
+  }
+  return '*';
+}
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
@@ -39,26 +65,40 @@ export function isLimitText(text: string): boolean {
 
 /**
  * Rate limit carried by a hook, if any. `StopFailure` with `error: rate_limit` always counts;
- * `Stop`/`StopFailure` whose message reads like a limit banner count too.
+ * `Stop`/`StopFailure` whose message reads like a limit banner count too, and a `StopFailure`
+ * from any CLI whose text reads like a 429 / exhausted quota (billing problems excepted).
  */
 export function rateLimitFromHook(
   event: HookEventName,
   payload: HookPayload,
   now: Date = new Date(),
   defaultTimeZone = 'UTC',
+  ctx?: LimitContext,
 ): RateLimitInfo | undefined {
   if (event !== 'StopFailure' && event !== 'Stop') return undefined;
   const message = asString(payload.last_assistant_message).trim();
   const details = asString(payload.error_details).trim();
+  const wrapper = [asString(payload.message).trim(), asString(payload.reason).trim()].find(Boolean) ?? '';
   const isRateLimit = event === 'StopFailure' && payload.error === 'rate_limit';
   // On `Stop` the message is Claude's own answer; only a short banner-like text counts.
   const bannerOnly = event === 'StopFailure' || message.length <= MAX_BANNER_LENGTH;
-  if (!isRateLimit && !(bannerOnly && isLimitText(message))) return undefined;
-  const text = [message, details].filter(Boolean).join(' — ');
+  const text = [message, details, wrapper].filter((v, i, all) => v && all.indexOf(v) === i).join(' — ');
+  const claudeBanner = bannerOnly && isLimitText(message);
+  const generic = event === 'StopFailure' && GENERIC_LIMIT_PATTERN.test(text) && !BILLING_PATTERN.test(text);
+  if (!isRateLimit && !claudeBanner && !generic) return undefined;
   return {
     message: oneLine(text || 'rate limit reached'),
     resetsAt: parseResetTime(text, now, defaultTimeZone),
+    pool: poolFor(ctx, text),
   };
+}
+
+/** Claude Code >= 2.1.234 reports its own usage-limit wait ending without continuing. */
+export function isQuotaWaitNotification(payload: HookPayload): boolean {
+  const kind = [payload.notification_type, payload.type, payload.matcher, payload.message]
+    .map((v) => (typeof v === 'string' ? v : ''))
+    .join(' ');
+  return /quota_auto_resume_disabled|usage limit reached/i.test(kind);
 }
 
 /**
@@ -70,7 +110,7 @@ const TRANSIENT_ERROR_PATTERN =
 
 /** Errors a retry cannot fix: sign-in, billing, quota and malformed requests. */
 const PERMANENT_ERROR_PATTERN =
-  /unauthori[sz]ed|unauthenticated|authentication|not signed in|not logged in|log ?in required|invalid (?:api )?key|api key (?:is )?invalid|permission denied|forbidden|\b40[0134]\b|billing|credit balance|payment required|insufficient[_ ]quota|quota exceeded|invalid[_ ]request|context (?:length|window)|prompt is too long|max_output_tokens/i;
+  /unauthori[sz]ed|unauthenticated|authentication|not signed in|not logged in|log ?in required|invalid (?:api )?key|api key (?:is )?invalid|permission denied|forbidden|\b40[0134]\b|billing|credit balance|payment required|insufficient[_ ]quota|invalid[_ ]request|context (?:length|window)|prompt is too long|max_output_tokens/i;
 
 /** Claude Code's `StopFailure` error kinds. */
 const TRANSIENT_ERROR_KINDS = new Set(['server_error', 'overloaded', 'api_error', 'network_error']);
@@ -86,8 +126,12 @@ export interface TransientErrorInfo {
  * limit), so trying the same turn again later is worthwhile. Sign-in, billing, quota and request
  * errors never count.
  */
-export function transientErrorFromHook(event: HookEventName, payload: HookPayload): TransientErrorInfo | undefined {
-  if (event !== 'StopFailure' || rateLimitFromHook(event, payload)) return undefined;
+export function transientErrorFromHook(
+  event: HookEventName,
+  payload: HookPayload,
+  ctx?: LimitContext,
+): TransientErrorInfo | undefined {
+  if (event !== 'StopFailure' || rateLimitFromHook(event, payload, new Date(), 'UTC', ctx)) return undefined;
   const kind = asString(payload.error);
   const text = [payload.last_assistant_message, payload.error_details, payload.message, payload.reason]
     .map((value) => asString(value).trim())
@@ -121,6 +165,7 @@ export function rateLimitFromScreen(
   ansi: string,
   now: Date = new Date(),
   defaultTimeZone = 'UTC',
+  ctx?: LimitContext,
 ): RateLimitInfo | undefined {
   const lines = stripAnsi(ansi)
     .split('\n')
@@ -131,7 +176,11 @@ export function rateLimitFromScreen(
     if (!isLimitText(line)) continue;
     // The reset time may wrap onto the next line on narrow terminals.
     const text = `${line} ${lines[i + 1] ?? ''}`;
-    return { message: oneLine(line.replace(/^[⎿│\s]+/, '')), resetsAt: parseResetTime(text, now, defaultTimeZone) };
+    return {
+      message: oneLine(line.replace(/^[⎿│\s]+/, '')),
+      resetsAt: parseResetTime(text, now, defaultTimeZone),
+      pool: poolFor(ctx, text),
+    };
   }
   return undefined;
 }
@@ -141,7 +190,9 @@ export function parseResetTime(text: string, now: Date = new Date(), defaultTime
   const epoch = /\|(\d{10})\b/.exec(text);
   if (epoch) return new Date(Number(epoch[1]) * 1000);
 
-  const relative = /resets?\s+in\s+(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?|s)?)?)?/i.exec(text);
+  const relative = /resets?\s+in\s+(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?|s)?)?)?(?:\s*\d+\s*s(?:ec(?:onds?)?)?)?/i.exec(
+    text,
+  );
   if (relative && (relative[1] || relative[2])) {
     const minutes = Number(relative[1] ?? 0) * 60 + Number(relative[2] ?? 0);
     return new Date(now.getTime() + minutes * 60_000);

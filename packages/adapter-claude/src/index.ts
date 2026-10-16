@@ -10,7 +10,7 @@
  */
 import type { AgentState, LaunchSpec } from '@emberline/adapter-sdk';
 import type { AgentPersona, HookEventName, HookPayload } from '@emberline/protocol';
-import { rateLimitFromHook } from './ratelimit.js';
+import { isQuotaWaitNotification, type LimitContext, rateLimitFromHook } from './ratelimit.js';
 
 export * from './ratelimit.js';
 
@@ -594,6 +594,7 @@ export function nextStateFromHook(
   current: AgentState,
   event: HookEventName,
   payload: HookPayload = {},
+  ctx?: LimitContext,
 ): AgentState | undefined {
   if (current === 'failed') return undefined;
   let next: AgentState | undefined;
@@ -612,14 +613,15 @@ export function nextStateFromHook(
       next = 'working';
       break;
     case 'Notification':
-      if (isPermissionNotification(payload)) next = 'waiting_input';
+      if (isQuotaWaitNotification(payload)) next = 'rate_limited';
+      else if (isPermissionNotification(payload)) next = 'waiting_input';
       else next = current === 'done' || current === 'rate_limited' ? undefined : 'waiting_input';
       break;
     case 'Stop':
-      next = rateLimitFromHook(event, payload) ? 'rate_limited' : 'done';
+      next = rateLimitFromHook(event, payload, new Date(), 'UTC', ctx) ? 'rate_limited' : 'done';
       break;
     case 'StopFailure':
-      next = rateLimitFromHook(event, payload) ? 'rate_limited' : 'waiting_input';
+      next = rateLimitFromHook(event, payload, new Date(), 'UTC', ctx) ? 'rate_limited' : 'waiting_input';
       break;
     case 'SessionEnd':
       next = current === 'rate_limited' ? undefined : 'done';

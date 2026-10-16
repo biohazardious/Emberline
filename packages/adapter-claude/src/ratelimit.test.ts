@@ -37,6 +37,7 @@ describe('parseResetTime', () => {
     // Unknown zone falls back to the default.
     ['resets 3pm (Mars/Olympus)', 'UTC', '2026-10-13T15:00:00.000Z'],
     ['API Error: Rate limit reached', 'UTC', undefined],
+    ['Resets in 31h43m5s.', 'UTC', new Date(NOW.getTime() + 1903 * 60_000).toISOString()],
     ['resets 3', 'UTC', undefined],
     ['resets 13pm', 'UTC', undefined],
   ];
@@ -61,12 +62,13 @@ describe('rateLimitFromHook', () => {
     expect(info).toEqual({
       message: "You've hit your limit · resets 2pm (UTC) — 429",
       resetsAt: new Date('2026-10-13T14:00:00Z'),
+      pool: '*',
     });
   });
 
   it('reads StopFailure rate_limit without a reset time', () => {
     const info = rateLimitFromHook('StopFailure', { error: 'rate_limit' }, NOW);
-    expect(info).toEqual({ message: 'rate limit reached', resetsAt: undefined });
+    expect(info).toEqual({ message: 'rate limit reached', resetsAt: undefined, pool: '*' });
   });
 
   it('ignores other API errors and normal answers', () => {
@@ -97,6 +99,7 @@ describe('rateLimitFromScreen', () => {
     expect(rateLimitFromScreen(screen, NOW, 'UTC')).toEqual({
       message: '5-hour limit reached ∙ resets 4pm',
       resetsAt: new Date('2026-10-13T16:00:00Z'),
+      pool: '*',
     });
   });
 
@@ -168,5 +171,73 @@ describe('transientErrorFromHook', () => {
       expect(transientErrorFromHook('StopFailure', payload), JSON.stringify(payload)).toBeUndefined();
     }
     expect(transientErrorFromHook('Stop', { last_assistant_message: 'The 503 page now renders' })).toBeUndefined();
+  });
+});
+
+const AGY_QUOTA =
+  'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s. ' +
+  'AGY_ERROR: { short_error : RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s. , status : RESOURCE_EXHAUSTED , error_code :429, retryable :true}';
+
+describe('provider limits', () => {
+  it('reads the Antigravity quota message from the wrapper StopFailure (2026-10-16 TrueNAS)', () => {
+    const info = rateLimitFromHook(
+      'StopFailure',
+      { error: 'cli_exit', reason: AGY_QUOTA, message: AGY_QUOTA },
+      NOW,
+      'UTC',
+      { agent: 'antigravity', model: 'argon' },
+    );
+    expect(info?.pool).toBe('*');
+    expect(info?.resetsAt?.toISOString()).toBe(new Date(NOW.getTime() + (31 * 60 + 43) * 60_000).toISOString());
+    expect(info?.message).toContain('Individual quota reached');
+  });
+
+  it('turns that hook into rate_limited, not waiting_input, and not a transient retry', () => {
+    const payload = { error: 'cli_exit', message: AGY_QUOTA };
+    expect(nextStateFromHook('working', 'StopFailure', payload, { agent: 'antigravity' })).toBe('rate_limited');
+    expect(transientErrorFromHook('StopFailure', payload, { agent: 'antigravity' })).toBeUndefined();
+  });
+
+  it('treats generic 429 / rate limit / quota reached as limits for any CLI on StopFailure only', () => {
+    for (const message of ['Error: 429 Too Many Requests', 'rate limit exceeded, slow down', 'Quota exceeded for metric generate_content']) {
+      expect(rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'gemini' })?.pool).toBe('*');
+    }
+    // A short Stop answer that mentions 429 is Claude's own text, not a limit.
+    expect(rateLimitFromHook('Stop', { last_assistant_message: 'Added a 429 handler.' }, NOW, 'UTC', { agent: 'claude' })).toBeUndefined();
+  });
+
+  it('keeps billing errors permanent', () => {
+    const payload = { error: 'cli_exit', message: 'insufficient_quota: You exceeded your current quota, please check your plan and billing details' };
+    expect(rateLimitFromHook('StopFailure', payload, NOW, 'UTC', { agent: 'codex' })).toBeUndefined();
+    expect(transientErrorFromHook('StopFailure', payload, { agent: 'codex' })).toBeUndefined();
+  });
+
+  it('gives Claude model-specific limits their own pool', () => {
+    expect(
+      rateLimitFromHook('StopFailure', { error: 'rate_limit', last_assistant_message: 'Opus weekly limit reached ∙ resets Oct 20, 9am (UTC)' }, NOW, 'UTC', { agent: 'claude', model: 'opus' })?.pool,
+    ).toBe('opus');
+    expect(
+      rateLimitFromHook('StopFailure', { error: 'rate_limit', last_assistant_message: '5-hour limit reached ∙ resets 2pm (UTC)' }, NOW, 'UTC', { agent: 'claude', model: 'opus' })?.pool,
+    ).toBe('*');
+  });
+
+  it('treats Claude spend-limit messages as a limit on the whole Claude lane', () => {
+    for (const message of [
+      "You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message",
+      "You've hit your individual spend limit · ask your admin for a higher limit",
+    ]) {
+      const info = rateLimitFromHook('StopFailure', { error: 'rate_limit', last_assistant_message: message }, NOW, 'UTC', { agent: 'claude', model: 'opus' });
+      expect(info).toMatchObject({ pool: '*', resetsAt: undefined });
+    }
+  });
+
+  it("reads Claude Code's usage-limit wait screen as a limit with its reset", () => {
+    const screen = 'some output\n  Usage limit reached · limit resets 3:45pm (UTC)\n  Continuing automatically at 3:45pm · esc to cancel\n';
+    expect(rateLimitFromScreen(screen, NOW, 'UTC', { agent: 'claude' })).toMatchObject({ pool: '*' });
+    expect(rateLimitFromScreen(screen, NOW, 'UTC', { agent: 'claude' })?.resetsAt?.toISOString()).toBe('2026-10-13T15:45:00.000Z');
+  });
+
+  it("treats Claude Code's disabled auto-resume notification as a limit", () => {
+    expect(nextStateFromHook('working', 'Notification', { notification_type: 'quota_auto_resume_disabled' })).toBe('rate_limited');
   });
 });
