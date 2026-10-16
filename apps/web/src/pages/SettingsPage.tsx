@@ -106,8 +106,10 @@ const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; tex
   },
 };
 
-function defaultRoute(agent: AgentId, model: Route['model']): Route {
-  return { agent, model, credential: PROVIDER_RUNTIME[agent].credentials[0]! };
+/** A single route; keeps `prior` (the credential the user had on the first route) when the provider still supports it. */
+function defaultRoute(agent: AgentId, model: Route['model'], prior?: Route['credential']): Route {
+  const allowed = PROVIDER_RUNTIME[agent].credentials;
+  return { agent, model, credential: prior && allowed.includes(prior) ? prior : allowed[0]! };
 }
 
 const SETTINGS_TABS = ['autopilot', 'providers', 'mcp_plugins', 'quota', 'notifications', 'updates', 'account'] as const;
@@ -333,13 +335,13 @@ export function SettingsPage({
         : (enabledProviders[0] ?? 'claude');
 
       setPersonaRoutes({
-        product_owner: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5))],
-        architect: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5))],
-        ui_ux: [defaultRoute(uiProvider, selectProviderModelByRank(uiProvider, 5))],
-        coder: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4))],
-        dba: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4))],
-        qa: [defaultRoute(qaProvider, selectProviderModelByRank(qaProvider, 3))],
-        security: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4))],
+        product_owner: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5), personaRoutes.product_owner[0]?.credential)],
+        architect: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5), personaRoutes.architect[0]?.credential)],
+        ui_ux: [defaultRoute(uiProvider, selectProviderModelByRank(uiProvider, 5), personaRoutes.ui_ux[0]?.credential)],
+        coder: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4), personaRoutes.coder[0]?.credential)],
+        dba: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4), personaRoutes.dba[0]?.credential)],
+        qa: [defaultRoute(qaProvider, selectProviderModelByRank(qaProvider, 3), personaRoutes.qa[0]?.credential)],
+        security: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4), personaRoutes.security[0]?.credential)],
       });
       setNotice(
         'Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. Fallbacks were reset. Click Save to persist.',
@@ -361,7 +363,7 @@ export function SettingsPage({
       } else {
         model = selectProviderModelByTier(agent, 'low', p);
       }
-      next[p] = [defaultRoute(agent, model)];
+      next[p] = [defaultRoute(agent, model, personaRoutes[p][0]?.credential)];
     }
     setPersonaRoutes(next);
     const labelMap = {
@@ -1301,6 +1303,7 @@ export function SettingsPage({
                       </span>
                       {personaRoutes && (
                         <RouteChainEditor
+                          persona={personaKey}
                           value={chain}
                           onChange={(next) => setPersonaRoutes({ ...personaRoutes, [personaKey]: next })}
                           enabledProviders={enabledProviders}

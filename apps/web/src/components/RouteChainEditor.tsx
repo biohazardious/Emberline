@@ -1,7 +1,10 @@
 import {
   type AgentId,
+  type AgentPersona,
+  formatRankStars,
   getModelsForProvider,
   MAX_ROUTES,
+  PERSONA_CAPABILITY_TARGETS,
   PROVIDER_REGISTRY,
   PROVIDER_RUNTIME,
   type Route,
@@ -12,11 +15,14 @@ const CREDENTIAL_LABEL = { login: 'Sign-in', api_key: 'API key', credits: 'AI cr
 
 /** One persona's fallback chain: the first route is used, the next ones when quota runs out. */
 export function RouteChainEditor({
+  persona,
   value,
   onChange,
   enabledProviders,
   keyConfigured,
 }: {
+  /** Decides what the Auto model aims for. */
+  persona: AgentPersona;
   value: Route[];
   onChange: (next: Route[]) => void;
   enabledProviders: AgentId[];
@@ -56,9 +62,10 @@ export function RouteChainEditor({
             </select>
             <select className="input" value={route.model} onChange={(e) => set(index, { model: e.target.value as Route['model'] })} aria-label="Model">
               {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+                <option key={m.id} value={m.id}>{formatRankStars(m.rank)} [{m.rank}/5 · {m.tier.toUpperCase()}] {m.label}</option>
               ))}
-              {!models.some((m) => m.id === route.model) && <option value={route.model}>{route.model}</option>}
+              <option value="auto">Auto (Match Persona Target Rank ★{PERSONA_CAPABILITY_TARGETS[persona].recommendedRank})</option>
+              {route.model !== 'auto' && !models.some((m) => m.id === route.model) && <option value={route.model}>{route.model}</option>}
             </select>
             <select
               className="input"
