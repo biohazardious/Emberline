@@ -2,6 +2,7 @@ import type {
   BuildDemoResponse,
   FactoryAttachmentInput,
   FactoryRequestResponse,
+  FactorySettings,
   Project,
   ProjectCheckpoint,
   ProjectStatusSummary,
@@ -39,6 +40,7 @@ import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { useApi } from '../hooks/useApi';
+import { startableCount } from '../ticketDeps';
 import { LiveBrowserStudio } from './LiveBrowserStudio';
 import { PersonaBadge } from './PersonaBadge';
 
@@ -148,6 +150,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
   const statusPoll = useApi<ProjectStatusSummary>(`/api/projects/${project.id}/status`, 4_000);
   const ticketsPoll = useApi<Ticket[]>(`/api/projects/${project.id}/tickets`, 5_000);
+  const settingsPoll = useApi<FactorySettings>('/api/factory/settings', 25_000);
   const checkpointsPoll = useApi<ProjectCheckpoint[]>(`/api/projects/${project.id}/checkpoints`, 10_000);
 
   const [activeTab, setActiveTab] = useState<StudioTab>('factory');
@@ -518,6 +521,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
   const { ticketCounts } = summary;
   const allTickets = ticketsPoll.data ?? [];
+  const startable = startableCount(allTickets, settingsPoll.data?.autoPickupBacklog ?? false);
   const activeOrRecentTickets = [
     ...allTickets.filter((t) => t.status === 'in_progress' || t.status === 'ready' || t.status === 'review'),
     ...allTickets.filter((t) => t.status === 'done').slice(-4),
@@ -565,7 +569,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               ) : (
                 <>
                   <Zap className="icon" aria-hidden /> Run Pipeline (
-                  {ticketCounts.ready || ticketCounts.backlog})
+                  {startable})
                 </>
               )}
             </button>

@@ -34,6 +34,13 @@ export function dependencyCandidates(ticket: Ticket, all: readonly Ticket[]): Ti
   return all.filter((t) => t.id !== ticket.id && !dependents.has(t.id) && !ticket.dependsOn.includes(t.id));
 }
 
+/** Tickets "Run Pipeline" can start now: ready ones (and backlog ones when pickup is on) with nothing blocking them. */
+export function startableCount(tickets: readonly Pick<Ticket, 'status' | 'blockedBy'>[], includeBacklog: boolean): number {
+  return tickets.filter(
+    (t) => t.blockedBy.length === 0 && (t.status === 'ready' || (includeBacklog && t.status === 'backlog')),
+  ).length;
+}
+
 /**
  * What dropping `ticket` into In progress does: `start` an agent (auto-start on, nothing running),
  * `confirm` first when it still waits for other tickets (the drawer asks, like its Start button),

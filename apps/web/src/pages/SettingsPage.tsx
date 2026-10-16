@@ -107,6 +107,11 @@ const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; tex
 };
 
 /** A single route; keeps `prior` (the credential the user had on the first route) when the provider still supports it. */
+/** The parallel-tickets field as a whole number between 1 and 4 (anything unreadable counts as 1). */
+function clampParallel(value: string): number {
+  return Math.max(1, Math.min(4, Math.trunc(Number(value)) || 1));
+}
+
 function defaultRoute(agent: AgentId, model: Route['model'], prior?: Route['credential']): Route {
   const allowed = PROVIDER_RUNTIME[agent].credentials;
   return { agent, model, credential: prior && allowed.includes(prior) ? prior : allowed[0]! };
@@ -138,7 +143,8 @@ export function SettingsPage({
   const [crossProviderCritic, setCrossProviderCritic] = useState(false);
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
   const [maxTicketDepth, setMaxTicketDepth] = useState(3);
-  const [maxParallelTickets, setMaxParallelTickets] = useState(2);
+  // Kept as typed while editing; clamped to 1-4 on blur and save.
+  const [maxParallelTickets, setMaxParallelTickets] = useState('2');
   const [maxAutoRunsPerDay, setMaxAutoRunsPerDay] = useState(40);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
@@ -186,7 +192,7 @@ export function SettingsPage({
         setAutoMoveToDone(res.autoMoveToDone);
         setMaxTicketDepth(res.maxTicketDepth);
         setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
-        setMaxParallelTickets(res.maxParallelTicketsPerProject ?? 2);
+        setMaxParallelTickets(String(res.maxParallelTicketsPerProject ?? 2));
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
         setPersonaRoutes(res.personaRoutes);
@@ -395,7 +401,7 @@ export function SettingsPage({
         autoMoveToDone,
         maxTicketDepth,
         maxAutoRunsPerProjectPerDay: maxAutoRunsPerDay,
-        maxParallelTicketsPerProject: maxParallelTickets,
+        maxParallelTicketsPerProject: clampParallel(maxParallelTickets),
         defaultAgent,
         enabledProviders,
         personaRoutes,
@@ -702,7 +708,8 @@ export function SettingsPage({
                 min={1}
                 max={4}
                 value={maxParallelTickets}
-                onChange={(e) => setMaxParallelTickets(Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
+                onChange={(e) => setMaxParallelTickets(e.target.value)}
+                onBlur={() => setMaxParallelTickets(String(clampParallel(maxParallelTickets)))}
                 style={{ width: '90px' }}
               />
               <div>

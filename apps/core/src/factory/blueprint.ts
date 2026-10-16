@@ -236,7 +236,7 @@ export function generateClaudeInstructions(name: string): string {
          "ref": "backend",
          "title": "Core / Backend: ...",
          "persona": "coder",
-         "priority": 3,
+         "priority": 2,
          "body": "Detailed specification, target files, and acceptance criteria..."
        },
        {
@@ -251,14 +251,14 @@ export function generateClaudeInstructions(name: string): string {
          "ref": "qa",
          "title": "QA & Build Verification: ...",
          "persona": "qa",
-         "priority": 1,
+         "priority": 2,
          "dependsOn": ["backend", "surface"],
          "body": "Write/run automated tests and verify the project's build/compile pipeline passes cleanly."
        }
      ]
    }
    \`\`\`
-   - Emberline Core automatically reads \`.emberline/new-tickets.json\` when your turn finishes, creates the tickets on the Kanban Board, syncs your work to \`main\`, and starts each ticket as soon as every ticket listed in its \`dependsOn\` (by \`ref\`, or an existing ticket key) is merged into \`main\`; tickets without dependencies start right away, up to the project's parallel limit. Order the work: producers (assets, schemas, contracts, migrations) before consumers, builds and QA after what they package or verify.
+   - Emberline Core automatically reads \`.emberline/new-tickets.json\` when your turn finishes, creates the tickets on the Kanban Board, syncs your work to \`main\`, and starts each ticket as soon as every ticket listed in its \`dependsOn\` (by \`ref\`, or an existing ticket key) is merged into \`main\`; tickets without dependencies start right away, up to the project's parallel limit. Give tickets of one batch the same \`priority\` and order them with \`dependsOn\` (priority does not follow the persona). Order the work: producers (assets, schemas, contracts, migrations) before consumers, builds and QA after what they package or verify.
 4. **Verify your work:** Run the project's appropriate build, compiler, linter, and test suite (e.g., \`pnpm/npm run build\`, \`pytest\`, \`go test ./...\`, \`cargo check\`, \`pio run\`, \`make\`, or \`bash -n\`) before concluding your turn.
 5. **Keep \`PROJECT.md\` up to date** whenever architectural boundaries, commands, or milestones evolve.
 `;

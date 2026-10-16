@@ -35,6 +35,16 @@ describe('ticket dependencies', () => {
     ]);
   });
 
+  it('reports a ref that normalizes to an earlier ticket\'s ref; the first one wins', () => {
+    const { edges, dropped } = resolveBatchDependencies(
+      [t('a', 'coder', 'Brand_Assets'), t('b', 'ui_ux', 'brand-assets'), t('c', 'qa', 'qa', ['brand-assets'])],
+      keys,
+      [],
+    );
+    expect(dropped).toEqual([{ ticketId: 'b', ref: 'brand-assets', reason: 'duplicate_ref' }]);
+    expect(edges).toEqual([{ ticketId: 'c', dependsOnId: 'a' }]);
+  });
+
   it('falls back to the default tiers when every declared dependency was dropped', () => {
     const { edges, dropped } = resolveBatchDependencies(
       [t('a', 'coder', 'a'), t('b', 'qa', 'b', ['nope']), t('c', 'ui_ux', 'c', ['c'])],

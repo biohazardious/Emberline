@@ -237,6 +237,14 @@ function handoffTarget(ev: RunEvent): string | undefined {
   return typeof id === 'string' ? id : undefined;
 }
 
+/** The text after the label of a `dependency_dropped` event: "<ticket> → <ref> (<reason>)". */
+function droppedDependencyText(payload: unknown): string | undefined {
+  const rec = (payload ?? {}) as Record<string, unknown>;
+  if (typeof rec.ticket !== 'string' || typeof rec.ref !== 'string') return undefined;
+  const reason = typeof rec.reason === 'string' ? ` (${rec.reason.replace(/_/g, ' ')})` : '';
+  return `${rec.ticket} → ${rec.ref}${reason}`;
+}
+
 export function RunEventTimeline({ run }: { run: Run }) {
   const [detail, setDetail] = useState<RunDetail>();
   const [loading, setLoading] = useState(true);
@@ -277,7 +285,10 @@ export function RunEventTimeline({ run }: { run: Run }) {
       {detail?.lastScreen && !run.terminalId && <LastScreen text={detail.lastScreen} />}
       <ol className="event-timeline" aria-label="Agent event timeline">
       {[...events].reverse().map((ev) => {
-        const { tool, detail: text } = payloadSummary(ev.payload);
+        const summary = payloadSummary(ev.payload);
+        const tool = summary.tool;
+        const dropped = ev.type === 'dependency_dropped' ? droppedDependencyText(ev.payload) : undefined;
+        const text = dropped ?? summary.detail;
         return (
           <li key={ev.id} className={`event-item event-src-${ev.source}`}>
             <div className="event-head">

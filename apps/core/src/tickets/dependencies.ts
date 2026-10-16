@@ -28,7 +28,7 @@ export interface Edge {
 export interface DroppedDependency {
   ticketId: string;
   ref: string;
-  reason: 'unknown' | 'self' | 'cycle';
+  reason: 'unknown' | 'self' | 'cycle' | 'duplicate_ref';
 }
 
 /** True when adding `candidate` to `edges` would let a ticket (transitively) depend on itself. */
@@ -69,7 +69,8 @@ export function defaultTierEdges(batch: Pick<BatchTicket, 'id' | 'persona'>[]): 
 
 /**
  * Turns a batch's declared refs/keys into edges. Unknown and self references and edges that would
- * close a cycle (also through `existingEdges`) are dropped; every other edge is kept.
+ * close a cycle (also through `existingEdges`) are dropped, as are repeated refs (the first wins);
+ * every other edge is kept.
  */
 export function resolveBatchDependencies(
   batch: BatchTicket[],
@@ -80,10 +81,15 @@ export function resolveBatchDependencies(
     return { edges: defaultTierEdges(batch), dropped: [] };
   }
   const refs = new Map<string, string>();
-  for (const ticket of batch) if (ticket.ref) refs.set(ticket.ref.toLowerCase(), ticket.id);
-
   const accepted: Edge[] = [];
   const dropped: DroppedDependency[] = [];
+  // Two drafts whose refs normalize alike are indistinguishable as targets: the first keeps the ref.
+  for (const ticket of batch) {
+    if (!ticket.ref) continue;
+    const key = normalizeTicketRef(ticket.ref) ?? ticket.ref.toLowerCase();
+    if (refs.has(key)) dropped.push({ ticketId: ticket.id, ref: ticket.ref, reason: 'duplicate_ref' });
+    else refs.set(key, ticket.id);
+  }
   for (const ticket of batch) {
     for (const ref of ticket.dependsOn ?? []) {
       // A ref the schema rewrote (`brand_assets` → `brand-assets`) is still found under its old spelling.

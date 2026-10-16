@@ -1,6 +1,6 @@
 import type { Ticket } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { dependencyCandidates, dropIntoInProgress, waitingLabel, waitingTitle } from './ticketDeps';
+import { dependencyCandidates, startableCount, dropIntoInProgress, waitingLabel, waitingTitle } from './ticketDeps';
 
 const t = (id: string, dependsOn: string[] = []): Ticket =>
   ({ id, key: id.toUpperCase(), dependsOn, blockedBy: [] }) as unknown as Ticket;
@@ -28,8 +28,10 @@ describe('dropIntoInProgress', () => {
   const blocked = { ...ready, blockedBy: [blocker('B')] } as Ticket;
   it('starts an unblocked ticket when auto-start is on', () =>
     expect(dropIntoInProgress(ready, { autoStart: true, hasLiveRun: false })).toBe('start'));
-  it('asks first for a ticket that still waits for others', () =>
+  it('keeps a ticket that still waits for others in place and asks first', () =>
     expect(dropIntoInProgress(blocked, { autoStart: true, hasLiveRun: false })).toBe('confirm'));
+  it('moves a blocked ticket only when it cannot be started anyway', () =>
+    expect(dropIntoInProgress(blocked, { autoStart: false, hasLiveRun: false })).toBe('move'));
   it('only moves without auto-start or with a live run', () => {
     expect(dropIntoInProgress(blocked, { autoStart: false, hasLiveRun: false })).toBe('move');
     expect(dropIntoInProgress(ready, { autoStart: true, hasLiveRun: true })).toBe('move');
@@ -38,4 +40,12 @@ describe('dropIntoInProgress', () => {
     expect(dropIntoInProgress({ ...ready, status: 'in_progress' } as Ticket, { autoStart: true, hasLiveRun: false })).toBe(
       'move',
     ));
+});
+
+describe('startableCount', () => {
+  const mk = (status: string, blocked = false) =>
+    ({ ...t(status + blocked), status, blockedBy: blocked ? [blocker('B')] : [] }) as Ticket;
+  const all = [mk('ready'), mk('ready', true), mk('backlog'), mk('backlog', true), mk('done')];
+  it('counts unblocked ready tickets', () => expect(startableCount(all, false)).toBe(1));
+  it('adds unblocked backlog tickets when backlog pickup is on', () => expect(startableCount(all, true)).toBe(2));
 });

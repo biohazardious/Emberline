@@ -8,7 +8,7 @@ import type {
   TicketStatus,
 } from '@emberline/protocol';
 import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
-import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
@@ -117,6 +117,10 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [autoStart, setAutoStart] = useState(true);
   // A blocked ticket dropped into In progress: its drawer opens asking "Start anyway" (`nonce` re-arms it).
   const [armedStart, setArmedStart] = useState<{ id: string; nonce: number }>();
+  // The armed state belongs to one ticket's drawer: opening another ticket (or none) drops it.
+  useEffect(() => {
+    setArmedStart((prev) => (prev && prev.id !== openId ? undefined : prev));
+  }, [openId]);
   const [blueprintOpen, setBlueprintOpen] = useState(false);
   const [demoPanelOpen, setDemoPanelOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
@@ -149,6 +153,14 @@ export function BoardPage({ projectId }: { projectId: string }) {
     const dropAction = target.status === 'in_progress' ? dropIntoInProgress(ticket, { autoStart, hasLiveRun }) : 'move';
     setError(undefined);
 
+    // A blocked ticket stays where it is: its drawer opens asking "Start anyway". Moving it first would
+    // leave it in In progress without a run when the drawer is closed.
+    if (dropAction === 'confirm') {
+      setArmedStart((prev) => ({ id: ticket.id, nonce: (prev?.nonce ?? 0) + 1 }));
+      setOpenId(ticket.id);
+      return;
+    }
+
     // Accepting a ticket brings its run's branch into the main workspace first; a conflict keeps the
     // ticket where it is so nothing is marked done that is not actually in main.
     if (target.status === 'done' && ticket.status !== 'done' && currentRun?.branch) {
@@ -172,11 +184,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
       const updated = await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position });
       patchLocal(updated);
       // Pipeline column behavior (herdr-board): dropping into In progress dispatches an agent when idle.
-      // A ticket still waiting for others is only moved; its drawer asks before starting it.
-      if (dropAction === 'confirm') {
-        setArmedStart((prev) => ({ id: ticket.id, nonce: (prev?.nonce ?? 0) + 1 }));
-        setOpenId(ticket.id);
-      } else if (dropAction === 'start') {
+      if (dropAction === 'start') {
         const started = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
           permissionMode: 'auto',
         });
@@ -548,7 +556,8 @@ function TicketDrawer({
   const [body, setBody] = useState(ticket.body);
   const [priority, setPriority] = useState(ticket.priority);
   const [persona, setPersona] = useState<AgentPersona>(ticket.persona ?? 'coder');
-  const [mode, setMode] = useState<PermissionMode>('default');
+  // A drop that armed the start uses the permission mode a normal drop does.
+  const [mode, setMode] = useState<PermissionMode>(armStart > 0 ? 'auto' : 'default');
   const [followUp, setFollowUp] = useState('');
   // The drawer tab lives in the address too (`?view=events`), next to the open ticket.
   const defaultView: DrawerView = ticket.status === 'review' && run?.worktreePath ? 'review' : 'details';
@@ -560,8 +569,19 @@ function TicketDrawer({
   const [depError, setDepError] = useState<string>();
   const [confirmStart, setConfirmStart] = useState(armStart > 0);
   useEffect(() => {
-    if (armStart > 0) setConfirmStart(true);
+    if (armStart > 0) {
+      setConfirmStart(true);
+      setMode('auto');
+    }
   }, [armStart]);
+  // The question is about the blockers it was asked for: when they change, it is asked afresh.
+  const blockerKey = ticket.blockedBy.map((b) => b.id).join(',');
+  const seenBlockers = useRef(blockerKey);
+  useEffect(() => {
+    if (seenBlockers.current === blockerKey) return;
+    seenBlockers.current = blockerKey;
+    setConfirmStart(false);
+  }, [blockerKey]);
   const live = run && !run.endedAt;
   const queued = run?.state === 'queued';
   const canFollowUp = (live && !queued) || run?.resumable === true;
