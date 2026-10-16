@@ -60,7 +60,7 @@ describe('rateLimitFromHook', () => {
       NOW,
     );
     expect(info).toEqual({
-      message: "You've hit your limit · resets 2pm (UTC) — 429",
+      message: "You've hit your limit · resets 2pm (UTC)",
       resetsAt: new Date('2026-10-13T14:00:00Z'),
       pool: '*',
     });
@@ -190,6 +190,24 @@ describe('provider limits', () => {
     expect(info?.pool).toBe('*');
     expect(info?.resetsAt?.toISOString()).toBe(new Date(NOW.getTime() + (31 * 60 + 43) * 60_000).toISOString());
     expect(info?.message).toContain('Individual quota reached');
+  });
+
+  it('ends the limit message with its reset sentence, before the AGY_ERROR detail', () => {
+    const info = rateLimitFromHook('StopFailure', { error: 'cli_exit', reason: AGY_QUOTA, message: AGY_QUOTA }, NOW, 'UTC', {
+      agent: 'antigravity',
+    });
+    expect(info?.message).toBe(
+      'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s.',
+    );
+    // Reset parsing still reads the whole text.
+    expect(info?.resetsAt?.toISOString()).toBe(new Date(NOW.getTime() + (31 * 60 + 43) * 60_000).toISOString());
+  });
+
+  it('ends the limit message before a JSON error blob', () => {
+    const gemini =
+      '[API Error: got status: 429 Too Many Requests. {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details.","status":"RESOURCE_EXHAUSTED"}}]';
+    const info = rateLimitFromHook('StopFailure', { error: 'cli_exit', message: gemini }, NOW, 'UTC', { agent: 'gemini' });
+    expect(info?.message).toBe('Error: got status: 429 Too Many Requests.');
   });
 
   it('turns that hook into rate_limited, not waiting_input, and not a transient retry', () => {

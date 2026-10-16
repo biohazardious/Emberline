@@ -82,10 +82,27 @@ const asString = (value: unknown) => (typeof value === 'string' ? value : '');
  */
 const cleanField = (value: unknown) => asString(value).replace(/^[\s\uFFFD]+/, '').trim();
 
+/** Where the CLI's raw error detail starts: Antigravity's `AGY_ERROR:` dump or a JSON blob. */
+const ERROR_DETAIL = /\s*(?:\bAGY_ERROR:|\{)/g;
+
+/** The reset clause ("Resets in 31h43m", "resets 2pm", "limit will reset at 5pm"). */
+const RESET_CLAUSE = /\bresets?\b/gi;
+
+/** The end of a sentence (or of a joined source): a stop followed by a space, a line break, " — ". */
+const SENTENCE_END = /[.!?](?=\s|$)|\n| — /g;
+
+/** The first match of the global `pattern` at or after `from`, or -1. */
+function indexFrom(pattern: RegExp, text: string, from: number): { index: number; length: number } | undefined {
+  pattern.lastIndex = from;
+  const match = pattern.exec(text);
+  return match ? { index: match.index, length: match[0].length } : undefined;
+}
+
 /**
  * The sentence that states the limit: from the start of the sentence holding the earliest limit
- * match to the end of the text (the reset time usually follows it). Tool output printed before it
- * is dropped. Falls back to the whole text when no pattern matches.
+ * match to the end of the sentence carrying the reset time, or else up to the CLI's raw error
+ * detail (`AGY_ERROR: { … }`, a JSON blob), or else the end of the text. Tool output printed
+ * before it is dropped. Falls back to the whole text when no pattern matches.
  */
 function limitSentence(text: string): string {
   let at = -1;
@@ -93,13 +110,20 @@ function limitSentence(text: string): string {
     const index = pattern.exec(text)?.index;
     if (index !== undefined && (at < 0 || index < at)) at = index;
   }
-  if (at <= 0) return text;
+  if (at < 0) return text;
   const before = text.slice(0, at);
   let start = 0;
   // Sentence ends, and "error:" labels (the wrapper joins lines with spaces, so there may be no other boundary).
   for (const boundary of before.matchAll(/[.!?]\s|\n| — /g)) start = boundary.index + boundary[0].length;
   for (const label of before.matchAll(/\berror:\s/gi)) start = Math.max(start, label.index);
-  return text.slice(start);
+  let end = indexFrom(ERROR_DETAIL, text, at + 1)?.index ?? text.length;
+  const reset = indexFrom(RESET_CLAUSE, text, at);
+  if (reset && reset.index < end) {
+    const stop = indexFrom(SENTENCE_END, text, reset.index + reset.length);
+    // Keeps the full stop, drops a line break or the " — " join.
+    if (stop && stop.index < end) end = stop.index + (/^[.!?]$/.test(text[stop.index] ?? '') ? 1 : 0);
+  }
+  return text.slice(start, end).trim();
 }
 
 export function isLimitText(text: string): boolean {

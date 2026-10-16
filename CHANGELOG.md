@@ -23,7 +23,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - A running factory chain stopped when core restarted; it now continues after the restart without clicking Run pipeline.
 - A failed ticket run stopped the factory chain; the other ready tickets now go on. When two ticket runs fail in a row, or a run fails before it gets to work, the chain pauses with a note on the run saying why.
 - Runs already waiting for a quota reset stayed waiting after the in-flight policy was switched to "Hand off to the next route" or after a fallback route's lane reopened; they now hand off to the next open route (at most 3 handoffs per run).
-- Limit notifications and the quota panel could show the agent's earlier output instead of the limit; they now start with the limit sentence (for example "Individual quota reached … Resets in 31h43m").
+- Limit notifications and the quota panel could show the agent's earlier output instead of the limit; they now show only the limit sentence up to its reset time, without the CLI's raw error dump (for example "error: Individual quota reached. … Resets in 31h43m5s.").
 - Settings and "Continue with…" offered "API key" routes when the key only came from core's environment; the server refuses those routes, so they are no longer offered and the sign-in route is suggested instead.
 - "Hand off" on a run that is waiting for you ends its live session; it now asks for a second click first.
 - The ticket drawer shows the whole handoff chain of a run (oldest first, with links) instead of only the run it continued.
