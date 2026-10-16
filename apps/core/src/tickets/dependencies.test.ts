@@ -35,6 +35,19 @@ describe('ticket dependencies', () => {
     ]);
   });
 
+  it('falls back to the default tiers when every declared dependency was dropped', () => {
+    const { edges, dropped } = resolveBatchDependencies(
+      [t('a', 'coder', 'a'), t('b', 'qa', 'b', ['nope']), t('c', 'ui_ux', 'c', ['c'])],
+      keys,
+      [],
+    );
+    expect(edges).toEqual([{ ticketId: 'b', dependsOnId: 'a' }, { ticketId: 'b', dependsOnId: 'c' }]);
+    expect(dropped).toEqual([
+      { ticketId: 'b', ref: 'nope', reason: 'unknown' },
+      { ticketId: 'c', ref: 'c', reason: 'self' },
+    ]);
+  });
+
   it('applies the default persona tiers when no draft states dependencies', () => {
     expect(defaultTierEdges([{ id: 'arch', persona: 'architect' }, { id: 'c', persona: 'coder' }, { id: 'u', persona: 'ui_ux' }, { id: 'q', persona: 'qa' }])).toEqual([
       { ticketId: 'c', dependsOnId: 'arch' },

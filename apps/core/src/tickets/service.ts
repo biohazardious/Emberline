@@ -23,10 +23,10 @@ import {
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
-import { and, asc, eq, max, min } from 'drizzle-orm';
+import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, tickets } from '../db/schema.js';
-import { conflict, notFound } from '../errors.js';
+import { projects, ticketDependencies, tickets } from '../db/schema.js';
+import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
   buildFactoryOrchestratorPrompt,
@@ -37,6 +37,7 @@ import {
   runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
+import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
 import { parseRouteTag } from '../runs/route.js';
@@ -53,7 +54,12 @@ interface TicketServiceEvents {
 /** Gap between neighbours so most moves need a single row update. */
 const POSITION_STEP = 1024;
 
-export const toTicket = (row: TicketRow): Ticket => ({
+type Blocker = Ticket['blockedBy'][number];
+
+export const toTicket = (
+  row: TicketRow,
+  deps: { dependsOn: string[]; blockedBy: Blocker[] } = { dependsOn: [], blockedBy: [] },
+): Ticket => ({
   id: row.id,
   projectId: row.projectId,
   key: row.key,
@@ -64,8 +70,8 @@ export const toTicket = (row: TicketRow): Ticket => ({
   persona: (row.persona as AgentPersona) ?? 'coder',
   position: row.position,
   depth: row.depth,
-  dependsOn: [],
-  blockedBy: [],
+  dependsOn: deps.dependsOn,
+  blockedBy: deps.blockedBy,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -424,6 +430,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         maxTicketDepth: fSettingsForDepth.maxTicketDepth,
       });
     } else if (ingested && ingested.tickets.length > 0) {
+      const created: { draft: (typeof ingested.tickets)[number]; ticket: Ticket }[] = [];
       for (const draft of ingested.tickets) {
         let body = draft.body ?? '';
         if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
@@ -434,7 +441,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           body = `${body.slice(0, TICKET_BODY_MAX - routeTag.length - 2)}\n\n${routeTag}`.trim();
         }
         try {
-          this.create(
+          const ticket = this.create(
             run.projectId,
             {
               title: draft.title,
@@ -445,6 +452,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             },
             draftDepth,
           );
+          created.push({ draft, ticket });
         } catch (error) {
           // The drafts file is already consumed: skip the bad draft, keep the others.
           this.runs.note(run.id, 'ticket_draft_rejected', {
@@ -453,6 +461,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           });
         }
       }
+      this.applyDraftDependencies(run.id, run.projectId, created);
       if (ingested.autoDispatch) {
         this.autoChainProjects.add(run.projectId);
       }
@@ -651,17 +660,121 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   list(projectId: string): Ticket[] {
     this.project(projectId);
-    return this.db
+    const rows = this.db
       .select()
       .from(tickets)
       .where(eq(tickets.projectId, projectId))
       .orderBy(asc(tickets.position))
-      .all()
-      .map(toTicket);
+      .all();
+    return this.withDependencies(rows);
   }
 
   get(id: string): Ticket {
-    return toTicket(this.row(id));
+    return this.withDependencies([this.row(id)])[0] as Ticket;
+  }
+
+  /** Dependencies of the given tickets with one query; `blockedBy` holds those not yet `done`. */
+  dependenciesOf(ids: string[]): Map<string, { dependsOn: string[]; blockedBy: Ticket['blockedBy'] }> {
+    const result = new Map<string, { dependsOn: string[]; blockedBy: Ticket['blockedBy'] }>();
+    for (const id of ids) result.set(id, { dependsOn: [], blockedBy: [] });
+    if (ids.length === 0) return result;
+    const rows = this.db
+      .select({
+        ticketId: ticketDependencies.ticketId,
+        id: tickets.id,
+        key: tickets.key,
+        title: tickets.title,
+        status: tickets.status,
+      })
+      .from(ticketDependencies)
+      .innerJoin(tickets, eq(tickets.id, ticketDependencies.dependsOnId))
+      .where(inArray(ticketDependencies.ticketId, ids))
+      .orderBy(asc(ticketDependencies.createdAt), asc(tickets.number))
+      .all();
+    for (const r of rows) {
+      const entry = result.get(r.ticketId);
+      if (!entry) continue;
+      entry.dependsOn.push(r.id);
+      if (r.status !== 'done') {
+        entry.blockedBy.push({ id: r.id, key: r.key, title: r.title, status: r.status as TicketStatus });
+      }
+    }
+    return result;
+  }
+
+  private withDependencies(rows: TicketRow[]): Ticket[] {
+    const deps = this.dependenciesOf(rows.map((r) => r.id));
+    return rows.map((row) => toTicket(row, deps.get(row.id)));
+  }
+
+  private allEdges(projectId: string): Edge[] {
+    return this.db
+      .select({ ticketId: ticketDependencies.ticketId, dependsOnId: ticketDependencies.dependsOnId })
+      .from(ticketDependencies)
+      .innerJoin(tickets, eq(tickets.id, ticketDependencies.ticketId))
+      .where(eq(tickets.projectId, projectId))
+      .all();
+  }
+
+  /** Resolves the batch's refs/keys (or the default tiers), stores the edges and notes the outcome on the run. */
+  private applyDraftDependencies(
+    runId: string,
+    projectId: string,
+    created: { draft: { ref?: string; dependsOn?: string[] }; ticket: Ticket }[],
+  ): void {
+    if (created.length === 0) return;
+    try {
+      const batchIds = new Set(created.map((c) => c.ticket.id));
+      const projectKeys = new Map<string, string>();
+      for (const r of this.db.select({ id: tickets.id, key: tickets.key }).from(tickets).where(eq(tickets.projectId, projectId)).all()) {
+        if (!batchIds.has(r.id)) projectKeys.set(r.key.toUpperCase(), r.id);
+      }
+      const { edges, dropped } = resolveBatchDependencies(
+        created.map(({ draft, ticket }) => ({
+          id: ticket.id,
+          key: ticket.key,
+          persona: ticket.persona,
+          ...(draft.ref ? { ref: draft.ref } : {}),
+          ...(draft.dependsOn ? { dependsOn: draft.dependsOn } : {}),
+        })),
+        projectKeys,
+        this.allEdges(projectId),
+      );
+      const now = new Date();
+      if (edges.length > 0) {
+        this.db
+          .insert(ticketDependencies)
+          .values(edges.map((e) => ({ ticketId: e.ticketId, dependsOnId: e.dependsOnId, createdAt: now })))
+          .onConflictDoNothing()
+          .run();
+      }
+      const keyById = new Map<string, string>(created.map((c) => [c.ticket.id, c.ticket.key]));
+      for (const r of this.db.select({ id: tickets.id, key: tickets.key }).from(tickets).where(eq(tickets.projectId, projectId)).all()) {
+        keyById.set(r.id, r.key);
+      }
+      for (const d of dropped) {
+        this.runs.note(runId, 'dependency_dropped', {
+          ticket: keyById.get(d.ticketId) ?? d.ticketId,
+          ref: d.ref,
+          reason: d.reason,
+        });
+      }
+      for (const { ticket } of created) {
+        const next = this.find(ticket.id);
+        if (next) this.emit('ticket', next);
+      }
+      if (edges.length > 0) {
+        this.runs.note(runId, 'dependencies_applied', {
+          edges: edges.map((e) => ({
+            ticket: keyById.get(e.ticketId) ?? e.ticketId,
+            dependsOn: keyById.get(e.dependsOnId) ?? e.dependsOnId,
+          })),
+          message: `${edges.length} ticket dependenc${edges.length === 1 ? 'y' : 'ies'} applied`,
+        });
+      }
+    } catch (error) {
+      this.runs.note(runId, 'dependency_error', { message: (error as Error).message.slice(0, 500) });
+    }
   }
 
   /** Runs created for the project in the last 24 hours. */
@@ -677,7 +790,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Like {@link get}, but `undefined` instead of a 404 for a deleted ticket. */
   find(id: string): Ticket | undefined {
     const row = this.db.select().from(tickets).where(eq(tickets.id, id)).get();
-    return row ? toTicket(row) : undefined;
+    return row ? this.withDependencies([row])[0] : undefined;
   }
 
   /** `depth` is set by the factory for agent-created tickets; people always create depth 0. */
@@ -717,13 +830,41 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   update(id: string, input: UpdateTicketBody): Ticket {
     const current = this.row(id);
-    const patch = UpdateTicketBodySchema.parse(input);
+    const { dependsOn, ...patch } = UpdateTicketBodySchema.parse(input);
+    if (dependsOn) this.replaceDependencies(current, dependsOn);
     const set: Partial<TicketRow> = { ...patch, updatedAt: new Date() };
     // Moved to another column without an explicit slot: append at the bottom.
     if (patch.status && patch.status !== current.status && patch.position === undefined) {
       set.position = this.edgePosition(current.projectId, patch.status, 'bottom');
     }
     return this.publish(this.db.update(tickets).set(set).where(eq(tickets.id, id)).returning().get());
+  }
+
+  /** Replaces the ticket's dependency set; validates everything before writing anything. */
+  private replaceDependencies(current: TicketRow, refs: string[]): void {
+    const siblings = this.db.select().from(tickets).where(eq(tickets.projectId, current.projectId)).all();
+    const ids = new Set<string>();
+    for (const ref of refs) {
+      const hit = siblings.find((t) => t.id === ref) ?? siblings.find((t) => t.key.toUpperCase() === ref.toUpperCase());
+      if (!hit) throw new HttpError(400, 'unknown_dependency', `no ticket "${ref}" in this project`);
+      ids.add(hit.id);
+    }
+    const others = this.allEdges(current.projectId).filter((e) => e.ticketId !== current.id);
+    const accepted: Edge[] = [];
+    for (const dependsOnId of ids) {
+      const edge = { ticketId: current.id, dependsOnId };
+      if (wouldCreateCycle([...others, ...accepted], edge)) {
+        throw new HttpError(409, 'dependency_cycle', 'a ticket cannot depend on itself, directly or through other tickets');
+      }
+      accepted.push(edge);
+    }
+    const now = new Date();
+    this.db.transaction((tx) => {
+      tx.delete(ticketDependencies).where(eq(ticketDependencies.ticketId, current.id)).run();
+      if (accepted.length > 0) {
+        tx.insert(ticketDependencies).values(accepted.map((e) => ({ ...e, createdAt: now }))).run();
+      }
+    });
   }
 
   remove(id: string): void {
@@ -821,7 +962,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   private publish(row: TicketRow): Ticket {
-    const ticket = toTicket(row);
+    const ticket = this.withDependencies([row])[0] as Ticket;
     this.emit('ticket', ticket);
     return ticket;
   }

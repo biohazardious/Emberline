@@ -104,5 +104,7 @@ export function resolveBatchDependencies(
       accepted.push(edge);
     }
   }
+  // Everything declared was unusable: the batch is as good as undeclared, so use the default tiers.
+  if (accepted.length === 0) return { edges: defaultTierEdges(batch), dropped };
   return { edges: accepted, dropped };
 }
