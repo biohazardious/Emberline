@@ -1403,6 +1403,15 @@ a {
   background: hsl(40 80% 20% / 0.2);
 }
 
+.security-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 0;
+  border-width: 0 0 1px;
+}
+
 .banner-error {
   border: 1px solid hsl(355 75% 55% / 0.4);
   background: hsl(355 60% 20% / 0.2);

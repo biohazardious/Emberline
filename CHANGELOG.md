@@ -8,6 +8,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - Core now answers HTTP 421 to requests whose `Host` is an unknown name, which blocks DNS-rebinding attacks from web pages. **Upgrade note:** if you open Emberline by a host name (a reverse proxy, `truenas.local` and so on), add it to `EMBERLINE_ALLOWED_HOSTS` in `.env` (comma-separated). IP addresses and `localhost` keep working without changes.
 - WebSocket connections (`/api/events`, terminals) without an `Origin` header are refused.
+- The web app shows a dismissible warning when you open it over plain HTTP from another machine, since passwords and session cookies then travel unencrypted.
 
 ### Changed
 

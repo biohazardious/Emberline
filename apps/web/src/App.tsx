@@ -38,6 +38,7 @@ import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
 import { ProviderMark } from './components/ProviderMark';
 import { RunInspector } from './components/RunInspector';
+import { SecurityBanner } from './components/SecurityBanner';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
@@ -875,6 +876,8 @@ function Shell() {
             </button>
           </div>
         </header>
+
+        <SecurityBanner />
 
         <div className="workbench-stage">
           <main className="content">
