@@ -105,6 +105,12 @@ function keyStoredFor(agent: AgentId, keys: StoredProviderKeys): boolean {
   );
 }
 
+/** The credential today's runs of `agent` use: the stored key when it has one, else the CLI login. */
+function defaultCredential(agent: AgentId, keys: StoredProviderKeys): Credential {
+  const allowed = PROVIDER_RUNTIME[agent].credentials;
+  return allowed.includes('api_key') && keyStoredFor(agent, keys) ? 'api_key' : allowed[0]!;
+}
+
 /** 0.1.x stored one agent + model per persona (and a Claude auto-downgrade switch). */
 function legacyChain(
   persona: AgentPersona,
@@ -114,8 +120,7 @@ function legacyChain(
 ): StoredRoute[] {
   const agent = raw.personaAgents?.[persona] ?? defaultAgent;
   const model = raw.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona];
-  const credential: Credential =
-    PROVIDER_RUNTIME[agent]?.credentials.includes('api_key') && keyStoredFor(agent, keys) ? 'api_key' : 'login';
+  const credential: Credential = PROVIDER_RUNTIME[agent] ? defaultCredential(agent, keys) : 'login';
   const chain: StoredRoute[] = [{ agent, model, credential }];
   if ((raw.quotaAutoDowngrade ?? true) && agent === 'claude' && (model === 'fable' || model === 'opus')) {
     chain.push({ agent, model: selectProviderModelByRank('claude', 3), credential });
@@ -373,7 +378,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     const fallback: Route = {
       agent: defaultAgent,
       model: coerceModelForProvider(defaultAgent, DEFAULT_PERSONA_MODELS[p], p),
-      credential: PROVIDER_RUNTIME[defaultAgent].credentials[0]!,
+      credential: defaultCredential(defaultAgent, keys),
     };
     const stored = raw.personaRoutes?.[p] ?? legacyChain(p, raw, keys, defaultAgent);
     personaRoutes[p] = normalizeChain(stored, p, enabledSet, fallback);
@@ -537,8 +542,16 @@ export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { ag
   const cfg = getFactorySettings(db);
   const chain = cfg.personaRoutes[persona];
   const enabled = new Set<string>(cfg.enabledProviders);
-  const head: StoredRoute[] = preferred?.agent
-    ? [{ agent: preferred.agent, model: preferred.model ?? 'auto', credential: chain[0]?.credential }]
+  const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
+  const tagged = AgentId.safeParse(preferred?.agent);
+  const head: StoredRoute[] = tagged.success
+    ? [
+        {
+          agent: tagged.data,
+          model: preferred?.model ?? 'auto',
+          credential: chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
+        },
+      ]
     : [];
   return normalizeChain([...head, ...chain], persona, enabled, chain[0]!);
 }

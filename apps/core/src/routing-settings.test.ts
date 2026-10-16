@@ -108,6 +108,41 @@ describe('persona routes', () => {
     expect(resolveRunRoutes(t.db, 'ui_ux')).toHaveLength(2);
   });
 
+  it('a persona whose legacy agent was disabled falls back to api_key when the default agent has a stored key', () => {
+    storeRaw(
+      { enabledProviders: ['claude'], personaAgents: { ui_ux: 'antigravity' }, personaModels: { ui_ux: 'argon' } },
+      { anthropicApiKey: 'sk-ant-test' },
+    );
+    expect(getFactorySettings(t.db).personaRoutes.ui_ux).toEqual([
+      { agent: 'claude', model: 'opus', credential: 'api_key' },
+    ]);
+  });
+
+  it('a tagged route takes its credential from a same-agent chain step, else the stored key', () => {
+    storeRaw(
+      {
+        enabledProviders: ['claude', 'antigravity'],
+        personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }] },
+      },
+      { anthropicApiKey: 'sk-ant-test' },
+    );
+    expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'claude', model: 'sonnet' })[0]).toEqual({
+      agent: 'claude',
+      model: 'sonnet',
+      credential: 'api_key',
+    });
+    storeRaw({
+      enabledProviders: ['claude', 'antigravity'],
+      personaRoutes: {
+        ui_ux: [
+          { agent: 'antigravity', model: 'argon', credential: 'login' },
+          { agent: 'claude', model: 'opus', credential: 'login' },
+        ],
+      },
+    });
+    expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'claude', model: 'sonnet' })[0]?.credential).toBe('login');
+  });
+
   it('puts provider keys into the env only for api_key routes', () => {
     updateFactorySettings(t.db, { anthropicApiKey: 'sk-ant-test' });
     expect(getProviderEnvFromSettings(t.db, 'claude', 'login')).toEqual({});
