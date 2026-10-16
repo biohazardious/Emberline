@@ -12,7 +12,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
-- Slow browsers and long-running runs can no longer grow Emberline's memory without limit. A terminal or live-update connection whose browser falls too far behind is closed and reconnects on its own (a terminal then shows a fresh screen). A terminal that is still attaching holds at most 1 MiB of output or typing before it reconnects. Each run keeps its newest 5000 events; older ones are pruned, except the few that Emberline reads later (such as the saved last screen).
+- Slow browsers and long-running runs can no longer grow Emberline's memory without limit. A terminal or live-update connection whose browser falls too far behind is closed and reconnects on its own (a terminal then shows a fresh screen). A terminal that is still attaching holds at most 1 MiB of output or typing before it reconnects. Each run keeps its newest 5000 events; older ones are pruned, except the few that Emberline reads later (such as the saved last screen), so for very long runs the tool-call count reflects only the retained events.
 
 - Cleaning up finished runs no longer deletes work that was not merged. Garbage collection (manual, per project, and the automatic one) now keeps a worktree that has uncommitted changes or commits missing from the project's default branch, and says how many it kept and why. If Emberline cannot tell, it keeps the worktree. Pruning one run's worktree from the dashboard asks first when it holds such work, with a "Prune anyway" button.
 

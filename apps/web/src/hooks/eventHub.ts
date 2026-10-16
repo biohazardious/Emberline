@@ -10,13 +10,15 @@ const listeners = new Set<Listener>();
 let socket: WebSocket | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let delay = 500;
+/** When the server last cut us off for being too slow (close 1013); reconnecting right after must keep backing off. */
+let overflowAt = 0;
 
 function connect(): void {
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/events`;
   const ws = new WebSocket(url);
   socket = ws;
   ws.onopen = () => {
-    delay = 500;
+    if (Date.now() - overflowAt > 10_000) delay = 500;
     for (const listener of listeners) listener.onOpen();
   };
   ws.onmessage = (message) => {
@@ -24,7 +26,8 @@ function connect(): void {
     if (!parsed.success) return;
     for (const listener of listeners) listener.onEvent(parsed.data);
   };
-  ws.onclose = () => {
+  ws.onclose = (close) => {
+    if (close.code === 1013) overflowAt = Date.now();
     if (socket !== ws) return; // closed on purpose
     socket = undefined;
     if (listeners.size === 0) return;

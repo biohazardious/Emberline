@@ -209,7 +209,14 @@ describe('ptyd', () => {
     });
     expect(slow.timedOut).toBe(true);
     // The timeout kills the whole process group, not just the shell: the background child is gone too.
-    const bgPid = Number(readFileSync(pidFile, 'utf8'));
+    let bgPid = 0;
+    for (let i = 0; i < 40 && !bgPid; i++) {
+      try {
+        bgPid = Number(readFileSync(pidFile, 'utf8').trim());
+      } catch {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
     expect(bgPid).toBeGreaterThan(1);
     const gone = async () => {
       for (let i = 0; i < 40; i++) {

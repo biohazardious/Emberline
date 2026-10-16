@@ -108,6 +108,22 @@ describe('run event pruning', () => {
     expect(typesOf(other.id).filter((x) => x === 'PreToolUse')).toHaveLength(10);
   });
 
+  it('keeps preview status and the fact that a long run worked', async () => {
+    const project = await createProject('Prune3', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    t.db.delete(runEvents).where(eq(runEvents.runId, run.id)).run();
+    const row = (type: string, state?: string) => ({ runId: run.id, ts: new Date(), source: 'hook', type, ...(state ? { state } : {}) });
+    t.db.insert(runEvents).values([row('UserPromptSubmit', 'working'), row('preview_stopped'), row('preview_started')]).run();
+    seed(run.id, 'PreToolUse', 5100);
+    t.db.insert(runEvents).values(row('Failed', 'failed')).run();
+
+    t.runs.pruneRunEvents();
+
+    const kept = t.db.select().from(runEvents).where(eq(runEvents.runId, run.id)).orderBy(runEvents.id).all();
+    expect(kept.map((e) => e.type).slice(0, 3)).toEqual(['UserPromptSubmit', 'preview_stopped', 'preview_started']);
+    expect(kept.some((e) => e.state === 'working')).toBe(true);
+  });
+
   it('reconcile prunes on its own schedule', async () => {
     const project = await createProject('Prune2', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();

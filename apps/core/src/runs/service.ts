@@ -51,7 +51,7 @@ import {
   StartPreviewBody as StartPreviewBodySchema,
   type ProjectUsageDay,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -133,7 +133,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
 /**
  * Event kinds that logic reads back later, so pruning never removes them: the one `last_screen`
  * snapshot, the `queued` event (unattended origin, queued prompts), one-shot markers
- * (`auto_nudged`, `session_lost`), the pipeline hold/merge notes (HOLD_EVENTS in tickets/service.ts,
+ * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS in tickets/service.ts,
  * `merged_to_main`, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
  */
 export const PRUNE_PROTECTED_EVENT_TYPES = [
@@ -153,7 +153,12 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'stall_detected',
   'waiting_input_timeout',
   'permission_mode_overridden',
+  // previewStatus reads the latest of these.
+  'preview_started',
+  'preview_stopped',
 ];
+/** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
+const PRUNE_RUNS_PER_PASS = 10;
 /**
  * An agent idling at its prompt after finishing is closed after this long. Sessions that can be
  * resumed (`claude --resume`) close soon; CLIs without a session id would lose follow-ups, so they
@@ -1789,16 +1794,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     });
   }
 
-  /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
-  /** Keeps the newest MAX_EVENTS_PER_RUN events of each run (plus the protected kinds); one DELETE per run over the cap. */
-  pruneRunEvents(): void {
+  /**
+   * Keeps the newest MAX_EVENTS_PER_RUN events of each run, the protected kinds, and the state rows
+   * that reachedWork / pipelineOutcome read (the first row of each working-or-later state and the
+   * latest `done`). One DELETE per run over the cap, at most PRUNE_RUNS_PER_PASS runs per call.
+   * Returns whether more runs are left over the cap.
+   */
+  pruneRunEvents(): boolean {
     const over = this.db
       .select({ runId: runEvents.runId })
       .from(runEvents)
       .groupBy(runEvents.runId)
       .having(sql`count(*) > ${MAX_EVENTS_PER_RUN}`)
+      .limit(PRUNE_RUNS_PER_PASS + 1)
       .all();
-    for (const { runId } of over) {
+    for (const { runId } of over.slice(0, PRUNE_RUNS_PER_PASS)) {
       const cutoff = this.db
         .select({ id: runEvents.id })
         .from(runEvents)
@@ -1808,22 +1818,48 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .offset(MAX_EVENTS_PER_RUN - 1)
         .get();
       if (!cutoff) continue;
+      const stateKeepers = this.db
+        .select({ id: sql<number>`min(${runEvents.id})` })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'waiting_input', 'done'])))
+        .groupBy(runEvents.state)
+        .all()
+        .map((r) => r.id);
+      const lastDone = this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), eq(runEvents.state, 'done')))
+        .orderBy(desc(runEvents.id))
+        .limit(1)
+        .get();
       this.db
         .delete(runEvents)
         .where(
-          and(eq(runEvents.runId, runId), lt(runEvents.id, cutoff.id), notInArray(runEvents.type, PRUNE_PROTECTED_EVENT_TYPES)),
+          and(
+            eq(runEvents.runId, runId),
+            lt(runEvents.id, cutoff.id),
+            notInArray(runEvents.type, PRUNE_PROTECTED_EVENT_TYPES),
+            notInArray(runEvents.id, [...stateKeepers, ...(lastDone ? [lastDone.id] : [])]),
+          ),
         )
         .run();
     }
+    return over.length > PRUNE_RUNS_PER_PASS;
   }
 
+  /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
   async reconcile(): Promise<void> {
     if (this.reconciling || this.ptyd.status !== 'connected') return;
     this.reconciling = true;
     try {
       if (Date.now() - this.lastEventPruneAt > EVENT_PRUNE_INTERVAL_MS) {
         this.lastEventPruneAt = Date.now();
-        this.pruneRunEvents();
+        try {
+          // More runs over the cap: come back on the next reconcile instead of waiting out the interval.
+          if (this.pruneRunEvents()) this.lastEventPruneAt = 0;
+        } catch {
+          // Pruning is housekeeping; it must never skip the rest of the reconcile.
+        }
       }
       this.failOrphanedSpawns(STARTING_WATCHDOG_MS);
       const open = this.db.select().from(runs).where(isNull(runs.endedAt)).orderBy(asc(runs.createdAt)).all();

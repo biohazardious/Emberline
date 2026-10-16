@@ -81,6 +81,8 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
     let disposed = false;
     let exited = false;
     let attempt = 0;
+    // A 1013 close means the browser was too slow; keep backing off instead of snapping back to a fast retry.
+    let overflowAt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const update = (next: ConnectionState) => {
@@ -105,7 +107,7 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
         const message = JSON.parse(String(event.data)) as TerminalServerMessage;
         switch (message.type) {
           case 'snapshot':
-            attempt = 0;
+            if (Date.now() - overflowAt > 10_000) attempt = 0;
             term.reset();
             // Replay at the server's size, then fit to ours (which triggers a resize upstream).
             term.resize(message.cols, message.rows);
@@ -137,7 +139,8 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
             break;
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (close) => {
+        if (close.code === 1013) overflowAt = Date.now();
         if (disposed || exited) return;
         update('reconnecting');
         retryTimer = setTimeout(connect, Math.min(500 * 2 ** attempt++, 5_000));
