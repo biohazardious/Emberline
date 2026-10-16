@@ -85,6 +85,14 @@ describe('host allow-list (DNS rebinding)', () => {
     expect((await t.app.inject({ url: '/api/health', headers: { host: 'anything.example' } })).statusCode).toBe(200);
   });
 
+  it('checks X-Forwarded-Host instead of Host when behind a trusted proxy', async () => {
+    t = await createTestApp({ trustProxy: true, allowedHosts: ['emberline.lan'] });
+    const get = (forwarded: string) =>
+      t!.app.inject({ url: '/api/health', headers: { host: 'core:7420', 'x-forwarded-host': forwarded } });
+    expect((await get('evil.example')).statusCode).toBe(421);
+    expect((await get('emberline.lan')).statusCode).toBe(200);
+  });
+
   it('parses EMBERLINE_ALLOWED_HOSTS from the environment', () => {
     expect(loadConfig({ EMBERLINE_ALLOWED_HOSTS: ' a.lan, B.lan. ,,*' }).allowedHosts).toEqual(['a.lan', 'b.lan', '*']);
     expect(loadConfig({}).allowedHosts).toEqual([]);

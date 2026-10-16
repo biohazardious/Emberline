@@ -1412,6 +1412,13 @@ a {
   border-width: 0 0 1px;
 }
 
+.security-banner-floating {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 100;
+  background: var(--surface);
+}
+
 .banner-error {
   border: 1px solid hsl(355 75% 55% / 0.4);
   background: hsl(355 60% 20% / 0.2);

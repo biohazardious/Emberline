@@ -20,6 +20,8 @@ services:
     environment:
       EMBERLINE_HOOK_URL: http://core:7420
       TZ: ${TZ:-UTC}
+      # Host names you open Emberline by (reverse proxy, truenas.local). IPs and localhost always work.
+      EMBERLINE_ALLOWED_HOSTS: ${EMBERLINE_ALLOWED_HOSTS:-}
       EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
       # Shows host paths of build outputs when EMBERLINE_WORKSPACES is a host path.
       EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES:-}

@@ -27,6 +27,7 @@ import {
 } from 'react';
 import { api, ApiRequestError, errorMessage } from './api';
 import { BrandLogo } from './components/BrandLogo';
+import { SecurityBanner } from './components/SecurityBanner';
 
 interface AuthContextValue {
   logout: () => Promise<void>;
@@ -80,54 +81,81 @@ export function AuthGate({ children }: { children: ReactNode }) {
 }
 
 const FEATURES = [
-  { icon: Bot, title: 'Many agents, one control room', text: 'Claude Code, Antigravity and more run side by side.' },
-  { icon: GitMerge, title: 'Every change lands through git', text: 'Worktrees, reviews and merges you can follow.' },
-  { icon: ShieldCheck, title: 'Agents stay in their sandbox', text: 'Workspace code runs in the runner, never in core.' },
-  { icon: Gauge, title: 'Quotas under control', text: 'Usage limits, budgets and a scheduler that waits for resets.' },
+  {
+    icon: Bot,
+    title: 'Many agents, one control room',
+    text: 'Claude Code, Antigravity and more run side by side.',
+  },
+  {
+    icon: GitMerge,
+    title: 'Every change lands through git',
+    text: 'Worktrees, reviews and merges you can follow.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Agents stay in their sandbox',
+    text: 'Workspace code runs in the runner, never in core.',
+  },
+  {
+    icon: Gauge,
+    title: 'Quotas under control',
+    text: 'Usage limits, budgets and a scheduler that waits for resets.',
+  },
 ];
 
-function AuthLayout({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+function AuthLayout({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+}) {
   return (
-    <main className="auth-page">
-      <aside className="auth-brand" aria-label="About Emberline">
-        <div className="auth-brand-inner">
-          <div className="auth-logo">
-            <BrandLogo size={40} />
-            <span>Emberline</span>
+    <>
+      <SecurityBanner floating />
+      <main className="auth-page">
+        <aside className="auth-brand" aria-label="About Emberline">
+          <div className="auth-brand-inner">
+            <div className="auth-logo">
+              <BrandLogo size={40} />
+              <span>Emberline</span>
+            </div>
+            <p className="auth-tagline">The self-hosted control room for your AI coding agents.</p>
+            <ul className="auth-features">
+              {FEATURES.map(({ icon: Icon, title: featureTitle, text }) => (
+                <li key={featureTitle}>
+                  <span className="auth-feature-icon">
+                    <Icon className="icon" aria-hidden />
+                  </span>
+                  <span>
+                    <strong>{featureTitle}</strong>
+                    <span>{text}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="auth-footnote">
+              Runs on your server with your own subscriptions. Not affiliated with Anthropic or Google.
+            </p>
           </div>
-          <p className="auth-tagline">The self-hosted control room for your AI coding agents.</p>
-          <ul className="auth-features">
-            {FEATURES.map(({ icon: Icon, title: featureTitle, text }) => (
-              <li key={featureTitle}>
-                <span className="auth-feature-icon">
-                  <Icon className="icon" aria-hidden />
-                </span>
-                <span>
-                  <strong>{featureTitle}</strong>
-                  <span>{text}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="auth-footnote">
-            Runs on your server with your own subscriptions. Not affiliated with Anthropic or Google.
-          </p>
-        </div>
-      </aside>
-      <section className="auth-panel">
-        <div className="auth-card">
-          <div className="auth-card-logo">
-            <BrandLogo size={30} />
-            <span>Emberline</span>
+        </aside>
+        <section className="auth-panel">
+          <div className="auth-card">
+            <div className="auth-card-logo">
+              <BrandLogo size={30} />
+              <span>Emberline</span>
+            </div>
+            <header>
+              <h1>{title}</h1>
+              {subtitle && <p className="auth-subtitle">{subtitle}</p>}
+            </header>
+            {children}
           </div>
-          <header>
-            <h1>{title}</h1>
-            {subtitle && <p className="auth-subtitle">{subtitle}</p>}
-          </header>
-          {children}
-        </div>
-      </section>
-    </main>
+        </section>
+      </main>
+    </>
   );
 }
 
@@ -314,8 +342,8 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
               />
             </label>
             <p className="auth-help">
-              Core prints a one-time token on its first start, so only someone with access to the server can claim
-              it. Find it with:
+              Core prints a one-time token on its first start, so only someone with access to the server can
+              claim it. Find it with:
             </p>
             <div className="auth-command">
               <code>make logs | grep "setup token"</code>
@@ -444,7 +472,12 @@ function LoginForm({ onDone }: { onDone: () => Promise<void> }) {
             'Sign in'
           )}
         </button>
-        <button type="button" className="auth-link" onClick={() => setShowReset((v) => !v)} aria-expanded={showReset}>
+        <button
+          type="button"
+          className="auth-link"
+          onClick={() => setShowReset((v) => !v)}
+          aria-expanded={showReset}
+        >
           Forgot your password?
         </button>
         {showReset && (
@@ -455,8 +488,8 @@ function LoginForm({ onDone }: { onDone: () => Promise<void> }) {
               <CopyButton text="make reset-password" label="Copy command" />
             </div>
             <p>
-              It clears the password (projects and runs are kept), restarts core and prints a new setup token. Then
-              reload this page and set a new password.
+              It clears the password (projects and runs are kept), restarts core and prints a new setup token.
+              Then reload this page and set a new password.
             </p>
           </div>
         )}

@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { hash, verify } from '@node-rs/argon2';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { CoreConfig } from '../config.js';
+import { type CoreConfig, normalizeHostName } from '../config.js';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { conflict, HttpError } from '../errors.js';
 import { SessionStore } from './sessions.js';
@@ -215,28 +215,17 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   return store;
 }
 
-/** Lower-case host name of a Host header value: no port, no IPv6 brackets, no trailing dot. */
-function hostnameOf(host: string): string {
-  let name = host.trim().toLowerCase();
-  if (name.startsWith('[')) {
-    const end = name.indexOf(']');
-    return end === -1 ? name : name.slice(1, end);
-  }
-  if (name.indexOf(':') === name.lastIndexOf(':')) name = name.replace(/:\d*$/, '');
-  return name.replace(/\.$/, '');
-}
-
 function hostAllowList(config: CoreConfig): (host: string) => boolean {
-  const names = new Set(['localhost', ...config.allowedHosts.map(hostnameOf)]);
+  const names = new Set(['localhost', ...config.allowedHosts]);
   try {
-    names.add(hostnameOf(new URL(config.hookUrl).host));
+    names.add(normalizeHostName(new URL(config.hookUrl).host));
   } catch {
     // an unparsable hook URL adds nothing
   }
   const any = names.has('*');
   return (host) => {
     if (any || host === '') return true;
-    const name = hostnameOf(host);
+    const name = normalizeHostName(host);
     return isIP(name) !== 0 || names.has(name);
   };
 }

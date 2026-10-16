@@ -86,15 +86,15 @@ Set these in `.env` (read by `compose.yaml`):
 
 Core also understands the following variables. They are not passed through by `compose.yaml`; add them to the `core` service's `environment` if you need them:
 
-| Variable                     | Default | Purpose                                                                          |
-| ---------------------------- | ------- | -------------------------------------------------------------------------------- |
-| `EMBERLINE_SETUP_TOKEN`      | random  | Choose the first-run setup token instead of reading it from the log.             |
-| `EMBERLINE_TRUST_PROXY`      | `false` | Trust `X-Forwarded-*` from a reverse proxy in front of core.                     |
-| `EMBERLINE_SECURE_COOKIES`   | `false` | Force `Secure` session cookies. Requests that arrive over HTTPS get them anyway. |
-| `EMBERLINE_SESSION_TTL_DAYS` | `30`    | Login session lifetime.                                                          |
-| `EMBERLINE_NOTIFY_URL`       | unset   | Default ntfy topic or webhook URL. It can also be set in the UI.                 |
-| `EMBERLINE_BACKUP_KEEP`      | `10`    | Number of `make backup` snapshots to keep.                                       |
-| `EMBERLINE_LOG_LEVEL`        | `info`  | pino log level.                                                                  |
+| Variable                     | Default | Purpose                                                                                                                                                                                                                                  |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMBERLINE_SETUP_TOKEN`      | random  | Choose the first-run setup token instead of reading it from the log.                                                                                                                                                                     |
+| `EMBERLINE_TRUST_PROXY`      | `false` | Trust `X-Forwarded-*` from a reverse proxy in front of core. The proxy must overwrite `X-Forwarded-Host` (nginx: `proxy_set_header X-Forwarded-Host $host;`), and core should be reachable only through it (`EMBERLINE_BIND=127.0.0.1`). |
+| `EMBERLINE_SECURE_COOKIES`   | `false` | Force `Secure` session cookies. Requests that arrive over HTTPS get them anyway.                                                                                                                                                         |
+| `EMBERLINE_SESSION_TTL_DAYS` | `30`    | Login session lifetime.                                                                                                                                                                                                                  |
+| `EMBERLINE_NOTIFY_URL`       | unset   | Default ntfy topic or webhook URL. It can also be set in the UI.                                                                                                                                                                         |
+| `EMBERLINE_BACKUP_KEEP`      | `10`    | Number of `make backup` snapshots to keep.                                                                                                                                                                                               |
+| `EMBERLINE_LOG_LEVEL`        | `info`  | pino log level.                                                                                                                                                                                                                          |
 
 ## Desktop, mobile and embedded projects
 

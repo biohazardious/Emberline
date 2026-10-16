@@ -32,8 +32,9 @@ export interface CoreConfig {
    */
   setupToken?: string;
   /**
-   * Extra host names (lower case, no port) core answers to besides IP literals, `localhost` and the
-   * hook URL's host; `*` disables the Host check.
+   * Extra host names core answers to besides IP literals, `localhost` and the hook URL's host,
+   * normalised by `normalizeHostName` (lower case, no port, no trailing dot); `*` disables the
+   * Host check.
    */
   allowedHosts: string[];
   /** Claude Code transcripts (runner home, mounted read-only); only paths under it are read. */
@@ -61,8 +62,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: (env.EMBERLINE_ALLOWED_HOSTS ?? '')
       .split(',')
-      .map((name) => name.trim().toLowerCase().replace(/\.$/, ''))
+      .map(normalizeHostName)
       .filter(Boolean),
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
   };
+}
+
+/** Lower-case host name of a Host header value or list entry: no port, no IPv6 brackets, no trailing dot. */
+export function normalizeHostName(host: string): string {
+  let name = host.trim().toLowerCase();
+  if (name.startsWith('[')) {
+    const end = name.indexOf(']');
+    return end === -1 ? name : name.slice(1, end);
+  }
+  if (name.indexOf(':') === name.lastIndexOf(':')) name = name.replace(/:\d*$/, '');
+  return name.replace(/\.$/, '');
 }

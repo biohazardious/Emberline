@@ -13,7 +13,7 @@ function dismissedBefore(): boolean {
 }
 
 /** Warns once per browser when Emberline is used over plain HTTP from another machine. */
-export function SecurityBanner() {
+export function SecurityBanner({ floating = false }: { floating?: boolean }) {
   const [dismissed, setDismissed] = useState(dismissedBefore);
   if (dismissed || !isPlainHttpOnNetwork(location.protocol, location.hostname)) return null;
 
@@ -27,7 +27,7 @@ export function SecurityBanner() {
   };
 
   return (
-    <div className="banner banner-warn security-banner" role="status">
+    <div className={`banner banner-warn security-banner${floating ? ' security-banner-floating' : ''}`} role="status">
       <span>
         You are using Emberline over plain HTTP on the network. Passwords and session cookies travel unencrypted; use
         a VPN or a TLS reverse proxy.{' '}
