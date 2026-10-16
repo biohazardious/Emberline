@@ -30,7 +30,7 @@ import { BuildOutputsList } from '../components/RunOutcome';
 import { useRuns, useTickets } from '../hooks/liveData';
 import { useGoBack, useQueryParam, useUpdateQuery } from '../hooks/navigation';
 import { timeAgo } from '../time';
-import { dependencyCandidates, waitingLabel, waitingTitle } from '../ticketDeps';
+import { dependencyCandidates, dropIntoInProgress, waitingLabel, waitingTitle } from '../ticketDeps';
 import { toastInfo } from '../toast';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -81,6 +81,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [dragId, setDragId] = useState<string>();
   const [drop, setDrop] = useState<DropTarget>();
   const [autoStart, setAutoStart] = useState(true);
+  // A blocked ticket dropped into In progress: its drawer opens asking "Start anyway" (`nonce` re-arms it).
+  const [armedStart, setArmedStart] = useState<{ id: string; nonce: number }>();
   const [blueprintOpen, setBlueprintOpen] = useState(false);
   const [demoPanelOpen, setDemoPanelOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
@@ -108,9 +110,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
     const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
-    const enteringInProgress = target.status === 'in_progress' && ticket.status !== 'in_progress';
     const currentRun = latestRun.get(ticket.id);
-    const hasLiveRun = currentRun && !currentRun.endedAt;
+    const hasLiveRun = Boolean(currentRun && !currentRun.endedAt);
+    const dropAction = target.status === 'in_progress' ? dropIntoInProgress(ticket, { autoStart, hasLiveRun }) : 'move';
     setError(undefined);
 
     // Accepting a ticket brings its run's branch into the main workspace first; a conflict keeps the
@@ -136,7 +138,11 @@ export function BoardPage({ projectId }: { projectId: string }) {
       const updated = await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position });
       patchLocal(updated);
       // Pipeline column behavior (herdr-board): dropping into In progress dispatches an agent when idle.
-      if (enteringInProgress && autoStart && !hasLiveRun) {
+      // A ticket still waiting for others is only moved; its drawer asks before starting it.
+      if (dropAction === 'confirm') {
+        setArmedStart((prev) => ({ id: ticket.id, nonce: (prev?.nonce ?? 0) + 1 }));
+        setOpenId(ticket.id);
+      } else if (dropAction === 'start') {
         const started = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
           permissionMode: 'auto',
         });
@@ -321,8 +327,12 @@ export function BoardPage({ projectId }: { projectId: string }) {
           ticket={open}
           allTickets={tickets ?? []}
           run={latestRun.get(open.id)}
-          onClose={() => setOpenId(undefined)}
+          onClose={() => {
+            setArmedStart(undefined);
+            setOpenId(undefined);
+          }}
           onChanged={patchLocal}
+          armStart={armedStart?.id === open.id ? armedStart.nonce : 0}
           onMove={(status) => {
             if (status !== open.status) void move(open, { status, beforeId: null });
           }}
@@ -488,6 +498,7 @@ function TicketDrawer({
   run,
   onClose,
   onChanged,
+  armStart,
   onMove,
 }: {
   ticket: Ticket;
@@ -495,6 +506,8 @@ function TicketDrawer({
   run: Run | undefined;
   onClose: () => void;
   onChanged: (ticket: Ticket) => void;
+  /** Changes (non-zero) when a drop asks this drawer to confirm starting a blocked ticket. */
+  armStart: number;
   onMove: (status: TicketStatus) => void;
 }) {
   const [title, setTitle] = useState(ticket.title);
@@ -511,7 +524,10 @@ function TicketDrawer({
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [depError, setDepError] = useState<string>();
-  const [confirmStart, setConfirmStart] = useState(false);
+  const [confirmStart, setConfirmStart] = useState(armStart > 0);
+  useEffect(() => {
+    if (armStart > 0) setConfirmStart(true);
+  }, [armStart]);
   const live = run && !run.endedAt;
   const queued = run?.state === 'queued';
   const canFollowUp = (live && !queued) || run?.resumable === true;
@@ -951,7 +967,7 @@ function TicketDrawer({
                 >
                   {busy === 'start'
                     ? 'Starting…'
-                    : confirmStart
+                    : confirmStart && ticket.blockedBy.length > 0
                       ? 'Start anyway'
                       : run
                         ? 'Start new run'

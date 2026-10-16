@@ -1,6 +1,6 @@
 import type { Ticket } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { dependencyCandidates, waitingLabel, waitingTitle } from './ticketDeps';
+import { dependencyCandidates, dropIntoInProgress, waitingLabel, waitingTitle } from './ticketDeps';
 
 const t = (id: string, dependsOn: string[] = []): Ticket =>
   ({ id, key: id.toUpperCase(), dependsOn, blockedBy: [] }) as unknown as Ticket;
@@ -21,4 +21,21 @@ describe('dependencyCandidates', () => {
     const all = [a, t('b', ['a']), t('c', ['b']), t('d'), t('x')];
     expect(dependencyCandidates(a, all).map((k) => k.id)).toEqual(['d']);
   });
+});
+
+describe('dropIntoInProgress', () => {
+  const ready = { ...t('a'), status: 'ready' } as Ticket;
+  const blocked = { ...ready, blockedBy: [blocker('B')] } as Ticket;
+  it('starts an unblocked ticket when auto-start is on', () =>
+    expect(dropIntoInProgress(ready, { autoStart: true, hasLiveRun: false })).toBe('start'));
+  it('asks first for a ticket that still waits for others', () =>
+    expect(dropIntoInProgress(blocked, { autoStart: true, hasLiveRun: false })).toBe('confirm'));
+  it('only moves without auto-start or with a live run', () => {
+    expect(dropIntoInProgress(blocked, { autoStart: false, hasLiveRun: false })).toBe('move');
+    expect(dropIntoInProgress(ready, { autoStart: true, hasLiveRun: true })).toBe('move');
+  });
+  it('only moves a ticket already in progress', () =>
+    expect(dropIntoInProgress({ ...ready, status: 'in_progress' } as Ticket, { autoStart: true, hasLiveRun: false })).toBe(
+      'move',
+    ));
 });

@@ -33,3 +33,16 @@ export function dependencyCandidates(ticket: Ticket, all: readonly Ticket[]): Ti
   }
   return all.filter((t) => t.id !== ticket.id && !dependents.has(t.id) && !ticket.dependsOn.includes(t.id));
 }
+
+/**
+ * What dropping `ticket` into In progress does: `start` an agent (auto-start on, nothing running),
+ * `confirm` first when it still waits for other tickets (the drawer asks, like its Start button),
+ * or just `move` it.
+ */
+export function dropIntoInProgress(
+  ticket: Pick<Ticket, 'status' | 'blockedBy'>,
+  opts: { autoStart: boolean; hasLiveRun: boolean },
+): 'start' | 'confirm' | 'move' {
+  if (ticket.status === 'in_progress' || !opts.autoStart || opts.hasLiveRun) return 'move';
+  return ticket.blockedBy.length > 0 ? 'confirm' : 'start';
+}
