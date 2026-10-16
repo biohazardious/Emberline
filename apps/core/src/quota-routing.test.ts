@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -448,6 +448,33 @@ describe('lanes and policy', () => {
     expect(noKey.statusCode).toBe(409);
     expect(noKey.json().error).toBe('route_unusable');
     expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+  });
+
+  it('manual handoff: only for a waiting, failed or limited run whose worktree still exists', async () => {
+    const route = { agent: 'claude', model: 'sonnet', credential: 'login' };
+    t.scheduler.update({ maxConcurrentRuns: 6 }); // the successors take slots too
+    const { run } = await startTicket('Finished');
+    await work(run);
+    t.db.update(runsTable).set({ state: 'done', endedAt: new Date() }).where(eq(runsTable.id, run.id)).run();
+    const done = await api('POST', `/api/runs/${run.id}/handoff`, { route });
+    expect(done.statusCode).toBe(409);
+    expect(done.json().error).toBe('run_not_waiting');
+
+    for (const state of ['failed', 'waiting_input'] as const) {
+      const { run: other } = await startTicket(`Waiting ${state}`);
+      await work(other);
+      t.db.update(runsTable).set({ state }).where(eq(runsTable.id, other.id)).run();
+      const ok = await api('POST', `/api/runs/${other.id}/handoff`, { route });
+      expect(ok.statusCode, state).toBe(201);
+    }
+
+    const { run: pruned } = await startTicket('Pruned');
+    await hook(pruned.id, 'StopFailure', await work(pruned), AGY_QUOTA);
+    rmSync(pruned.worktreePath, { recursive: true, force: true });
+    const missing = await api('POST', `/api/runs/${pruned.id}/handoff`, { route });
+    expect(missing.statusCode).toBe(409);
+    expect(missing.json().error).toBe('worktree_missing');
+    expect(await getRun(pruned.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
   });
 
   it('resume-now rejects an empty lane field instead of resuming every lane', async () => {

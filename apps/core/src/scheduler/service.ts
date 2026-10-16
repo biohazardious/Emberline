@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
 import { type RateLimitInfo, rateLimitFromScreen } from '@emberline/adapter-claude';
 import {
   type CreateRunBody,
@@ -52,6 +53,9 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
 };
 
 const MAX_CONCURRENCY_KEY = 'scheduler.maxConcurrentRuns';
+
+/** Runs a person may hand to another route: stuck on a limit, failed, or waiting for an answer. */
+const MANUAL_HANDOFF_STATES: ReadonlySet<string> = new Set(['rate_limited', 'failed', 'waiting_input']);
 const DEFAULT_MAX_CONCURRENCY = 2;
 
 const toWindow = (row: WindowRow): QuotaWindow => ({
@@ -190,12 +194,19 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   }
 
   /**
-   * A person hands a waiting run to another route. Refused (before the run is touched) when the
+   * A person hands a waiting run to another route. Refused (before the run is touched) unless the
+   * run is waiting (limited, failed or waiting for input) in a worktree that still exists, when the
    * agent cannot sign in that way, when an API-key route has no key saved, or while that route is
    * out of quota too.
    */
   async handOff(runId: string, route: Route): Promise<Run> {
-    this.runs.getRun(runId); // 404 for an unknown run first
+    const run = this.runs.getRun(runId); // 404 for an unknown run first
+    if (!MANUAL_HANDOFF_STATES.has(run.state)) {
+      throw new HttpError(409, 'run_not_waiting', `a ${run.state} run cannot be handed off; only a waiting, failed or limited one`);
+    }
+    if (!existsSync(run.worktreePath)) {
+      throw new HttpError(409, 'worktree_missing', "this run's worktree was removed; start a new run instead");
+    }
     if (!PROVIDER_RUNTIME[route.agent]?.credentials.includes(route.credential)) {
       throw new HttpError(400, 'route_unsupported', `${route.agent} cannot run with credential ${route.credential}`);
     }
