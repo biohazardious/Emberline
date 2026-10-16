@@ -109,6 +109,12 @@ export const RunBuildOutputsResponse = z.object({
 });
 export type RunBuildOutputsResponse = z.infer<typeof RunBuildOutputsResponse>;
 
+export const PruneWorktreeBody = z.object({
+  /** Remove the worktree even when it holds uncommitted changes or commits not in the default branch. */
+  force: z.boolean().default(false),
+});
+export type PruneWorktreeBody = z.input<typeof PruneWorktreeBody>;
+
 export const PruneWorktreeResponse = z.object({
   runId: z.string(),
   worktreePath: z.string(),

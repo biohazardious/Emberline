@@ -139,7 +139,7 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
 
   app.post<{ Params: { id: string } }>(
     '/api/runs/:id/worktree/prune',
-    async (request): Promise<PruneWorktreeResponse> => runs.pruneWorktree(request.params.id),
+    async (request): Promise<PruneWorktreeResponse> => runs.pruneWorktree(request.params.id, (request.body ?? {}) as never),
   );
 
   app.get<{ Params: { id: string } }>(

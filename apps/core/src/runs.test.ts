@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { eq } from 'drizzle-orm';
-import { runs } from './db/schema.js';
+import { projects, runs } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -360,6 +360,87 @@ describe('runs', () => {
       expect(ids).toContain(successor.id);
       expect(existsSync(lone.worktreePath)).toBe(false);
       expect(existsSync(predecessor.worktreePath)).toBe(true);
+    });
+  });
+
+  describe('garbage collection keeps unmerged work', () => {
+    const finishRun = async (projectId: string) => {
+      const run: Run = (await api('POST', '/api/runs', { projectId })).json();
+      await tokenFor(run.id);
+      await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return t.runs.getRun(run.id).endedAt;
+          },
+          { timeout: 5_000 },
+        )
+        .not.toBeNull();
+      return t.runs.getRun(run.id);
+    };
+    const commitIn = (dir: string) =>
+      execFileSync('git', ['-C', dir, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'agent work']);
+
+    it('manual GC keeps a worktree whose branch has commits outside the default branch, until it is merged', async () => {
+      const project = await createProject('GC unmerged', true);
+      const run = await finishRun(project.id);
+      commitIn(run.worktreePath);
+
+      const first = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(first.removedRuns).toBe(0);
+      expect(first.keptWorktrees).toEqual([{ runId: run.id, reason: 'unmerged_commits' }]);
+      expect(existsSync(run.worktreePath)).toBe(true);
+
+      execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'merge', '-q', '--no-ff', '-m', 'merge', run.branch ?? '']);
+      const second = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(second.removedRuns).toBe(1);
+      expect(second.keptWorktrees).toEqual([]);
+      expect(existsSync(run.worktreePath)).toBe(false);
+    });
+
+    it('reports uncommitted changes and a missing default branch as kept', async () => {
+      const project = await createProject('GC kept reasons', true);
+      const dirty = await finishRun(project.id);
+      writeFileSync(path.join(dirty.worktreePath, 'unsaved.txt'), 'wip\n');
+      const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(res.keptWorktrees).toEqual([{ runId: dirty.id, reason: 'uncommitted_changes' }]);
+
+      // A default branch git cannot resolve means "cannot prove it is merged": keep.
+      const clean = await finishRun(project.id);
+      t.db.update(projects).set({ defaultBranch: 'no-such-branch' }).where(eq(projects.id, project.id)).run();
+      const res2 = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(res2.keptWorktrees).toContainEqual({ runId: clean.id, reason: 'unmerged_commits' });
+      expect(existsSync(clean.worktreePath)).toBe(true);
+    });
+
+    it('auto-GC keeps a stale worktree with unmerged commits', async () => {
+      const project = await createProject('Auto GC unmerged', true);
+      const stale = await finishRun(project.id);
+      commitIn(stale.worktreePath);
+      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, stale.id)).run();
+      for (let i = 0; i < 10; i += 1) {
+        t.db
+          .insert(runs)
+          .values({
+            id: `synthetic-${i}`,
+            projectId: project.id,
+            agent: 'claude',
+            state: 'done',
+            worktreePath: project.path,
+            hookTokenHash: 'x',
+            stateChangedAt: new Date(10_000 + i),
+            createdAt: new Date(10_000 + i),
+            endedAt: new Date(10_000 + i),
+          })
+          .run();
+      }
+      const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(live.id);
+      (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+      await t.runs.reconcile();
+      expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
+      expect(existsSync(stale.worktreePath)).toBe(true);
     });
   });
 

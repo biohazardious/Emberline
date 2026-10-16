@@ -10,6 +10,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - WebSocket connections (`/api/events`, terminals) without an `Origin` header are refused.
 - The web app shows a dismissible warning when you open it over plain HTTP from another machine, since passwords and session cookies then travel unencrypted.
 
+### Fixed
+
+- Cleaning up finished runs no longer deletes work that was not merged. Garbage collection (manual, per project, and the automatic one) now keeps a worktree that has uncommitted changes or commits missing from the project's default branch, and says how many it kept and why. If Emberline cannot tell, it keeps the worktree. Pruning one run's worktree from the dashboard asks first when it holds such work, with a "Prune anyway" button.
+
 ### Changed
 
 - Settings shows a short terms note per provider: a risk level (low, medium, high), what the vendor's terms say about running its CLI inside a platform like Emberline, the date it was checked and a link to the source. The README lists the same. Several accounts per provider stays a non-goal.

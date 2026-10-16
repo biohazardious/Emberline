@@ -645,6 +645,15 @@ export const GarbageCollectRunsResponse = z.object({
   removedRuns: z.number().int(),
   closedSessions: z.number().int(),
   prunedWorktrees: z.number().int(),
+  /** Finished runs whose worktree (and run row) were kept because removing it could lose work. */
+  keptWorktrees: z
+    .array(
+      z.object({
+        runId: z.string(),
+        reason: z.enum(['uncommitted_changes', 'unmerged_commits', 'in_review']),
+      }),
+    )
+    .default([]),
   remainingRuns: z.number().int(),
 });
 export type GarbageCollectRunsResponse = z.infer<typeof GarbageCollectRunsResponse>;

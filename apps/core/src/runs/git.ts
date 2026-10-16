@@ -632,6 +632,22 @@ export async function worktreeHasUncommittedWork(worktreePath: string): Promise<
   return status === null || status.trim().length > 0;
 }
 
+/**
+ * True when the worktree's HEAD has commits that are not in the project's default branch, so
+ * removing it would strand them on a branch nobody merged. Fail-closed: any git error (missing
+ * default branch, unreadable repo) counts as unmerged.
+ */
+export async function worktreeHasUnmergedCommits(worktreePath: string, defaultBranch: string): Promise<boolean> {
+  if (!existsSync(path.join(worktreePath, '.git'))) return false;
+  try {
+    await git(worktreePath, ['rev-parse', '--verify', '--quiet', `refs/heads/${defaultBranch}`]);
+    const count = await git(worktreePath, ['rev-list', '--count', `refs/heads/${defaultBranch}..HEAD`]);
+    return !/^\d+$/.test(count) || Number(count) > 0;
+  } catch {
+    return true;
+  }
+}
+
 export async function pruneWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
   const resolvedProject = path.resolve(projectPath);
   const resolvedWorktree = path.resolve(worktreePath);

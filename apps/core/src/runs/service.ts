@@ -32,6 +32,8 @@ import {
   type GitStageBody,
   type HookEnvelope,
   PROVIDER_RUNTIME,
+  type PruneWorktreeBody,
+  PruneWorktreeBody as PruneWorktreeBodySchema,
   type PruneWorktreeResponse,
   type Route,
   type Run,
@@ -82,6 +84,7 @@ import {
   resolveSafeWorktreePath,
   stageWorktreeFiles,
   worktreeHasUncommittedWork,
+  worktreeHasUnmergedCommits,
 } from './git.js';
 import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } from './handoff.js';
 import { providerAdapter } from './providers.js';
@@ -129,6 +132,8 @@ const AUTO_GC_INTERVAL_MS = 60_000;
 const IDLE_DONE_RESUMABLE_TTL_MS = 2 * 60_000;
 const IDLE_DONE_NON_RESUMABLE_TTL_MS = 30 * 60_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
+
+type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
 /** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
 const STARTING_WATCHDOG_MS = 3 * 60_000;
 const MAX_EVENTS_IN_DETAIL = 200;
@@ -1272,7 +1277,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Prunes the linked git worktree (`/workspaces/.worktrees/...`) for an ended run, keeping
    * the run record and git branch intact. Active runs must be stopped first.
    */
-  async pruneWorktree(id: string): Promise<PruneWorktreeResponse> {
+  async pruneWorktree(id: string, rawBody?: PruneWorktreeBody): Promise<PruneWorktreeResponse> {
+    const { force } = PruneWorktreeBodySchema.parse(rawBody ?? {});
     let row = this.row(id);
     if (!row.endedAt) {
       await this.reconcile();
@@ -1289,6 +1295,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (shared) throw conflict(`run ${shared.id.slice(0, 8)} still works in this worktree`);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');
+    if (!force && row.worktreePath !== project.path) {
+      const reason = await this.worktreeWorkReason(row.worktreePath, project.defaultBranch);
+      if (reason) {
+        throw new HttpError(
+          409,
+          'worktree_has_work',
+          reason === 'uncommitted_changes'
+            ? 'This worktree has uncommitted changes that pruning would delete.'
+            : `This worktree has commits that are not in ${project.defaultBranch} yet. Merge the branch first, or prune anyway.`,
+        );
+      }
+    }
     const removed = await pruneWorktree(project.path, row.worktreePath);
     if (removed) {
       this.record(id, {
@@ -1518,6 +1536,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     let closedSessions = 0;
     let prunedWorktrees = 0;
     let removedRuns = 0;
+    const keptWorktrees: GarbageCollectRunsResponse['keptWorktrees'] = [];
 
     // 1. Ensure any run already in `done` or `failed` state with an open or attached PTY session is closed & detached.
     const allRuns = this.db.select().from(runs).orderBy(desc(runs.createdAt)).all();
@@ -1598,7 +1617,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const toRemove = list.slice(body.keepRecent);
       const proj = projectMap.get(projId);
       for (const row of toRemove) {
-        if (await this.mustKeepForReview(row, proj?.path)) continue;
+        const keep = await this.mustKeepForReview(row, proj);
+        if (keep) {
+          keptWorktrees.push({ runId: row.id, reason: keep });
+          continue;
+        }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
@@ -1618,6 +1641,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       removedRuns,
       closedSessions,
       prunedWorktrees,
+      keptWorktrees,
       remainingRuns,
     };
   }
@@ -1769,7 +1793,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
           const proj = projectMap.get(projId);
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
-            if (await this.mustKeepForReview(stale, proj?.path)) continue;
+            if (await this.mustKeepForReview(stale, proj)) continue;
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
@@ -1786,17 +1810,33 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /**
    * Garbage collection never deletes work a human still has to look at: runs of tickets that are
-   * not `done` yet (e.g. in Review after a refused merge) and worktrees with uncommitted changes.
+   * not `done` yet (e.g. in Review after a refused merge), worktrees with uncommitted changes, and
+   * worktrees whose branch has commits the default branch does not contain. Returns why, or null.
    */
-  private async mustKeepForReview(row: RunRow, projectPath: string | undefined): Promise<boolean> {
+  private async mustKeepForReview(
+    row: RunRow,
+    project: { path: string; defaultBranch: string } | undefined,
+  ): Promise<KeptWorktreeReason | null> {
     if (row.ticketId) {
       const ticket = this.db.select({ status: tickets.status }).from(tickets).where(eq(tickets.id, row.ticketId)).get();
-      if (ticket && ticket.status !== 'done') return true;
+      if (ticket && ticket.status !== 'done') return 'in_review';
     }
-    if (row.worktreePath && row.worktreePath !== projectPath) {
-      return worktreeHasUncommittedWork(row.worktreePath);
+    if (row.worktreePath && row.worktreePath !== project?.path) {
+      // Without a project the default branch is unknown, so nothing can be proven merged.
+      return this.worktreeWorkReason(row.worktreePath, project?.defaultBranch ?? null);
     }
-    return false;
+    return null;
+  }
+
+  private async worktreeWorkReason(
+    worktreePath: string,
+    defaultBranch: string | null,
+  ): Promise<Exclude<KeptWorktreeReason, 'in_review'> | null> {
+    if (await worktreeHasUncommittedWork(worktreePath)) return 'uncommitted_changes';
+    if (defaultBranch === null || (await worktreeHasUnmergedCommits(worktreePath, defaultBranch))) {
+      return 'unmerged_commits';
+    }
+    return null;
   }
 
   private row(id: string): RunRow {

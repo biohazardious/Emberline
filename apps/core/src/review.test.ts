@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
   GitCommitResponse,
@@ -203,6 +203,29 @@ describe('M6 review, git commit/push, and artifacts', () => {
     const secondPrune = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
     expect(secondPrune.statusCode).toBe(200);
     expect(secondPrune.json().removed).toBe(false);
+  });
+
+  it('refuses to prune a worktree with uncommitted changes unless forced', async () => {
+    const { project } = await createGitProjectWithBareRemote('Prune Dirty');
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'dirty' })).json();
+    writeFileSync(path.join(run.worktreePath, 'unsaved.txt'), 'wip\n');
+    await api('POST', `/api/runs/${run.id}/stop`);
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return ((await api('GET', `/api/runs/${run.id}`)).json() as Run).endedAt;
+      })
+      .toBeTruthy();
+
+    const refused = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('worktree_has_work');
+    expect(existsSync(path.join(run.worktreePath, 'unsaved.txt'))).toBe(true);
+
+    const forced = await api('POST', `/api/runs/${run.id}/worktree/prune`, { force: true });
+    expect(forced.statusCode).toBe(200);
+    expect(forced.json().removed).toBe(true);
+    expect(existsSync(run.worktreePath)).toBe(false);
   });
 
   it('configures and dispatches ntfy / webhook notifications', async () => {

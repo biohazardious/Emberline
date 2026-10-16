@@ -13,7 +13,7 @@ import { API_VERSION } from '@emberline/protocol';
 import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { api, errorMessage } from '../api';
+import { api, ApiRequestError, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -65,6 +65,7 @@ export function Dashboard({
   const setOverviewTab = (tab: OverviewTab) => setSectionParam(tab === 'studio' ? null : tab);
   const [hideCompletedRuns, setHideCompletedRuns] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string>();
+  const [pruneBlocked, setPruneBlocked] = useState<{ id: string; message: string }>();
   const [runFormFor, setRunFormFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
   const [runFormPrompt, setRunFormPrompt] = useState<string>('');
@@ -131,15 +132,20 @@ export function Dashboard({
     }
   };
 
-  const runAction = async (id: string, action: 'stop' | 'remove' | 'resume' | 'prune') => {
+  const runAction = async (id: string, action: 'stop' | 'remove' | 'resume' | 'prune', force = false) => {
     setActionError(undefined);
+    setPruneBlocked(undefined);
     try {
       if (action === 'stop') await api(`/api/runs/${id}/stop`, 'POST');
       else if (action === 'resume') await api(`/api/runs/${id}/resume`, 'POST', {});
-      else if (action === 'prune') await api(`/api/runs/${id}/worktree/prune`, 'POST', {});
+      else if (action === 'prune') await api(`/api/runs/${id}/worktree/prune`, 'POST', force ? { force: true } : {});
       else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
-      setActionError(errorMessage(e));
+      if (action === 'prune' && e instanceof ApiRequestError && e.code === 'worktree_has_work') {
+        setPruneBlocked({ id, message: e.message });
+      } else {
+        setActionError(errorMessage(e));
+      }
     }
   };
 
@@ -161,6 +167,14 @@ export function Dashboard({
       {system && system.apiVersion !== API_VERSION && (
         <div className="banner banner-warn" role="status">
           Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the new version.
+        </div>
+      )}
+      {pruneBlocked && (
+        <div className="banner banner-error" role="alert">
+          {pruneBlocked.message}{' '}
+          <button type="button" className="btn btn-sm" onClick={() => void runAction(pruneBlocked.id, 'prune', true)}>
+            Prune anyway
+          </button>
         </div>
       )}
       {actionError && (
