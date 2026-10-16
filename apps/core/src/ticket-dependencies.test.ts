@@ -79,7 +79,8 @@ async function waitFile(name: string): Promise<string> {
 }
 
 
-type Draft = { ref?: string; title: string; persona?: string; dependsOn?: string[] };
+/** `ref` and `dependsOn` are loose on purpose: the PO writes them by hand. */
+type Draft = { ref?: unknown; title: string; persona?: string; dependsOn?: unknown };
 
 /** Runs a PO ticket that writes `drafts` into its worktree and lets its Stop ingest them. */
 async function ingestDrafts(projectId: string, drafts: Draft[]): Promise<{ run: Run; tickets: Ticket[] }> {
@@ -146,6 +147,44 @@ describe('ticket dependencies', () => {
         { ticket: b.key, ref: 'a', reason: 'cycle' },
       ]),
     );
+  });
+
+  it('keeps the whole batch when a ref or dependsOn is malformed', async () => {
+    const project = await createProject();
+    const { tickets } = await ingestDrafts(project.id, [
+      { ref: 'brand_assets', title: 'Brand assets', persona: 'ui_ux' },
+      { ref: 7, title: 'Android shell', persona: 'coder' },
+      { ref: 'apk-build', title: 'APK build', persona: 'coder', dependsOn: ['brand_assets', 7] },
+      { ref: 'qa', title: 'QA pass', persona: 'qa', dependsOn: 'apk-build' },
+    ]);
+    expect(tickets).toHaveLength(4);
+    const apk = byTitle(tickets, 'APK build');
+    expect([...apk.dependsOn].sort()).toEqual([byTitle(tickets, 'Brand assets').id, byTitle(tickets, 'Android shell').id].sort());
+    expect(byTitle(tickets, 'QA pass').dependsOn).toEqual([apk.id]);
+  });
+
+  it('notes a tickets file it cannot read on the run instead of dropping it silently', async () => {
+    await api('PATCH', '/api/factory/settings', { autoPickupReady: false });
+    const project = await createProject();
+    for (const content of ['{ "tickets": [ { "title": "A" ', JSON.stringify({ autoDispatch: false, tickets: [] })]) {
+      const po = await createTicket(project.id, { title: 'Plan the work', status: 'ready' });
+      const { run } = (await api('POST', `/api/tickets/${po.id}/start`, {})).json() as { run: Run };
+      const file = path.join(run.worktreePath, '.emberline', 'new-tickets.json');
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, content);
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+      await hook(run.id, 'UserPromptSubmit', token);
+      await hook(run.id, 'Stop', token);
+      await expect
+        .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type))
+        .toContain('tickets_file_rejected');
+      const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+      const note = detail.events.find((e) => e.type === 'tickets_file_rejected')?.payload as { message: string };
+      expect(note.message.length).toBeGreaterThan(0);
+      expect(note.message.length).toBeLessThanOrEqual(500);
+      expect(existsSync(file)).toBe(false);
+    }
   });
 
   it('applies the default tiers when no draft declares dependsOn', async () => {

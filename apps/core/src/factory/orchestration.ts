@@ -111,8 +111,13 @@ ${attachmentSection}
 5. **Autonomous Execution Rule (CRITICAL):** Do NOT ask the user clarifying questions and do NOT wait for confirmation. Always select the cleanest architecture-appropriate design that fits \`PROJECT.md\` and write \`.emberline/new-tickets.json\` in this turn.`;
 }
 
+/**
+ * Reads and consumes the drafts file an agent wrote. A file that is not valid JSON or not a valid
+ * batch is still removed; `onRejected` hears why, so the run can say so instead of failing silently.
+ */
 export async function ingestAgentTicketsFile(
   workspacePath: string,
+  onRejected?: (message: string) => void,
 ): Promise<{ autoDispatch: boolean; tickets: AgentTicketDraft[] } | null> {
   const candidates = [
     path.join(workspacePath, '.emberline', 'new-tickets.json'),
@@ -128,8 +133,9 @@ export async function ingestAgentTicketsFile(
         Array.isArray(json) ? { autoDispatch: true, tickets: json } : json,
       );
       return parsed;
-    } catch {
+    } catch (error) {
       await rm(filePath, { force: true }).catch(() => undefined);
+      onRejected?.(`${path.basename(filePath)}: ${(error as Error).message}`.slice(0, 500));
     }
   }
   return null;

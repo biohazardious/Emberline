@@ -226,6 +226,7 @@ const EVENT_LABEL: Record<string, string> = {
   retry_gave_up: 'retry gave up',
   dependencies_applied: 'planned order',
   dependency_dropped: 'dependency dropped',
+  tickets_file_rejected: 'tickets file rejected',
   conflict_resolution_requested: 'resolving merge conflict',
 };
 

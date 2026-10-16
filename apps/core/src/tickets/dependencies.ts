@@ -1,4 +1,4 @@
-import type { AgentPersona } from '@emberline/protocol';
+import { type AgentPersona, normalizeTicketRef } from '@emberline/protocol';
 
 /** Default execution tiers: lower tiers run first when a batch states no dependencies. */
 export const DEPENDENCY_TIERS: Record<AgentPersona, 0 | 1 | 2> = {
@@ -86,7 +86,9 @@ export function resolveBatchDependencies(
   const dropped: DroppedDependency[] = [];
   for (const ticket of batch) {
     for (const ref of ticket.dependsOn ?? []) {
-      const dependsOnId = refs.get(ref.toLowerCase()) ?? projectKeys.get(ref.toUpperCase());
+      // A ref the schema rewrote (`brand_assets` → `brand-assets`) is still found under its old spelling.
+      const dependsOnId =
+        refs.get(ref.toLowerCase()) ?? refs.get(normalizeTicketRef(ref) ?? '') ?? projectKeys.get(ref.toUpperCase());
       if (!dependsOnId) {
         dropped.push({ ticketId: ticket.id, ref, reason: 'unknown' });
         continue;

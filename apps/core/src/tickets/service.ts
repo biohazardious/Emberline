@@ -450,10 +450,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       : undefined;
 
     // 1. Check if the agent wrote `.emberline/new-tickets.json` in its worktree or main workspace
-    const fromWorktree = run.worktreePath ? await ingestAgentTicketsFile(run.worktreePath) : null;
+    const rejected = (message: string) => this.runs.note(run.id, 'tickets_file_rejected', { message });
+    const fromWorktree = run.worktreePath ? await ingestAgentTicketsFile(run.worktreePath, rejected) : null;
     const fromMain =
       !fromWorktree && projectRow.path !== run.worktreePath
-        ? await ingestAgentTicketsFile(projectRow.path)
+        ? await ingestAgentTicketsFile(projectRow.path, rejected)
         : null;
     const ingested = fromWorktree ?? fromMain;
 

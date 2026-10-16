@@ -72,11 +72,36 @@ describe('ticket dependencies', () => {
 });
 
 describe('dependency protocol fields', () => {
-  it('lower-cases and validates draft refs and caps dependsOn', () => {
-    expect(AgentTicketDraft.parse({ title: 'x', ref: 'Brand-Assets' }).ref).toBe('brand-assets');
-    expect(AgentTicketDraft.safeParse({ title: 'x', ref: 'bad ref!' }).success).toBe(false);
-    expect(AgentTicketDraft.safeParse({ title: 'x', dependsOn: Array.from({ length: 11 }, (_, i) => `r${i}`) }).success).toBe(false);
-    expect(AgentTicketDraft.safeParse({ title: 'x', dependsOn: ['a'] }).success).toBe(true);
+  it('normalizes draft refs instead of rejecting the draft', () => {
+    const ref = (value: unknown) => AgentTicketDraft.parse({ title: 'x', ref: value }).ref;
+    expect(ref('Brand-Assets')).toBe('brand-assets');
+    expect(ref('bad ref!')).toBe('bad-ref-');
+    expect(ref('brand_assets')).toBe('brand-assets');
+    expect(ref('--Lead')).toBe('lead');
+    expect(ref(7)).toBe('7');
+    expect(ref('x'.repeat(50))).toBe('x'.repeat(40));
+    expect(ref('!!!')).toBeUndefined();
+    expect(ref({ nested: true })).toBeUndefined();
+    expect(AgentTicketDraft.parse({ title: 'x' }).ref).toBeUndefined();
+  });
+
+  it('normalizes dependsOn: one string, numbers, junk entries and more than 10', () => {
+    const deps = (value: unknown) => AgentTicketDraft.parse({ title: 'x', dependsOn: value }).dependsOn;
+    expect(deps(['a'])).toEqual(['a']);
+    expect(deps('apk-build')).toEqual(['apk-build']);
+    expect(deps(['a', 3, null, { b: 1 }, ' c '])).toEqual(['a', '3', 'c']);
+    expect(deps(Array.from({ length: 11 }, (_, i) => `r${i}`))).toHaveLength(10);
+    expect(deps({ not: 'a list' })).toBeUndefined();
+    expect(AgentTicketDraft.parse({ title: 'x' }).dependsOn).toBeUndefined();
+  });
+
+  it('matches a dependsOn entry written like the ref was before normalization', () => {
+    const { edges } = resolveBatchDependencies(
+      [t('a', 'ui_ux', 'brand-assets'), t('b', 'coder', 'apk', ['Brand_Assets'])],
+      keys,
+      [],
+    );
+    expect(edges).toEqual([{ ticketId: 'b', dependsOnId: 'a' }]);
   });
 
   it('accepts dependsOn on ticket updates', () => {
