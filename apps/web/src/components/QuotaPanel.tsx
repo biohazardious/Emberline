@@ -440,7 +440,7 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
             <>
               <ProviderLimitsHeader id="antigravity" title="Antigravity" />
               <p className="muted small" style={{ margin: 0 }}>
-                Antigravity does not report its quota to the CLI, and Emberline does not query Google's quota service with
+                The Antigravity CLI does not expose its quota, and Emberline does not query Google's quota service with
                 your login. When a run hits a limit, it shows at the top of this panel with its reset time.
               </p>
             </>
