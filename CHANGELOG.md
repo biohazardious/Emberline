@@ -7,10 +7,26 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Added
 
 - A run whose turn died on a temporary provider error (503 / unavailable, overloaded, 5xx, network errors) is retried automatically after 1, 5 and 15 minutes, continuing the same session. It waits as "retrying n/3" without pausing other runs; sign-in, billing, quota and request errors are never retried, a stop cancels the pending retry, and after the third failure the run is left for you as before.
+- Fallback chains: each persona has an ordered list of routes (provider, model, and sign-in, API key or — for Antigravity — AI credits). Settings → Multi-Agent & Model Matrix sets them and two policies: whether new runs wait for a provider's quota to reset or start on the next route, and whether a run that runs out of quota waits or hands off to the next route. A handoff continues in the same worktree and branch with a summary of the work so far; it shows as "handed off" with links between the runs, and a waiting run offers "Continue with…".
+- Quota limits are tracked per provider, sign-in and model pool: one provider running out no longer pauses the others. Each exhausted lane has its own countdown and "Try now".
+- Notifications name the lane that ran out ("Antigravity (all models) quota reached …") and say when it is back.
+- Settings shows the Claude account's extra usage (it is set on claude.ai).
 
 ### Fixed
 
 - Claude Code runs could stop at the Claude in Chrome dialog ("Claude in Chrome extension detected — use my browser?"), shown when the signed-in account has the extension on another computer. Runs now start with `--no-chrome` and the dialog is pre-answered; an answer you already gave is kept.
+- Antigravity's "Individual quota reached … Resets in 31h43m" (RESOURCE_EXHAUSTED / 429) failed the run instead of waiting for the reset; quota and rate-limit errors of every CLI (429, RESOURCE_EXHAUSTED, "quota exceeded") are now recognised, billing errors are not.
+- Gemini CLI, Codex, Copilot and Aider runs resumed after a limit started over without context; they now get the task, the last message and the worktree state.
+- Scheduled (cron) jobs were skipped while any provider was out of quota; they now start, and only a job whose own provider is out of quota waits queued for it.
+- Claude Code's spend-limit messages ("You've hit your monthly spend limit") and the end of its own usage-limit wait are recognised as limits, so the run waits for the reset or hands off like any other limit.
+
+### Upgrading
+
+- Migration 0013 runs on start (a database backup is taken first).
+- Persona settings become one-step chains. A persona whose provider had an API key saved keeps using that key (route "API key"); put a "Sign-in" route first if you want the subscription used first. "Auto-downgrade Claude" becomes a second Claude route.
+- Antigravity runs no longer receive the Gemini API key; they use the Antigravity sign-in.
+- Antigravity's "Use AI credits" is now set by Emberline for each run: off for "Sign-in" routes, on for "AI credits" routes. A value switched by hand in agy is overwritten by the next run; add an "AI credits" route to the chain instead.
+- Both policies default to "wait", which keeps the previous behaviour apart from per-provider waiting.
 
 ## [0.1.3] - 2026-10-16
 
