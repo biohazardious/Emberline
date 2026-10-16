@@ -188,4 +188,51 @@ describe('runs carry their route', () => {
   });
 });
 
+describe('handoff', () => {
+  it('continues a run as a successor in the same worktree and branch', async () => {
+    const { run } = await startTicket('Colour-blind cats');
+    const token = await work(run);
+    await hook(run.id, 'StopFailure', token, AGY_QUOTA);
+
+    const successor: Run = await t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, {
+      reason: 'Individual quota reached',
+      source: 'system',
+      automatic: true,
+    });
+    expect(successor).toMatchObject({
+      agent: 'claude',
+      model: 'opus',
+      routeIndex: 1,
+      predecessorRunId: run.id,
+      worktreePath: run.worktreePath,
+      branch: run.branch,
+      ticketId: run.ticketId,
+    });
+    expect(successor.prompt).toContain('You are taking over a task from another agent, antigravity (argon)');
+
+    const before = await getRun(run.id);
+    expect(before).toMatchObject({ state: 'done', handedOffTo: successor.id });
+    expect(before.endedAt).not.toBeNull();
+    expect(before.events.at(-1)).toMatchObject({ type: 'handed_off', payload: { toRunId: successor.id } });
+    // Only one live run on the ticket, and it is the successor.
+    expect(t.runs.activeRunForTicket(run.ticketId ?? '')?.id).toBe(successor.id);
+    // Twice is refused.
+    await expect(t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, { reason: 'x', source: 'user', automatic: false })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('resumes a Gemini run without session support with the handoff prompt, not a bare "continue"', async () => {
+    process.env.EMBERLINE_GEMINI_COMMAND = path.join(t.dir, 'fake-gemini');
+    writeFake(t.dir, 'fake-gemini');
+    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'], personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] } });
+    const { run } = await startTicket('Regression matrix', 'qa');
+    const token = await work(run);
+    await hook(run.id, 'Stop', token);
+    await t.ptyd.get().write(run.terminalId ?? '', 'exit\r');
+    await expect.poll(async () => { await t.runs.reconcile(); return (await getRun(run.id)).endedAt; }, { timeout: 5_000 }).not.toBeNull();
+    await t.runs.resume(run.id);
+    await expect.poll(() => readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8'), { timeout: 5_000 }).toContain('Your previous session on this task ended');
+    delete process.env.EMBERLINE_GEMINI_COMMAND;
+  });
+});
+
 export { api, AGY_QUOTA, getRun, hook, scheduler, startTicket, waitFile, work };

@@ -31,6 +31,7 @@ import {
   type GitPushResponse,
   type GitStageBody,
   type HookEnvelope,
+  PROVIDER_RUNTIME,
   type PruneWorktreeResponse,
   type Route,
   type Run,
@@ -42,6 +43,7 @@ import {
   type RunFileDiff,
   type RunPreviewStatus,
   type RunState,
+  sameRoute,
   type RunTelemetry,
   type StartPreviewBody,
   StartPreviewBody as StartPreviewBodySchema,
@@ -67,6 +69,7 @@ import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath } from '../demo-token
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
+  git,
   inspectDiff,
   inspectFileDiff,
   listBuildOutputs,
@@ -79,6 +82,7 @@ import {
   stageWorktreeFiles,
   worktreeHasUncommittedWork,
 } from './git.js';
+import { buildHandoffPrompt, type HandoffPromptInput } from './handoff.js';
 import { providerAdapter } from './providers.js';
 import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
@@ -574,7 +578,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       await this.typePrompt(row.ptydSessionId, text);
       return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
     }
-    if (!row.agentSessionId) {
+    const mode = PROVIDER_RUNTIME[row.agent as AgentId]?.resumeMode ?? 'session';
+    if (!row.agentSessionId && mode === 'session') {
       if (row.state === 'done') {
         // B19: a finished run's result stands; only this follow-up is impossible.
         this.note(id, 'resume_failed', { reason: 'no session' });
@@ -585,7 +590,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       throw conflict('this run has no agent session to resume; start a new run');
     }
     const previous = row.ptydSessionId;
-    const run = await this.spawnAgent(row, { prompt: text, resumeSessionId: row.agentSessionId, type: 'resumed' });
+    // Providers without session resume start a new conversation: give it the context a bare "continue" lacks.
+    const respawnPrompt =
+      mode === 'fresh' && text === CONTINUE_PROMPT
+        ? buildHandoffPrompt(await this.handoffContext(row, 'the session ended', true))
+        : text;
+    const run = await this.spawnAgent(row, {
+      prompt: respawnPrompt,
+      resumeSessionId: mode === 'fresh' ? undefined : (row.agentSessionId ?? undefined),
+      type: 'resumed',
+    });
     if (previous) {
       // The exited terminal is superseded by the new one.
       await this.ptyd
@@ -594,6 +608,109 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .catch(() => undefined);
     }
     return run;
+  }
+
+  /**
+   * Ends `id` and continues its work as a new run on `route`, in the same worktree and branch, with
+   * a prompt that hands over what was done. The successor is inserted first, so every listener that
+   * sees the predecessor turn `done` also sees `handedOffTo` and does not treat it as finished work.
+   */
+  async handOff(id: string, route: Route, opts: { reason: string; source: 'system' | 'user'; automatic: boolean }): Promise<Run> {
+    const row = this.row(id);
+    if (row.cancelledAt) throw conflict('this run was stopped');
+    if (row.handedOffTo) throw conflict('this run was already handed off');
+    if (row.state === 'queued' || row.state === 'starting' || row.state === 'working') {
+      throw conflict(`a ${row.state} run cannot be handed off`);
+    }
+    const routes = [...runRoutes(row)];
+    let routeIndex = routes.findIndex((r) => sameRoute(r, route));
+    if (routeIndex < 0) {
+      routes.push(route);
+      routeIndex = routes.length - 1;
+    }
+    const prompt = buildHandoffPrompt(await this.handoffContext(row, opts.reason, false));
+    const successor = await this.enqueue(
+      { projectId: row.projectId, prompt, persona: row.persona as AgentPersona, permissionMode: row.permissionMode as Run['permissionMode'] },
+      {
+        ticketId: row.ticketId ?? undefined,
+        title: row.title ?? undefined,
+        worktree: { path: row.worktreePath, branch: row.branch },
+        routes,
+        routeIndex,
+        predecessor: { id: row.id, handoffCount: row.handoffCount + (opts.automatic ? 1 : 0) },
+      },
+    );
+    this.note(successor.id, 'handoff_from', {
+      fromRunId: row.id,
+      reason: opts.reason,
+      message: `Took over from ${row.agent} (${runModel(row) ?? 'auto'}): ${opts.reason}`,
+    });
+    const sessionId = row.ptydSessionId && !row.endedAt ? row.ptydSessionId : null;
+    this.record(row.id, {
+      source: opts.source,
+      type: 'handed_off',
+      state: 'done',
+      payload: { toRunId: successor.id, route, reason: opts.reason, message: `Handed off to ${route.agent} (${route.model}): ${opts.reason}` },
+      patch: { endedAt: row.endedAt ?? new Date(), handedOffTo: successor.id, autoRetryAt: null },
+    });
+    if (sessionId) {
+      await this.ptyd
+        .get()
+        .kill(sessionId)
+        .catch(() => undefined);
+    }
+    return this.getRun(successor.id);
+  }
+
+  /** Re-points a queued run at another route of its own chain (the scheduler's fallback for new runs). */
+  bindRoute(id: string, routeIndex: number): Run {
+    const row = this.row(id);
+    if (row.state !== 'queued') throw conflict(`run is ${row.state}, not queued`);
+    const route = runRoutes(row)[routeIndex];
+    if (!route) throw conflict('no such route');
+    return this.record(id, {
+      source: 'system',
+      type: 'route_bound',
+      payload: { route, routeIndex, message: `Starting on ${route.agent} (${route.model}) because the first route is out of quota` },
+      patch: { agent: route.agent, model: route.model, credential: route.credential, routeIndex },
+    });
+  }
+
+  /** Ticket, last answer, worktree state and recent tool calls for a handoff prompt. */
+  private async handoffContext(row: RunRow, reason: string, sameAgent: boolean): Promise<HandoffPromptInput> {
+    const ticket = row.ticketId ? this.db.select().from(tickets).where(eq(tickets.id, row.ticketId)).get() : undefined;
+    const [gitStatus, diffStat] = await Promise.all([
+      git(row.worktreePath, ['status', '--short']).catch(() => ''),
+      git(row.worktreePath, ['diff', '--stat', 'HEAD']).catch(() => ''),
+    ]);
+    const toolEvents = this.db
+      .select()
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, row.id), eq(runEvents.type, 'PreToolUse')))
+      .orderBy(desc(runEvents.id))
+      .limit(20)
+      .all()
+      .reverse();
+    const recentTools = toolEvents.map((e) => {
+      const p = (e.payload ?? {}) as { tool_name?: unknown; tool_input_summary?: unknown; message?: unknown };
+      const name = typeof p.tool_name === 'string' ? p.tool_name : 'tool';
+      const detail =
+        typeof p.tool_input_summary === 'string' ? p.tool_input_summary : typeof p.message === 'string' ? p.message : '';
+      return detail ? `${name}: ${detail.slice(0, 200)}` : name;
+    });
+    return {
+      ticket: ticket
+        ? { key: ticket.key, title: ticket.title, body: ticket.body.replace(new RegExp(ROUTE_TAG.source, 'gi'), '').trim() }
+        : null,
+      originalPrompt: row.prompt,
+      from: { agent: row.agent, model: runModel(row) },
+      reason,
+      finalMessage: this.finalMessage(row),
+      gitStatus,
+      diffStat,
+      recentTools,
+      sameAgent,
+    };
   }
 
   /** Visible screen + recent scrollback of a run's terminal (serialized ANSI), if it has one. */
