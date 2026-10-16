@@ -24,8 +24,8 @@ import {
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gt, inArray, max, min } from 'drizzle-orm';
-import type { Db } from '../db/index.js';
-import { projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
+import { type Db, getSetting, setSetting } from '../db/index.js';
+import { projects, runEvents, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
@@ -69,6 +69,14 @@ const ACTIVE_CHAINS_KEY = 'factory.activeChains';
  * dispatch must not merge it behind the gate's back.
  */
 const HOLD_EVENTS = ['merge_failed', 'secret_guard_blocked', 'build_gate_error', 'build_gate_failed'];
+
+/**
+ * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass
+ * was cut off (it finalizes the ticket even when the project is not chaining any more).
+ */
+interface PipelineOptions {
+  finalizing?: boolean;
+}
 
 /** See {@link TicketService.dispatchNextReadyTicket}. */
 interface DispatchOptions {
@@ -179,6 +187,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly startingTickets = new Set<string>();
   /** Runs whose completion pipeline (gates, merge, move to Done) is in progress, with the number of passes. */
   private readonly pipelineRuns = new Map<string, number>();
+  /** Runs whose cut-off pipeline a dispatch already ran again in this process (once each). */
+  private readonly resumedPipelines = new Set<string>();
+  /** Per chaining project: ticket runs that failed since a ticket last moved to Done. */
+  private readonly failedInARow = new Map<string, number>();
 
   constructor(
     private readonly db: Db,
@@ -211,30 +223,68 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           )
           .catch(() => undefined);
       }
-      if (stateChanged && run.state === 'done' && run.projectId) {
-        this.handleRunCompleted(run).catch((error: unknown) => {
-          // The pipeline is best effort per run; record why it stopped instead of crashing core.
-          this.runs.note(run.id, 'pipeline_failed', { message: (error as Error).message?.slice(0, 500) });
-        });
-      }
-      // A ticket run that crashed frees its slot: the chain goes on with the other tickets (the
-      // failed one stays where it is). A run a person stopped does not.
+      if (stateChanged && run.state === 'done' && run.projectId) this.completeRun(run);
       if (
         stateChanged &&
         run.state === 'failed' &&
         run.projectId &&
         run.ticketId &&
         !run.cancelled &&
-        this.autoChainProjects.has(run.projectId) &&
-        getFactorySettings(this.db).autoPickupReady
+        this.autoChainProjects.has(run.projectId)
       ) {
-        void this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+        this.ticketRunFailed(run, run.projectId);
       }
     });
   }
 
+  /** Runs the completion pipeline in the background; it is best effort per run. */
+  private completeRun(run: Run, opts: PipelineOptions = {}): void {
+    this.handleRunCompleted(run, opts).catch((error: unknown) => {
+      // Record why it stopped instead of crashing core.
+      this.runs.note(run.id, 'pipeline_failed', { message: (error as Error).message?.slice(0, 500) });
+    });
+  }
+
+  /**
+   * A ticket run of a chaining project crashed (a person's stop is not a crash). It frees its slot:
+   * the chain goes on with the other tickets, the failed one stays where it is. Unless the failures
+   * look systematic (two in a row without a ticket reaching Done, or a run that never got to work,
+   * e.g. a CLI that does not start): then the chain pauses instead of burning through the queue.
+   */
+  private ticketRunFailed(run: Run, projectId: string): void {
+    const inARow = (this.failedInARow.get(projectId) ?? 0) + 1;
+    this.failedInARow.set(projectId, inARow);
+    const neverWorked = !this.reachedWork(run.id);
+    if (inARow >= 2 || neverWorked) {
+      this.failedInARow.delete(projectId);
+      this.chainOff(projectId);
+      this.runs.note(run.id, 'factory_chain_paused', {
+        reason: neverWorked ? 'failed_before_working' : 'failed_in_a_row',
+        message: neverWorked
+          ? 'A ticket run failed before it got to work; the factory paused — fix the cause and click Run pipeline'
+          : `${inARow} ticket runs failed in a row; the factory paused — fix the cause and click Run pipeline`,
+      });
+      return;
+    }
+    if (getFactorySettings(this.db).autoPickupReady) {
+      void this.dispatchNextReadyTicket(projectId).catch(() => undefined);
+    }
+  }
+
+  /** Whether the run ever got to work (or further) before it ended. */
+  private reachedWork(runId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'waiting_input', 'done'])))
+        .limit(1)
+        .get(),
+    );
+  }
+
   private loadActiveChains(): Set<string> {
-    const value = this.db.select().from(settings).where(eq(settings.key, ACTIVE_CHAINS_KEY)).get()?.value;
+    const value = getSetting<unknown>(this.db, ACTIVE_CHAINS_KEY);
     return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []);
   }
 
@@ -250,12 +300,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   private saveActiveChains(): void {
-    const value = [...this.autoChainProjects];
-    this.db
-      .insert(settings)
-      .values({ key: ACTIVE_CHAINS_KEY, value })
-      .onConflictDoUpdate({ target: settings.key, set: { value } })
-      .run();
+    setSetting(this.db, ACTIVE_CHAINS_KEY, [...this.autoChainProjects]);
   }
 
   /**
@@ -436,7 +481,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const fSettings = getFactorySettings(this.db);
     if (this.busyTicketRuns(projectId) >= fSettings.maxParallelTicketsPerProject) return [];
 
-    const projectRow = this.project(projectId);
+    this.project(projectId); // 404 for an unknown project
 
     // S16: a daily run budget per project stops an auto-chaining factory from draining the quota.
     if (this.dailyBudgetExhausted(projectId, fSettings.maxAutoRunsPerProjectPerDay)) {
@@ -449,31 +494,30 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
         const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
         // A run whose own pipeline is still going (gates, merge) is not left over: leave it alone.
-        if (
-          latestRun &&
-          latestRun.state === 'done' &&
-          !latestRun.handedOffTo &&
-          !this.pipelineRuns.has(latestRun.id) &&
-          // A gate left it here for a person (secret guard, build gate, a merge that failed): not
-          // leftover work, and not a merge to retry on every dispatch.
-          !this.heldForPerson(latestRun.id)
-        ) {
-          if (
-            fSettings.autoSyncToMain &&
-            latestRun.worktreePath &&
-            latestRun.worktreePath !== projectRow.path
-          ) {
-            // A run still resolving its conflict is finished by its own pipeline when it stops again.
-            if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
-            const merged = await this.mergeRunIntoMain(latestRun, projectRow.path, reviewTicket.key);
-            if (!merged.ok) continue;
-          }
+        if (!latestRun || latestRun.state !== 'done' || latestRun.handedOffTo || this.pipelineRuns.has(latestRun.id)) {
+          continue;
+        }
+        // A run still resolving its conflict is finished by its own pipeline when it stops again.
+        if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
+        const outcome = this.pipelineOutcome(latestRun.id);
+        // A gate left it here for a person (secret guard, build gate, a merge that failed): not
+        // leftover work, and not a merge to retry on every dispatch.
+        if (outcome === 'held') continue;
+        if (outcome === 'merged') {
+          // Merged, but the move to Done was cut off.
           try {
             this.moveToTop(reviewTicket.id, 'done');
           } catch {
             // ignore
           }
+          continue;
         }
+        // The pipeline of this completion never got to its end (e.g. core went down mid-way): run it
+        // again so its gates apply instead of merging behind them. Once per process; not awaited,
+        // since its own dispatch waits for this one.
+        if (this.resumedPipelines.has(latestRun.id)) continue;
+        this.resumedPipelines.add(latestRun.id);
+        this.completeRun(latestRun, { finalizing: true });
       }
     }
 
@@ -513,13 +557,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return started;
   }
 
-  private async handleRunCompleted(run: Run): Promise<void> {
+  private async handleRunCompleted(run: Run, opts: PipelineOptions = {}): Promise<void> {
     // With parallel tickets another run's dispatch may finalize Review tickets meanwhile; it must
     // not merge this run before its gates have passed.
     // Counted: an overlapping pass for the same run must not lift the guard while one is still going.
     this.pipelineRuns.set(run.id, (this.pipelineRuns.get(run.id) ?? 0) + 1);
     try {
-      await this.runPipeline(run);
+      await this.runPipeline(run, opts);
     } finally {
       const left = (this.pipelineRuns.get(run.id) ?? 1) - 1;
       if (left > 0) this.pipelineRuns.set(run.id, left);
@@ -527,7 +571,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
   }
 
-  private async runPipeline(run: Run): Promise<void> {
+  private async runPipeline(run: Run, { finalizing = false }: PipelineOptions): Promise<void> {
     if (!run.projectId) return;
     let projectRow;
     try {
@@ -646,6 +690,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       projectTickets.some((t) => t.title.startsWith('[Factory]') || t.status === 'ready');
 
     const isFactoryRun =
+      finalizing ||
       this.autoChainProjects.has(run.projectId) ||
       Boolean(ingested) ||
       isFactoryOrchestratorTicket ||
@@ -715,6 +760,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           !slopReport.passed,
       );
 
+      // Held first, also while the agent is asked to clean up: should the request not arrive, a
+      // later dispatch must not merge the leak. The agent's next stop lifts the hold.
+      if (hasSecretViolation) {
+        this.runs.note(run.id, 'secret_guard_blocked', { secretLeakCount: slopReport?.secretLeakCount ?? 0 });
+      }
+
       if (
         (hasSecretViolation || hasSlopViolation) &&
         slopReport?.autoFixPrompt &&
@@ -726,10 +777,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         return;
       }
 
-      if (hasSecretViolation) {
-        secretGuardBlockedMerge = true;
-        this.runs.note(run.id, 'secret_guard_blocked', { secretLeakCount: slopReport?.secretLeakCount ?? 0 });
-      }
+      if (hasSecretViolation) secretGuardBlockedMerge = true;
     }
 
     // 2c. Layer 3 — Cross-Provider AI Critic (e.g. Claude codes -> Antigravity critiques, or vice versa):
@@ -785,9 +833,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // 4. Auto-move completed factory ticket to Done when enabled (keep it in Review when the merge was
     //    blocked by Secret Guard or refused because of conflicts, so a human resolves it).
+    let movedToDone = false;
     if (!mergeBlocked && fSettings.autoMoveToDone && run.ticketId) {
       try {
         this.moveToTop(run.ticketId, 'done');
+        movedToDone = true;
       } catch {
         // ignore if ticket was removed
       }
@@ -799,9 +849,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       await this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' }).catch(() => undefined);
     }
 
-    // 6. Dispatch the next specialist ticket in the project's queue if auto-chaining is active
+    // 6. Dispatch the next specialist ticket in the project's queue if auto-chaining is active;
+    //    otherwise start only the tickets that were waiting for this one (like a manual move to Done).
     if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+    } else if (movedToDone && run.ticketId) {
+      this.dispatchUnblocked(run.projectId, this.dependentIds(run.ticketId));
     }
   }
 
@@ -828,10 +881,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * Whether the run's last completion pipeline left its ticket in Review on purpose: a hold note
-   * (HOLD_EVENTS) after the run's latest switch to `done`. A later turn of the agent lifts it.
+   * What the run's latest completion pipeline (the one after its latest switch to `done`) decided:
+   * `held` when it left the ticket in Review for a person (a HOLD_EVENTS note; a later turn of the
+   * agent lifts it), `merged` when the work landed in main, null when it never got that far.
    */
-  private heldForPerson(runId: string): boolean {
+  private pipelineOutcome(runId: string): 'held' | 'merged' | null {
     const lastDone = this.db
       .select({ id: runEvents.id })
       .from(runEvents)
@@ -839,20 +893,20 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .orderBy(desc(runEvents.id))
       .limit(1)
       .get();
-    return Boolean(
-      this.db
-        .select({ id: runEvents.id })
-        .from(runEvents)
-        .where(
-          and(
-            eq(runEvents.runId, runId),
-            gt(runEvents.id, lastDone?.id ?? 0),
-            inArray(runEvents.type, HOLD_EVENTS),
-          ),
-        )
-        .limit(1)
-        .get(),
-    );
+    const types = this.db
+      .select({ type: runEvents.type })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, runId),
+          gt(runEvents.id, lastDone?.id ?? 0),
+          inArray(runEvents.type, [...HOLD_EVENTS, 'merged_to_main']),
+        ),
+      )
+      .all()
+      .map((e) => e.type);
+    if (types.some((type) => HOLD_EVENTS.includes(type))) return 'held';
+    return types.includes('merged_to_main') ? 'merged' : null;
   }
 
   /** Whether the run already got its one automatic conflict-resolution attempt (survives a restart). */
@@ -1076,6 +1130,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // A person closed a ticket by hand: the tickets waiting for it may start now (the whole queue
     // when the factory already chains this project); a plain board move starts nothing else.
     if (patch.status === 'done' && current.status !== 'done') {
+      this.failedInARow.delete(current.projectId);
       this.dispatchUnblocked(current.projectId, this.dependentIds(id));
     } else if (blockedBefore && ticket.status !== 'done') {
       const freed = this.nowUnblocked([id], blockedBefore);
@@ -1220,6 +1275,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       this.db.update(tickets).set({ status, position, updatedAt: new Date() }).where(eq(tickets.id, id)).returning().get(),
     );
     if (status !== row.status) this.publishDependents(id);
+    if (status === 'done') this.failedInARow.delete(row.projectId);
     return ticket;
   }
 

@@ -293,12 +293,12 @@ async function finish(run: Run): Promise<void> {
 }
 
 /** Records every pipeline pass so a test can wait for all of them, dispatch included. */
-function trackPipelines(): Promise<void>[] {
+function trackPipelines(service: TicketService = t.tickets): Promise<void>[] {
   const passes: Promise<void>[] = [];
-  const svc = t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
-  const original = svc.handleRunCompleted.bind(t.tickets);
-  svc.handleRunCompleted = (r) => {
-    const pass = original(r);
+  const svc = service as unknown as { handleRunCompleted(r: Run, opts?: object): Promise<void> };
+  const original = svc.handleRunCompleted.bind(service);
+  svc.handleRunCompleted = (r, opts) => {
+    const pass = original(r, opts);
     passes.push(pass);
     return pass;
   };
@@ -811,6 +811,48 @@ function writeFailingClaude(dir: string): string {
   return file;
 }
 
+/** A stand-in that gets to work and crashes (exit 3) on the first line typed into it. */
+function writeCrashingClaude(dir: string): string {
+  const file = path.join(dir, 'crashing-claude.sh');
+  writeFileSync(
+    file,
+    [
+      '#!/bin/sh',
+      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
+      `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
+      'echo "fake claude ready"',
+      `: > "${dir}/ready-$EMBERLINE_RUN_ID"`,
+      'read line',
+      'exit 3',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return file;
+}
+
+/** Tests run no reconciler loop: notice a run's end by hand. */
+const settledState = async (runId: string) => {
+  await t.runs.reconcile();
+  return t.runs.get(runId).state;
+};
+
+/** Lets a crashing stand-in's run start working, then crash; resolves once the run is failed. */
+async function crashAfterWork(run: Run): Promise<void> {
+  await waitFile(`ready-${run.id}`);
+  const token = await waitFile(`token-${run.id}`);
+  await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+  await hook(run.id, 'UserPromptSubmit', token);
+  await t.runs.sendPrompt(run.id, 'crash');
+  await expect.poll(() => settledState(run.id), { timeout: 10_000 }).toBe('failed');
+}
+
+const commitSecret = (worktreePath: string) => {
+  writeFileSync(path.join(worktreePath, '.env'), 'API_TOKEN=abc\n');
+  wgit(worktreePath, 'add', '-A');
+  wgit(worktreePath, 'commit', '-q', '-m', 'env');
+};
+
 describe('factory chain robustness', () => {
   it('a restarted core keeps an active chain and resumes it', async () => {
     const project = await createProject();
@@ -833,23 +875,63 @@ describe('factory chain robustness', () => {
 
   it('a failed ticket run lets the chain go on with the other ready tickets', async () => {
     await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
-    t.config.claudeCommand = writeFailingClaude(t.dir);
+    t.config.claudeCommand = writeCrashingClaude(t.dir);
     const project = await createProject();
     const x = await createTicket(project.id, { title: 'X', status: 'ready', priority: 3 });
     const y = await createTicket(project.id, { title: 'Y', status: 'ready', priority: 1 });
 
     await t.tickets.dispatchNextReadyTicket(project.id);
     expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([x.id]);
-    // Tests run no reconciler loop: notice the crash by hand.
-    const stateOfX = async () => {
-      await t.runs.reconcile();
-      return runsFor(x.id)[0]?.state;
-    };
-    await expect.poll(stateOfX, { timeout: 10_000 }).toBe('failed');
+    await crashAfterWork(runsFor(x.id)[0] as Run);
     await expect.poll(() => runsFor(y.id).length, { timeout: 10_000 }).toBe(1);
     // The failed ticket stays where it is and is not started again.
     expect(runsFor(x.id)).toHaveLength(1);
     expect(await statusOf(x.id)).toBe('in_progress');
+    await settle(project.id);
+  });
+
+  it('pauses the chain after two ticket runs in a row failed', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    t.config.claudeCommand = writeCrashingClaude(t.dir);
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready', priority: 3 });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready', priority: 2 });
+    const z = await createTicket(project.id, { title: 'Z', status: 'ready', priority: 1 });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const runX = runsFor(x.id)[0] as Run;
+    await crashAfterWork(runX);
+    await expect.poll(() => runsFor(y.id).length, { timeout: 10_000 }).toBe(1);
+    const runY = runsFor(y.id)[0] as Run;
+    await crashAfterWork(runY);
+    await expect.poll(() => eventTypes(runY), { timeout: 10_000 }).toContain('factory_chain_paused');
+    await dispatchesDone(project.id);
+
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+    expect(runsFor(z.id)).toHaveLength(0);
+    expect(await eventTypes(runX)).not.toContain('factory_chain_paused');
+    const detail = (await api('GET', `/api/runs/${runY.id}`)).json() as RunDetail;
+    expect(detail.events.find((e) => e.type === 'factory_chain_paused')?.payload).toMatchObject({
+      message: '2 ticket runs failed in a row; the factory paused — fix the cause and click Run pipeline',
+    });
+    await settle(project.id);
+  });
+
+  it('pauses the chain when a ticket run fails before it ever got to work', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    t.config.claudeCommand = writeFailingClaude(t.dir);
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready', priority: 3 });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready', priority: 1 });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const runX = runsFor(x.id)[0] as Run;
+    await expect.poll(() => settledState(runX.id), { timeout: 10_000 }).toBe('failed');
+    await expect.poll(() => eventTypes(runX), { timeout: 10_000 }).toContain('factory_chain_paused');
+    await dispatchesDone(project.id);
+
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+    expect(runsFor(y.id)).toHaveLength(0);
     await settle(project.id);
   });
 
@@ -869,12 +951,14 @@ describe('factory chain robustness', () => {
     await settle(project.id);
   });
 
-  it('a ticket started by a narrow dispatch does not turn the chain on when it finishes', async () => {
+  it('a ticket started by a narrow dispatch starts its own dependents, not the queue, when it finishes', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });
     const b = await createTicket(project.id, { title: 'B', status: 'ready' });
     const c = await createTicket(project.id, { title: 'C', status: 'ready' });
+    const e = await createTicket(project.id, { title: 'E', status: 'ready' });
     await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+    await api('PATCH', `/api/tickets/${e.id}`, { dependsOn: [b.id] });
     const passes = trackPipelines();
 
     // A person closes A: only B, which waited for it, starts.
@@ -883,6 +967,8 @@ describe('factory chain robustness', () => {
     await finish(runsFor(b.id)[0] as Run);
     await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(1);
     await Promise.all(passes);
+    // B's pipeline moved it to Done: E, which waited for B, starts too.
+    await expect.poll(() => runsFor(e.id).length, { timeout: 5_000 }).toBe(1);
     await dispatchesDone(project.id);
 
     expect(await statusOf(b.id)).toBe('done');
@@ -916,9 +1002,7 @@ describe('factory chain robustness', () => {
 
     await t.tickets.dispatchNextReadyTicket(project.id);
     const run = runsFor(a.id)[0] as Run;
-    writeFileSync(path.join(run.worktreePath, '.env'), 'API_TOKEN=abc\n');
-    wgit(run.worktreePath, 'add', '-A');
-    wgit(run.worktreePath, 'commit', '-q', '-m', 'env');
+    commitSecret(run.worktreePath);
     await waitFile(`ready-${run.id}`);
     const token = await waitFile(`token-${run.id}`);
     await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
@@ -936,5 +1020,55 @@ describe('factory chain robustness', () => {
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(existsSync(path.join(project.path, '.env'))).toBe(false);
     expect(await eventTypes(run)).toContain('secret_guard_blocked');
+    await settle(project.id);
+  });
+
+  it('the secret guard holds the ticket even when its clean-up request cannot be delivered', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async () => {
+      throw new Error('no live session');
+    };
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    commitSecret(run.worktreePath);
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await eventTypes(run)).toContain('secret_guard_blocked');
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(passes).toHaveLength(1);
+    expect(await statusOf(a.id)).toBe('review');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(existsSync(path.join(project.path, '.env'))).toBe(false);
+    await settle(project.id);
+  });
+
+  it('a Review ticket whose pipeline was cut off gets the gates on resume, not a plain merge', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    // Core goes down before the completion pipeline of A's run gets to run.
+    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () => undefined;
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    commitSecret(run.worktreePath);
+    await finish(run);
+    await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('review');
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const passes = trackPipelines(restarted);
+    await restarted.resumeChains();
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+
+    expect(await eventTypes(run)).toContain('secret_guard_blocked');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).not.toBe('done');
+    expect(existsSync(path.join(project.path, '.env'))).toBe(false);
+    await settle(project.id);
   });
 });
