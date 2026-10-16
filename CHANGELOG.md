@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
 ### Added
 
 - A run whose turn died on a temporary provider error (503 / unavailable, overloaded, 5xx, network errors) is retried automatically after 1, 5 and 15 minutes, continuing the same session. It waits as "retrying n/3" without pausing other runs; sign-in, billing, quota and request errors are never retried, a stop cancels the pending retry, and after the third failure the run is left for you as before.
@@ -124,7 +126,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/biohazardious/emberline/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/biohazardious/emberline/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/biohazardious/emberline/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/biohazardious/emberline/compare/v0.1.0...v0.1.1
