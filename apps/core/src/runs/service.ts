@@ -238,6 +238,9 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
  * Owns the run lifecycle: worktree + agent spawn, hook ingestion (the primary state signal),
  * and reconciliation with ptyd (process exits, runner restarts).
  */
+/** A run that is live, or parked on a quota limit and still going to resume (not cancelled). */
+const runStillActive = () => or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
+
 export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   private reconciling = false;
@@ -1099,7 +1102,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .where(
         and(
           eq(runs.ticketId, ticketId),
-          or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt))),
+          runStillActive(),
         ),
       )
       .orderBy(desc(runs.createdAt))
@@ -1243,7 +1246,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.db
       .select()
       .from(runs)
-      .where(opts.stillRunning ? and(sharing, isNull(runs.endedAt)) : sharing)
+      .where(opts.stillRunning ? and(sharing, runStillActive()) : sharing)
       .get();
   }
 
@@ -1260,7 +1263,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!row.endedAt && row.state !== 'done' && row.state !== 'failed') {
       throw conflict('stop the active run before pruning its worktree');
     }
-    // Only a sharer that has not ended blocks a manual prune; two ended runs must not lock each other out.
+    if (row.state === 'rate_limited' && !row.cancelledAt) {
+      throw conflict('this run is waiting for its quota and will resume in this worktree; stop it first');
+    }
+    // Only a sharer that is still active blocks a manual prune; two ended runs must not lock each other out.
     const shared = this.worktreeSharedWith(row, { stillRunning: true });
     if (shared) throw conflict(`run ${shared.id.slice(0, 8)} still works in this worktree`);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();

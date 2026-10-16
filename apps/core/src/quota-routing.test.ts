@@ -511,6 +511,17 @@ describe('handed-off runs are not finished work', () => {
     expect(existsSync(successor.worktreePath)).toBe(true);
   });
 
+  it('keeps the worktree while an ended successor is parked on a quota limit', async () => {
+    const { run, successor } = await handedOff();
+    await t.runs.stop(successor.id);
+    await expect.poll(async () => (await getRun(successor.id)).endedAt, { timeout: 5_000 }).not.toBeNull();
+    // Reconcile leaves a rate-limited run rate_limited with endedAt set; it still resumes here.
+    t.db.update(runsTable).set({ state: 'rate_limited', cancelledAt: null }).where(eq(runsTable.id, successor.id)).run();
+    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`)).statusCode).toBe(409);
+    expect((await api('POST', `/api/runs/${successor.id}/worktree/prune`)).statusCode).toBe(409);
+    expect(existsSync(successor.worktreePath)).toBe(true);
+  });
+
   it('prunes the worktree once the successor has ended too', async () => {
     const { run, successor } = await handedOff();
     await t.runs.stop(successor.id);
