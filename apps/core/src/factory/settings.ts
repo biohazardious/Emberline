@@ -549,9 +549,17 @@ export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { ag
   // a bare model keeps the persona's first route and only swaps the model.
   let head: Route | undefined;
   if (tagged.success) {
+    // `Model: auto` (or no model) never reaches the CLI: a same-agent chain step's model, else
+    // the persona's model mapped onto the tagged agent.
+    const explicitModel = preferredModel ?? (preferred?.model as AgentModelId | undefined);
+    const sameAgent = chain.find((r) => r.agent === tagged.data && r.model !== 'auto');
+    const personaModel = chain[0] && chain[0].model !== 'auto' ? chain[0].model : DEFAULT_PERSONA_MODELS[persona];
     head = {
       agent: tagged.data,
-      model: (preferredModel ?? preferred?.model ?? 'auto') as AgentModelId,
+      model:
+        explicitModel && explicitModel !== 'auto'
+          ? explicitModel
+          : (sameAgent?.model ?? coerceModelForProvider(tagged.data, personaModel, persona)),
       credential: chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
     };
   } else if (preferredModel && preferredModel !== 'auto' && chain[0]) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { selectProviderModelByRank } from '@emberline/protocol';
+import { coerceModelForProvider, selectProviderModelByRank } from '@emberline/protocol';
 import { settings } from './db/schema.js';
 import {
   getFactorySettings,
@@ -106,6 +106,20 @@ describe('persona routes', () => {
       { agent: 'claude', model: 'opus', credential: 'login' },
     ]);
     expect(resolveRunRoutes(t.db, 'ui_ux')).toHaveLength(2);
+  });
+
+  it('a tag with Model: auto takes the model of a same-agent chain step, else the persona model for that agent', () => {
+    updateFactorySettings(t.db, {
+      enabledProviders: ['claude', 'antigravity'],
+      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'login' }] },
+    });
+    expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'claude', model: 'auto' })[0]).toEqual({ agent: 'claude', model: 'opus', credential: 'login' });
+    expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'antigravity' })[0]?.model).toBe('argon');
+    updateFactorySettings(t.db, { personaRoutes: { ui_ux: [{ agent: 'claude', model: 'sonnet', credential: 'login' }] } });
+    const head = resolveRunRoutes(t.db, 'ui_ux', { agent: 'antigravity', model: 'auto' })[0];
+    expect(head?.agent).toBe('antigravity');
+    expect(head?.model).toBe(coerceModelForProvider('antigravity', 'sonnet', 'ui_ux'));
+    expect(head?.model).not.toBe('auto');
   });
 
   it('a persona whose legacy agent was disabled falls back to api_key when the default agent has a stored key', () => {
