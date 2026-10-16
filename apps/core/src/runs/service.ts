@@ -54,6 +54,7 @@ import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
   getFactorySettings,
@@ -82,7 +83,7 @@ import {
   stageWorktreeFiles,
   worktreeHasUncommittedWork,
 } from './git.js';
-import { buildHandoffPrompt, type HandoffPromptInput } from './handoff.js';
+import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } from './handoff.js';
 import { providerAdapter } from './providers.js';
 import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
@@ -241,6 +242,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   private reconciling = false;
   private lastAutoGcAt = 0;
+  private readonly handoffLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
 
   constructor(
@@ -571,6 +573,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
     const row = this.row(id);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
+    if (row.handedOffTo) throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
     // A pending automatic retry is taken now (by the scheduler or the user's own resume).
     if (row.autoRetryAt) this.db.update(runs).set({ autoRetryAt: null }).where(eq(runs.id, id)).run();
     if (row.state === 'queued') return this.launch(id);
@@ -616,6 +619,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * sees the predecessor turn `done` also sees `handedOffTo` and does not treat it as finished work.
    */
   async handOff(id: string, route: Route, opts: { reason: string; source: 'system' | 'user'; automatic: boolean }): Promise<Run> {
+    // One handoff per run at a time: the guards are re-read inside the lock, so a second caller sees `handedOffTo`.
+    return this.handoffLock.run(id, () => this.handOffLocked(id, route, opts));
+  }
+
+  private async handOffLocked(
+    id: string,
+    route: Route,
+    opts: { reason: string; source: 'system' | 'user'; automatic: boolean },
+  ): Promise<Run> {
     const row = this.row(id);
     if (row.cancelledAt) throw conflict('this run was stopped');
     if (row.handedOffTo) throw conflict('this run was already handed off');
@@ -666,6 +678,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   bindRoute(id: string, routeIndex: number): Run {
     const row = this.row(id);
     if (row.state !== 'queued') throw conflict(`run is ${row.state}, not queued`);
+    if (row.cancelledAt) throw conflict('this run was stopped');
     const route = runRoutes(row)[routeIndex];
     if (!route) throw conflict('no such route');
     return this.record(id, {
@@ -691,13 +704,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .limit(20)
       .all()
       .reverse();
-    const recentTools = toolEvents.map((e) => {
-      const p = (e.payload ?? {}) as { tool_name?: unknown; tool_input_summary?: unknown; message?: unknown };
-      const name = typeof p.tool_name === 'string' ? p.tool_name : 'tool';
-      const detail =
-        typeof p.tool_input_summary === 'string' ? p.tool_input_summary : typeof p.message === 'string' ? p.message : '';
-      return detail ? `${name}: ${detail.slice(0, 200)}` : name;
-    });
+    const recentTools = summarizeRecentTools(
+      toolEvents.map((e) => {
+        const p = (e.payload ?? {}) as { tool_name?: unknown; tool_input_summary?: unknown; message?: unknown };
+        const detail =
+          typeof p.tool_input_summary === 'string' ? p.tool_input_summary : typeof p.message === 'string' ? p.message : '';
+        return { name: typeof p.tool_name === 'string' ? p.tool_name : 'tool', detail: detail.slice(0, 200) };
+      }),
+    );
     return {
       ticket: ticket
         ? { key: ticket.key, title: ticket.title, body: ticket.body.replace(new RegExp(ROUTE_TAG.source, 'gi'), '').trim() }

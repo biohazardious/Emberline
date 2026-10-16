@@ -222,16 +222,78 @@ describe('handoff', () => {
 
   it('resumes a Gemini run without session support with the handoff prompt, not a bare "continue"', async () => {
     process.env.EMBERLINE_GEMINI_COMMAND = path.join(t.dir, 'fake-gemini');
-    writeFake(t.dir, 'fake-gemini');
-    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'], personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] } });
-    const { run } = await startTicket('Regression matrix', 'qa');
+    try {
+      writeFake(t.dir, 'fake-gemini');
+      updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'], personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] } });
+      const { run } = await startTicket('Regression matrix', 'qa');
+      const token = await work(run);
+      await hook(run.id, 'Stop', token);
+      await t.ptyd.get().write(run.terminalId ?? '', 'exit\r');
+      await expect.poll(async () => { await t.runs.reconcile(); return (await getRun(run.id)).endedAt; }, { timeout: 5_000 }).not.toBeNull();
+      const resumed = await t.runs.resume(run.id);
+      expect(resumed).toMatchObject({ id: run.id, agent: 'gemini' });
+      await expect.poll(() => readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8'), { timeout: 5_000 }).toContain('Your previous session on this task ended');
+      expect(readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8')).not.toContain('--resume');
+    } finally {
+      delete process.env.EMBERLINE_GEMINI_COMMAND;
+    }
+  });
+
+  const CLAUDE_OPUS = { agent: 'claude', model: 'opus', credential: 'login' } as const;
+
+  const count = (id: string) => t.db.select().from(runsTable).where(eq(runsTable.id, id)).get()?.handoffCount;
+
+  async function stopped(): Promise<{ run: Run; ticketId: string }> {
+    const { run, ticketId } = await startTicket('Colour-blind cats');
     const token = await work(run);
-    await hook(run.id, 'Stop', token);
-    await t.ptyd.get().write(run.terminalId ?? '', 'exit\r');
-    await expect.poll(async () => { await t.runs.reconcile(); return (await getRun(run.id)).endedAt; }, { timeout: 5_000 }).not.toBeNull();
-    await t.runs.resume(run.id);
-    await expect.poll(() => readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8'), { timeout: 5_000 }).toContain('Your previous session on this task ended');
-    delete process.env.EMBERLINE_GEMINI_COMMAND;
+    await hook(run.id, 'StopFailure', token, AGY_QUOTA);
+    return { run, ticketId };
+  }
+
+  it('a manual handoff to a route outside the chain appends it and does not count against the budget', async () => {
+    const { run } = await stopped();
+    const route = { agent: 'claude', model: 'sonnet', credential: 'login' } as const;
+    const successor: Run = await t.runs.handOff(run.id, route, { reason: 'user', source: 'user', automatic: false });
+    expect(successor.routes).toHaveLength(3);
+    expect(successor.routes[2]).toEqual(route);
+    expect(successor).toMatchObject({ routeIndex: 2, model: 'sonnet' });
+    expect(count(successor.id)).toBe(0);
+  });
+
+  it('an automatic handoff counts against the budget', async () => {
+    const { run } = await stopped();
+    const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    expect(count(successor.id)).toBe(1);
+  });
+
+  it('refuses to hand off a stopped or a working run', async () => {
+    const { run } = await startTicket('Working');
+    await work(run);
+    await expect(t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'x', source: 'user', automatic: false })).rejects.toMatchObject({ statusCode: 409 });
+    await t.runs.stop(run.id);
+    await expect(t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'x', source: 'user', automatic: false })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('two concurrent handoffs of one run create exactly one successor', async () => {
+    const { run, ticketId } = await stopped();
+    const attempt = () => t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    const results = await Promise.allSettled([attempt(), attempt()]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ statusCode: 409 });
+    expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(1);
+  });
+
+  it('a handed-off run cannot be resumed, and a cancelled queued run cannot be re-bound', async () => {
+    const { run } = await stopped();
+    const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    const before = t.runs.list().length;
+    await expect(t.runs.resume(run.id)).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining(successor.id.slice(0, 8)) });
+    expect(t.runs.list()).toHaveLength(before);
+    expect((await getRun(run.id)).terminalId).toBe(run.terminalId);
+    const queued = await t.runs.enqueue({ projectId, agent: 'claude', prompt: 'q' } as never);
+    t.db.update(runsTable).set({ cancelledAt: new Date() }).where(eq(runsTable.id, queued.id)).run();
+    expect(() => t.runs.bindRoute(queued.id, 0)).toThrow(expect.objectContaining({ statusCode: 409 }));
   });
 });
 

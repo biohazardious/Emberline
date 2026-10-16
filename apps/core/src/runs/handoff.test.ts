@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHandoffPrompt } from './handoff.js';
+import { buildHandoffPrompt, summarizeRecentTools } from './handoff.js';
 
 const base = {
   ticket: { key: 'MPG-28', title: 'Accessibility pass', body: 'Colour-blind safe cats.' },
@@ -35,5 +35,21 @@ describe('handoff prompt', () => {
 
   it('uses the original prompt when the run has no ticket', () => {
     expect(buildHandoffPrompt({ ...base, ticket: null })).toContain('MPG-28: Accessibility pass\n\nColour-blind safe cats.');
+  });
+});
+
+describe('recent tool summary', () => {
+  it('collapses consecutive repeats and whitespace in details', () => {
+    const out = summarizeRecentTools([
+      { name: 'Edit', detail: '' },
+      { name: 'Edit', detail: '' },
+      { name: 'Bash', detail: 'npm\n  test\t-- run' },
+      { name: 'Edit', detail: '' },
+    ]);
+    expect(out).toEqual(['Edit ×2', 'Bash: npm test -- run', 'Edit']);
+  });
+
+  it('is empty when no entry has a detail', () => {
+    expect(summarizeRecentTools([{ name: 'Edit', detail: '' }, { name: 'Write', detail: '' }])).toEqual([]);
   });
 });

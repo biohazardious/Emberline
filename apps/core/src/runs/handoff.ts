@@ -14,6 +14,23 @@ export interface HandoffPromptInput {
 const MAX_SECTION = 4_000;
 const clip = (text: string) => (text.length > MAX_SECTION ? `${text.slice(0, MAX_SECTION)}\n…` : text);
 
+/**
+ * The tool-call lines for a handoff prompt: details on one line, consecutive repeats folded
+ * ("Edit ×3"). Empty when no call has a detail, since the worktree status already shows what changed.
+ */
+export function summarizeRecentTools(calls: { name: string; detail: string }[]): string[] {
+  if (!calls.some((c) => c.detail.trim())) return [];
+  const lines: { text: string; count: number }[] = [];
+  for (const call of calls) {
+    const detail = call.detail.replace(/\s+/g, ' ').trim();
+    const text = detail ? `${call.name}: ${detail}` : call.name;
+    const last = lines.at(-1);
+    if (last?.text === text) last.count += 1;
+    else lines.push({ text, count: 1 });
+  }
+  return lines.map((l) => (l.count > 1 ? `${l.text} ×${l.count}` : l.text));
+}
+
 export function buildHandoffPrompt(input: HandoffPromptInput): string {
   const who = `${input.from.agent}${input.from.model ? ` (${input.from.model})` : ''}`;
   const task = input.ticket
