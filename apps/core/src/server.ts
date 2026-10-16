@@ -31,7 +31,7 @@ import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.j
 import type { TicketService } from './tickets/service.js';
 import { UpdateService } from './updates/service.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 
 export interface CoreDeps {
   config: CoreConfig;

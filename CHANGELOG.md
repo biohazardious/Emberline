@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-17
+
 ### Security
 
 - Core now answers HTTP 421 to requests whose `Host` is an unknown name, which blocks DNS-rebinding attacks from web pages. **Upgrade note:** if you open Emberline by a host name (a reverse proxy, `truenas.local` and so on), add it to `EMBERLINE_ALLOWED_HOSTS` in `.env` (comma-separated). The same goes for monitors and scrapers (Prometheus, Uptime Kuma and so on) that reach core by a host name, such as a Docker service name other than `core`. An entry pasted as a URL (`https://name:8443/`) counts as its host name; one that is not a host name is ignored, with a warning in core's log. IP addresses and `localhost` keep working without changes.
@@ -152,7 +154,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/biohazardious/emberline/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/biohazardious/emberline/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/biohazardious/emberline/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/biohazardious/emberline/compare/v0.1.1...v0.1.2
