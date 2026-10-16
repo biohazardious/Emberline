@@ -2,7 +2,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { runs as runsTable } from './db/schema.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -124,6 +126,65 @@ describe('runs carry their route', () => {
     const { run } = await startTicket('Credits run');
     expect(run.credential).toBe('credits');
     expect(await waitFile(`env-${run.id}`)).toContain('credits=1');
+  });
+
+  it('a tagged ticket leads with the tag (even a disabled provider), strips it and keeps the persona chain after it', async () => {
+    updateFactorySettings(t.db, { enabledProviders: ['claude'] });
+    const ticket = (
+      await api('POST', `/api/projects/${projectId}/tickets`, {
+        title: 'Tagged',
+        status: 'ready',
+        persona: 'ui_ux',
+        body: '[Preferred Agent: antigravity · Model: argon]\n\nDo the thing',
+      })
+    ).json();
+    const run: Run = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json().run;
+    expect(run.agent).toBe('antigravity');
+    expect(run.routes).toEqual([
+      { agent: 'antigravity', model: 'argon', credential: 'login' },
+      { agent: 'claude', model: 'opus', credential: 'login' },
+    ]);
+    expect(run.prompt).not.toContain('[Preferred Agent:');
+    expect(run.prompt).toContain('Do the thing');
+  });
+
+  it('a hand-picked agent runs alone and keeps the stored key on a key-only install', async () => {
+    updateFactorySettings(t.db, {
+      enabledProviders: ['antigravity'],
+      anthropicApiKey: 'sk-ant-test',
+      personaRoutes: { qa: [{ agent: 'antigravity', model: 'argon', credential: 'login' }] },
+    });
+    const run: Run = (await api('POST', '/api/runs', { projectId, persona: 'qa', agent: 'claude', prompt: 'hi' })).json();
+    expect(run.routes).toHaveLength(1);
+    expect(run).toMatchObject({ agent: 'claude', credential: 'api_key' });
+    expect(await waitFile(`env-${run.id}`)).toContain('key=sk-ant-test');
+  });
+
+  it('a model-only request keeps the persona\'s first agent and the rest of its chain', async () => {
+    const run: Run = (await api('POST', '/api/runs', { projectId, persona: 'ui_ux', model: 'sonnet', prompt: 'hi' })).json();
+    expect(run.routes[0]!.agent).toBe('antigravity');
+    expect(run.agent).toBe('antigravity');
+    updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
+    const coder: Run = (await api('POST', '/api/runs', { projectId, persona: 'coder', model: 'sonnet', prompt: 'hi' })).json();
+    expect(coder).toMatchObject({ agent: 'claude', model: 'sonnet' });
+  });
+
+  it('a legacy run row (no stored routes) still gets the stored key when it is launched', async () => {
+    updateFactorySettings(t.db, { anthropicApiKey: 'sk-ant-test' });
+    const queued = await t.runs.enqueue({ projectId, agent: 'claude', prompt: 'old' } as never);
+    t.db.update(runsTable).set({ routes: [], credential: 'login' }).where(eq(runsTable.id, queued.id)).run();
+    await t.runs.launch(queued.id);
+    expect(await waitFile(`env-${queued.id}`)).toContain('key=sk-ant-test');
+  });
+
+  it('enqueue continues in a given worktree instead of creating one', async () => {
+    const first: Run = (await api('POST', '/api/runs', { projectId, agent: 'claude', prompt: 'a' })).json();
+    const second = await t.runs.enqueue(
+      { projectId, agent: 'claude', prompt: 'b' } as never,
+      { worktree: { path: first.worktreePath, branch: first.branch } },
+    );
+    expect(second.worktreePath).toBe(first.worktreePath);
+    expect(second.branch).toBe(first.branch);
   });
 });
 

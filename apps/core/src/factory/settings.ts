@@ -544,16 +544,31 @@ export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { ag
   const enabled = new Set<string>(cfg.enabledProviders);
   const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
   const tagged = AgentId.safeParse(preferred?.agent);
-  const head: StoredRoute[] = tagged.success
-    ? [
-        {
-          agent: tagged.data,
-          model: preferred?.model ?? 'auto',
-          credential: chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
-        },
-      ]
-    : [];
-  return normalizeChain([...head, ...chain], persona, enabled, chain[0]!);
+  const preferredModel = AgentModelId.safeParse(preferred?.model).data;
+  // A tagged or hand-picked agent leads even when its provider is not enabled (as before 0.2.0);
+  // a bare model keeps the persona's first route and only swaps the model.
+  let head: Route | undefined;
+  if (tagged.success) {
+    head = {
+      agent: tagged.data,
+      model: (preferredModel ?? preferred?.model ?? 'auto') as AgentModelId,
+      credential: chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
+    };
+  } else if (preferredModel && preferredModel !== 'auto' && chain[0]) {
+    head = { ...chain[0], model: coerceModelForProvider(chain[0].agent, preferredModel, persona) };
+  }
+  const rest = normalizeChain(chain, persona, enabled, chain[0]!);
+  const out: Route[] = head ? [head] : [];
+  for (const route of rest) {
+    if (!out.some((r) => sameRoute(r, route))) out.push(route);
+  }
+  return out.slice(0, MAX_ROUTES);
+}
+
+/** The credential a run of `agent` gets without a configured route: the stored key when there is one, else the login. */
+export function defaultCredentialFor(db: Db, agent: AgentId): Credential {
+  const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
+  return defaultCredential(agent, keys);
 }
 
 /** An API-key route is only usable while its provider's key is stored; login and credits routes always are. */

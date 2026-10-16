@@ -32,7 +32,6 @@ import {
   type GitStageBody,
   type HookEnvelope,
   type PruneWorktreeResponse,
-  PROVIDER_RUNTIME,
   type Route,
   type Run,
   type RunArtifact,
@@ -56,6 +55,7 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
   getFactorySettings,
+  defaultCredentialFor,
   getProviderEnvFromSettings,
   resolveMcpServersForPersona,
   resolveModelForPersona,
@@ -512,22 +512,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const tag = parseRouteTag(body.prompt ?? '');
     const explicitAgent = tag?.agent ?? input.agent;
     const explicitModel = (body.model && body.model !== 'auto' ? body.model : undefined) ?? tag?.model;
+    // An agent picked by hand (no tag) runs only there.
     const resolved = (): Route[] => {
-      if (!input.agent || tag) {
-        return resolveRunRoutes(this.db, persona, explicitAgent ? { agent: explicitAgent, model: explicitModel } : undefined);
-      }
-      // An agent picked by hand runs only there, even when its provider is not enabled for fallbacks.
-      const picked = resolveRunRoutes(this.db, persona, { agent: input.agent, model: explicitModel })[0];
-      return [
-        picked?.agent === input.agent
-          ? picked
-          : { agent: input.agent, model: (explicitModel ?? 'auto') as AgentModelId, credential: PROVIDER_RUNTIME[input.agent].credentials[0]! },
-      ];
+      const chain = resolveRunRoutes(this.db, persona, explicitAgent || explicitModel ? { agent: explicitAgent, model: explicitModel } : undefined);
+      return input.agent && !tag ? chain.slice(0, 1) : chain;
     };
+
     const routes = origin?.routes ?? resolved();
     const routeIndex = origin?.routeIndex ?? 0;
     const route = routes[routeIndex] ?? routes[0]!;
-    const prompt = (body.prompt ?? '').replace(ROUTE_TAG, '').trimEnd();
+    const prompt = (body.prompt ?? '').replaceAll(new RegExp(ROUTE_TAG.source, 'gi'), '').trim();
     const now = new Date();
     this.db
       .insert(runs)
@@ -668,7 +662,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const effectivePrompt =
       options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
 
-    const extraEnv = getProviderEnvFromSettings(this.db, row.agent, row.credential as Credential);
+    // A pre-0.2.0 row has no stored route: it gets the key it would have got then.
+    const credential = row.routes.length === 0 ? defaultCredentialFor(this.db, row.agent as AgentId) : (row.credential as Credential);
+    const extraEnv = getProviderEnvFromSettings(this.db, row.agent, credential);
     // Antigravity AI credits are a setting in agy's shared settings.json; the CLI seed writes it per run.
     if (row.agent === 'antigravity') extraEnv.EMBERLINE_USE_CREDITS = row.credential === 'credits' ? '1' : '0';
     const provider = providerAdapter(row.agent);
