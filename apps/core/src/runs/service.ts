@@ -116,6 +116,8 @@ export interface RunOrigin {
   /** Explicit chain and position (handoff); otherwise taken from the persona settings. */
   routes?: Route[];
   routeIndex?: number;
+  /** Nobody watches this run (cron job or factory dispatch); recorded on its `queued` event. */
+  unattended?: 'cron' | 'factory';
   /** The run this one takes over from. */
   predecessor?: { id: string; handoffCount: number };
 }
@@ -137,6 +139,8 @@ const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
 /** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
 const STARTING_WATCHDOG_MS = 3 * 60_000;
+/** An unattended run waiting on a permission prompt this long is stopped as failed (R6). */
+const WAITING_INPUT_TIMEOUT_MS = 30 * 60_000;
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -575,7 +579,37 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         createdAt: now,
       })
       .run();
-    return this.record(id, { source: 'system', type: 'queued', state: 'queued' });
+    return this.record(id, {
+      source: 'system',
+      type: 'queued',
+      state: 'queued',
+      ...(origin?.unattended ? { payload: { unattended: origin.unattended } } : {}),
+    });
+  }
+
+  /** Whether no one watches the run: started by a cron job or a factory dispatch (its `queued` event says so). */
+  unattendedOrigin(id: string): 'cron' | 'factory' | undefined {
+    const event = this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, id), eq(runEvents.type, 'queued')))
+      .orderBy(asc(runEvents.id))
+      .limit(1)
+      .get();
+    const origin = (event?.payload as { unattended?: unknown } | null | undefined)?.unattended;
+    return origin === 'cron' || origin === 'factory' ? origin : undefined;
+  }
+
+  /** Whether the run already has an event of this type (e.g. a one-shot nudge that was sent). */
+  hasEvent(id: string, type: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, id), eq(runEvents.type, type)))
+        .limit(1)
+        .get(),
+    );
   }
 
   /** Spawns a queued run's agent with its initial prompt. */
@@ -672,6 +706,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         routes,
         routeIndex,
         predecessor: { id: row.id, handoffCount: row.handoffCount + (opts.automatic ? 1 : 0) },
+        unattended: this.unattendedOrigin(row.id),
       },
     );
     this.note(successor.id, 'handoff_from', {
@@ -1684,6 +1719,28 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // If an interactive CLI finished its turn (`state === 'done'`) and has been sitting idle
           // for over its idle TTL without any follow-up prompt, close & dispose its PTY
           // so it never lingers as a zombie process in Fleet Multiplexer.
+          if (
+            row.state === 'waiting_input' &&
+            row.lastEvent === 'Notification' &&
+            nowMs - row.stateChangedAt.getTime() > WAITING_INPUT_TIMEOUT_MS &&
+            this.unattendedOrigin(row.id)
+          ) {
+            // Nobody will answer this prompt: free the slot instead of holding it forever.
+            await this.saveLastScreen(row.id, row.ptydSessionId);
+            await this.ptyd
+              .get()
+              .remove(row.ptydSessionId)
+              .catch(() => undefined);
+            byId.delete(row.ptydSessionId);
+            this.record(row.id, {
+              source: 'system',
+              type: 'waiting_input_timeout',
+              state: 'failed',
+              payload: { message: 'An unattended run waited on a permission prompt for 30 minutes and was stopped' },
+              patch: { endedAt: new Date(), ptydSessionId: null, autoRetryAt: null },
+            });
+            continue;
+          }
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
           if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl) {
             await this.saveLastScreen(row.id, row.ptydSessionId);

@@ -649,4 +649,41 @@ describe('runs', () => {
       else process.env.EMBERLINE_RUNNER_HOME = previousHome;
     }
   });
+
+  describe('waiting_input watchdog (R6)', () => {
+    async function waitingOnPermission(unattended: boolean) {
+      const project = await createProject(unattended ? 'Cron Wait' : 'Manual Wait', true);
+      const run: Run = unattended
+        ? await t.scheduler.submit({ projectId: project.id, prompt: 'x', permissionMode: 'auto' }, { unattended: 'cron' })
+        : (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: 's' });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+      await hook(run.id, 'Notification', token, { notification_type: 'permission_prompt', message: 'needs permission' });
+      expect(t.runs.getRun(run.id).state).toBe('waiting_input');
+      return run;
+    }
+    const age = (id: string, ms: number) =>
+      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - ms) }).where(eq(runs.id, id)).run();
+
+    it('fails an unattended run that waited on a permission prompt for over 30 minutes', async () => {
+      const run = await waitingOnPermission(true);
+      age(run.id, 10 * 60_000);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).state).toBe('waiting_input');
+      age(run.id, 31 * 60_000);
+      await t.runs.reconcile();
+      const after = t.runs.get(run.id);
+      expect(after).toMatchObject({ state: 'failed', lastEvent: 'waiting_input_timeout' });
+      expect(after.endedAt).not.toBeNull();
+      expect(after.events.map((e) => e.type)).toContain('waiting_input_timeout');
+    });
+
+    it('leaves an attended run waiting', async () => {
+      const run = await waitingOnPermission(false);
+      age(run.id, 3 * 60 * 60_000);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).state).toBe('waiting_input');
+    });
+  });
 });

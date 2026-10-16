@@ -187,7 +187,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly selfHealedRuns = new Set<string>();
   private readonly slopHealedRuns = new Set<string>();
   private readonly criticReviewedRuns = new Set<string>();
-  private readonly autoNudgedRuns = new Set<string>();
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
@@ -219,9 +218,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         run.lastEvent === 'Notification' &&
         run.projectId &&
         this.autoChainProjects.has(run.projectId) &&
-        !this.autoNudgedRuns.has(run.id)
+        !this.runs.hasEvent(run.id, 'auto_nudged')
       ) {
-        this.autoNudgedRuns.add(run.id);
+        this.runs.note(run.id, 'auto_nudged', { reason: 'permission_prompt' });
         void this.runs
           .sendPrompt(
             run.id,
@@ -605,7 +604,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (this.runs.activeRunForTicket(next.id) || this.startingTickets.has(next.id)) continue;
       try {
-        started.push(await this.start(next.id, { permissionMode: 'auto', persona: next.persona }));
+        started.push(await this.start(next.id, { permissionMode: 'auto', persona: next.persona }, { unattended: true }));
       } catch (error) {
         // Someone started it by hand in the meantime: take the next one.
         if (error instanceof HttpError && error.statusCode === 409) continue;
@@ -724,10 +723,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (
       isFactoryOrchestratorTicket &&
       !ingested &&
-      !this.autoNudgedRuns.has(run.id) &&
+      !this.runs.hasEvent(run.id, 'auto_nudged') &&
       (!run.endedAt || run.resumable)
     ) {
-      this.autoNudgedRuns.add(run.id);
+      this.runs.note(run.id, 'auto_nudged', { reason: 'no_ticket_drafts' });
       await this.runs
         .prompt(
           run.id,
@@ -1270,20 +1269,24 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * Queues a run for the ticket on branch `emberline/<key>-<slug>`; the scheduler starts it when
    * a slot and quota are available. One live run per ticket.
    */
-  async start(id: string, input: StartTicketBody): Promise<{ ticket: Ticket; run: Run }> {
+  async start(
+    id: string,
+    input: StartTicketBody,
+    opts: { unattended?: boolean } = {},
+  ): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
     if (this.runs.activeRunForTicket(id) || this.startingTickets.has(id)) {
       throw conflict('this ticket already has a running agent');
     }
     this.startingTickets.add(id);
     try {
-      return await this.startUnguarded(ticket, input);
+      return await this.startUnguarded(ticket, input, opts.unattended);
     } finally {
       this.startingTickets.delete(id);
     }
   }
 
-  private async startUnguarded(ticket: Ticket, input: StartTicketBody): Promise<{ ticket: Ticket; run: Run }> {
+  private async startUnguarded(ticket: Ticket, input: StartTicketBody, unattended = false): Promise<{ ticket: Ticket; run: Run }> {
     const id = ticket.id;
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
     const effectivePersona = persona ?? ticket.persona;
@@ -1299,6 +1302,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       },
       {
         ticketId: id,
+        ...(unattended ? { unattended: 'factory' as const } : {}),
         branch: `emberline/${ticket.key.toLowerCase()}${slug ? `-${slug}` : ''}`,
         title: `${ticket.key} ${ticket.title}`,
       },

@@ -239,4 +239,22 @@ describe('NotificationService quota lanes', () => {
     await emit([]);
     expect(sent).toEqual(['Claude (all models) quota reached', 'Claude (opus) quota is back']);
   });
+
+  it('explains a waiting-input timeout instead of a generic failure', async () => {
+    const { EventEmitter } = await import('node:events');
+    const runs = new EventEmitter();
+    const service = new NotificationService({} as Db, runs as never);
+    const sent: { title: string; body: string }[] = [];
+    service.getSettings = () =>
+      ({ enabled: true, provider: 'webhook', url: 'http://127.0.0.1:9/unused', token: null, onRateLimited: true, onQuotaResumed: true, onWaitingInput: true, onRunFinished: true }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push({ title: msg.title, body: msg.body });
+      return { ok: true, status: 200, error: null };
+    };
+    runs.emit('run', { id: 'r1', title: 'Nightly', branch: null, state: 'failed', lastEvent: 'waiting_input_timeout', cancelled: false }, true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toContain('Nightly');
+    expect(sent[0]!.body).toMatch(/permission/i);
+    expect(sent[0]!.body).toMatch(/30 minutes/);
+  });
 });

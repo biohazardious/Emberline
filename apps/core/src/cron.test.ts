@@ -74,7 +74,7 @@ describe('cron jobs', () => {
     t.ptyd.start();
     await t.ptyd.waitUntilConnected();
     const cookie = await setupAndLogin(t.app);
-    const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
+    const api = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
       t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
     const { project } = (await api('POST', '/api/projects', { name: 'Cron Project' })).json();
     return { api, projectId: project.id as string };
@@ -158,5 +158,30 @@ describe('cron jobs', () => {
     expect(preview.json().nextRuns).toHaveLength(5);
     expect(new Date(preview.json().nextRuns[0]).getUTCHours()).toBe(6);
     expect((await api('POST', '/api/cron/preview', { cronExpr: '-5 * * * *' })).statusCode).toBe(400);
+  });
+
+  it('offers only auto and bypassPermissions to unattended jobs (R5)', async () => {
+    const { api, projectId } = await start();
+    const body = { projectId, name: 'n', cronExpr: '*/5 * * * *', prompt: 'p' };
+    for (const permissionMode of ['default', 'acceptEdits', 'plan']) {
+      expect((await api('POST', '/api/cron', { ...body, permissionMode })).statusCode, permissionMode).toBe(400);
+    }
+    expect((await api('POST', '/api/cron', { ...body, permissionMode: 'bypassPermissions' })).statusCode).toBe(201);
+    const job: ScheduledJob = (await api('POST', '/api/cron', body)).json();
+    expect(job.permissionMode).toBe('auto');
+    expect((await api('PATCH', `/api/cron/${job.id}`, { permissionMode: 'default' })).statusCode).toBe(400);
+    expect((await api('PATCH', `/api/cron/${job.id}`, { permissionMode: 'bypassPermissions' })).statusCode).toBe(200);
+  });
+
+  it('runs a stored legacy job with a prompting mode as auto and says so in the run (R5)', async () => {
+    const { api, projectId } = await start();
+    const cron = new CronService(t.db, t.runs, t.scheduler, 'UTC');
+    const job: ScheduledJob = (await api('POST', '/api/cron', { projectId, name: 'old', cronExpr: '*/5 * * * *', prompt: 'old' })).json();
+    t.db.update(scheduledJobs).set({ permissionMode: 'default' }).where(eq(scheduledJobs.id, job.id)).run();
+    const { run } = await cron.triggerNow(job.id);
+    expect(t.runs.get(run.id).permissionMode).toBe('auto');
+    const note = t.runs.get(run.id).events.find((e) => e.type === 'permission_mode_overridden');
+    expect(note).toBeDefined();
+    expect(t.runs.get(run.id).events.find((e) => e.type === 'queued')?.payload).toMatchObject({ unattended: 'cron' });
   });
 });

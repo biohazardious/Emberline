@@ -459,7 +459,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
       name: 'Nightly Test Suite',
       cronExpr: '0 2 * * *',
       prompt: 'Run tests and fix failures',
-      permissionMode: 'acceptEdits',
+      permissionMode: 'bypassPermissions',
     });
     expect(createRes.statusCode).toBe(201);
     const job: ScheduledJob = createRes.json();

@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import type { CronOverlapPolicy, CronPreviewResponse, PermissionMode, Project, Run, ScheduledJob } from '@emberline/protocol';
+import type { CronOverlapPolicy, CronPermissionMode, CronPreviewResponse, Project, Run, ScheduledJob } from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -44,7 +44,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   const [name, setName] = useState('');
   const [cronExpr, setCronExpr] = useState('0 2 * * *');
   const [prompt, setPrompt] = useState('');
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto');
+  const [permissionMode, setPermissionMode] = useState<CronPermissionMode>('auto');
   const [timeZone, setTimeZone] = useState(browserTimeZone);
   const [overlapPolicy, setOverlapPolicy] = useState<CronOverlapPolicy>('skip');
   const [preview, setPreview] = useState<{ runs: string[]; error: string | null }>({ runs: [], error: null });
@@ -263,13 +263,11 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
             <select
               className="input"
               value={permissionMode}
-              onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
+              onChange={(e) => setPermissionMode(e.target.value as CronPermissionMode)}
               style={{ maxWidth: '170px' }}
+              title="Scheduled runs are unattended, so they never stop to ask permission"
             >
               <option value="auto">Autonomous</option>
-              <option value="acceptEdits">Accept edits</option>
-              <option value="default">Ask permissions</option>
-              <option value="plan">Plan only</option>
               <option value="bypassPermissions">Bypass permissions</option>
             </select>
           </div>

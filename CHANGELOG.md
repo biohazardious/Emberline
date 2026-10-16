@@ -14,6 +14,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - Cleaning up finished runs no longer deletes work that was not merged. Garbage collection (manual, per project, and the automatic one) now keeps a worktree that has uncommitted changes or commits missing from the project's default branch, and says how many it kept and why. If Emberline cannot tell, it keeps the worktree. Pruning one run's worktree from the dashboard asks first when it holds such work, with a "Prune anyway" button.
 
+- Runs that start on their own (scheduled jobs and the factory's automatic ticket runs) no longer sit forever on a permission prompt. If one waits for 30 minutes with nobody answering, Emberline stops it as failed, frees its slot and sends a notification. Runs you started by hand are never stopped this way. Scheduled jobs can only use "Autonomous" or "Bypass permissions"; an older job saved with another mode now runs as Autonomous and the run says so. The factory's one-time "keep going" nudge is now remembered per run, so a restart no longer repeats it.
+
 ### Changed
 
 - Settings shows a short terms note per provider: a risk level (low, medium, high), what the vendor's terms say about running its CLI inside a platform like Emberline, the date it was checked and a link to the source. The README lists the same. Several accounts per provider stays a non-goal.

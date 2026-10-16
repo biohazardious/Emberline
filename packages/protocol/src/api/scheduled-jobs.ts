@@ -9,6 +9,10 @@ import { PermissionMode } from './projects.js';
 export const CronOverlapPolicy = z.enum(['skip', 'queue']);
 export type CronOverlapPolicy = z.infer<typeof CronOverlapPolicy>;
 
+/** Nobody watches a scheduled run, so it may never stop on a permission prompt. */
+export const CronPermissionMode = z.enum(['auto', 'bypassPermissions']);
+export type CronPermissionMode = z.infer<typeof CronPermissionMode>;
+
 const TimeZoneName = z.string().trim().min(1).max(64);
 
 export const ScheduledJob = z.object({
@@ -34,7 +38,7 @@ export const CreateScheduledJobBody = z.object({
   name: z.string().trim().min(1).max(200),
   cronExpr: z.string().trim().min(1).max(100),
   prompt: z.string().trim().min(1).max(20_000),
-  permissionMode: PermissionMode.default('auto'),
+  permissionMode: CronPermissionMode.default('auto'),
   enabled: z.boolean().default(true),
   /** Defaults to core's zone (`EMBERLINE_TIMEZONE` / `TZ`). */
   timeZone: TimeZoneName.optional(),
@@ -47,7 +51,7 @@ export const UpdateScheduledJobBody = z
     name: z.string().trim().min(1).max(200),
     cronExpr: z.string().trim().min(1).max(100),
     prompt: z.string().trim().min(1).max(20_000),
-    permissionMode: PermissionMode,
+    permissionMode: CronPermissionMode,
     enabled: z.boolean(),
     timeZone: TimeZoneName,
     overlapPolicy: CronOverlapPolicy,

@@ -82,10 +82,13 @@ export class NotificationService {
           const cfg = this.getSettings();
           if (cfg.enabled && cfg.onRunFinished) {
             const failed = run.state === 'failed';
+            const timedOut = run.lastEvent === 'waiting_input_timeout';
             void this.dispatch(cfg, {
               event: 'run_finished',
-              title: failed ? `Run failed: ${label}` : `Run completed: ${label}`,
-              body: failed
+              title: timedOut ? `Run stopped, no one answered: ${label}` : failed ? `Run failed: ${label}` : `Run completed: ${label}`,
+              body: timedOut
+                ? `Run "${label}" waited 30 minutes on a permission prompt with nobody there, so it was stopped.`
+                : failed
                 ? `Run "${label}" exited with an error.`
                 : `Run "${label}" finished its turn and is ready for review.`,
               priority: failed ? 'high' : 'default',

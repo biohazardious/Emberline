@@ -254,12 +254,23 @@ export class CronService {
   }
 
   private async dispatchJobRun(row: ScheduledJobRow, now: Date): Promise<Run> {
+    // Nobody watches a scheduled run: a job stored with a prompting mode (older versions allowed
+    // it) runs as `auto` instead of stalling on a permission prompt.
+    const overridden = row.permissionMode !== 'auto' && row.permissionMode !== 'bypassPermissions';
     const input = {
       projectId: row.projectId,
       prompt: row.prompt,
-      permissionMode: row.permissionMode as PermissionMode,
+      permissionMode: (overridden ? 'auto' : row.permissionMode) as PermissionMode,
     };
-    const run = this.scheduler ? await this.scheduler.submit(input) : await this.runs.enqueue(input);
+    const origin = { unattended: 'cron' } as const;
+    const run = this.scheduler ? await this.scheduler.submit(input, origin) : await this.runs.enqueue(input, origin);
+    if (overridden) {
+      this.runs.note(run.id, 'permission_mode_overridden', {
+        from: row.permissionMode,
+        to: 'auto',
+        message: `Scheduled jobs run unattended, so "${row.permissionMode}" was replaced with "auto"`,
+      });
+    }
     const nextRunAt = this.next(row, now);
     this.db
       .update(scheduledJobs)

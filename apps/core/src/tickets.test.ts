@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { settings } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
-import { keyPrefix, statusForRunState, ticketPrompt } from './tickets/service.js';
+import { keyPrefix, statusForRunState, TicketService, ticketPrompt } from './tickets/service.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -362,5 +362,35 @@ describe('tickets', () => {
     expect(promptRes.statusCode).toBe(200);
     expect((promptRes.json() as Run).lastEvent).toBe('prompt_sent');
     expect((await getTicket(ticket.id)).status).toBe('in_progress');
+  });
+
+  it('marks factory-dispatched runs unattended and nudges a stalled one once, across restarts (R5, R9)', async () => {
+    const project = await createProject();
+    await createTicket(project.id, { title: 'Auto', status: 'ready' });
+    const [started] = await t.tickets.dispatchNextReadyTicket(project.id);
+    const runId = started!.run.id;
+    expect(t.runs.get(runId).events.find((e) => e.type === 'queued')?.payload).toMatchObject({ unattended: 'factory' });
+    // A manually started ticket run is attended.
+    const manual = await createTicket(project.id, { title: 'Manual', status: 'backlog' });
+    const manualRun: Run = (await api('POST', `/api/tickets/${manual.id}/start`, {})).json().run;
+    expect(t.runs.get(manualRun.id).events.find((e) => e.type === 'queued')?.payload ?? {}).not.toHaveProperty('unattended');
+
+    const token = await waitFile(`token-${runId}`);
+    await hook(runId, 'SessionStart', token, { session_id: 's' });
+    await hook(runId, 'UserPromptSubmit', token, { prompt: 'go' });
+    await hook(runId, 'Notification', token, { notification_type: 'permission_prompt', message: 'ok?' });
+    await expect
+      .poll(() => t.runs.get(runId).events.filter((e) => e.type === 'auto_nudged').length, { timeout: 5_000 })
+      .toBe(1);
+    const prompts = () => t.runs.get(runId).events.filter((e) => e.type === 'prompt_sent').length;
+    await expect.poll(prompts, { timeout: 5_000 }).toBe(1);
+
+    // A restarted TicketService has no memory of the nudge, only the run's events.
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    t.runs.emit('run', { ...t.runs.getRun(runId), state: 'waiting_input', lastEvent: 'Notification' }, true);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(t.runs.get(runId).events.filter((e) => e.type === 'auto_nudged')).toHaveLength(1);
+    expect(prompts()).toBe(1);
+    void restarted;
   });
 });
