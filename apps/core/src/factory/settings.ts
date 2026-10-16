@@ -456,6 +456,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     maxTicketDepth: raw.maxTicketDepth ?? 3,
     maxAutoRunsPerProjectPerDay: raw.maxAutoRunsPerProjectPerDay ?? 40,
     maxParallelTicketsPerProject: raw.maxParallelTicketsPerProject ?? 2,
+    buildOutputsQuotaGb: raw.buildOutputsQuotaGb ?? 5,
     mcpServers: mergedMcpServers,
     skillPlugins: mergedSkillPlugins,
     anthropicKeyConfigured,
@@ -527,6 +528,7 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     maxTicketDepth: body.maxTicketDepth ?? current.maxTicketDepth,
     maxAutoRunsPerProjectPerDay: body.maxAutoRunsPerProjectPerDay ?? current.maxAutoRunsPerProjectPerDay,
     maxParallelTicketsPerProject: body.maxParallelTicketsPerProject ?? current.maxParallelTicketsPerProject,
+    buildOutputsQuotaGb: body.buildOutputsQuotaGb ?? current.buildOutputsQuotaGb,
     mcpServers: body.mcpServers ?? current.mcpServers,
     skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };

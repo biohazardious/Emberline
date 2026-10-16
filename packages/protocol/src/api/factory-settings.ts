@@ -284,6 +284,8 @@ export const FactorySettings = z.object({
   maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000).default(40),
   /** Tickets of one project that may run at the same time. */
   maxParallelTicketsPerProject: z.number().int().min(1).max(4).default(2),
+  /** Archive quota for run build outputs, per project, in GB. */
+  buildOutputsQuotaGb: z.number().min(0.5).max(1000).default(5),
   mcpServers: z.array(McpServerEntry).default(DEFAULT_MCP_SERVERS),
   skillPlugins: z.array(SkillPluginEntry).default(DEFAULT_SKILL_PLUGINS),
   anthropicKeyConfigured: z.boolean().default(false),
@@ -331,6 +333,7 @@ export const UpdateFactorySettingsBody = z
     maxTicketDepth: z.number().int().min(1).max(10),
     maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000),
     maxParallelTicketsPerProject: z.number().int().min(1).max(4),
+    buildOutputsQuotaGb: z.number().min(0.5).max(1000),
     mcpServers: z.array(McpServerEntry),
     skillPlugins: z.array(SkillPluginEntry),
     anthropicApiKey: z.string().trim().max(500).nullable(),

@@ -218,3 +218,29 @@ export const ticketDependencies = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.ticketId, t.dependsOnId] }), index('ticket_dependencies_depends_on_idx').on(t.dependsOnId)],
 );
+
+/** Archived run deliverables (APKs, installers, firmware). Rows outlive their run on purpose, so `runId` has no foreign key. */
+export const buildOutputs = sqliteTable(
+  'build_outputs',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    runId: text('run_id').notNull(),
+    ticketId: text('ticket_id'),
+    name: text('name').notNull(),
+    /** Worktree-relative path the file was copied from. */
+    sourcePath: text('source_path').notNull(),
+    /** Archive-relative path of the copy. */
+    storedPath: text('stored_path').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sourceMtime: integer('source_mtime', { mode: 'timestamp_ms' }).notNull(),
+    archivedAt: integer('archived_at', { mode: 'timestamp_ms' }).notNull(),
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+  },
+  (t) => [
+    index('build_outputs_project_archived_idx').on(t.projectId, t.archivedAt),
+    uniqueIndex('build_outputs_run_source_idx').on(t.runId, t.sourcePath),
+  ],
+);

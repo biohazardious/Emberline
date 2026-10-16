@@ -232,6 +232,33 @@ describe('maxParallelTicketsPerProject over HTTP', () => {
   });
 });
 
+describe('buildOutputsQuotaGb over HTTP', () => {
+  it('defaults to 5, round-trips 0.5..1000 and rejects values outside with 400', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const patch = (value: number) =>
+      t.app.inject({
+        method: 'PATCH',
+        url: '/api/factory/settings',
+        payload: { buildOutputsQuotaGb: value },
+        headers: { ...CSRF, cookie },
+      });
+    const read = async () =>
+      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: { ...CSRF, cookie } })).json()
+        .buildOutputsQuotaGb;
+    expect(await read()).toBe(5);
+    for (const value of [0.5, 12.5, 1000]) {
+      const res = await patch(value);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().buildOutputsQuotaGb).toBe(value);
+      expect(await read()).toBe(value);
+    }
+    for (const value of [0.4, 0, -1, 1000.5]) {
+      expect((await patch(value)).statusCode).toBe(400);
+      expect(await read()).toBe(1000);
+    }
+  });
+});
+
 describe('Antigravity terms acknowledgement', () => {
   it('enabling Antigravity requires the acknowledgement; already enabled installs keep running', async () => {
     const cookie = await setupAndLogin(t.app);

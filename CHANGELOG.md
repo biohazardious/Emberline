@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Settings: a per-project quota for archived build outputs (`buildOutputsQuotaGb`, default 5 GB, 0.5 to 1000 GB). The archive itself arrives in the next changes.
+
 ## [0.2.1] - 2026-10-17
 
 ### Security
