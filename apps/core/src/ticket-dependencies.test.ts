@@ -413,6 +413,24 @@ describe('dependency-aware dispatch', () => {
     await settle(project.id);
   });
 
+  it('a manual move to done in a plain project starts nothing', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    await createTicket(project.id, { title: 'B', status: 'ready' });
+    // update() calls dispatch synchronously when it dispatches at all, so a spy sees it right away.
+    const calls: string[] = [];
+    const dispatch = t.tickets.dispatchNextReadyTicket.bind(t.tickets);
+    t.tickets.dispatchNextReadyTicket = (projectId) => {
+      calls.push(projectId);
+      return dispatch(projectId);
+    };
+
+    expect((await api('PATCH', `/api/tickets/${a.id}`, { status: 'done' })).statusCode).toBe(200);
+    expect(calls).toEqual([]);
+    expect(ticketRuns(project.id)).toEqual([]);
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+  });
+
   it('republishes dependents when their dependency moves to done', async () => {
     await api('PATCH', '/api/factory/settings', { autoPickupReady: false });
     const project = await createProject();

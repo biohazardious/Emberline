@@ -159,8 +159,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
-  /** Runs whose completion pipeline (gates, merge, move to Done) is in progress. */
-  private readonly pipelineRuns = new Set<string>();
+  /** Runs whose completion pipeline (gates, merge, move to Done) is in progress, with the number of passes. */
+  private readonly pipelineRuns = new Map<string, number>();
 
   constructor(
     private readonly db: Db,
@@ -399,11 +399,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private async handleRunCompleted(run: Run): Promise<void> {
     // With parallel tickets another run's dispatch may finalize Review tickets meanwhile; it must
     // not merge this run before its gates have passed.
-    this.pipelineRuns.add(run.id);
+    // Counted: an overlapping pass for the same run must not lift the guard while one is still going.
+    this.pipelineRuns.set(run.id, (this.pipelineRuns.get(run.id) ?? 0) + 1);
     try {
       await this.runPipeline(run);
     } finally {
-      this.pipelineRuns.delete(run.id);
+      const left = (this.pipelineRuns.get(run.id) ?? 1) - 1;
+      if (left > 0) this.pipelineRuns.set(run.id, left);
+      else this.pipelineRuns.delete(run.id);
     }
   }
 
@@ -866,8 +869,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if ((patch.status && patch.status !== current.status) || (patch.title && patch.title !== current.title)) {
       this.publishDependents(id);
     }
-    // A person closed a ticket by hand: tickets waiting for it may start now.
-    if (patch.status === 'done' && current.status !== 'done' && getFactorySettings(this.db).autoPickupReady) {
+    // A person closed a ticket by hand: tickets waiting for it may start now. Only then, or when the
+    // factory already chains this project; a plain board move must not start agents nobody asked for.
+    if (
+      patch.status === 'done' &&
+      current.status !== 'done' &&
+      getFactorySettings(this.db).autoPickupReady &&
+      (this.autoChainProjects.has(current.projectId) || this.dependentIds(id).length > 0)
+    ) {
       void this.dispatchNextReadyTicket(current.projectId).catch(() => undefined);
     }
     return ticket;
