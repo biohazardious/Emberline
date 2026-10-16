@@ -283,6 +283,29 @@ describe('dependency-aware dispatch', () => {
     await settle(project.id);
   });
 
+  it('still finishes a parallel ticket whose sibling emptied the queue first', async () => {
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready' });
+    const passes = trackPipelines();
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([x.id, y.id]);
+
+    // X finishes first; its dispatch finds nothing left to start while Y is still working.
+    await finish(runsFor(x.id)[0] as Run);
+    await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await statusOf(x.id)).toBe('done');
+
+    // Y's completion is still part of the factory chain: merged and moved to Done, not left in Review.
+    await finish(runsFor(y.id)[0] as Run);
+    await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(2);
+    await Promise.all(passes);
+    expect(await statusOf(y.id)).toBe('done');
+    await settle(project.id);
+  });
+
   it('starts one ticket at a time with maxParallelTicketsPerProject 1', async () => {
     await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
     const project = await createProject();

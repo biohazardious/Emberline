@@ -377,7 +377,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ...(fSettings.autoPickupBacklog ? allTickets.filter((t) => t.status === 'backlog').sort(byPriority) : []),
     ];
     if (queue.length === 0) {
-      this.autoChainProjects.delete(projectId);
+      // The chain ends only once its last ticket run is through: a parallel sibling still working
+      // must be merged and moved to Done by its own pipeline when it finishes.
+      if (this.busyTicketRuns(projectId) === 0) this.autoChainProjects.delete(projectId);
       return [];
     }
     this.autoChainProjects.add(projectId);
