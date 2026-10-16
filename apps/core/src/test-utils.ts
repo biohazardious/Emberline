@@ -74,6 +74,8 @@ export async function createTestApp(
     scheduler,
     async close() {
       await app.close();
+      // Background archive passes must not outlive the DB and temp dir they use.
+      await runs.outputs.idle();
       tickets.dispose();
       runs.dispose();
       scheduler.dispose();

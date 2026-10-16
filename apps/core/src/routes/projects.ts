@@ -962,6 +962,8 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         await rm(resolvedWorkspace, { recursive: true, force: true }).catch(() => {});
       }
 
+      // Archived build outputs go with the project (rows and files).
+      await runs.outputs.removeProject(projectId).catch(() => {});
       db.delete(projects).where(eq(projects.id, projectId)).run();
       tickets.forgetProject(projectId);
 

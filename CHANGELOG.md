@@ -7,6 +7,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Added
 
 - Settings: a per-project quota for archived build outputs (`buildOutputsQuotaGb`, default 5 GB, 0.5 to 1000 GB). The archive itself arrives in the next changes.
+- Build outputs (APKs, installers, firmware) are archived per project each time a run finishes a turn or fails, and right before any worktree is pruned (manual cleanup, per-run prune, automatic cleanup), so a deliverable in a git-ignored `build/` folder survives its worktree. The archive sits in `.emberline-outputs` on the workspaces volume; when a project goes over its quota the oldest unpinned outputs are removed first, and deleting a project removes its archive. Problems (quota full, an output larger than the quota, a failed copy) appear as notes in the run's timeline and never hold up a run or its pipeline. The page that lists and downloads them arrives in the next changes.
 
 ## [0.2.1] - 2026-10-17
 

@@ -976,3 +976,165 @@ describe('runs', () => {
     });
   });
 });
+
+describe('build output archive', () => {
+  const gitIn = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-C', cwd, '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args]);
+  const finishRun = async (projectId: string) => {
+    const run: Run = (await api('POST', '/api/runs', { projectId })).json();
+    await tokenFor(run.id);
+    await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return t.runs.getRun(run.id).endedAt;
+        },
+        { timeout: 5_000 },
+      )
+      .not.toBeNull();
+    await t.runs.outputs.idle();
+    return t.runs.getRun(run.id);
+  };
+  const putApk = (worktreePath: string, bytes: number) => {
+    const rel = 'build/app/outputs/apk/release/app-release.apk';
+    mkdirSync(path.dirname(path.join(worktreePath, rel)), { recursive: true });
+    writeFileSync(path.join(worktreePath, rel), Buffer.alloc(bytes, 5));
+  };
+  /** The run ignores `build/`, commits that, and the branch is merged: GC may prune the worktree. */
+  const mergeIgnoringBuild = (run: Run, projectPath: string) => {
+    writeFileSync(path.join(run.worktreePath, '.gitignore'), 'build/\n');
+    gitIn(run.worktreePath, 'add', '.gitignore');
+    gitIn(run.worktreePath, 'commit', '-q', '-m', 'ignore build');
+    gitIn(projectPath, 'merge', '-q', '--no-ff', '-m', 'merge', run.branch ?? '');
+  };
+  const expectArchivedApk = async (projectId: string, runId: string, bytes: number) => {
+    const { outputs } = t.runs.outputs.list(projectId);
+    expect(outputs).toEqual([expect.objectContaining({ name: 'app-release.apk', runId, sizeBytes: bytes })]);
+    const file = await t.runs.outputs.open(outputs[0]?.id ?? '');
+    expect(readFileSync(file.abs)).toEqual(Buffer.alloc(bytes, 5));
+  };
+
+  it('auto-GC archives an APK in a git-ignored build/ dir before it prunes the merged worktree', async () => {
+    const project = await createProject('Archive auto GC', true);
+    const stale = await finishRun(project.id);
+    mergeIgnoringBuild(stale, project.path);
+    putApk(stale.worktreePath, 4096);
+    t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, stale.id)).run();
+    for (let i = 0; i < 10; i += 1) {
+      t.db
+        .insert(runs)
+        .values({
+          id: `synthetic-${i}`,
+          projectId: project.id,
+          agent: 'claude',
+          state: 'done',
+          worktreePath: project.path,
+          hookTokenHash: 'x',
+          stateChangedAt: new Date(10_000 + i),
+          createdAt: new Date(10_000 + i),
+          endedAt: new Date(10_000 + i),
+        })
+        .run();
+    }
+    const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(live.id);
+    (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+
+    await t.runs.reconcile();
+
+    expect(t.runs.list().map((r) => r.id)).not.toContain(stale.id);
+    expect(existsSync(stale.worktreePath)).toBe(false);
+    await expectArchivedApk(project.id, stale.id, 4096);
+    expect(t.runs.outputs.list(project.id).outputs[0]?.runExists).toBe(false);
+  });
+
+  it('manual GC archives before it prunes', async () => {
+    const project = await createProject('Archive manual GC', true);
+    const run = await finishRun(project.id);
+    mergeIgnoringBuild(run, project.path);
+    putApk(run.worktreePath, 3000);
+
+    const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0, pruneWorktrees: true });
+    expect(res.prunedWorktrees).toBe(1);
+    expect(existsSync(run.worktreePath)).toBe(false);
+    await expectArchivedApk(project.id, run.id, 3000);
+  });
+
+  it('a per-run prune archives first', async () => {
+    const project = await createProject('Archive prune', true);
+    const run = await finishRun(project.id);
+    putApk(run.worktreePath, 2000);
+
+    const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, { force: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ removed: true });
+    expect(existsSync(run.worktreePath)).toBe(false);
+    await expectArchivedApk(project.id, run.id, 2000);
+  });
+
+  it('archives when a run reaches done, in the background', async () => {
+    const project = await createProject('Archive on done', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'UserPromptSubmit', token);
+    putApk(run.worktreePath, 1000);
+
+    expect((await hook(run.id, 'Stop', token)).statusCode).toBe(200);
+    expect(t.runs.getRun(run.id).state).toBe('done');
+    await t.runs.outputs.idle();
+    await expectArchivedApk(project.id, run.id, 1000);
+  });
+
+  it('never makes the hook (and the pipeline behind it) wait for an archive pass', async () => {
+    const project = await createProject('Archive async', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'UserPromptSubmit', token);
+    let release: () => void = () => undefined;
+    const spy = vi
+      .spyOn(t.runs.outputs, 'archiveRun')
+      .mockImplementation(() => new Promise((resolve) => (release = () => resolve({ archived: 0, skipped: 0, failed: 0 }))));
+    try {
+      const res = await hook(run.id, 'Stop', token);
+      expect(res.statusCode).toBe(200);
+      expect(t.runs.getRun(run.id).state).toBe('done');
+      await expect.poll(() => spy.mock.calls.map((c) => c[0])).toEqual([run.id]);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  it('archives when a run ends failed', async () => {
+    const project = await createProject('Archive on failed', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(run.id);
+    putApk(run.worktreePath, 1500);
+    await t.ptyd.get().write(run.terminalId ?? '', 'fail\r');
+    await expect
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return t.runs.getRun(run.id).state;
+        },
+        { timeout: 5_000 },
+      )
+      .toBe('failed');
+    await t.runs.outputs.idle();
+    await expectArchivedApk(project.id, run.id, 1500);
+  });
+
+  it('deleting a project removes its archived outputs', async () => {
+    const project = await createProject('Archive delete', true);
+    const run = await finishRun(project.id);
+    putApk(run.worktreePath, 100);
+    await t.runs.outputs.archiveRun(run.id);
+    const archiveDir = path.join(t.config.workspacesDir, '.emberline-outputs', project.id);
+    expect(existsSync(archiveDir)).toBe(true);
+
+    expect((await api('DELETE', `/api/projects/${project.id}`)).statusCode).toBe(200);
+    expect(existsSync(archiveDir)).toBe(false);
+    expect(t.runs.outputs.list(project.id).outputs).toEqual([]);
+  });
+});

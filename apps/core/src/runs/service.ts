@@ -57,6 +57,7 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { BuildOutputArchive } from '../outputs/archive.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
@@ -324,6 +325,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   >();
   private readonly handoffLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
+  /** Archived build outputs; passes run when a run ends a turn or fails, and before any worktree prune. */
+  readonly outputs: BuildOutputArchive;
   /** Stall watchdog per working (or starting) run: the screen hash, since when it is unchanged, when it was last read. */
   private readonly stallWatch = new Map<string, { hash: string | null; since: number; sampledAt: number }>();
 
@@ -335,6 +338,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     super();
     this.setMaxListeners(0); // one listener per open UI socket
     this.demoTokens = new DemoTokens(db);
+    this.outputs = new BuildOutputArchive(db, config, { note: (runId, type, payload) => this.note(runId, type, payload) });
+    // End of a turn (`done`) or of the run (`failed`): archive in the background; nothing waits for it.
+    this.on('run', (run, stateChanged) => {
+      if (stateChanged && (run.state === 'done' || run.state === 'failed')) this.outputs.archiveSoon(run.id);
+    });
   }
 
   /** Starts periodic reconciliation with ptyd. */
@@ -1444,6 +1452,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         );
       }
     }
+    // Deliverables in git-ignored build directories exist only here: archive them first.
+    if (row.worktreePath !== project.path) await this.outputs.archiveBeforePrune(id);
     const removed = await pruneWorktree(project.path, row.worktreePath);
     if (removed) {
       this.record(id, {
@@ -1765,6 +1775,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           continue;
         }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
+          await this.outputs.archiveBeforePrune(row.id);
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
@@ -2073,14 +2084,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           byProj.set(r.projectId, arr);
         }
         const seen = new Set<string>();
-        for (const [projId, arr] of byProj.entries()) {
+        // A pre-prune archive pass that times out ends this auto-GC pass, so one slow disk holds
+        // reconcile for at most one timeout per interval; the rest waits for the next pass.
+        let archiveTimedOut = false;
+        autoGc: for (const [projId, arr] of byProj.entries()) {
           if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
           const proj = projectMap.get(projId);
           const branch = proj ? await this.mergeTarget(proj) : undefined;
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
+            if (archiveTimedOut) break autoGc;
             seen.add(stale.id);
             if (await this.mustKeepForReview(stale, proj, { branch, cached: true })) continue;
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
+              archiveTimedOut = (await this.outputs.archiveBeforePrune(stale.id)) === 'timeout';
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);
