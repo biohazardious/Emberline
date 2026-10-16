@@ -118,8 +118,8 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
     metric('emberline_scheduler_slots', 'gauge', 'Maximum concurrent runs.', [['', scheduler.maxConcurrentRuns]]);
     metric('emberline_scheduler_busy', 'gauge', 'Runs holding a slot.', [['', scheduler.busy]]);
     metric('emberline_scheduler_queued', 'gauge', 'Runs waiting for a slot or quota.', [['', scheduler.queued]]);
-    metric('emberline_quota_paused', 'gauge', '1 while dispatch is paused by a usage limit.', [
-      ['', scheduler.window ? 1 : 0],
+    metric('emberline_quota_paused', 'gauge', 'Quota lanes out of quota (agent, credential, model pool); 0 when none.', [
+      ['', scheduler.windows.length],
     ]);
     metric('emberline_runner_connected', 'gauge', 'Core is connected to the runner (ptyd).', [
       ['', deps.ptyd.status === 'connected' ? 1 : 0],

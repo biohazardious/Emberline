@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { backupDatabase } from './backup.js';
 import { openDb } from './db/index.js';
+import { quotaWindows } from './db/schema.js';
 import { createTestApp, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
@@ -44,6 +45,19 @@ describe('ops endpoints', () => {
     expect(res.body).toContain('# TYPE emberline_up gauge');
     expect(res.body).toContain('emberline_runner_connected 0');
     expect(res.body).toMatch(/emberline_http_requests_total\{method="GET",status="2xx"\} \d+/);
+    expect(res.body).toContain('emberline_quota_paused 0');
+  });
+
+  it('reports how many quota lanes are out of quota', async () => {
+    t = await createTestApp();
+    process.env.EMBERLINE_METRICS_TOKEN = 'scrape-secret';
+    const resumeAt = new Date(Date.now() + 3_600_000);
+    for (const agent of ['claude', 'antigravity']) {
+      t.db.insert(quotaWindows).values({ id: agent, agent, exhaustedAt: new Date(), resumeAt, source: 'hook' }).run();
+    }
+    const res = await t.app.inject({ url: '/metrics', headers: { authorization: 'Bearer scrape-secret' } });
+    expect(res.body).toMatch(/# HELP emberline_quota_paused .*lanes out of quota/);
+    expect(res.body).toContain('emberline_quota_paused 2');
   });
 });
 
