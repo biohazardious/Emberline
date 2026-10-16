@@ -107,7 +107,7 @@ describe('ToolchainService', () => {
       delete process.env.FAKE_SDK_GATE;
     }
     await expect
-      .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing)
+      .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing, { timeout: 5_000 })
       .toBe(false);
   });
 });

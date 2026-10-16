@@ -286,6 +286,83 @@ describe('runs', () => {
     expect(t.runs.list().map((r) => r.id).sort()).toEqual([dirty.id, inReview.id].sort());
   });
 
+  describe('garbage collection and shared worktrees', () => {
+    const finishRun = async (projectId: string) => {
+      const run: Run = (await api('POST', '/api/runs', { projectId })).json();
+      await tokenFor(run.id);
+      await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return t.runs.getRun(run.id).endedAt;
+          },
+          { timeout: 5_000 },
+        )
+        .not.toBeNull();
+      return t.runs.getRun(run.id);
+    };
+
+    it('manual GC removes the predecessor row but keeps the worktree its successor still uses', async () => {
+      const project = await createProject('GC shared', true);
+      const predecessor = await finishRun(project.id);
+      const lone = await finishRun(project.id);
+      const successor: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(successor.id);
+      // The still-active successor took over the predecessor's worktree (a handoff).
+      t.db.update(runs).set({ worktreePath: predecessor.worktreePath }).where(eq(runs.id, successor.id)).run();
+
+      const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0, pruneWorktrees: true });
+      expect(res.removedRuns).toBe(2);
+      const ids = t.runs.list().map((r) => r.id);
+      expect(ids).toEqual([successor.id]);
+      expect(existsSync(predecessor.worktreePath)).toBe(true);
+      // An unshared worktree is pruned, so the guard is what kept the shared one.
+      expect(existsSync(lone.worktreePath)).toBe(false);
+    });
+
+    it('auto-GC in reconcile removes the stale predecessor row but keeps a shared worktree', async () => {
+      const project = await createProject('Auto GC', true);
+      const lone = await finishRun(project.id);
+      const predecessor = await finishRun(project.id);
+      const successor = await finishRun(project.id);
+      t.db.update(runs).set({ worktreePath: predecessor.worktreePath }).where(eq(runs.id, successor.id)).run();
+      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, lone.id)).run();
+      t.db.update(runs).set({ createdAt: new Date(2_000) }).where(eq(runs.id, predecessor.id)).run();
+      t.db.update(runs).set({ createdAt: new Date(5_000) }).where(eq(runs.id, successor.id)).run();
+      // Nine newer finished rows plus the successor fill the ten kept slots.
+      for (let i = 0; i < 9; i += 1) {
+        t.db
+          .insert(runs)
+          .values({
+            id: `synthetic-${i}`,
+            projectId: project.id,
+            agent: 'claude',
+            state: 'done',
+            worktreePath: project.path,
+            hookTokenHash: 'x',
+            stateChangedAt: new Date(10_000 + i),
+            createdAt: new Date(10_000 + i),
+            endedAt: new Date(10_000 + i),
+          })
+          .run();
+      }
+      // reconcile only reaches auto-GC while some run is still open; keep one alive.
+      const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(live.id);
+      // Elapse the interval gate (earlier reconciles already used it).
+      (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+
+      await t.runs.reconcile();
+      const ids = t.runs.list().map((r) => r.id);
+      expect(ids).not.toContain(lone.id);
+      expect(ids).not.toContain(predecessor.id);
+      expect(ids).toContain(successor.id);
+      expect(existsSync(lone.worktreePath)).toBe(false);
+      expect(existsSync(predecessor.worktreePath)).toBe(true);
+    });
+  });
+
   it('keeps a finished run done when a follow-up cannot resume it (B19)', async () => {
     const project = await createProject('No session', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
