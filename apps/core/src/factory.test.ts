@@ -435,6 +435,15 @@ describe('dependency-aware PO prompt', () => {
     expect(prompt).not.toContain('Priority 3 - High');
     expect(prompt).toContain('Order the work');
     expect(prompt).toContain('Autonomous Execution Rule');
+    expect(prompt).toContain('priority (0–3) only breaks ties between tickets that are ready at the same time');
+    expect(prompt).toContain('lowercase letters, digits and hyphens, start with a letter or digit, up to 40 characters');
+    expect(prompt).toContain('up to 10 `dependsOn` entries');
+    expect(prompt).toContain('e.g. `MPG-12`');
+  });
+
+  it('defaults the prompt to the default parallel ticket limit', async () => {
+    const { buildFactoryOrchestratorPrompt } = await import('./factory/orchestration.js');
+    expect(buildFactoryOrchestratorPrompt('Build an APK')).toContain('up to 2 tickets of this project at once');
   });
 
   it('blueprint instructions no longer promise sequential dispatch', async () => {

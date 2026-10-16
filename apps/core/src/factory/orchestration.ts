@@ -64,7 +64,7 @@ export function buildFactoryOrchestratorPrompt(
   userRequest: string,
   autoDispatch = true,
   attachmentContext = '',
-  maxParallelTickets = 3,
+  maxParallelTickets = 2,
 ): string {
   const attachmentSection = attachmentContext.trim()
     ? `\n### Attached Reference Files & Visual Assets (Uploaded by User):\n${attachmentContext.trim()}\n`
@@ -87,12 +87,13 @@ ${attachmentSection}
    - \`coder\`: Core business logic, backend services/APIs, CLI/system automation scripts, desktop/native state, build/packaging, or embedded firmware implementation.
    - \`ui_ux\` (when user-facing surfaces exist): Web/Portal pages, forms, dashboards, desktop/mobile GUI views, brand assets, or interactive CLI/TUI output ergonomics.
    - \`qa\`: Unit/integration/E2E tests, safety/regression checks, and running the project's build/compile verification pipeline.
-   **Order the work:** give every ticket a short unique \`ref\` (lowercase letters, digits and hyphens, e.g. \`brand-assets\`) and list the refs of the tickets it needs in \`dependsOn\` (you may also name the key of an existing ticket).
+   **Order the work:** give every ticket a short unique \`ref\` and list the refs of the tickets it needs in \`dependsOn\`. Refs are lowercase letters, digits and hyphens, start with a letter or digit, up to 40 characters (e.g. \`brand-assets\`); a ticket has up to 10 \`dependsOn\` entries; an existing ticket is referenced by its key, e.g. \`MPG-12\`.
    - Producers come before consumers: assets, schemas, contracts, and migrations first, then the code that uses them.
    - Builds, packaging, and integration depend on everything they package or wire together.
    - QA depends on the tickets whose work it verifies.
    - Work that is truly independent gets no \`dependsOn\`, so it can run in parallel.
    - Keep chains short; do not chain tickets that do not need each other's output.
+   - A ticket's priority (0–3) only breaks ties between tickets that are ready at the same time; dependencies, not priority, decide the order.
    *(If the user attached images, screenshots, schemas, logs, or reference files above, ALWAYS copy their exact Absolute Paths into the \`body\` of the relevant delegated tickets so those specialists can inspect or use them!)*
 4. **Write Delegated Tickets to \`.emberline/new-tickets.json\`:**
    Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below (include only the tickets relevant to this request; this example builds an Android APK):
