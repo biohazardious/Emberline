@@ -1,23 +1,24 @@
 import {
   type AgentId,
-  type AgentModelId,
   type AgentPersona,
   type CliToolStatus,
+  type ClaudeUsageTelemetry,
   coerceModelForProvider,
   DEFAULT_MCP_SERVERS,
   DEFAULT_SKILL_PLUGINS,
   type FactorySettings,
   formatRankStars,
   getModelInfoForProvider,
-  getModelsForProvider,
   type McpServerEntry,
   type ModelCapabilityTag,
   type ModelCapabilityTier,
   PERSONA_CAPABILITY_TARGETS,
-  type PersonaAgentMap,
-  type PersonaModelMap,
+  type PersonaRouteMap,
   PROVIDER_REGISTRY,
+  PROVIDER_RUNTIME,
   type ProviderLoginResponse,
+  type QuotaPolicy,
+  type Route,
   type SkillPluginEntry,
   selectProviderModelByRank,
   selectProviderModelByTier,
@@ -63,11 +64,13 @@ import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQueryParam } from '../hooks/navigation';
 import { api, errorMessage } from '../api';
+import { useApi } from '../hooks/useApi';
 import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { AccountPanel } from '../components/AccountPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
+import { RouteChainEditor } from '../components/RouteChainEditor';
 import { SdkToolchainPanel } from '../components/SdkToolchainPanel';
 import { UpdatesPanel } from '../components/UpdatesPanel';
 import { ProviderMark } from '../components/ProviderMark';
@@ -103,6 +106,10 @@ const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; tex
   },
 };
 
+function defaultRoute(agent: AgentId, model: Route['model']): Route {
+  return { agent, model, credential: PROVIDER_RUNTIME[agent].credentials[0]! };
+}
+
 const SETTINGS_TABS = ['autopilot', 'providers', 'mcp_plugins', 'quota', 'notifications', 'updates', 'account'] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
@@ -132,24 +139,10 @@ export function SettingsPage({
   const [maxAutoRunsPerDay, setMaxAutoRunsPerDay] = useState(40);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
-  const [personaAgents, setPersonaAgents] = useState<PersonaAgentMap>({
-    product_owner: 'claude',
-    architect: 'claude',
-    ui_ux: 'claude',
-    coder: 'claude',
-    dba: 'claude',
-    qa: 'claude',
-    security: 'claude',
-  });
-  const [personaModels, setPersonaModels] = useState<PersonaModelMap>({
-    product_owner: 'fable',
-    architect: 'fable',
-    ui_ux: 'opus',
-    coder: 'opus',
-    dba: 'opus',
-    qa: 'sonnet',
-    security: 'opus',
-  });
+  const [personaRoutes, setPersonaRoutes] = useState<PersonaRouteMap | null>(null);
+  const [quotaPolicy, setQuotaPolicy] = useState<QuotaPolicy>({ newRuns: 'wait', inFlight: 'wait' });
+  // Same URL and poll interval as the Quota tab, so both share one cached request.
+  const claudeUsage = useApi<ClaudeUsageTelemetry>('/api/factory/claude-usage', 30_000).data;
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>(DEFAULT_MCP_SERVERS);
   const [skillPlugins, setSkillPlugins] = useState<SkillPluginEntry[]>(DEFAULT_SKILL_PLUGINS);
 
@@ -192,8 +185,8 @@ export function SettingsPage({
         setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
-        setPersonaAgents(res.personaAgents);
-        if (res.personaModels) setPersonaModels(res.personaModels);
+        setPersonaRoutes(res.personaRoutes);
+        if (res.quotaPolicy) setQuotaPolicy(res.quotaPolicy);
         if (res.mcpServers?.length) setMcpServers(res.mcpServers);
         if (res.skillPlugins?.length) setSkillPlugins(res.skillPlugins);
       })
@@ -294,58 +287,36 @@ export function SettingsPage({
         setDefaultAgent(fallbackAgent);
       }
 
-      // If disabling a provider, migrate any personas that were using it to fallbackAgent and rank-match their models
+      // Disabling a provider drops its routes from every chain; a chain left empty falls back to the new default.
       if (exists) {
-        setPersonaAgents((prevAgents) => {
-          const updatedAgents = { ...prevAgents };
-          setPersonaModels((prevModels) => {
-            const updatedModels = { ...prevModels };
-            for (const p of PERSONA_LIST) {
-              const key = p.id;
-              if (updatedAgents[key] === providerId) {
-                updatedAgents[key] = fallbackAgent;
-                updatedModels[key] = coerceModelForProvider(
-                  fallbackAgent,
-                  updatedModels[key] ?? 'opus',
-                  key,
-                );
-              }
-            }
-            return updatedModels;
-          });
-          return updatedAgents;
+        setPersonaRoutes((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev };
+          for (const p of PERSONA_LIST) {
+            const kept = prev[p.id].filter((r) => r.agent !== providerId);
+            updated[p.id] = kept.length
+              ? kept
+              : [defaultRoute(fallbackAgent, coerceModelForProvider(fallbackAgent, prev[p.id][0]?.model ?? 'opus', p.id))];
+          }
+          return updated;
         });
       }
       return next;
     });
   };
 
-  const handlePersonaProviderChange = (personaKey: AgentPersona, nextAgent: AgentId) => {
-    setPersonaAgents((prev) => ({
-      ...prev,
-      [personaKey]: nextAgent,
-    }));
-    // Automatically pick the model in `nextAgent` matching the current model's capability rank (or persona target rank)
-    setPersonaModels((prev) => {
-      const currentModel = prev[personaKey] ?? 'opus';
-      const coerced = coerceModelForProvider(nextAgent, currentModel, personaKey);
-      return {
-        ...prev,
-        [personaKey]: coerced,
-      };
+  const handlePersonaTierQuickSelect = (personaKey: AgentPersona, tier: ModelCapabilityTier) => {
+    setPersonaRoutes((prev) => {
+      if (!prev) return prev;
+      const [first, ...rest] = prev[personaKey];
+      if (!first) return prev;
+      return { ...prev, [personaKey]: [{ ...first, model: selectProviderModelByTier(first.agent, tier, personaKey) }, ...rest] };
     });
   };
 
-  const handlePersonaTierQuickSelect = (personaKey: AgentPersona, tier: ModelCapabilityTier) => {
-    const agent = personaAgents[personaKey] ?? defaultAgent ?? 'claude';
-    const nextModel = selectProviderModelByTier(agent, tier, personaKey);
-    setPersonaModels((prev) => ({
-      ...prev,
-      [personaKey]: nextModel,
-    }));
-  };
-
   const applyCapabilityPreset = (preset: 'auto-rank' | 'all-high' | 'all-medium' | 'all-low' | 'multi-provider') => {
+    if (!personaRoutes) return;
+    // Presets replace each chain with a single route; add fallbacks afterwards.
     if (preset === 'multi-provider') {
       const uiProvider: AgentId = enabledProviders.includes('antigravity')
         ? 'antigravity'
@@ -361,55 +332,45 @@ export function SettingsPage({
         ? 'claude'
         : (enabledProviders[0] ?? 'claude');
 
-      const nextAgents: PersonaAgentMap = {
-        product_owner: coreProvider,
-        architect: coreProvider,
-        ui_ux: uiProvider,
-        coder: coreProvider,
-        dba: coreProvider,
-        qa: qaProvider,
-        security: coreProvider,
-      };
-      const nextModels: PersonaModelMap = {
-        product_owner: selectProviderModelByRank(coreProvider, 5),
-        architect: selectProviderModelByRank(coreProvider, 5),
-        ui_ux: selectProviderModelByRank(uiProvider, 5),
-        coder: selectProviderModelByRank(coreProvider, 4),
-        dba: selectProviderModelByRank(coreProvider, 4),
-        qa: selectProviderModelByRank(qaProvider, 3),
-        security: selectProviderModelByRank(coreProvider, 4),
-      };
-      setPersonaAgents(nextAgents);
-      setPersonaModels(nextModels);
+      setPersonaRoutes({
+        product_owner: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5))],
+        architect: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5))],
+        ui_ux: [defaultRoute(uiProvider, selectProviderModelByRank(uiProvider, 5))],
+        coder: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4))],
+        dba: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4))],
+        qa: [defaultRoute(qaProvider, selectProviderModelByRank(qaProvider, 3))],
+        security: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4))],
+      });
       setNotice(
-        'Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. Click Save to persist.',
+        'Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. Fallbacks were reset. Click Save to persist.',
       );
       return;
     }
 
-    const nextModels = { ...personaModels };
+    const next: PersonaRouteMap = { ...personaRoutes };
     for (const meta of PERSONA_LIST) {
       const p = meta.id;
-      const agent = personaAgents[p] ?? defaultAgent ?? 'claude';
+      const agent = personaRoutes[p][0]?.agent ?? defaultAgent ?? 'claude';
+      let model: Route['model'];
       if (preset === 'auto-rank') {
-        const targetRank = PERSONA_CAPABILITY_TARGETS[p].recommendedRank;
-        nextModels[p] = selectProviderModelByRank(agent, targetRank);
+        model = selectProviderModelByRank(agent, PERSONA_CAPABILITY_TARGETS[p].recommendedRank);
       } else if (preset === 'all-high') {
-        nextModels[p] = selectProviderModelByTier(agent, 'high', p);
+        model = selectProviderModelByTier(agent, 'high', p);
       } else if (preset === 'all-medium') {
-        nextModels[p] = selectProviderModelByTier(agent, 'medium', p);
+        model = selectProviderModelByTier(agent, 'medium', p);
       } else {
-        nextModels[p] = selectProviderModelByTier(agent, 'low', p);
+        model = selectProviderModelByTier(agent, 'low', p);
       }
+      next[p] = [defaultRoute(agent, model)];
     }
-    setPersonaModels(nextModels);
+    setPersonaRoutes(next);
     const labelMap = {
       'auto-rank': 'Recommended Persona Capability Ranks (★5 PO/Arch, ★4 Core/UI/Sec, ★3 QA)',
       'all-high': 'Maximum Capability / High Tier (★4–5)',
       'all-medium': 'Balanced Medium Tier (★3)',
       'all-low': 'Fast / Token-Saver Low Tier (★1–2)',
     };
-    setNotice(`Applied "${labelMap[preset]}" across active providers. Click Save to persist.`);
+    setNotice(`Applied "${labelMap[preset]}" across active providers. Fallbacks were reset. Click Save to persist.`);
   };
 
   const handleSaveFactorySettings = async (e: FormEvent) => {
@@ -432,8 +393,8 @@ export function SettingsPage({
         maxAutoRunsPerProjectPerDay: maxAutoRunsPerDay,
         defaultAgent,
         enabledProviders,
-        personaAgents,
-        personaModels,
+        personaRoutes,
+        quotaPolicy,
         mcpServers,
         skillPlugins,
       };
@@ -445,8 +406,8 @@ export function SettingsPage({
       setSettings(updated);
       setEnabledProviders(updated.enabledProviders?.length ? updated.enabledProviders : ['claude']);
       setDefaultAgent(updated.defaultAgent);
-      setPersonaAgents(updated.personaAgents);
-      setPersonaModels(updated.personaModels);
+      setPersonaRoutes(updated.personaRoutes);
+      setQuotaPolicy(updated.quotaPolicy);
       if (updated.mcpServers?.length) setMcpServers(updated.mcpServers);
       if (updated.skillPlugins?.length) setSkillPlugins(updated.skillPlugins);
       setAnthropicApiKey('');
@@ -1228,6 +1189,46 @@ export function SettingsPage({
               </div>
             </div>
 
+            <div className="quota-policy">
+              <label>
+                New runs when their provider is out of quota
+                <select
+                  className="input"
+                  value={quotaPolicy.newRuns}
+                  onChange={(e) => setQuotaPolicy({ ...quotaPolicy, newRuns: e.target.value as QuotaPolicy['newRuns'] })}
+                >
+                  <option value="wait">Wait for the reset</option>
+                  <option value="fallback">Start on the next route</option>
+                </select>
+              </label>
+              <label>
+                Runs in progress when their provider runs out
+                <select
+                  className="input"
+                  value={quotaPolicy.inFlight}
+                  onChange={(e) => setQuotaPolicy({ ...quotaPolicy, inFlight: e.target.value as QuotaPolicy['inFlight'] })}
+                >
+                  <option value="wait">Wait for the reset and continue</option>
+                  <option value="fallback">Hand off to the next route</option>
+                </select>
+              </label>
+            </div>
+
+            {claudeUsage?.extraUsage && (
+              <p className="muted small" style={{ margin: 0 }}>
+                Claude extra usage:{' '}
+                {claudeUsage.extraUsage.enabled
+                  ? `on · $${claudeUsage.extraUsage.usedUsd.toFixed(2)} of $${claudeUsage.extraUsage.limitUsd.toFixed(2)} this month`
+                  : `off${claudeUsage.extraUsage.disabledReason ? ` (${claudeUsage.extraUsage.disabledReason})` : ''}`}
+                {' · '}
+                <a href="https://claude.ai/settings/usage" target="_blank" rel="noreferrer">
+                  Change it on claude.ai → Settings → Usage
+                </a>
+                {claudeUsage.extraUsage.enabled &&
+                  '. Claude keeps working past its subscription limit and bills extra usage; fallbacks after a Claude route only start when that runs out too.'}
+              </p>
+            )}
+
             <div
               style={{
                 display: 'grid',
@@ -1238,19 +1239,11 @@ export function SettingsPage({
               {PERSONA_LIST.map((meta) => {
                 const personaKey = meta.id;
                 const targetSpec = PERSONA_CAPABILITY_TARGETS[personaKey];
-                const rawSelectedAgent = personaAgents[personaKey] ?? defaultAgent ?? 'claude';
-                const selectedAgent: AgentId = enabledProviders.includes(rawSelectedAgent)
-                  ? rawSelectedAgent
-                  : (enabledProviders[0] ?? 'claude');
+                const chain = personaRoutes?.[personaKey] ?? [];
+                const firstRoute = chain[0];
+                const selectedAgent: AgentId = firstRoute?.agent ?? enabledProviders[0] ?? 'claude';
                 const providerEntry = PROVIDER_REGISTRY[selectedAgent];
-                const providerModels = getModelsForProvider(selectedAgent);
-
-                const rawSelectedModel = personaModels[personaKey] ?? 'opus';
-                const selectedModel = coerceModelForProvider(
-                  selectedAgent,
-                  rawSelectedModel,
-                  personaKey,
-                );
+                const selectedModel = firstRoute?.model ?? 'auto';
                 const modelInfo = getModelInfoForProvider(selectedAgent, selectedModel);
                 const activeTier: ModelCapabilityTier =
                   modelInfo?.tier ?? targetSpec.recommendedTier;
@@ -1301,62 +1294,27 @@ export function SettingsPage({
                       </div>
                     </div>
 
-                    {/* Provider Selector (Only shows Enabled Providers!) */}
+                    {/* Fallback chain: first route runs, the next ones take over when its quota runs out */}
                     <div className="field" style={{ gap: 4 }}>
-                      <span
-                        className="muted mono"
-                        style={{
-                          fontSize: '0.68rem',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <span>AI Provider / CLI Engine</span>
-                        <span>
-                          {enabledProviders.length === 1
-                            ? '1 Active Provider'
-                            : `${enabledProviders.length} Active Providers`}
-                        </span>
+                      <span className="muted mono" style={{ fontSize: '0.68rem' }}>
+                        Provider chain (first route, then fallbacks)
                       </span>
-                      {enabledProviders.length === 1 ? (
-                        <div
-                          className="input mono"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '6px 10px',
-                            fontSize: '0.8rem',
-                            background: 'color-mix(in srgb, var(--text) 3%, transparent)',
-                            cursor: 'default',
+                      {personaRoutes && (
+                        <RouteChainEditor
+                          value={chain}
+                          onChange={(next) => setPersonaRoutes({ ...personaRoutes, [personaKey]: next })}
+                          enabledProviders={enabledProviders}
+                          keyConfigured={{
+                            claude: Boolean(settings?.anthropicKeyConfigured),
+                            codex: Boolean(settings?.openaiKeyConfigured),
+                            gemini: Boolean(settings?.geminiKeyConfigured),
+                            aider: Boolean(
+                              settings?.anthropicKeyConfigured ||
+                                settings?.openaiKeyConfigured ||
+                                settings?.geminiKeyConfigured,
+                            ),
                           }}
-                          title="Enable additional providers in Step 1 above to switch providers per persona"
-                        >
-                          <span>
-                            <ProviderMark id={providerEntry.id} />
-                            {providerEntry.label}
-                          </span>
-                          <span className="badge mono" style={{ fontSize: '0.64rem' }}>
-                            Active
-                          </span>
-                        </div>
-                      ) : (
-                        <select
-                          className="input"
-                          value={selectedAgent}
-                          onChange={(e) =>
-                            handlePersonaProviderChange(personaKey, e.target.value as AgentId)
-                          }
-                        >
-                          {enabledProviders.map((provId) => {
-                            const prov = PROVIDER_REGISTRY[provId];
-                            return (
-                              <option key={provId} value={provId}>
-                                {prov.label}
-                              </option>
-                            );
-                          })}
-                        </select>
+                        />
                       )}
                     </div>
 
@@ -1414,40 +1372,6 @@ export function SettingsPage({
                         })}
                       </div>
                     </div>
-
-                    {/* Strictly Provider-Scoped Model Dropdown */}
-                    <label className="field" style={{ gap: 4 }}>
-                      <span
-                        className="muted mono"
-                        style={{
-                          fontSize: '0.68rem',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <span>{providerEntry.shortLabel} Model Selection</span>
-                        <span className="mono">{providerModels.length} Models</span>
-                      </span>
-                      <select
-                        className="input"
-                        value={selectedModel}
-                        onChange={(e) =>
-                          setPersonaModels((prev) => ({
-                            ...prev,
-                            [personaKey]: e.target.value as AgentModelId,
-                          }))
-                        }
-                      >
-                        {providerModels.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {formatRankStars(m.rank)} [{m.rank}/5 · {m.tier.toUpperCase()}] {m.label}
-                          </option>
-                        ))}
-                        <option value="auto">
-                          Auto (Match Persona Target Rank ★{targetSpec.recommendedRank})
-                        </option>
-                      </select>
-                    </label>
 
                     {/* Selected Model Capability Tags & Description */}
                     {modelInfo && (

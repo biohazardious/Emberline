@@ -1291,6 +1291,67 @@ a {
   flex: none;
 }
 
+/* Per-persona fallback chain and the quota policy above the persona grid */
+.route-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.route-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.route-step-index {
+  flex: 0 0 100%;
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+
+.route-step > select {
+  flex: 1 1 110px;
+  min-width: 0;
+  width: auto;
+}
+
+.route-step-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.badge-warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.quota-policy {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 12px;
+}
+
+.quota-policy label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.quota-policy select {
+  width: 100%;
+  min-width: 0;
+}
+
 /* --- dashboard / overview -------------------------------------------------- */
 
 .dashboard {
