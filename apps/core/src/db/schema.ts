@@ -1,3 +1,5 @@
+import type { Route } from '@emberline/protocol';
+import { sql } from 'drizzle-orm';
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /** Free-form key/value settings (JSON values). */
@@ -87,6 +89,20 @@ export const runs = sqliteTable(
     autoRetryCount: integer('auto_retry_count').notNull().default(0),
     /** When the scheduler retries the run (it waits as `rate_limited` until then); null otherwise. */
     autoRetryAt: integer('auto_retry_at', { mode: 'timestamp_ms' }),
+    /** Model the run started with; null on rows from before 0.2.0 (read from the prompt's route tag). */
+    model: text('model'),
+    /** `login` (the CLI's sign-in) or `api_key` (the key from Settings). */
+    credential: text('credential').notNull().default('login'),
+    /** Fallback chain snapshot taken at enqueue (`Route[]`); `[]` on legacy rows. */
+    routes: text('routes', { mode: 'json' }).$type<Route[]>().notNull().default(sql`'[]'`),
+    /** Index into `routes` of the route this run uses. */
+    routeIndex: integer('route_index').notNull().default(0),
+    /** Run this one took over from after a quota handoff. */
+    predecessorRunId: text('predecessor_run_id'),
+    /** Successor that took over; a handed-off run is `done` but did not finish its work. */
+    handedOffTo: text('handed_off_to'),
+    /** Automatic handoffs so far in this ticket attempt (copied +1 to a successor). */
+    handoffCount: integer('handoff_count').notNull().default(0),
   },
   (t) => [index('runs_project_idx').on(t.projectId)],
 );
@@ -109,11 +125,16 @@ export const runEvents = sqliteTable(
 );
 
 /**
- * Exhausted usage windows of the (single) subscription. A window with `resumedAt` null pauses
- * dispatch until `resumeAt`; timers are derived from these rows, so they survive restarts.
+ * Exhausted usage windows per lane (agent + credential + pool). A window with `resumedAt` null
+ * pauses dispatch on its lane until `resumeAt`; timers are derived from these rows, so they
+ * survive restarts.
  */
 export const quotaWindows = sqliteTable('quota_windows', {
   id: text('id').primaryKey(),
+  /** Lane the window blocks; pool `*` blocks every pool of the agent + credential. */
+  agent: text('agent').notNull().default('claude'),
+  credential: text('credential').notNull().default('login'),
+  pool: text('pool').notNull().default('*'),
   /** Approximate window start (reset - 5h) when the reset time is known. */
   startedAt: integer('started_at', { mode: 'timestamp_ms' }),
   exhaustedAt: integer('exhausted_at', { mode: 'timestamp_ms' }).notNull(),

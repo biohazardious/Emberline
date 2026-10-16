@@ -77,6 +77,7 @@ import {
   worktreeHasUncommittedWork,
 } from './git.js';
 import { providerAdapter } from './providers.js';
+import { runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -174,13 +175,12 @@ export const toRun = (row: RunRow): Run => ({
     row.state === 'rate_limited' && row.autoRetryAt
       ? { attempt: row.autoRetryCount, max: AUTO_RETRY_DELAYS_MS.length, at: row.autoRetryAt.toISOString() }
       : null,
-  // Interim until runs store their route (migration 0013).
-  model: null,
-  credential: 'login',
-  routes: [],
-  routeIndex: 0,
-  predecessorRunId: null,
-  handedOffTo: null,
+  model: runModel(row),
+  credential: row.credential as Run['credential'],
+  routes: runRoutes(row),
+  routeIndex: row.routeIndex,
+  predecessorRunId: row.predecessorRunId,
+  handedOffTo: row.handedOffTo,
 });
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {

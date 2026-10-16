@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -35,6 +36,21 @@ function createOutdatedDb(file: string): void {
 }
 
 describe('openDb', () => {
+  it('0013: runs and quota windows get route and lane columns with legacy-safe defaults', () => {
+    const db = openDb(':memory:');
+    const defaults = (table: string) =>
+      Object.fromEntries(
+        (db.db.all(sql.raw(`pragma table_info(${table})`)) as { name: string; dflt_value: string | null }[]).map(
+          (c) => [c.name, c.dflt_value],
+        ),
+      );
+    const run = defaults('runs');
+    expect(run).toMatchObject({ credential: "'login'", routes: "'[]'", route_index: '0', handoff_count: '0' });
+    expect(Object.keys(run)).toEqual(expect.arrayContaining(['model', 'predecessor_run_id', 'handed_off_to']));
+    expect(defaults('quota_windows')).toMatchObject({ agent: "'claude'", credential: "'login'", pool: "'*'" });
+    db.close();
+  });
+
   it('does not back up a fresh or up-to-date database', () => {
     const file = path.join(dir, 'emberline.db');
     openDb(file).close();
