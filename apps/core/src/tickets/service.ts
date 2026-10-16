@@ -54,6 +54,9 @@ interface TicketServiceEvents {
 /** Gap between neighbours so most moves need a single row update. */
 const POSITION_STEP = 1024;
 
+/** Run states that occupy one of a project's parallel ticket slots. */
+const ACTIVE_RUN_STATES = new Set<Run['state']>(['queued', 'starting', 'working', 'waiting_input', 'rate_limited']);
+
 type Blocker = Ticket['blockedBy'][number];
 
 export const toTicket = (
@@ -156,6 +159,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
+  /** Runs whose completion pipeline (gates, merge, move to Done) is in progress. */
+  private readonly pipelineRuns = new Set<string>();
 
   constructor(
     private readonly db: Db,
@@ -306,41 +311,40 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * Starts the highest-priority `ready` (or `backlog` when `autoPickupBacklog` is enabled) ticket
-   * for `projectId` if no run is currently active on the project.
+   * Starts every unblocked `ready` (then `backlog`, when `autoPickupBacklog` is enabled) ticket of
+   * `projectId`, highest priority first, until the project has `maxParallelTicketsPerProject`
+   * ticket runs active. Returns what it started (empty when nothing).
    */
-  dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
+  dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run }[]> {
     // Check-then-start spans several awaits; two completions (or a click) must not both dispatch.
     return this.dispatchLock.run(projectId, () => this.dispatchNextReadyTicketUnlocked(projectId));
   }
 
-  private async dispatchNextReadyTicketUnlocked(projectId: string): Promise<{ ticket: Ticket; run: Run } | null> {
-    const projectRuns = this.runs.list().filter((r) => r.projectId === projectId);
-    const hasActive = projectRuns.some(
-      (r) =>
-        r.state === 'queued' ||
-        r.state === 'starting' ||
-        r.state === 'working' ||
-        r.state === 'waiting_input' ||
-        r.state === 'rate_limited',
-    );
-    if (hasActive) return null;
+  /** Active runs working on one of the project's tickets; ticket-less runs never count. */
+  private busyTicketRuns(projectId: string): number {
+    return this.runs
+      .list()
+      .filter((r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && ACTIVE_RUN_STATES.has(r.state)).length;
+  }
 
+  private async dispatchNextReadyTicketUnlocked(projectId: string): Promise<{ ticket: Ticket; run: Run }[]> {
     const fSettings = getFactorySettings(this.db);
+    if (this.busyTicketRuns(projectId) >= fSettings.maxParallelTicketsPerProject) return [];
+
     const projectRow = this.project(projectId);
-    const allTickets = this.list(projectId);
 
     // S16: a daily run budget per project stops an auto-chaining factory from draining the quota.
     if (this.dailyBudgetExhausted(projectId, fSettings.maxAutoRunsPerProjectPerDay)) {
       this.autoChainProjects.delete(projectId);
-      return null;
+      return [];
     }
 
     // Finalize any tickets left in 'review' with a completed run (e.g. if core restarted mid-pipeline)
     if (fSettings.autoMoveToDone) {
-      for (const reviewTicket of allTickets.filter((t) => t.status === 'review')) {
+      for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
         const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
-        if (latestRun && latestRun.state === 'done') {
+        // A run whose own pipeline is still going (gates, merge) is not left over: leave it alone.
+        if (latestRun && latestRun.state === 'done' && !latestRun.handedOffTo && !this.pipelineRuns.has(latestRun.id)) {
           if (
             fSettings.autoSyncToMain &&
             latestRun.worktreePath &&
@@ -358,31 +362,52 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
 
-    const readyTickets = allTickets
-      .filter((t) => t.status === 'ready')
-      .sort((a, b) => b.priority - a.priority || a.position - b.position);
-
-    let next = readyTickets[0];
-    if (!next && fSettings.autoPickupBacklog) {
-      const backlogTickets = allTickets
-        .filter((t) => t.status === 'backlog')
-        .sort((a, b) => b.priority - a.priority || a.position - b.position);
-      next = backlogTickets[0];
-    }
-
-    if (!next) {
+    // Read after the finalization above: tickets it moved to Done may unblock others.
+    const allTickets = this.list(projectId);
+    const byPriority = (a: Ticket, b: Ticket) => b.priority - a.priority || a.position - b.position;
+    const queue = [
+      ...allTickets.filter((t) => t.status === 'ready').sort(byPriority),
+      ...(fSettings.autoPickupBacklog ? allTickets.filter((t) => t.status === 'backlog').sort(byPriority) : []),
+    ];
+    if (queue.length === 0) {
       this.autoChainProjects.delete(projectId);
-      return null;
+      return [];
     }
-
     this.autoChainProjects.add(projectId);
-    return this.start(next.id, {
-      permissionMode: 'auto',
-      persona: next.persona,
-    });
+
+    const started: { ticket: Ticket; run: Run }[] = [];
+    for (const next of queue) {
+      if (next.blockedBy.length > 0) continue;
+      if (this.busyTicketRuns(projectId) >= fSettings.maxParallelTicketsPerProject) break;
+      // The budget counts every run started in this pass too.
+      if (this.dailyBudgetExhausted(projectId, fSettings.maxAutoRunsPerProjectPerDay)) {
+        this.autoChainProjects.delete(projectId);
+        break;
+      }
+      if (this.runs.activeRunForTicket(next.id) || this.startingTickets.has(next.id)) continue;
+      try {
+        started.push(await this.start(next.id, { permissionMode: 'auto', persona: next.persona }));
+      } catch (error) {
+        // Someone started it by hand in the meantime: take the next one.
+        if (error instanceof HttpError && error.statusCode === 409) continue;
+        throw error;
+      }
+    }
+    return started;
   }
 
   private async handleRunCompleted(run: Run): Promise<void> {
+    // With parallel tickets another run's dispatch may finalize Review tickets meanwhile; it must
+    // not merge this run before its gates have passed.
+    this.pipelineRuns.add(run.id);
+    try {
+      await this.runPipeline(run);
+    } finally {
+      this.pipelineRuns.delete(run.id);
+    }
+  }
+
+  private async runPipeline(run: Run): Promise<void> {
     if (!run.projectId) return;
     let projectRow;
     try {
@@ -837,7 +862,35 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (patch.status && patch.status !== current.status && patch.position === undefined) {
       set.position = this.edgePosition(current.projectId, patch.status, 'bottom');
     }
-    return this.publish(this.db.update(tickets).set(set).where(eq(tickets.id, id)).returning().get());
+    const ticket = this.publish(this.db.update(tickets).set(set).where(eq(tickets.id, id)).returning().get());
+    if ((patch.status && patch.status !== current.status) || (patch.title && patch.title !== current.title)) {
+      this.publishDependents(id);
+    }
+    // A person closed a ticket by hand: tickets waiting for it may start now.
+    if (patch.status === 'done' && current.status !== 'done' && getFactorySettings(this.db).autoPickupReady) {
+      void this.dispatchNextReadyTicket(current.projectId).catch(() => undefined);
+    }
+    return ticket;
+  }
+
+  /** `blockedBy` of the tickets waiting for `id` shows its status and title: republish them. */
+  private publishDependents(id: string): void {
+    this.publishTickets(this.dependentIds(id));
+  }
+
+  private dependentIds(id: string): string[] {
+    return this.db
+      .select({ ticketId: ticketDependencies.ticketId })
+      .from(ticketDependencies)
+      .where(eq(ticketDependencies.dependsOnId, id))
+      .all()
+      .map((r) => r.ticketId);
+  }
+
+  private publishTickets(ids: string[]): void {
+    if (ids.length === 0) return;
+    const rows = this.db.select().from(tickets).where(inArray(tickets.id, ids)).all();
+    for (const ticket of this.withDependencies(rows)) this.emit('ticket', ticket);
   }
 
   /** Replaces the ticket's dependency set; validates everything before writing anything. */
@@ -869,8 +922,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   remove(id: string): void {
     const row = this.row(id);
+    const waiting = this.dependentIds(id);
     this.db.delete(tickets).where(eq(tickets.id, id)).run();
     this.emit('removed', { id, projectId: row.projectId });
+    // Their edge to it went with it (ON DELETE CASCADE).
+    this.publishTickets(waiting);
   }
 
   /**
@@ -946,9 +1002,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private moveToTop(id: string, status: TicketStatus): Ticket {
     const row = this.row(id);
     const position = this.edgePosition(row.projectId, status, 'top');
-    return this.publish(
+    const ticket = this.publish(
       this.db.update(tickets).set({ status, position, updatedAt: new Date() }).where(eq(tickets.id, id)).returning().get(),
     );
+    if (status !== row.status) this.publishDependents(id);
+    return ticket;
   }
 
   private edgePosition(projectId: string, status: TicketStatus, edge: 'top' | 'bottom'): number {

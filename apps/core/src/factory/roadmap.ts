@@ -1759,7 +1759,7 @@ async function dispatchRoadmapItemsUnlocked(
   if (input.autoStart && (createdTickets.length > 0 || itemIdsToDispatch.size > 0)) {
     ticketService.setAutoChain(project.id, true);
     const dispatched = await ticketService.dispatchNextReadyTicket(project.id);
-    startedRun = dispatched?.run ?? null;
+    startedRun = dispatched[0]?.run ?? null;
   }
 
   const finalStored = await readOrInitRoadmapFile(project, ticketService);

@@ -221,8 +221,10 @@ describe('tickets', () => {
     await api('PATCH', '/api/factory/settings', { maxAutoRunsPerProjectPerDay: 1 });
     await createTicket(project.id, { title: 'First', status: 'ready' });
     await createTicket(project.id, { title: 'Second', status: 'ready' });
-    const first = await t.tickets.dispatchNextReadyTicket(project.id);
-    expect(first).not.toBeNull();
+    // Two parallel slots, but the budget counts each run the pass starts.
+    const [first, ...more] = await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(first).toBeDefined();
+    expect(more).toEqual([]);
     await t.runs.stop(first!.run.id);
     await expect
       .poll(async () => {
@@ -230,7 +232,7 @@ describe('tickets', () => {
         return t.runs.getRun(first!.run.id).endedAt;
       })
       .not.toBeNull();
-    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toBeNull();
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
 
     const usage = (await api('GET', `/api/projects/${project.id}/usage?days=3`)).json();
     expect(usage).toMatchObject({ runsLast24h: 1, maxAutoRunsPerProjectPerDay: 1, budgetExhausted: true });
@@ -240,6 +242,7 @@ describe('tickets', () => {
   });
 
   it('dispatches one ticket per project even when dispatches race', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
     const project = await createProject();
     await createTicket(project.id, { title: 'First', status: 'ready' });
     await createTicket(project.id, { title: 'Second', status: 'ready' });
@@ -248,7 +251,7 @@ describe('tickets', () => {
       t.tickets.dispatchNextReadyTicket(project.id),
       t.tickets.dispatchNextReadyTicket(project.id),
     ]);
-    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    expect(results.flat()).toHaveLength(1);
     expect(t.runs.list().filter((r) => r.projectId === project.id)).toHaveLength(1);
   });
 

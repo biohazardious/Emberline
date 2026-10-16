@@ -346,11 +346,13 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
       if (!row) throw notFound('no such project');
       tickets.setAutoChain(row.id, true);
-      const started = await tickets.dispatchNextReadyTicket(row.id);
+      const dispatched = await tickets.dispatchNextReadyTicket(row.id);
       return {
         ok: true,
         autoChainActive: tickets.isAutoChainActive(row.id),
-        started,
+        // `started` keeps its pre-0.2.0 shape (the first ticket or null); `dispatched` lists them all.
+        started: dispatched[0] ?? null,
+        dispatched,
       };
     },
   );

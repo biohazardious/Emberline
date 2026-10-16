@@ -5,6 +5,7 @@ import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { TicketService } from './tickets/service.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -206,5 +207,258 @@ describe('ticket dependencies', () => {
     expect(after.blockedBy).toEqual([]);
     expect(after.dependsOn).toEqual([a.id]);
     expect((await getTicket(b.id)).blockedBy).toEqual([]);
+  });
+});
+
+/** Ticket runs of the project, oldest first. */
+const ticketRuns = (projectId: string) =>
+  t.runs
+    .list()
+    .filter((r) => r.projectId === projectId && r.ticketId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+const runsFor = (ticketId: string) => t.runs.list().filter((r) => r.ticketId === ticketId);
+const ACTIVE = new Set<Run['state']>(['queued', 'starting', 'working', 'waiting_input', 'rate_limited']);
+
+/** Lets a started agent work and finish its turn; the pipeline then moves its ticket on. */
+async function finish(run: Run): Promise<void> {
+  const token = await waitFile(`token-${run.id}`);
+  await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+  await hook(run.id, 'UserPromptSubmit', token);
+  await hook(run.id, 'Stop', token);
+}
+
+/** Records every pipeline pass so a test can wait for all of them, dispatch included. */
+function trackPipelines(): Promise<void>[] {
+  const passes: Promise<void>[] = [];
+  const svc = t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
+  const original = svc.handleRunCompleted.bind(t.tickets);
+  svc.handleRunCompleted = (r) => {
+    const pass = original(r);
+    passes.push(pass);
+    return pass;
+  };
+  return passes;
+}
+
+const statusOf = async (id: string) => (await getTicket(id)).status;
+
+/** The started agents write into the test directory; let them get there before teardown. */
+const settle = (projectId: string) =>
+  Promise.all(
+    t.runs
+      .list()
+      .filter((r) => r.projectId === projectId && r.state !== 'queued')
+      .map((r) => waitFile(`token-${r.id}`)),
+  );
+
+describe('dependency-aware dispatch', () => {
+  it('starts a dependent ticket only after its dependency is done', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready', priority: 1 });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready', priority: 3 });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([a.id]);
+
+    await finish(runsFor(a.id)[0] as Run);
+    await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('done');
+    await expect.poll(() => runsFor(b.id).length, { timeout: 10_000 }).toBe(1);
+    await settle(project.id);
+  });
+
+  it('starts independent tickets up to the per-project limit and fills a freed slot', async () => {
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready' });
+    const z = await createTicket(project.id, { title: 'Z', status: 'ready' });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([x.id, y.id]);
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
+
+    await finish(runsFor(x.id)[0] as Run);
+    await expect.poll(() => runsFor(z.id).length, { timeout: 10_000 }).toBe(1);
+    expect(runsFor(y.id)).toHaveLength(1);
+    await settle(project.id);
+  });
+
+  it('starts one ticket at a time with maxParallelTicketsPerProject 1', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready' });
+
+    const first = await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(first.map((s) => s.ticket.id)).toEqual([x.id]);
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
+    expect(runsFor(y.id)).toHaveLength(0);
+
+    await finish(runsFor(x.id)[0] as Run);
+    await expect.poll(() => runsFor(y.id).length, { timeout: 10_000 }).toBe(1);
+    await settle(project.id);
+  });
+
+  it('does not count a ticket-less run of the project as busy', async () => {
+    const project = await createProject();
+    const manual = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'look around' })).json() as Run;
+    expect(manual.ticketId).toBeNull();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready' });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([x.id, y.id]);
+    await waitFile(`token-${manual.id}`);
+    await settle(project.id);
+  });
+
+  it('reads edges and statuses only from the database (a restarted core still waits)', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready', priority: 1 });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready', priority: 3 });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+
+    // A fresh service has no in-memory state: what it knows comes from the DB.
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    await restarted.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([a.id]);
+    const again = new TicketService(t.db, t.runs, t.scheduler);
+    expect(await again.dispatchNextReadyTicket(project.id)).toEqual([]);
+    expect(runsFor(b.id)).toHaveLength(0);
+    await settle(project.id);
+  });
+
+  it('two runs finishing at once start no ticket twice and never exceed the limit', async () => {
+    const project = await createProject();
+    const created: Ticket[] = [];
+    for (const title of ['P1', 'P2', 'P3', 'P4']) created.push(await createTicket(project.id, { title, status: 'ready' }));
+    let maxBusy = 0;
+    t.runs.on('run', () => {
+      const busy = t.runs
+        .list()
+        .filter((r) => r.projectId === project.id && r.ticketId && !r.handedOffTo && ACTIVE.has(r.state)).length;
+      maxBusy = Math.max(maxBusy, busy);
+    });
+    const passes = trackPipelines();
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id)).toHaveLength(2);
+    const [r1, r2] = ticketRuns(project.id) as [Run, Run];
+    const [k1, k2] = await Promise.all([waitFile(`token-${r1.id}`), waitFile(`token-${r2.id}`)]);
+    for (const [run, token] of [
+      [r1, k1],
+      [r2, k2],
+    ] as const) {
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+      await hook(run.id, 'UserPromptSubmit', token);
+    }
+    await Promise.all([hook(r1.id, 'Stop', k1), hook(r2.id, 'Stop', k2)]);
+    await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(2);
+    await Promise.all(passes);
+
+    for (const ticket of created) expect(runsFor(ticket.id)).toHaveLength(1);
+    expect(maxBusy).toBeLessThanOrEqual(2);
+    await settle(project.id);
+  });
+
+  it('another dispatch leaves a Review ticket whose own pipeline is still running alone', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const merges: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const svc = t.tickets as unknown as { mergeRunIntoMain(r: Run, main: string, key: string | null): Promise<boolean> };
+    const merge = svc.mergeRunIntoMain.bind(t.tickets);
+    svc.mergeRunIntoMain = async (r, main, key) => {
+      merges.push(r.id);
+      if (merges.length === 1) await gate;
+      return merge(r, main, key);
+    };
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    await finish(run);
+    // A's pipeline now waits inside its merge; its ticket sits in Review with a done run.
+    await expect.poll(() => merges.length, { timeout: 5_000 }).toBe(1);
+    expect(await statusOf(a.id)).toBe('review');
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(merges).toEqual([run.id]);
+
+    release();
+    await Promise.all(passes);
+    expect(merges).toEqual([run.id]);
+    expect(await statusOf(a.id)).toBe('done');
+  });
+
+  it("starts at most the limit of an upgraded project's ready tickets without edges", async () => {
+    const project = await createProject();
+    for (const title of ['U1', 'U2', 'U3', 'U4']) await createTicket(project.id, { title, status: 'ready' });
+    await Promise.all([t.tickets.dispatchNextReadyTicket(project.id), t.tickets.dispatchNextReadyTicket(project.id)]);
+    expect(ticketRuns(project.id)).toHaveLength(2);
+    await settle(project.id);
+  });
+
+  it('a manual move of a dependency to done dispatches the unblocked ticket', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+
+    await api('PATCH', `/api/tickets/${a.id}`, { status: 'done' });
+    await expect.poll(() => runsFor(b.id).length, { timeout: 5_000 }).toBe(1);
+    expect(runsFor(a.id)).toHaveLength(0);
+    await settle(project.id);
+  });
+
+  it('republishes dependents when their dependency moves to done', async () => {
+    await api('PATCH', '/api/factory/settings', { autoPickupReady: false });
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+    const seen: Ticket[] = [];
+    t.tickets.on('ticket', (tk) => seen.push(tk));
+
+    await api('PATCH', `/api/tickets/${a.id}`, { status: 'done' });
+    const forB = seen.filter((tk) => tk.id === b.id);
+    expect(forB.length).toBeGreaterThan(0);
+    expect(forB.at(-1)?.blockedBy).toEqual([]);
+    expect(forB.at(-1)?.dependsOn).toEqual([a.id]);
+  });
+
+  it('runs the APK example in dependency order', async () => {
+    const project = await createProject();
+    const { run: po, tickets } = await ingestDrafts(project.id, [
+      { ref: 'brand-assets', title: 'Brand assets', persona: 'ui_ux' },
+      { ref: 'android-shell', title: 'Android shell', persona: 'coder' },
+      { ref: 'apk-build', title: 'APK build', persona: 'coder', dependsOn: ['brand-assets', 'android-shell'] },
+      { ref: 'qa', title: 'QA pass', persona: 'qa', dependsOn: ['apk-build'] },
+    ]);
+    const assets = byTitle(tickets, 'Brand assets');
+    const shell = byTitle(tickets, 'Android shell');
+    const apk = byTitle(tickets, 'APK build');
+    const qa = byTitle(tickets, 'QA pass');
+    await expect.poll(() => statusOf(po.ticketId as string), { timeout: 10_000 }).toBe('done');
+    await api('PATCH', '/api/factory/settings', { autoPickupReady: true });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).filter((r) => r.id !== po.id).map((r) => r.ticketId).sort()).toEqual([assets.id, shell.id].sort());
+
+    await finish(runsFor(shell.id)[0] as Run);
+    await expect.poll(() => statusOf(shell.id), { timeout: 10_000 }).toBe('done');
+    // Serialized behind any dispatch the pipeline started: apk-build still waits for brand-assets.
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
+    expect(runsFor(apk.id)).toHaveLength(0);
+
+    await finish(runsFor(assets.id)[0] as Run);
+    await expect.poll(() => runsFor(apk.id).length, { timeout: 10_000 }).toBe(1);
+    expect(runsFor(qa.id)).toHaveLength(0);
+
+    await finish(runsFor(apk.id)[0] as Run);
+    await expect.poll(() => runsFor(qa.id).length, { timeout: 10_000 }).toBe(1);
+    await settle(project.id);
   });
 });
