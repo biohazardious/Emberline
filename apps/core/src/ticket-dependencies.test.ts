@@ -605,8 +605,8 @@ describe('dependency-aware dispatch', () => {
 });
 
 describe('one automatic merge-conflict resolution', () => {
-  const FOLLOW_UP = (files: string) =>
-    `main has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${files}). Merge main into your branch (git merge main), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
+  const FOLLOW_UP = (files: string, branch = 'main') =>
+    `${branch} has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${files}). Merge ${branch} into your branch (git merge ${branch}), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
 
   /** Like the usual stand-in, but it stays alive and logs every line typed into it (the start prompt is an argument). */
   function writeLivingClaude(dir: string): string {
@@ -638,12 +638,13 @@ describe('one automatic merge-conflict resolution', () => {
     ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
 
   /** Two tickets editing the same line; A has been merged into main, B conflicts with it. */
-  async function conflictingPair() {
+  async function conflictingPair(branch = 'main') {
     t.config.claudeCommand = writeLivingClaude(t.dir);
     const project = await createProject();
     writeFileSync(path.join(project.path, 'app.js'), 'one\ntwo\nthree\n');
     wgit(project.path, 'add', '-A');
     wgit(project.path, 'commit', '-q', '-m', 'app');
+    if (branch !== 'main') wgit(project.path, 'branch', '-m', branch);
     // A factory project: a finished orchestrator ticket keeps the pipeline on for A and B.
     await createTicket(project.id, { title: '[Factory] Plan', status: 'done' });
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });
@@ -700,6 +701,13 @@ describe('one automatic merge-conflict resolution', () => {
     expect(readFileSync(path.join(runB.worktreePath, 'app.js'), 'utf8')).toContain('from-b');
     expect(await eventTypes(runB)).toContain('merged_to_main');
     expect(followups(runB)).toHaveLength(1);
+  });
+
+  it('names the branch the main workspace is on, not main', async () => {
+    const { runB } = await conflictingPair('trunk');
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    expect(followups(runB)).toEqual([FOLLOW_UP('app.js', 'trunk')]);
   });
 
   it('a second conflict lands in Review, asks nothing again and dispatches the next ticket', async () => {

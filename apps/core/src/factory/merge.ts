@@ -20,6 +20,18 @@ function gitLines(stdout: string): string[] {
     .filter(Boolean);
 }
 
+/** The branch checked out in the main workspace (what runs are merged into); null when detached or unknown. */
+export async function mainWorkspaceBranch(mainWorkspacePath: string): Promise<string | null> {
+  const res = await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainWorkspacePath }).catch(() => ({ stdout: '' }));
+  const branch = res.stdout.trim();
+  return branch && branch !== 'HEAD' ? branch : null;
+}
+
+/** The one follow-up a run gets when its branch no longer merges into `branch` cleanly. */
+export function conflictResolutionPrompt(branch: string, conflicts: string[]): string {
+  return `${branch} has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${conflicts.join(', ')}). Merge ${branch} into your branch (git merge ${branch}), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
+}
+
 /**
  * Integrates a run's worktree into the project's main workspace with git: the run's output is
  * committed on its own branch and merged (`--no-ff`) into the main checkout. Untracked and ignored

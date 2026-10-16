@@ -31,8 +31,10 @@ import {
   auditWorktreeSlop,
   buildFactoryOrchestratorPrompt,
   buildWorkspaceDemo,
+  conflictResolutionPrompt,
   getFactorySettings,
   ingestAgentTicketsFile,
+  mainWorkspaceBranch,
   persistFactoryAttachments,
   runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
@@ -692,7 +694,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         merged.conflicts.length > 0 &&
         !run.endedAt &&
         !this.conflictResolutionRequested(run.id) &&
-        (await this.requestConflictResolution(run, merged.conflicts))
+        (await this.requestConflictResolution(run, merged.conflicts, projectRow))
       ) {
         return;
       }
@@ -755,8 +757,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /** Types the conflict follow-up into the live session; false when the run cannot take a prompt. */
-  private async requestConflictResolution(run: Run, conflicts: string[]): Promise<boolean> {
-    const text = `main has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${conflicts.join(', ')}). Merge main into your branch (git merge main), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
+  private async requestConflictResolution(
+    run: Run,
+    conflicts: string[],
+    project: { path: string; defaultBranch: string },
+  ): Promise<boolean> {
+    // The merge goes into whatever the main workspace has checked out; the column is the fallback.
+    const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
+    const text = conflictResolutionPrompt(branch, conflicts);
     this.runs.note(run.id, 'conflict_resolution_requested', { conflicts });
     try {
       await this.runs.sendPrompt(run.id, text);
