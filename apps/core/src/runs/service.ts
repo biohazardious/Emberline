@@ -184,7 +184,8 @@ export const toRun = (row: RunRow): Run => ({
   stateChangedAt: row.stateChangedAt.toISOString(),
   createdAt: row.createdAt.toISOString(),
   endedAt: row.endedAt?.toISOString() ?? null,
-  resumable: row.endedAt !== null && row.agentSessionId !== null && row.cancelledAt === null,
+  // A handed-off run's work continues in its successor; resuming it is refused.
+  resumable: row.endedAt !== null && row.agentSessionId !== null && row.cancelledAt === null && row.handedOffTo === null,
   cancelled: row.cancelledAt !== null,
   autoRetry:
     row.state === 'rate_limited' && row.autoRetryAt

@@ -318,6 +318,8 @@ describe('handoff', () => {
     await expect(t.runs.resume(run.id)).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining(successor.id.slice(0, 8)) });
     expect(t.runs.list()).toHaveLength(before);
     expect((await getRun(run.id)).terminalId).toBe(run.terminalId);
+    // The UI offers "Re-open" / "Resume now" for resumable runs; this one only refuses them.
+    expect(await getRun(run.id)).toMatchObject({ handedOffTo: successor.id, resumable: false });
     const queued = await t.runs.enqueue({ projectId, agent: 'claude', prompt: 'q' } as never);
     t.db.update(runsTable).set({ cancelledAt: new Date() }).where(eq(runsTable.id, queued.id)).run();
     expect(() => t.runs.bindRoute(queued.id, 0)).toThrow(expect.objectContaining({ statusCode: 409 }));
