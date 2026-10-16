@@ -245,6 +245,12 @@ export const FactorySettings = z.object({
   theme: ThemeMode.default('dark'),
   defaultAgent: AgentId.default('claude'),
   enabledProviders: z.array(AgentId).default(['claude']),
+  /**
+   * The admin accepted that Google does not support Antigravity consumer logins inside third-party
+   * tools and may suspend the account. Required to enable Antigravity; installs that already had it
+   * enabled keep running without it.
+   */
+  antigravityTermsAcknowledged: z.boolean().default(false),
   /** @deprecated derived from personaRoutes[p][0] */
   personaAgents: PersonaAgentMap,
   /** @deprecated derived from personaRoutes[p][0] */
@@ -308,6 +314,7 @@ export const UpdateFactorySettingsBody = z
     theme: ThemeMode,
     defaultAgent: AgentId,
     enabledProviders: z.array(AgentId).min(1),
+    antigravityTermsAcknowledged: z.boolean(),
     personaAgents: PersonaAgentMap.partial(),
     personaModels: PersonaModelMap.partial(),
     personaRoutes: PersonaRouteMap.partial(),

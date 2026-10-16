@@ -3704,3 +3704,20 @@ dialog.cmd-dialog::backdrop {
   flex-direction: column;
   gap: 4px;
 }
+
+/* Antigravity provider card: the account-risk acknowledgement. */
+.provider-terms-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  line-height: 1.4;
+  cursor: pointer;
+}
+.provider-terms-note input {
+  margin-top: 2px;
+  flex: none;
+}

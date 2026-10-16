@@ -22,6 +22,7 @@ import {
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
+import { HttpError } from '../errors.js';
 import { settings } from '../db/schema.js';
 
 // --- F7 & F10: Unified Factory Settings & Multi-Provider Routing ------------
@@ -336,6 +337,9 @@ function detectRunnerProviderAuth(params: {
   };
 }
 
+export const ANTIGRAVITY_TERMS_NOTE =
+  'Google does not support using an Antigravity consumer login inside third-party tools and has suspended accounts for it. Acknowledge this risk in Settings before enabling Antigravity.';
+
 function quotaPolicyOf(raw: StoredFactorySettings): QuotaPolicy {
   return { newRuns: raw.quotaPolicy?.newRuns ?? 'wait', inFlight: raw.quotaPolicy?.inFlight ?? 'wait' };
 }
@@ -432,6 +436,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     theme: raw.theme ?? 'dark',
     defaultAgent,
     enabledProviders,
+    antigravityTermsAcknowledged: raw.antigravityTermsAcknowledged ?? false,
     personaAgents: normalizedAgents,
     personaModels: normalizedModels,
     personaRoutes,
@@ -477,6 +482,10 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     enabledSet.add('claude');
   }
   const enabledProviders = Array.from(enabledSet);
+  const antigravityTermsAcknowledged = body.antigravityTermsAcknowledged ?? current.antigravityTermsAcknowledged;
+  if (enabledSet.has('antigravity') && !current.enabledProviders.includes('antigravity') && !antigravityTermsAcknowledged) {
+    throw new HttpError(409, 'antigravity_terms', ANTIGRAVITY_TERMS_NOTE);
+  }
 
   const nextDefaultAgent: AgentId =
     body.defaultAgent && enabledSet.has(body.defaultAgent)
@@ -500,6 +509,7 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     theme: body.theme ?? current.theme,
     defaultAgent: nextDefaultAgent,
     enabledProviders,
+    antigravityTermsAcknowledged,
     personaRoutes: nextRoutes,
     quotaPolicy: { ...current.quotaPolicy, ...(body.quotaPolicy ?? {}) },
     autoPickupReady: body.autoPickupReady ?? current.autoPickupReady,

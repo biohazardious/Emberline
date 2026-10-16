@@ -82,6 +82,9 @@ export function RouteChainEditor({
             </select>
             {route.credential === 'api_key' && <span className="badge badge-warn" title="Billed to your API key">paid</span>}
             {route.credential === 'credits' && <span className="badge badge-warn" title="Uses your Antigravity AI credits once the subscription quota is used up">paid</span>}
+            {route.agent === 'antigravity' && route.credential !== 'api_key' && (
+              <span className="badge badge-warn" title="Google does not support Antigravity consumer logins in third-party tools and may suspend the account">account risk</span>
+            )}
             <span className="route-step-actions">
               <button type="button" className="icon-btn" onClick={() => move(index, -1)} disabled={index === 0} aria-label="Move up"><ArrowUp size={14} /></button>
               <button type="button" className="icon-btn" onClick={() => move(index, 1)} disabled={index === value.length - 1} aria-label="Move down"><ArrowDown size={14} /></button>

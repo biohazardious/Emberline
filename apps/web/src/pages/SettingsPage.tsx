@@ -165,6 +165,7 @@ export function SettingsPage({
 
   const [saving, setSaving] = useState(false);
   const [launchingLoginProvider, setLaunchingLoginProvider] = useState<AgentId | null>(null);
+  const [antigravityAck, setAntigravityAck] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -195,6 +196,7 @@ export function SettingsPage({
         setMaxParallelTickets(String(res.maxParallelTicketsPerProject ?? 2));
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
+        setAntigravityAck(res.antigravityTermsAcknowledged ?? false);
         setPersonaRoutes(res.personaRoutes);
         if (res.quotaPolicy) setQuotaPolicy(res.quotaPolicy);
         if (res.mcpServers?.length) setMcpServers(res.mcpServers);
@@ -272,6 +274,11 @@ export function SettingsPage({
     setNotice(null);
     setError(null);
     try {
+      // Signing in enables the provider, which the server allows for Antigravity only once the risk is accepted.
+      if (providerId === 'antigravity' && !settings?.antigravityTermsAcknowledged) {
+        const updated = await api<FactorySettings>('/api/factory/settings', 'PATCH', { antigravityTermsAcknowledged: true });
+        setSettings(updated);
+      }
       const res = await api<ProviderLoginResponse>('/api/factory/provider-login', 'POST', {
         provider: providerId,
       });
@@ -285,6 +292,10 @@ export function SettingsPage({
   };
 
   const toggleProviderEnabled = (providerId: AgentId) => {
+    if (providerId === 'antigravity' && !antigravityAck && !enabledProviders.includes('antigravity')) {
+      setNotice('Accept the Antigravity account risk on its card before enabling it.');
+      return;
+    }
     setEnabledProviders((prev) => {
       const exists = prev.includes(providerId);
       if (exists && prev.length <= 1) {
@@ -328,19 +339,16 @@ export function SettingsPage({
     if (!personaRoutes) return;
     // Presets replace each chain with a single route; add fallbacks afterwards.
     if (preset === 'multi-provider') {
-      const uiProvider: AgentId = enabledProviders.includes('antigravity')
-        ? 'antigravity'
-        : enabledProviders.includes('gemini')
-          ? 'gemini'
-          : (enabledProviders[0] ?? 'claude');
+      const coreProvider: AgentId = enabledProviders.includes('claude')
+        ? 'claude'
+        : (enabledProviders[0] ?? 'claude');
+      // Antigravity is never picked by a preset: the user adds it to a chain knowingly.
+      const uiProvider: AgentId = enabledProviders.includes('gemini') ? 'gemini' : coreProvider;
       const qaProvider: AgentId = enabledProviders.includes('gemini')
         ? 'gemini'
         : enabledProviders.includes('codex')
           ? 'codex'
           : (enabledProviders[0] ?? 'claude');
-      const coreProvider: AgentId = enabledProviders.includes('claude')
-        ? 'claude'
-        : (enabledProviders[0] ?? 'claude');
 
       setPersonaRoutes({
         product_owner: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5), personaRoutes.product_owner[0]?.credential)],
@@ -404,6 +412,7 @@ export function SettingsPage({
         maxParallelTicketsPerProject: clampParallel(maxParallelTickets),
         defaultAgent,
         enabledProviders,
+        antigravityTermsAcknowledged: antigravityAck,
         personaRoutes,
         quotaPolicy,
         mcpServers,
@@ -416,6 +425,7 @@ export function SettingsPage({
       const updated = await api<FactorySettings>('/api/factory/settings', 'PATCH', payload);
       setSettings(updated);
       setEnabledProviders(updated.enabledProviders?.length ? updated.enabledProviders : ['claude']);
+      setAntigravityAck(updated.antigravityTermsAcknowledged ?? false);
       setDefaultAgent(updated.defaultAgent);
       setPersonaRoutes(updated.personaRoutes);
       setQuotaPolicy(updated.quotaPolicy);
@@ -891,6 +901,21 @@ export function SettingsPage({
                         </button>
                       </div>
 
+                      {providerId === 'antigravity' && (
+                        <label className="provider-terms-note small">
+                          <input
+                            type="checkbox"
+                            checked={antigravityAck}
+                            onChange={(e) => setAntigravityAck(e.target.checked)}
+                          />
+                          <span>
+                            Google does not support using an Antigravity consumer login (Google AI Pro/Ultra) inside
+                            third-party tools such as Emberline and has suspended accounts for it. I accept this risk for
+                            my account.
+                          </span>
+                        </label>
+                      )}
+
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                         <span
                           className="badge mono"
@@ -1064,7 +1089,7 @@ export function SettingsPage({
                           <button
                             type="button"
                             className="btn btn-xs btn-ghost"
-                            disabled={launchingLoginProvider !== null}
+                            disabled={launchingLoginProvider !== null || (providerId === 'antigravity' && !antigravityAck)}
                             onClick={() => void handleStartProviderLogin(providerId)}
                             style={{
                               borderColor: 'color-mix(in srgb, var(--info) 45%, transparent)',

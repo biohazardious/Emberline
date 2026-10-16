@@ -123,6 +123,14 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
+## Provider terms
+
+Emberline runs each vendor's official CLI, signed in with your own account, and never handles the login tokens itself. Usage limits come from what the CLIs report. Whether a subscription may be used this way is up to each vendor:
+
+- **Claude Code:** Anthropic allows running the unmodified Claude Code binary with your own Claude subscription, including on a platform that hosts it. Their plans are sized for ordinary individual use, so keep concurrency and automatic runs reasonable.
+- **Antigravity:** Google does not support using an Antigravity consumer login (Google AI Pro/Ultra) inside third-party tools and has suspended accounts for it. Settings asks you to accept that risk before Antigravity can be enabled, and Emberline never adds it to a fallback chain for you.
+- **Others:** check the current terms of each CLI you enable. An API key is always the safest route.
+
 ## Architecture
 
 ```

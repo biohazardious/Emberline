@@ -51,7 +51,7 @@ describe('persona routes', () => {
   });
 
   it('normalizes saved chains: disabled providers dropped, credentials coerced, duplicates removed, max 4', () => {
-    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity'] });
+    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity'], antigravityTermsAcknowledged: true });
     const saved = updateFactorySettings(t.db, {
       personaRoutes: {
         ui_ux: [
@@ -71,7 +71,7 @@ describe('persona routes', () => {
   });
 
   it('keeps an Antigravity credits route and a Claude api_key route without a stored key', () => {
-    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity'] });
+    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity'], antigravityTermsAcknowledged: true });
     const saved = updateFactorySettings(t.db, {
       personaRoutes: {
         coder: [
@@ -89,6 +89,7 @@ describe('persona routes', () => {
   it('a legacy personaAgents PATCH rewrites route 0 and keeps the fallbacks', () => {
     updateFactorySettings(t.db, {
       enabledProviders: ['claude', 'antigravity'],
+      antigravityTermsAcknowledged: true,
       personaRoutes: { qa: [{ agent: 'claude', model: 'sonnet', credential: 'login' }, { agent: 'claude', model: 'haiku', credential: 'login' }] },
     });
     const saved = updateFactorySettings(t.db, { personaAgents: { qa: 'antigravity' } });
@@ -99,6 +100,7 @@ describe('persona routes', () => {
   it('builds a run chain from a ticket tag followed by the persona chain', () => {
     updateFactorySettings(t.db, {
       enabledProviders: ['claude', 'antigravity'],
+      antigravityTermsAcknowledged: true,
       personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'login' }] },
     });
     expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'claude', model: 'sonnet' })).toEqual([
@@ -112,6 +114,7 @@ describe('persona routes', () => {
   it('a tag with Model: auto takes the model of a same-agent chain step, else the persona model for that agent', () => {
     updateFactorySettings(t.db, {
       enabledProviders: ['claude', 'antigravity'],
+      antigravityTermsAcknowledged: true,
       personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'login' }] },
     });
     expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'claude', model: 'auto' })[0]).toEqual({ agent: 'claude', model: 'opus', credential: 'login' });
@@ -223,5 +226,39 @@ describe('maxParallelTicketsPerProject over HTTP', () => {
       expect((await patch(value)).statusCode).toBe(400);
       expect(await read()).toBe(4);
     }
+  });
+});
+
+describe('Antigravity terms acknowledgement', () => {
+  it('enabling Antigravity requires the acknowledgement; already enabled installs keep running', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const patch = (payload: object) =>
+      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', payload, headers: { ...CSRF, cookie } });
+
+    expect(getFactorySettings(t.db).antigravityTermsAcknowledged).toBe(false);
+    const refused = await patch({ enabledProviders: ['claude', 'antigravity'] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'antigravity_terms' });
+    expect(getFactorySettings(t.db).enabledProviders).toEqual(['claude']);
+
+    const login = await t.app.inject({
+      method: 'POST',
+      url: '/api/factory/provider-login',
+      payload: { provider: 'antigravity' },
+      headers: { ...CSRF, cookie },
+    });
+    expect(login.statusCode).toBe(409);
+    expect(getFactorySettings(t.db).enabledProviders).toEqual(['claude']);
+
+    const ok = await patch({ enabledProviders: ['claude', 'antigravity'], antigravityTermsAcknowledged: true });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ enabledProviders: ['claude', 'antigravity'], antigravityTermsAcknowledged: true });
+  });
+
+  it('a pre-existing Antigravity setup without the acknowledgement is not switched off', () => {
+    storeRaw({ enabledProviders: ['claude', 'antigravity'] });
+    const cfg = updateFactorySettings(t.db, { autoPickupReady: false });
+    expect(cfg.enabledProviders).toEqual(['claude', 'antigravity']);
+    expect(cfg.antigravityTermsAcknowledged).toBe(false);
   });
 });

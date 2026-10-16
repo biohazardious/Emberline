@@ -49,6 +49,7 @@ beforeEach(async () => {
   projectId = (await api('POST', '/api/projects', { name: 'Quota' })).json().project.id;
   updateFactorySettings(t.db, {
     enabledProviders: ['claude', 'antigravity'],
+    antigravityTermsAcknowledged: true,
     personaRoutes: {
       ui_ux: [
         { agent: 'antigravity', model: 'argon', credential: 'login' },
@@ -178,6 +179,7 @@ describe('runs carry their route', () => {
   it('a hand-picked agent runs alone and keeps the stored key on a key-only install', async () => {
     updateFactorySettings(t.db, {
       enabledProviders: ['antigravity'],
+      antigravityTermsAcknowledged: true,
       anthropicApiKey: 'sk-ant-test',
       personaRoutes: { qa: [{ agent: 'antigravity', model: 'argon', credential: 'login' }] },
     });
@@ -251,7 +253,7 @@ describe('handoff', () => {
     process.env.EMBERLINE_GEMINI_COMMAND = path.join(t.dir, 'fake-gemini');
     try {
       writeFake(t.dir, 'fake-gemini');
-      updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'], personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] } });
+      updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'], antigravityTermsAcknowledged: true, personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] } });
       const { run } = await startTicket('Regression matrix', 'qa');
       const token = await work(run);
       await hook(run.id, 'Stop', token);

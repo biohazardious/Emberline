@@ -7,7 +7,7 @@ import {
   PROVIDER_REGISTRY,
   type SchedulerState,
 } from '@emberline/protocol';
-import { Calendar, ChartColumn, Clock, CreditCard, Gauge, RotateCw, Timer, Zap } from 'lucide-react';
+import { Calendar, ChartColumn, Clock, CreditCard, RotateCw, Timer, Zap } from 'lucide-react';
 import { type ReactNode, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { ProviderMark } from './ProviderMark';
