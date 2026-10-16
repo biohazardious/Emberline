@@ -7,9 +7,9 @@ type Settings = Parameters<typeof handoffCandidates>[1] & object;
 const settings = (patch: Partial<Settings> = {}): Settings => ({
   personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }] } as FactorySettings['personaRoutes'],
   enabledProviders: ['antigravity', 'claude'],
-  anthropicKeyConfigured: false,
-  openaiKeyConfigured: false,
-  geminiKeyConfigured: false,
+  anthropicKeyStored: false,
+  openaiKeyStored: false,
+  geminiKeyStored: false,
   ...patch,
 });
 
@@ -50,13 +50,20 @@ describe('handoffCandidates', () => {
   });
 
   it('uses the saved API key by default, drops API-key routes without a key and never picks AI credits', () => {
-    expect(defaultRouteFor(settings({ anthropicKeyConfigured: true }), 'claude', 'coder')?.credential).toBe('api_key');
+    expect(defaultRouteFor(settings({ anthropicKeyStored: true }), 'claude', 'coder')?.credential).toBe('api_key');
     expect(defaultRouteFor(settings(), 'claude', 'coder')?.credential).toBe('login');
     expect(defaultRouteFor(settings(), 'antigravity', 'coder')?.credential).toBe('login');
     expect(defaultRouteFor(settings(), 'aider', 'coder')).toBeUndefined();
     const keyed: Route = { agent: 'claude', model: 'opus', credential: 'api_key' };
     expect(handoffCandidates(run({ routes: [agy, keyed] }), settings()).some((c) => c.route.credential === 'api_key')).toBe(false);
-    expect(handoffCandidates(run({ routes: [agy, keyed] }), settings({ anthropicKeyConfigured: true }))[0]?.route).toEqual(keyed);
+    expect(handoffCandidates(run({ routes: [agy, keyed] }), settings({ anthropicKeyStored: true }))[0]?.route).toEqual(keyed);
+  });
+
+  it('an env-only key offers no api_key default; the provider login default is offered', () => {
+    const envOnly = { ...settings(), anthropicKeyConfigured: true, anthropicKeyStored: false } as Settings;
+    expect(defaultRouteFor(envOnly, 'claude', 'coder')?.credential).toBe('login');
+    expect(handoffCandidates(run(), envOnly).some((c) => c.route.credential === 'api_key')).toBe(false);
+    expect(handoffCandidates(run(), envOnly).some((c) => c.route.agent === 'claude' && c.route.credential === 'login')).toBe(true);
   });
 
   it('marks routes whose lane is out of quota', () => {

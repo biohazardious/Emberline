@@ -29,21 +29,21 @@ export const HANDOFF_STATES: ReadonlySet<Run['state']> = new Set(['rate_limited'
 
 type SettingsView = Pick<
   FactorySettings,
-  'personaRoutes' | 'enabledProviders' | 'anthropicKeyConfigured' | 'openaiKeyConfigured' | 'geminiKeyConfigured'
+  'personaRoutes' | 'enabledProviders' | 'anthropicKeyStored' | 'openaiKeyStored' | 'geminiKeyStored'
 >;
 
-/** Whether `agent` has an API key saved (aider can use any vendor's key). */
+/** Whether `agent` has an API key saved in Settings, not just in the environment (aider can use any vendor's key). */
 export function keySavedFor(settings: SettingsView, agent: AgentId): boolean {
   switch (agent) {
     case 'claude':
-      return settings.anthropicKeyConfigured;
+      return settings.anthropicKeyStored;
     case 'codex':
-      return settings.openaiKeyConfigured;
+      return settings.openaiKeyStored;
     case 'gemini':
     case 'antigravity':
-      return settings.geminiKeyConfigured;
+      return settings.geminiKeyStored;
     case 'aider':
-      return settings.anthropicKeyConfigured || settings.openaiKeyConfigured || settings.geminiKeyConfigured;
+      return settings.anthropicKeyStored || settings.openaiKeyStored || settings.geminiKeyStored;
     default:
       return false;
   }

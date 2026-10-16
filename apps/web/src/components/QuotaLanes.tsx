@@ -84,6 +84,7 @@ export function HandoffMenu({ run }: { run: Run }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState('');
+  const [confirming, setConfirming] = useState(false);
   const client = useQueryClient();
   const { data: settings } = useApi<FactorySettings>('/api/factory/settings', 15_000);
   const { scheduler } = useScheduler();
@@ -106,6 +107,7 @@ export function HandoffMenu({ run }: { run: Run }) {
         disabled={busy}
         onChange={(e) => {
           setError(null);
+          setConfirming(false);
           setPicked(e.target.value);
         }}
       >
@@ -124,8 +126,15 @@ export function HandoffMenu({ run }: { run: Run }) {
         type="button"
         className="btn btn-ghost btn-sm"
         disabled={busy || selected.exhausted}
+        aria-label={`Hand off to ${routeLabel(selected.route)}`}
         onClick={async () => {
+          // A waiting_input run has a live session; handing off ends it, so ask once first.
+          if (run.state === 'waiting_input' && !confirming) {
+            setConfirming(true);
+            return;
+          }
           try {
+            setConfirming(false);
             setError(null);
             setBusy(true);
             const successor = await api<Run>(`/api/runs/${run.id}/handoff`, 'POST', { route: selected.route });
@@ -138,8 +147,13 @@ export function HandoffMenu({ run }: { run: Run }) {
           }
         }}
       >
-        Continue
+        Hand off
       </button>
+      {confirming && (
+        <span className="muted small" role="status">
+          Hand off ends this live session — click again to confirm
+        </span>
+      )}
       {error && <span className="error-text" role="alert">{error}</span>}
     </div>
   );

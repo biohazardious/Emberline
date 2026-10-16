@@ -66,6 +66,40 @@ interface DropTarget {
   beforeId: string | null;
 }
 
+/** The runs that came before `run` in its handoff chain (oldest first); the same attempt continued on other routes. */
+function AttemptChain({ run }: { run: Run }) {
+  const { runs } = useRuns();
+  const chain: { id: string; run?: Run }[] = [];
+  const seen = new Set([run.id]);
+  for (let id = run.predecessorRunId; id && !seen.has(id); ) {
+    seen.add(id);
+    const found = (runs ?? []).find((r) => r.id === id);
+    chain.unshift({ id, run: found });
+    id = found?.predecessorRunId ?? null;
+  }
+  if (chain.length === 0) return null;
+  return (
+    <div className="attempt-chain muted small">
+      <span>Earlier on this attempt</span>
+      <ol>
+        {chain.map(({ id, run: p }) => (
+          <li key={id}>
+            {p ? (
+              <>
+                <span className="mono">{formatAgentDisplayName(p.agent)}{p.model ? ` · ${p.model}` : ''}</span>{' '}
+                <RunStatePill state={p.state} cancelled={p.cancelled} autoRetry={p.autoRetry} handedOffTo={p.handedOffTo} />{' '}
+                <Link href={`/runs/${id}/review`} className="mono">{id.slice(0, 8)}</Link>
+              </>
+            ) : (
+              <span className="mono" title="This run is no longer listed">{id.slice(0, 8)}</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 export function BoardPage({ projectId }: { projectId: string }) {
   const projects = useApi<Project[]>('/api/projects', 30_000);
   const project = projects.data?.find((p) => p.id === projectId);
@@ -853,15 +887,7 @@ function TicketDrawer({
             )}
           </div>
           {run && <HandoffMenu run={run} />}
-          {run?.predecessorRunId && (
-            <p className="muted small">
-              Continues run{' '}
-              <Link href={`/runs/${run.predecessorRunId}/review`} className="mono">
-                {run.predecessorRunId.slice(0, 8)}
-              </Link>{' '}
-              (out of quota)
-            </p>
-          )}
+          {run && <AttemptChain run={run} />}
           {run && <RunFailureBanner run={run} />}
           {/* The Events tab shows these itself, next to the final answer. */}
           {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}

@@ -3695,3 +3695,12 @@ dialog.cmd-dialog::backdrop {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.attempt-chain ol {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

@@ -665,13 +665,17 @@ function FleetPane({
                 className="badge mono"
                 style={{
                   borderColor:
-                    run.state === 'done'
+                    run.state === 'done' && run.handedOffTo
+                      ? 'var(--border)'
+                      : run.state === 'done'
                       ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
                       : run.state === 'failed'
                         ? 'color-mix(in srgb, var(--bad) 45%, transparent)'
                         : 'var(--border)',
                   color:
-                    run.state === 'done'
+                    run.state === 'done' && run.handedOffTo
+                      ? 'var(--info, var(--muted))'
+                      : run.state === 'done'
                       ? 'var(--ok)'
                       : run.state === 'failed'
                         ? 'var(--bad)'
@@ -684,7 +688,7 @@ function FleetPane({
                   </>
                 ) : run.state === 'done' ? (
                   <>
-                    <Check className="icon" aria-hidden /> {run.handedOffTo ? 'Handed Off' : 'Completed'} & Terminal Closed
+                    <Check className="icon" aria-hidden /> {run.handedOffTo ? 'Handed off to another route' : 'Completed & Terminal Closed'}
                   </>
                 ) : (
                   <>
@@ -705,7 +709,8 @@ function FleetPane({
                 : run.state === 'done' && run.handedOffTo
                   ? (
                     <>
-                      Handed off: run {run.handedOffTo.slice(0, 8)} continues this work in the same worktree. Click Timeline to
+                      Handed off: run{' '}
+                      <Link href={`/runs/${run.handedOffTo}/review`}>{run.handedOffTo.slice(0, 8)}</Link> continues this work in the same worktree. Click Timeline to
                       follow it, or <Trash className="icon" aria-hidden /> to remove.
                     </>
                   )

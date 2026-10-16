@@ -452,6 +452,9 @@ export function getFactorySettings(db: Db): FactorySettings {
     anthropicKeyConfigured,
     openaiKeyConfigured,
     geminiKeyConfigured,
+    anthropicKeyStored: Boolean(keys.anthropicApiKey),
+    openaiKeyStored: Boolean(keys.openaiApiKey),
+    geminiKeyStored: Boolean(keys.geminiApiKey),
     providerAuth,
   });
 }

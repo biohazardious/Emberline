@@ -1334,13 +1334,13 @@ export function SettingsPage({
                           onChange={(next) => setPersonaRoutes({ ...personaRoutes, [personaKey]: next })}
                           enabledProviders={enabledProviders}
                           keyConfigured={{
-                            claude: Boolean(settings?.anthropicKeyConfigured),
-                            codex: Boolean(settings?.openaiKeyConfigured),
-                            gemini: Boolean(settings?.geminiKeyConfigured),
+                            claude: Boolean(settings?.anthropicKeyStored),
+                            codex: Boolean(settings?.openaiKeyStored),
+                            gemini: Boolean(settings?.geminiKeyStored),
                             aider: Boolean(
-                              settings?.anthropicKeyConfigured ||
-                                settings?.openaiKeyConfigured ||
-                                settings?.geminiKeyConfigured,
+                              settings?.anthropicKeyStored ||
+                                settings?.openaiKeyStored ||
+                                settings?.geminiKeyStored,
                             ),
                           }}
                         />

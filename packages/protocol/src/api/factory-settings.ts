@@ -282,6 +282,10 @@ export const FactorySettings = z.object({
   anthropicKeyConfigured: z.boolean().default(false),
   openaiKeyConfigured: z.boolean().default(false),
   geminiKeyConfigured: z.boolean().default(false),
+  /** Keys saved in Settings (not from the environment): only these make an API-key route usable. */
+  anthropicKeyStored: z.boolean().default(false),
+  openaiKeyStored: z.boolean().default(false),
+  geminiKeyStored: z.boolean().default(false),
   providerAuth: ProviderAuthStatusMap.optional(),
 });
 export type FactorySettings = z.infer<typeof FactorySettings>;

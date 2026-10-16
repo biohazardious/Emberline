@@ -172,6 +172,23 @@ describe('persona routes', () => {
     expect(getProviderEnvFromSettings(t.db, 'claude', 'api_key')).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-test' });
   });
 
+  it('settings report a key as stored only when saved, not when it comes from the environment', () => {
+    const saved = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'env-only';
+    try {
+      let cfg = getFactorySettings(t.db);
+      expect(cfg.openaiKeyConfigured).toBe(true);
+      expect(cfg.openaiKeyStored).toBe(false);
+      updateFactorySettings(t.db, { anthropicApiKey: 'k' });
+      cfg = getFactorySettings(t.db);
+      expect(cfg.anthropicKeyStored).toBe(true);
+      expect(cfg.openaiKeyStored).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = saved;
+    }
+  });
+
   it('an api_key route is usable only while its key is stored', () => {
     const route = { agent: 'claude', model: 'opus', credential: 'api_key' } as const;
     expect(routeUsable(t.db, route)).toBe(false);
