@@ -514,6 +514,24 @@ describe('lanes and policy', () => {
     expect((await scheduler()).windows).toHaveLength(0);
   });
 
+  it('a legacy rate-limited row behind a legacy window waits while it is open and resumes once it has passed', async () => {
+    const { run } = await startTicket('Legacy limit', 'coder');
+    await work(run);
+    // A pre-0.2.0 row: no stored chain, no model column, the column-default credential; and a window with default lane columns.
+    t.db.update(runsTable).set({ state: 'rate_limited', routes: [], model: null, credential: 'login' }).where(eq(runsTable.id, run.id)).run();
+    t.db.insert(quotaWindows).values({ id: 'legacy-open', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+    await t.scheduler.tick();
+    expect((await getRun(run.id)).state).toBe('rate_limited');
+    expect((await scheduler()).windows).toMatchObject([{ agent: 'claude', credential: 'login', pool: '*' }]);
+
+    t.db.update(quotaWindows).set({ resumeAt: new Date(Date.now() - 1_000) }).where(eq(quotaWindows.id, 'legacy-open')).run();
+    await t.scheduler.tick();
+    const resumed = await getRun(run.id);
+    expect(resumed.state).toBe('starting');
+    expect(resumed.events.map((e) => e.type)).toContain('resumed');
+    await expect.poll(() => readFileSync(path.join(t.dir, `lines-${run.id}`), 'utf8'), { timeout: 5_000 }).toMatch(/continue/i);
+  });
+
   it('skips an API-key fallback whose key was deleted', async () => {
     updateFactorySettings(t.db, {
       quotaPolicy: { inFlight: 'fallback' },
