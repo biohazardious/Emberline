@@ -576,7 +576,7 @@ function Shell() {
                     <span className={`dot run-${r.state}`} />
                     <span className="nav-label">{title}</span>
                     {r.persona && r.persona !== 'coder' && <PersonaBadge persona={r.persona} />}
-                    <RunStatePill state={r.state} cancelled={r.cancelled} autoRetry={r.autoRetry} />
+                    <RunStatePill state={r.state} cancelled={r.cancelled} autoRetry={r.autoRetry} handedOffTo={r.handedOffTo} />
                   </button>
                 </li>
               );
@@ -587,11 +587,11 @@ function Shell() {
 
         <footer className="sidebar-foot">
           {scheduler && (
-            <div className={`sidebar-quota${scheduler.window ? ' sidebar-quota-paused' : ''}`}>
+            <div className={`sidebar-quota${scheduler.windows.length > 0 ? ' sidebar-quota-paused' : ''}`}>
               <span className="dot" />
               <span className="mono">
-                {scheduler.window
-                  ? `Quota paused (${scheduler.rateLimited})`
+                {scheduler.windows.length > 0
+                  ? `${scheduler.windows.length} lane${scheduler.windows.length > 1 ? 's' : ''} out of quota`
                   : `${scheduler.busy}/${scheduler.maxConcurrentRuns} slots`}
               </span>
             </div>

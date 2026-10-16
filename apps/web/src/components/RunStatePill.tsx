@@ -28,16 +28,26 @@ export function RunStatePill({
   state,
   cancelled = false,
   autoRetry = null,
+  handedOffTo = null,
 }: {
   state: RunState;
   cancelled?: boolean;
   autoRetry?: Run['autoRetry'];
+  handedOffTo?: string | null;
 }) {
   if (cancelled && state === 'failed') {
     return (
       <span className="run-pill run-cancelled" title="Stopped by you; this run will not resume">
         <span className="dot" />
         cancelled
+      </span>
+    );
+  }
+  if (handedOffTo && state === 'done') {
+    return (
+      <span className="run-pill run-handed_off" title="Out of quota; another run continues this work">
+        <span className="dot" />
+        handed off
       </span>
     );
   }

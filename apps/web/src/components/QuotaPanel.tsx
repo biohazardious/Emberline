@@ -11,17 +11,12 @@ import { Calendar, ChartColumn, Clock, CreditCard, Gauge, RotateCw, Timer, Zap }
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { ProviderMark } from './ProviderMark';
+import { QuotaLanes } from './QuotaLanes';
 import { useApi } from '../hooks/useApi';
 import { useRuns, useScheduler } from '../hooks/liveData';
 
-const SOURCE_LABEL = {
-  hook: 'from Claude',
-  screen: 'read from the terminal',
-  probe: 'reset time unknown, probing',
-} as const;
-
 /** Re-renders every `ms` so countdowns stay fresh. */
-function useNow(ms: number): number {
+export function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), ms);
@@ -30,7 +25,7 @@ function useNow(ms: number): number {
   return now;
 }
 
-function formatCountdown(target: string, now: number): string {
+export function formatCountdown(target: string, now: number): string {
   const seconds = Math.max(0, Math.round((Date.parse(target) - now) / 1000));
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -236,7 +231,8 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
   }, [settingsPoll.data, runs, usage]);
 
   if (!scheduler) return null;
-  const { window } = scheduler;
+  const windows = scheduler.windows;
+  const window = windows.length > 0 ? windows[0] : undefined;
 
   const call = async (fn: () => Promise<SchedulerState>) => {
     setBusy(true);
@@ -278,12 +274,8 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
         <div className="quota-main">
           <span className="quota-orb" aria-hidden="true" />
           <div className="quota-text">
-            <strong>Usage limit reached</strong>
-            <span className="muted">
-              Resuming in <span className="mono quota-countdown">{formatCountdown(window.resumeAt, now)}</span>
-              {' · '}
-              {window.resetsAt ? `resets ${clock(window.resetsAt)}` : 'next probe'} ({SOURCE_LABEL[window.resetSource]})
-            </span>
+            <strong>Out of quota</strong>
+            <QuotaLanes windows={windows} compact />
           </div>
         </div>
 
@@ -292,17 +284,6 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
             <span className="quota-stat" title="Runs waiting for the reset">
               {scheduler.rateLimited} paused · {scheduler.queued} queued
             </span>
-          )}
-          {window && (
-            <button
-              id="quota-resume"
-              className="btn btn-sm"
-              disabled={busy}
-              title="Try now instead of waiting; if the limit still applies the pause starts again"
-              onClick={() => void call(() => api<SchedulerState>('/api/scheduler/resume', 'POST'))}
-            >
-              Resume now
-            </button>
           )}
         </div>
         {error && <p className="form-error quota-error">{error}</p>}
@@ -329,13 +310,8 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
           <span className="quota-orb" aria-hidden="true" />
           {window ? (
             <div className="quota-text">
-              <strong>Usage limit reached</strong>
-              <span className="muted">
-                Resuming in <span className="mono quota-countdown">{formatCountdown(window.resumeAt, now)}</span>
-                {' · '}
-                {window.resetsAt ? `resets ${clock(window.resetsAt)}` : 'next probe'} ({SOURCE_LABEL[window.resetSource]})
-              </span>
-              {window.message && <span className="quota-message mono">{window.message}</span>}
+              <strong>Out of quota</strong>
+              <QuotaLanes windows={windows} />
             </div>
           ) : (
             <div className="quota-text">
@@ -400,17 +376,6 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               </button>
             ))}
           </div>
-          {window && (
-            <button
-              id="quota-resume"
-              className="btn btn-sm"
-              disabled={busy}
-              title="Try now instead of waiting; if the limit still applies the pause starts again"
-              onClick={() => void call(() => api<SchedulerState>('/api/scheduler/resume', 'POST'))}
-            >
-              Resume now
-            </button>
-          )}
         </div>
       </div>
 

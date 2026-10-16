@@ -684,7 +684,7 @@ function RunRow({
     run.lastEvent !== 'worktree_pruned';
   const body = (
     <>
-      <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
+      <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
       <PersonaBadge persona={run.persona} />
       <span className="row-title">{run.title ?? projectName ?? 'project'}</span>
       {run.title && projectName && <span className="badge">{projectName}</span>}

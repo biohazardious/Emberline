@@ -1598,6 +1598,11 @@ a {
   background: var(--bad);
 }
 
+.run-handed_off {
+  --tone: hsl(265 75% 74%);
+  background: hsl(265 75% 74%);
+}
+
 .run-cancelled {
   --tone: var(--muted);
   background: var(--muted);
@@ -1610,6 +1615,7 @@ a {
 .run-pill.run-queued,
 .run-pill.run-rate_limited,
 .run-pill.run-done,
+.run-pill.run-handed_off,
 .run-pill.run-failed {
   background: color-mix(in hsl, var(--tone) 12%, transparent);
 }
@@ -3612,4 +3618,32 @@ dialog.cmd-dialog::backdrop {
   .update-action {
     grid-column: 2;
   }
+}
+
+.quota-lanes {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quota-lanes li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.quota-lane-eta {
+  color: var(--muted);
+}
+
+.handoff-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0;
 }

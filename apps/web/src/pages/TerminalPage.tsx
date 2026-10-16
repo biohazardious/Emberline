@@ -30,7 +30,7 @@ export function TerminalPage({ id }: { id: string }) {
         </button>
         <h1 className="terminal-title">{info?.title ?? 'Terminal'}</h1>
         {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
-        {run && <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />}
+        {run && <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />}
         <span className={`pill pill-${state}`}>
           <span className="dot" />
           {STATE_LABEL[state]}

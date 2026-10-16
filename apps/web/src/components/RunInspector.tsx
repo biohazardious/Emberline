@@ -214,6 +214,24 @@ export function RunFailureBanner({ run }: { run: Run }) {
   );
 }
 
+const EVENT_LABEL: Record<string, string> = {
+  handed_off: 'handed off',
+  handoff_from: 'took over',
+  route_bound: 'fallback route',
+  route_skipped: 'route skipped',
+  handoff_failed: 'handoff failed',
+  rate_limit_failed: 'limit reached',
+  retry_scheduled: 'retry scheduled',
+  retry_gave_up: 'retry gave up',
+};
+
+/** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
+function handoffTarget(ev: RunEvent): string | undefined {
+  const payload = ev.payload as { toRunId?: unknown; fromRunId?: unknown } | null;
+  const id = ev.type === 'handed_off' ? payload?.toRunId : ev.type === 'handoff_from' ? payload?.fromRunId : undefined;
+  return typeof id === 'string' ? id : undefined;
+}
+
 export function RunEventTimeline({ run }: { run: Run }) {
   const [detail, setDetail] = useState<RunDetail>();
   const [loading, setLoading] = useState(true);
@@ -259,7 +277,12 @@ export function RunEventTimeline({ run }: { run: Run }) {
           <li key={ev.id} className={`event-item event-src-${ev.source}`}>
             <div className="event-head">
               <span className="event-source mono">{ev.source}</span>
-              <span className="event-type mono">{ev.type}</span>
+              <span className="event-type mono">{EVENT_LABEL[ev.type] ?? ev.type}</span>
+              {handoffTarget(ev) && (
+                <Link href={`/runs/${handoffTarget(ev)}/review`} className="badge badge-soft mono">
+                  run {handoffTarget(ev)?.slice(0, 8)} →
+                </Link>
+              )}
               {tool && <span className="badge badge-soft mono">{tool}</span>}
               {ev.state && <RunStatePill state={ev.state} />}
               <span className="event-time mono">{timeAgo(ev.ts)}</span>
@@ -319,7 +342,7 @@ export function RunInspector({
     <aside className="dock-inspector" aria-label="Run inspector">
       <header className="dock-head">
         <div className="dock-head-main">
-          <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
+          <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
           <strong className="dock-title">{run.title ?? projectName ?? 'Agent Run'}</strong>
           {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
           <span className="badge mono">{run.permissionMode}</span>

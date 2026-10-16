@@ -11,7 +11,7 @@ import {
 } from '@emberline/protocol';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 
-const CREDENTIAL_LABEL = { login: 'Sign-in', api_key: 'API key', credits: 'AI credits' } as const;
+export const CREDENTIAL_LABEL = { login: 'Sign-in', api_key: 'API key', credits: 'AI credits' } as const;
 
 /** One persona's fallback chain: the first route is used, the next ones when quota runs out. */
 export function RouteChainEditor({

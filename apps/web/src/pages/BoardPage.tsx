@@ -23,6 +23,7 @@ import {
   RunFailureBanner,
   STAGE_TEMPLATES,
 } from '../components/RunInspector';
+import { HandoffMenu } from '../components/QuotaLanes';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { BuildOutputsList } from '../components/RunOutcome';
@@ -443,7 +444,7 @@ function TicketCard({
         <p className="card-title">{ticket.title}</p>
         {run && (
           <div className="card-foot">
-            <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
+            <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
             {run.telemetry && run.telemetry.totalTokens > 0 && (
               <span
                 className="card-event mono"
@@ -578,7 +579,7 @@ function TicketDrawer({
             {ticket.key}
           </span>
           <PersonaBadge persona={persona} showFull />
-          {run && <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />}
+          {run && <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />}
           {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
           <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
           {run && (
@@ -725,7 +726,7 @@ function TicketDrawer({
             <h2>Agent Execution</h2>
             {run && (
               <div className="agent-run">
-                <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
+                <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
                 <span className="badge badge-soft mono">{formatAgentDisplayName(run.agent)}</span>
                 {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
                 {run.terminalId && (
@@ -745,6 +746,16 @@ function TicketDrawer({
               </div>
             )}
           </div>
+          {run && <HandoffMenu run={run} />}
+          {run?.predecessorRunId && (
+            <p className="muted small">
+              Continues run{' '}
+              <Link href={`/runs/${run.predecessorRunId}/review`} className="mono">
+                {run.predecessorRunId.slice(0, 8)}
+              </Link>{' '}
+              (out of quota)
+            </p>
+          )}
           {run && <RunFailureBanner run={run} />}
           {/* The Events tab shows these itself, next to the final answer. */}
           {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}
