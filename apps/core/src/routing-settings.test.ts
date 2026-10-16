@@ -9,7 +9,7 @@ import {
   routeUsable,
   updateFactorySettings,
 } from './factory/settings.js';
-import { createTestApp, type TestApp } from './test-utils.js';
+import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 beforeEach(async () => {
@@ -196,5 +196,32 @@ describe('persona routes', () => {
     expect(routeUsable(t.db, route)).toBe(true);
     expect(routeUsable(t.db, { agent: 'claude', model: 'opus', credential: 'login' })).toBe(true);
     expect(routeUsable(t.db, { agent: 'antigravity', model: 'argon', credential: 'credits' })).toBe(true);
+  });
+});
+
+describe('maxParallelTicketsPerProject over HTTP', () => {
+  it('round-trips 1..4 and rejects 0 and 5 with 400, keeping the stored value', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const patch = (value: number) =>
+      t.app.inject({
+        method: 'PATCH',
+        url: '/api/factory/settings',
+        payload: { maxParallelTicketsPerProject: value },
+        headers: { ...CSRF, cookie },
+      });
+    const read = async () =>
+      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: { ...CSRF, cookie } })).json()
+        .maxParallelTicketsPerProject;
+    expect(await read()).toBe(2);
+    for (const value of [1, 2, 3, 4]) {
+      const res = await patch(value);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().maxParallelTicketsPerProject).toBe(value);
+      expect(await read()).toBe(value);
+    }
+    for (const value of [0, 5]) {
+      expect((await patch(value)).statusCode).toBe(400);
+      expect(await read()).toBe(4);
+    }
   });
 });

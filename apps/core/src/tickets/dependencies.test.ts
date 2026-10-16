@@ -114,6 +114,21 @@ describe('dependency protocol fields', () => {
     expect(edges).toEqual([{ ticketId: 'b', dependsOnId: 'a' }]);
   });
 
+  it('drops an edge that closes a cycle through existing edges', () => {
+    // old38 already waits on old39, which waits on the batch ticket a: a -> old38 would loop.
+    const existing = [
+      { ticketId: 'old38', dependsOnId: 'old39' },
+      { ticketId: 'old39', dependsOnId: 'a' },
+    ];
+    const { edges, dropped } = resolveBatchDependencies(
+      [t('a', 'coder', 'a', ['MPG-38']), t('b', 'qa', 'b', ['a'])],
+      keys,
+      existing,
+    );
+    expect(dropped).toEqual([{ ticketId: 'a', ref: 'MPG-38', reason: 'cycle' }]);
+    expect(edges).toEqual([{ ticketId: 'b', dependsOnId: 'a' }]);
+  });
+
   it('accepts dependsOn on ticket updates', () => {
     expect(UpdateTicketBody.parse({ dependsOn: ['MPG-1'] }).dependsOn).toEqual(['MPG-1']);
     expect(UpdateTicketBody.safeParse({ dependsOn: Array.from({ length: 21 }, (_, i) => `k${i}`) }).success).toBe(false);

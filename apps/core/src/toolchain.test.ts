@@ -26,7 +26,8 @@ beforeEach(async () => {
     fakeSdk,
     [
       '#!/usr/bin/env bash',
-      'sleep "${FAKE_SDK_SLEEP:-0}"',
+      // Blocks until the test creates the gate file (when one is set), so timing never matters.
+      'if [ -n "${FAKE_SDK_GATE:-}" ]; then while [ ! -e "$FAKE_SDK_GATE" ]; do sleep 0.05; done; fi',
       'mkdir -p "$EMBERLINE_TOOLS_DIR/sdk/.installed"',
       'echo "installing $2"',
       'echo "9.9.9" > "$EMBERLINE_TOOLS_DIR/sdk/.installed/$2"',
@@ -92,16 +93,21 @@ describe('ToolchainService', () => {
   });
 
   it('runs one SDK action at a time', async () => {
-    process.env.FAKE_SDK_SLEEP = '1';
+    const gate = path.join(t.dir, 'sdk-gate');
+    process.env.FAKE_SDK_GATE = gate;
+    const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
     try {
-      const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
       await toolchain.executeSdkAction('flutter', { action: 'install' });
       expect((await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing).toBe(true);
       await expect(toolchain.executeSdkAction('android', { action: 'install' })).rejects.toMatchObject({
         statusCode: 409,
       });
     } finally {
-      delete process.env.FAKE_SDK_SLEEP;
+      writeFileSync(gate, '');
+      delete process.env.FAKE_SDK_GATE;
     }
+    await expect
+      .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing)
+      .toBe(false);
   });
 });

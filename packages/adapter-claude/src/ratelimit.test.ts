@@ -262,6 +262,22 @@ describe('provider limits', () => {
     }
   });
 
+  it('recognises a spend-limit banner without error: rate_limit, on Stop (short banner only) and on the screen', () => {
+    const ctx = { agent: 'claude', model: 'opus' } as const;
+    const banner = "You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage";
+    for (const event of ['Stop', 'StopFailure'] as const) {
+      expect(rateLimitFromHook(event, { last_assistant_message: banner }, NOW, 'UTC', ctx)).toMatchObject({
+        pool: '*',
+        resetsAt: undefined,
+      });
+    }
+    // A long Stop message is Claude's own answer, not a banner.
+    const long = `${banner} ${'and here is a long explanation of the billing page. '.repeat(6)}`;
+    expect(long.length).toBeGreaterThan(200);
+    expect(rateLimitFromHook('Stop', { last_assistant_message: long }, NOW, 'UTC', ctx)).toBeUndefined();
+    expect(rateLimitFromScreen(`working...\n  ${banner}\n`, NOW, 'UTC', ctx)).toMatchObject({ pool: '*' });
+  });
+
   it("reads Claude Code's usage-limit wait screen as a limit with its reset", () => {
     const screen = 'some output\n  Usage limit reached · limit resets 3:45pm (UTC)\n  Continuing automatically at 3:45pm · esc to cancel\n';
     expect(rateLimitFromScreen(screen, NOW, 'UTC', { agent: 'claude' })).toMatchObject({ pool: '*' });

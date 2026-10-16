@@ -514,6 +514,18 @@ describe('lanes and policy', () => {
     expect((await scheduler()).windows).toHaveLength(0);
   });
 
+  it('a live pre-0.2.0 window (future resumeAt) holds Claude runs but not Antigravity runs', async () => {
+    // Only the required columns: agent, credential and pool take their defaults (claude, login, *).
+    t.db.insert(quotaWindows).values({ id: 'legacy-live', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+    const claude = await startTicket('Claude work', 'coder');
+    const agy = await startTicket('Antigravity work', 'ui_ux');
+    await expect.poll(async () => (await getRun(agy.run.id)).state, { timeout: 5_000 }).toBe('starting');
+    expect(await getRun(agy.run.id)).toMatchObject({ agent: 'antigravity' });
+    expect((await getRun(claude.run.id)).state).toBe('queued');
+    await t.scheduler.tick();
+    expect((await getRun(claude.run.id)).state).toBe('queued');
+  });
+
   it('a legacy rate-limited row behind a legacy window waits while it is open and resumes once it has passed', async () => {
     const { run } = await startTicket('Legacy limit', 'coder');
     await work(run);
