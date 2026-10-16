@@ -1412,9 +1412,10 @@ a {
   border-width: 0 0 1px;
 }
 
+/* Sticky, not fixed: it takes its own space, so it never covers the setup or login card. */
 .security-banner-floating {
-  position: fixed;
-  inset: 0 0 auto;
+  position: sticky;
+  top: 0;
   z-index: 100;
   background: var(--surface);
 }
