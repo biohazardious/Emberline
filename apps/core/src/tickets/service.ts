@@ -68,7 +68,7 @@ const ACTIVE_CHAINS_KEY = 'factory.activeChains';
  * Run notes by which the completion pipeline left a ticket in Review for a person: a later
  * dispatch must not merge it behind the gate's back.
  */
-const HOLD_EVENTS = ['merge_failed', 'secret_guard_blocked', 'build_gate_error', 'build_gate_failed'];
+const HOLD_EVENTS = ['merge_failed', 'secret_guard_blocked', 'slop_guard_blocked', 'critic_blocked', 'build_gate_error', 'build_gate_failed'];
 
 /**
  * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass
@@ -252,6 +252,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * e.g. a CLI that does not start): then the chain pauses instead of burning through the queue.
    */
   private ticketRunFailed(run: Run, projectId: string): void {
+    // A lost session (ptyd or core restarted underneath the run) says nothing about the tickets.
+    if (!this.sessionLost(run.id)) {
+      if (this.countFailure(run, projectId)) return;
+    }
+    if (getFactorySettings(this.db).autoPickupReady) {
+      void this.dispatchNextReadyTicket(projectId).catch(() => undefined);
+    }
+  }
+
+  /** Counts a real failure; returns true when it paused the chain. */
+  private countFailure(run: Run, projectId: string): boolean {
     const inARow = (this.failedInARow.get(projectId) ?? 0) + 1;
     this.failedInARow.set(projectId, inARow);
     const neverWorked = !this.reachedWork(run.id);
@@ -264,11 +275,21 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           ? 'A ticket run failed before it got to work; the factory paused — fix the cause and click Run pipeline'
           : `${inARow} ticket runs failed in a row; the factory paused — fix the cause and click Run pipeline`,
       });
-      return;
+      return true;
     }
-    if (getFactorySettings(this.db).autoPickupReady) {
-      void this.dispatchNextReadyTicket(projectId).catch(() => undefined);
-    }
+    return false;
+  }
+
+  /** Whether the run ended because its session was gone (a ptyd or core restart), not because it crashed. */
+  private sessionLost(runId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'session_lost')))
+        .limit(1)
+        .get(),
+    );
   }
 
   /** Whether the run ever got to work (or further) before it ended. */
@@ -773,6 +794,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         (!run.endedAt || run.resumable)
       ) {
         this.slopHealedRuns.add(run.id);
+        // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
+        if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', {});
         await this.runs.prompt(run.id, slopReport.autoFixPrompt).catch(() => undefined);
         return;
       }
@@ -802,6 +825,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         criticRes.followUpPrompt &&
         (!run.endedAt || run.resumable)
       ) {
+        this.runs.note(run.id, 'critic_blocked', {});
         await this.runs.prompt(run.id, criticRes.followUpPrompt).catch(() => undefined);
         return;
       }

@@ -45,6 +45,16 @@ describe('ticket dependencies', () => {
     expect(edges).toEqual([{ ticketId: 'c', dependsOnId: 'a' }]);
   });
 
+  it('reports repeated refs also when no ticket declares a dependency', () => {
+    const { edges, dropped } = resolveBatchDependencies(
+      [t('a', 'architect', 'brand-assets'), t('b', 'coder', 'brand_assets')],
+      keys,
+      [],
+    );
+    expect(dropped).toEqual([{ ticketId: 'b', ref: 'brand_assets', reason: 'duplicate_ref' }]);
+    expect(edges).toEqual([{ ticketId: 'b', dependsOnId: 'a' }]);
+  });
+
   it('falls back to the default tiers when every declared dependency was dropped', () => {
     const { edges, dropped } = resolveBatchDependencies(
       [t('a', 'coder', 'a'), t('b', 'qa', 'b', ['nope']), t('c', 'ui_ux', 'c', ['c'])],

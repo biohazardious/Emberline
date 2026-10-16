@@ -77,9 +77,6 @@ export function resolveBatchDependencies(
   projectKeys: Map<string, string>,
   existingEdges: Edge[],
 ): { edges: Edge[]; dropped: DroppedDependency[] } {
-  if (!batch.some((ticket) => (ticket.dependsOn?.length ?? 0) > 0)) {
-    return { edges: defaultTierEdges(batch), dropped: [] };
-  }
   const refs = new Map<string, string>();
   const accepted: Edge[] = [];
   const dropped: DroppedDependency[] = [];
@@ -89,6 +86,9 @@ export function resolveBatchDependencies(
     const key = normalizeTicketRef(ticket.ref) ?? ticket.ref.toLowerCase();
     if (refs.has(key)) dropped.push({ ticketId: ticket.id, ref: ticket.ref, reason: 'duplicate_ref' });
     else refs.set(key, ticket.id);
+  }
+  if (!batch.some((ticket) => (ticket.dependsOn?.length ?? 0) > 0)) {
+    return { edges: defaultTierEdges(batch), dropped };
   }
   for (const ticket of batch) {
     for (const ref of ticket.dependsOn ?? []) {

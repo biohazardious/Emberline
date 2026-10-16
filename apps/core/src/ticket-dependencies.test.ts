@@ -935,6 +935,35 @@ describe('factory chain robustness', () => {
     await settle(project.id);
   });
 
+  it('runs that ended because the session was lost do not count toward pausing the chain', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    t.config.claudeCommand = writeCrashingClaude(t.dir);
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready', priority: 3 });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready', priority: 2 });
+    const z = await createTicket(project.id, { title: 'Z', status: 'ready', priority: 1 });
+
+    const loseSession = async (run: Run) => {
+      await waitFile(`ready-${run.id}`);
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+      await hook(run.id, 'UserPromptSubmit', token);
+      const sessionId = t.runs.get(run.id).terminalId as string;
+      await t.ptyd.get().remove(sessionId);
+      await expect.poll(() => settledState(run.id), { timeout: 10_000 }).toBe('failed');
+      expect(await eventTypes(run)).toContain('session_lost');
+    };
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    await loseSession(runsFor(x.id)[0] as Run);
+    await expect.poll(() => runsFor(y.id).length, { timeout: 10_000 }).toBe(1);
+    await loseSession(runsFor(y.id)[0] as Run);
+    await expect.poll(() => runsFor(z.id).length, { timeout: 10_000 }).toBe(1);
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(true);
+    expect(await eventTypes(runsFor(y.id)[0] as Run)).not.toContain('factory_chain_paused');
+    await settle(project.id);
+  });
+
   it('a ticket run a person stopped does not start the next ticket', async () => {
     await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
     const project = await createProject();
@@ -1044,6 +1073,31 @@ describe('factory chain robustness', () => {
     expect(await statusOf(a.id)).toBe('review');
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(existsSync(path.join(project.path, '.env'))).toBe(false);
+    await settle(project.id);
+  });
+
+  it('the anti-slop gate holds the ticket even when its clean-up request cannot be delivered', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async () => {
+      throw new Error('no live session');
+    };
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    writeFileSync(path.join(run.worktreePath, 'slop.ts'), 'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'slop');
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await eventTypes(run)).toContain('slop_guard_blocked');
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(passes).toHaveLength(1);
+    expect(await statusOf(a.id)).toBe('review');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
     await settle(project.id);
   });
 
