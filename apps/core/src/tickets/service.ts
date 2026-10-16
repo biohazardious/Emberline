@@ -25,7 +25,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gt, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
-import { projects, runEvents, ticketDependencies, tickets } from '../db/schema.js';
+import { projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
@@ -103,6 +103,12 @@ export const toTicket = (
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
+
+/**
+ * Settings key of a project's last ticket number. Only grows, so a deleted ticket's key is never
+ * given to a new ticket (runs and dependencies name tickets by key).
+ */
+const ticketSeqKey = (projectId: string) => `tickets.seq.${projectId}`;
 
 /** Ticket key prefix from the project slug: initials of the words ("demo-project" -> "DP"), else 3 letters. */
 export function keyPrefix(slug: string): string {
@@ -370,6 +376,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   isAutoChainActive(projectId: string): boolean {
     return this.autoChainProjects.has(projectId);
+  }
+
+  /** Drops what is kept per project outside its rows (its ticket number sequence) once it is deleted. */
+  forgetProject(projectId: string): void {
+    this.chainOff(projectId);
+    this.db.delete(settings).where(eq(settings.key, ticketSeqKey(projectId))).run();
   }
 
   setAutoChain(projectId: string, enabled: boolean): void {
@@ -1133,12 +1145,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const body = CreateTicketBodySchema.parse(input);
     const now = new Date();
     const row = this.db.transaction((tx) => {
+      const seqKey = ticketSeqKey(projectId);
+      const stored = tx.select({ value: settings.value }).from(settings).where(eq(settings.key, seqKey)).get()?.value;
+      // The highest number in use too: a project from before the sequence starts after its tickets.
       const last = tx
         .select({ n: max(tickets.number) })
         .from(tickets)
         .where(eq(tickets.projectId, projectId))
         .get();
-      const number = (last?.n ?? 0) + 1;
+      const number = Math.max(typeof stored === 'number' ? stored : 0, last?.n ?? 0) + 1;
+      tx.insert(settings)
+        .values({ key: seqKey, value: number })
+        .onConflictDoUpdate({ target: settings.key, set: { value: number } })
+        .run();
       return tx
         .insert(tickets)
         .values({

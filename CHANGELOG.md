@@ -31,6 +31,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - A ticket still waiting for its dependencies that was dropped on In progress moved there without a run; it now stays in Ready and opens its drawer with "Start anyway".
 - A ticket a gate left in Review for you (secret guard, slop or critic check, failed build gate, failed merge) could be merged by a later dispatch; it now stays in Review.
 - A ticket that finished while the factory chain was off (started on its own or by hand) did not start the tickets waiting for it; they now start.
+- A deleted ticket's key was given to the next new ticket of the project, so its old runs showed under the new ticket; ticket keys are no longer reused.
 
 ### Upgrading
 

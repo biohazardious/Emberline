@@ -3,8 +3,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { settings } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { keyPrefix, statusForRunState, ticketPrompt } from './tickets/service.js';
 
@@ -284,6 +286,36 @@ describe('tickets', () => {
     const ticket = await createTicket(project.id, { title: 'Idle' });
     expect((await api('POST', `/api/tickets/${ticket.id}/prompt`, { text: 'hi' })).statusCode).toBe(409);
     expect((await api('POST', `/api/tickets/${ticket.id}/prompt`, { text: '  ' })).statusCode).toBe(400);
+  });
+
+  it('never reuses the key of a deleted ticket', async () => {
+    const project = await createProject();
+    const first = await createTicket(project.id, { title: 'One' });
+    const second = await createTicket(project.id, { title: 'Two' });
+    expect([first.key, second.key]).toEqual(['DP-1', 'DP-2']);
+    expect((await api('DELETE', `/api/tickets/${second.id}`)).statusCode).toBe(200);
+    expect((await createTicket(project.id, { title: 'Three' })).key).toBe('DP-3');
+    // Created at once, they still get one number each.
+    const batch = await Promise.all(['A', 'B', 'C', 'D'].map((title) => createTicket(project.id, { title })));
+    expect(batch.map((x) => x.key).sort()).toEqual(['DP-4', 'DP-5', 'DP-6', 'DP-7']);
+  });
+
+  it('starts the key sequence of an existing project after its highest ticket number', async () => {
+    const project = await createProject();
+    await createTicket(project.id, { title: 'One' });
+    await createTicket(project.id, { title: 'Two' });
+    // A database from before the sequence existed.
+    t.db.delete(settings).where(eq(settings.key, `tickets.seq.${project.id}`)).run();
+    expect((await createTicket(project.id, { title: 'Three' })).key).toBe('DP-3');
+  });
+
+  it('drops a deleted project\'s ticket number sequence', async () => {
+    const project = await createProject();
+    await createTicket(project.id, { title: 'One' });
+    const seq = () => t.db.select().from(settings).where(eq(settings.key, `tickets.seq.${project.id}`)).get();
+    expect(seq()?.value).toBe(1);
+    expect((await api('DELETE', `/api/projects/${project.id}?deleteFiles=0`)).statusCode).toBe(200);
+    expect(seq()).toBeUndefined();
   });
 
   it('keeps runs when their ticket is deleted', async () => {

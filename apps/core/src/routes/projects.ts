@@ -963,6 +963,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       }
 
       db.delete(projects).where(eq(projects.id, projectId)).run();
+      tickets.forgetProject(projectId);
 
       const nextFirst = db.select().from(projects).orderBy(asc(projects.createdAt)).get();
       saveActiveProjectId(nextFirst?.id ?? null);
