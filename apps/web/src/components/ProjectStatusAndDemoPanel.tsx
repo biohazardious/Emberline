@@ -150,7 +150,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
   const statusPoll = useApi<ProjectStatusSummary>(`/api/projects/${project.id}/status`, 4_000);
   const ticketsPoll = useApi<Ticket[]>(`/api/projects/${project.id}/tickets`, 5_000);
-  const settingsPoll = useApi<FactorySettings>('/api/factory/settings', 25_000);
+  const settingsPoll = useApi<FactorySettings>('/api/factory/settings', 15_000);
   const checkpointsPoll = useApi<ProjectCheckpoint[]>(`/api/projects/${project.id}/checkpoints`, 10_000);
 
   const [activeTab, setActiveTab] = useState<StudioTab>('factory');

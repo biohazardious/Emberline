@@ -664,22 +664,8 @@ function FleetPane({
               <span
                 className="badge mono"
                 style={{
-                  borderColor:
-                    run.state === 'done' && run.handedOffTo
-                      ? 'var(--border)'
-                      : run.state === 'done'
-                      ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
-                      : run.state === 'failed'
-                        ? 'color-mix(in srgb, var(--bad) 45%, transparent)'
-                        : 'var(--border)',
-                  color:
-                    run.state === 'done' && run.handedOffTo
-                      ? 'var(--info, var(--muted))'
-                      : run.state === 'done'
-                      ? 'var(--ok)'
-                      : run.state === 'failed'
-                        ? 'var(--bad)'
-                        : 'var(--muted)',
+                  borderColor: placeholderTone(run).border,
+                  color: placeholderTone(run).text,
                 }}
               >
                 {run.state === 'queued' ? (
@@ -773,4 +759,12 @@ function FleetPane({
       )}
     </article>
   );
+}
+
+/** Badge colours of a run's placeholder card: handed-off runs read as info, distinct from muted. */
+function placeholderTone(run: Run): { border: string; text: string } {
+  if (run.state === 'done' && run.handedOffTo) return { border: 'var(--border)', text: 'var(--info)' };
+  if (run.state === 'done') return { border: 'color-mix(in srgb, var(--ok) 45%, transparent)', text: 'var(--ok)' };
+  if (run.state === 'failed') return { border: 'color-mix(in srgb, var(--bad) 45%, transparent)', text: 'var(--bad)' };
+  return { border: 'var(--border)', text: 'var(--muted)' };
 }

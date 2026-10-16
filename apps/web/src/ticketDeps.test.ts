@@ -30,8 +30,6 @@ describe('dropIntoInProgress', () => {
     expect(dropIntoInProgress(ready, { autoStart: true, hasLiveRun: false })).toBe('start'));
   it('keeps a ticket that still waits for others in place and asks first', () =>
     expect(dropIntoInProgress(blocked, { autoStart: true, hasLiveRun: false })).toBe('confirm'));
-  it('moves a blocked ticket only when it cannot be started anyway', () =>
-    expect(dropIntoInProgress(blocked, { autoStart: false, hasLiveRun: false })).toBe('move'));
   it('only moves without auto-start or with a live run', () => {
     expect(dropIntoInProgress(blocked, { autoStart: false, hasLiveRun: false })).toBe('move');
     expect(dropIntoInProgress(ready, { autoStart: true, hasLiveRun: true })).toBe('move');

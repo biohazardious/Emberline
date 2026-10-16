@@ -106,12 +106,12 @@ const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; tex
   },
 };
 
-/** A single route; keeps `prior` (the credential the user had on the first route) when the provider still supports it. */
 /** The parallel-tickets field as a whole number between 1 and 4 (anything unreadable counts as 1). */
 function clampParallel(value: string): number {
   return Math.max(1, Math.min(4, Math.trunc(Number(value)) || 1));
 }
 
+/** A single route; keeps `prior` (the credential the user had on the first route) when the provider still supports it. */
 function defaultRoute(agent: AgentId, model: Route['model'], prior?: Route['credential']): Route {
   const allowed = PROVIDER_RUNTIME[agent].credentials;
   return { agent, model, credential: prior && allowed.includes(prior) ? prior : allowed[0]! };
