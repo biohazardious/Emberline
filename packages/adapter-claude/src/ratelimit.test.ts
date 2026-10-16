@@ -206,6 +206,37 @@ describe('provider limits', () => {
     expect(rateLimitFromHook('Stop', { last_assistant_message: 'Added a 429 handler.' }, NOW, 'UTC', { agent: 'claude' })).toBeUndefined();
   });
 
+  it('does not read ordinary output as a limit (rate limit needs a word start, 429 needs an error context)', () => {
+    for (const message of ['Failed to accelerate limit switches', 'AssertionError: expected 429 but got 200', 'tests: 429 passed']) {
+      expect(rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'gemini' }), message).toBeUndefined();
+    }
+    for (const message of [
+      '429 Too Many Requests',
+      'HTTP 429',
+      'request failed with status 429',
+      'API error (429): slow down',
+      'Error code 429',
+      'error 429 from upstream',
+      'rate_limit_error: Number of requests has exceeded your rate limit',
+    ]) {
+      expect(rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'codex' }), message).toBeDefined();
+    }
+    expect(rateLimitFromHook('StopFailure', { error: 'cli_exit', message: AGY_QUOTA }, NOW, 'UTC', { agent: 'antigravity' })).toBeDefined();
+  });
+
+  it('keeps an explicit 429 / RESOURCE_EXHAUSTED a limit when it only points at billing details', () => {
+    const gemini =
+      '[API Error: got status: 429 Too Many Requests. {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details.","status":"RESOURCE_EXHAUSTED"}}]';
+    expect(rateLimitFromHook('StopFailure', { error: 'cli_exit', message: gemini }, NOW, 'UTC', { agent: 'gemini' })?.pool).toBe('*');
+    for (const message of [
+      'RESOURCE_EXHAUSTED (code 429): insufficient_quota',
+      'HTTP 429: Your credit balance is too low',
+      'status 429 payment required',
+    ]) {
+      expect(rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'gemini' }), message).toBeUndefined();
+    }
+  });
+
   it('keeps billing errors permanent', () => {
     const payload = { error: 'cli_exit', message: 'insufficient_quota: You exceeded your current quota, please check your plan and billing details' };
     expect(rateLimitFromHook('StopFailure', payload, NOW, 'UTC', { agent: 'codex' })).toBeUndefined();

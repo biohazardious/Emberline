@@ -35,12 +35,29 @@ export interface LimitContext {
 const LIMIT_PATTERN =
   /(usage limit reached|(?:5-hour|weekly|opus|sonnet|session|daily)\s+limit reached|you'?ve (?:hit|reached) your (?:usage )?limit|rate limit reached|limit will reset|you'?ve hit your (?:monthly|individual|organization'?s?|team'?s?) spend limit)/i;
 
-/** Usage limits reported by any CLI or API: HTTP 429, rate limits, exhausted quotas. Checked on StopFailure only. */
+/**
+ * An HTTP 429 named as such ("HTTP 429", "status 429", "code 429", "error 429", "(429)",
+ * "429 Too Many Requests") or gRPC's RESOURCE_EXHAUSTED. A bare "429" is ordinary output
+ * ("expected 429 but got 200"), never a limit.
+ */
+const EXPLICIT_LIMIT_PATTERN =
+  /RESOURCE_EXHAUSTED|\b(?:http|status|code|error|error_code|status_code)\b["']?\s*[:=]?\s*\(?429\b|\(429\)|\b429\s+too many requests/i;
+
+/** Softer limit wording from any CLI or API: rate limits, exhausted quotas. Checked on StopFailure only. */
 const GENERIC_LIMIT_PATTERN =
-  /\b429\b|RESOURCE_EXHAUSTED|too many requests|rate[ _-]?limit(?:ed| exceeded| reached)?|quota (?:has been |was |is )?(?:reached|exceeded|exhausted)|individual quota reached/i;
+  /too many requests|\brate[ _-]?limit(?:ed| exceeded| reached)?|quota (?:has been |was |is )?(?:reached|exceeded|exhausted)/i;
 
 /** Quota words that are really billing problems; never a limit that resets. */
 const BILLING_PATTERN = /insufficient[_ ]quota|billing|credit balance|payment required/i;
+
+/** Billing problems that win even over an explicit 429 (Gemini's 429 text points at "plan and billing details"). */
+const HARD_BILLING_PATTERN = /insufficient[_ ]quota|credit balance|payment required/i;
+
+/** A provider limit in any CLI's failure text: an explicit 429 counts unless it is a hard billing error. */
+function isGenericLimit(text: string): boolean {
+  if (EXPLICIT_LIMIT_PATTERN.test(text)) return !HARD_BILLING_PATTERN.test(text);
+  return GENERIC_LIMIT_PATTERN.test(text) && !BILLING_PATTERN.test(text);
+}
 
 /** Claude limits tied to one model family ("Opus weekly limit reached"). */
 const CLAUDE_MODEL_POOL = /\b(opus|sonnet|haiku|fable)\b[^.\n]{0,20}\blimit\b/i;
@@ -84,7 +101,7 @@ export function rateLimitFromHook(
   const bannerOnly = event === 'StopFailure' || message.length <= MAX_BANNER_LENGTH;
   const text = [message, details, wrapper].filter((v, i, all) => v && all.indexOf(v) === i).join(' — ');
   const claudeBanner = bannerOnly && isLimitText(message);
-  const generic = event === 'StopFailure' && GENERIC_LIMIT_PATTERN.test(text) && !BILLING_PATTERN.test(text);
+  const generic = event === 'StopFailure' && isGenericLimit(text);
   if (!isRateLimit && !claudeBanner && !generic) return undefined;
   return {
     message: oneLine(text || 'rate limit reached'),
