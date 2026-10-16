@@ -330,7 +330,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       await ticketsPoll.refresh();
       setBanner({
         kind: 'ok',
-        text: `Factory request${attachedCount > 0 ? ` (+${attachedCount} attached file${attachedCount > 1 ? 's' : ''})` : ''} dispatched to Product Owner (${res.ticket.key}). PO will refine the spec, create specialist tickets (Coder, UI/UX, QA), and ${autoDispatch ? 'auto-dispatch them sequentially' : 'place them in Ready'}.`,
+        text: `Factory request${attachedCount > 0 ? ` (+${attachedCount} attached file${attachedCount > 1 ? 's' : ''})` : ''} dispatched to Product Owner (${res.ticket.key}). PO will refine the spec, create specialist tickets (Coder, UI/UX, QA), and ${autoDispatch ? 'start each one as soon as the tickets it depends on are merged, several in parallel' : 'place them in Ready'}.`,
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
@@ -432,7 +432,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       await ticketsPoll.refresh();
       setBanner({
         kind: 'ok',
-        text: 'Sequential multi-persona pipeline activated for Ready/Backlog tickets.',
+        text: 'Pipeline activated: Ready/Backlog tickets start in dependency order, several in parallel.',
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
@@ -558,7 +558,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
               className="btn btn-sm"
               disabled={startingPipeline}
               onClick={() => void handleRunPipeline()}
-              title="Sequentially run Ready/Backlog tickets across their assigned personas and sync each to Main"
+              title="Run Ready/Backlog tickets with their assigned personas in dependency order, several in parallel, and sync each to Main"
             >
               {startingPipeline ? (
                 'Starting…'
@@ -858,7 +858,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   checked={autoDispatch}
                   onChange={(e) => setAutoDispatch(e.target.checked)}
                 />
-                Auto-dispatch &amp; sync specialist tickets sequentially
+                Auto-dispatch &amp; sync specialist tickets in dependency order (parallel when independent)
               </label>
             </div>
 
