@@ -187,6 +187,32 @@ describe('ticket dependencies', () => {
     }
   });
 
+  it('orders tickets delegated through the API like ingested ones', async () => {
+    const project = await createProject();
+    const delegate = async (tickets: object[]) => {
+      const res = await api('POST', `/api/projects/${project.id}/delegate-tickets`, { autoDispatch: false, tickets });
+      expect(res.statusCode).toBe(201);
+      return res.json() as Ticket[];
+    };
+
+    // No dependsOn anywhere: the default tiers put QA after the code.
+    const [coder, qa] = await delegate([
+      { title: 'Code it', persona: 'coder' },
+      { title: 'Test it', persona: 'qa' },
+    ]);
+    expect(qa?.dependsOn).toEqual([coder?.id]);
+    expect(qa?.blockedBy.map((b) => b.key)).toEqual([coder?.key]);
+    expect((await getTicket((qa as Ticket).id)).dependsOn).toEqual([coder?.id]);
+
+    // Explicit refs, and the key of an existing ticket.
+    const [shell, apk] = await delegate([
+      { ref: 'shell', title: 'Shell', persona: 'coder' },
+      { ref: 'apk', title: 'APK', persona: 'coder', dependsOn: ['shell', (coder as Ticket).key] },
+    ]);
+    expect([...(apk as Ticket).dependsOn].sort()).toEqual([shell?.id, coder?.id].sort());
+    expect(shell?.dependsOn).toEqual([]);
+  });
+
   it('applies the default tiers when no draft declares dependsOn', async () => {
     const project = await createProject();
     const { tickets } = await ingestDrafts(project.id, [

@@ -292,13 +292,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * Creates 1..N specialist tickets delegated by an agent (via `.emberline/new-tickets.json`
-   * or `POST /api/internal/agent/tickets`) and optionally starts the sequential pipeline.
+   * Creates 1..N specialist tickets delegated through `POST /api/projects/:id/delegate-tickets`,
+   * orders them like an ingested drafts file (refs/dependsOn, else the default tiers) and
+   * optionally starts the dependency-aware dispatch.
    */
   async createDelegatedTickets(projectId: string, payload: AgentCreateTicketsPayload): Promise<Ticket[]> {
     this.project(projectId);
     const parsed = AgentCreateTicketsPayloadSchema.parse(payload);
-    const created: Ticket[] = [];
+    const created: { draft: (typeof parsed.tickets)[number]; ticket: Ticket }[] = [];
     for (const draft of parsed.tickets) {
       let body = draft.body ?? '';
       if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
@@ -306,21 +307,24 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         const modelStr = draft.preferredModel ?? 'auto';
         body = `${body}\n\n[Preferred Agent: ${agentStr} · Model: ${modelStr}]`.trim();
       }
-      created.push(
-        this.create(projectId, {
+      created.push({
+        draft,
+        ticket: this.create(projectId, {
           title: draft.title,
           body,
           persona: draft.persona,
           priority: draft.priority,
           status: 'ready',
         }),
-      );
+      });
     }
+    // No run to note the outcome on: the response's dependsOn/blockedBy show it.
+    this.applyDraftDependencies(null, projectId, created);
     if (parsed.autoDispatch && created.length > 0) {
       this.autoChainProjects.add(projectId);
       await this.dispatchNextReadyTicket(projectId);
     }
-    return created;
+    return created.map(({ ticket }) => this.find(ticket.id) ?? ticket);
   }
 
   /**
@@ -832,13 +836,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .all();
   }
 
-  /** Resolves the batch's refs/keys (or the default tiers), stores the edges and notes the outcome on the run. */
+  /** Resolves the batch's refs/keys (or the default tiers), stores the edges and notes the outcome on the run (if any). */
   private applyDraftDependencies(
-    runId: string,
+    runId: string | null,
     projectId: string,
     created: { draft: { ref?: string; dependsOn?: string[] }; ticket: Ticket }[],
   ): void {
     if (created.length === 0) return;
+    const note = (type: string, payload: Record<string, unknown>) => {
+      if (runId) this.runs.note(runId, type, payload);
+    };
     try {
       const batchIds = new Set(created.map((c) => c.ticket.id));
       const projectKeys = new Map<string, string>();
@@ -869,7 +876,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         keyById.set(r.id, r.key);
       }
       for (const d of dropped) {
-        this.runs.note(runId, 'dependency_dropped', {
+        note('dependency_dropped', {
           ticket: keyById.get(d.ticketId) ?? d.ticketId,
           ref: d.ref,
           reason: d.reason,
@@ -880,7 +887,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         if (next) this.emit('ticket', next);
       }
       if (edges.length > 0) {
-        this.runs.note(runId, 'dependencies_applied', {
+        note('dependencies_applied', {
           edges: edges.map((e) => ({
             ticket: keyById.get(e.ticketId) ?? e.ticketId,
             dependsOn: keyById.get(e.dependsOnId) ?? e.dependsOnId,
@@ -889,7 +896,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         });
       }
     } catch (error) {
-      this.runs.note(runId, 'dependency_error', { message: (error as Error).message.slice(0, 500) });
+      note('dependency_error', { message: (error as Error).message.slice(0, 500) });
     }
   }
 
