@@ -684,7 +684,7 @@ function FleetPane({
                   </>
                 ) : run.state === 'done' ? (
                   <>
-                    <Check className="icon" aria-hidden /> Completed & Terminal Closed
+                    <Check className="icon" aria-hidden /> {run.handedOffTo ? 'Handed Off' : 'Completed'} & Terminal Closed
                   </>
                 ) : (
                   <>
@@ -702,6 +702,13 @@ function FleetPane({
             <p className="mono" style={{ margin: '0 0 8px', fontSize: '0.82rem' }}>
               {run.state === 'queued'
                 ? 'Waiting in scheduler queue for an execution slot…'
+                : run.state === 'done' && run.handedOffTo
+                  ? (
+                    <>
+                      Handed off: run {run.handedOffTo.slice(0, 8)} continues this work in the same worktree. Click Timeline to
+                      follow it, or <Trash className="icon" aria-hidden /> to remove.
+                    </>
+                  )
                 : run.state === 'done'
                   ? (
                     <>

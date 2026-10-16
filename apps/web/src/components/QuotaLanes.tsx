@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, errorMessage } from '../api';
 import { liveKeys, useScheduler } from '../hooks/liveData';
-import { upsert } from '../hooks/useEvents';
+import { withHandoff } from '../runHandoff';
 import { formatCountdown, useNow } from '../time';
 import { CREDENTIAL_LABEL } from './RouteChainEditor';
 
@@ -82,9 +82,7 @@ export function HandoffMenu({ run }: { run: Run }) {
               setBusy(true);
               const successor = await api<Run>(`/api/runs/${run.id}/handoff`, 'POST', { route });
               // Flip the predecessor to "handed off" now instead of waiting for the SSE event.
-              client.setQueryData<Run[]>(liveKeys.runs, (list) =>
-                list ? upsert(upsert(list, { ...run, handedOffTo: successor.id }), successor) : list,
-              );
+              client.setQueryData<Run[]>(liveKeys.runs, (list) => (list ? withHandoff(list, run, successor) : list));
             } catch (e) {
               setError(errorMessage(e));
             } finally {
