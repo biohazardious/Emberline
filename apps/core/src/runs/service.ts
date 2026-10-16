@@ -97,6 +97,8 @@ interface RunServiceEvents {
   removed: [id: string];
   /** A hook put the run into `rate_limited`; `info` is what the hook revealed about the limit. */
   rateLimited: [run: Run, info: RateLimitInfo | undefined];
+  /** {@link RunService.note} added an informational event to the run's timeline. */
+  note: [run: Run, type: string, payload: unknown];
 }
 
 /** Extra context when a run is started for a ticket or specialized background job. */
@@ -1095,11 +1097,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** Appends an informational system event (no state change) to a run's timeline. */
   note(id: string, type: string, payload?: unknown): void {
+    let run: Run;
     try {
-      this.record(id, { source: 'system', type, payload });
+      run = this.record(id, { source: 'system', type, payload });
     } catch {
       // The run was removed meanwhile.
+      return;
     }
+    this.emit('note', run, type, payload);
   }
 
   /** The newest run of a ticket whose agent process is still alive, if any. */

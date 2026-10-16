@@ -228,6 +228,14 @@ const EVENT_LABEL: Record<string, string> = {
   dependency_dropped: 'dependency dropped',
   tickets_file_rejected: 'tickets file rejected',
   conflict_resolution_requested: 'resolving merge conflict',
+  conflict_resolution_failed: 'conflict resolution failed',
+  factory_chain_paused: 'factory paused',
+  secret_guard_blocked: 'held: secret found',
+  slop_guard_blocked: 'held: slop check',
+  critic_blocked: 'held: critic review',
+  build_gate_failed: 'held: build failed',
+  build_gate_error: 'held: build gate error',
+  merge_failed: 'held: merge failed',
 };
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */

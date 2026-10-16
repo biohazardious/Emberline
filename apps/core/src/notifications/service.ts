@@ -28,7 +28,7 @@ export function encodeHeaderValue(value: string): string {
 }
 
 export interface NotificationMessage {
-  event: 'rate_limited' | 'quota_resumed' | 'waiting_input' | 'run_finished' | 'test';
+  event: 'rate_limited' | 'quota_resumed' | 'waiting_input' | 'run_finished' | 'factory_paused' | 'test';
   title: string;
   body: string;
   priority?: 'default' | 'high';
@@ -93,6 +93,24 @@ export class NotificationService {
             });
           }
         }
+      });
+      // A paused factory waits for a person like an agent does: same switch as waiting_input.
+      runs.on('note', (run, type, payload) => {
+        if (type !== 'factory_chain_paused') return;
+        const cfg = this.getSettings();
+        if (!cfg.enabled || !cfg.onWaitingInput) return;
+        const label = run.title ?? run.branch ?? run.id.slice(0, 8);
+        const message = (payload as { message?: unknown } | null)?.message;
+        void this.dispatch(cfg, {
+          event: 'factory_paused',
+          title: `Factory paused: ${label}`,
+          body:
+            typeof message === 'string' && message
+              ? message
+              : 'The factory chain paused after failing ticket runs; fix the cause and click Run pipeline.',
+          priority: 'high',
+          tags: ['pause_button', 'emberline'],
+        });
       });
     }
   }

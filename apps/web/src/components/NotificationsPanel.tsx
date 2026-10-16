@@ -270,7 +270,7 @@ export function NotificationsPanel() {
                   checked={onWaitingInput}
                   onChange={(e) => setOnWaitingInput(e.target.checked)}
                 />
-                Agent waiting on you
+                Agent waiting on you / factory paused
               </label>
               <label className="review-checkbox-label">
                 <input

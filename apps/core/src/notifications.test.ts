@@ -105,6 +105,40 @@ describe('NotificationService run events', () => {
   });
 });
 
+describe('NotificationService factory pause', () => {
+  it('pages when a factory chain pauses, under the "waiting on you" switch', async () => {
+    const { EventEmitter } = await import('node:events');
+    const runs = new EventEmitter();
+    const service = new NotificationService({} as Db, runs as never);
+    let onWaitingInput = true;
+    const sent: { event: string; title: string; body: string }[] = [];
+    service.getSettings = () =>
+      ({
+        enabled: true,
+        provider: 'webhook',
+        url: 'http://127.0.0.1:9/unused',
+        token: null,
+        onRateLimited: false,
+        onQuotaResumed: false,
+        onWaitingInput,
+        onRunFinished: false,
+      }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push({ event: msg.event, title: msg.title, body: msg.body });
+      return { ok: true, status: 200, error: null };
+    };
+    const run = { id: 'r1', title: 'DP-3: Build the APK', branch: null, state: 'failed', lastEvent: 'factory_chain_paused' };
+    const message = '2 ticket runs failed in a row; the factory paused — fix the cause and click Run pipeline';
+    runs.emit('note', run, 'retry_scheduled', {});
+    expect(sent).toEqual([]);
+    runs.emit('note', run, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
+    expect(sent).toEqual([{ event: 'factory_paused', title: 'Factory paused: DP-3: Build the APK', body: message }]);
+    onWaitingInput = false;
+    runs.emit('note', run, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
+    expect(sent).toHaveLength(1);
+  });
+});
+
 describe('NotificationService quota lanes', () => {
   it('pages once per lane that runs out and once when it is back, naming the lane', async () => {
     const { EventEmitter } = await import('node:events');
