@@ -5,7 +5,6 @@ import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import type { AgentState } from '@emberline/adapter-sdk';
 import {
-  CLAUDE_ADAPTER_ID,
   CONTINUE_PROMPT,
   decoratePromptWithPersona,
   nextStateFromHook,
@@ -16,10 +15,12 @@ import {
   transientErrorFromHook,
 } from '@emberline/adapter-claude';
 import {
+  type AgentId,
   type AgentModelId,
   type AgentPersona,
   type BrowserAgentAction,
   type CreateRunBody,
+  type Credential,
   CreateRunBody as CreateRunBodySchema,
   type DiffScope,
   type GarbageCollectRunsBody,
@@ -31,6 +32,8 @@ import {
   type GitStageBody,
   type HookEnvelope,
   type PruneWorktreeResponse,
+  PROVIDER_RUNTIME,
+  type Route,
   type Run,
   type RunArtifact,
   type RunBuildOutputsResponse,
@@ -54,9 +57,9 @@ import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
   getFactorySettings,
   getProviderEnvFromSettings,
-  resolveAgentForPersona,
   resolveMcpServersForPersona,
   resolveModelForPersona,
+  resolveRunRoutes,
   resolveSkillPluginPromptForPersona,
 } from '../factory/service.js';
 import { auditWorktreeSlop } from '../factory/slop-guard.js';
@@ -77,7 +80,7 @@ import {
   worktreeHasUncommittedWork,
 } from './git.js';
 import { providerAdapter } from './providers.js';
-import { runModel, runRoutes } from './route.js';
+import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -97,6 +100,13 @@ export interface RunOrigin {
   /** Branch name to use (made unique if taken). */
   branch?: string;
   title?: string;
+  /** Continue in an existing worktree (quota handoff) instead of creating one. */
+  worktree?: { path: string; branch: string | null };
+  /** Explicit chain and position (handoff); otherwise taken from the persona settings. */
+  routes?: Route[];
+  routeIndex?: number;
+  /** The run this one takes over from. */
+  predecessor?: { id: string; handoffCount: number };
 }
 
 /** Delay between pasting a prompt and pressing Enter, so the TUI has consumed the paste. */
@@ -490,29 +500,34 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
     const id = randomUUID();
     const short = id.slice(0, 8);
-    const workspace = await prepareWorkspace(
-      project.path,
-      path.join(this.config.workspacesDir, '.worktrees', project.slug, short),
-      origin?.branch ?? `emberline/run-${short}`,
-    );
+    const workspace =
+      origin?.worktree ??
+      (await prepareWorkspace(
+        project.path,
+        path.join(this.config.workspacesDir, '.worktrees', project.slug, short),
+        origin?.branch ?? `emberline/run-${short}`,
+      ));
 
     const persona = body.persona ?? 'coder';
-    const promptRouteMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
-      body.prompt ?? '',
-    );
-    const preferredAgentFromPrompt = promptRouteMatch?.[1];
-    const resolvedAgent =
-      preferredAgentFromPrompt ??
-      input.agent ??
-      resolveAgentForPersona(this.db, persona) ??
-      CLAUDE_ADAPTER_ID;
-    const explicitModel =
-      (body.model && body.model !== 'auto' ? body.model : undefined) ??
-      (promptRouteMatch?.[2] as AgentModelId | undefined);
-    const promptWithRoute =
-      explicitModel && !/\[Preferred Agent:/i.test(body.prompt)
-        ? `${body.prompt}${body.prompt ? '\n\n' : ''}[Preferred Agent: ${resolvedAgent} · Model: ${explicitModel}]`
-        : body.prompt;
+    const tag = parseRouteTag(body.prompt ?? '');
+    const explicitAgent = tag?.agent ?? input.agent;
+    const explicitModel = (body.model && body.model !== 'auto' ? body.model : undefined) ?? tag?.model;
+    const resolved = (): Route[] => {
+      if (!input.agent || tag) {
+        return resolveRunRoutes(this.db, persona, explicitAgent ? { agent: explicitAgent, model: explicitModel } : undefined);
+      }
+      // An agent picked by hand runs only there, even when its provider is not enabled for fallbacks.
+      const picked = resolveRunRoutes(this.db, persona, { agent: input.agent, model: explicitModel })[0];
+      return [
+        picked?.agent === input.agent
+          ? picked
+          : { agent: input.agent, model: (explicitModel ?? 'auto') as AgentModelId, credential: PROVIDER_RUNTIME[input.agent].credentials[0]! },
+      ];
+    };
+    const routes = origin?.routes ?? resolved();
+    const routeIndex = origin?.routeIndex ?? 0;
+    const route = routes[routeIndex] ?? routes[0]!;
+    const prompt = (body.prompt ?? '').replace(ROUTE_TAG, '').trimEnd();
     const now = new Date();
     this.db
       .insert(runs)
@@ -520,10 +535,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         id,
         projectId: project.id,
         ticketId: origin?.ticketId ?? null,
-        agent: resolvedAgent,
+        agent: route.agent,
+        model: route.model,
+        credential: route.credential,
+        routes,
+        routeIndex,
+        predecessorRunId: origin?.predecessor?.id ?? null,
+        handoffCount: origin?.predecessor ? origin.predecessor.handoffCount : 0,
         persona,
         state: 'queued',
-        prompt: promptWithRoute,
+        prompt,
         permissionMode: body.permissionMode,
         branch: workspace.branch,
         worktreePath: workspace.path,
@@ -641,16 +662,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     });
 
     const persona = (row.persona as AgentPersona) ?? 'coder';
-    const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
-      options.prompt ?? row.prompt ?? '',
-    );
-    const preferredModelFromPrompt = routeTagMatch?.[2] as AgentModelId | undefined;
-    const resolvedModel = resolveModelForPersona(this.db, persona, preferredModelFromPrompt);
+    const resolvedModel = (runModel(row) ??
+      resolveModelForPersona(this.db, persona, undefined, row.agent as AgentId)) as AgentModelId;
 
     const effectivePrompt =
       options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
 
-    const extraEnv = getProviderEnvFromSettings(this.db, row.agent);
+    const extraEnv = getProviderEnvFromSettings(this.db, row.agent, row.credential as Credential);
+    // Antigravity AI credits are a setting in agy's shared settings.json; the CLI seed writes it per run.
+    if (row.agent === 'antigravity') extraEnv.EMBERLINE_USE_CREDITS = row.credential === 'credits' ? '1' : '0';
     const provider = providerAdapter(row.agent);
     // Tests substitute a fake `claude`; the Claude-specific extras need the real CLI.
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';

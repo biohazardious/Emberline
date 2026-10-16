@@ -34,12 +34,12 @@ import {
   getFactorySettings,
   ingestAgentTicketsFile,
   persistFactoryAttachments,
-  resolveAgentForPersona,
   runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
+import { parseRouteTag } from '../runs/route.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -749,11 +749,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const id = ticket.id;
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
     const effectivePersona = persona ?? ticket.persona;
-    const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
-      ticket.body ?? '',
-    );
-    const preferredAgent = routeTagMatch?.[1] as AgentId | undefined;
-    const preferredModel = routeTagMatch?.[2] as AgentModelId | undefined;
+    const tag = parseRouteTag(ticket.body ?? '');
     const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
     const run = await this.scheduler.submit(
       {
@@ -761,8 +757,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         prompt: ticketPrompt(ticket),
         permissionMode,
         persona: effectivePersona,
-        agent: resolveAgentForPersona(this.db, effectivePersona, preferredAgent),
-        model: preferredModel,
+        ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
       },
       {
         ticketId: id,

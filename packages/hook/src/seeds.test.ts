@@ -101,6 +101,19 @@ describe('emberline-cli-seed', () => {
     expect(json(file)).toEqual({ trustedWorkspaces: ['/workspaces', worktree], theme: 'x' });
   });
 
+  it('sets agy AI credits from the run route and leaves them alone without the env var', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
+    const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ trustedWorkspaces: [], useG1Credits: true, other: 1 }));
+    run('emberline-cli-seed.mjs', home, { EMBERLINE_USE_CREDITS: '0' }, ['antigravity']);
+    expect(json(file)).toMatchObject({ useG1Credits: false, other: 1 });
+    run('emberline-cli-seed.mjs', home, { EMBERLINE_USE_CREDITS: '1' }, ['antigravity']);
+    expect(json(file).useG1Credits).toBe(true);
+    run('emberline-cli-seed.mjs', home, {}, ['antigravity']);
+    expect(json(file).useG1Credits).toBe(true);
+  });
+
   it('does nothing for agents without first-run config', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
     run('emberline-cli-seed.mjs', home, {}, ['codex']);

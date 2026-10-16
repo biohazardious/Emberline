@@ -84,9 +84,16 @@ if (agent === 'antigravity') {
       (entry) => typeof entry !== 'string' || !entry.startsWith('/workspaces/.worktrees/') || fs.existsSync(entry),
     );
     const next = kept.includes(cwd) ? kept : [...kept, cwd];
-    if (next.length === current.length && next.every((entry, i) => entry === current[i])) return false;
-    data.trustedWorkspaces = next;
-    return true;
+    const trustChanged = !(next.length === current.length && next.every((entry, i) => entry === current[i]));
+    if (trustChanged) data.trustedWorkspaces = next;
+    // AI credits (paid, after the subscription quota) are chosen per route; Emberline owns the key.
+    let credits = false;
+    const wanted = process.env.EMBERLINE_USE_CREDITS;
+    if ((wanted === '1' || wanted === '0') && data.useG1Credits !== (wanted === '1')) {
+      data.useG1Credits = wanted === '1';
+      credits = true;
+    }
+    return trustChanged || credits;
   });
 }
 
