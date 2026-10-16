@@ -569,6 +569,86 @@ describe('lanes and policy', () => {
   });
 });
 
+describe('waiting runs follow the in-flight policy and reopening lanes', () => {
+  /** An Antigravity run limited on its own lane, waiting as `rate_limited`. */
+  async function waiting(title = 'Colour-blind cats'): Promise<Run> {
+    const { run } = await startTicket(title);
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    await expect.poll(async () => (await getRun(run.id)).state, { timeout: 5_000 }).toBe('rate_limited');
+    return run;
+  }
+  /** Closes the Claude lane too, so the run has no open fallback route. */
+  const closeClaude = () =>
+    t.db.insert(quotaWindows).values({ id: 'claude-closed', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+
+  it('a run waiting under "wait" is handed off once the policy is switched to fallback', async () => {
+    const run = await waiting();
+    await t.scheduler.tick();
+    expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+
+    const res = await api('PATCH', '/api/factory/settings', { quotaPolicy: { inFlight: 'fallback' } });
+    expect(res.statusCode).toBe(200);
+    // No explicit tick: changing the policy wakes the scheduler.
+    await expect.poll(async () => (await getRun(run.id)).handedOffTo, { timeout: 5_000 }).not.toBeNull();
+    const successor = await getRun((await getRun(run.id)).handedOffTo ?? '');
+    expect(successor).toMatchObject({ agent: 'claude', model: 'opus', routeIndex: 1, predecessorRunId: run.id, worktreePath: run.worktreePath });
+    expect(t.db.select().from(runsTable).where(eq(runsTable.id, successor.id)).get()?.handoffCount).toBe(1);
+  });
+
+  it('with every fallback lane closed the run waits, and is handed off when a fallback window expires', async () => {
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    closeClaude();
+    const run = await waiting();
+    await t.scheduler.tick();
+    expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+
+    t.db.update(quotaWindows).set({ resumeAt: new Date(Date.now() - 1_000) }).where(eq(quotaWindows.id, 'claude-closed')).run();
+    await t.scheduler.tick();
+    const after = await getRun(run.id);
+    expect(after.handedOffTo).not.toBeNull();
+    expect(await getRun(after.handedOffTo ?? '')).toMatchObject({ agent: 'claude', predecessorRunId: run.id });
+  });
+
+  it('does not re-evaluate a run without an open route on every pass, and hands it off once the fallback lane is resumed', async () => {
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    closeClaude();
+    const run = await waiting();
+    await t.scheduler.tick();
+
+    const sched = t.scheduler as unknown as { routeOpen: (runId: string, ...rest: unknown[]) => boolean };
+    const original = sched.routeOpen.bind(t.scheduler);
+    let checks = 0;
+    sched.routeOpen = (runId, ...rest) => {
+      if (runId === run.id) checks += 1;
+      return original(runId, ...rest);
+    };
+    for (let i = 0; i < 3; i += 1) await t.scheduler.tick();
+    expect(checks).toBe(0);
+    expect((await getRun(run.id)).events.filter((e) => e.type === 'handoff_failed')).toHaveLength(0);
+
+    await api('POST', '/api/scheduler/resume', { agent: 'claude', credential: 'login', pool: '*' });
+    await expect.poll(async () => (await getRun(run.id)).handedOffTo, { timeout: 5_000 }).not.toBeNull();
+    expect(checks).toBeGreaterThan(0);
+  });
+
+  it('respects MAX_HANDOFFS and never hands off a run waiting for its automatic retry', async () => {
+    // Both start before the Antigravity lane closes (a queued run would wait for it under newRuns = wait).
+    const { run: capped } = await startTicket('Ping pong');
+    const { run: retrying } = await startTicket('Transient');
+    const tokens = [await work(capped), await work(retrying)];
+    await hook(capped.id, 'StopFailure', tokens[0]!, AGY_QUOTA);
+    await hook(retrying.id, 'StopFailure', tokens[1]!, AGY_QUOTA);
+    t.db.update(runsTable).set({ handoffCount: 3 }).where(eq(runsTable.id, capped.id)).run();
+    t.db.update(runsTable).set({ autoRetryAt: new Date(Date.now() + 3_600_000) }).where(eq(runsTable.id, retrying.id)).run();
+
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    await t.scheduler.tick();
+    await t.scheduler.tick();
+    expect(await getRun(capped.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+    expect(await getRun(retrying.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+  });
+});
+
 describe('handed-off runs are not finished work', () => {
   async function handedOff(seen: string[] = [], pipeline: string[] = []) {
     const { ticketId, run } = await startTicket('Colour-blind cats');

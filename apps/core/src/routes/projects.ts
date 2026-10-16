@@ -147,7 +147,7 @@ export function slugify(name: string): string {
     .slice(0, 48);
 }
 
-export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, tickets, runs }: CoreDeps): void {
+export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, tickets, runs, scheduler }: CoreDeps): void {
   const saveActiveProjectId = (activeProjectId: string | null) => {
     db.insert(settings)
       .values({ key: ACTIVE_PROJECT_KEY, value: { activeProjectId } })
@@ -509,6 +509,8 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   app.patch('/api/factory/settings', async (request): Promise<FactorySettings> => {
     const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
     const updated = updateFactorySettings(db, patch);
+    // A policy switch or a new key may let waiting runs move to a fallback route now.
+    scheduler.wake();
     if (patch.enabledProviders && process.env.NODE_ENV === 'production') {
       toolchain.ensureEnabledProvidersInstalled(updated.enabledProviders);
     }

@@ -85,7 +85,8 @@ interface SchedulerEvents {
  *   pool of the agent + credential; other lanes keep dispatching.
  * - Policy `newRuns`: a queued run whose lane is closed waits, or (`fallback`) starts on the first
  *   route of its chain whose lane is open. Policy `inFlight`: a limited run waits, or (`fallback`)
- *   is handed off to such a route in the same worktree, at most `MAX_HANDOFFS` times automatically.
+ *   is handed off to such a route in the same worktree, at most `MAX_HANDOFFS` times automatically;
+ *   a run already waiting moves too once the policy is switched to `fallback` or a fallback lane reopens.
  * - When a window closes, its lane's rate-limited runs resume first (by ticket priority), then the
  *   queue; handed-off successors go before other queued runs.
  * - A run hit by a temporary provider error also waits as `rate_limited`, without opening a window,
@@ -100,6 +101,13 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   private lastPublished = '';
   /** `runId|route` pairs already noted as `route_skipped`. */
   private readonly skipped = new Set<string>();
+  /**
+   * Waiting runs already checked for a fallback route, with the lane state they were checked
+   * against (open windows + usable routes): a run is only checked again once that changes.
+   */
+  private readonly fallbackChecked = new Map<string, string>();
+  /** Runs with an automatic handoff under way (from the limit hook or a dispatch pass). */
+  private readonly handingOff = new Set<string>();
   private readonly options: SchedulerOptions;
 
   constructor(
@@ -120,10 +128,14 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     });
     runs.on('run', (run, stateChanged) => {
       if (run.endedAt) this.forgetSkipped(run.id);
-      if (stateChanged) this.kick();
+      if (stateChanged) {
+        this.fallbackChecked.delete(run.id);
+        this.kick();
+      }
     });
     runs.on('removed', (id) => {
       this.forgetSkipped(id);
+      this.fallbackChecked.delete(id);
       this.kick();
     });
   }
@@ -225,6 +237,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     return this.runs.getRun(successor.id);
   }
 
+  /** Schedules a dispatch pass, e.g. after the quota policy or a provider key changed. */
+  wake(): void {
+    this.kick();
+  }
+
   /** Serialized dispatch pass; concurrent calls coalesce into one extra pass. */
   tick(): Promise<void> {
     if (this.ticking) {
@@ -257,6 +274,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     if (this.ptyd.status !== 'connected') return;
 
     const policy = getQuotaPolicy(this.db);
+    await this.moveWaitingRuns(policy.inFlight === 'fallback');
     let slots = this.maxConcurrentRuns() - this.busyCount();
     for (const candidate of this.candidates()) {
       if (slots <= 0) break;
@@ -308,6 +326,42 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         .orderBy(...(successorsFirst ? [desc(successor)] : []), desc(priority), asc(order))
         .all();
     return [...select('rate_limited', runs.stateChangedAt, false), ...select('queued', runs.createdAt, true)];
+  }
+
+  /**
+   * Policy `inFlight = fallback` for runs already waiting: a limited run whose own lane is still
+   * closed moves to an open route of its chain, e.g. after the policy was switched or a fallback
+   * lane reopened. A run without an open route is checked again only once the open windows or its
+   * routes' usability change, not on every pass. Automatic-retry waits are never handed off.
+   */
+  private async moveWaitingRuns(fallback: boolean): Promise<void> {
+    const waiting = this.db
+      .select()
+      .from(runs)
+      .where(and(eq(runs.state, 'rate_limited'), isNull(runs.handedOffTo)))
+      .all();
+    const ids = new Set(waiting.map((r) => r.id));
+    for (const id of this.fallbackChecked.keys()) if (!ids.has(id)) this.fallbackChecked.delete(id);
+    if (!fallback) return;
+    const closed = this.openWindows();
+    const now = Date.now();
+    const windows = closed
+      .filter((w) => w.resumeAt.getTime() > now)
+      .map((w) => `${w.id}:${w.pool}`)
+      .join(',');
+    for (const row of waiting) {
+      if (row.cancelledAt || row.autoRetryAt || row.handoffCount >= MAX_HANDOFFS || this.handingOff.has(row.id)) continue;
+      const current = currentRoute(row);
+      const lane = laneOf(current);
+      if (!this.laneClosed(lane, closed)) continue; // its own lane reopened: the run resumes there
+      const others = runRoutes(row).filter((r) => !sameRoute(r, current));
+      if (others.length === 0) continue;
+      const key = `${windows}|${others.map((r) => (routeUsable(this.db, r) ? 1 : 0)).join('')}`;
+      if (this.fallbackChecked.get(row.id) === key) continue;
+      this.fallbackChecked.set(row.id, key);
+      const reason = closed.find((w) => w.resumeAt.getTime() > now && laneCovers(w, lane))?.message ?? 'usage limit reached';
+      await this.autoHandOff(row, closed, reason);
+    }
   }
 
   private busyCount(): number {
@@ -392,15 +446,25 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   private async maybeHandOff(run: Run, info: RateLimitInfo | undefined): Promise<void> {
     if (getQuotaPolicy(this.db).inFlight !== 'fallback') return;
     const row = this.db.select().from(runs).where(eq(runs.id, run.id)).get();
-    if (!row || row.cancelledAt || row.handedOffTo || row.handoffCount >= MAX_HANDOFFS) return;
-    const closed = this.openWindows();
+    if (!row || row.cancelledAt || row.handedOffTo || row.handoffCount >= MAX_HANDOFFS || this.handingOff.has(row.id)) return;
+    await this.autoHandOff(row, this.openWindows(), info?.message ?? 'usage limit reached');
+  }
+
+  /**
+   * Hands `row` off to the first other route of its chain whose lane is open (none: it keeps
+   * waiting). Marked synchronously, so the hook and a dispatch pass never race for the same run.
+   */
+  private async autoHandOff(row: typeof runs.$inferSelect, closed: readonly WindowRow[], reason: string): Promise<void> {
     const current = currentRoute(row);
     const next = runRoutes(row).find((r) => !sameRoute(r, current) && this.routeOpen(row.id, r, closed));
     if (!next) return;
+    this.handingOff.add(row.id);
     try {
-      await this.runs.handOff(row.id, next, { reason: info?.message ?? 'usage limit reached', source: 'system', automatic: true });
+      await this.runs.handOff(row.id, next, { reason, source: 'system', automatic: true });
     } catch (error) {
       this.runs.note(row.id, 'handoff_failed', { message: (error as Error).message });
+    } finally {
+      this.handingOff.delete(row.id);
     }
     this.kick();
   }
