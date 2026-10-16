@@ -25,7 +25,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, ticketDependencies, tickets } from '../db/schema.js';
+import { projects, runEvents, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
@@ -350,8 +350,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             latestRun.worktreePath &&
             latestRun.worktreePath !== projectRow.path
           ) {
+            // A run still resolving its conflict is finished by its own pipeline when it stops again.
+            if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
             const merged = await this.mergeRunIntoMain(latestRun, projectRow.path, reviewTicket.key);
-            if (!merged) continue;
+            if (!merged.ok) continue;
           }
           try {
             this.moveToTop(reviewTicket.id, 'done');
@@ -643,7 +645,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       run.worktreePath &&
       run.worktreePath !== projectRow.path
     ) {
-      mergeBlocked = !(await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null));
+      const merged = await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null);
+      mergeBlocked = !merged.ok;
+      // The agent gets one attempt to resolve the conflict itself; it is still alive and keeps the
+      // ticket in Review. A later conflict (or a run that cannot take a prompt) falls through.
+      if (
+        !merged.ok &&
+        merged.conflicts.length > 0 &&
+        !run.endedAt &&
+        !this.conflictResolutionRequested(run.id) &&
+        (await this.requestConflictResolution(run, merged.conflicts))
+      ) {
+        return;
+      }
     }
 
     // 4. Auto-move completed factory ticket to Done when enabled (keep it in Review when the merge was
@@ -672,7 +686,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * Merges a finished run's worktree into the main workspace. Failures are recorded on the run
    * (`merge_failed`) instead of thrown; returns whether the work landed in main.
    */
-  private async mergeRunIntoMain(run: Run, mainWorkspacePath: string, ticketKey: string | null): Promise<boolean> {
+  private async mergeRunIntoMain(
+    run: Run,
+    mainWorkspacePath: string,
+    ticketKey: string | null,
+  ): Promise<{ ok: boolean; conflicts: string[] }> {
     const res = await syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
       mainWorkspacePath,
@@ -683,7 +701,31 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       summary: res.summary,
       ...(res.conflicts.length > 0 ? { conflicts: res.conflicts } : {}),
     });
-    return res.ok;
+    return { ok: res.ok, conflicts: res.conflicts };
+  }
+
+  /** Whether the run already got its one automatic conflict-resolution attempt (survives a restart). */
+  private conflictResolutionRequested(runId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'conflict_resolution_requested')))
+        .limit(1)
+        .get(),
+    );
+  }
+
+  /** Types the conflict follow-up into the live session; false when the run cannot take a prompt. */
+  private async requestConflictResolution(run: Run, conflicts: string[]): Promise<boolean> {
+    const text = `main has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${conflicts.join(', ')}). Merge main into your branch (git merge main), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
+    this.runs.note(run.id, 'conflict_resolution_requested', { conflicts });
+    try {
+      await this.runs.sendPrompt(run.id, text);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   list(projectId: string): Ticket[] {

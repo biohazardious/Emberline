@@ -370,7 +370,9 @@ describe('dependency-aware dispatch', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const svc = t.tickets as unknown as { mergeRunIntoMain(r: Run, main: string, key: string | null): Promise<boolean> };
+    const svc = t.tickets as unknown as {
+      mergeRunIntoMain(r: Run, main: string, key: string | null): Promise<{ ok: boolean; conflicts: string[] }>;
+    };
     const merge = svc.mergeRunIntoMain.bind(t.tickets);
     svc.mergeRunIntoMain = async (r, main, key) => {
       merges.push(r.id);
@@ -477,6 +479,135 @@ describe('dependency-aware dispatch', () => {
 
     await finish(runsFor(apk.id)[0] as Run);
     await expect.poll(() => runsFor(qa.id).length, { timeout: 10_000 }).toBe(1);
+    await settle(project.id);
+  });
+});
+
+describe('one automatic merge-conflict resolution', () => {
+  const FOLLOW_UP = (files: string) =>
+    `main has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${files}). Merge main into your branch (git merge main), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
+
+  /** Like the usual stand-in, but it stays alive and logs every line typed into it (the start prompt is an argument). */
+  function writeLivingClaude(dir: string): string {
+    const file = path.join(dir, 'living-claude.sh');
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
+        `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
+        'echo "fake claude ready"',
+        `: > "${dir}/ready-$EMBERLINE_RUN_ID"`,
+        `while read line; do printf '%s\\n' "$line" >> "${dir}/followups-$EMBERLINE_RUN_ID"; done`,
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    return file;
+  }
+
+  const wgit = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], { encoding: 'utf8' });
+
+  const followups = (run: Run) => {
+    const file = path.join(t.dir, `followups-${run.id}`);
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+  };
+  const eventTypes = async (run: Run) =>
+    ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
+
+  /** Two tickets editing the same line; A has been merged into main, B conflicts with it. */
+  async function conflictingPair() {
+    t.config.claudeCommand = writeLivingClaude(t.dir);
+    const project = await createProject();
+    writeFileSync(path.join(project.path, 'app.js'), 'one\ntwo\nthree\n');
+    wgit(project.path, 'add', '-A');
+    wgit(project.path, 'commit', '-q', '-m', 'app');
+    // A factory project: a finished orchestrator ticket keeps the pipeline on for A and B.
+    await createTicket(project.id, { title: '[Factory] Plan', status: 'done' });
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const runA = runsFor(a.id)[0] as Run;
+    const runB = runsFor(b.id)[0] as Run;
+    writeFileSync(path.join(runA.worktreePath, 'app.js'), 'one\nfrom-a\nthree\n');
+    writeFileSync(path.join(runB.worktreePath, 'app.js'), 'one\nfrom-b\nthree\n');
+    // Typed input is only safe once the stand-in is reading.
+    await Promise.all([waitFile(`ready-${runA.id}`), waitFile(`ready-${runB.id}`)]);
+    for (const run of [runA, runB]) {
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+      await hook(run.id, 'UserPromptSubmit', token);
+    }
+    await stopAgain(runA);
+    await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('done');
+    // Backlog tickets are picked up by a dispatch only; creating one starts nothing by itself.
+    await api('PATCH', '/api/factory/settings', { autoPickupBacklog: true });
+    return { project, a, b, runA, runB };
+  }
+
+  const stopAgain = async (run: Run) => {
+    const token = await waitFile(`token-${run.id}`);
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Stop', token);
+  };
+
+  it('asks the agent once to resolve the conflict, then merges the resolution', async () => {
+    const { b, runB } = await conflictingPair();
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    expect(followups(runB)).toEqual([FOLLOW_UP('app.js')]);
+    const events = (await api('GET', `/api/runs/${runB.id}`)).json() as RunDetail;
+    expect(events.events.find((e) => e.type === 'conflict_resolution_requested')?.payload).toMatchObject({
+      conflicts: ['app.js'],
+    });
+    expect(await statusOf(b.id)).not.toBe('done');
+    expect(t.runs.get(runB.id).endedAt).toBeNull();
+
+    // The agent merges main into its branch and commits the resolution.
+    try {
+      wgit(runB.worktreePath, 'merge', 'main');
+    } catch {
+      // conflicts are expected
+    }
+    writeFileSync(path.join(runB.worktreePath, 'app.js'), 'one\nfrom-a\nfrom-b\nthree\n');
+    wgit(runB.worktreePath, 'add', '-A');
+    wgit(runB.worktreePath, 'commit', '-q', '-m', 'resolve');
+    await stopAgain(runB);
+
+    await expect.poll(() => statusOf(b.id), { timeout: 10_000 }).toBe('done');
+    expect(readFileSync(path.join(runB.worktreePath, 'app.js'), 'utf8')).toContain('from-b');
+    expect(await eventTypes(runB)).toContain('merged_to_main');
+    expect(followups(runB)).toHaveLength(1);
+  });
+
+  it('a second conflict lands in Review, asks nothing again and dispatches the next ticket', async () => {
+    const { project, b, runB } = await conflictingPair();
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    const c = await createTicket(project.id, { title: 'C', status: 'backlog' });
+    expect(runsFor(c.id)).toHaveLength(0);
+
+    await stopAgain(runB);
+    await expect.poll(() => runsFor(c.id).length, { timeout: 10_000 }).toBe(1);
+    expect(await statusOf(b.id)).toBe('review');
+    expect(await eventTypes(runB)).toContain('merge_failed');
+    expect((await eventTypes(runB)).filter((x) => x === 'conflict_resolution_requested')).toHaveLength(1);
+    expect(followups(runB)).toHaveLength(1);
+    await settle(project.id);
+  });
+
+  it('falls back to Review at once when the agent can no longer receive a prompt', async () => {
+    const { project, b, runB } = await conflictingPair();
+    const svc = t.runs as unknown as { sendPrompt(id: string, text: string): Promise<Run> };
+    svc.sendPrompt = async () => {
+      throw new Error('no live session');
+    };
+    const c = await createTicket(project.id, { title: 'C', status: 'backlog' });
+    await stopAgain(runB);
+    await expect.poll(() => runsFor(c.id).length, { timeout: 10_000 }).toBe(1);
+    expect(await statusOf(b.id)).toBe('review');
+    expect(await eventTypes(runB)).toContain('merge_failed');
     await settle(project.id);
   });
 });
