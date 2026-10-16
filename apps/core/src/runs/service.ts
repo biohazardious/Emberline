@@ -1238,11 +1238,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** Another run (e.g. a handoff successor) working in the same worktree. */
-  private worktreeSharedWith(row: RunRow): RunRow | undefined {
+  private worktreeSharedWith(row: RunRow, opts: { stillRunning?: boolean } = {}): RunRow | undefined {
+    const sharing = and(eq(runs.worktreePath, row.worktreePath), ne(runs.id, row.id));
     return this.db
       .select()
       .from(runs)
-      .where(and(eq(runs.worktreePath, row.worktreePath), ne(runs.id, row.id)))
+      .where(opts.stillRunning ? and(sharing, isNull(runs.endedAt)) : sharing)
       .get();
   }
 
@@ -1259,7 +1260,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!row.endedAt && row.state !== 'done' && row.state !== 'failed') {
       throw conflict('stop the active run before pruning its worktree');
     }
-    const shared = this.worktreeSharedWith(row);
+    // Only a sharer that has not ended blocks a manual prune; two ended runs must not lock each other out.
+    const shared = this.worktreeSharedWith(row, { stillRunning: true });
     if (shared) throw conflict(`run ${shared.id.slice(0, 8)} still works in this worktree`);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');

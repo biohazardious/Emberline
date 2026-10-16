@@ -60,7 +60,13 @@ beforeEach(async () => {
 
 /** True while a fake CLI started from this test's directory is still running. */
 function fakeCliAlive(dir: string): boolean {
-  for (const pid of readdirSync('/proc')) {
+  let pids: string[] = [];
+  try {
+    pids = readdirSync('/proc');
+  } catch {
+    return false; // no /proc: nothing to wait for
+  }
+  for (const pid of pids) {
     if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
     try {
       if (readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(dir)) return true;
@@ -503,6 +509,15 @@ describe('handed-off runs are not finished work', () => {
     const res = await api('POST', `/api/runs/${run.id}/worktree/prune`);
     expect(res.statusCode).toBe(409);
     expect(existsSync(successor.worktreePath)).toBe(true);
+  });
+
+  it('prunes the worktree once the successor has ended too', async () => {
+    const { run, successor } = await handedOff();
+    await t.runs.stop(successor.id);
+    await expect.poll(async () => (await getRun(successor.id)).endedAt, { timeout: 5_000 }).not.toBeNull();
+    const res = await api('POST', `/api/runs/${run.id}/worktree/prune`);
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(successor.worktreePath)).toBe(false);
   });
 });
 
