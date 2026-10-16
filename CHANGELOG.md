@@ -20,6 +20,16 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Gemini CLI, Codex, Copilot and Aider runs resumed after a limit started over without context; they now get the task, the last message and the worktree state.
 - Scheduled (cron) jobs were skipped while any provider was out of quota; they now start, and only a job whose own provider is out of quota waits queued for it.
 - Claude Code's spend-limit messages ("You've hit your monthly spend limit") and the end of its own usage-limit wait are recognised as limits, so the run waits for the reset or hands off like any other limit.
+- A running factory chain stopped when core restarted; it now continues after the restart without clicking Run pipeline.
+- A failed ticket run stopped the factory chain; the other ready tickets now go on. When two ticket runs fail in a row, or a run fails before it gets to work, the chain pauses with a note on the run saying why.
+- Runs already waiting for a quota reset stayed waiting after the in-flight policy was switched to "Hand off to the next route" or after a fallback route's lane reopened; they now hand off to the next open route (at most 3 handoffs per run).
+- Limit notifications and the quota panel could show the agent's earlier output instead of the limit; they now start with the limit sentence (for example "Individual quota reached … Resets in 31h43m").
+- Settings and "Continue with…" offered "API key" routes when the key only came from core's environment; the server refuses those routes, so they are no longer offered and the sign-in route is suggested instead.
+- "Hand off" on a run that is waiting for you ends its live session; it now asks for a second click first.
+- The ticket drawer shows the whole handoff chain of a run (oldest first, with links) instead of only the run it continued.
+- A ticket still waiting for its dependencies that was dropped on In progress moved there without a run; it now stays in Ready and opens its drawer with "Start anyway".
+- A ticket a gate left in Review for you (secret guard, slop or critic check, failed build gate, failed merge) could be merged by a later dispatch; it now stays in Review.
+- A ticket that finished while the factory chain was off (started on its own or by hand) did not start the tickets waiting for it; they now start.
 
 ### Upgrading
 
