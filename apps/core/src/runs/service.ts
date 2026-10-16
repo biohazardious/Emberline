@@ -235,13 +235,21 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
   return summary;
 }
 
+/** A run that is live, or parked on a quota limit and still going to resume (not cancelled). */
+const runStillActive = () => or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
+
+/** Why a run cannot be handed off right now, if it cannot. */
+function handoffBlocker(row: RunRow): string | undefined {
+  if (row.cancelledAt) return 'this run was stopped';
+  if (row.handedOffTo) return 'this run was already handed off';
+  if (row.state === 'queued' || row.state === 'starting' || row.state === 'working') return `a ${row.state} run cannot be handed off`;
+  return undefined;
+}
+
 /**
  * Owns the run lifecycle: worktree + agent spawn, hook ingestion (the primary state signal),
  * and reconciliation with ptyd (process exits, runner restarts).
  */
-/** A run that is live, or parked on a quota limit and still going to resume (not cancelled). */
-const runStillActive = () => or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
-
 export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   private reconciling = false;
@@ -633,11 +641,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     opts: { reason: string; source: 'system' | 'user'; automatic: boolean },
   ): Promise<Run> {
     const row = this.row(id);
-    if (row.cancelledAt) throw conflict('this run was stopped');
-    if (row.handedOffTo) throw conflict('this run was already handed off');
-    if (row.state === 'queued' || row.state === 'starting' || row.state === 'working') {
-      throw conflict(`a ${row.state} run cannot be handed off`);
-    }
+    const blocked = handoffBlocker(row);
+    if (blocked) throw conflict(blocked);
     const routes = [...runRoutes(row)];
     let routeIndex = routes.findIndex((r) => sameRoute(r, route));
     if (routeIndex < 0) {
@@ -645,6 +650,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       routeIndex = routes.length - 1;
     }
     const prompt = buildHandoffPrompt(await this.handoffContext(row, opts.reason, false));
+    // A stop or a resume may have landed while the context was built: re-read before creating the
+    // successor, so no orphan successor is left and the kill below reaches the current terminal.
+    const current = this.row(id);
+    const changed = handoffBlocker(current) ?? (current.state !== row.state ? `the run is ${current.state} now` : undefined);
+    if (changed) throw conflict(changed);
     const successor = await this.enqueue(
       { projectId: row.projectId, prompt, persona: row.persona as AgentPersona, permissionMode: row.permissionMode as Run['permissionMode'] },
       {
@@ -661,13 +671,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       reason: opts.reason,
       message: `Took over from ${row.agent} (${runModel(row) ?? 'auto'}): ${opts.reason}`,
     });
-    const sessionId = row.ptydSessionId && !row.endedAt ? row.ptydSessionId : null;
+    const latest = this.row(id);
+    const sessionId = latest.ptydSessionId && !latest.endedAt ? latest.ptydSessionId : null;
     this.record(row.id, {
       source: opts.source,
       type: 'handed_off',
       state: 'done',
       payload: { toRunId: successor.id, route, reason: opts.reason, message: `Handed off to ${route.agent} (${route.model}): ${opts.reason}` },
-      patch: { endedAt: row.endedAt ?? new Date(), handedOffTo: successor.id, autoRetryAt: null },
+      patch: { endedAt: latest.endedAt ?? new Date(), handedOffTo: successor.id, autoRetryAt: null },
     });
     if (sessionId) {
       await this.ptyd
@@ -875,8 +886,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         payload: options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : undefined,
         patch: { ptydSessionId: session.id },
       });
-      if (this.row(row.id).cancelledAt) {
-        // Stopped while the terminal was being created: end it now instead of letting it work.
+      const after = this.row(row.id);
+      if (after.cancelledAt || after.handedOffTo) {
+        // Stopped or handed off while the terminal was being created: end it now instead of letting it work.
         await ptyd.kill(session.id, 'SIGKILL').catch(() => undefined);
         void this.reconcile();
       }

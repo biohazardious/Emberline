@@ -311,6 +311,44 @@ describe('handoff', () => {
     expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(1);
   });
 
+  /** Holds the handoff while its context (worktree status, diff) is built, so a stop or resume can land in that gap. */
+  function holdHandoffContext(): { reached: () => boolean; release: () => void } {
+    const svc = t.runs as unknown as { handoffContext: (...args: unknown[]) => Promise<unknown> };
+    const original = svc.handoffContext.bind(t.runs);
+    let release: (() => void) | undefined;
+    svc.handoffContext = async (...args: unknown[]) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return original(...args);
+    };
+    return { reached: () => release !== undefined, release: () => release?.() };
+  }
+
+  it('a stop while the handoff prompt is being built wins: 409, no successor', async () => {
+    const { run, ticketId } = await stopped();
+    const gate = holdHandoffContext();
+    const pending = t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    await expect.poll(gate.reached).toBe(true);
+    await t.runs.stop(run.id);
+    gate.release();
+    await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+    expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(0);
+    expect(await getRun(run.id)).toMatchObject({ handedOffTo: null, cancelled: true });
+  });
+
+  it('a resume while the handoff prompt is being built wins: 409, no successor, the run keeps working', async () => {
+    const { run, ticketId } = await stopped();
+    const gate = holdHandoffContext();
+    const pending = t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    await expect.poll(gate.reached).toBe(true);
+    await t.runs.resume(run.id);
+    gate.release();
+    await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+    expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(0);
+    expect(await getRun(run.id)).toMatchObject({ state: 'starting', handedOffTo: null, endedAt: null });
+  });
+
   it('a handed-off run cannot be resumed, and a cancelled queued run cannot be re-bound', async () => {
     const { run } = await stopped();
     const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
