@@ -224,6 +224,9 @@ const EVENT_LABEL: Record<string, string> = {
   rate_limit_failed: 'limit reached',
   retry_scheduled: 'retry scheduled',
   retry_gave_up: 'retry gave up',
+  dependencies_applied: 'planned order',
+  dependency_dropped: 'dependency dropped',
+  conflict_resolution_requested: 'resolving merge conflict',
 };
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */

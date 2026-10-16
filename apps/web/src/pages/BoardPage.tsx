@@ -30,6 +30,7 @@ import { BuildOutputsList } from '../components/RunOutcome';
 import { useRuns, useTickets } from '../hooks/liveData';
 import { useGoBack, useQueryParam, useUpdateQuery } from '../hooks/navigation';
 import { timeAgo } from '../time';
+import { dependencyCandidates, waitingLabel, waitingTitle } from '../ticketDeps';
 import { toastInfo } from '../toast';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -318,6 +319,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
         <TicketDrawer
           key={open.id}
           ticket={open}
+          allTickets={tickets ?? []}
           run={latestRun.get(open.id)}
           onClose={() => setOpenId(undefined)}
           onChanged={patchLocal}
@@ -442,6 +444,11 @@ function TicketCard({
           <span className="prio-dot" title={`${PRIORITIES[ticket.priority]} priority`} />
         </div>
         <p className="card-title">{ticket.title}</p>
+        {waitingLabel(ticket.blockedBy) && (
+          <span className="card-waiting mono" title={waitingTitle(ticket.blockedBy)}>
+            {waitingLabel(ticket.blockedBy)}
+          </span>
+        )}
         {run && (
           <div className="card-foot">
             <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
@@ -477,12 +484,14 @@ const DRAWER_VIEWS = ['details', 'review', 'terminal', 'events'] as const;
 type DrawerView = (typeof DRAWER_VIEWS)[number];
 function TicketDrawer({
   ticket,
+  allTickets,
   run,
   onClose,
   onChanged,
   onMove,
 }: {
   ticket: Ticket;
+  allTickets: Ticket[];
   run: Run | undefined;
   onClose: () => void;
   onChanged: (ticket: Ticket) => void;
@@ -501,6 +510,8 @@ function TicketDrawer({
   const setViewTab = (view: DrawerView) => setViewParam(view === defaultView ? null : view);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [depError, setDepError] = useState<string>();
+  const [confirmStart, setConfirmStart] = useState(false);
   const live = run && !run.endedAt;
   const queued = run?.state === 'queued';
   const canFollowUp = (live && !queued) || run?.resumable === true;
@@ -533,7 +544,31 @@ function TicketDrawer({
       onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority, persona }));
     });
 
-  const start = () =>
+  const setDependsOn = async (next: string[]) => {
+    setBusy('deps');
+    setDepError(undefined);
+    try {
+      onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { dependsOn: next }));
+    } catch (e) {
+      setDepError(errorMessage(e));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const byId = new Map(allTickets.map((t) => [t.id, t]));
+  const candidates = dependencyCandidates(ticket, allTickets);
+
+  // A blocked ticket needs a second click: the first one only asks.
+  const start = () => {
+    if (ticket.blockedBy.length > 0 && !confirmStart) {
+      setConfirmStart(true);
+      return;
+    }
+    setConfirmStart(false);
+    void startNow();
+  };
+
+  const startNow = () =>
     act('start', async () => {
       if (dirty) await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority, persona });
       const res = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
@@ -701,6 +736,61 @@ function TicketDrawer({
               </button>
             </div>
 
+            <label className="drawer-label" htmlFor="drawer-dep-add">
+              Depends on
+            </label>
+            <div className="dep-editor">
+              {ticket.dependsOn.length === 0 && <p className="muted small">No dependencies.</p>}
+              <ul className="dep-list">
+                {ticket.dependsOn.map((id) => {
+                  const dep = byId.get(id);
+                  return (
+                    <li key={id} className="dep-item">
+                      {dep ? (
+                        <>
+                          <Link href={`/projects/${ticket.projectId}/board?ticket=${dep.id}`} className="mono dep-key">
+                            {dep.key}
+                          </Link>
+                          <span className="dep-title">{dep.title}</span>
+                          <span className="badge badge-soft">{dep.status.replace('_', ' ')}</span>
+                        </>
+                      ) : (
+                        <span className="mono muted dep-title">{id}</span>
+                      )}
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Remove dependency ${dep?.key ?? id}`}
+                        disabled={!!busy}
+                        onClick={() => void setDependsOn(ticket.dependsOn.filter((d) => d !== id))}
+                      >
+                        <X className="icon" aria-hidden />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <select
+                id="drawer-dep-add"
+                className="input"
+                value=""
+                disabled={!!busy || candidates.length === 0}
+                onChange={(e) => e.target.value && void setDependsOn([...ticket.dependsOn, e.target.value])}
+              >
+                <option value="">{candidates.length === 0 ? 'No tickets to add' : 'Add a dependency…'}</option>
+                {candidates.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.key} {c.title}
+                  </option>
+                ))}
+              </select>
+              {depError && (
+                <p className="form-error" role="alert">
+                  {depError}
+                </p>
+              )}
+            </div>
+
             <label className="drawer-label" htmlFor="drawer-status">
               Column
             </label>
@@ -845,21 +935,38 @@ function TicketDrawer({
                 exhausted.
               </p>
               <div className="run-form-foot">
-                <span />
+                {ticket.blockedBy.length > 0 ? (
+                  <span className="muted small" role={confirmStart ? 'alert' : undefined}>
+                    {confirmStart ? 'Still waiting for ' : 'Waiting for '}
+                    {ticket.blockedBy.map((b) => b.key).join(', ')}. Starting now skips the wait.
+                  </span>
+                ) : (
+                  <span />
+                )}
                 <button
                   id="drawer-start"
                   className={`btn btn-sm ${run?.resumable && run.state !== 'failed' ? '' : 'btn-primary'}`}
                   disabled={!!busy || !title.trim()}
-                  onClick={() => void start()}
+                  onClick={start}
                 >
-                  {busy === 'start' ? 'Starting…' : run ? 'Start new run' : 'Start Agent Run'}
+                  {busy === 'start'
+                    ? 'Starting…'
+                    : confirmStart
+                      ? 'Start anyway'
+                      : run
+                        ? 'Start new run'
+                        : 'Start Agent Run'}
                 </button>
               </div>
             </div>
           )}
         </section>
 
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
 
         <footer className="drawer-foot">
           <button id="drawer-delete" className="btn btn-sm btn-ghost danger" disabled={!!busy} onClick={() => void remove()}>

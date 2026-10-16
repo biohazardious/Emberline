@@ -3656,3 +3656,42 @@ dialog.cmd-dialog::backdrop {
   padding: 4px 8px;
   font-size: 0.78rem;
 }
+
+.card-waiting {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.66rem;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  padding: 1px 6px;
+}
+
+.dep-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dep-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dep-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.dep-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

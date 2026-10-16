@@ -138,6 +138,7 @@ export function SettingsPage({
   const [crossProviderCritic, setCrossProviderCritic] = useState(false);
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
   const [maxTicketDepth, setMaxTicketDepth] = useState(3);
+  const [maxParallelTickets, setMaxParallelTickets] = useState(2);
   const [maxAutoRunsPerDay, setMaxAutoRunsPerDay] = useState(40);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
@@ -185,6 +186,7 @@ export function SettingsPage({
         setAutoMoveToDone(res.autoMoveToDone);
         setMaxTicketDepth(res.maxTicketDepth);
         setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
+        setMaxParallelTickets(res.maxParallelTicketsPerProject ?? 2);
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
         setPersonaRoutes(res.personaRoutes);
@@ -393,6 +395,7 @@ export function SettingsPage({
         autoMoveToDone,
         maxTicketDepth,
         maxAutoRunsPerProjectPerDay: maxAutoRunsPerDay,
+        maxParallelTicketsPerProject: maxParallelTickets,
         defaultAgent,
         enabledProviders,
         personaRoutes,
@@ -688,6 +691,24 @@ export function SettingsPage({
                 <strong>Daily run budget per project</strong>
                 <div className="muted small">
                   Auto-dispatch stops starting new runs for a project once this many runs started in the last 24 hours (0 = unlimited). Manual starts are not limited.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="number"
+                className="input mono"
+                min={1}
+                max={4}
+                value={maxParallelTickets}
+                onChange={(e) => setMaxParallelTickets(Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
+                style={{ width: '90px' }}
+              />
+              <div>
+                <strong>Parallel tickets per project</strong>
+                <div className="muted small">
+                  How many unblocked tickets of one project the factory works on at the same time (1-4). Tickets that wait for a dependency never start early.
                 </div>
               </div>
             </label>
