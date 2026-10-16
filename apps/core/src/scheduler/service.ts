@@ -127,7 +127,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       );
     });
     runs.on('run', (run, stateChanged) => {
-      if (run.endedAt) this.forgetSkipped(run.id);
+      // A rate-limited run whose process exited still waits: only an end state frees its memory.
+      if (run.state === 'done' || run.state === 'failed') this.forgetSkipped(run.id);
       if (stateChanged) {
         this.fallbackChecked.delete(run.id);
         this.kick();
@@ -425,7 +426,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     return false;
   }
 
-  /** Drops a finished or removed run's `route_skipped` memory so the set stays bounded. */
+  /** Drops a done, failed or removed run's `route_skipped` memory so the set stays bounded. */
   private forgetSkipped(runId: string): void {
     for (const key of this.skipped) if (key.startsWith(`${runId}|`)) this.skipped.delete(key);
   }

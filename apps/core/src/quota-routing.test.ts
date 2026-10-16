@@ -569,6 +569,24 @@ describe('lanes and policy', () => {
     await expect.poll(() => skipped.size, { timeout: 5_000 }).toBe(0);
   });
 
+  it('keeps a waiting run\'s route_skipped memory after its agent process exited', async () => {
+    updateFactorySettings(t.db, {
+      quotaPolicy: { inFlight: 'fallback' },
+      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'api_key' }] },
+    });
+    const { run } = await startTicket('No key');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    const skipped = (t.scheduler as unknown as { skipped: Set<string> }).skipped;
+    await expect.poll(() => skipped.size, { timeout: 5_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await getRun(run.id)).state, { timeout: 5_000 }).toBe('rate_limited');
+    // The process is gone while the run waits for the reset: it still waits, so the note stays once-only.
+    t.db.update(runsTable).set({ endedAt: new Date() }).where(eq(runsTable.id, run.id)).run();
+    t.runs.note(run.id, 'probe');
+    expect(skipped.size).toBeGreaterThan(0);
+    await t.scheduler.tick();
+    expect((await getRun(run.id)).events.filter((e) => e.type === 'route_skipped')).toHaveLength(1);
+  });
+
   it('skips an API-key fallback whose key was deleted', async () => {
     updateFactorySettings(t.db, {
       quotaPolicy: { inFlight: 'fallback' },
