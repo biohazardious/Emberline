@@ -1150,7 +1150,7 @@ export function SettingsPage({
                       {isEnabled && (providerId === 'gemini' || providerId === 'antigravity') && (
                         <label className="field" style={{ gap: 3, marginTop: 2 }}>
                           <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-                            Google Gemini API Key (recommended)
+                            {providerId === 'gemini' ? 'Google Gemini API Key (recommended)' : 'Google Gemini API Key (optional)'}
                           </span>
                           <input
                             type="password"
