@@ -9,7 +9,7 @@ import {
   type SchedulerState,
 } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { handoffCandidates, HANDOFF_STATES } from '../handoffCandidates';
 import { liveKeys, useScheduler } from '../hooks/liveData';
@@ -85,6 +85,8 @@ export function HandoffMenu({ run }: { run: Run }) {
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState('');
   const [confirming, setConfirming] = useState(false);
+  // The second click confirms ending the live session of this state only; a new state asks afresh.
+  useEffect(() => setConfirming(false), [run.state]);
   const client = useQueryClient();
   const { data: settings } = useApi<FactorySettings>('/api/factory/settings', 15_000);
   const { scheduler } = useScheduler();
