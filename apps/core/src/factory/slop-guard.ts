@@ -675,15 +675,23 @@ export function selectRivalCriticAgent(
   }
 
   const candidates: AgentId[] = ['antigravity', 'claude', 'gemini', 'codex', 'copilot'];
+  // A sign-in with a warning (a consumer Google login for Gemini) most likely fails; an API key works.
+  const keyConfigured: Partial<Record<AgentId, boolean>> = {
+    claude: settings.anthropicKeyConfigured,
+    codex: settings.openaiKeyConfigured,
+    gemini: settings.geminiKeyConfigured,
+  };
+  const doubtful = (candidate: AgentId) =>
+    Boolean(settings.providerAuth?.[candidate]?.warning) && !keyConfigured[candidate];
   // Prefer a logged-in rival that can actually review non-interactively.
   for (const candidate of candidates) {
-    if (candidate === authorAgent || !supportsRivalReview(candidate)) continue;
+    if (candidate === authorAgent || !supportsRivalReview(candidate) || doubtful(candidate)) continue;
     if (settings.providerAuth?.[candidate]?.authenticated) {
       return { reviewerAgent: candidate, reviewerModel: selectProviderModelByRank(candidate, 4) };
     }
   }
   for (const candidate of candidates) {
-    if (candidate === authorAgent) continue;
+    if (candidate === authorAgent || doubtful(candidate)) continue;
     const isEnabled = settings.enabledProviders.includes(candidate);
     const isAuth = Boolean(settings.providerAuth?.[candidate]?.authenticated);
     if (isEnabled || isAuth) {

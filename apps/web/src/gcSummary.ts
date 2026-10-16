@@ -8,7 +8,10 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
   const parts = (
     [
       [count('uncommitted_changes'), 'uncommitted changes'],
-      [count('unmerged_commits'), 'commits not merged into the main branch'],
+      [
+        count('unmerged_commits'),
+        'commits not in the branch Emberline merges into (the one checked out in the project)',
+      ],
       [count('in_review'), 'a ticket still in review'],
     ] as const
   )

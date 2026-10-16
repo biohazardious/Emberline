@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FactorySettings, Run } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runCrossProviderCritic } from './factory/slop-guard.js';
+import { runCrossProviderCritic, selectRivalCriticAgent } from './factory/slop-guard.js';
 
 let dir: string;
 let repo: string;
@@ -113,6 +113,29 @@ describe('cross-provider critic', () => {
     const res = await runCrossProviderCritic({ run: run('antigravity'), workspacePath: repo, settings });
     expect(res).toMatchObject({ reviewerAgent: 'claude', reviewSource: 'rival', verdict: 'PASS' });
     expect(readFileSync(path.join(dir, 'claude.args'), 'utf8')).toMatch(/--permission-mode\nplan/);
+  });
+});
+
+describe('rival critic choice', () => {
+  it('skips a provider whose sign-in carries a warning (a consumer Google login) unless it has an API key', () => {
+    const warned = {
+      enabledProviders: ['claude'],
+      providerAuth: {
+        ...settings.providerAuth,
+        antigravity: auth(false),
+        gemini: {
+          ...auth(true),
+          warning: 'Google login works only with Gemini Code Assist Standard/Enterprise',
+        },
+      },
+    } as unknown as FactorySettings;
+    expect(selectRivalCriticAgent('claude', warned).reviewerAgent).toBe('claude');
+    expect(
+      selectRivalCriticAgent('claude', { ...warned, enabledProviders: ['claude', 'gemini'] }).reviewerAgent,
+    ).toBe('claude');
+    expect(selectRivalCriticAgent('claude', { ...warned, geminiKeyConfigured: true }).reviewerAgent).toBe(
+      'gemini',
+    );
   });
 });
 

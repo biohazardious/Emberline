@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CronService } from './cron/service.js';
 import { computeNextCronDate, previewCronRuns } from './cron/schedule.js';
-import { quotaWindows, scheduledJobs } from './db/schema.js';
+import { quotaWindows, runs as runsTable, scheduledJobs } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const next = (expr: string, from: string, zone = 'UTC') => computeNextCronDate(expr, new Date(from), zone).toISOString();
@@ -173,15 +173,57 @@ describe('cron jobs', () => {
     expect((await api('PATCH', `/api/cron/${job.id}`, { permissionMode: 'bypassPermissions' })).statusCode).toBe(200);
   });
 
-  it('runs a stored legacy job with a prompting mode as auto and says so in the run (R5)', async () => {
+  it('pauses a stored job with a prompting mode instead of running it, and says why (R5)', async () => {
     const { api, projectId } = await start();
     const cron = new CronService(t.db, t.runs, t.scheduler, 'UTC');
-    const job: ScheduledJob = (await api('POST', '/api/cron', { projectId, name: 'old', cronExpr: '*/5 * * * *', prompt: 'old' })).json();
-    t.db.update(scheduledJobs).set({ permissionMode: 'default' }).where(eq(scheduledJobs.id, job.id)).run();
-    const { run } = await cron.triggerNow(job.id);
-    expect(t.runs.get(run.id).permissionMode).toBe('auto');
-    const note = t.runs.get(run.id).events.find((e) => e.type === 'permission_mode_overridden');
-    expect(note).toBeDefined();
-    expect(t.runs.get(run.id).events.find((e) => e.type === 'queued')?.payload).toMatchObject({ unattended: 'cron' });
+    const body = { projectId, cronExpr: '*/5 * * * *', prompt: 'old' };
+    const legacy: ScheduledJob[] = [];
+    for (const permissionMode of ['default', 'acceptEdits', 'plan']) {
+      const job: ScheduledJob = (await api('POST', '/api/cron', { ...body, name: permissionMode })).json();
+      t.db
+        .update(scheduledJobs)
+        .set({ permissionMode, nextRunAt: new Date(Date.now() - 60_000) })
+        .where(eq(scheduledJobs.id, job.id))
+        .run();
+      legacy.push(job);
+    }
+    const fine: ScheduledJob = (await api('POST', '/api/cron', { ...body, name: 'fine' })).json();
+    expect(fine.pausedReason).toBeNull();
+
+    // Due on the next fire: none of the legacy jobs starts a run, each is paused with a reason.
+    const spawned = await cron.tick(new Date());
+    expect(spawned).toHaveLength(0);
+    expect(t.db.select().from(runsTable).all()).toHaveLength(0);
+    const listed: ScheduledJob[] = (await api('GET', `/api/cron?projectId=${projectId}`)).json();
+    for (const { id } of legacy) {
+      const job = listed.find((j) => j.id === id)!;
+      expect(job.enabled, job.name).toBe(false);
+      expect(job.permissionMode).toBe(job.name);
+      expect(job.pausedReason).toMatch(/Autonomous or Bypass/);
+    }
+    expect(listed.find((j) => j.id === fine.id)).toMatchObject({ enabled: true, pausedReason: null });
+
+    // Run now is refused too, and re-enabling needs Auto or Bypass.
+    const plan = legacy[2]!;
+    expect((await api('POST', `/api/cron/${plan.id}/trigger`)).statusCode).toBe(400);
+    expect(t.db.select().from(runsTable).all()).toHaveLength(0);
+    expect((await api('PATCH', `/api/cron/${plan.id}`, { enabled: true })).statusCode).toBe(400);
+    const fixed = await api('PATCH', `/api/cron/${plan.id}`, { enabled: true, permissionMode: 'auto' });
+    expect(fixed.statusCode).toBe(200);
+    expect(fixed.json()).toMatchObject({ enabled: true, permissionMode: 'auto', pausedReason: null });
+  });
+
+  it('pauses stored jobs with a prompting mode when the scheduler starts (R5)', async () => {
+    const { api, projectId } = await start();
+    const job: ScheduledJob = (
+      await api('POST', '/api/cron', { projectId, name: 'old', cronExpr: '0 3 * * *', prompt: 'p' })
+    ).json();
+    t.db.update(scheduledJobs).set({ permissionMode: 'plan' }).where(eq(scheduledJobs.id, job.id)).run();
+    const cron = new CronService(t.db, t.runs, t.scheduler, 'UTC');
+    cron.start(60_000);
+    cron.stop();
+    const [after] = cron.list(projectId);
+    expect(after).toMatchObject({ enabled: false, permissionMode: 'plan' });
+    expect(after!.pausedReason).toMatch(/Autonomous or Bypass/);
   });
 });

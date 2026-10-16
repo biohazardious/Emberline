@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { eq } from 'drizzle-orm';
 import { projects, runEvents, runs } from './db/schema.js';
+import { worktreeHeadSha } from './runs/git.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -481,6 +482,78 @@ describe('runs', () => {
       const res2 = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(res2.keptWorktrees).toContainEqual({ runId: clean.id, reason: 'unmerged_commits' });
       expect(existsSync(clean.worktreePath)).toBe(true);
+    });
+
+    it('reports a worktree shared by a handoff predecessor and successor once, as the newest run', async () => {
+      const project = await createProject('GC handoff kept', true);
+      const predecessor = await finishRun(project.id);
+      const successor = await finishRun(project.id);
+      t.db.update(runs).set({ worktreePath: predecessor.worktreePath }).where(eq(runs.id, successor.id)).run();
+      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, predecessor.id)).run();
+      t.db.update(runs).set({ createdAt: new Date(2_000) }).where(eq(runs.id, successor.id)).run();
+      commitIn(predecessor.worktreePath);
+      const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(res.keptWorktrees).toEqual([{ runId: successor.id, reason: 'unmerged_commits' }]);
+    });
+
+    it('auto-GC re-checks a kept worktree at most every 10 minutes while its HEAD is unchanged', async () => {
+      const project = await createProject('Auto GC cache', true);
+      const stale = await finishRun(project.id);
+      commitIn(stale.worktreePath);
+      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, stale.id)).run();
+      for (let i = 0; i < 10; i += 1) {
+        t.db
+          .insert(runs)
+          .values({
+            id: `synthetic-${i}`,
+            projectId: project.id,
+            agent: 'claude',
+            state: 'done',
+            worktreePath: project.path,
+            hookTokenHash: 'x',
+            stateChangedAt: new Date(10_000 + i),
+            createdAt: new Date(10_000 + i),
+            endedAt: new Date(10_000 + i),
+          })
+          .run();
+      }
+      const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(live.id);
+      const autoGc = async () => {
+        (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+        await t.runs.reconcile();
+        return t.runs.list().map((r) => r.id);
+      };
+      // HEAD is read from git's files, without spawning git.
+      expect(await worktreeHeadSha(stale.worktreePath)).toBe(
+        execFileSync('git', ['-C', stale.worktreePath, 'rev-parse', 'HEAD']).toString().trim(),
+      );
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        expect(await autoGc()).toContain(stale.id);
+        // Merged meanwhile: the cached verdict stands until the re-check is due.
+        execFileSync('git', [
+          '-C',
+          project.path,
+          '-c',
+          'user.email=t@example.com',
+          '-c',
+          'user.name=t',
+          'merge',
+          '-q',
+          '--no-ff',
+          '-m',
+          'merge',
+          stale.branch ?? '',
+        ]);
+        vi.setSystemTime(Date.now() + 5 * 60_000);
+        expect(await autoGc()).toContain(stale.id);
+        vi.setSystemTime(Date.now() + 6 * 60_000);
+        expect(await autoGc()).not.toContain(stale.id);
+        expect(existsSync(stale.worktreePath)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('auto-GC keeps a stale worktree with unmerged commits', async () => {

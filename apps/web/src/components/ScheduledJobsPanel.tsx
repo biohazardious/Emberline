@@ -26,6 +26,15 @@ const PRESETS = [
   },
 ];
 
+/** Names as the form offers them; the others only appear on jobs saved by older versions. */
+const MODE_LABELS: Record<ScheduledJob['permissionMode'], string> = {
+  auto: 'Autonomous',
+  bypassPermissions: 'Bypass permissions',
+  default: 'Ask',
+  acceptEdits: 'Accept edits',
+  plan: 'Plan only',
+};
+
 /** The viewer's zone; schedules default to it so "02:00" means their 02:00. */
 const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
@@ -122,12 +131,14 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
     }
   };
 
-  const handleToggleEnabled = async (job: ScheduledJob) => {
+  /** `mode` re-enables a job paused for its permission mode with one that scheduled runs may use. */
+  const handleToggleEnabled = async (job: ScheduledJob, mode?: CronPermissionMode) => {
     setBusyId(job.id);
     setError(null);
     try {
       const updated = await api<ScheduledJob>(`/api/cron/${job.id}`, 'PATCH', {
         enabled: !job.enabled,
+        ...(mode ? { permissionMode: mode } : {}),
       });
       setJobs((prev) => prev.map((j) => (j.id === job.id ? updated : j)));
     } catch (err) {
@@ -298,7 +309,11 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
       )}
 
       {notice && <p className="muted small mono" style={{ padding: '0 0.25rem' }}>{notice}</p>}
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
 
       {visibleJobs.length === 0 ? (
         <div className="empty">
@@ -319,6 +334,9 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
                 <span className="badge badge-soft mono" title="Time zone the schedule runs in">
                   {job.timeZone}
                 </span>
+                <span className="badge badge-soft" title="Permission mode of this job's runs">
+                  {MODE_LABELS[job.permissionMode]}
+                </span>
                 {job.overlapPolicy === 'queue' && (
                   <span className="badge badge-soft" title="Due runs are queued even while the previous one runs">
                     queues overlaps
@@ -330,25 +348,43 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
                     last run ↗
                   </Link>
                 )}
+                {job.pausedReason && <span className="row-meta">Paused: {job.pausedReason}.</span>}
               </div>
               <div className="row-actions">
                 <button
                   type="button"
                   className="btn btn-sm"
-                  disabled={busyId === job.id}
+                  disabled={busyId === job.id || Boolean(job.pausedReason)}
                   onClick={() => void handleTriggerNow(job)}
                   title="Spawn a run for this scheduled job immediately"
                 >
                   Run Now
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  disabled={busyId === job.id}
-                  onClick={() => void handleToggleEnabled(job)}
-                >
-                  {job.enabled ? 'Pause' : 'Enable'}
-                </button>
+                {job.pausedReason ? (
+                  <select
+                    className="input"
+                    aria-label={`Re-enable ${job.name} with a permission mode`}
+                    value=""
+                    disabled={busyId === job.id}
+                    onChange={(e) => void handleToggleEnabled(job, e.target.value as CronPermissionMode)}
+                    style={{ maxWidth: '190px' }}
+                  >
+                    <option value="" disabled>
+                      Enable as…
+                    </option>
+                    <option value="auto">Autonomous</option>
+                    <option value="bypassPermissions">Bypass permissions</option>
+                  </select>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    disabled={busyId === job.id}
+                    onClick={() => void handleToggleEnabled(job)}
+                  >
+                    {job.enabled ? 'Pause' : 'Enable'}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="icon-btn"

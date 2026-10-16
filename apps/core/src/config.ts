@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import path from 'node:path';
 
 export interface CoreConfig {
@@ -60,12 +61,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
-    allowedHosts: (env.EMBERLINE_ALLOWED_HOSTS ?? '')
-      .split(',')
-      .map(normalizeHostName)
-      .filter(Boolean),
+    allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
   };
+}
+
+const HOST_LABEL = '[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?';
+const HOST_NAME = new RegExp(`^${HOST_LABEL}(?:\\.${HOST_LABEL})*$`);
+
+/**
+ * `EMBERLINE_ALLOWED_HOSTS` (comma list) as host names. An entry pasted as a URL
+ * (`https://name:8443/path`) is reduced to its host name; one that still is not a host name, an IP
+ * address or `*` lands in `ignored`, which core logs as a warning at startup.
+ */
+export function parseAllowedHosts(raw: string): { hosts: string[]; ignored: string[] } {
+  const hosts: string[] = [];
+  const ignored: string[] = [];
+  for (const entry of raw.split(',')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const authority = trimmed
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+      .replace(/[/?#].*$/, '')
+      .replace(/^.*@/, '');
+    const name = normalizeHostName(authority);
+    if (name === '*' || isIP(name) || HOST_NAME.test(name)) hosts.push(name);
+    else ignored.push(trimmed);
+  }
+  return { hosts, ignored };
 }
 
 /** Lower-case host name of a Host header value or list entry: no port, no IPv6 brackets, no trailing dot. */

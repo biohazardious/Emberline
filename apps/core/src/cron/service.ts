@@ -11,7 +11,7 @@ import {
   type UpdateScheduledJobBody,
   UpdateScheduledJobBody as UpdateScheduledJobBodySchema,
 } from '@emberline/protocol';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, notInArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projects, runs as runsTable, scheduledJobs } from '../db/schema.js';
 import { badRequest, notFound } from '../errors.js';
@@ -22,6 +22,12 @@ import type { Scheduler } from '../scheduler/service.js';
 type ScheduledJobRow = typeof scheduledJobs.$inferSelect;
 
 export { computeNextCronDate, parseCronExpression } from './schedule.js';
+
+/** Nobody watches a scheduled run, so it may only use a mode that never stops on a permission prompt (R5). */
+const isUnattendedMode = (mode: string) => mode === 'auto' || mode === 'bypassPermissions';
+
+export const UNATTENDED_MODE_REQUIRED =
+  'Scheduled runs need Autonomous or Bypass permissions; re-enable the job with one of them';
 
 function toScheduledJob(row: ScheduledJobRow, defaultTimeZone: string): ScheduledJob {
   return {
@@ -38,6 +44,7 @@ function toScheduledJob(row: ScheduledJobRow, defaultTimeZone: string): Schedule
     lastRunAt: row.lastRunAt?.toISOString() ?? null,
     nextRunAt: row.nextRunAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
+    pausedReason: !row.enabled && !isUnattendedMode(row.permissionMode) ? UNATTENDED_MODE_REQUIRED : null,
   };
 }
 
@@ -90,8 +97,27 @@ export class CronService {
     }
   }
 
+  /**
+   * Pauses enabled jobs stored with a prompting mode (older versions allowed any). They are not
+   * raised to `auto`: a "Plan only" job must not start editing files after an upgrade. The job
+   * list shows why each one is paused.
+   */
+  pauseJobsNeedingAttendance(): void {
+    this.db
+      .update(scheduledJobs)
+      .set({ enabled: false })
+      .where(
+        and(
+          eq(scheduledJobs.enabled, true),
+          notInArray(scheduledJobs.permissionMode, ['auto', 'bypassPermissions']),
+        ),
+      )
+      .run();
+  }
+
   start(intervalMs = 30_000): void {
     if (this.timer) return;
+    this.pauseJobsNeedingAttendance();
     this.replan();
     this.timer = setInterval(() => {
       void this.tick();
@@ -161,6 +187,12 @@ export class CronService {
     const body: UpdateScheduledJobBody = parsed.data;
     const nextCron = body.cronExpr ?? existing.cronExpr;
     const nextEnabled = body.enabled ?? existing.enabled;
+    const nextMode = body.permissionMode ?? existing.permissionMode;
+    if (nextEnabled && !isUnattendedMode(nextMode)) {
+      throw badRequest(
+        'Scheduled runs need Autonomous or Bypass permissions; choose one to re-enable this job',
+      );
+    }
     if (body.timeZone) assertTimeZone(body.timeZone);
     const timeZone = body.timeZone ?? existing.timeZone;
 
@@ -173,7 +205,7 @@ export class CronService {
       name: body.name ?? existing.name,
       cronExpr: nextCron,
       prompt: body.prompt ?? existing.prompt,
-      permissionMode: body.permissionMode ?? existing.permissionMode,
+      permissionMode: nextMode,
       enabled: nextEnabled,
       timeZone,
       overlapPolicy: body.overlapPolicy ?? existing.overlapPolicy,
@@ -194,6 +226,10 @@ export class CronService {
   async triggerNow(id: string, now: Date = new Date()): Promise<{ job: ScheduledJob; run: Run }> {
     const row = this.db.select().from(scheduledJobs).where(eq(scheduledJobs.id, id)).get();
     if (!row) throw notFound('no such scheduled job');
+    if (!isUnattendedMode(row.permissionMode)) {
+      this.pause(row.id);
+      throw badRequest(UNATTENDED_MODE_REQUIRED);
+    }
     const run = await this.dispatchJobRun(row, now);
     const updated = this.db.select().from(scheduledJobs).where(eq(scheduledJobs.id, id)).get()!;
     return { job: toScheduledJob(updated, this.defaultTimeZone), run };
@@ -218,6 +254,10 @@ export class CronService {
 
       for (const row of rows) {
         if (row.nextRunAt.getTime() > now.getTime()) continue;
+        if (!isUnattendedMode(row.permissionMode)) {
+          this.pause(row.id);
+          continue;
+        }
         if (row.overlapPolicy === 'skip' && this.previousRunStillGoing(row)) {
           // B13: a long run must not pile up new worktrees every interval.
           this.db
@@ -253,24 +293,18 @@ export class CronService {
     return Boolean(last && !last.endedAt && last.state !== 'done' && last.state !== 'failed');
   }
 
+  private pause(id: string): void {
+    this.db.update(scheduledJobs).set({ enabled: false }).where(eq(scheduledJobs.id, id)).run();
+  }
+
   private async dispatchJobRun(row: ScheduledJobRow, now: Date): Promise<Run> {
-    // Nobody watches a scheduled run: a job stored with a prompting mode (older versions allowed
-    // it) runs as `auto` instead of stalling on a permission prompt.
-    const overridden = row.permissionMode !== 'auto' && row.permissionMode !== 'bypassPermissions';
     const input = {
       projectId: row.projectId,
       prompt: row.prompt,
-      permissionMode: (overridden ? 'auto' : row.permissionMode) as PermissionMode,
+      permissionMode: row.permissionMode as PermissionMode,
     };
     const origin = { unattended: 'cron' } as const;
     const run = this.scheduler ? await this.scheduler.submit(input, origin) : await this.runs.enqueue(input, origin);
-    if (overridden) {
-      this.runs.note(run.id, 'permission_mode_overridden', {
-        from: row.permissionMode,
-        to: 'auto',
-        message: `Scheduled jobs run unattended, so "${row.permissionMode}" was replaced with "auto"`,
-      });
-    }
     const nextRunAt = this.next(row, now);
     this.db
       .update(scheduledJobs)

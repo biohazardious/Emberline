@@ -30,6 +30,11 @@ export const ScheduledJob = z.object({
   lastRunAt: z.string().nullable(),
   nextRunAt: z.string(),
   createdAt: z.string(),
+  /**
+   * Set when the job is paused because its stored permission mode is not allowed for scheduled runs
+   * (older versions allowed any mode). Re-enabling it needs `auto` or `bypassPermissions`.
+   */
+  pausedReason: z.string().nullable(),
 });
 export type ScheduledJob = z.infer<typeof ScheduledJob>;
 

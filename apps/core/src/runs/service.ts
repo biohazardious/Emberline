@@ -86,8 +86,10 @@ import {
   stageWorktreeFiles,
   worktreeHasUncommittedWork,
   worktreeHasUnmergedCommits,
+  worktreeHeadSha,
 } from './git.js';
 import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } from './handoff.js';
+import { HOLD_EVENTS } from './hold-events.js';
 import { providerAdapter } from './providers.js';
 import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
@@ -133,7 +135,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
 /**
  * Event kinds that logic reads back later, so pruning never removes them: the one `last_screen`
  * snapshot, the `queued` event (unattended origin, queued prompts), one-shot markers
- * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS in tickets/service.ts,
+ * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
  * `merged_to_main`, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
  */
 export const PRUNE_PROTECTED_EVENT_TYPES = [
@@ -141,18 +143,12 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'queued',
   'auto_nudged',
   'session_lost',
-  'merge_failed',
-  'secret_guard_blocked',
-  'slop_guard_blocked',
-  'critic_blocked',
-  'build_gate_error',
-  'build_gate_failed',
+  ...HOLD_EVENTS,
   'merged_to_main',
   'conflict_resolution_requested',
   'pr_created',
   'stall_detected',
   'waiting_input_timeout',
-  'permission_mode_overridden',
   // previewStatus reads the latest of these.
   'preview_started',
   'preview_stopped',
@@ -169,6 +165,8 @@ const IDLE_DONE_NON_RESUMABLE_TTL_MS = 30 * 60_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 
 type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
+/** Auto-GC re-runs git on a kept worktree whose HEAD has not moved at most this often. */
+const KEPT_WORKTREE_RECHECK_MS = 10 * 60_000;
 /** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
 const STARTING_WATCHDOG_MS = 3 * 60_000;
 /**
@@ -319,6 +317,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private reconciling = false;
   private lastAutoGcAt = 0;
   private lastEventPruneAt = 0;
+  /** Auto-GC's last verdict on a kept worktree, by run id: the HEAD it saw and when. */
+  private readonly keptWorktreeChecks = new Map<
+    string,
+    { head: string | null; reason: KeptWorktreeReason; checkedAt: number }
+  >();
   private readonly handoffLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
   /** Stall watchdog per working (or starting) run: the screen hash, since when it is unchanged, when it was last read. */
@@ -653,6 +656,36 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .get();
     const origin = (event?.payload as { unattended?: unknown } | null | undefined)?.unattended;
     return origin === 'cron' || origin === 'factory' ? origin : undefined;
+  }
+
+  /**
+   * Why a `waiting_input` run waits, if it is on a permission prompt or was found stalled (R6). Read
+   * from the event that moved it into its current state and the hooks after it, not from
+   * `lastEvent`: notes such as `auto_nudged` or `prompt_sent` overwrite that without changing state.
+   */
+  private waitingReason(id: string): 'Notification' | 'stall_detected' | undefined {
+    const entered = this.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, id), isNotNull(runEvents.state)))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get();
+    if (!entered) return undefined;
+    const reason = this.db
+      .select({ type: runEvents.type })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, id),
+          gte(runEvents.id, entered.id),
+          inArray(runEvents.type, ['Notification', 'stall_detected']),
+        ),
+      )
+      .orderBy(asc(runEvents.id))
+      .limit(1)
+      .get();
+    return reason?.type === 'Notification' || reason?.type === 'stall_detected' ? reason.type : undefined;
   }
 
   /** Whether the run already has an event of this type (e.g. a one-shot nudge that was sent). */
@@ -1720,10 +1753,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     for (const [projId, list] of byProject.entries()) {
       const toRemove = list.slice(body.keepRecent);
       const proj = projectMap.get(projId);
+      const branch = toRemove.length > 0 && proj ? await this.mergeTarget(proj) : undefined;
+      // A handoff predecessor and its successor share one worktree: report it once, as the newest run.
+      const reportedPaths = new Set<string>();
       for (const row of toRemove) {
-        const keep = await this.mustKeepForReview(row, proj);
+        const keep = await this.mustKeepForReview(row, proj, { branch });
         if (keep) {
-          keptWorktrees.push({ runId: row.id, reason: keep });
+          const shared = row.worktreePath && row.worktreePath !== proj?.path ? row.worktreePath : null;
+          if (!shared || !reportedPaths.has(shared)) keptWorktrees.push({ runId: row.id, reason: keep });
+          if (shared) reportedPaths.add(shared);
           continue;
         }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
@@ -1895,12 +1933,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             if (await this.stalled(row, nowMs)) this.markStalled(row.id);
             continue;
           }
-          if (
-            row.state === 'waiting_input' &&
-            (row.lastEvent === 'Notification' || row.lastEvent === 'stall_detected') &&
-            nowMs - row.stateChangedAt.getTime() > WAITING_INPUT_TIMEOUT_MS &&
-            this.unattendedOrigin(row.id)
-          ) {
+          const waitingOn =
+            row.state === 'waiting_input' && nowMs - row.stateChangedAt.getTime() > WAITING_INPUT_TIMEOUT_MS
+              ? this.waitingReason(row.id)
+              : undefined;
+          if (waitingOn && this.unattendedOrigin(row.id)) {
             // Nobody will answer this prompt: free the slot instead of holding it forever.
             await this.saveLastScreen(row.id, row.ptydSessionId);
             await this.ptyd
@@ -1914,7 +1951,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
               state: 'failed',
               payload: {
                 message:
-                  row.lastEvent === 'stall_detected'
+                  waitingOn === 'stall_detected'
                     ? `An unattended run stalled and nobody looked at it for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes; it was stopped`
                     : `An unattended run waited on a permission prompt for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes and was stopped`,
               },
@@ -2035,16 +2072,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           arr.push(r);
           byProj.set(r.projectId, arr);
         }
+        const seen = new Set<string>();
         for (const [projId, arr] of byProj.entries()) {
           if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
           const proj = projectMap.get(projId);
+          const branch = proj ? await this.mergeTarget(proj) : undefined;
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
-            if (await this.mustKeepForReview(stale, proj)) continue;
+            seen.add(stale.id);
+            if (await this.mustKeepForReview(stale, proj, { branch, cached: true })) continue;
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);
           }
+        }
+        for (const id of this.keptWorktreeChecks.keys()) {
+          if (!seen.has(id)) this.keptWorktreeChecks.delete(id);
         }
       }
     } catch {
@@ -2062,6 +2105,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private async mustKeepForReview(
     row: RunRow,
     project: { path: string; defaultBranch: string } | undefined,
+    /**
+     * `branch`: the merge target, resolved once per pass. `cached`: reuse the last verdict on a kept
+     * worktree whose HEAD has not moved for up to KEPT_WORKTREE_RECHECK_MS (auto-GC runs every minute).
+     */
+    opts: { branch?: string; cached?: boolean } = {},
   ): Promise<KeptWorktreeReason | null> {
     if (row.ticketId) {
       const ticket = this.db.select({ status: tickets.status }).from(tickets).where(eq(tickets.id, row.ticketId)).get();
@@ -2070,9 +2118,25 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (row.worktreePath && row.worktreePath !== project?.path) {
       // Without a project the target branch is unknown, so nothing can be proven merged.
       if (!project) return 'unmerged_commits';
-      return (await this.worktreeWorkReason(row.worktreePath, project))?.reason ?? null;
+      if (!opts.cached) {
+        return (await this.worktreeWorkReason(row.worktreePath, project, opts.branch))?.reason ?? null;
+      }
+      const head = await worktreeHeadSha(row.worktreePath);
+      const last = this.keptWorktreeChecks.get(row.id);
+      if (last && last.head === head && Date.now() - last.checkedAt < KEPT_WORKTREE_RECHECK_MS) {
+        return last.reason;
+      }
+      const reason = (await this.worktreeWorkReason(row.worktreePath, project, opts.branch))?.reason ?? null;
+      if (reason) this.keptWorktreeChecks.set(row.id, { head, reason, checkedAt: Date.now() });
+      else this.keptWorktreeChecks.delete(row.id);
+      return reason;
     }
     return null;
+  }
+
+  /** The branch runs merge into: the main workspace's current branch, else the project's `defaultBranch`. */
+  private async mergeTarget(project: { path: string; defaultBranch: string }): Promise<string> {
+    return (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
   }
 
   /**
@@ -2082,8 +2146,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private async worktreeWorkReason(
     worktreePath: string,
     project: { path: string; defaultBranch: string },
+    knownBranch?: string,
   ): Promise<{ reason: Exclude<KeptWorktreeReason, 'in_review'>; branch: string } | null> {
-    const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
+    const branch = knownBranch ?? (await this.mergeTarget(project));
     if (await worktreeHasUncommittedWork(worktreePath)) return { reason: 'uncommitted_changes', branch };
     if (await worktreeHasUnmergedCommits(worktreePath, branch)) return { reason: 'unmerged_commits', branch };
     return null;

@@ -3,7 +3,7 @@
  */
 import path from 'node:path';
 import { ptydCommandExecutor, setCommandExecutor } from './command-exec.js';
-import { loadConfig } from './config.js';
+import { loadConfig, parseAllowedHosts } from './config.js';
 import { openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
@@ -24,6 +24,13 @@ const app = await buildServer(
   { config, db, ptyd, runs, tickets, scheduler },
   { logger: { level: config.logLevel } },
 );
+const { ignored: ignoredHosts } = parseAllowedHosts(process.env.EMBERLINE_ALLOWED_HOSTS ?? '');
+if (ignoredHosts.length > 0) {
+  app.log.warn(
+    { ignored: ignoredHosts },
+    'EMBERLINE_ALLOWED_HOSTS: ignoring entries that are not host names',
+  );
+}
 // A background task that forgot a .catch must not take down every running agent's control plane.
 process.on('unhandledRejection', (reason) => {
   app.log.error({ err: reason }, 'unhandled promise rejection');

@@ -42,6 +42,7 @@ import {
 import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
+import { HOLD_EVENTS } from '../runs/hold-events.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -63,12 +64,6 @@ type Blocker = Ticket['blockedBy'][number];
 
 /** Settings key of the projects whose factory chain is on (JSON array of project ids). */
 const ACTIVE_CHAINS_KEY = 'factory.activeChains';
-
-/**
- * Run notes by which the completion pipeline left a ticket in Review for a person: a later
- * dispatch must not merge it behind the gate's back.
- */
-const HOLD_EVENTS = ['merge_failed', 'secret_guard_blocked', 'slop_guard_blocked', 'critic_blocked', 'build_gate_error', 'build_gate_failed'];
 
 /**
  * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass

@@ -239,7 +239,6 @@ const EVENT_LABEL: Record<string, string> = {
   stall_detected: 'stalled',
   waiting_input_timeout: 'stopped: nobody answered',
   auto_nudged: 'nudged to continue',
-  permission_mode_overridden: 'permission mode changed',
 };
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */

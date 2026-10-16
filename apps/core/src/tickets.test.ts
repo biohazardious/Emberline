@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { settings } from './db/schema.js';
+import { runs, settings } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { keyPrefix, statusForRunState, TicketService, ticketPrompt } from './tickets/service.js';
 
@@ -392,6 +392,49 @@ describe('tickets', () => {
     expect(t.runs.get(runId).events.filter((e) => e.type === 'auto_nudged')).toHaveLength(1);
     expect(prompts()).toBe(1);
     void restarted;
+  });
+
+  it('stops a factory run whose auto-nudge did not clear the permission prompt after 30 minutes (R6)', async () => {
+    // This stand-in stays alive and swallows typed input, like a select dialog that ignores text.
+    const stubborn = path.join(t.dir, 'stubborn-claude.sh');
+    writeFileSync(
+      stubborn,
+      [
+        '#!/bin/sh',
+        `printf %s "$EMBERLINE_HOOK_TOKEN" > "${t.dir}/.token-$EMBERLINE_RUN_ID"`,
+        `mv "${t.dir}/.token-$EMBERLINE_RUN_ID" "${t.dir}/token-$EMBERLINE_RUN_ID"`,
+        'while read line; do :; done',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    t.config.claudeCommand = stubborn;
+    const project = await createProject();
+    await createTicket(project.id, { title: 'Stuck', status: 'ready' });
+    const [started] = await t.tickets.dispatchNextReadyTicket(project.id);
+    const runId = started!.run.id;
+    const token = await waitFile(`token-${runId}`);
+    await hook(runId, 'SessionStart', token, { session_id: 's-stuck' });
+    await hook(runId, 'UserPromptSubmit', token, { prompt: 'go' });
+    await hook(runId, 'Notification', token, { notification_type: 'permission_prompt', message: 'ok?' });
+    await expect
+      .poll(() => t.runs.get(runId).events.filter((e) => e.type === 'prompt_sent').length, { timeout: 5_000 })
+      .toBe(1);
+    expect(t.runs.get(runId).events.filter((e) => e.type === 'auto_nudged')).toHaveLength(1);
+    // The nudge was typed, but no hook followed: the run still waits, and its last event is a note.
+    expect(t.runs.getRun(runId).state).toBe('waiting_input');
+    expect(t.runs.getRun(runId).lastEvent).not.toBe('Notification');
+
+    const age = (ms: number) =>
+      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - ms) }).where(eq(runs.id, runId)).run();
+    age(10 * 60_000);
+    await t.runs.reconcile();
+    expect(t.runs.getRun(runId).state).toBe('waiting_input');
+    age(31 * 60_000);
+    await t.runs.reconcile();
+    const after = t.runs.get(runId);
+    expect(after).toMatchObject({ state: 'failed', lastEvent: 'waiting_input_timeout' });
+    expect(after.endedAt).not.toBeNull();
   });
 
   describe('pipeline settle (R8)', () => {

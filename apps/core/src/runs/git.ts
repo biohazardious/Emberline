@@ -648,6 +648,33 @@ export async function worktreeHasUnmergedCommits(worktreePath: string, defaultBr
   }
 }
 
+/**
+ * The commit a linked worktree has checked out, read from git's files without spawning git (cheap
+ * enough for a check every minute). Null when it cannot be read.
+ */
+export async function worktreeHeadSha(worktreePath: string): Promise<string | null> {
+  try {
+    const dotGit = await readFile(path.join(worktreePath, '.git'), 'utf8');
+    const gitDir = /^gitdir: (.+)$/m.exec(dotGit)?.[1]?.trim();
+    if (!gitDir) return null;
+    const dir = path.resolve(worktreePath, gitDir);
+    const head = (await readFile(path.join(dir, 'HEAD'), 'utf8')).trim();
+    if (!head.startsWith('ref: ')) return head || null;
+    const ref = head.slice('ref: '.length);
+    const common = path.resolve(
+      dir,
+      (await readFile(path.join(dir, 'commondir'), 'utf8').catch(() => '.')).trim(),
+    );
+    const loose = await readFile(path.join(common, ref), 'utf8').catch(() => null);
+    if (loose !== null) return loose.trim() || null;
+    const packed = await readFile(path.join(common, 'packed-refs'), 'utf8').catch(() => '');
+    const line = packed.split('\n').find((l) => l.endsWith(` ${ref}`));
+    return line?.split(' ')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function pruneWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
   const resolvedProject = path.resolve(projectPath);
   const resolvedWorktree = path.resolve(worktreePath);

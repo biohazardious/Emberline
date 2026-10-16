@@ -4,7 +4,7 @@ import path from 'node:path';
 import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { loadConfig } from './config.js';
+import { loadConfig, parseAllowedHosts } from './config.js';
 import { CSRF, createTestApp, setupAndLogin, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
@@ -96,6 +96,17 @@ describe('host allow-list (DNS rebinding)', () => {
   it('parses EMBERLINE_ALLOWED_HOSTS from the environment', () => {
     expect(loadConfig({ EMBERLINE_ALLOWED_HOSTS: ' a.lan, B.lan. ,,*' }).allowedHosts).toEqual(['a.lan', 'b.lan', '*']);
     expect(loadConfig({}).allowedHosts).toEqual([]);
+  });
+
+  it('reduces EMBERLINE_ALLOWED_HOSTS entries pasted as URLs to the host name and ignores the rest', () => {
+    const parsed = parseAllowedHosts(
+      'https://Emberline.Example.com:8443/app?x=1, http://user@nas.lan/, core_1:7420, [::1]:7420, nas2.lan/, has space, bad!name, https://, -dash.lan, a..b',
+    );
+    expect(parsed.hosts).toEqual(['emberline.example.com', 'nas.lan', 'core_1', '::1', 'nas2.lan']);
+    expect(parsed.ignored).toEqual(['has space', 'bad!name', 'https://', '-dash.lan', 'a..b']);
+    expect(loadConfig({ EMBERLINE_ALLOWED_HOSTS: 'https://emberline.example.com/' }).allowedHosts).toEqual([
+      'emberline.example.com',
+    ]);
   });
 
   it('refuses WebSocket upgrades without an Origin header, even with a valid cookie', async () => {
