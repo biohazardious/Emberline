@@ -28,11 +28,20 @@ const app = await buildServer(
 process.on('unhandledRejection', (reason) => {
   app.log.error({ err: reason }, 'unhandled promise rejection');
 });
+// Factory chains that were on when core stopped carry on once the runner is back (first connect).
+let chainsResumed = false;
 ptyd.on('status', (status) => {
   app.log.info({ socket: config.ptydSocket }, `ptyd ${status}`);
   if (status === 'connected') {
-    void runs.reconcile();
+    const reconciled = runs.reconcile();
     void scheduler.tick();
+    if (!chainsResumed) {
+      chainsResumed = true;
+      void reconciled
+        .catch(() => undefined)
+        .then(() => tickets.resumeChains())
+        .catch((err: unknown) => app.log.error({ err }, 'resuming factory chains failed'));
+    }
   }
 });
 ptyd.start();

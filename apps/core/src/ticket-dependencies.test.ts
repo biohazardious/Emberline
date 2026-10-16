@@ -307,6 +307,13 @@ function trackPipelines(): Promise<void>[] {
 
 const statusOf = async (id: string) => (await getTicket(id)).status;
 
+/** Waits until every dispatch pass queued for the project so far is through. */
+const dispatchesDone = (projectId: string) =>
+  (t.tickets as unknown as { dispatchLock: { run(key: string, fn: () => Promise<void>): Promise<void> } }).dispatchLock.run(
+    projectId,
+    async () => undefined,
+  );
+
 /** The started agents write into the test directory; let them get there before teardown. */
 const settle = (projectId: string) =>
   Promise.all(
@@ -491,13 +498,6 @@ describe('dependency-aware dispatch', () => {
     await settle(project.id);
   });
 
-  /** Waits until every dispatch pass queued for the project so far is through. */
-  const dispatchesDone = (projectId: string) =>
-    (t.tickets as unknown as { dispatchLock: { run(key: string, fn: () => Promise<void>): Promise<void> } }).dispatchLock.run(
-      projectId,
-      async () => undefined,
-    );
-
   it('a manual move of a dependency to done starts only the tickets waiting for it', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });
@@ -630,38 +630,44 @@ describe('dependency-aware dispatch', () => {
   });
 });
 
+/** Like the usual stand-in, but it stays alive and logs every line typed into it (the start prompt is an argument). */
+function writeLivingClaude(dir: string): string {
+  const file = path.join(dir, 'living-claude.sh');
+  writeFileSync(
+    file,
+    [
+      '#!/bin/sh',
+      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
+      `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
+      'echo "fake claude ready"',
+      `: > "${dir}/ready-$EMBERLINE_RUN_ID"`,
+      `while read line; do printf '%s\\n' "$line" >> "${dir}/followups-$EMBERLINE_RUN_ID"; done`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return file;
+}
+
+const wgit = (cwd: string, ...args: string[]) =>
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], { encoding: 'utf8' });
+
+const followups = (run: Run) => {
+  const file = path.join(t.dir, `followups-${run.id}`);
+  return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+};
+const eventTypes = async (run: Run) =>
+  ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
+
+const stopAgain = async (run: Run) => {
+  const token = await waitFile(`token-${run.id}`);
+  await hook(run.id, 'UserPromptSubmit', token);
+  await hook(run.id, 'Stop', token);
+};
+
 describe('one automatic merge-conflict resolution', () => {
   const FOLLOW_UP = (files: string, branch = 'main') =>
     `${branch} has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${files}). Merge ${branch} into your branch (git merge ${branch}), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
-
-  /** Like the usual stand-in, but it stays alive and logs every line typed into it (the start prompt is an argument). */
-  function writeLivingClaude(dir: string): string {
-    const file = path.join(dir, 'living-claude.sh');
-    writeFileSync(
-      file,
-      [
-        '#!/bin/sh',
-        `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
-        `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
-        'echo "fake claude ready"',
-        `: > "${dir}/ready-$EMBERLINE_RUN_ID"`,
-        `while read line; do printf '%s\\n' "$line" >> "${dir}/followups-$EMBERLINE_RUN_ID"; done`,
-        '',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
-    return file;
-  }
-
-  const wgit = (cwd: string, ...args: string[]) =>
-    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], { encoding: 'utf8' });
-
-  const followups = (run: Run) => {
-    const file = path.join(t.dir, `followups-${run.id}`);
-    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
-  };
-  const eventTypes = async (run: Run) =>
-    ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
 
   /** Two tickets editing the same line; A has been merged into main, B conflicts with it. */
   async function conflictingPair(branch = 'main') {
@@ -694,11 +700,6 @@ describe('one automatic merge-conflict resolution', () => {
     return { project, a, b, runA, runB };
   }
 
-  const stopAgain = async (run: Run) => {
-    const token = await waitFile(`token-${run.id}`);
-    await hook(run.id, 'UserPromptSubmit', token);
-    await hook(run.id, 'Stop', token);
-  };
 
   it('asks the agent once to resolve the conflict, then merges the resolution', async () => {
     const { b, runB } = await conflictingPair();
@@ -752,6 +753,26 @@ describe('one automatic merge-conflict resolution', () => {
     await settle(project.id);
   });
 
+  it('a later dispatch leaves a ticket whose merge failed in Review and does not retry the merge', async () => {
+    const { project, b, runB } = await conflictingPair();
+    const passes = trackPipelines();
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    await stopAgain(runB);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await Promise.all(passes);
+    // The pipeline stopped the agent: nothing is resolving the conflict any more.
+    await expect.poll(() => t.runs.get(runB.id).endedAt, { timeout: 10_000 }).not.toBeNull();
+    const failedMerges = async () => (await eventTypes(runB)).filter((x) => x === 'merge_failed').length;
+    const before = await failedMerges();
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(await failedMerges()).toBe(before);
+    expect(await statusOf(b.id)).toBe('review');
+    await settle(project.id);
+  });
+
   it('falls back to Review at once when the agent can no longer receive a prompt', async () => {
     const { project, b, runB } = await conflictingPair();
     const svc = t.runs as unknown as { sendPrompt(id: string, text: string): Promise<Run> };
@@ -770,5 +791,150 @@ describe('one automatic merge-conflict resolution', () => {
     const detail = (await api('GET', `/api/runs/${runB.id}`)).json() as RunDetail;
     expect(detail.events.find((e) => e.type === 'conflict_resolution_failed')?.payload).toMatchObject({ message: 'no live session' });
     await settle(project.id);
+  });
+});
+
+/** A stand-in that leaves its hook token and then crashes. */
+function writeFailingClaude(dir: string): string {
+  const file = path.join(dir, 'failing-claude.sh');
+  writeFileSync(
+    file,
+    [
+      '#!/bin/sh',
+      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
+      `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
+      'exit 3',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return file;
+}
+
+describe('factory chain robustness', () => {
+  it('a restarted core keeps an active chain and resumes it', async () => {
+    const project = await createProject();
+    const other = await createProject('Other Project');
+    t.tickets.setAutoChain(project.id, true);
+    t.tickets.setAutoChain(other.id, true);
+    t.tickets.setAutoChain(other.id, false);
+    const x = await createTicket(project.id, { title: 'X', status: 'ready' });
+    const y = await createTicket(other.id, { title: 'Y', status: 'ready' });
+
+    // A fresh service knows only what the database holds.
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    expect(restarted.isAutoChainActive(project.id)).toBe(true);
+    expect(restarted.isAutoChainActive(other.id)).toBe(false);
+    await restarted.resumeChains();
+    expect(runsFor(x.id)).toHaveLength(1);
+    expect(runsFor(y.id)).toHaveLength(0);
+    await settle(project.id);
+  });
+
+  it('a failed ticket run lets the chain go on with the other ready tickets', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    t.config.claudeCommand = writeFailingClaude(t.dir);
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready', priority: 3 });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready', priority: 1 });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(ticketRuns(project.id).map((r) => r.ticketId)).toEqual([x.id]);
+    // Tests run no reconciler loop: notice the crash by hand.
+    const stateOfX = async () => {
+      await t.runs.reconcile();
+      return runsFor(x.id)[0]?.state;
+    };
+    await expect.poll(stateOfX, { timeout: 10_000 }).toBe('failed');
+    await expect.poll(() => runsFor(y.id).length, { timeout: 10_000 }).toBe(1);
+    // The failed ticket stays where it is and is not started again.
+    expect(runsFor(x.id)).toHaveLength(1);
+    expect(await statusOf(x.id)).toBe('in_progress');
+    await settle(project.id);
+  });
+
+  it('a ticket run a person stopped does not start the next ticket', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    const project = await createProject();
+    const x = await createTicket(project.id, { title: 'X', status: 'ready', priority: 3 });
+    const y = await createTicket(project.id, { title: 'Y', status: 'ready', priority: 1 });
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(x.id)[0] as Run;
+    await waitFile(`token-${run.id}`);
+    await api('POST', `/api/runs/${run.id}/stop`);
+    await expect.poll(() => t.runs.get(run.id).state, { timeout: 10_000 }).toBe('failed');
+    await dispatchesDone(project.id);
+    expect(runsFor(y.id)).toHaveLength(0);
+    await settle(project.id);
+  });
+
+  it('a ticket started by a narrow dispatch does not turn the chain on when it finishes', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    const c = await createTicket(project.id, { title: 'C', status: 'ready' });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+    const passes = trackPipelines();
+
+    // A person closes A: only B, which waited for it, starts.
+    await api('PATCH', `/api/tickets/${a.id}`, { status: 'done' });
+    await expect.poll(() => runsFor(b.id).length, { timeout: 5_000 }).toBe(1);
+    await finish(runsFor(b.id)[0] as Run);
+    await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(1);
+    await Promise.all(passes);
+    await dispatchesDone(project.id);
+
+    expect(await statusOf(b.id)).toBe('done');
+    expect(runsFor(c.id)).toHaveLength(0);
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+    await settle(project.id);
+  });
+
+  it('a ticket started by hand does not turn the chain on when it finishes', async () => {
+    const project = await createProject();
+    const c = await createTicket(project.id, { title: 'C', status: 'ready' });
+    const d = await createTicket(project.id, { title: 'D', status: 'ready' });
+    const passes = trackPipelines();
+
+    const { run } = (await api('POST', `/api/tickets/${c.id}/start`, {})).json() as { run: Run };
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(1);
+    await Promise.all(passes);
+    await dispatchesDone(project.id);
+
+    expect(runsFor(d.id)).toHaveLength(0);
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+    await settle(project.id);
+  });
+
+  it('a later dispatch leaves a ticket the secret guard held in Review', async () => {
+    t.config.claudeCommand = writeLivingClaude(t.dir);
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    writeFileSync(path.join(run.worktreePath, '.env'), 'API_TOKEN=abc\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'env');
+    await waitFile(`ready-${run.id}`);
+    const token = await waitFile(`token-${run.id}`);
+    await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+    await stopAgain(run);
+    // The guard first asks the agent to clean up; it stops again with the leak still there.
+    await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await Promise.all(passes);
+    expect(await statusOf(a.id)).toBe('review');
+    await expect.poll(() => t.runs.get(run.id).endedAt, { timeout: 10_000 }).not.toBeNull();
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(await statusOf(a.id)).toBe('review');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(existsSync(path.join(project.path, '.env'))).toBe(false);
+    expect(await eventTypes(run)).toContain('secret_guard_blocked');
   });
 });
