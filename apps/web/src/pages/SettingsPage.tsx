@@ -1215,6 +1215,11 @@ export function SettingsPage({
                 </select>
               </label>
             </div>
+            <p className="muted small" style={{ margin: 0 }}>
+              The factory works on one ticket per project at a time, so a ticket waiting for its provider&apos;s quota
+              holds that project&apos;s queue. For factory projects, give the persona a fallback route and choose
+              &ldquo;Start on the next route&rdquo; / &ldquo;Hand off to the next route&rdquo;.
+            </p>
 
             {claudeUsage?.extraUsage && (
               <p className="muted small" style={{ margin: 0 }}>

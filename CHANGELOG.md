@@ -7,7 +7,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Added
 
 - A run whose turn died on a temporary provider error (503 / unavailable, overloaded, 5xx, network errors) is retried automatically after 1, 5 and 15 minutes, continuing the same session. It waits as "retrying n/3" without pausing other runs; sign-in, billing, quota and request errors are never retried, a stop cancels the pending retry, and after the third failure the run is left for you as before.
-- Fallback chains: each persona has an ordered list of routes (provider, model, and sign-in, API key or — for Antigravity — AI credits). Settings → Multi-Agent & Model Matrix sets them and two policies: whether new runs wait for a provider's quota to reset or start on the next route, and whether a run that runs out of quota waits or hands off to the next route. A handoff continues in the same worktree and branch with a summary of the work so far; it shows as "handed off" with links between the runs, and a waiting run offers "Continue with…".
+- Fallback chains: each persona has an ordered list of routes (provider, model, and sign-in, API key or — for Antigravity — AI credits). Settings → Multi-Agent & Model Matrix sets them and two policies: whether new runs wait for a provider's quota to reset or start on the next route, and whether a run that runs out of quota waits or hands off to the next route. A handoff continues in the same worktree and branch with a summary of the work so far; it shows as "handed off" with links between the runs, and a waiting run offers "Continue with…" (another route of its chain, its persona's chain or any enabled provider).
 - Quota limits are tracked per provider, sign-in and model pool: one provider running out no longer pauses the others. Each exhausted lane has its own countdown and "Try now".
 - Notifications name the lane that ran out ("Antigravity (all models) quota reached …") and say when it is back.
 - Settings shows the Claude account's extra usage (it is set on claude.ai).
@@ -23,10 +23,12 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Upgrading
 
 - Migration 0013 runs on start (a database backup is taken first).
-- Persona settings become one-step chains. A persona whose provider had an API key saved keeps using that key (route "API key"); put a "Sign-in" route first if you want the subscription used first. "Auto-downgrade Claude" becomes a second Claude route.
+- Persona settings become one-step chains. A persona whose provider had an API key saved keeps using that key (route "API key"); put a "Sign-in" route first if you want the subscription used first.
+- "Auto-downgrade Claude" is gone: Fable and Opus personas no longer step down to Sonnet at 80 % Claude usage. If it was on, Sonnet becomes the persona's second route, which is only used when a policy is set to "Start on the next route" / "Hand off to the next route"; with the default policies the persona waits for Claude's reset instead.
 - Antigravity runs no longer receive the Gemini API key; they use the Antigravity sign-in.
 - Antigravity's "Use AI credits" is now set by Emberline for each run: off for "Sign-in" routes, on for "AI credits" routes. A value switched by hand in agy is overwritten by the next run; add an "AI credits" route to the chain instead.
-- Both policies default to "wait", which keeps the previous behaviour apart from per-provider waiting.
+- Both policies default to "wait": work whose provider is out of quota waits for that provider's reset while the other providers keep working.
+- The factory still works on one ticket at a time per project, so a ticket waiting for a provider's quota holds that project's queue unless the persona has a fallback route and a policy is set to use it.
 
 ## [0.1.3] - 2026-10-16
 
