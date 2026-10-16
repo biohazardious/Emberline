@@ -13,6 +13,7 @@ import type { WebSocket } from 'ws';
 import { projects } from '../db/schema.js';
 import { notFound } from '../errors.js';
 import type { CoreDeps } from '../server.js';
+import { PRE_READY_CAP, sendBounded, TERMINAL_SEND_CAP } from './ws-send.js';
 
 export const toTerminal = (s: SessionInfo): TerminalInfo => ({
   id: s.id,
@@ -78,17 +79,29 @@ export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd 
  * and output that ptyd delivers right behind the attach response is held back until the
  * snapshot has been sent, so the browser always sees: snapshot, then output.
  */
-function attachTerminal(socket: WebSocket, sessionId: string, ptyd: CoreDeps['ptyd'], warn: (m: string) => void) {
+export function attachTerminal(socket: WebSocket, sessionId: string, ptyd: CoreDeps['ptyd'], warn: (m: string) => void) {
   let viewer: PtydClient | undefined;
   let closed = false;
   let ready = false;
   const queuedInput: TerminalClientMessage[] = [];
   const heldOutput: TerminalServerMessage[] = [];
+  let heldBytes = 0;
 
-  const send = (message: TerminalServerMessage) => {
-    if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
+  const send = (message: TerminalServerMessage) => sendBounded(socket, message, TERMINAL_SEND_CAP);
+  // Holding is capped rather than trimmed: a trimmed stream would corrupt the screen, so past the
+  // cap the socket is closed and the browser reconnects to a fresh snapshot.
+  const overflow = () => {
+    heldOutput.length = 0;
+    queuedInput.length = 0;
+    socket.close(1013, 'attach too slow');
   };
-  const emit = (message: TerminalServerMessage) => (ready ? send(message) : heldOutput.push(message));
+  const emit = (message: TerminalServerMessage) => {
+    if (ready) return void send(message);
+    if (closed) return;
+    heldBytes += message.type === 'output' ? message.data.length : 64;
+    if (heldBytes > PRE_READY_CAP) overflow();
+    else heldOutput.push(message);
+  };
   const apply = (message: TerminalClientMessage) => {
     if (!viewer) return;
     const op =
@@ -107,7 +120,10 @@ function attachTerminal(socket: WebSocket, sessionId: string, ptyd: CoreDeps['pt
     } catch {
       return;
     }
-    if (ready) apply(parsed);
+    if (ready) return apply(parsed);
+    if (closed) return;
+    heldBytes += parsed.type === 'input' ? parsed.data.length : 64;
+    if (heldBytes > PRE_READY_CAP) overflow();
     else queuedInput.push(parsed);
   });
   socket.on('close', () => {

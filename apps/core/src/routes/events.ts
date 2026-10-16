@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 import type { TicketService } from '../tickets/service.js';
+import { EVENTS_SEND_CAP, sendBounded } from './ws-send.js';
 
 /** `/api/events`: single push channel for the UI (runs, tickets, scheduler). */
 export function registerEventRoutes(
@@ -12,9 +13,7 @@ export function registerEventRoutes(
   scheduler: Scheduler,
 ): void {
   app.get('/api/events', { websocket: true }, (socket) => {
-    const send = (event: ServerEvent) => {
-      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
-    };
+    const send = (event: ServerEvent) => void sendBounded(socket, event, EVENTS_SEND_CAP);
     const onRun = (run: Run) => send({ type: 'run', run });
     const onRunRemoved = (id: string) => send({ type: 'run_removed', id });
     const onTicket = (ticket: Ticket) => send({ type: 'ticket', ticket });

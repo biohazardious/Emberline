@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { eq } from 'drizzle-orm';
-import { projects, runs } from './db/schema.js';
+import { projects, runEvents, runs } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -78,6 +78,45 @@ async function tokenFor(runId: string): Promise<string> {
   await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
   return readFileSync(file, 'utf8');
 }
+
+describe('run event pruning', () => {
+  const seed = (runId: string, type: string, n: number) =>
+    t.db
+      .insert(runEvents)
+      .values(Array.from({ length: n }, () => ({ runId, ts: new Date(), source: 'hook', type })))
+      .run();
+  const typesOf = (runId: string) =>
+    t.db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(runEvents.id).all().map((e) => e.type);
+
+  it('keeps the newest 5000 events of a run and never the protected kinds', async () => {
+    const project = await createProject('Prune', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const other: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    t.db.delete(runEvents).where(eq(runEvents.runId, run.id)).run();
+    seed(run.id, 'last_screen', 1);
+    seed(run.id, 'auto_nudged', 1);
+    seed(run.id, 'PreToolUse', 5100);
+    seed(other.id, 'PreToolUse', 10);
+
+    t.runs.pruneRunEvents();
+
+    const kept = typesOf(run.id);
+    expect(kept.filter((x) => x === 'PreToolUse')).toHaveLength(5000);
+    expect(kept).toContain('last_screen');
+    expect(kept).toContain('auto_nudged');
+    expect(kept).toHaveLength(5002);
+    expect(typesOf(other.id).filter((x) => x === 'PreToolUse')).toHaveLength(10);
+  });
+
+  it('reconcile prunes on its own schedule', async () => {
+    const project = await createProject('Prune2', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    seed(run.id, 'PreToolUse', 5100);
+    (t.runs as unknown as { lastEventPruneAt: number }).lastEventPruneAt = 0;
+    await t.runs.reconcile();
+    expect(typesOf(run.id).length).toBeLessThanOrEqual(5001);
+  });
+});
 
 describe('runs', () => {
   it('starts the agent in a fresh worktree on its own branch', async () => {

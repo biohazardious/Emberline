@@ -12,6 +12,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
+- Slow browsers and long-running runs can no longer grow Emberline's memory without limit. A terminal or live-update connection whose browser falls too far behind is closed and reconnects on its own (a terminal then shows a fresh screen). A terminal that is still attaching holds at most 1 MiB of output or typing before it reconnects. Each run keeps its newest 5000 events; older ones are pruned, except the few that Emberline reads later (such as the saved last screen).
+
 - Cleaning up finished runs no longer deletes work that was not merged. Garbage collection (manual, per project, and the automatic one) now keeps a worktree that has uncommitted changes or commits missing from the project's default branch, and says how many it kept and why. If Emberline cannot tell, it keeps the worktree. Pruning one run's worktree from the dashboard asks first when it holds such work, with a "Prune anyway" button.
 
 - Runs that start on their own (scheduled jobs and the factory's automatic ticket runs) no longer sit forever on a permission prompt. If one waits for 30 minutes with nobody answering, Emberline stops it as failed, frees its slot and sends a notification. Runs you started by hand are never stopped this way. Scheduled jobs can only use "Autonomous" or "Bypass permissions"; an older job saved with another mode now runs as Autonomous and the run says so. The factory's one-time "keep going" nudge is now remembered per run, so a restart no longer repeats it.

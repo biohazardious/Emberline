@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -200,8 +200,29 @@ describe('ptyd', () => {
     expect(capped).toMatchObject({ truncated: true });
     expect(capped.stdout).toHaveLength(100);
 
-    const slow = await client.exec({ file: 'sh', args: ['-c', 'sleep 5 & sleep 5'], cwd: dir, timeoutMs: 200 });
+    const pidFile = path.join(dir, 'bg.pid');
+    const slow = await client.exec({
+      file: 'sh',
+      args: ['-c', `sleep 30 & echo $! > "${pidFile}"; sleep 30`],
+      cwd: dir,
+      timeoutMs: 300,
+    });
     expect(slow.timedOut).toBe(true);
+    // The timeout kills the whole process group, not just the shell: the background child is gone too.
+    const bgPid = Number(readFileSync(pidFile, 'utf8'));
+    expect(bgPid).toBeGreaterThan(1);
+    const gone = async () => {
+      for (let i = 0; i < 40; i++) {
+        try {
+          process.kill(bgPid, 0);
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === 'ESRCH';
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return false;
+    };
+    expect(await gone()).toBe(true);
 
     const missing = await client.exec({ file: 'definitely-not-a-binary', cwd: dir });
     expect(missing.exitCode).toBe(127);

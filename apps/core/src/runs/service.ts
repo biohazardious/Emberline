@@ -51,7 +51,7 @@ import {
   StartPreviewBody as StartPreviewBodySchema,
   type ProjectUsageDay,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gte, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -127,6 +127,33 @@ const SUBMIT_DELAY_MS = 150;
 
 const RECONCILE_INTERVAL_MS = 3_000;
 const AUTO_GC_INTERVAL_MS = 60_000;
+const EVENT_PRUNE_INTERVAL_MS = 5 * 60_000;
+/** Newest `run_events` rows kept per run; older ones are pruned (R11). */
+export const MAX_EVENTS_PER_RUN = 5000;
+/**
+ * Event kinds that logic reads back later, so pruning never removes them: the one `last_screen`
+ * snapshot, the `queued` event (unattended origin, queued prompts), one-shot markers
+ * (`auto_nudged`, `session_lost`), the pipeline hold/merge notes (HOLD_EVENTS in tickets/service.ts,
+ * `merged_to_main`, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
+ */
+export const PRUNE_PROTECTED_EVENT_TYPES = [
+  'last_screen',
+  'queued',
+  'auto_nudged',
+  'session_lost',
+  'merge_failed',
+  'secret_guard_blocked',
+  'slop_guard_blocked',
+  'critic_blocked',
+  'build_gate_error',
+  'build_gate_failed',
+  'merged_to_main',
+  'conflict_resolution_requested',
+  'pr_created',
+  'stall_detected',
+  'waiting_input_timeout',
+  'permission_mode_overridden',
+];
 /**
  * An agent idling at its prompt after finishing is closed after this long. Sessions that can be
  * resumed (`claude --resume`) close soon; CLIs without a session id would lose follow-ups, so they
@@ -286,6 +313,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   private reconciling = false;
   private lastAutoGcAt = 0;
+  private lastEventPruneAt = 0;
   private readonly handoffLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
   /** Stall watchdog per working (or starting) run: the screen hash, since when it is unchanged, when it was last read. */
@@ -1762,10 +1790,41 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
+  /** Keeps the newest MAX_EVENTS_PER_RUN events of each run (plus the protected kinds); one DELETE per run over the cap. */
+  pruneRunEvents(): void {
+    const over = this.db
+      .select({ runId: runEvents.runId })
+      .from(runEvents)
+      .groupBy(runEvents.runId)
+      .having(sql`count(*) > ${MAX_EVENTS_PER_RUN}`)
+      .all();
+    for (const { runId } of over) {
+      const cutoff = this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(eq(runEvents.runId, runId))
+        .orderBy(desc(runEvents.id))
+        .limit(1)
+        .offset(MAX_EVENTS_PER_RUN - 1)
+        .get();
+      if (!cutoff) continue;
+      this.db
+        .delete(runEvents)
+        .where(
+          and(eq(runEvents.runId, runId), lt(runEvents.id, cutoff.id), notInArray(runEvents.type, PRUNE_PROTECTED_EVENT_TYPES)),
+        )
+        .run();
+    }
+  }
+
   async reconcile(): Promise<void> {
     if (this.reconciling || this.ptyd.status !== 'connected') return;
     this.reconciling = true;
     try {
+      if (Date.now() - this.lastEventPruneAt > EVENT_PRUNE_INTERVAL_MS) {
+        this.lastEventPruneAt = Date.now();
+        this.pruneRunEvents();
+      }
       this.failOrphanedSpawns(STARTING_WATCHDOG_MS);
       const open = this.db.select().from(runs).where(isNull(runs.endedAt)).orderBy(asc(runs.createdAt)).all();
       const attached = this.db
