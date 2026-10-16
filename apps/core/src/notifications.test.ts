@@ -160,4 +160,49 @@ describe('NotificationService quota lanes', () => {
     expect(sent.at(-1)).toMatchObject({ event: 'quota_resumed', title: 'Claude (opus) quota is back' });
     expect(sent).toHaveLength(4);
   });
+
+  it('a window refined in place to one model pool neither pages again nor says the lane is back', async () => {
+    const { EventEmitter } = await import('node:events');
+    const base = { maxConcurrentRuns: 2, busy: 1, queued: 0, rateLimited: 1 };
+    const window = (pool: string) => ({
+      id: 'w1',
+      agent: 'claude',
+      credential: 'login',
+      pool,
+      exhaustedAt: '2026-10-16T10:00:00.000Z',
+      resetsAt: '2026-10-16T15:00:00.000Z',
+      resumeAt: '2026-10-16T15:01:00.000Z',
+      resetSource: 'hook' as const,
+      message: 'limit reached',
+      resumedAt: null,
+    });
+    const scheduler = Object.assign(new EventEmitter(), { state: () => ({ ...base, window: null, windows: [] }) });
+    const service = new NotificationService({} as Db, undefined, scheduler as never);
+    const sent: string[] = [];
+    service.getSettings = () =>
+      ({
+        enabled: true,
+        provider: 'webhook',
+        url: 'http://127.0.0.1:9/unused',
+        token: null,
+        onRateLimited: true,
+        onQuotaResumed: true,
+        onWaitingInput: true,
+        onRunFinished: true,
+      }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push(msg.title);
+      return { ok: true, status: 200, error: null };
+    };
+    const emit = async (windows: ReturnType<typeof window>[]) => {
+      scheduler.emit('state', { ...base, window: windows[0] ?? null, windows });
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+
+    await emit([window('*')]);
+    await emit([window('opus')]);
+    expect(sent).toEqual(['Claude (all models) quota reached']);
+    await emit([]);
+    expect(sent).toEqual(['Claude (all models) quota reached', 'Claude (opus) quota is back']);
+  });
 });

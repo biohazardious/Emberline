@@ -47,8 +47,8 @@ function laneLabel(w: QuotaWindow): string {
 }
 
 export class NotificationService {
-  /** Exhausted lanes as of the last scheduler state, by lane key. */
-  private lastLanes = new Map<string, QuotaWindow>();
+  /** Open quota windows as of the last scheduler state. */
+  private lastWindows: QuotaWindow[] = [];
 
   constructor(
     private readonly db: Db,
@@ -56,7 +56,7 @@ export class NotificationService {
     scheduler?: Scheduler,
   ) {
     if (scheduler) {
-      this.lastLanes = new Map(scheduler.state().windows.map((w) => [laneKey(w), w]));
+      this.lastWindows = scheduler.state().windows;
       scheduler.on('state', (state) => {
         void this.onSchedulerState(state);
       });
@@ -97,17 +97,28 @@ export class NotificationService {
     }
   }
 
-  /** One page per quota lane that runs out, and one when it is back; other lanes keep running meanwhile. */
+  /**
+   * One page per quota lane that runs out, and one when it is back; other lanes keep running
+   * meanwhile. A window is the same limit while its id or its lane lives on: a window refined in
+   * place to one model pool (same id, other lane) or replaced on its lane (new id) pages nothing.
+   */
   private async onSchedulerState(state: SchedulerState): Promise<void> {
-    const prev = this.lastLanes;
-    const next = new Map(state.windows.map((w) => [laneKey(w), w]));
-    this.lastLanes = next;
+    const prev = this.lastWindows;
+    const next = state.windows;
+    this.lastWindows = next;
+    const known = (windows: QuotaWindow[]) => {
+      const ids = new Set(windows.map((w) => w.id));
+      const lanes = new Set(windows.map(laneKey));
+      return (w: QuotaWindow) => ids.has(w.id) || lanes.has(laneKey(w));
+    };
+    const wasOpen = known(prev);
+    const isOpen = known(next);
 
     const cfg = this.getSettings();
     if (!cfg.enabled) return;
 
-    for (const [key, window] of next) {
-      if (prev.has(key) || !cfg.onRateLimited) continue;
+    for (const window of next) {
+      if (wasOpen(window) || !cfg.onRateLimited) continue;
       const resumeAt = new Date(window.resumeAt).toLocaleTimeString();
       const resetNote = window.resetsAt
         ? `Resets at ${new Date(window.resetsAt).toLocaleTimeString()}.`
@@ -120,8 +131,8 @@ export class NotificationService {
         tags: ['warning', 'emberline'],
       });
     }
-    for (const [key, window] of prev) {
-      if (next.has(key) || !cfg.onQuotaResumed) continue;
+    for (const window of prev) {
+      if (isOpen(window) || !cfg.onQuotaResumed) continue;
       await this.dispatch(cfg, {
         event: 'quota_resumed',
         title: `${laneLabel(window)} quota is back`,
