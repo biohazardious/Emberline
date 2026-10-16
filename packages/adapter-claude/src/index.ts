@@ -547,7 +547,9 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     watcherSnippet,
     wrappedExec,
     options.prompt ? `kill "$EMBERLINE_WATCH_PID" >/dev/null 2>&1 || true` : '',
-    `if [ "$STATUS" -eq 0 ]; then rm -f "${logFile}"; echo '{"tool_name":"${options.agent}","message":"Completed ${options.agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else ERR_DETAIL=$(sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' "${logFile}" 2>/dev/null | tr '\\r' '\\n' | sed '/^[[:space:]]*$/d' | tail -n 6 | tr '\\n' ' ' | sed 's/["\\\\]/ /g' | cut -c1-420); rm -f "${logFile}"; if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL="${options.agent} exited with code $STATUS"; fi; printf "\\n\\033[1;31m=== ❌ ${options.agent} exited with code %s ===\\033[0m\\n%s\\n" "$STATUS" "$ERR_DETAIL"; echo "{\\"error\\":\\"cli_exit\\",\\"reason\\":\\"$ERR_DETAIL\\",\\"message\\":\\"$ERR_DETAIL\\"}" | ${hook} StopFailure >/dev/null 2>&1 || true; sleep 4; fi`,
+    // On failure the hook gets the end of the output: the error (e.g. agy's quota message with its
+    // reset time) is the last line, after whatever the CLI printed while it worked.
+    `if [ "$STATUS" -eq 0 ]; then rm -f "${logFile}"; echo '{"tool_name":"${options.agent}","message":"Completed ${options.agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else ERR_DETAIL=$(sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' "${logFile}" 2>/dev/null | tr '\\r' '\\n' | sed '/^[[:space:]]*$/d' | tail -n 6 | tr '\\n' ' ' | sed 's/["\\\\]/ /g' | tail -c 420); rm -f "${logFile}"; if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL="${options.agent} exited with code $STATUS"; fi; printf "\\n\\033[1;31m=== ❌ ${options.agent} exited with code %s ===\\033[0m\\n%s\\n" "$STATUS" "$ERR_DETAIL"; echo "{\\"error\\":\\"cli_exit\\",\\"reason\\":\\"$ERR_DETAIL\\",\\"message\\":\\"$ERR_DETAIL\\"}" | ${hook} StopFailure >/dev/null 2>&1 || true; sleep 4; fi`,
     `exit $STATUS`,
   ]
     .filter(Boolean)

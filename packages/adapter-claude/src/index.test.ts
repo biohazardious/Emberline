@@ -291,4 +291,37 @@ describe('secondary CLIs start without first-run questions', () => {
     const { status } = runWithFake('aider', 'echo "The API provider is not able to authenticate you."; exit 0', 'do it');
     expect(status).toBe(1);
   });
+
+  it('reports the end of the output on a failed exit, so a quota error after long output is kept', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cli-launch-'));
+    execFileSync('git', ['init', '-q', dir]);
+    const quota =
+      'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s. AGY_ERROR: RESOURCE_EXHAUSTED (code 429)';
+    const fake = path.join(dir, 'fake-agy');
+    const work = 'agy: step - reading files, editing components and running the build to check the layout still renders';
+    writeFileSync(fake, `#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8; do echo "${work} $i"; done\necho "${quota}"\nexit 3\n`, { mode: 0o755 });
+    // Records each hook event with its payload instead of posting it to core.
+    const hook = path.join(dir, 'fake-hook');
+    writeFileSync(hook, `#!/bin/sh\nprintf '%s %s\\n' "$1" "$(cat)" >> "${dir}/hooks.txt"\n`, { mode: 0o755 });
+    process.env.EMBERLINE_ANTIGRAVITY_COMMAND = fake;
+    try {
+      const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity', hookCommand: hook });
+      const res = spawnSync(spec.file, spec.args, {
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? '', HOME: dir, ...spec.env },
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect(res.status).toBe(3);
+    } finally {
+      delete process.env.EMBERLINE_ANTIGRAVITY_COMMAND;
+    }
+    const failure = readFileSync(path.join(dir, 'hooks.txt'), 'utf8')
+      .split('\n')
+      .find((line) => line.startsWith('StopFailure '));
+    const payload = JSON.parse(failure?.slice('StopFailure '.length) ?? '{}');
+    expect(payload.message).toContain('Resets in 31h43m5s. AGY_ERROR: RESOURCE_EXHAUSTED (code 429)');
+    expect(payload.message.length).toBeLessThanOrEqual(420);
+    expect(nextStateFromHook('working', 'StopFailure', payload, { agent: 'antigravity' })).toBe('rate_limited');
+  }, 20_000);
 });
