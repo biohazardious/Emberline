@@ -360,7 +360,12 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       if (this.fallbackChecked.get(row.id) === key) continue;
       this.fallbackChecked.set(row.id, key);
       const reason = closed.find((w) => w.resumeAt.getTime() > now && laneCovers(w, lane))?.message ?? 'usage limit reached';
-      await this.autoHandOff(row, closed, reason);
+      // An earlier handoff of this pass awaited: the run and the windows may have changed meanwhile.
+      const fresh = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
+      if (!fresh || fresh.state !== 'rate_limited' || fresh.cancelledAt || fresh.handedOffTo || this.handingOff.has(fresh.id)) continue;
+      const freshClosed = this.openWindows();
+      if (!this.laneClosed(laneOf(currentRoute(fresh)), freshClosed)) continue;
+      await this.autoHandOff(fresh, freshClosed, reason);
     }
   }
 
@@ -499,7 +504,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     );
     const open = this.db.select().from(quotaWindows).where(and(sameLane, isNull(quotaWindows.resumedAt))).get();
     if (!open && known && refinePool !== undefined && refinePool !== lane.pool) {
-      // The hook opened a window without a reset (pool `*`); the banner names a narrower pool: narrow it in place.
+      // The hook opened a window without a reset; the banner names another pool. Only a `*` window is narrowed; any other keeps its pool and just gets the reset.
       const probe = this.db
         .select()
         .from(quotaWindows)
@@ -514,7 +519,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         )
         .get();
       if (probe) {
-        this.db.update(quotaWindows).set({ ...fields, pool: lane.pool }).where(eq(quotaWindows.id, probe.id)).run();
+        this.db.update(quotaWindows).set({ ...fields, pool: refinePool === '*' ? lane.pool : refinePool }).where(eq(quotaWindows.id, probe.id)).run();
         this.publish(true);
         return;
       }

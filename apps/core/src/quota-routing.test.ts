@@ -643,6 +643,33 @@ describe('waiting runs follow the in-flight policy and reopening lanes', () => {
     expect(checks).toBeGreaterThan(0);
   });
 
+  it('re-reads each waiting run before its handoff: a run stopped during the pass is left alone', async () => {
+    // Both start before the Antigravity lane closes.
+    const { run: first } = await startTicket('First');
+    const { run: second } = await startTicket('Second');
+    const tokens = [await work(first), await work(second)];
+    await hook(first.id, 'StopFailure', tokens[0]!, AGY_QUOTA);
+    await hook(second.id, 'StopFailure', tokens[1]!, AGY_QUOTA);
+    await t.scheduler.tick();
+    const handOff = t.runs.handOff.bind(t.runs);
+    const handed: string[] = [];
+    (t.runs as unknown as { handOff: typeof t.runs.handOff }).handOff = async (id, ...rest) => {
+      handed.push(id);
+      // The first handoff of the pass stops the other waiting run.
+      const other = id === first.id ? second.id : first.id;
+      t.db.update(runsTable).set({ cancelledAt: new Date(), state: 'failed', endedAt: new Date() }).where(eq(runsTable.id, other)).run();
+      return handOff(id, ...rest);
+    };
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    await t.scheduler.tick();
+    await expect.poll(() => handed.length, { timeout: 5_000 }).toBeGreaterThan(0);
+    await t.scheduler.tick();
+    expect(handed).toHaveLength(1);
+    const other = handed[0] === first.id ? second : first;
+    expect((await getRun(other.id)).events.map((e) => e.type)).not.toContain('handoff_failed');
+    expect((await getRun(other.id)).handedOffTo).toBeNull();
+  });
+
   it('respects MAX_HANDOFFS and never hands off a run waiting for its automatic retry', async () => {
     // Both start before the Antigravity lane closes (a queued run would wait for it under newRuns = wait).
     const { run: capped } = await startTicket('Ping pong');

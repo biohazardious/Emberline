@@ -171,6 +171,19 @@ describe('scheduler', () => {
     expect(window?.message).toBe('5-hour limit reached ∙ resets 11:58pm (UTC)');
   });
 
+  it('a screen refine only narrows: a wider screen pool sets the reset on the existing window and keeps its pool', async () => {
+    const a = await submit();
+    const recordLimit = (lane: { agent: string; credential: string; pool: string }, info: unknown, refinePool?: string) =>
+      (t.scheduler as unknown as { recordLimit(...args: unknown[]): void }).recordLimit(a.id, lane, info, info ? 'screen' : 'hook', refinePool);
+    const base = { agent: a.agent, credential: a.credential };
+    recordLimit({ ...base, pool: 'opus' }, undefined);
+    recordLimit({ ...base, pool: '*' }, { resetsAt: new Date(Date.now() + 3_600_000), pool: '*', message: 'wide' }, 'opus');
+    const windows = t.db.select().from(quotaWindows).all();
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({ pool: 'opus', source: 'screen' });
+    expect(windows[0]?.resetsAt).not.toBeNull();
+  });
+
   it('probes after the probe interval when no reset time is known, and re-opens on a repeat hit', async () => {
     await t.close();
     await ptydServer.close();
