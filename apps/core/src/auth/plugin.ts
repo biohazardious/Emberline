@@ -1,5 +1,6 @@
 import { type AuthState, ChangePasswordBody, CSRF_HEADER, LoginBody, SetupBody } from '@emberline/protocol';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { hash, verify } from '@node-rs/argon2';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CoreConfig } from '../config.js';
@@ -74,7 +75,16 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     });
   };
 
+  const hostAllowed = hostAllowList(config);
   app.addHook('onRequest', async (request, reply) => {
+    // DNS rebinding: a page on evil.example that re-points its name at this machine would be
+    // same-origin with us. Browsers still send the attacker's name as Host, so refuse unknown names
+    // (this covers the API, the SPA and /metrics). IP literals cannot be rebound.
+    if (!hostAllowed(request.host)) {
+      return reply
+        .code(421)
+        .send({ error: 'misdirected_request', message: `Host "${request.host}" is not allowed. Add it to EMBERLINE_ALLOWED_HOSTS.` });
+    }
     // Absolute-form targets (`GET http://host/api/...`) are only meant for proxies.
     if (!request.raw.url?.startsWith('/')) {
       return reply.code(400).send({ error: 'bad_request', message: 'origin-form request target required' });
@@ -90,6 +100,11 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     const origin = request.headers.origin;
     if (origin && !sameHost(origin, request.host)) {
       return reply.code(403).send({ error: 'forbidden', message: 'cross-origin request rejected' });
+    }
+    // Browsers always send Origin on WebSocket handshakes; a missing one is a non-browser client
+    // that has no business holding a session cookie here.
+    if (!origin && request.headers.upgrade?.toLowerCase() === 'websocket') {
+      return reply.code(403).send({ error: 'forbidden', message: 'WebSocket upgrades need an Origin header' });
     }
     if (!SAFE_METHODS.has(request.method) && request.headers[CSRF_HEADER] !== '1') {
       return reply.code(403).send({ error: 'csrf', message: `missing ${CSRF_HEADER} header` });
@@ -198,6 +213,32 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   });
 
   return store;
+}
+
+/** Lower-case host name of a Host header value: no port, no IPv6 brackets, no trailing dot. */
+function hostnameOf(host: string): string {
+  let name = host.trim().toLowerCase();
+  if (name.startsWith('[')) {
+    const end = name.indexOf(']');
+    return end === -1 ? name : name.slice(1, end);
+  }
+  if (name.indexOf(':') === name.lastIndexOf(':')) name = name.replace(/:\d*$/, '');
+  return name.replace(/\.$/, '');
+}
+
+function hostAllowList(config: CoreConfig): (host: string) => boolean {
+  const names = new Set(['localhost', ...config.allowedHosts.map(hostnameOf)]);
+  try {
+    names.add(hostnameOf(new URL(config.hookUrl).host));
+  } catch {
+    // an unparsable hook URL adds nothing
+  }
+  const any = names.has('*');
+  return (host) => {
+    if (any || host === '') return true;
+    const name = hostnameOf(host);
+    return isIP(name) !== 0 || names.has(name);
+  };
 }
 
 function sameHost(origin: string, host: string): boolean {

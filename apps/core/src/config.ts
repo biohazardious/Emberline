@@ -31,6 +31,11 @@ export interface CoreConfig {
    * prints it to its log while no password exists.
    */
   setupToken?: string;
+  /**
+   * Extra host names (lower case, no port) core answers to besides IP literals, `localhost` and the
+   * hook URL's host; `*` disables the Host check.
+   */
+  allowedHosts: string[];
   /** Claude Code transcripts (runner home, mounted read-only); only paths under it are read. */
   transcriptsDir: string;
 }
@@ -54,6 +59,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
+    allowedHosts: (env.EMBERLINE_ALLOWED_HOSTS ?? '')
+      .split(',')
+      .map((name) => name.trim().toLowerCase().replace(/\.$/, ''))
+      .filter(Boolean),
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
   };
 }

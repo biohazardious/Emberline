@@ -4,6 +4,7 @@ import path from 'node:path';
 import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { loadConfig } from './config.js';
 import { CSRF, createTestApp, setupAndLogin, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
@@ -34,6 +35,75 @@ describe('core server', () => {
     } finally {
       rmSync(webDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('host allow-list (DNS rebinding)', () => {
+  const webDirWithIndex = () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'web-'));
+    writeFileSync(path.join(dir, 'index.html'), '<h1>ember</h1>');
+    return dir;
+  };
+
+  it('answers 421 to unknown host names on API, SPA, setup and metrics', async () => {
+    const webDir = webDirWithIndex();
+    try {
+      t = await createTestApp({ webDir });
+      process.env.EMBERLINE_METRICS_TOKEN = 'scrape-secret';
+      for (const url of ['/api/health', '/', '/metrics']) {
+        const res = await t.app.inject({ url, headers: { host: 'evil.example:7420' } });
+        expect(res.statusCode, url).toBe(421);
+        expect(res.body).toContain('EMBERLINE_ALLOWED_HOSTS');
+      }
+      const setup = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/setup',
+        headers: { ...CSRF, host: 'evil.example' },
+        payload: { password: 'long enough password', setupToken: TEST_SETUP_TOKEN },
+      });
+      expect(setup.statusCode).toBe(421);
+    } finally {
+      delete process.env.EMBERLINE_METRICS_TOKEN;
+      rmSync(webDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['192.168.1.16:7420', '[::1]:7420', '[fe80::1]', 'localhost:7420', 'LOCALHOST.:7420', 'core:7420', '10.0.0.5'])(
+    'lets %s through',
+    async (host) => {
+      t = await createTestApp({ hookUrl: 'http://core:7420' });
+      expect((await t.app.inject({ url: '/api/health', headers: { host } })).statusCode).toBe(200);
+    },
+  );
+
+  it('allows names from EMBERLINE_ALLOWED_HOSTS and "*" disables the check', async () => {
+    t = await createTestApp({ allowedHosts: ['emberline.lan'] });
+    expect((await t.app.inject({ url: '/api/health', headers: { host: 'Emberline.LAN:8080' } })).statusCode).toBe(200);
+    expect((await t.app.inject({ url: '/api/health', headers: { host: 'other.lan' } })).statusCode).toBe(421);
+    await t.close();
+    t = await createTestApp({ allowedHosts: ['*'] });
+    expect((await t.app.inject({ url: '/api/health', headers: { host: 'anything.example' } })).statusCode).toBe(200);
+  });
+
+  it('parses EMBERLINE_ALLOWED_HOSTS from the environment', () => {
+    expect(loadConfig({ EMBERLINE_ALLOWED_HOSTS: ' a.lan, B.lan. ,,*' }).allowedHosts).toEqual(['a.lan', 'b.lan', '*']);
+    expect(loadConfig({}).allowedHosts).toEqual([]);
+  });
+
+  it('refuses WebSocket upgrades without an Origin header, even with a valid cookie', async () => {
+    t = await createTestApp();
+    const cookie = await setupAndLogin(t.app);
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const status = await new Promise<number>((resolve) => {
+      const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie } });
+      ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+      ws.once('open', () => {
+        ws.close();
+        resolve(101);
+      });
+      ws.once('error', () => undefined);
+    });
+    expect(status).toBe(403);
   });
 });
 
@@ -208,7 +278,7 @@ describe('auth', () => {
   });
 
   it('enforces the CSRF header and same-origin requests', async () => {
-    t = await createTestApp();
+    t = await createTestApp({ allowedHosts: ['emberline.local'] });
     const noHeader = await t.app.inject({
       method: 'POST',
       url: '/api/auth/setup',

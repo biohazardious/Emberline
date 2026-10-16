@@ -17,6 +17,8 @@ services:
     environment:
       # emberline-hook runs in the runner and posts agent hooks back to core.
       EMBERLINE_HOOK_URL: http://core:7420
+      # Extra host names you reach Emberline by (reverse proxy, truenas.local). IPs and localhost always work.
+      EMBERLINE_ALLOWED_HOSTS: ${EMBERLINE_ALLOWED_HOSTS:-}
       # Zone used to read wall-clock reset times such as "resets 2pm" (quota scheduler).
       TZ: ${TZ:-UTC}
       # Enables GET /metrics (Prometheus) for scrapers that send this bearer token.

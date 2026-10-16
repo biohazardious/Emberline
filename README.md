@@ -75,13 +75,14 @@ make down
 
 Set these in `.env` (read by `compose.yaml`):
 
-| Variable                        | Default        | Purpose                                                                                                                                                  |
-| ------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EMBERLINE_BIND`                | `127.0.0.1`    | Host interface the web UI binds to. `0.0.0.0` exposes it to your network; see [Security](#security).                                                     |
-| `EMBERLINE_PORT`                | `7420`         | Host port.                                                                                                                                               |
-| `TZ`                            | `UTC`          | Your IANA time zone (for example `Europe/Berlin`). CLIs print reset times as wall-clock times ("resets 2pm"), and the scheduler reads them in this zone. |
-| `EMBERLINE_WORKSPACES_HOST_DIR` | `./workspaces` | Host directory that holds the project workspaces.                                                                                                        |
-| `EMBERLINE_METRICS_TOKEN`       | unset          | Enables `GET /metrics` for scrapers sending `Authorization: Bearer <token>`.                                                                             |
+| Variable                        | Default        | Purpose                                                                                                                                                                                                                           |
+| ------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMBERLINE_BIND`                | `127.0.0.1`    | Host interface the web UI binds to. `0.0.0.0` exposes it to your network; see [Security](#security).                                                                                                                              |
+| `EMBERLINE_PORT`                | `7420`         | Host port.                                                                                                                                                                                                                        |
+| `TZ`                            | `UTC`          | Your IANA time zone (for example `Europe/Berlin`). CLIs print reset times as wall-clock times ("resets 2pm"), and the scheduler reads them in this zone.                                                                          |
+| `EMBERLINE_WORKSPACES_HOST_DIR` | `./workspaces` | Host directory that holds the project workspaces.                                                                                                                                                                                 |
+| `EMBERLINE_ALLOWED_HOSTS`       | unset          | Comma-separated host names you open Emberline by, such as `emberline.example.com` or `truenas.local` (through a reverse proxy, say). IP addresses and `localhost` always work; other names get HTTP 421. `*` turns the check off. |
+| `EMBERLINE_METRICS_TOKEN`       | unset          | Enables `GET /metrics` for scrapers sending `Authorization: Bearer <token>`.                                                                                                                                                      |
 
 Core also understands the following variables. They are not passed through by `compose.yaml`; add them to the `core` service's `environment` if you need them:
 
@@ -116,6 +117,7 @@ A missing toolchain fails the gate with the command that installs it, so an agen
 Emberline gives AI agents a shell, your git credentials and your provider logins. Treat it like SSH access to the machine it runs on.
 
 - **Keep it private.** By default it listens on `127.0.0.1` only. To reach it from other devices, put it behind a VPN (Tailscale, WireGuard) or a TLS reverse proxy. Plain HTTP on a LAN is tolerated, but passwords and session cookies then travel unencrypted.
+- **Host names are checked.** Requests whose `Host` is not an IP address, `localhost` or a name in `EMBERLINE_ALLOWED_HOSTS` get HTTP 421, which stops DNS-rebinding pages from reaching Emberline through your browser. WebSocket connections must also carry an `Origin` header.
 - **Single admin account.** The first visitor needs the setup token from the server log, so nobody else on the network can claim a fresh instance.
 - **Two containers, two roles.** `core` (API and UI) runs no workspace processes and ships without git, ssh or build tools. Everything that runs in a workspace (agents, git, installs, builds, tests) runs in `runner`. Git commands ignore repository hooks and command-running config.
 - **The runner is one trust domain.** All agents and terminals run as the same user and can read each other's workspaces and the provider logins in the runner's home. Don't run agents for projects you don't trust next to ones you do.

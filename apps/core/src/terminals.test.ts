@@ -105,6 +105,7 @@ describe('terminals', () => {
 
     expect(await statusOf({ origin: address })).toBe(401);
     expect(await statusOf({ cookie, origin: 'https://evil.example' })).toBe(403);
+    expect(await statusOf({ cookie })).toBe(403);
   });
 
   it('returns 503 when the runner is unreachable', async () => {
