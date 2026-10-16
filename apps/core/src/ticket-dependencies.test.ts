@@ -465,15 +465,74 @@ describe('dependency-aware dispatch', () => {
     await settle(project.id);
   });
 
-  it('a manual move of a dependency to done dispatches the unblocked ticket', async () => {
+  /** Waits until every dispatch pass queued for the project so far is through. */
+  const dispatchesDone = (projectId: string) =>
+    (t.tickets as unknown as { dispatchLock: { run(key: string, fn: () => Promise<void>): Promise<void> } }).dispatchLock.run(
+      projectId,
+      async () => undefined,
+    );
+
+  it('a manual move of a dependency to done starts only the tickets waiting for it', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });
     const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    const c = await createTicket(project.id, { title: 'C', status: 'ready' });
     await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
 
     await api('PATCH', `/api/tickets/${a.id}`, { status: 'done' });
     await expect.poll(() => runsFor(b.id).length, { timeout: 5_000 }).toBe(1);
+    await dispatchesDone(project.id);
     expect(runsFor(a.id)).toHaveLength(0);
+    expect(runsFor(c.id)).toHaveLength(0);
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+    await settle(project.id);
+  });
+
+  it('a manual move to done in a chaining project dispatches the whole queue', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    const c = await createTicket(project.id, { title: 'C', status: 'ready' });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+    t.tickets.setAutoChain(project.id, true);
+
+    await api('PATCH', `/api/tickets/${a.id}`, { status: 'done' });
+    await expect.poll(() => runsFor(b.id).length + runsFor(c.id).length, { timeout: 5_000 }).toBe(2);
+    await settle(project.id);
+  });
+
+  it('removing the last blocker starts only the ticket it unblocked', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'backlog' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    const c = await createTicket(project.id, { title: 'C', status: 'ready' });
+    const d = await createTicket(project.id, { title: 'D', status: 'ready' });
+    const e = await createTicket(project.id, { title: 'E', status: 'ready' });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+    await api('PATCH', `/api/tickets/${c.id}`, { dependsOn: [a.id] });
+
+    // Its dependsOn changed and nothing blocks it any more.
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [] });
+    await expect.poll(() => runsFor(b.id).length, { timeout: 5_000 }).toBe(1);
+    // The ticket it waited for is deleted.
+    await api('DELETE', `/api/tickets/${a.id}`);
+    await expect.poll(() => runsFor(c.id).length, { timeout: 5_000 }).toBe(1);
+    await dispatchesDone(project.id);
+    expect(runsFor(d.id)).toHaveLength(0);
+    expect(runsFor(e.id)).toHaveLength(0);
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+    await settle(project.id);
+  });
+
+  it('removing a blocker in a chaining project dispatches the queue', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'backlog' });
+    const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+    await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
+    t.tickets.setAutoChain(project.id, true);
+
+    await api('DELETE', `/api/tickets/${a.id}`);
+    await expect.poll(() => runsFor(b.id).length, { timeout: 5_000 }).toBe(1);
     await settle(project.id);
   });
 

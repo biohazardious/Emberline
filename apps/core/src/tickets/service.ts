@@ -59,6 +59,12 @@ const ACTIVE_RUN_STATES = new Set<Run['state']>(['queued', 'starting', 'working'
 
 type Blocker = Ticket['blockedBy'][number];
 
+/** See {@link TicketService.dispatchNextReadyTicket}. */
+interface DispatchOptions {
+  only?: ReadonlySet<string>;
+  chain?: boolean;
+}
+
 export const toTicket = (
   row: TicketRow,
   deps: { dependsOn: string[]; blockedBy: Blocker[] } = { dependsOn: [], blockedBy: [] },
@@ -319,10 +325,31 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * Starts every unblocked `ready` (then `backlog`, when `autoPickupBacklog` is enabled) ticket of
    * `projectId`, highest priority first, until the project has `maxParallelTicketsPerProject`
    * ticket runs active. Returns what it started (empty when nothing).
+   *
+   * Internal option: `only` limits the candidates to those tickets and skips finalizing Review
+   * tickets; `chain: false` leaves the project's auto-chain as it is (a person's board change must
+   * not turn the factory on).
    */
-  dispatchNextReadyTicket(projectId: string): Promise<{ ticket: Ticket; run: Run }[]> {
+  dispatchNextReadyTicket(projectId: string, opts: DispatchOptions = {}): Promise<{ ticket: Ticket; run: Run }[]> {
     // Check-then-start spans several awaits; two completions (or a click) must not both dispatch.
-    return this.dispatchLock.run(projectId, () => this.dispatchNextReadyTicketUnlocked(projectId));
+    return this.dispatchLock.run(projectId, () => this.dispatchNextReadyTicketUnlocked(projectId, opts));
+  }
+
+  /**
+   * `ticketIds` may have just lost their last blocker through a person's change: a chaining project
+   * dispatches its queue, any other project starts only those tickets.
+   */
+  private dispatchUnblocked(projectId: string, ticketIds: string[]): void {
+    if (!getFactorySettings(this.db).autoPickupReady) return;
+    const opts: DispatchOptions = this.autoChainProjects.has(projectId) ? {} : { only: new Set(ticketIds), chain: false };
+    if (opts.only?.size === 0) return;
+    void this.dispatchNextReadyTicket(projectId, opts).catch(() => undefined);
+  }
+
+  /** Of `ids`, those blocked in `before` that nothing blocks any more. */
+  private nowUnblocked(ids: string[], before: Map<string, { blockedBy: Ticket['blockedBy'] }>): string[] {
+    const after = this.dependenciesOf(ids);
+    return ids.filter((id) => (before.get(id)?.blockedBy.length ?? 0) > 0 && after.get(id)?.blockedBy.length === 0);
   }
 
   /** Active runs working on one of the project's tickets; ticket-less runs never count. */
@@ -332,7 +359,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .filter((r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && ACTIVE_RUN_STATES.has(r.state)).length;
   }
 
-  private async dispatchNextReadyTicketUnlocked(projectId: string): Promise<{ ticket: Ticket; run: Run }[]> {
+  private async dispatchNextReadyTicketUnlocked(
+    projectId: string,
+    { only, chain = true }: DispatchOptions,
+  ): Promise<{ ticket: Ticket; run: Run }[]> {
     const fSettings = getFactorySettings(this.db);
     if (this.busyTicketRuns(projectId) >= fSettings.maxParallelTicketsPerProject) return [];
 
@@ -345,7 +375,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // Finalize any tickets left in 'review' with a completed run (e.g. if core restarted mid-pipeline)
-    if (fSettings.autoMoveToDone) {
+    if (fSettings.autoMoveToDone && !only) {
       for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
         const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
         // A run whose own pipeline is still going (gates, merge) is not left over: leave it alone.
@@ -370,7 +400,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // Read after the finalization above: tickets it moved to Done may unblock others.
-    const allTickets = this.list(projectId);
+    const allTickets = this.list(projectId).filter((t) => !only || only.has(t.id));
     const byPriority = (a: Ticket, b: Ticket) => b.priority - a.priority || a.position - b.position;
     const queue = [
       ...allTickets.filter((t) => t.status === 'ready').sort(byPriority),
@@ -379,10 +409,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (queue.length === 0) {
       // The chain ends only once its last ticket run is through: a parallel sibling still working
       // must be merged and moved to Done by its own pipeline when it finishes.
-      if (this.busyTicketRuns(projectId) === 0) this.autoChainProjects.delete(projectId);
+      if (chain && this.busyTicketRuns(projectId) === 0) this.autoChainProjects.delete(projectId);
       return [];
     }
-    this.autoChainProjects.add(projectId);
+    if (chain) this.autoChainProjects.add(projectId);
 
     const started: { ticket: Ticket; run: Run }[] = [];
     for (const next of queue) {
@@ -909,6 +939,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   update(id: string, input: UpdateTicketBody): Ticket {
     const current = this.row(id);
     const { dependsOn, ...patch } = UpdateTicketBodySchema.parse(input);
+    const blockedBefore = dependsOn ? this.dependenciesOf([id]) : undefined;
     if (dependsOn) this.replaceDependencies(current, dependsOn);
     const set: Partial<TicketRow> = { ...patch, updatedAt: new Date() };
     // Moved to another column without an explicit slot: append at the bottom.
@@ -919,15 +950,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if ((patch.status && patch.status !== current.status) || (patch.title && patch.title !== current.title)) {
       this.publishDependents(id);
     }
-    // A person closed a ticket by hand: tickets waiting for it may start now. Only then, or when the
-    // factory already chains this project; a plain board move must not start agents nobody asked for.
-    if (
-      patch.status === 'done' &&
-      current.status !== 'done' &&
-      getFactorySettings(this.db).autoPickupReady &&
-      (this.autoChainProjects.has(current.projectId) || this.dependentIds(id).length > 0)
-    ) {
-      void this.dispatchNextReadyTicket(current.projectId).catch(() => undefined);
+    // A person closed a ticket by hand: the tickets waiting for it may start now (the whole queue
+    // when the factory already chains this project); a plain board move starts nothing else.
+    if (patch.status === 'done' && current.status !== 'done') {
+      this.dispatchUnblocked(current.projectId, this.dependentIds(id));
+    } else if (blockedBefore && ticket.status !== 'done') {
+      const freed = this.nowUnblocked([id], blockedBefore);
+      if (freed.length > 0) this.dispatchUnblocked(current.projectId, freed);
     }
     return ticket;
   }
@@ -982,10 +1011,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   remove(id: string): void {
     const row = this.row(id);
     const waiting = this.dependentIds(id);
+    const blockedBefore = this.dependenciesOf(waiting);
     this.db.delete(tickets).where(eq(tickets.id, id)).run();
     this.emit('removed', { id, projectId: row.projectId });
     // Their edge to it went with it (ON DELETE CASCADE).
     this.publishTickets(waiting);
+    const freed = this.nowUnblocked(waiting, blockedBefore);
+    if (freed.length > 0) this.dispatchUnblocked(row.projectId, freed);
   }
 
   /**
