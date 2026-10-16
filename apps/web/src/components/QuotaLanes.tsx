@@ -1,8 +1,19 @@
-import { type AgentId, type Credential, PROVIDER_REGISTRY, type QuotaWindow, type Run, type SchedulerState } from '@emberline/protocol';
+import {
+  type AgentId,
+  type Credential,
+  type FactorySettings,
+  PROVIDER_REGISTRY,
+  type QuotaWindow,
+  type Route,
+  type Run,
+  type SchedulerState,
+} from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, errorMessage } from '../api';
+import { handoffCandidates, HANDOFF_STATES } from '../handoffCandidates';
 import { liveKeys, useScheduler } from '../hooks/liveData';
+import { useApi } from '../hooks/useApi';
 import { withHandoff } from '../runHandoff';
 import { formatCountdown, useNow } from '../time';
 import { CREDENTIAL_LABEL } from './RouteChainEditor';
@@ -58,42 +69,77 @@ export function QuotaLanes({ windows, compact = false }: { windows: QuotaWindow[
   );
 }
 
-/** "Continue with…" for a waiting run: its chain's other routes. */
+const SOURCE_LABEL = { run: "This run's chain", persona: 'Persona chain', provider: 'Other providers' } as const;
+
+const routeKey = (r: Route) => `${r.agent}|${r.model}|${r.credential}`;
+
+const routeLabel = (r: Route) =>
+  `${providerLabel(r.agent)} · ${r.model}${r.credential === 'login' ? '' : ` (${CREDENTIAL_LABEL[r.credential]}, paid)`}`;
+
+/**
+ * "Continue with…" for a waiting run: its own chain, its persona's chain, then each enabled
+ * provider's default route, as one select so it fits the Fleet card and the inspector header.
+ */
 export function HandoffMenu({ run }: { run: Run }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [picked, setPicked] = useState('');
   const client = useQueryClient();
-  const routes = run.routes.filter((_, i) => i !== run.routeIndex);
-  if (run.handedOffTo || run.cancelled || !(run.state === 'rate_limited' || run.state === 'failed') || routes.length === 0) {
-    return null;
-  }
+  const { data: settings } = useApi<FactorySettings>('/api/factory/settings', 15_000);
+  const { scheduler } = useScheduler();
+  if (run.handedOffTo || run.cancelled || !HANDOFF_STATES.has(run.state)) return null;
+  const candidates = handoffCandidates(run, settings, scheduler?.windows);
+  if (candidates.length === 0) return null;
+  const selected =
+    candidates.find((c) => routeKey(c.route) === picked) ?? candidates.find((c) => !c.exhausted) ?? candidates[0]!;
+  const groups = (['run', 'persona', 'provider'] as const)
+    .map((source) => [source, candidates.filter((c) => c.source === source)] as const)
+    .filter(([, list]) => list.length > 0);
+  const id = `handoff-${run.id}`;
   return (
     <div className="handoff-menu" role="group" aria-label="Continue with">
-      <span>Continue with</span>
-      {routes.map((route) => (
-        <button
-          key={`${route.agent}-${route.model}-${route.credential}`}
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={busy}
-          onClick={async () => {
-            try {
-              setError(null);
-              setBusy(true);
-              const successor = await api<Run>(`/api/runs/${run.id}/handoff`, 'POST', { route });
-              // Flip the predecessor to "handed off" now instead of waiting for the SSE event.
-              client.setQueryData<Run[]>(liveKeys.runs, (list) => (list ? withHandoff(list, run, successor) : list));
-            } catch (e) {
-              setError(errorMessage(e));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {providerLabel(route.agent)} · {route.model}
-          {route.credential === 'login' ? '' : ` (${CREDENTIAL_LABEL[route.credential]}, paid)`}
-        </button>
-      ))}
+      <label htmlFor={id}>Continue with</label>
+      <select
+        id={id}
+        className="input"
+        value={routeKey(selected.route)}
+        disabled={busy}
+        onChange={(e) => {
+          setError(null);
+          setPicked(e.target.value);
+        }}
+      >
+        {groups.map(([source, list]) => (
+          <optgroup key={source} label={SOURCE_LABEL[source]}>
+            {list.map((c) => (
+              <option key={routeKey(c.route)} value={routeKey(c.route)} disabled={c.exhausted}>
+                {routeLabel(c.route)}
+                {c.exhausted ? ' — out of quota' : ''}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        disabled={busy || selected.exhausted}
+        onClick={async () => {
+          try {
+            setError(null);
+            setBusy(true);
+            const successor = await api<Run>(`/api/runs/${run.id}/handoff`, 'POST', { route: selected.route });
+            // Flip the predecessor to "handed off" now instead of waiting for the SSE event.
+            client.setQueryData<Run[]>(liveKeys.runs, (list) => (list ? withHandoff(list, run, successor) : list));
+          } catch (e) {
+            setError(errorMessage(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        Continue
+      </button>
       {error && <span className="error-text" role="alert">{error}</span>}
     </div>
   );

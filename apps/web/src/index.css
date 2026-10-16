@@ -3647,3 +3647,12 @@ dialog.cmd-dialog::backdrop {
   flex-wrap: wrap;
   margin: 6px 0;
 }
+
+.handoff-menu .input {
+  width: auto;
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 22rem;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
