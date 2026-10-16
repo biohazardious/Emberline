@@ -49,7 +49,7 @@ import {
   StartPreviewBody as StartPreviewBodySchema,
   type ProjectUsageDay,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gte, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -1237,6 +1237,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return readWorktreeArtifact(row.worktreePath, relPath);
   }
 
+  /** Another run (e.g. a handoff successor) working in the same worktree. */
+  private worktreeSharedWith(row: RunRow): RunRow | undefined {
+    return this.db
+      .select()
+      .from(runs)
+      .where(and(eq(runs.worktreePath, row.worktreePath), ne(runs.id, row.id)))
+      .get();
+  }
+
   /**
    * Prunes the linked git worktree (`/workspaces/.worktrees/...`) for an ended run, keeping
    * the run record and git branch intact. Active runs must be stopped first.
@@ -1250,6 +1259,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!row.endedAt && row.state !== 'done' && row.state !== 'failed') {
       throw conflict('stop the active run before pruning its worktree');
     }
+    const shared = this.worktreeSharedWith(row);
+    if (shared) throw conflict(`run ${shared.id.slice(0, 8)} still works in this worktree`);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');
     const removed = await pruneWorktree(project.path, row.worktreePath);
@@ -1562,7 +1573,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const proj = projectMap.get(projId);
       for (const row of toRemove) {
         if (await this.mustKeepForReview(row, proj?.path)) continue;
-        if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path) {
+        if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
@@ -1733,7 +1744,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           const proj = projectMap.get(projId);
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
             if (await this.mustKeepForReview(stale, proj?.path)) continue;
-            if (proj && stale.worktreePath && stale.worktreePath !== proj.path) {
+            if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);

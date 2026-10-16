@@ -79,6 +79,30 @@ describe('NotificationService run events', () => {
     runs.emit('run', run('failed', 'process_exited'), true);
     expect(sent).toEqual(['waiting_input', 'run_finished']);
   });
+
+  it('does not announce a handed-off run as completed', async () => {
+    const { EventEmitter } = await import('node:events');
+    const runs = new EventEmitter();
+    const service = new NotificationService({} as Db, runs as never);
+    const sent: string[] = [];
+    service.getSettings = () =>
+      ({
+        enabled: true,
+        provider: 'webhook',
+        url: 'http://127.0.0.1:9/unused',
+        token: null,
+        onRateLimited: true,
+        onQuotaResumed: true,
+        onWaitingInput: true,
+        onRunFinished: true,
+      }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push(msg.event);
+      return { ok: true, status: 200, error: null };
+    };
+    runs.emit('run', { id: 'r1', title: 'T', branch: null, state: 'done', lastEvent: 'Stop', cancelled: false, handedOffTo: 'x' }, true);
+    expect(sent).toEqual([]);
+  });
 });
 
 describe('NotificationService quota lanes', () => {

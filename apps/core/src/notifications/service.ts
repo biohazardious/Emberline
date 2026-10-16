@@ -78,7 +78,7 @@ export class NotificationService {
               tags: ['hourglass_flowing_sand', 'emberline'],
             });
           }
-        } else if ((run.state === 'done' || run.state === 'failed') && !run.cancelled) {
+        } else if ((run.state === 'done' || run.state === 'failed') && !run.cancelled && !run.handedOffTo) {
           const cfg = this.getSettings();
           if (cfg.enabled && cfg.onRunFinished) {
             const failed = run.state === 'failed';

@@ -157,6 +157,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     super();
     this.setMaxListeners(0);
     runs.on('run', (run, stateChanged) => {
+      // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
+      if (run.handedOffTo) return;
       if (run.ticketId) {
         if (stateChanged) this.followRun(run.ticketId, run.state);
         else if (run.lastEvent === 'prompt_sent') this.followRun(run.ticketId, 'working');
@@ -663,7 +665,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Runs created for the project in the last 24 hours. */
   runsLast24h(projectId: string): number {
     const since = Date.now() - 24 * 60 * 60_000;
-    return this.runs.list().filter((r) => r.projectId === projectId && Date.parse(r.createdAt) >= since).length;
+    return this.runs.list().filter((r) => r.projectId === projectId && !r.predecessorRunId && Date.parse(r.createdAt) >= since).length;
   }
 
   dailyBudgetExhausted(projectId: string, max = getFactorySettings(this.db).maxAutoRunsPerProjectPerDay): boolean {

@@ -1,10 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { quotaWindows, runs as runsTable } from './db/schema.js';
+import { computeProjectRecommendations } from './factory/workspace-status.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -57,10 +58,30 @@ beforeEach(async () => {
   });
 });
 
+/** True while a fake CLI started from this test's directory is still running. */
+function fakeCliAlive(dir: string): boolean {
+  for (const pid of readdirSync('/proc')) {
+    if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
+    try {
+      if (readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(dir)) return true;
+    } catch {
+      // the process exited while we looked
+    }
+  }
+  return false;
+}
+
 afterEach(async () => {
   delete process.env.EMBERLINE_ANTIGRAVITY_COMMAND;
-  await t.close();
+  // Stop the agent sessions and let the fake CLIs exit before the directory is removed; under full-suite
+  // load a process that is still writing makes the removal fail with ENOTEMPTY.
+  t.scheduler.dispose();
+  for (const run of t.runs.list()) {
+    if (!run.endedAt) await t.runs.stop(run.id).catch(() => undefined);
+  }
   await ptydServer.close();
+  for (let i = 0; i < 100 && fakeCliAlive(t.dir); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
@@ -429,6 +450,73 @@ describe('lanes and policy', () => {
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
     await expect.poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 }).toContain('route_skipped');
     expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
+  });
+});
+
+describe('handed-off runs are not finished work', () => {
+  async function handedOff(seen: string[] = [], pipeline: string[] = []) {
+    const { ticketId, run } = await startTicket('Colour-blind cats');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    // The successor's own events move the ticket back to in_progress, so watch every transition.
+    t.tickets.on('ticket', (tk) => seen.push(tk.status));
+    const tickets = t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
+    const original = tickets.handleRunCompleted.bind(t.tickets);
+    tickets.handleRunCompleted = (r) => {
+      pipeline.push(r.id);
+      return original(r);
+    };
+    const successor = await t.runs.handOff(
+      run.id,
+      { agent: 'claude', model: 'opus', credential: 'login' },
+      { reason: 'quota', source: 'system', automatic: true },
+    );
+    return { ticketId, run, successor };
+  }
+
+  it('does not run the pipeline or move the ticket; the successor finishing does', async () => {
+    const seen: string[] = [];
+    const pipeline: string[] = [];
+    const { ticketId, run, successor } = await handedOff(seen, pipeline);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(pipeline).not.toContain(run.id);
+    expect(seen).not.toContain('review');
+    expect(seen).not.toContain('done');
+    const events = (await getRun(run.id)).events.map((e) => e.type);
+    expect(events).not.toContain('merged_to_main');
+    expect(events).not.toContain('pipeline_failed');
+    expect((await api('GET', `/api/tickets/${ticketId}`)).json().status).toBe('in_progress');
+
+    const token = await work(successor);
+    await hook(successor.id, 'Stop', token);
+    await expect
+      .poll(async () => (await api('GET', `/api/tickets/${ticketId}`)).json().status, { timeout: 5_000 })
+      .not.toBe('in_progress');
+  });
+
+  it('does not count successors against the daily auto-run budget', async () => {
+    const { run } = await handedOff();
+    expect(t.tickets.runsLast24h(run.projectId)).toBe(1);
+  });
+
+  it('GC keeps the worktree the successor is working in', async () => {
+    const { run, successor } = await handedOff();
+    const res = await api('POST', `/api/runs/${run.id}/worktree/prune`);
+    expect(res.statusCode).toBe(409);
+    expect(existsSync(successor.worktreePath)).toBe(true);
+  });
+});
+
+describe('workspace status ignores handed-off runs', () => {
+  it('a handed-off coder run does not trigger the QA recommendation', () => {
+    const recommend = (handedOffTo: string | null) =>
+      computeProjectRecommendations(
+        { id: 'p' } as never,
+        { exists: true, content: 'x'.repeat(200) } as never,
+        [],
+        [{ id: 'r', state: 'done', persona: 'coder', handedOffTo }] as never,
+      ).map((r) => r.id);
+    expect(recommend(null)).toContain('run-qa-verification');
+    expect(recommend('successor')).not.toContain('run-qa-verification');
   });
 });
 

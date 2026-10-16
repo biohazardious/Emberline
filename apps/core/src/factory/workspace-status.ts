@@ -37,7 +37,7 @@ export function computeProjectRecommendations(
 
   // 2. Completed runs waiting in Review
   const reviewTickets = projectTickets.filter((t) => t.status === 'review');
-  const finishedRuns = projectRuns.filter((r) => r.state === 'done');
+  const finishedRuns = projectRuns.filter((r) => r.state === 'done' && !r.handedOffTo);
   if (reviewTickets.length > 0) {
     const latestReviewRun = finishedRuns.find((r) => reviewTickets.some((t) => t.id === r.ticketId)) ?? finishedRuns[0];
     recommendations.push({
@@ -88,7 +88,7 @@ export function computeProjectRecommendations(
   }
 
   // 5. Recommend QA verification if coder runs completed without a QA run
-  const hasCoderDone = projectRuns.some((r) => r.state === 'done' && r.persona === 'coder');
+  const hasCoderDone = projectRuns.some((r) => r.state === 'done' && !r.handedOffTo && r.persona === 'coder');
   const hasQaRun = projectRuns.some((r) => r.persona === 'qa');
   if (hasCoderDone && !hasQaRun) {
     recommendations.push({
