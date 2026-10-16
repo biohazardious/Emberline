@@ -565,7 +565,7 @@ function FleetPane({
             aria-label={`Select ${run.title ?? 'run'} for a bulk prompt`}
           />
         )}
-        <RunStatePill state={run.state} cancelled={run.cancelled} />
+        <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
         <PersonaBadge persona={run.persona} />
         <button type="button" className="fleet-pane-title" onClick={onInspect} title="Open run inspector & timeline">
           {run.title ?? project?.name ?? 'Agent Run'}

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { nextStateFromHook, stateAfterExit } from './index.js';
-import { isLimitText, parseResetTime, rateLimitFromHook, rateLimitFromScreen, stripAnsi } from './ratelimit.js';
+import {
+  isLimitText,
+  parseResetTime,
+  rateLimitFromHook,
+  rateLimitFromScreen,
+  stripAnsi,
+  transientErrorFromHook,
+} from './ratelimit.js';
 
 // 2026-10-13 09:30 UTC (12:30 in Istanbul, UTC+3; 05:30 in New York, UTC-4).
 const NOW = new Date('2026-10-13T09:30:00Z');
@@ -127,5 +134,39 @@ describe('limit-aware state machine', () => {
     ]) {
       expect(isLimitText(text), text).toBe(true);
     }
+  });
+});
+
+describe('transientErrorFromHook', () => {
+  const agy503 =
+    'Session e9ad1581 connected error: failed to send message: send failed; already reported to the user: Eligibility check failed: failed to get load code assist response: UNAVAILABLE (code 503): The service is currently unavailable. Turn ERROR';
+
+  it('retries provider outages and network errors', () => {
+    for (const payload of [
+      { error: 'cli_exit', reason: agy503, message: agy503 },
+      { error: 'server_error', last_assistant_message: 'API Error: 500 Internal server error' },
+      { error: 'unknown', last_assistant_message: 'API Error: 529 {"type":"overloaded_error"}' },
+      { error: 'cli_exit', message: 'request to https://api.openai.com failed, reason: socket hang up' },
+      { error: 'cli_exit', message: 'getaddrinfo EAI_AGAIN generativelanguage.googleapis.com' },
+      { error: 'server_error' },
+    ]) {
+      expect(transientErrorFromHook('StopFailure', payload), JSON.stringify(payload)).toBeDefined();
+    }
+    expect(transientErrorFromHook('StopFailure', { error: 'cli_exit', message: agy503 })?.message).toContain('UNAVAILABLE (code 503)');
+  });
+
+  it('never retries sign-in, billing, quota, request errors or usage limits', () => {
+    for (const payload of [
+      { error: 'authentication_failed', last_assistant_message: 'API Error: 503 upstream' },
+      { error: 'cli_exit', message: 'Error: 401 Unauthorized — please log in' },
+      { error: 'billing_error', last_assistant_message: 'Credit balance is too low' },
+      { error: 'cli_exit', message: 'insufficient_quota: You exceeded your current quota' },
+      { error: 'invalid_request', last_assistant_message: 'prompt is too long' },
+      { error: 'rate_limit', last_assistant_message: '5-hour limit reached ∙ resets 2pm' },
+      { error: 'cli_exit', message: 'codex exited with code 2' },
+    ]) {
+      expect(transientErrorFromHook('StopFailure', payload), JSON.stringify(payload)).toBeUndefined();
+    }
+    expect(transientErrorFromHook('Stop', { last_assistant_message: 'The 503 page now renders' })).toBeUndefined();
   });
 });

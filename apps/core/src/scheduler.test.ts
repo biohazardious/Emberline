@@ -2,8 +2,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { quotaWindows } from './db/schema.js';
+import { quotaWindows, runs as runsTable } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -332,5 +333,110 @@ describe('scheduler', () => {
     expect(stopped).toMatchObject({ state: 'failed' });
     expect(stopped.endedAt).not.toBeNull();
     expect((await scheduler()).queued).toBe(0);
+  });
+
+  describe('automatic retries after temporary provider errors', () => {
+    const outage = {
+      error: 'cli_exit',
+      message: 'error: failed to send message: UNAVAILABLE (code 503): The service is currently unavailable.',
+    };
+    /** Simulates the wait: the stored retry time is now in the past. */
+    const retryDue = (id: string) =>
+      t.db.update(runsTable).set({ autoRetryAt: new Date(Date.now() - 1_000) }).where(eq(runsTable.id, id)).run();
+
+    it('waits without pausing the queue, then continues the turn', async () => {
+      const a = await submit();
+      const tokenA = await work(a);
+      await hook(a.id, 'StopFailure', tokenA, outage);
+
+      const waiting = await getRun(a.id);
+      expect(waiting).toMatchObject({ state: 'rate_limited', autoRetry: { attempt: 1, max: 3 } });
+      expect(Date.parse(waiting.autoRetry?.at ?? '') - Date.now()).toBeGreaterThan(50_000);
+      expect(waiting.events.find((e) => e.type === 'retry_scheduled')?.payload).toMatchObject({
+        attempt: 1,
+        max: 3,
+        reason: expect.stringContaining('UNAVAILABLE (code 503)'),
+      });
+      expect((await scheduler()).window).toBeNull();
+
+      // Not before its time.
+      await t.scheduler.tick();
+      expect(readLines(a.id)).not.toContain('Continue where you left off.');
+
+      retryDue(a.id);
+      await t.scheduler.tick();
+      await expect.poll(() => readLines(a.id), { timeout: 5_000 }).toContain('Continue where you left off.');
+      expect((await getRun(a.id)).autoRetry).toBeNull();
+    });
+
+    it('respawns an agent whose process exited after the error', async () => {
+      const a = await submit();
+      const tokenA = await work(a);
+      await hook(a.id, 'StopFailure', tokenA, outage);
+      await t.ptyd.get().write(a.terminalId ?? '', 'exit\r');
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return (await getRun(a.id)).endedAt;
+          },
+          { timeout: 5_000 },
+        )
+        .not.toBeNull();
+      expect((await getRun(a.id)).state).toBe('rate_limited');
+
+      retryDue(a.id);
+      await t.scheduler.tick();
+      await expect
+        .poll(() => readFileSync(path.join(t.dir, `args-${a.id}`), 'utf8').trim().split('\n').at(-1), { timeout: 5_000 })
+        .toContain(`--resume sess-${a.id.slice(0, 4)} -- Continue where you left off.`);
+    });
+
+    it('gives up after three retries, and a finished turn earns them back', async () => {
+      const a = await submit();
+      const token = await work(a);
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await hook(a.id, 'StopFailure', token, outage);
+        expect((await getRun(a.id)).autoRetry?.attempt).toBe(attempt);
+        retryDue(a.id);
+        await t.scheduler.tick();
+        await expect.poll(async () => (await getRun(a.id)).state, { timeout: 5_000 }).toBe('starting');
+        await hook(a.id, 'UserPromptSubmit', token);
+      }
+      await hook(a.id, 'StopFailure', token, outage);
+      const gaveUp = await getRun(a.id);
+      expect(gaveUp).toMatchObject({ state: 'waiting_input', autoRetry: null });
+      expect(gaveUp.events.at(-1)).toMatchObject({ type: 'retry_gave_up', payload: { attempts: 3 } });
+
+      await hook(a.id, 'UserPromptSubmit', token);
+      await hook(a.id, 'Stop', token);
+      await hook(a.id, 'UserPromptSubmit', token);
+      await hook(a.id, 'StopFailure', token, outage);
+      expect((await getRun(a.id)).autoRetry?.attempt).toBe(1);
+    });
+
+    it('never retries sign-in errors, and a stop cancels a pending retry', async () => {
+      const a = await submit();
+      const tokenA = await work(a);
+      await hook(a.id, 'StopFailure', tokenA, { error: 'cli_exit', message: 'Error: 401 Unauthorized, please log in' });
+      expect(await getRun(a.id)).toMatchObject({ state: 'waiting_input', autoRetry: null });
+
+      await hook(a.id, 'UserPromptSubmit', tokenA);
+      await hook(a.id, 'StopFailure', tokenA, outage);
+      expect((await getRun(a.id)).state).toBe('rate_limited');
+      await api('POST', `/api/runs/${a.id}/stop`);
+      retryDue(a.id);
+      await t.scheduler.tick();
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return (await getRun(a.id)).state;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe('failed');
+      expect((await getRun(a.id)).events.map((e) => e.type)).not.toContain('resumed');
+    });
   });
 });

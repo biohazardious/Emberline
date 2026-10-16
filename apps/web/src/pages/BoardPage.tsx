@@ -443,7 +443,7 @@ function TicketCard({
         <p className="card-title">{ticket.title}</p>
         {run && (
           <div className="card-foot">
-            <RunStatePill state={run.state} cancelled={run.cancelled} />
+            <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
             {run.telemetry && run.telemetry.totalTokens > 0 && (
               <span
                 className="card-event mono"
@@ -578,7 +578,7 @@ function TicketDrawer({
             {ticket.key}
           </span>
           <PersonaBadge persona={persona} showFull />
-          {run && <RunStatePill state={run.state} cancelled={run.cancelled} />}
+          {run && <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />}
           {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
           <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
           {run && (
@@ -725,7 +725,7 @@ function TicketDrawer({
             <h2>Agent Execution</h2>
             {run && (
               <div className="agent-run">
-                <RunStatePill state={run.state} cancelled={run.cancelled} />
+                <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
                 <span className="badge badge-soft mono">{formatAgentDisplayName(run.agent)}</span>
                 {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
                 {run.terminalId && (
@@ -764,8 +764,9 @@ function TicketDrawer({
           {run?.state === 'rate_limited' && (
             <div className="agent-note agent-note-limit">
               <span>
-                Paused by the usage limit. {formatAgentDisplayName(run.agent)} continues automatically when the window
-                resets.
+                {run.autoRetry
+                  ? `A temporary provider error stopped the turn. ${formatAgentDisplayName(run.agent)} retries automatically at ${new Date(run.autoRetry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (attempt ${run.autoRetry.attempt} of ${run.autoRetry.max}).`
+                  : `Paused by the usage limit. ${formatAgentDisplayName(run.agent)} continues automatically when the window resets.`}
               </span>
               <button
                 id="drawer-resume"

@@ -10,7 +10,8 @@ const BASE_TITLE = 'Emberline';
 export function needsAttention(run: Run, now = Date.now()): boolean {
   // A fresh session reports waiting_input until its first prompt lands: not a person's turn yet.
   if (run.state === 'waiting_input') return run.lastEvent !== 'SessionStart';
-  if (run.state === 'rate_limited') return true;
+  // A temporary provider error retries on its own; a usage limit is worth knowing about.
+  if (run.state === 'rate_limited') return !run.autoRetry;
   if (run.state === 'failed' && !run.cancelled)
     return now - Date.parse(run.stateChangedAt) < FAILED_RECENT_MS;
   return false;

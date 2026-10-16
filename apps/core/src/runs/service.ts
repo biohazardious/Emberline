@@ -13,6 +13,7 @@ import {
   type RateLimitInfo,
   rateLimitFromHook,
   stateAfterExit,
+  transientErrorFromHook,
 } from '@emberline/adapter-claude';
 import {
   type AgentModelId,
@@ -136,6 +137,12 @@ const TOOL_INPUT_SUMMARY_MAX = 2_000;
 const LAST_SCREEN_LINES = 200;
 const LAST_SCREEN_MAX = 64 * 1024;
 
+/**
+ * Waits before each automatic retry of a turn that died on a temporary provider error (503,
+ * overloaded, network). After the last one the run is left for the user as before.
+ */
+export const AUTO_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+
 const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
 /** Scrollback lines read when looking for a limit banner on screen. */
@@ -163,6 +170,10 @@ export const toRun = (row: RunRow): Run => ({
   endedAt: row.endedAt?.toISOString() ?? null,
   resumable: row.endedAt !== null && row.agentSessionId !== null && row.cancelledAt === null,
   cancelled: row.cancelledAt !== null,
+  autoRetry:
+    row.state === 'rate_limited' && row.autoRetryAt
+      ? { attempt: row.autoRetryCount, max: AUTO_RETRY_DELAYS_MS.length, at: row.autoRetryAt.toISOString() }
+      : null,
 });
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -534,6 +545,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
     const row = this.row(id);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
+    // A pending automatic retry is taken now (by the scheduler or the user's own resume).
+    if (row.autoRetryAt) this.db.update(runs).set({ autoRetryAt: null }).where(eq(runs.id, id)).run();
     if (row.state === 'queued') return this.launch(id);
     if (row.ptydSessionId && !row.endedAt) {
       await this.typePrompt(row.ptydSessionId, text);
@@ -806,10 +819,23 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       patch.transcriptPath = payload.transcript_path;
     }
     // A late hook (e.g. SessionEnd after a kill) must not revive an ended or stopped run.
-    const next =
-      row.endedAt || row.cancelledAt
-        ? undefined
-        : nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload);
+    const live = !row.endedAt && !row.cancelledAt;
+    let next = live ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload) : undefined;
+    // A temporary provider error: wait as `rate_limited` (no slot, no quota window) and let the
+    // scheduler retry the turn, a few times with growing delays.
+    const transient = live ? transientErrorFromHook(envelope.event, envelope.payload) : undefined;
+    let retry: { attempt: number; at: Date } | undefined;
+    if (transient && row.autoRetryCount < AUTO_RETRY_DELAYS_MS.length) {
+      const attempt = row.autoRetryCount + 1;
+      retry = { attempt, at: new Date(Date.now() + (AUTO_RETRY_DELAYS_MS[attempt - 1] ?? 0)) };
+      next = row.state === 'rate_limited' ? undefined : 'rate_limited';
+      patch.autoRetryCount = attempt;
+      patch.autoRetryAt = retry.at;
+    } else if (envelope.event === 'Stop' && (row.autoRetryCount > 0 || row.autoRetryAt)) {
+      // The turn finished: later errors get their full set of retries again.
+      patch.autoRetryCount = 0;
+      patch.autoRetryAt = null;
+    }
     const run = this.record(row.id, {
       source: 'hook',
       type: envelope.event,
@@ -817,6 +843,25 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       payload: summarizePayload(payload),
       patch,
     });
+    if (retry && transient) {
+      const max = AUTO_RETRY_DELAYS_MS.length;
+      const minutes = Math.round((retry.at.getTime() - Date.now()) / 60_000);
+      this.note(row.id, 'retry_scheduled', {
+        attempt: retry.attempt,
+        max,
+        retryAt: retry.at.toISOString(),
+        reason: transient.message,
+        message: `Temporary provider error; retrying in ${minutes} min (attempt ${retry.attempt}/${max}): ${transient.message}`,
+      });
+      return this.getRun(row.id);
+    }
+    if (transient) {
+      this.note(row.id, 'retry_gave_up', {
+        attempts: row.autoRetryCount,
+        reason: transient.message,
+        message: `Gave up after ${row.autoRetryCount} automatic retries: ${transient.message}`,
+      });
+    }
     if (next === 'rate_limited') {
       this.emit('rateLimited', run, rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone));
     }

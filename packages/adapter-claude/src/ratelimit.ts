@@ -61,6 +61,43 @@ export function rateLimitFromHook(
   };
 }
 
+/**
+ * Errors that say nothing about the request: the provider was down, overloaded or unreachable.
+ * Retrying the same turn later usually works. Checked after {@link PERMANENT_ERROR_PATTERN}.
+ */
+const TRANSIENT_ERROR_PATTERN =
+  /\b(?:50[0234]|529)\b|service (?:is )?(?:currently |temporarily )?unavailable|\bUNAVAILABLE\b|overloaded|internal server error|bad gateway|gateway time-?out|\bECONNRESET\b|\bETIMEDOUT\b|\bECONNREFUSED\b|\bEAI_AGAIN\b|socket hang up|fetch failed|network error|connection (?:reset|refused|error|closed)|try again later/i;
+
+/** Errors a retry cannot fix: sign-in, billing, quota and malformed requests. */
+const PERMANENT_ERROR_PATTERN =
+  /unauthori[sz]ed|unauthenticated|authentication|not signed in|not logged in|log ?in required|invalid (?:api )?key|api key (?:is )?invalid|permission denied|forbidden|\b40[0134]\b|billing|credit balance|payment required|insufficient[_ ]quota|quota exceeded|invalid[_ ]request|context (?:length|window)|prompt is too long|max_output_tokens/i;
+
+/** Claude Code's `StopFailure` error kinds. */
+const TRANSIENT_ERROR_KINDS = new Set(['server_error', 'overloaded', 'api_error', 'network_error']);
+const PERMANENT_ERROR_KINDS = new Set(['authentication_failed', 'billing_error', 'invalid_request', 'max_output_tokens']);
+
+export interface TransientErrorInfo {
+  /** The error as reported (trimmed, single line). */
+  message: string;
+}
+
+/**
+ * A turn that died on a temporary provider or network error (a `StopFailure` that is not a usage
+ * limit), so trying the same turn again later is worthwhile. Sign-in, billing, quota and request
+ * errors never count.
+ */
+export function transientErrorFromHook(event: HookEventName, payload: HookPayload): TransientErrorInfo | undefined {
+  if (event !== 'StopFailure' || rateLimitFromHook(event, payload)) return undefined;
+  const kind = asString(payload.error);
+  const text = [payload.last_assistant_message, payload.error_details, payload.message, payload.reason]
+    .map((value) => asString(value).trim())
+    .filter((value, index, all) => value && all.indexOf(value) === index)
+    .join(' — ');
+  if (PERMANENT_ERROR_KINDS.has(kind) || PERMANENT_ERROR_PATTERN.test(text)) return undefined;
+  if (!TRANSIENT_ERROR_KINDS.has(kind) && !TRANSIENT_ERROR_PATTERN.test(text)) return undefined;
+  return { message: oneLine(text || kind) };
+}
+
 /** Strips ANSI/OSC escape sequences and control characters from terminal output. */
 export function stripAnsi(data: string): string {
   return (

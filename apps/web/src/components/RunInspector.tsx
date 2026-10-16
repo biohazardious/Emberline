@@ -319,7 +319,7 @@ export function RunInspector({
     <aside className="dock-inspector" aria-label="Run inspector">
       <header className="dock-head">
         <div className="dock-head-main">
-          <RunStatePill state={run.state} cancelled={run.cancelled} />
+          <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
           <strong className="dock-title">{run.title ?? projectName ?? 'Agent Run'}</strong>
           {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
           <span className="badge mono">{run.permissionMode}</span>

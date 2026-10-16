@@ -576,7 +576,7 @@ function Shell() {
                     <span className={`dot run-${r.state}`} />
                     <span className="nav-label">{title}</span>
                     {r.persona && r.persona !== 'coder' && <PersonaBadge persona={r.persona} />}
-                    <RunStatePill state={r.state} cancelled={r.cancelled} />
+                    <RunStatePill state={r.state} cancelled={r.cancelled} autoRetry={r.autoRetry} />
                   </button>
                 </li>
               );

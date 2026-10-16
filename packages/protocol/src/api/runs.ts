@@ -518,6 +518,11 @@ export const Run = z.object({
   resumable: z.boolean(),
   /** The user stopped this run; it ended as `failed` (or `done` if its work was finished) and never resumes. */
   cancelled: z.boolean(),
+  /**
+   * Set while the run waits (as `rate_limited`) to retry a turn that died on a temporary provider
+   * error: the attempt number (1-based), the most attempts made and when it retries.
+   */
+  autoRetry: z.object({ attempt: z.number().int(), max: z.number().int(), at: z.string() }).nullable().optional(),
   /** Token & tool execution telemetry (no monetary pricing). */
   telemetry: RunTelemetry.optional(),
 });

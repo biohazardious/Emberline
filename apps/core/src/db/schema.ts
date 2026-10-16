@@ -83,6 +83,10 @@ export const runs = sqliteTable(
     endedAt: integer('ended_at', { mode: 'timestamp_ms' }),
     /** Set when a user stopped the run; a cancelled run never resumes or turns `done` again. */
     cancelledAt: integer('cancelled_at', { mode: 'timestamp_ms' }),
+    /** Automatic retries after temporary provider errors since the last finished turn. */
+    autoRetryCount: integer('auto_retry_count').notNull().default(0),
+    /** When the scheduler retries the run (it waits as `rate_limited` until then); null otherwise. */
+    autoRetryAt: integer('auto_retry_at', { mode: 'timestamp_ms' }),
   },
   (t) => [index('runs_project_idx').on(t.projectId)],
 );

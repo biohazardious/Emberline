@@ -10,7 +10,7 @@ import {
   type UpdateSchedulerBody,
   UpdateSchedulerBody as UpdateSchedulerBodySchema,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { quotaWindows, runs, settings, tickets } from '../db/schema.js';
@@ -66,6 +66,8 @@ interface SchedulerEvents {
  * - A rate limit in any run opens a quota window: dispatch pauses until `resumeAt`
  *   (reset + jitter, or a 15-min probe when the reset time is unknown).
  * - When the window closes, rate-limited runs resume first (by ticket priority), then the queue.
+ * - A run hit by a temporary provider error also waits as `rate_limited`, without opening a window,
+ *   and is retried once its own `autoRetryAt` has passed.
  * All state lives in SQLite; `tick()` derives everything from it, so restarts lose nothing.
  */
 export class Scheduler extends EventEmitter<SchedulerEvents> {
@@ -212,7 +214,13 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         .select({ id: runs.id, state: runs.state })
         .from(runs)
         .leftJoin(tickets, eq(tickets.id, runs.ticketId))
-        .where(eq(runs.state, state))
+        .where(
+          and(
+            eq(runs.state, state),
+            // An automatic retry waits for its own time, independent of quota windows.
+            or(isNull(runs.autoRetryAt), lte(runs.autoRetryAt, new Date())),
+          ),
+        )
         .orderBy(desc(priority), asc(order))
         .all();
     return [...select('rate_limited', runs.stateChangedAt), ...select('queued', runs.createdAt)];

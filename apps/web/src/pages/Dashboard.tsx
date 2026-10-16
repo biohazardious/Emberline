@@ -684,7 +684,7 @@ function RunRow({
     run.lastEvent !== 'worktree_pruned';
   const body = (
     <>
-      <RunStatePill state={run.state} cancelled={run.cancelled} />
+      <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
       <PersonaBadge persona={run.persona} />
       <span className="row-title">{run.title ?? projectName ?? 'project'}</span>
       {run.title && projectName && <span className="badge">{projectName}</span>}
@@ -733,7 +733,9 @@ function RunRow({
           onClick={onResume}
           title={
             run.state === 'rate_limited'
-              ? 'Try now instead of waiting for the reset'
+              ? run.autoRetry
+                ? 'Retry now instead of waiting'
+                : 'Try now instead of waiting for the reset'
               : `Continue this ${run.agent ?? 'agent'} session`
           }
         >

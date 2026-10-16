@@ -57,7 +57,7 @@ export function ReviewPage({
               ← Board
             </Link>
           )}
-          <RunStatePill state={run.state} cancelled={run.cancelled} />
+          <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} />
           <strong style={{ fontSize: '0.88rem' }}>
             {run.title ?? run.prompt.slice(0, 72)}
           </strong>
