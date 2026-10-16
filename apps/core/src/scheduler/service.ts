@@ -118,10 +118,14 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         this.runs.note(run.id, 'rate_limit_failed', { message: error instanceof Error ? error.message : String(error) }),
       );
     });
-    runs.on('run', (_run, stateChanged) => {
+    runs.on('run', (run, stateChanged) => {
+      if (run.endedAt) this.forgetSkipped(run.id);
       if (stateChanged) this.kick();
     });
-    runs.on('removed', () => this.kick());
+    runs.on('removed', (id) => {
+      this.forgetSkipped(id);
+      this.kick();
+    });
   }
 
   start(): void {
@@ -362,6 +366,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     return false;
   }
 
+  /** Drops a finished or removed run's `route_skipped` memory so the set stays bounded. */
+  private forgetSkipped(runId: string): void {
+    for (const key of this.skipped) if (key.startsWith(`${runId}|`)) this.skipped.delete(key);
+  }
+
   private async onRateLimited(run: Run, fromHook: RateLimitInfo | undefined): Promise<void> {
     const lane: Lane = { agent: run.agent, credential: run.credential, pool: fromHook?.pool ?? '*' };
     // Synchronously, so no dispatch pass can resume this run before the window exists.
@@ -376,7 +385,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     const onScreen = screen
       ? rateLimitFromScreen(screen, new Date(), this.config.timeZone, { agent: run.agent, model: run.model })
       : undefined;
-    if (onScreen?.resetsAt) this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen');
+    if (onScreen?.resetsAt) this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen', lane.pool);
   }
 
   /** Policy `inFlight = fallback`: move the limited run to the first route whose lane is open. */
@@ -397,7 +406,14 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   }
 
   /** Opens (or refines / re-opens) the quota window of `lane` for a limit hit. */
-  private recordLimit(runId: string, lane: Lane, info: RateLimitInfo | undefined, source: ResetSource): void {
+  private recordLimit(
+    runId: string,
+    lane: Lane,
+    info: RateLimitInfo | undefined,
+    source: ResetSource,
+    /** Pool of the window the hook opened, when the screen refines it (possibly to a narrower pool). */
+    refinePool?: string,
+  ): void {
     const now = new Date();
     const known = info?.resetsAt && info.resetsAt.getTime() > now.getTime() ? info.resetsAt : undefined;
     const effectiveSource: ResetSource = known ? source : 'probe';
@@ -418,6 +434,27 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       eq(quotaWindows.pool, lane.pool),
     );
     const open = this.db.select().from(quotaWindows).where(and(sameLane, isNull(quotaWindows.resumedAt))).get();
+    if (!open && known && refinePool !== undefined && refinePool !== lane.pool) {
+      // The hook opened a window without a reset (pool `*`); the banner names a narrower pool: narrow it in place.
+      const probe = this.db
+        .select()
+        .from(quotaWindows)
+        .where(
+          and(
+            eq(quotaWindows.agent, lane.agent),
+            eq(quotaWindows.credential, lane.credential),
+            eq(quotaWindows.pool, refinePool),
+            isNull(quotaWindows.resumedAt),
+            isNull(quotaWindows.resetsAt),
+          ),
+        )
+        .get();
+      if (probe) {
+        this.db.update(quotaWindows).set({ ...fields, pool: lane.pool }).where(eq(quotaWindows.id, probe.id)).run();
+        this.publish(true);
+        return;
+      }
+    }
     if (open) {
       // Already paused: only a better (known) reset time changes anything.
       if (known && !open.resetsAt) {

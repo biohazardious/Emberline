@@ -532,6 +532,31 @@ describe('lanes and policy', () => {
     await expect.poll(() => readFileSync(path.join(t.dir, `lines-${run.id}`), 'utf8'), { timeout: 5_000 }).toMatch(/continue/i);
   });
 
+  it('a screen banner narrows the hook\'s reset-less window in place instead of adding a second one', async () => {
+    updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
+    const coder = await startTicket('Coder', 'coder');
+    t.runs.screen = async () => 'Opus weekly limit reached ∙ resets Oct 30, 9am (UTC)\n';
+    await hook(coder.run.id, 'StopFailure', await work(coder.run), { error: 'rate_limit' });
+    await expect.poll(async () => (await scheduler()).windows[0]?.resetSource, { timeout: 5_000 }).toBe('screen');
+    const windows = (await scheduler()).windows;
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({ agent: 'claude', pool: 'opus' });
+    expect(windows[0]?.resetsAt).toBeTruthy();
+  });
+
+  it('forgets a run\'s route_skipped memory once the run ends', async () => {
+    updateFactorySettings(t.db, {
+      quotaPolicy: { inFlight: 'fallback' },
+      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'api_key' }] },
+    });
+    const { run } = await startTicket('No key');
+    await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
+    const skipped = (t.scheduler as unknown as { skipped: Set<string> }).skipped;
+    await expect.poll(() => skipped.size, { timeout: 5_000 }).toBeGreaterThan(0);
+    await t.runs.stop(run.id);
+    await expect.poll(() => skipped.size, { timeout: 5_000 }).toBe(0);
+  });
+
   it('skips an API-key fallback whose key was deleted', async () => {
     updateFactorySettings(t.db, {
       quotaPolicy: { inFlight: 'fallback' },

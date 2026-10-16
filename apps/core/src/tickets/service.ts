@@ -769,13 +769,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // The merge goes into whatever the main workspace has checked out; the column is the fallback.
     const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
     const text = conflictResolutionPrompt(branch, conflicts);
-    this.runs.note(run.id, 'conflict_resolution_requested', { conflicts });
     try {
       await this.runs.sendPrompt(run.id, text);
-      return true;
-    } catch {
+    } catch (error) {
+      this.runs.note(run.id, 'conflict_resolution_failed', { conflicts, message: error instanceof Error ? error.message : String(error) });
       return false;
     }
+    this.runs.note(run.id, 'conflict_resolution_requested', { conflicts });
+    return true;
   }
 
   list(projectId: string): Ticket[] {

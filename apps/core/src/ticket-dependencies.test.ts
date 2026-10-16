@@ -763,6 +763,12 @@ describe('one automatic merge-conflict resolution', () => {
     await expect.poll(() => runsFor(c.id).length, { timeout: 10_000 }).toBe(1);
     expect(await statusOf(b.id)).toBe('review');
     expect(await eventTypes(runB)).toContain('merge_failed');
+    // The request was never delivered, so it is not recorded as requested; the failure is.
+    const types = await eventTypes(runB);
+    expect(types).not.toContain('conflict_resolution_requested');
+    expect(types).toContain('conflict_resolution_failed');
+    const detail = (await api('GET', `/api/runs/${runB.id}`)).json() as RunDetail;
+    expect(detail.events.find((e) => e.type === 'conflict_resolution_failed')?.payload).toMatchObject({ message: 'no live session' });
     await settle(project.id);
   });
 });
