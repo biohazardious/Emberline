@@ -182,6 +182,11 @@ export interface ClaudeHookSettings {
   switchModelsOnFlag: true;
   skillOverrides: { 'auto-mode-setup': 'off' };
   modelProposedGoals: 'disabled';
+  /**
+   * The CLI pipes its status (with subscription `rate_limits`) to this runner script, which keeps the
+   * latest limits for Emberline's usage view; Emberline never reads or sends the login token itself.
+   */
+  statusLine: { type: 'command'; command: string; padding: 0 };
   /** Auto-continue a question the agent asks despite running unattended. */
   askUserQuestionTimeout?: string;
   permissions: {
@@ -228,6 +233,7 @@ export function buildHookSettings(
     switchModelsOnFlag: true,
     skillOverrides: { 'auto-mode-setup': 'off' },
     modelProposedGoals: 'disabled',
+    statusLine: { type: 'command', command: 'claude-statusline.mjs', padding: 0 },
   } as const;
   if (autonomous) {
     return {

@@ -12,7 +12,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.3.3';
+export const BROWSER_DAEMON_VERSION = '1.4.0';
 
 /**
  * S17: the same rule the daemon applies before navigating (`normalizeNavigateUrl`), checked in core
@@ -844,107 +844,6 @@ function scanTranscriptTokens(nowMs) {
 // quotaInfo {remainingFraction, resetTime} per model). Read-only, with agy's own OAuth token. The
 // token lives about an hour and agy only refreshes it while it runs, so an expired token is renewed
 // by running \`agy models\` (lists models, spends no quota) at most every 10 minutes.
-let cachedAgyQuota = null;
-let cachedAgyQuotaAt = 0;
-let agyRefreshAttemptAt = 0;
-const AGY_TOKEN_PATH = '/home/node/.gemini/antigravity-cli/antigravity-oauth-token';
-const AGY_BIN = '/opt/ai-tools/bin/agy';
-
-function readAgyToken() {
-  if (!fs.existsSync(AGY_TOKEN_PATH)) return null;
-  const token = JSON.parse(fs.readFileSync(AGY_TOKEN_PATH, 'utf8'))?.token;
-  return token?.access_token ? token : null;
-}
-
-function agyTokenExpired(token, nowMs) {
-  const expiry = token?.expiry ? Date.parse(token.expiry) : NaN;
-  return Number.isFinite(expiry) && expiry - 60_000 <= nowMs;
-}
-
-function refreshAgyToken() {
-  return new Promise((resolve) => {
-    if (!fs.existsSync(AGY_BIN)) return resolve(false);
-    const child = spawn(AGY_BIN, ['--log-file', '/dev/null', 'models'], { stdio: 'ignore', env: process.env });
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch {}
-      resolve(false);
-    }, 45_000);
-    child.on('exit', (code) => { clearTimeout(timer); resolve(code === 0); });
-    child.on('error', () => { clearTimeout(timer); resolve(false); });
-  });
-}
-const AGY_API = 'https://daily-cloudcode-pa.googleapis.com/v1internal:';
-
-async function agyCall(method, body, accessToken) {
-  const res = await fetch(AGY_API + method, {
-    method: 'POST',
-    // The service only answers requests that identify as the Antigravity client.
-    headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json', 'User-Agent': 'antigravity' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(6000),
-  });
-  if (!res.ok) throw new Error(method + ' HTTP ' + res.status);
-  return res.json();
-}
-
-function agyGroupLabel(ids) {
-  const text = ids.join(' ').toLowerCase();
-  const parts = [];
-  if (text.includes('gemini')) parts.push('Gemini');
-  if (text.includes('claude')) parts.push('Claude');
-  if (text.includes('gpt')) parts.push('GPT');
-  return parts.length ? parts.join('/') : 'Models';
-}
-
-async function getAntigravityQuota(forceRefresh = false) {
-  const nowMs = Date.now();
-  if (!forceRefresh && cachedAgyQuota && nowMs - cachedAgyQuotaAt < 60_000) return cachedAgyQuota;
-  const result = { available: false, groups: [], reason: null, updatedAt: new Date(nowMs).toISOString() };
-  try {
-    let token = readAgyToken();
-    if (token && agyTokenExpired(token, nowMs) && nowMs - agyRefreshAttemptAt > 10 * 60_000) {
-      agyRefreshAttemptAt = nowMs;
-      await refreshAgyToken();
-      token = readAgyToken();
-    }
-    if (!token) {
-      result.reason = 'not logged in';
-    } else if (agyTokenExpired(token, Date.now())) {
-      result.reason = 'token expired and could not be refreshed; run agy once to sign in again';
-    } else {
-      const load = await agyCall('loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' } }, token.access_token);
-      const project = typeof load?.cloudaicompanionProject === 'string' ? load.cloudaicompanionProject : load?.cloudaicompanionProject?.id;
-      const data = await agyCall('fetchAvailableModels', project ? { project } : {}, token.access_token);
-      const models = data?.models && typeof data.models === 'object' ? Object.entries(data.models) : [];
-      // Models that share a pool report the same fraction and reset time; models without a reset
-      // time are unmetered (fraction 1) and are left out.
-      const pools = new Map();
-      for (const [id, model] of models) {
-        const q = model?.quotaInfo;
-        if (!q || !q.resetTime || typeof q.remainingFraction !== 'number') continue;
-        const key = q.resetTime + '|' + q.remainingFraction;
-        const pool = pools.get(key) || { ids: [], remaining: q.remainingFraction, resetsAt: q.resetTime };
-        pool.ids.push(id);
-        pools.set(key, pool);
-      }
-      result.groups = [...pools.values()]
-        .map((p) => ({
-          label: agyGroupLabel(p.ids),
-          usedPercent: Math.min(100, Math.max(0, Math.round((1 - p.remaining) * 1000) / 10)),
-          resetsAt: p.resetsAt,
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-      result.available = result.groups.length > 0;
-      if (!result.available) result.reason = 'no metered models reported';
-    }
-  } catch (err) {
-    result.reason = 'quota request failed: ' + (err && err.message ? err.message : String(err));
-  }
-  cachedAgyQuota = result;
-  cachedAgyQuotaAt = nowMs;
-  return result;
-}
-
 async function getClaudeUsage(forceRefresh = false) {
   const nowMs = Date.now();
   if (!forceRefresh && cachedClaudeUsage && nowMs - cachedClaudeUsageAt < 25_000) {
@@ -960,63 +859,29 @@ async function getClaudeUsage(forceRefresh = false) {
   let sevenDay = null;
   let extraUsage = null;
 
+  // Plan details come from the local credentials file; the token in it is never used or sent.
   try {
     const credsPath = '/home/node/.claude/.credentials.json';
     if (fs.existsSync(credsPath)) {
-      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-      const oauth = creds?.claudeAiOauth;
+      const oauth = JSON.parse(fs.readFileSync(credsPath, 'utf8'))?.claudeAiOauth;
       if (oauth && oauth.accessToken) {
         authenticated = true;
         subscriptionType = oauth.subscriptionType || null;
         rateLimitTier = oauth.rateLimitTier || null;
-        if (oauth.expiresAt) {
-          const expDate = new Date(oauth.expiresAt);
-          if (!Number.isNaN(expDate.getTime())) {
-            tokenExpiresAt = expDate.toISOString();
-          }
-        }
-
-        const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-          headers: {
-            Authorization: 'Bearer ' + oauth.accessToken,
-            'anthropic-beta': 'oauth-2025-04-20',
-          },
-          signal: AbortSignal.timeout(4000),
-        }).catch(() => null);
-
-        if (res && res.ok) {
-          const data = await res.json();
-          const limits = Array.isArray(data?.limits) ? data.limits : [];
-          const sessionLim = limits.find((l) => l.kind === 'session');
-          const weeklyLim = limits.find((l) => l.kind === 'weekly_all');
-
-          if (data?.five_hour) {
-            fiveHour = {
-              utilizationPercent: Math.min(100, Math.max(0, Number(data.five_hour.utilization) || 0)),
-              resetsAt: data.five_hour.resets_at || null,
-              severity: sessionLim?.severity || 'normal',
-            };
-          }
-          if (data?.seven_day) {
-            sevenDay = {
-              utilizationPercent: Math.min(100, Math.max(0, Number(data.seven_day.utilization) || 0)),
-              resetsAt: data.seven_day.resets_at || null,
-              severity: weeklyLim?.severity || 'normal',
-            };
-          }
-          if (data?.extra_usage && typeof data.extra_usage === 'object') {
-            const eu = data.extra_usage;
-            extraUsage = {
-              enabled: Boolean(eu.is_enabled),
-              usedUsd: (Number(eu.used_credits) || 0) / 100,
-              limitUsd: (Number(eu.monthly_limit) || 0) / 100,
-              utilizationPercent: Math.min(100, Math.max(0, Number(eu.utilization) || 0)),
-              disabledReason: eu.disabled_reason || null,
-            };
-          }
-        }
+        const expDate = oauth.expiresAt ? new Date(oauth.expiresAt) : null;
+        if (expDate && !Number.isNaN(expDate.getTime())) tokenExpiresAt = expDate.toISOString();
       }
     }
+  } catch {}
+
+  // Limits as the CLI itself reports them to its status line (claude-statusline.mjs keeps the latest).
+  let limitsUpdatedAt = null;
+  try {
+    const limits = JSON.parse(fs.readFileSync('/home/node/.claude/emberline-rate-limits.json', 'utf8'));
+    fiveHour = limits?.fiveHour ?? null;
+    sevenDay = limits?.sevenDay ?? null;
+    extraUsage = limits?.extraUsage ?? null;
+    limitsUpdatedAt = typeof limits?.updatedAt === 'string' ? limits.updatedAt : null;
   } catch {}
 
   const result = {
@@ -1031,7 +896,7 @@ async function getClaudeUsage(forceRefresh = false) {
     hourlyTokens: hourly,
     dailyTokens: daily,
     weeklyTokens: weekly,
-    providerQuotas: { antigravity: await getAntigravityQuota(forceRefresh) },
+    limitsUpdatedAt,
     updatedAt: new Date(nowMs).toISOString(),
   };
 

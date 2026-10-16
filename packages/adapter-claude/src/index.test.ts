@@ -29,6 +29,12 @@ describe('buildHookSettings', () => {
 });
 
 describe('run settings', () => {
+  it('reads subscription limits from the CLI status line, never from the login token', () => {
+    const statusLine = { type: 'command', command: 'claude-statusline.mjs', padding: 0 };
+    expect(buildHookSettings('emberline-hook')).toMatchObject({ statusLine });
+    expect(buildHookSettings('emberline-hook', 5, true)).toMatchObject({ statusLine });
+  });
+
   it('pins the classic renderer and keeps prompts and promos out of the PTY', () => {
     const settings = buildHookSettings('emberline-hook');
     // Any tui value also stops the mid-turn "Try the new fullscreen renderer?" dialog.

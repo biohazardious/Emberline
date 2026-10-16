@@ -362,6 +362,11 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
         <>
           {/* Live rate-limit gauges, one section per provider that reports them. */}
           <ProviderLimitsHeader id="claude" title={formatClaudePlanLabel(usage)} />
+          <p className="muted small" style={{ margin: 0 }}>
+            {usage.limitsUpdatedAt
+              ? `As Claude Code last reported them, ${dateTimeShort(usage.limitsUpdatedAt)}.`
+              : 'Claude Code reports its limits while a run is active; they appear here after the next Claude run.'}
+          </p>
           <div className="quota-gauges">
             <LimitGauge
               icon={<Timer className="icon" aria-hidden />}
@@ -434,26 +439,10 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
           {providerTelemetry.some((p) => p.providerId === 'antigravity') && (
             <>
               <ProviderLimitsHeader id="antigravity" title="Antigravity" />
-              {usage.providerQuotas?.antigravity?.available ? (
-                <div className="quota-gauges">
-                  {usage.providerQuotas.antigravity.groups.map((g) => (
-                    <LimitGauge
-                      key={g.label}
-                      icon={<Gauge className="icon" aria-hidden />}
-                      title={`${g.label} Model Quota`}
-                      percent={Math.round(g.usedPercent)}
-                      remaining={`${Math.max(0, Math.round(100 - g.usedPercent))}% remaining`}
-                      resetsAt={g.resetsAt}
-                      resetLabel={dateTimeShort}
-                      now={now}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <p className="muted small mono" style={{ margin: 0 }}>
-                  Quota unavailable: {usage.providerQuotas?.antigravity?.reason ?? 'not reported yet'}
-                </p>
-              )}
+              <p className="muted small" style={{ margin: 0 }}>
+                Antigravity does not report its quota to the CLI, and Emberline does not query Google's quota service with
+                your login. When a run hits a limit, it shows at the top of this panel with its reset time.
+              </p>
             </>
           )}
         </>

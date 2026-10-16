@@ -120,3 +120,52 @@ describe('emberline-cli-seed', () => {
     expect(existsSync(path.join(home, '.gemini'))).toBe(false);
   });
 });
+
+describe('claude-statusline', () => {
+  function statusline(home: string, input: string) {
+    const res = spawnSync(process.execPath, [path.join(wrappers, 'claude-statusline.mjs')], {
+      env: { PATH: process.env.PATH ?? '', HOME: home },
+      input,
+      encoding: 'utf8',
+    });
+    expect(res.status).toBe(0);
+    return res.stdout;
+  }
+  const limitsFile = (home: string) => path.join(home, '.claude', 'emberline-rate-limits.json');
+
+  it('keeps the CLI-reported limits in the usage telemetry shape and prints them', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'statusline-'));
+    const out = statusline(
+      home,
+      JSON.stringify({
+        model: { id: 'claude-opus-5-5' },
+        rate_limits: {
+          five_hour: { used_percentage: 42.4, resets_at: 1792171200 },
+          seven_day: { used_percentage: 18, resets_at: '2026-10-20T08:00:00Z' },
+          spend_limit: { used_percentage: 12.5, used_usd: 2.5, limit_usd: 20, resets_at: 1792171200 },
+        },
+      }),
+    );
+    expect(out).toBe('5h 42% · 7d 18% · spend $2.50\n');
+    const saved = json(limitsFile(home));
+    expect(saved).toMatchObject({
+      fiveHour: { utilizationPercent: 42.4, resetsAt: new Date(1792171200 * 1000).toISOString(), severity: 'normal' },
+      sevenDay: { utilizationPercent: 18, resetsAt: '2026-10-20T08:00:00.000Z', severity: 'normal' },
+      extraUsage: { enabled: true, usedUsd: 2.5, limitUsd: 20, utilizationPercent: 12.5, disabledReason: null },
+    });
+    expect(typeof saved.updatedAt).toBe('string');
+  });
+
+  it('writes nothing without rate limits (API key login) or on bad input', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'statusline-'));
+    expect(statusline(home, JSON.stringify({ model: { id: 'claude-opus-5-5' } }))).toBe('\n');
+    expect(statusline(home, 'not json')).toBe('\n');
+    expect(existsSync(limitsFile(home))).toBe(false);
+  });
+
+  it('records only the windows the CLI reports', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'statusline-'));
+    expect(statusline(home, JSON.stringify({ rate_limits: { seven_day: { used_percentage: 130 } } }))).toBe('7d 100%\n');
+    expect(json(limitsFile(home))).toMatchObject({ fiveHour: null, sevenDay: { utilizationPercent: 100, resetsAt: null }, extraUsage: null });
+  });
+});

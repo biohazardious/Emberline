@@ -603,7 +603,6 @@ function Shell() {
               const isClaude = currentSidebarProvider === 'claude';
               const isAuthed =
                 authInfo?.authenticated ?? (isClaude ? Boolean(claudeUsage.data?.authenticated) : true);
-              const providerQuota = claudeUsage.data?.providerQuotas?.[currentSidebarProvider];
               const providerBucket =
                 claudeUsage.data?.providerTokens?.[currentSidebarProvider] ??
                 (isClaude && claudeUsage.data
@@ -717,23 +716,9 @@ function Shell() {
                       <span>5h: {Math.round(claudeUsage.data.fiveHour?.utilizationPercent ?? 0)}%</span>
                       <span>7d: {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%</span>
                     </div>
-                  ) : providerQuota?.available ? (
-                    // Quota pools as the provider reports them (e.g. Antigravity: Gemini, Claude/GPT).
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                      {providerQuota.groups.map((g) => (
-                        <span
-                          key={g.label}
-                          title={g.resetsAt ? `${g.label} quota resets ${new Date(g.resetsAt).toLocaleString()}` : g.label}
-                          style={{ color: g.usedPercent >= 90 ? 'var(--bad)' : g.usedPercent >= 75 ? 'var(--warn)' : undefined }}
-                        >
-                          {g.label}: {Math.round(g.usedPercent)}%
-                        </span>
-                      ))}
-                    </div>
                   ) : (
                     <div
                       style={{ display: 'flex', justifyContent: 'space-between' }}
-                      title={providerQuota?.reason ? `Quota unavailable: ${providerQuota.reason}` : undefined}
                     >
                       <span>
                         Turns: {providerBucket ? providerBucket.weeklyTokens.turnCount : 0}
