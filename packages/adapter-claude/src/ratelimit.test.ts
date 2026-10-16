@@ -272,3 +272,27 @@ describe('provider limits', () => {
     expect(nextStateFromHook('working', 'Notification', { notification_type: 'quota_auto_resume_disabled' })).toBe('rate_limited');
   });
 });
+
+describe('limit message and wrapper tail', () => {
+  it('keeps the limit sentence, not the unrelated tool output before it', () => {
+    const noise = 'npm WARN deprecated foo@1.0.0 Running tests: 12 passed ';
+    const info = rateLimitFromHook('StopFailure', { error: 'cli_exit', message: noise + AGY_QUOTA }, NOW, 'UTC', { agent: 'antigravity' });
+    expect(info?.message).toMatch(/^(error: )?Individual quota reached/);
+    expect(info?.message).not.toContain('npm WARN');
+    expect(info?.message).toContain('Resets in 31h43m5s');
+  });
+
+  it('drops a partial multi-byte character left by the wrapper tail', () => {
+    const info = rateLimitFromHook('StopFailure', { error: 'cli_exit', message: `\uFFFD\uFFFD${AGY_QUOTA}` }, NOW, 'UTC', { agent: 'antigravity' });
+    expect(info?.message.startsWith('error: Individual quota reached')).toBe(true);
+    const transient = transientErrorFromHook('StopFailure', { error: 'cli_exit', message: '\uFFFDservice unavailable (code 503)' });
+    expect(transient?.message).toBe('service unavailable (code 503)');
+  });
+
+  it('a quota-wait notification never revives a finished run', () => {
+    const payload = { notification_type: 'quota_auto_resume_disabled' };
+    expect(nextStateFromHook('done', 'Notification', payload)).toBeUndefined();
+    expect(nextStateFromHook('failed', 'Notification', payload)).toBeUndefined();
+    expect(nextStateFromHook('working', 'Notification', payload)).toBe('rate_limited');
+  });
+});

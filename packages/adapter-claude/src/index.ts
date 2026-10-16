@@ -615,7 +615,7 @@ export function nextStateFromHook(
       next = 'working';
       break;
     case 'Notification':
-      if (isQuotaWaitNotification(payload)) next = 'rate_limited';
+      if (isQuotaWaitNotification(payload)) next = current === 'done' ? undefined : 'rate_limited';
       else if (isPermissionNotification(payload)) next = 'waiting_input';
       else next = current === 'done' || current === 'rate_limited' ? undefined : 'waiting_input';
       break;

@@ -76,6 +76,32 @@ const MAX_BANNER_LENGTH = 200;
 
 const asString = (value: unknown) => (typeof value === 'string' ? value : '');
 
+/**
+ * A hook text field, trimmed. The wrapper cuts its error detail with `tail -c`, which can split a
+ * multi-byte character; the leftover bytes decode to U+FFFD at the start, so those are dropped.
+ */
+const cleanField = (value: unknown) => asString(value).replace(/^[\s\uFFFD]+/, '').trim();
+
+/**
+ * The sentence that states the limit: from the start of the sentence holding the earliest limit
+ * match to the end of the text (the reset time usually follows it). Tool output printed before it
+ * is dropped. Falls back to the whole text when no pattern matches.
+ */
+function limitSentence(text: string): string {
+  let at = -1;
+  for (const pattern of [LIMIT_PATTERN, EXPLICIT_LIMIT_PATTERN, GENERIC_LIMIT_PATTERN]) {
+    const index = pattern.exec(text)?.index;
+    if (index !== undefined && (at < 0 || index < at)) at = index;
+  }
+  if (at <= 0) return text;
+  const before = text.slice(0, at);
+  let start = 0;
+  // Sentence ends, and "error:" labels (the wrapper joins lines with spaces, so there may be no other boundary).
+  for (const boundary of before.matchAll(/[.!?]\s|\n| — /g)) start = boundary.index + boundary[0].length;
+  for (const label of before.matchAll(/\berror:\s/gi)) start = Math.max(start, label.index);
+  return text.slice(start);
+}
+
 export function isLimitText(text: string): boolean {
   return LIMIT_PATTERN.test(text);
 }
@@ -93,9 +119,9 @@ export function rateLimitFromHook(
   ctx?: LimitContext,
 ): RateLimitInfo | undefined {
   if (event !== 'StopFailure' && event !== 'Stop') return undefined;
-  const message = asString(payload.last_assistant_message).trim();
-  const details = asString(payload.error_details).trim();
-  const wrapper = [asString(payload.message).trim(), asString(payload.reason).trim()].find(Boolean) ?? '';
+  const message = cleanField(payload.last_assistant_message);
+  const details = cleanField(payload.error_details);
+  const wrapper = [cleanField(payload.message), cleanField(payload.reason)].find(Boolean) ?? '';
   const isRateLimit = event === 'StopFailure' && payload.error === 'rate_limit';
   // On `Stop` the message is Claude's own answer; only a short banner-like text counts.
   const bannerOnly = event === 'StopFailure' || message.length <= MAX_BANNER_LENGTH;
@@ -104,7 +130,7 @@ export function rateLimitFromHook(
   const generic = event === 'StopFailure' && isGenericLimit(text);
   if (!isRateLimit && !claudeBanner && !generic) return undefined;
   return {
-    message: oneLine(text || 'rate limit reached'),
+    message: oneLine(limitSentence(text) || 'rate limit reached'),
     resetsAt: parseResetTime(text, now, defaultTimeZone),
     pool: poolFor(ctx, text),
   };
@@ -151,7 +177,7 @@ export function transientErrorFromHook(
   if (event !== 'StopFailure' || rateLimitFromHook(event, payload, new Date(), 'UTC', ctx)) return undefined;
   const kind = asString(payload.error);
   const text = [payload.last_assistant_message, payload.error_details, payload.message, payload.reason]
-    .map((value) => asString(value).trim())
+    .map(cleanField)
     .filter((value, index, all) => value && all.indexOf(value) === index)
     .join(' — ');
   if (PERMANENT_ERROR_KINDS.has(kind) || PERMANENT_ERROR_PATTERN.test(text)) return undefined;
@@ -194,7 +220,7 @@ export function rateLimitFromScreen(
     // The reset time may wrap onto the next line on narrow terminals.
     const text = `${line} ${lines[i + 1] ?? ''}`;
     return {
-      message: oneLine(line.replace(/^[⎿│\s]+/, '')),
+      message: oneLine(line.replace(/^[⎿│\s\uFFFD]+/, '')),
       resetsAt: parseResetTime(text, now, defaultTimeZone),
       pool: poolFor(ctx, text),
     };
