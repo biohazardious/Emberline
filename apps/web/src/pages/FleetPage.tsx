@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
+import { keptWorktreesSummary } from '../gcSummary';
 import { api, errorMessage } from '../api';
 import { HandoffMenu } from '../components/QuotaLanes';
 import { PersonaBadge } from '../components/PersonaBadge';
@@ -191,20 +192,8 @@ export function FleetPage({
       setNotice(
         `Garbage collection complete: removed ${res.removedRuns} finished session${res.removedRuns === 1 ? '' : 's'}, closed ${res.closedSessions} lingering terminal${res.closedSessions === 1 ? '' : 's'}, and pruned ${res.prunedWorktrees} git worktree${res.prunedWorktrees === 1 ? '' : 's'}.`,
       );
-      if (res.keptWorktrees.length > 0) {
-        const count = (reason: string) => res.keptWorktrees.filter((k) => k.reason === reason).length;
-        const parts = [
-          [count('uncommitted_changes'), 'uncommitted changes'],
-          [count('unmerged_commits'), 'commits not merged into the default branch'],
-          [count('in_review'), 'a ticket still in review'],
-        ]
-          .filter(([n]) => n)
-          .map(([n, why]) => `${n} with ${why}`);
-        setNotice(
-          (prev) =>
-            `${prev ?? ''} Kept ${res.keptWorktrees.length} worktree${res.keptWorktrees.length === 1 ? '' : 's'} so no work is lost: ${parts.join(', ')}.`,
-        );
-      }
+      const kept = keptWorktreesSummary(res);
+      if (kept) setNotice((prev) => `${prev ?? ''} ${kept}`.trim());
       if (filter === 'completed' && res.removedRuns > 0 && keepRecent === 0) {
         setFilter('active');
       }

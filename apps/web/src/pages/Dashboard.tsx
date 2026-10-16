@@ -1,4 +1,5 @@
 import type {
+  GarbageCollectRunsResponse,
   AgentId,
   AgentModelId,
   AgentPersona,
@@ -14,6 +15,7 @@ import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } f
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
+import { keptWorktreesSummary } from '../gcSummary';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -65,6 +67,7 @@ export function Dashboard({
   const setOverviewTab = (tab: OverviewTab) => setSectionParam(tab === 'studio' ? null : tab);
   const [hideCompletedRuns, setHideCompletedRuns] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string>();
+  const [cleanupNotice, setCleanupNotice] = useState<string>();
   const [pruneBlocked, setPruneBlocked] = useState<{ id: string; message: string }>();
   const [runFormFor, setRunFormFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
@@ -167,6 +170,11 @@ export function Dashboard({
       {system && system.apiVersion !== API_VERSION && (
         <div className="banner banner-warn" role="status">
           Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the new version.
+        </div>
+      )}
+      {cleanupNotice && (
+        <div className="banner banner-warn" role="status">
+          {cleanupNotice}
         </div>
       )}
       {pruneBlocked && (
@@ -447,7 +455,16 @@ export function Dashboard({
                         className="btn btn-sm btn-ghost"
                         title="Prune finished git worktrees for this project"
                         onClick={async () => {
-                          await api(`/api/projects/${p.id}/cleanup-worktrees`, 'POST');
+                          setActionError(undefined);
+                          try {
+                            const res = await api<GarbageCollectRunsResponse>(
+                              `/api/projects/${p.id}/cleanup-worktrees`,
+                              'POST',
+                            );
+                            setCleanupNotice(keptWorktreesSummary(res) ?? undefined);
+                          } catch (e) {
+                            setActionError(errorMessage(e));
+                          }
                         }}
                       >
                         <Eraser className="icon" aria-hidden /> Clean Worktrees

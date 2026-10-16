@@ -630,6 +630,12 @@ export type RunDetail = z.infer<typeof RunDetail>;
 export const ResumeRunBody = z.object({ text: z.string().trim().max(20_000).optional() });
 export type ResumeRunBody = z.input<typeof ResumeRunBody>;
 
+export const PruneWorktreeBody = z.object({
+  /** Remove the worktree even when it holds uncommitted changes or commits not in the default branch. */
+  force: z.boolean().default(false),
+});
+export type PruneWorktreeBody = z.input<typeof PruneWorktreeBody>;
+
 export const GarbageCollectRunsBody = z.object({
   projectId: z.string().min(1).optional(),
   /** Number of most-recent completed runs to retain (0 = purge all completed/failed runs). */

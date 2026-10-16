@@ -399,6 +399,19 @@ describe('runs', () => {
       expect(existsSync(run.worktreePath)).toBe(false);
     });
 
+    it('measures "merged" against the branch the project has checked out, not the default-branch column', async () => {
+      const project = await createProject('GC master', true);
+      execFileSync('git', ['-C', project.path, 'branch', '-m', 'main', 'master']);
+      const run = await finishRun(project.id);
+      commitIn(run.worktreePath);
+      const kept = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(kept.keptWorktrees).toEqual([{ runId: run.id, reason: 'unmerged_commits' }]);
+      execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'merge', '-q', '--no-ff', '-m', 'merge', run.branch ?? '']);
+      const done = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+      expect(done.removedRuns).toBe(1);
+      expect(existsSync(run.worktreePath)).toBe(false);
+    });
+
     it('reports uncommitted changes and a missing default branch as kept', async () => {
       const project = await createProject('GC kept reasons', true);
       const dirty = await finishRun(project.id);
@@ -406,8 +419,9 @@ describe('runs', () => {
       const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(res.keptWorktrees).toEqual([{ runId: dirty.id, reason: 'uncommitted_changes' }]);
 
-      // A default branch git cannot resolve means "cannot prove it is merged": keep.
+      // A branch git cannot resolve (detached checkout, bogus fallback column) means "cannot prove it is merged": keep.
       const clean = await finishRun(project.id);
+      execFileSync('git', ['-C', project.path, 'checkout', '-q', '--detach']);
       t.db.update(projects).set({ defaultBranch: 'no-such-branch' }).where(eq(projects.id, project.id)).run();
       const res2 = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(res2.keptWorktrees).toContainEqual({ runId: clean.id, reason: 'unmerged_commits' });

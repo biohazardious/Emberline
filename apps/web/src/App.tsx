@@ -3,6 +3,7 @@ import {
   type AgentId,
   type ClaudeUsageTelemetry,
   type FactorySettings,
+  type GarbageCollectRunsResponse,
   type Project,
   PROVIDER_REGISTRY,
   type Run,
@@ -30,6 +31,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api, errorMessage } from './api';
+import { keptWorktreesSummary } from './gcSummary';
 import { AuthGate, useAuth } from './auth';
 import { BrandLogo } from './components/BrandLogo';
 import { CommandPalette } from './components/CommandPalette';
@@ -308,8 +310,10 @@ function Shell() {
   const handleCleanupProjectWorktrees = async () => {
     if (!activeProject) return;
     try {
-      await api(`/api/projects/${activeProject.id}/cleanup-worktrees`, 'POST');
-      toastInfo('Finished worktrees cleaned up.');
+      const res = await api<GarbageCollectRunsResponse>(`/api/projects/${activeProject.id}/cleanup-worktrees`, 'POST');
+      const kept = keptWorktreesSummary(res);
+      if (kept && res.prunedWorktrees === 0) toastInfo(kept);
+      else toastInfo(kept ? `Finished worktrees cleaned up. ${kept}` : 'Finished worktrees cleaned up.');
     } catch (e) {
       toastError(`Cleanup failed: ${errorMessage(e)}`);
     }

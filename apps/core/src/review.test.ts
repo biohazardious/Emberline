@@ -228,6 +228,29 @@ describe('M6 review, git commit/push, and artifacts', () => {
     expect(existsSync(run.worktreePath)).toBe(false);
   });
 
+  it('refuses to prune a worktree with unmerged commits unless forced, naming the branch', async () => {
+    const { project } = await createGitProjectWithBareRemote('Prune Unmerged');
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'commits' })).json();
+    execFileSync('git', ['-C', run.worktreePath, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'work']);
+    await api('POST', `/api/runs/${run.id}/stop`);
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return ((await api('GET', `/api/runs/${run.id}`)).json() as Run).endedAt;
+      })
+      .toBeTruthy();
+
+    const refused = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('worktree_has_work');
+    expect(refused.json().message).toContain('main');
+    expect(existsSync(run.worktreePath)).toBe(true);
+
+    const forced = await api('POST', `/api/runs/${run.id}/worktree/prune`, { force: true });
+    expect(forced.statusCode).toBe(200);
+    expect(existsSync(run.worktreePath)).toBe(false);
+  });
+
   it('configures and dispatches ntfy / webhook notifications', async () => {
     const { createServer } = await import('node:http');
     const received: { headers: Record<string, unknown>; body: string }[] = [];

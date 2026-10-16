@@ -57,6 +57,7 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
   getFactorySettings,
@@ -1296,14 +1297,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');
     if (!force && row.worktreePath !== project.path) {
-      const reason = await this.worktreeWorkReason(row.worktreePath, project.defaultBranch);
-      if (reason) {
+      const found = await this.worktreeWorkReason(row.worktreePath, project);
+      if (found) {
+        const { reason, branch } = found;
         throw new HttpError(
           409,
           'worktree_has_work',
           reason === 'uncommitted_changes'
             ? 'This worktree has uncommitted changes that pruning would delete.'
-            : `This worktree has commits that are not in ${project.defaultBranch} yet. Merge the branch first, or prune anyway.`,
+            : `This worktree has commits that are not in ${branch ?? 'the main branch'} yet. Merge the branch first, or prune anyway.`,
         );
       }
     }
@@ -1822,20 +1824,24 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (ticket && ticket.status !== 'done') return 'in_review';
     }
     if (row.worktreePath && row.worktreePath !== project?.path) {
-      // Without a project the default branch is unknown, so nothing can be proven merged.
-      return this.worktreeWorkReason(row.worktreePath, project?.defaultBranch ?? null);
+      // Without a project the target branch is unknown, so nothing can be proven merged.
+      if (!project) return 'unmerged_commits';
+      return (await this.worktreeWorkReason(row.worktreePath, project))?.reason ?? null;
     }
     return null;
   }
 
+  /**
+   * Runs merge into the main workspace's current branch (the project's `defaultBranch` column is
+   * only the fallback), so that is what "merged" is measured against. `branch` names it.
+   */
   private async worktreeWorkReason(
     worktreePath: string,
-    defaultBranch: string | null,
-  ): Promise<Exclude<KeptWorktreeReason, 'in_review'> | null> {
-    if (await worktreeHasUncommittedWork(worktreePath)) return 'uncommitted_changes';
-    if (defaultBranch === null || (await worktreeHasUnmergedCommits(worktreePath, defaultBranch))) {
-      return 'unmerged_commits';
-    }
+    project: { path: string; defaultBranch: string },
+  ): Promise<{ reason: Exclude<KeptWorktreeReason, 'in_review'>; branch: string } | null> {
+    const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
+    if (await worktreeHasUncommittedWork(worktreePath)) return { reason: 'uncommitted_changes', branch };
+    if (await worktreeHasUnmergedCommits(worktreePath, branch)) return { reason: 'unmerged_commits', branch };
     return null;
   }
 
