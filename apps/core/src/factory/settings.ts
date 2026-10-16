@@ -361,7 +361,14 @@ export function getFactorySettings(db: Db): FactorySettings {
     enabledProviders,
     personaAgents: normalizedAgents,
     personaModels: normalizedModels,
-    quotaAutoDowngrade: raw.quotaAutoDowngrade ?? true,
+    // Interim until personaRoutes are stored (routing task): one login step per persona.
+    personaRoutes: Object.fromEntries(
+      ALL_PERSONA_KEYS.map((p) => [
+        p,
+        [{ agent: normalizedAgents[p], model: normalizedModels[p], credential: 'login' }],
+      ]),
+    ),
+    quotaPolicy: { newRuns: 'wait', inFlight: 'wait' },
     autoPickupReady: raw.autoPickupReady ?? true,
     autoPickupBacklog: raw.autoPickupBacklog ?? false,
     autoSyncToMain: raw.autoSyncToMain ?? true,
@@ -431,7 +438,6 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     enabledProviders,
     personaAgents: normalizedAgents,
     personaModels: normalizedModels,
-    quotaAutoDowngrade: body.quotaAutoDowngrade ?? current.quotaAutoDowngrade,
     autoPickupReady: body.autoPickupReady ?? current.autoPickupReady,
     autoPickupBacklog: body.autoPickupBacklog ?? current.autoPickupBacklog,
     autoSyncToMain: body.autoSyncToMain ?? current.autoSyncToMain,
@@ -525,6 +531,12 @@ export function resolveModelForPersona(
   explicitAgent?: AgentId,
 ): AgentModelId {
   const cfg = getFactorySettings(db);
+  // The setting is no longer exposed; keep honouring a value that is still stored.
+  const storedDowngrade = (
+    db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get()?.value as
+      | { quotaAutoDowngrade?: boolean }
+      | undefined
+  )?.quotaAutoDowngrade;
   const agent = resolveAgentForPersona(db, persona, explicitAgent);
   const rawCandidate =
     explicitModel && explicitModel !== 'auto'
@@ -532,7 +544,7 @@ export function resolveModelForPersona(
       : (cfg.personaModels?.[persona] ?? DEFAULT_PERSONA_MODELS[persona] ?? 'opus');
   const candidate = coerceModelForProvider(agent, rawCandidate, persona);
   if (
-    cfg.quotaAutoDowngrade &&
+    (storedDowngrade ?? true) &&
     agent === 'claude' &&
     getLastKnownClaudeUtilizationPercent() >= 80 &&
     (candidate === 'fable' || candidate === 'opus')

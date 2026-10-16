@@ -7,6 +7,10 @@ export type ResetSource = z.infer<typeof ResetSource>;
 
 export const QuotaWindow = z.object({
   id: z.string(),
+  /** The lane this window blocks; pool `*` blocks every pool of the agent + credential. */
+  agent: z.string(),
+  credential: z.string(),
+  pool: z.string(),
   exhaustedAt: z.string(),
   /** When the usage window resets; null while unknown (probing). */
   resetsAt: z.string().nullable(),
@@ -27,10 +31,18 @@ export const SchedulerState = z.object({
   busy: z.number().int(),
   queued: z.number().int(),
   rateLimited: z.number().int(),
-  /** The exhausted window while dispatch is paused; null when quota is available. */
+  /** @deprecated: the open window that resumes first; use `windows`. */
   window: QuotaWindow.nullable(),
+  /** Every exhausted lane; work on other lanes keeps running. */
+  windows: z.array(QuotaWindow),
 });
 export type SchedulerState = z.infer<typeof SchedulerState>;
+
+/** Ends the pause of one lane (or of every lane when empty). */
+export const ResumeSchedulerBody = z
+  .object({ agent: z.string(), credential: z.string(), pool: z.string() })
+  .partial();
+export type ResumeSchedulerBody = z.input<typeof ResumeSchedulerBody>;
 
 export const UpdateSchedulerBody = z.object({
   maxConcurrentRuns: z.number().int().min(1).max(MAX_CONCURRENCY),

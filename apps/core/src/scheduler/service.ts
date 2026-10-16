@@ -46,6 +46,9 @@ const DEFAULT_MAX_CONCURRENCY = 2;
 
 const toWindow = (row: WindowRow): QuotaWindow => ({
   id: row.id,
+  agent: 'claude',
+  credential: 'login',
+  pool: '*',
   exhaustedAt: row.exhaustedAt.toISOString(),
   resetsAt: row.resetsAt?.toISOString() ?? null,
   resumeAt: row.resumeAt.toISOString(),
@@ -130,6 +133,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       rateLimited:
         this.db.select({ n: sql<number>`count(*)` }).from(runs).where(eq(runs.state, 'rate_limited')).get()?.n ?? 0,
       window: open ? toWindow(open) : null,
+      windows: open ? [toWindow(open)] : [],
     };
   }
 

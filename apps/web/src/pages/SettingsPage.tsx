@@ -130,7 +130,6 @@ export function SettingsPage({
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
   const [maxTicketDepth, setMaxTicketDepth] = useState(3);
   const [maxAutoRunsPerDay, setMaxAutoRunsPerDay] = useState(40);
-  const [quotaAutoDowngrade, setQuotaAutoDowngrade] = useState(true);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
   const [personaAgents, setPersonaAgents] = useState<PersonaAgentMap>({
@@ -191,7 +190,6 @@ export function SettingsPage({
         setAutoMoveToDone(res.autoMoveToDone);
         setMaxTicketDepth(res.maxTicketDepth);
         setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
-        setQuotaAutoDowngrade(res.quotaAutoDowngrade ?? true);
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
         setPersonaAgents(res.personaAgents);
@@ -432,7 +430,6 @@ export function SettingsPage({
         autoMoveToDone,
         maxTicketDepth,
         maxAutoRunsPerProjectPerDay: maxAutoRunsPerDay,
-        quotaAutoDowngrade,
         defaultAgent,
         enabledProviders,
         personaAgents,
@@ -1230,28 +1227,6 @@ export function SettingsPage({
                 </button>
               </div>
             </div>
-
-            <label
-              style={{
-                padding: '10px 12px',
-                borderRadius: 'var(--radius)',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={quotaAutoDowngrade}
-                onChange={(e) => setQuotaAutoDowngrade(e.target.checked)}
-              />
-              <span style={{ fontSize: '0.82rem' }}>
-                <strong>Quota-Aware Autonomous Rank Step-Down:</strong> When 5-hour or 7-day utilization exceeds 80%, automatically step down <code>High (★4–5)</code> runs to <code>Medium (★3)</code> on that same provider so the pipeline keeps running without hitting hard rate limits.
-              </span>
-            </label>
 
             <div
               style={{

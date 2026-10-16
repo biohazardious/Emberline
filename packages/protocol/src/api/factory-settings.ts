@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AgentPersona } from './projects.js';
 import { TerminalInfo } from './terminals.js';
 import { AgentId, AgentModelId } from './runs.js';
+import { PersonaRouteMap, QuotaPolicy } from './routing.js';
 
 export const ThemeMode = z.enum(['dark', 'light']);
 export type ThemeMode = z.infer<typeof ThemeMode>;
@@ -244,7 +245,9 @@ export const FactorySettings = z.object({
   theme: ThemeMode.default('dark'),
   defaultAgent: AgentId.default('claude'),
   enabledProviders: z.array(AgentId).default(['claude']),
+  /** @deprecated derived from personaRoutes[p][0] */
   personaAgents: PersonaAgentMap,
+  /** @deprecated derived from personaRoutes[p][0] */
   personaModels: PersonaModelMap.default({
     product_owner: 'fable',
     architect: 'fable',
@@ -254,7 +257,9 @@ export const FactorySettings = z.object({
     qa: 'sonnet',
     security: 'opus',
   }),
-  quotaAutoDowngrade: z.boolean().default(true),
+  /** Per persona: the route to use first and the fallbacks after it. */
+  personaRoutes: PersonaRouteMap,
+  quotaPolicy: QuotaPolicy.default({ newRuns: 'wait', inFlight: 'wait' }),
   autoPickupReady: z.boolean().default(true),
   autoPickupBacklog: z.boolean().default(false),
   autoSyncToMain: z.boolean().default(true),
@@ -299,7 +304,8 @@ export const UpdateFactorySettingsBody = z
     enabledProviders: z.array(AgentId).min(1),
     personaAgents: PersonaAgentMap.partial(),
     personaModels: PersonaModelMap.partial(),
-    quotaAutoDowngrade: z.boolean(),
+    personaRoutes: PersonaRouteMap.partial(),
+    quotaPolicy: QuotaPolicy.partial(),
     autoPickupReady: z.boolean(),
     autoPickupBacklog: z.boolean(),
     autoSyncToMain: z.boolean(),

@@ -523,6 +523,17 @@ export const Run = z.object({
    * error: the attempt number (1-based), the most attempts made and when it retries.
    */
   autoRetry: z.object({ attempt: z.number().int(), max: z.number().int(), at: z.string() }).nullable().optional(),
+  /** Model the run was started with; null on runs from before 0.2.0 without a route tag. */
+  model: z.string().nullable().default(null),
+  credential: z.enum(['login', 'api_key', 'credits']).default('login'),
+  /** The run's fallback chain (snapshot at enqueue) and the step it is on. */
+  routes: z
+    .array(z.object({ agent: z.string(), model: z.string(), credential: z.enum(['login', 'api_key', 'credits']) }))
+    .default([]),
+  routeIndex: z.number().int().default(0),
+  /** Run this one continues after a handoff, and the run that took over from this one. */
+  predecessorRunId: z.string().nullable().default(null),
+  handedOffTo: z.string().nullable().default(null),
   /** Token & tool execution telemetry (no monetary pricing). */
   telemetry: RunTelemetry.optional(),
 });
@@ -537,6 +548,15 @@ export const CreateRunBody = z.object({
   permissionMode: PermissionMode.default('default'),
 });
 export type CreateRunBody = z.input<typeof CreateRunBody>;
+
+export const HandoffBody = z.object({
+  route: z.object({
+    agent: AgentId,
+    model: AgentModelId,
+    credential: z.enum(['login', 'api_key', 'credits']).default('login'),
+  }),
+});
+export type HandoffBody = z.input<typeof HandoffBody>;
 
 export const RunEvent = z.object({
   id: z.number().int(),
