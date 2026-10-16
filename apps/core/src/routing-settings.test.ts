@@ -4,6 +4,7 @@ import { settings } from './db/schema.js';
 import {
   getFactorySettings,
   getProviderEnvFromSettings,
+  getQuotaPolicy,
   resolveRunRoutes,
   routeUsable,
   updateFactorySettings,
@@ -155,6 +156,13 @@ describe('persona routes', () => {
       },
     });
     expect(resolveRunRoutes(t.db, 'ui_ux', { agent: 'claude', model: 'sonnet' })[0]?.credential).toBe('login');
+  });
+
+  it('reads the quota policy on its own, with defaults', () => {
+    expect(getQuotaPolicy(t.db)).toEqual({ newRuns: 'wait', inFlight: 'wait' });
+    updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
+    expect(getQuotaPolicy(t.db)).toEqual({ newRuns: 'wait', inFlight: 'fallback' });
+    expect(getQuotaPolicy(t.db)).toEqual(getFactorySettings(t.db).quotaPolicy);
   });
 
   it('puts provider keys into the env only for api_key routes', () => {

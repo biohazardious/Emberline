@@ -23,7 +23,7 @@ import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { quotaWindows, runs, settings, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
-import { getFactorySettings, routeUsable } from '../factory/settings.js';
+import { getQuotaPolicy, routeUsable } from '../factory/settings.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
@@ -252,7 +252,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     this.closeExpired(new Date());
     if (this.ptyd.status !== 'connected') return;
 
-    const policy = getFactorySettings(this.db).quotaPolicy;
+    const policy = getQuotaPolicy(this.db);
     let slots = this.maxConcurrentRuns() - this.busyCount();
     for (const candidate of this.candidates()) {
       if (slots <= 0) break;
@@ -381,7 +381,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 
   /** Policy `inFlight = fallback`: move the limited run to the first route whose lane is open. */
   private async maybeHandOff(run: Run, info: RateLimitInfo | undefined): Promise<void> {
-    if (getFactorySettings(this.db).quotaPolicy.inFlight !== 'fallback') return;
+    if (getQuotaPolicy(this.db).inFlight !== 'fallback') return;
     const row = this.db.select().from(runs).where(eq(runs.id, run.id)).get();
     if (!row || row.cancelledAt || row.handedOffTo || row.handoffCount >= MAX_HANDOFFS) return;
     const closed = this.openWindows();

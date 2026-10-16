@@ -336,6 +336,16 @@ function detectRunnerProviderAuth(params: {
   };
 }
 
+function quotaPolicyOf(raw: StoredFactorySettings): QuotaPolicy {
+  return { newRuns: raw.quotaPolicy?.newRuns ?? 'wait', inFlight: raw.quotaPolicy?.inFlight ?? 'wait' };
+}
+
+/** The quota policy alone: one settings row, none of the provider auth detection `getFactorySettings` does. */
+export function getQuotaPolicy(db: Db): QuotaPolicy {
+  const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
+  return quotaPolicyOf((row?.value ?? {}) as StoredFactorySettings);
+}
+
 export function getFactorySettings(db: Db): FactorySettings {
   const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
   const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
@@ -425,7 +435,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     personaAgents: normalizedAgents,
     personaModels: normalizedModels,
     personaRoutes,
-    quotaPolicy: { newRuns: raw.quotaPolicy?.newRuns ?? 'wait', inFlight: raw.quotaPolicy?.inFlight ?? 'wait' },
+    quotaPolicy: quotaPolicyOf(raw),
     autoPickupReady: raw.autoPickupReady ?? true,
     autoPickupBacklog: raw.autoPickupBacklog ?? false,
     autoSyncToMain: raw.autoSyncToMain ?? true,
