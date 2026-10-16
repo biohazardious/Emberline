@@ -1599,8 +1599,8 @@ a {
 }
 
 .run-handed_off {
-  --tone: hsl(265 75% 74%);
-  background: hsl(265 75% 74%);
+  --tone: var(--info);
+  background: var(--info);
 }
 
 .run-cancelled {

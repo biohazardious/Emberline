@@ -16,6 +16,7 @@ import {
 import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { HandoffMenu } from '../components/QuotaLanes';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { STAGE_TEMPLATES } from '../components/RunInspector';
@@ -648,6 +649,7 @@ function FleetPane({
           )}
         </div>
       </header>
+      <HandoffMenu run={run} />
 
       <div className="fleet-pane-body">
         {live && run.terminalId && attachTerminal ? (

@@ -8,34 +8,13 @@ import {
   type SchedulerState,
 } from '@emberline/protocol';
 import { Calendar, ChartColumn, Clock, CreditCard, Gauge, RotateCw, Timer, Zap } from 'lucide-react';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { ProviderMark } from './ProviderMark';
+import { formatCountdown, useNow } from '../time';
 import { QuotaLanes } from './QuotaLanes';
 import { useApi } from '../hooks/useApi';
 import { useRuns, useScheduler } from '../hooks/liveData';
-
-/** Re-renders every `ms` so countdowns stay fresh. */
-export function useNow(ms: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(timer);
-  }, [ms]);
-  return now;
-}
-
-export function formatCountdown(target: string, now: number): string {
-  const seconds = Math.max(0, Math.round((Date.parse(target) - now) / 1000));
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s.toString().padStart(2, '0')}s`;
-  return `${s}s`;
-}
 
 export function formatTokensCompact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;

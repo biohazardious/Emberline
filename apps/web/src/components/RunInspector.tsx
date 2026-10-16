@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { timeAgo } from '../time';
+import { HandoffMenu } from './QuotaLanes';
 import { BuildOutputsList, ExpandableText, FinalAnswer, LastScreen } from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
 
@@ -347,6 +348,7 @@ export function RunInspector({
           {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
           <span className="badge mono">{run.permissionMode}</span>
         </div>
+        <HandoffMenu run={run} />
         <div className="dock-head-actions">
           <div className="segmented" role="tablist" aria-label="Inspector view">
             {run.terminalId && (
