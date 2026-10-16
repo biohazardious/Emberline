@@ -450,5 +450,55 @@ describe('tickets', () => {
       expect(passes).toHaveLength(1);
       expect(passes[0]).toMatchObject({ id: run.id, state: 'done' });
     });
+
+    async function workingTicketRun(title: string) {
+      const project = await createProject();
+      const ticket = await createTicket(project.id, { title });
+      const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+      await hook(run.id, 'UserPromptSubmit', token);
+      return { project, ticket, run, token };
+    }
+
+    it('runs the pipeline at once when the agent process has already exited', async () => {
+      const { run } = await workingTicketRun('Exited');
+      const passes = trackPipelines();
+      await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return t.runs.getRun(run.id).state;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe('done');
+      // No settle wait: an exited CLI cannot wake up again.
+      expect(passes).toHaveLength(1);
+      expect(passes[0]?.endedAt).not.toBeNull();
+    });
+
+    it('a dispatch during the settle window leaves the run to its own, single pass', async () => {
+      const { project, ticket, run, token } = await workingTicketRun('Settling');
+      const passes = trackPipelines();
+      await hook(run.id, 'Stop', token);
+      expect((await getTicket(ticket.id)).status).toBe('review');
+      // Finalizing leftover Review tickets must not pick up a run that is still settling.
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      expect(passes).toHaveLength(0);
+      await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(1);
+      await pause(SETTLE_MS * 2);
+      expect(passes).toHaveLength(1);
+    });
+
+    it('dispose drops pending settle waits', async () => {
+      const { run, token } = await workingTicketRun('Disposed');
+      const passes = trackPipelines();
+      await hook(run.id, 'Stop', token);
+      t.tickets.dispose();
+      await pause(SETTLE_MS * 2);
+      expect(passes).toHaveLength(0);
+    });
   });
 });

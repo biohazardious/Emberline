@@ -12,7 +12,7 @@ import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
 import { badRequest } from '../errors.js';
 import { providerAdapter } from '../runs/providers.js';
-import type { RunService } from '../runs/service.js';
+import { minutesOf, type RunService, STALL_WATCHDOG_MS, WAITING_INPUT_TIMEOUT_MS } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
 const SETTINGS_KEY = 'notifications.config';
@@ -75,7 +75,7 @@ export class NotificationService {
               title: `Agent waiting on you: ${label}`,
               body:
                 run.lastEvent === 'stall_detected'
-                  ? `Run "${label}" showed no activity for 20 minutes and may be stuck. Have a look at its terminal.`
+                  ? `Run "${label}" showed no activity for ${minutesOf(STALL_WATCHDOG_MS)} minutes and may be stuck. Have a look at its terminal.`
                   : `Run "${label}" (${run.lastEvent ?? 'prompt'}) is waiting for your input or permission.`,
               priority: 'high',
               tags: ['hourglass_flowing_sand', 'emberline'],
@@ -90,7 +90,7 @@ export class NotificationService {
               event: 'run_finished',
               title: timedOut ? `Run stopped, no one answered: ${label}` : failed ? `Run failed: ${label}` : `Run completed: ${label}`,
               body: timedOut
-                ? `Run "${label}" waited 30 minutes on a permission prompt with nobody there, so it was stopped.`
+                ? `Run "${label}" waited ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes on a permission prompt or a stalled turn with nobody there, so it was stopped.`
                 : failed
                 ? `Run "${label}" exited with an error.`
                 : `Run "${label}" finished its turn and is ready for review.`,

@@ -984,7 +984,11 @@ export function ReviewView({ run, onRunUpdated }: Props) {
         </form>
       )}
 
-      {error && <p className="form-error" style={{ margin: '0.5rem 0.75rem' }}>{error}</p>}
+      {error && (
+        <p className="form-error" role="alert" style={{ margin: '0.5rem 0.75rem' }}>
+          {error}
+        </p>
+      )}
       {gitNotice && (
         <div className="git-notice-banner">
           <span className="mono">{gitNotice}</span>

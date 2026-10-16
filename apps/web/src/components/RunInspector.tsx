@@ -236,6 +236,10 @@ const EVENT_LABEL: Record<string, string> = {
   build_gate_failed: 'held: build failed',
   build_gate_error: 'held: build gate error',
   merge_failed: 'held: merge failed',
+  stall_detected: 'stalled',
+  waiting_input_timeout: 'stopped: nobody answered',
+  auto_nudged: 'nudged to continue',
+  permission_mode_overridden: 'permission mode changed',
 };
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
@@ -533,7 +537,11 @@ export function RunInspector({
             </button>
           </div>
         )}
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
       </footer>
     </aside>
   );

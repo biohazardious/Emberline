@@ -139,13 +139,19 @@ const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
 /** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
 const STARTING_WATCHDOG_MS = 3 * 60_000;
-/** An unattended run waiting on a permission prompt this long is stopped as failed (R6). */
-const WAITING_INPUT_TIMEOUT_MS = 30 * 60_000;
 /**
- * A `working` run with no hook and an unchanged screen this long is taken as stalled (a missed Stop
- * hook, a hung CLI): it becomes `waiting_input`, which frees its slot and pages the user (R7).
+ * An unattended run waiting this long on a permission prompt, or since it was found stalled, is
+ * stopped as failed (R6).
  */
-const STALL_WATCHDOG_MS = 20 * 60_000;
+export const WAITING_INPUT_TIMEOUT_MS = 30 * 60_000;
+/**
+ * A `working` run, or a `starting` one with a terminal (e.g. a live resume whose CONTINUE produced no
+ * hook), with no hook and an unchanged screen this long is taken as stalled (a missed hook, a hung
+ * CLI): it becomes `waiting_input`, which frees its slot and pages the user (R7).
+ */
+export const STALL_WATCHDOG_MS = 20 * 60_000;
+/** Whole minutes of a duration, for user-facing copy. */
+export const minutesOf = (ms: number) => Math.round(ms / 60_000);
 /** How often the stall watchdog looks at a working run's screen. */
 const STALL_SCREEN_SAMPLE_MS = 60_000;
 /** Screen lines hashed by the stall watchdog. */
@@ -282,7 +288,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private lastAutoGcAt = 0;
   private readonly handoffLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
-  /** Stall watchdog per working run: the screen hash, since when it is unchanged, when it was last read. */
+  /** Stall watchdog per working (or starting) run: the screen hash, since when it is unchanged, when it was last read. */
   private readonly stallWatch = new Map<string, { hash: string | null; since: number; sampledAt: number }>();
 
   constructor(
@@ -1712,7 +1718,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /**
-   * Stall watchdog (R7): reads a working run's screen at most once a minute and tells whether it has
+   * Stall watchdog (R7): reads a working or starting run's screen at most once a minute and tells whether it has
    * neither changed nor had a hook for {@link STALL_WATCHDOG_MS}. Hooks reset the watch (ingestHook);
    * a core restart starts it over.
    */
@@ -1746,12 +1752,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.stallWatch.delete(id);
     // Re-read: the screen was read asynchronously and the run may have moved on meanwhile.
     const row = this.db.select().from(runs).where(eq(runs.id, id)).get();
-    if (row?.state !== 'working' || row.endedAt || row.cancelledAt) return;
+    if ((row?.state !== 'working' && row?.state !== 'starting') || row.endedAt || row.cancelledAt) return;
     this.record(id, {
       source: 'system',
       type: 'stall_detected',
       state: 'waiting_input',
-      payload: { message: 'No agent activity and an unchanged screen for 20 minutes; it may be stuck' },
+      payload: { message: `No agent activity and an unchanged screen for ${minutesOf(STALL_WATCHDOG_MS)} minutes; it may be stuck` },
     });
   }
 
@@ -1772,7 +1778,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const { sessions } = await this.ptyd.get().list();
       const byId = new Map(sessions.map((s) => [s.id, s]));
       const nowMs = Date.now();
-      const stillWorking = new Set<string>();
+      const watched = new Set<string>();
 
       for (const row of open) {
         if (!row.ptydSessionId) {
@@ -1789,14 +1795,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         }
         const session = byId.get(row.ptydSessionId);
         if (session?.status === 'running') {
-          if (row.state === 'working') {
-            stillWorking.add(row.id);
+          if (row.state === 'working' || row.state === 'starting') {
+            watched.add(row.id);
             if (await this.stalled(row, nowMs)) this.markStalled(row.id);
             continue;
           }
           if (
             row.state === 'waiting_input' &&
-            row.lastEvent === 'Notification' &&
+            (row.lastEvent === 'Notification' || row.lastEvent === 'stall_detected') &&
             nowMs - row.stateChangedAt.getTime() > WAITING_INPUT_TIMEOUT_MS &&
             this.unattendedOrigin(row.id)
           ) {
@@ -1811,7 +1817,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
               source: 'system',
               type: 'waiting_input_timeout',
               state: 'failed',
-              payload: { message: 'An unattended run waited on a permission prompt for 30 minutes and was stopped' },
+              payload: {
+                message:
+                  row.lastEvent === 'stall_detected'
+                    ? `An unattended run stalled and nobody looked at it for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes; it was stopped`
+                    : `An unattended run waited on a permission prompt for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes and was stopped`,
+              },
               patch: { endedAt: new Date(), ptydSessionId: null, autoRetryAt: null },
             });
             continue;
@@ -1883,7 +1894,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
       }
       for (const runId of this.stallWatch.keys()) {
-        if (!stillWorking.has(runId)) this.stallWatch.delete(runId);
+        if (!watched.has(runId)) this.stallWatch.delete(runId);
       }
       for (const row of attached) {
         if (!row.endedAt || !row.ptydSessionId) continue;

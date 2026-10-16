@@ -764,6 +764,41 @@ describe('runs', () => {
       expect(await state()).toBe('working');
     });
 
+    it('also watches a run stuck in starting with a live terminal, so prompts are taken again', async () => {
+      const project = await createProject('Stuck start', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(run.id);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).state).toBe('starting');
+      vi.setSystemTime(Date.now() + 21 * 60_000);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'waiting_input', lastEvent: 'stall_detected' });
+      vi.useRealTimers(); // the login session would have expired in the faked future
+      expect((await api('POST', `/api/runs/${run.id}/prompt`, { text: 'hello?' })).statusCode).toBe(200);
+    });
+
+    it('stops an unattended stalled run 30 minutes after the stall (R6)', async () => {
+      const project = await createProject('Cron Stall', false);
+      const run = await t.scheduler.submit({ projectId: project.id, prompt: 'x', permissionMode: 'auto' }, { unattended: 'cron' });
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: 's-cron-stall' });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      await t.runs.reconcile();
+      vi.setSystemTime(Date.now() + 21 * 60_000);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'waiting_input', lastEvent: 'stall_detected' });
+      vi.setSystemTime(Date.now() + 29 * 60_000);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).state).toBe('waiting_input');
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      await t.runs.reconcile();
+      const after = t.runs.getRun(run.id);
+      expect(after).toMatchObject({ state: 'failed', lastEvent: 'waiting_input_timeout' });
+      expect(after.endedAt).not.toBeNull();
+    });
+
     it('any hook restarts the stall timer', async () => {
       const project = await createProject('Busy', false);
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
