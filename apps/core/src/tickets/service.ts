@@ -23,7 +23,7 @@ import {
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gt, inArray, lt, max, min } from 'drizzle-orm';
+import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
@@ -43,7 +43,7 @@ import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './depende
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
-import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from '../runs/hold-events.js';
+import { pipelineOutcome, stillHeld } from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunService } from '../runs/service.js';
@@ -1085,59 +1085,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * agent lifts it), `merged` when the work landed in main, null when it never got that far.
    */
   private pipelineOutcome(runId: string): 'held' | 'merged' | null {
-    const lastDone = this.db
-      .select({ id: runEvents.id })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.state, 'done')))
-      .orderBy(desc(runEvents.id))
-      .limit(1)
-      .get();
-    const types = this.db
-      .select({ type: runEvents.type })
-      .from(runEvents)
-      .where(
-        and(
-          eq(runEvents.runId, runId),
-          gt(runEvents.id, lastDone?.id ?? 0),
-          inArray(runEvents.type, [...HOLD_EVENTS, 'merged_to_main']),
-        ),
-      )
-      .all()
-      .map((e) => e.type);
-    if (types.some((type) => HOLD_EVENTS.includes(type))) return 'held';
-    return types.includes('merged_to_main') ? 'merged' : null;
+    return pipelineOutcome(this.db, runId);
   }
 
   /**
-   * Whether an earlier pipeline pass of this run left it held: of the pass outcomes recorded before
-   * the run's latest switch to `done` (the current pass's own notes come after it), the newest is a
-   * HOLD_EVENTS note, not a merge or an accepted completion signal. A hold that was later merged, or
-   * whose agent later signalled completion (no merge follows when auto-sync and auto-Done are off),
-   * does not count.
+   * Whether an earlier pipeline pass of this run left it held (see hold-outcome.ts). A hold that was
+   * later merged, or whose agent later signalled completion (no merge follows when auto-sync and
+   * auto-Done are off), does not count.
    */
   private stillHeld(runId: string): boolean {
-    const lastDone = this.db
-      .select({ id: runEvents.id })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.state, 'done')))
-      .orderBy(desc(runEvents.id))
-      .limit(1)
-      .get();
-    if (!lastDone) return false;
-    const newest = this.db
-      .select({ type: runEvents.type })
-      .from(runEvents)
-      .where(
-        and(
-          eq(runEvents.runId, runId),
-          lt(runEvents.id, lastDone.id),
-          inArray(runEvents.type, [...HOLD_EVENTS, ...HOLD_ENDING_EVENTS]),
-        ),
-      )
-      .orderBy(desc(runEvents.id))
-      .limit(1)
-      .get();
-    return Boolean(newest && HOLD_EVENTS.includes(newest.type));
+    return stillHeld(this.db, runId);
   }
 
   /** Whether the run already got its one automatic conflict-resolution attempt (survives a restart). */

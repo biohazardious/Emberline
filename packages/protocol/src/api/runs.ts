@@ -540,6 +540,33 @@ export const RunTelemetry = z.object({
 });
 export type RunTelemetry = z.infer<typeof RunTelemetry>;
 
+/** Why a run needs a person, in the order core checks them (apps/core/src/runs/attention.ts). */
+export const RunAttentionReason = z.enum(['question', 'permission', 'stalled', 'held', 'blocked', 'failed', 'rate_limited']);
+export type RunAttentionReason = z.infer<typeof RunAttentionReason>;
+
+export const RunAttention = z.object({
+  reason: RunAttentionReason,
+  /** The question/permission message, hold label, blockers joined or failure reason. */
+  detail: z.string().nullable(),
+  /** ISO time of the triggering event. */
+  since: z.string(),
+  /** `${runId}:${reason}:${eventId}`: the same for every read of the same occurrence. */
+  occurrence: z.string(),
+});
+export type RunAttention = z.infer<typeof RunAttention>;
+
+/** Labels of the pipeline notes that hold a finished run for a person (HOLD_EVENTS, minus the nudge). */
+export const HOLD_LABELS: Readonly<Record<string, string>> = {
+  merge_failed: 'Merge failed',
+  secret_guard_blocked: 'Secret found in the diff',
+  slop_guard_blocked: 'Quality guard blocked',
+  critic_blocked: 'Critic blocked',
+  build_gate_error: 'Build checks could not run',
+  build_gate_failed: 'Build checks failed',
+  completion_missing: 'No completion signal',
+  completion_blocked: 'Blocked',
+};
+
 export const Run = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -582,6 +609,10 @@ export const Run = z.object({
   /** Run this one continues after a handoff, and the run that took over from this one. */
   predecessorRunId: z.string().nullable().default(null),
   handedOffTo: z.string().nullable().default(null),
+  /** What the run needs from a person, or null; computed by core per read. */
+  attention: RunAttention.nullable().default(null),
+  /** Done, its ticket waits in Review and nothing holds it. */
+  reviewReady: z.boolean().default(false),
   /** Token & tool execution telemetry (no monetary pricing). */
   telemetry: RunTelemetry.optional(),
 });

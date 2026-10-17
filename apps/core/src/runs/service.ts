@@ -57,6 +57,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
+import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
@@ -285,6 +286,8 @@ export const toRun = (row: RunRow): Run => ({
   routeIndex: row.routeIndex,
   predecessorRunId: row.predecessorRunId,
   handedOffTo: row.handedOffTo,
+  attention: null,
+  reviewReady: false,
 });
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -418,10 +421,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .all()
         .map((row) => [row.runId, row.n]),
     );
-    return rows.map((row) => ({
-      ...toRun(row),
-      telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0),
-    }));
+    return this.withAttention(
+      rows.map((row) => ({
+        ...toRun(row),
+        telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0),
+      })),
+    );
+  }
+
+  /** The events behind attention for these runs, in a fixed number of statements (see attention.ts). */
+  loadAttentionFacts(ids: string[]): Map<string, AttentionFacts> {
+    return loadAttentionFacts(this.db, ids);
+  }
+
+  /** `attention` and `reviewReady` of the given runs, from one batched load of their events. */
+  withAttention(list: Run[]): Run[] {
+    return attachAttention(this.db, list, (ids) => this.loadAttentionFacts(ids));
   }
 
   get(id: string): RunDetail {
@@ -447,9 +462,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         }),
       );
     const toolCalls = events.filter((e) => e.type === 'PreToolUse').length;
+    const [withAttention] = this.withAttention([{ ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls) }]);
     return {
-      ...toRun(row),
-      telemetry: this.computeTelemetryForRow(row, toolCalls),
+      ...(withAttention as Run),
       events,
       finalMessage: this.finalMessage(row),
       lastScreen: this.lastScreen(id),
