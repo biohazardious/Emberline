@@ -22,6 +22,7 @@ import {
   type FleetSection,
   fleetSection,
   isRunCompleted,
+  needsElsewhere,
   type SeenMap,
 } from '../attention';
 import { keptWorktreesSummary } from '../gcSummary';
@@ -146,6 +147,8 @@ export function FleetPage({
     () => (runs ?? []).filter((r) => !activeProjectId || r.projectId === activeProjectId),
     [runs, activeProjectId],
   );
+  /** Fleet shows one project, the badge counts all: say what the other projects add to Needs you. */
+  const elsewhere = useMemo(() => needsElsewhere(runs ?? [], seen, activeProjectId), [runs, seen, activeProjectId]);
 
   const counts = useMemo(() => {
     const all = scopedRuns;
@@ -505,6 +508,11 @@ export function FleetPage({
               {section && (
                 <h2 className="fleet-section-head">
                   {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
+                  {section === 'needs' && elsewhere > 0 && (
+                    <Link href="/inbox" className="muted small fleet-section-more">
+                      +{elsewhere} in other projects
+                    </Link>
+                  )}
                 </h2>
               )}
               <div className={`fleet-grid fleet-grid-${layout}`}>

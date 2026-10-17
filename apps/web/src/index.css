@@ -3984,6 +3984,13 @@ dialog.cmd-dialog::backdrop {
   color: var(--muted);
 }
 
+.fleet-section-more {
+  margin-left: 0.6rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .inbox-page {
   flex: 1;
   min-height: 0;
