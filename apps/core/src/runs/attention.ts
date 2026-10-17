@@ -64,19 +64,25 @@ export function computeAttention(run: AttentionRun, facts: AttentionFacts | unde
   switch (run.state) {
     case 'waiting_input': {
       if (run.lastEvent === 'SessionStart') return null;
+      // One wait is one occurrence, anchored at the event that entered it (a Notification, a stall, a
+      // StopFailure…): whatever arrives later in the same wait only decides the reason and the detail.
+      const enteredId = facts?.enteredId ?? null;
       const waiting = facts?.waiting ?? [];
+      const entered = waiting.find((e) => e.id === enteredId);
+      // stateChangedAt is written with the entering event, so it is that event's time.
+      const since = entered?.ts.toISOString() ?? run.stateChangedAt;
+      const at = (reason: RunAttention['reason'], detail: string | null) => make(run, reason, detail, since, enteredId);
       const latest = waiting.at(-1);
-      if (!latest) return make(run, 'question', null, run.stateChangedAt, facts?.enteredId ?? null);
-      // A stall is its own wait (it enters waiting_input from working) and the latest one decides.
-      if (latest.type === 'stall_detected') return make(run, 'stalled', message(latest), latest.ts.toISOString(), latest.id);
-      // One wait is one occurrence, anchored at its first Notification: a permission prompt anywhere in it
-      // makes it a permission; Claude's later idle reminder neither starts a new occurrence nor flips it.
+      // A stall enters its own wait (from working); a later Notification of that wait takes over.
+      if (latest?.type === 'stall_detected') return at('stalled', message(latest));
       const notifications = waiting.filter((e) => e.type === 'Notification');
-      const first = notifications[0] as AttentionEvent;
+      // A permission prompt anywhere in the wait makes it a permission.
       const permission = notifications.find((e) => isPermissionNotification(e.payload ?? {}));
-      if (permission) return make(run, 'permission', message(permission), first.ts.toISOString(), first.id);
-      const asked = notifications.find((e) => e.payload?.notification_type !== 'idle_prompt' && message(e)) ?? latest;
-      return make(run, 'question', message(asked), first.ts.toISOString(), first.id);
+      if (permission) return at('permission', message(permission));
+      // Claude's idle reminders say nothing new: the detail is the agent's own question, or the text
+      // of the Notification that entered the wait.
+      const asked = notifications.find((e) => e.payload?.notification_type !== 'idle_prompt' && message(e));
+      return at('question', message(asked ?? (entered?.type === 'Notification' ? entered : undefined)));
     }
     case 'rate_limited':
       return run.autoRetry ? null : make(run, 'rate_limited', null, run.stateChangedAt, facts?.enteredId ?? null);

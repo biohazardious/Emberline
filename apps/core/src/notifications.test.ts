@@ -527,3 +527,43 @@ describe('NotificationService on a real RunService', () => {
     }
   });
 });
+
+describe('NotificationService on real hooks', () => {
+  it('a wait entered without a Notification (StopFailure) and Claude\'s later idle reminder are one occurrence, one page', async () => {
+    const { createHash } = await import('node:crypto');
+    const { createTestApp, setupAndLogin, CSRF } = await import('./test-utils.js');
+    const { runs } = await import('./db/schema.js');
+    const t = await createTestApp();
+    try {
+      const cookie = await setupAndLogin(t.app);
+      const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Hooks', initGit: false }, headers: { ...CSRF, cookie } });
+      const projectId = res.json().project.id as string;
+      const now = new Date();
+      const hookTokenHash = createHash('sha256').update('tok').digest('hex');
+      t.db.insert(runs).values({ id: 'run-sf', projectId, agent: 'claude', state: 'working', worktreePath: '/tmp/x', hookTokenHash, stateChangedAt: now, createdAt: now, title: 'SF' }).run();
+      const service = new NotificationService(t.db, t.runs, undefined, { now: () => now.getTime() - 1000 });
+      service.getSettings = () => ({ ...CFG, onRunFinished: false });
+      const sent: { body: string }[] = [];
+      service.dispatch = async (_cfg, msg) => {
+        sent.push({ body: msg.body });
+        return { ok: true, status: 200, error: null };
+      };
+      const hook = (event: string, payload: object) =>
+        t.runs.ingestHook({ runId: 'run-sf', event: event as never, receivedAt: new Date().toISOString(), payload }, 'tok');
+      hook('StopFailure', { error: 'invalid_request', message: 'Prompt is too long' });
+      await new Promise((resolve) => setImmediate(resolve));
+      const first = t.runs.getRun('run-sf');
+      expect(first.state).toBe('waiting_input');
+      expect(first.attention?.reason).toBe('question');
+      hook('Notification', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+      await new Promise((resolve) => setImmediate(resolve));
+      const second = t.runs.getRun('run-sf');
+      expect(second.attention?.occurrence).toBe(first.attention?.occurrence);
+      expect(second.attention?.since).toBe(first.attention?.since);
+      expect(sent).toHaveLength(1);
+      service.stop();
+    } finally {
+      await t.close();
+    }
+  });
+});

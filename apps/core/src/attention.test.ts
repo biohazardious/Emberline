@@ -39,14 +39,14 @@ const facts = (over: Partial<AttentionFacts> = {}): AttentionFacts => ({
 
 describe('computeAttention rules', () => {
   it('question: a waiting run with an ordinary Notification', () => {
-    const a = computeAttention(baseRun(), facts({ waiting: [ev(6, 'Notification', { message: 'Which db?' })] }), NOW);
+    const a = computeAttention(baseRun(), facts({ enteredId: 6, waiting: [ev(6, 'Notification', { message: 'Which db?' })] }), NOW);
     expect(a).toEqual({ reason: 'question', detail: 'Which db?', since: iso(30_000), occurrence: 'r1:question:6' });
   });
 
   it('permission: a Notification of the wait is a permission prompt (by type or by text)', () => {
     const byType = computeAttention(
       baseRun(),
-      facts({ waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' })] }),
+      facts({ enteredId: 6, waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' })] }),
       NOW,
     );
     expect(byType).toMatchObject({ reason: 'permission', detail: 'Allow Bash?', occurrence: 'r1:permission:6' });
@@ -54,41 +54,56 @@ describe('computeAttention rules', () => {
     expect(byText?.reason).toBe('permission');
     const idleLater = computeAttention(
       baseRun(),
-      facts({ waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt' }), ev(7, 'Notification', { notification_type: 'idle_prompt', message: 'idle' })] }),
+      facts({ enteredId: 6, waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt' }), ev(7, 'Notification', { notification_type: 'idle_prompt', message: 'idle' })] }),
       NOW,
     );
     // One wait is one occurrence: the idle reminder after a permission prompt changes nothing.
     expect(idleLater).toMatchObject({ reason: 'permission', occurrence: 'r1:permission:6' });
   });
 
-  it('one wait is one occurrence: anchored at its first Notification, permission wins, idle reminders never count', () => {
+  it('one wait is one occurrence: anchored at the Notification that entered it, permission wins, idle reminders never count', () => {
     const idle = (id: number) => ev(id, 'Notification', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
     const permission = computeAttention(
       baseRun(),
-      facts({ waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' }), idle(9)] }),
+      facts({ enteredId: 6, waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' }), idle(9)] }),
       NOW,
     );
     expect(permission).toMatchObject({ reason: 'permission', detail: 'Allow Bash?', occurrence: 'r1:permission:6' });
-    const question = computeAttention(baseRun(), facts({ waiting: [ev(6, 'Notification', { message: 'Which db?' }), idle(9)] }), NOW);
+    const question = computeAttention(baseRun(), facts({ enteredId: 6, waiting: [ev(6, 'Notification', { message: 'Which db?' }), idle(9)] }), NOW);
     expect(question).toMatchObject({ reason: 'question', detail: 'Which db?', occurrence: 'r1:question:6' });
-    const idleOnly = computeAttention(baseRun(), facts({ waiting: [idle(6), idle(9)] }), NOW);
+    const idleOnly = computeAttention(baseRun(), facts({ enteredId: 6, waiting: [idle(6), idle(9)] }), NOW);
     expect(idleOnly).toMatchObject({ reason: 'question', detail: 'Claude is waiting for your input', occurrence: 'r1:question:6' });
   });
 
   it('stalled: the first reason after entering the state is stall_detected', () => {
-    const a = computeAttention(baseRun(), facts({ waiting: [ev(6, 'stall_detected', { message: 'No output for 20 minutes' })] }), NOW);
+    const a = computeAttention(baseRun(), facts({ enteredId: 6, waiting: [ev(6, 'stall_detected', { message: 'No output for 20 minutes' })] }), NOW);
     expect(a).toMatchObject({ reason: 'stalled', detail: 'No output for 20 minutes', occurrence: 'r1:stalled:6' });
   });
 
-  it('the latest of Notification and stall_detected decides', () => {
-    const stallLast = computeAttention(baseRun(), facts({ waiting: [ev(6, 'Notification', { message: 'q' }), ev(7, 'stall_detected')] }), NOW);
-    expect(stallLast).toMatchObject({ reason: 'stalled', occurrence: 'r1:stalled:7' });
+  it('a Notification later in a wait a stall entered decides the reason; the occurrence stays at the stall', () => {
+    const stalled = computeAttention(baseRun(), facts({ enteredId: 7, waiting: [ev(7, 'stall_detected')] }), NOW);
+    expect(stalled).toMatchObject({ reason: 'stalled', occurrence: 'r1:stalled:7' });
     const notificationLast = computeAttention(
       baseRun(),
-      facts({ waiting: [ev(6, 'stall_detected'), ev(7, 'Notification', { notification_type: 'permission_prompt', message: 'ok?' })] }),
+      facts({ enteredId: 6, waiting: [ev(6, 'stall_detected'), ev(7, 'Notification', { notification_type: 'permission_prompt', message: 'ok?' })] }),
       NOW,
     );
-    expect(notificationLast).toMatchObject({ reason: 'permission', detail: 'ok?', occurrence: 'r1:permission:7' });
+    expect(notificationLast).toMatchObject({ reason: 'permission', detail: 'ok?', since: iso(30_000), occurrence: 'r1:permission:6' });
+  });
+
+  it('a wait entered without a Notification (StopFailure) stays one occurrence when an idle reminder follows', () => {
+    const run = baseRun({ lastEvent: 'StopFailure' });
+    const before = computeAttention(run, facts({ enteredId: 5 }), NOW);
+    expect(before).toEqual({ reason: 'question', detail: null, since: run.stateChangedAt, occurrence: 'r1:question:5' });
+    const after = computeAttention(
+      { ...run, lastEvent: 'Notification' },
+      facts({ enteredId: 5, waiting: [ev(6, 'Notification', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' })] }),
+      NOW,
+    );
+    expect(after).toEqual(before);
+    // A real question later in that wait gives the detail, still the same occurrence.
+    const asked = computeAttention(run, facts({ enteredId: 5, waiting: [ev(6, 'Notification', { message: 'Which db?' })] }), NOW);
+    expect(asked).toMatchObject({ detail: 'Which db?', occurrence: 'r1:question:5' });
   });
 
   it('uses a deterministic time-based occurrence when no triggering event is known', () => {
