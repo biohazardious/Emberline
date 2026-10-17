@@ -1,4 +1,4 @@
-import type { GarbageCollectRunsResponse, Project, Run, RunDetail } from '@emberline/protocol';
+import type { GarbageCollectRunsResponse, Project, Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
 import {
   Check,
   Circle,
@@ -21,7 +21,8 @@ import { HandoffMenu } from '../components/QuotaLanes';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { STAGE_TEMPLATES } from '../components/RunInspector';
-import { BuildOutputsList, FinalAnswer, LastScreen } from '../components/RunOutcome';
+import { outputsBadge } from '../buildOutputs';
+import { FinalAnswer, LastScreen } from '../components/RunOutcome';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
@@ -55,13 +56,25 @@ function finishedAt(r: Run): number {
   return Date.parse(r.endedAt ?? r.stateChangedAt);
 }
 
+/** Compact link to the Build Outputs page, filtered to this run; nothing when the run has none. */
+function BuildOutputsBadge({ run }: { run: Run }) {
+  const res = useApi<RunBuildOutputsResponse>(`/api/runs/${run.id}/build-outputs`, 30_000);
+  const badge = outputsBadge(run.projectId, run.id, res.data?.outputs.length ?? 0);
+  if (!badge) return null;
+  return (
+    <Link href={badge.href} className="fleet-outputs-badge">
+      <Package className="icon" aria-hidden /> {badge.label}
+    </Link>
+  );
+}
+
 /** The agent's final answer, last screen and build outputs, for a pane whose session finished. */
 function FinishedOutcome({ run }: { run: Run }) {
   const detail = useApi<RunDetail>(`/api/runs/${run.id}`, 10_000);
   return (
     <div className="fleet-outcome">
       {detail.data?.finalMessage && <FinalAnswer text={detail.data.finalMessage} />}
-      <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />
+      <BuildOutputsBadge run={run} />
       {detail.data?.lastScreen && !run.terminalId && <LastScreen text={detail.data.lastScreen} />}
     </div>
   );

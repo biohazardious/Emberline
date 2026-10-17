@@ -22,6 +22,7 @@ Think of it as an issue tracker, an editor and a git client in one browser tab, 
 - **Quality gates.** A build/lint/test gate, and a pre-merge check for leftover secrets and debug code.
 - **Fleet view.** Watch up to four agent terminals side by side, filter to the ones waiting for you and steer them inline.
 - **Project tooling.** A new-project wizard that writes a `PROJECT.md` blueprint and starter tickets, a roadmap and brainstorming page, a code explorer and editor, a live view of the agent's headless browser, checkpoints with rollback, scheduled jobs and project export.
+- **Build outputs.** APKs, installers and firmware are archived per project when a run finishes, so they outlive worktree cleanup. A Build Outputs page lists, downloads, pins and prunes them within a per-project quota.
 - **Personas.** Route roles (architect, coder, DBA, QA, security) to the agent and model you prefer.
 - **Notifications.** ntfy or a webhook (generic, Discord, Slack) for usage limits, resumes, agents waiting for input and finished runs.
 - **Operations.** Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.

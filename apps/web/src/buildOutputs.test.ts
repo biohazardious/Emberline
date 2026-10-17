@@ -1,6 +1,6 @@
 import type { ProjectBuildOutput } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { clampQuotaGb, filterOutputs, formatBytes, outputGroup, usageFraction, usageText } from './buildOutputs';
+import { clampQuotaGb, filterOutputs, formatBytes, outputGroup, outputsBadge, usageFraction, usageText } from './buildOutputs';
 
 const out = (overrides: Partial<ProjectBuildOutput> = {}): ProjectBuildOutput => ({
   id: 'o1',
@@ -95,5 +95,15 @@ describe('clampQuotaGb', () => {
     expect(clampQuotaGb('7.3')).toBe(7.3);
     expect(clampQuotaGb('')).toBe(5);
     expect(clampQuotaGb('abc')).toBe(5);
+  });
+});
+
+describe('outputsBadge', () => {
+  it('links to the run-filtered page and pluralises', () => {
+    expect(outputsBadge('p1', 'r 1', 1)).toEqual({ href: '/projects/p1/outputs?run=r%201', label: '1 output' });
+    expect(outputsBadge('p1', 'r1', 3)?.label).toBe('3 outputs');
+  });
+  it('renders nothing for zero', () => {
+    expect(outputsBadge('p1', 'r1', 0)).toBeNull();
   });
 });

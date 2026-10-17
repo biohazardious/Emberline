@@ -2428,6 +2428,19 @@ a {
   text-align: left;
 }
 
+.fleet-outputs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 3px 9px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 999px;
+  color: var(--ember-2);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
 
 .link-btn {
   padding: 0;

@@ -88,3 +88,12 @@ export function clampQuotaGb(value: string): number {
   if (value.trim() === '' || !Number.isFinite(n)) return 5;
   return Math.max(0.5, Math.min(1000, n));
 }
+
+/** Fleet badge: where it links and what it says; null when the run has no outputs. */
+export function outputsBadge(projectId: string, runId: string, count: number): { href: string; label: string } | null {
+  if (count <= 0) return null;
+  return {
+    href: `/projects/${encodeURIComponent(projectId)}/outputs?run=${encodeURIComponent(runId)}`,
+    label: `${count} ${count === 1 ? 'output' : 'outputs'}`,
+  };
+}
