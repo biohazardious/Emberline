@@ -3748,3 +3748,180 @@ dialog.cmd-dialog::backdrop {
   margin-top: 2px;
   flex: none;
 }
+
+/* --- build outputs (/projects/:id/outputs) --------------------------------- */
+
+.build-outputs-page {
+  overflow-y: auto;
+}
+
+.build-outputs-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.build-outputs-usage p {
+  margin: 0;
+}
+
+.build-outputs-usage-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.build-outputs-usage-line code {
+  overflow-wrap: anywhere;
+}
+
+.build-outputs-meter {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.build-outputs-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ok);
+  transition: width 0.3s;
+}
+
+.build-outputs-meter-fill.warn {
+  background: var(--warn);
+}
+
+.build-outputs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.build-outputs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.build-outputs-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 260px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.build-outputs-search .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.build-outputs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.build-outputs-empty p {
+  margin: 0;
+  max-width: 48ch;
+}
+
+.build-outputs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.build-outputs-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.build-outputs-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.build-outputs-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.build-outputs-table td.build-outputs-name {
+  display: table-cell;
+}
+
+.build-outputs-ticket-title {
+  color: var(--text);
+}
+
+.build-outputs-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.build-outputs-pinned {
+  color: var(--ok);
+}
+
+.build-outputs-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+}
+
+.build-outputs-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.build-outputs-card .build-outputs-actions {
+  width: 100%;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .build-outputs-table {
+    display: none;
+  }
+
+  .build-outputs-cards {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .build-outputs-search {
+    flex-basis: 100%;
+  }
+}

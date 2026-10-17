@@ -21,6 +21,7 @@ import {
   LayoutGrid,
   Menu,
   Moon,
+  Package,
   Search,
   Settings,
   SquareKanban,
@@ -54,6 +55,9 @@ const TerminalPage = lazy(() => import('./pages/TerminalPage').then((m) => ({ de
 const BoardPage = lazy(() => import('./pages/BoardPage').then((m) => ({ default: m.BoardPage })));
 const FleetPage = lazy(() => import('./pages/FleetPage').then((m) => ({ default: m.FleetPage })));
 const ReviewPage = lazy(() => import('./pages/ReviewPage').then((m) => ({ default: m.ReviewPage })));
+const BuildOutputsPage = lazy(() =>
+  import('./pages/BuildOutputsPage').then((m) => ({ default: m.BuildOutputsPage })),
+);
 const CodeExplorerPage = lazy(() =>
   import('./pages/CodeExplorerPage').then((m) => ({ default: m.CodeExplorerPage })),
 );
@@ -493,6 +497,18 @@ function Shell() {
           )}
           {activeProject && (
             <Link
+              href={`/projects/${activeProject.id}/outputs`}
+              className={`nav-item${location === `/projects/${activeProject.id}/outputs` ? ' active' : ''}`}
+              title="Build Outputs"
+            >
+              <span className="nav-icon mono">
+                <Package className="icon" aria-hidden />
+              </span>
+              <span className="nav-label">Build Outputs</span>
+            </Link>
+          )}
+          {activeProject && (
+            <Link
               href={`/projects/${activeProject.id}/browser`}
               className={`nav-item${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
               title="Live Browser Studio"
@@ -808,6 +824,15 @@ function Shell() {
               )}
               {activeProject && (
                 <Link
+                  href={`/projects/${activeProject.id}/outputs`}
+                  className={`topbar-tab${location === `/projects/${activeProject.id}/outputs` ? ' active' : ''}`}
+                  title="Build Outputs"
+                >
+                  <Package className="icon" aria-hidden /> <span className="tab-label">Build Outputs</span>
+                </Link>
+              )}
+              {activeProject && (
+                <Link
                   href={`/projects/${activeProject.id}/browser`}
                   className={`topbar-tab${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
                   title="Live Browser"
@@ -918,6 +943,13 @@ function Shell() {
                 {(params) => (
                   <Suspense fallback={<div className="board-page" aria-busy="true" />}>
                     <CodeExplorerPage key={params.id} projectId={params.id} />
+                  </Suspense>
+                )}
+              </Route>
+              <Route path="/projects/:id/outputs">
+                {(params) => (
+                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                    <BuildOutputsPage key={params.id} projectId={params.id} />
                   </Suspense>
                 )}
               </Route>

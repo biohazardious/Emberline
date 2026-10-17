@@ -65,6 +65,7 @@ import { useLocation } from 'wouter';
 import { useQueryParam } from '../hooks/navigation';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
+import { clampQuotaGb } from '../buildOutputs';
 import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { AccountPanel } from '../components/AccountPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -145,6 +146,8 @@ export function SettingsPage({
   const [maxTicketDepth, setMaxTicketDepth] = useState(3);
   // Kept as typed while editing; clamped to 1-4 on blur and save.
   const [maxParallelTickets, setMaxParallelTickets] = useState('2');
+  // Kept as typed while editing; clamped to 0.5-1000 GB on blur and save.
+  const [buildOutputsQuotaGb, setBuildOutputsQuotaGb] = useState('5');
   const [maxAutoRunsPerDay, setMaxAutoRunsPerDay] = useState(40);
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
@@ -194,6 +197,7 @@ export function SettingsPage({
         setMaxTicketDepth(res.maxTicketDepth);
         setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
         setMaxParallelTickets(String(res.maxParallelTicketsPerProject ?? 2));
+        setBuildOutputsQuotaGb(String(res.buildOutputsQuotaGb ?? 5));
         setDefaultAgent(res.defaultAgent);
         setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
         setAntigravityAck(res.antigravityTermsAcknowledged ?? false);
@@ -410,6 +414,7 @@ export function SettingsPage({
         maxTicketDepth,
         maxAutoRunsPerProjectPerDay: maxAutoRunsPerDay,
         maxParallelTicketsPerProject: clampParallel(maxParallelTickets),
+        buildOutputsQuotaGb: clampQuotaGb(buildOutputsQuotaGb),
         defaultAgent,
         enabledProviders,
         antigravityTermsAcknowledged: antigravityAck,
@@ -726,6 +731,26 @@ export function SettingsPage({
                 <strong>Parallel tickets per project</strong>
                 <div className="muted small">
                   How many unblocked tickets of one project the factory works on at the same time (1-4). Tickets that wait for a dependency never start early.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="number"
+                className="input mono"
+                min={0.5}
+                max={1000}
+                step={0.5}
+                value={buildOutputsQuotaGb}
+                onChange={(e) => setBuildOutputsQuotaGb(e.target.value)}
+                onBlur={() => setBuildOutputsQuotaGb(String(clampQuotaGb(buildOutputsQuotaGb)))}
+                style={{ width: '90px' }}
+              />
+              <div>
+                <strong>Build outputs archive per project (GB)</strong>
+                <div className="muted small">
+                  Archived APKs, installers and firmware images are kept per project up to this size (0.5-1000 GB). Beyond it the oldest unpinned outputs are deleted; pinned ones stay.
                 </div>
               </div>
             </label>
