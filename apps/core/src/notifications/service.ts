@@ -76,6 +76,8 @@ export interface NotificationServiceOptions {
   presence?: Pick<PresenceRegistry, 'isWatched'>;
   retryDelayMs?: number;
   now?: () => number;
+  /** Where a failure inside a listener goes (core's logger); console by default. */
+  log?: (message: string, error: unknown) => void;
 }
 
 /** The part of a page that depends on what happened; the rest (log, presence, retry) is shared. */
@@ -83,6 +85,12 @@ interface Page {
   occurrence: string;
   runId: string;
   message: NotificationMessage;
+  /** ISO time the attention began; a page older than this service's start is not sent. */
+  since?: string;
+  /** Whether the settings still want this page (checked again before a retry). */
+  wanted: (cfg: NotificationSettings) => boolean;
+  /** Set when `occurrence` is the run's `attention.occurrence`: a retry then needs it to be current. */
+  attention?: boolean;
 }
 
 export class NotificationService {
@@ -91,6 +99,9 @@ export class NotificationService {
   private readonly presence?: Pick<PresenceRegistry, 'isWatched'>;
   private readonly retryDelayMs: number;
   private readonly now: () => number;
+  private readonly log: (message: string, error: unknown) => void;
+  /** Attention that began before this moment predates this process; see {@link page}. */
+  private readonly startedAt: number;
   private readonly retries = new Set<NodeJS.Timeout>();
   private pruneTimer: NodeJS.Timeout | null = null;
 
@@ -103,6 +114,8 @@ export class NotificationService {
     this.presence = options.presence;
     this.retryDelayMs = options.retryDelayMs ?? PAGE_RETRY_MS;
     this.now = options.now ?? Date.now;
+    this.log = options.log ?? ((message, error) => console.error(message, error));
+    this.startedAt = this.now();
     if (scheduler) {
       this.lastWindows = scheduler.state().windows;
       scheduler.on('state', (state) => {
@@ -111,33 +124,46 @@ export class NotificationService {
     }
     if (runs) {
       runs.on('run', (emitted, stateChanged) => {
-        // In-process payloads carry no attention; computed once per emit, shared with the events socket.
-        const run = runs.attentionOf(emitted);
-        this.onRun(run, stateChanged);
+        // Never throws into the emitter (a DB error must not escape RunService.record).
+        try {
+          // In-process payloads carry no attention; computed once per emit, shared with the events socket.
+          this.onRun(runs.attentionOf(emitted), stateChanged);
+        } catch (error) {
+          this.log('notification: handling a run event failed', error);
+        }
       });
       // A paused factory waits for a person like an agent does: same switch as waiting_input.
       runs.on('note', (run, type, payload) => {
         if (type !== 'factory_chain_paused') return;
-        const cfg = this.getSettings();
-        if (!cfg.enabled || !cfg.onWaitingInput) return;
-        const label = run.title ?? run.branch ?? run.id.slice(0, 8);
-        const message = (payload as { message?: unknown } | null)?.message;
-        void this.page(cfg, {
-          occurrence: `${run.projectId}:factory_paused:${this.latestEventId(run.id)}`,
-          runId: run.id,
-          message: {
-            event: 'factory_paused',
-            title: `Factory paused: ${label}`,
-            body:
-              typeof message === 'string' && message
-                ? message
-                : 'The factory chain paused after failing ticket runs; fix the cause and click Run pipeline.',
-            priority: 'high',
-            tags: ['pause_button', 'emberline'],
-          },
-        });
+        try {
+          this.onFactoryPaused(run, payload);
+        } catch (error) {
+          this.log('notification: handling a factory pause failed', error);
+        }
       });
     }
+  }
+
+  private onFactoryPaused(run: Run, payload: unknown): void {
+    const cfg = this.getSettings();
+    if (!cfg.enabled || !cfg.onWaitingInput) return;
+    const label = run.title ?? run.branch ?? run.id.slice(0, 8);
+    const message = (payload as { message?: unknown } | null)?.message;
+    this.send(cfg, {
+      occurrence: `${run.projectId}:factory_paused:${this.latestEventId(run.id)}`,
+      runId: run.id,
+      wanted: (c) => c.onWaitingInput,
+      message: {
+        event: 'factory_paused',
+        title: `Factory paused: ${label}`,
+        body:
+          typeof message === 'string' && message
+            ? message
+            : 'The factory chain paused after failing ticket runs; fix the cause and click Run pipeline.',
+        priority: 'high',
+        tags: ['pause_button', 'emberline'],
+      },
+    });
   }
 
   /** Starts the daily pruning of the page log. */
@@ -197,9 +223,12 @@ export class NotificationService {
         // Failures page under the finished-runs switch, once, when the run fails.
         if (stateChanged && cfg.onRunFinished) {
           const timedOut = run.lastEvent === 'waiting_input_timeout';
-          void this.page(cfg, {
+          this.send(cfg, {
             occurrence: attention.occurrence,
             runId: run.id,
+            since: attention.since,
+            attention: true,
+            wanted: (c) => c.onRunFinished,
             message: {
               event: 'run_finished',
               title: timedOut ? `Run stopped, no one answered: ${label}` : `Run failed: ${label}`,
@@ -214,9 +243,12 @@ export class NotificationService {
         return;
       }
       if (!cfg.onWaitingInput) return;
-      void this.page(cfg, {
+      this.send(cfg, {
         occurrence: attention.occurrence,
         runId: run.id,
+        since: attention.since,
+        attention: true,
+        wanted: (c) => c.onWaitingInput,
         message: {
           event: 'waiting_input',
           title: `Agent waiting on you: ${label}`,
@@ -230,9 +262,10 @@ export class NotificationService {
     if (stateChanged && run.state === 'done' && !run.cancelled && !run.handedOffTo) {
       const cfg = this.getSettings();
       if (!cfg.enabled || !cfg.onRunFinished) return;
-      void this.page(cfg, {
+      this.send(cfg, {
         occurrence: `${run.id}:finished:${this.stateEventId(run.id, 'done', run.stateChangedAt)}`,
         runId: run.id,
+        wanted: (c) => c.onRunFinished,
         message: {
           event: 'run_finished',
           title: `Run completed: ${label}`,
@@ -244,40 +277,73 @@ export class NotificationService {
     }
   }
 
+  /** Fire and forget: a failure is logged, never thrown into the run's event flow. */
+  private send(cfg: NotificationSettings, page: Page): void {
+    this.page(cfg, page).catch((error) => this.log('notification: paging failed', error));
+  }
+
   /**
    * Sends one page unless its occurrence is logged already (sent, suppressed or failed: never twice,
-   * restarts included) or someone is looking at that run. The row is written first, so two emits of the
-   * same occurrence cannot both send. A failed send is retried once after {@link PAGE_RETRY_MS}.
+   * restarts included), someone is looking at that run, or the attention began before this process
+   * started (an upgrade or restart does not re-announce old waits; hooks and holds only arise while
+   * core runs, so nothing real is lost). The row is written BEFORE the send: at-most-once, a crash can
+   * lose a page but never double it. A failed send is retried once after {@link PAGE_RETRY_MS}, if it
+   * is still wanted by then.
    */
   private async page(cfg: NotificationSettings, page: Page): Promise<void> {
-    const watched = this.presence?.isWatched(page.runId) ?? false;
+    const old = page.since !== undefined && Date.parse(page.since) < this.startedAt;
+    const hidden = old || (this.presence?.isWatched(page.runId) ?? false);
     const inserted = this.db
       .insert(notificationLog)
       .values({
         occurrence: page.occurrence,
         event: page.message.event,
         sentAt: new Date(this.now()),
-        outcome: watched ? 'suppressed' : 'sent',
+        outcome: hidden ? 'suppressed' : 'sent',
       })
       .onConflictDoNothing()
       .run();
-    if (inserted.changes === 0 || watched) return;
+    if (inserted.changes === 0 || hidden) return;
     const result = await this.dispatch(cfg, page.message);
     if (result.ok) return;
     this.setOutcome(page.occurrence, 'failed');
     const timer = setTimeout(() => {
       this.retries.delete(timer);
-      const current = this.getSettings();
-      if (!current.enabled) return;
-      void this.dispatch(current, page.message).then((retry) => {
-        if (retry.ok) this.setOutcome(page.occurrence, 'sent');
-      });
+      try {
+        this.retry(page);
+      } catch (error) {
+        this.log('notification: retry failed', error);
+      }
     }, this.retryDelayMs);
     timer.unref();
     this.retries.add(timer);
   }
 
-  private setOutcome(occurrence: string, outcome: 'sent' | 'failed'): void {
+  /** The one retry: sends only if the page is still wanted, still current and nobody is looking. */
+  private retry(page: Page): void {
+    const current = this.getSettings();
+    if (!current.enabled || !page.wanted(current)) return;
+    if (page.attention) {
+      let now: string | undefined;
+      try {
+        now = this.runs?.getRun(page.runId).attention?.occurrence;
+      } catch {
+        return; // the run is gone
+      }
+      if (now !== page.occurrence) return;
+    }
+    if (this.presence?.isWatched(page.runId)) {
+      this.setOutcome(page.occurrence, 'suppressed');
+      return;
+    }
+    void this.dispatch(current, page.message)
+      .then((retry) => {
+        if (retry.ok) this.setOutcome(page.occurrence, 'sent');
+      })
+      .catch((error) => this.log('notification: retry failed', error));
+  }
+
+  private setOutcome(occurrence: string, outcome: 'sent' | 'suppressed' | 'failed'): void {
     this.db.update(notificationLog).set({ outcome }).where(eq(notificationLog.occurrence, occurrence)).run();
   }
 

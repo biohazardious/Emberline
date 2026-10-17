@@ -64,17 +64,19 @@ export function computeAttention(run: AttentionRun, facts: AttentionFacts | unde
   switch (run.state) {
     case 'waiting_input': {
       if (run.lastEvent === 'SessionStart') return null;
-      // The latest reason since the state was entered decides (a stall after a question, or a prompt after a stall).
-      const latest = (facts?.waiting ?? []).at(-1);
+      const waiting = facts?.waiting ?? [];
+      const latest = waiting.at(-1);
       if (!latest) return make(run, 'question', null, run.stateChangedAt, facts?.enteredId ?? null);
+      // A stall is its own wait (it enters waiting_input from working) and the latest one decides.
       if (latest.type === 'stall_detected') return make(run, 'stalled', message(latest), latest.ts.toISOString(), latest.id);
-      return make(
-        run,
-        isPermissionNotification(latest.payload ?? {}) ? 'permission' : 'question',
-        message(latest),
-        latest.ts.toISOString(),
-        latest.id,
-      );
+      // One wait is one occurrence, anchored at its first Notification: a permission prompt anywhere in it
+      // makes it a permission; Claude's later idle reminder neither starts a new occurrence nor flips it.
+      const notifications = waiting.filter((e) => e.type === 'Notification');
+      const first = notifications[0] as AttentionEvent;
+      const permission = notifications.find((e) => isPermissionNotification(e.payload ?? {}));
+      if (permission) return make(run, 'permission', message(permission), first.ts.toISOString(), first.id);
+      const asked = notifications.find((e) => e.payload?.notification_type !== 'idle_prompt' && message(e)) ?? latest;
+      return make(run, 'question', message(asked), first.ts.toISOString(), first.id);
     }
     case 'rate_limited':
       return run.autoRetry ? null : make(run, 'rate_limited', null, run.stateChangedAt, facts?.enteredId ?? null);

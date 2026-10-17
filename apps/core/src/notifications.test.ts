@@ -3,7 +3,7 @@ import type { NotificationSettings } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type Db, openDb } from './db/index.js';
-import { notificationLog } from './db/schema.js';
+import { notificationLog, runEvents } from './db/schema.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService, type NotificationServiceOptions } from './notifications/service.js';
 
@@ -66,7 +66,21 @@ async function harness(cfg: Partial<NotificationSettings> = {}, options: Notific
   const runs = Object.assign(new EventEmitter(), {
     attentionOf: (run: { attention?: Attention | null }) => ({ attention: null, ...run }),
   });
-  const service = new NotificationService(db, runs as never, undefined, options);
+  const current = new Map<string, unknown>();
+  runs.on('run', (r: { id: string }) => current.set(r.id, r));
+  Object.assign(runs, {
+    getRun: (id: string) => {
+      const r = current.get(id);
+      if (!r) throw new Error('no run');
+      return r;
+    },
+  });
+  const logged: string[] = [];
+  const service = new NotificationService(db, runs as never, undefined, {
+    now: () => Date.parse('2026-10-18T09:00:00Z'),
+    log: (message) => logged.push(message),
+    ...options,
+  });
   let settings: NotificationSettings = { ...CFG, ...cfg };
   service.getSettings = () => settings;
   const sent: { event: string; title: string; body: string; priority?: string }[] = [];
@@ -79,6 +93,8 @@ async function harness(cfg: Partial<NotificationSettings> = {}, options: Notific
   return {
     db,
     runs,
+    logged,
+    current,
     service,
     sent,
     flush,
@@ -160,6 +176,26 @@ describe('NotificationService run events', () => {
     second.runs.emit('run', run('waiting_input', 'Notification', att('question', 6)), false);
     await second.flush();
     expect(second.sent).toHaveLength(1);
+  });
+
+  it('logs as suppressed, without sending, an occurrence older than the service start (upgrade/restart)', async () => {
+    const h = await harness({}, { now: () => Date.parse('2026-10-18T11:00:00Z') });
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), false);
+    await h.flush();
+    expect(h.sent).toEqual([]);
+    expect(h.db.select().from(notificationLog).get()?.outcome).toBe('suppressed');
+  });
+
+  it('a throwing attention computation neither breaks the emit for other listeners nor escapes', async () => {
+    const h = await harness();
+    (h.runs as unknown as { attentionOf: () => never }).attentionOf = () => {
+      throw new Error('db is locked');
+    };
+    const other = vi.fn();
+    h.runs.on('run', other);
+    expect(() => h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), true)).not.toThrow();
+    expect(other).toHaveBeenCalled();
+    expect(h.logged.join()).toMatch(/notification/i);
   });
 
   it('maps attention reasons to the toggles: waiting-input covers all but failures, which follow run-finished', async () => {
@@ -261,6 +297,34 @@ describe('NotificationService run events', () => {
     expect(h.sent).toHaveLength(2);
   });
 
+  it('drops the retry when the occurrence is no longer current, the toggle is off, or someone is looking', async () => {
+    vi.useFakeTimers();
+    const presence = new PresenceRegistry();
+    const h = await harness({}, { presence });
+    const fail = async (id: number) => {
+      h.failSends(false);
+      h.runs.emit('run', run('waiting_input', 'Notification', att('question', id)), true);
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    // 1: the run moved on (its attention is another occurrence by the time of the retry).
+    await fail(1);
+    h.runs.emit('run', run('working', 'PreToolUse', null), false);
+    // 2: the toggle is switched off.
+    await fail(2);
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 2)), false);
+    h.set({ onWaitingInput: false });
+    // 3: a visible client opens the run.
+    h.set({ onWaitingInput: true });
+    await fail(3);
+    presence.set(Symbol('tab'), { visible: true, runId: 'r1' });
+    const before = h.sent.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sent).toHaveLength(before);
+    const outcomes = Object.fromEntries(h.db.select().from(notificationLog).all().map((r) => [r.occurrence, r.outcome]));
+    expect(outcomes['r1:question:3']).toBe('suppressed');
+    expect(outcomes['r1:question:1']).toBe('failed');
+  });
+
   it('records the retry as sent when it gets through', async () => {
     vi.useFakeTimers();
     const h = await harness();
@@ -317,6 +381,10 @@ describe('NotificationService factory pause', () => {
     h.runs.emit('note', r, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
     await h.flush();
     expect(h.sent).toEqual([{ event: 'factory_paused', title: 'Factory paused: DP-3: Build the APK', body: message, priority: 'high' }]);
+    // The same pause again (another emit of the same note) does not page twice.
+    h.runs.emit('note', r, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
+    await h.flush();
+    expect(h.sent).toHaveLength(1);
     h.set({ onWaitingInput: false });
     h.runs.emit('note', r, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
     await h.flush();
@@ -423,5 +491,39 @@ describe('NotificationService quota lanes', () => {
     expect(sent).toEqual(['Claude (all models) quota reached']);
     await emit([]);
     expect(sent).toEqual(['Claude (all models) quota reached', 'Claude (opus) quota is back']);
+  });
+});
+
+describe('NotificationService on a real RunService', () => {
+  it('pages exactly once, with the held text, when the completion gate holds a done run', async () => {
+    const { createTestApp, setupAndLogin, CSRF } = await import('./test-utils.js');
+    const { runs } = await import('./db/schema.js');
+    const t = await createTestApp();
+    try {
+      const cookie = await setupAndLogin(t.app);
+      const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Int', initGit: false }, headers: { ...CSRF, cookie } });
+      const projectId = res.json().project.id as string;
+      const now = new Date();
+      t.db.insert(runs).values({ id: 'run-int', projectId, agent: 'claude', state: 'done', worktreePath: '/tmp/x', hookTokenHash: 'h', stateChangedAt: now, createdAt: now, title: 'DP-3' }).run();
+      // A real done run has the event that moved it there; the pipeline notes after it decide the hold.
+      t.db.insert(runEvents).values({ runId: 'run-int', ts: now, source: 'hook', type: 'Stop', state: 'done', payload: null }).run();
+      const service = new NotificationService(t.db, t.runs);
+      service.getSettings = () => ({ ...CFG, onRunFinished: false });
+      const sent: { body: string }[] = [];
+      service.dispatch = async (_cfg, msg) => {
+        sent.push({ body: msg.body });
+        return { ok: true, status: 200, error: null };
+      };
+      t.runs.note('run-int', 'completion_missing', {});
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.body).toContain('No completion signal');
+      t.runs.note('run-int', 'completion_nudged', {});
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(1);
+      service.stop();
+    } finally {
+      await t.close();
+    }
   });
 });

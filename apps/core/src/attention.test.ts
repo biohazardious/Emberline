@@ -43,7 +43,7 @@ describe('computeAttention rules', () => {
     expect(a).toEqual({ reason: 'question', detail: 'Which db?', since: iso(30_000), occurrence: 'r1:question:6' });
   });
 
-  it('permission: the latest Notification is a permission prompt (by type or by text)', () => {
+  it('permission: a Notification of the wait is a permission prompt (by type or by text)', () => {
     const byType = computeAttention(
       baseRun(),
       facts({ waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' })] }),
@@ -57,7 +57,22 @@ describe('computeAttention rules', () => {
       facts({ waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt' }), ev(7, 'Notification', { notification_type: 'idle_prompt', message: 'idle' })] }),
       NOW,
     );
-    expect(idleLater?.reason).toBe('question');
+    // One wait is one occurrence: the idle reminder after a permission prompt changes nothing.
+    expect(idleLater).toMatchObject({ reason: 'permission', occurrence: 'r1:permission:6' });
+  });
+
+  it('one wait is one occurrence: anchored at its first Notification, permission wins, idle reminders never count', () => {
+    const idle = (id: number) => ev(id, 'Notification', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+    const permission = computeAttention(
+      baseRun(),
+      facts({ waiting: [ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' }), idle(9)] }),
+      NOW,
+    );
+    expect(permission).toMatchObject({ reason: 'permission', detail: 'Allow Bash?', occurrence: 'r1:permission:6' });
+    const question = computeAttention(baseRun(), facts({ waiting: [ev(6, 'Notification', { message: 'Which db?' }), idle(9)] }), NOW);
+    expect(question).toMatchObject({ reason: 'question', detail: 'Which db?', occurrence: 'r1:question:6' });
+    const idleOnly = computeAttention(baseRun(), facts({ waiting: [idle(6), idle(9)] }), NOW);
+    expect(idleOnly).toMatchObject({ reason: 'question', detail: 'Claude is waiting for your input', occurrence: 'r1:question:6' });
   });
 
   it('stalled: the first reason after entering the state is stall_detected', () => {
@@ -202,6 +217,16 @@ describe('attention through RunService', () => {
     // A later note that does not change state leaves the occurrence alone.
     seedEvent(id, 'auto_nudged');
     expect(find(id).attention?.occurrence).toBe(first?.occurrence);
+  });
+
+  it('a permission prompt then Claude\'s idle reminder stay one occurrence and one page', () => {
+    const id = seedRun('waiting_input', { lastEvent: 'Notification' });
+    seedEvent(id, 'PreToolUse', 'working');
+    seedEvent(id, 'Notification', 'waiting_input', { notification_type: 'permission_prompt', message: 'Allow rm?' });
+    const first = find(id).attention;
+    seedEvent(id, 'Notification', null, { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+    expect(find(id).attention).toEqual(first);
+    expect(first?.reason).toBe('permission');
   });
 
   it('every Run handed out by the service carries attention', () => {
