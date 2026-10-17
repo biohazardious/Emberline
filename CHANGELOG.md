@@ -14,6 +14,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
+- On phones, a Fleet card whose ticket title wraps no longer cuts off its reply box at the bottom.
 - Downloading a run artifact, a run build output, a project file or a project export whose file name has characters outside Latin-1 (for example `çıktı.apk` or an emoji) failed with an error 500. The download now sends the name in an ASCII fallback plus its full UTF-8 form.
 
 ## [0.2.1] - 2026-10-17

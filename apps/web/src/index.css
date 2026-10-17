@@ -2948,6 +2948,12 @@ dialog.cmd-dialog::backdrop {
   .fleet-grid-cols {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* One column scrolls with the page: size the grid to its panes, or a pane whose header wraps
+     (long ticket title) is squeezed into its row and its reply box is cut off. */
+  .fleet-grid {
+    flex: none;
+  }
 }
 
 @media (max-width: 640px) {
