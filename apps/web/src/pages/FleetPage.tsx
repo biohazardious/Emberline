@@ -23,6 +23,7 @@ import {
   fleetSection,
   isRunCompleted,
   needsElsewhere,
+  needsElsewhereHint,
   type SeenMap,
 } from '../attention';
 import { keptWorktreesSummary } from '../gcSummary';
@@ -469,6 +470,16 @@ export function FleetPage({
         </div>
       )}
 
+      {/* Nothing here needs you, but the badge counts other projects: say where they are. */}
+      {filter === 'active' && elsewhere > 0 && !sections.some((s) => s.section === 'needs') && (
+        <h2 className="fleet-section-head fleet-needs-elsewhere">
+          {FLEET_SECTION_LABELS.needs} ·{' '}
+          <Link href="/inbox" className="fleet-section-more">
+            {needsElsewhereHint(elsewhere, 0)} → Inbox
+          </Link>
+        </h2>
+      )}
+
       {visibleRuns.length === 0 ? (
         <div className="empty fleet-empty">
           <p>
@@ -510,7 +521,7 @@ export function FleetPage({
                   {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
                   {section === 'needs' && elsewhere > 0 && (
                     <Link href="/inbox" className="muted small fleet-section-more">
-                      +{elsewhere} in other projects
+                      {needsElsewhereHint(elsewhere, list.length)}
                     </Link>
                   )}
                 </h2>

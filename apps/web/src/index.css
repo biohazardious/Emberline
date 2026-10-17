@@ -3991,6 +3991,10 @@ dialog.cmd-dialog::backdrop {
   text-transform: none;
 }
 
+.fleet-needs-elsewhere .fleet-section-more {
+  margin-left: 0;
+}
+
 .inbox-page {
   flex: 1;
   min-height: 0;

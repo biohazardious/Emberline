@@ -8,6 +8,7 @@ import {
   holdLabel,
   inboxHeading,
   needsElsewhere,
+  needsElsewhereHint,
   pendingAttention,
   pruneSeen,
 } from './attention';
@@ -182,5 +183,20 @@ describe('needsElsewhere', () => {
     expect(needsElsewhere(runs, { 'c:failed:e1': NOW }, 'p1')).toBe(1);
     expect(needsElsewhere(runs, {}, 'p2')).toBe(1);
     expect(needsElsewhere(runs, {}, null)).toBe(0);
+  });
+});
+
+describe('needsElsewhereHint', () => {
+  it('adds to a Needs you section, stands alone when the project has none, and is empty when nothing waits elsewhere', () => {
+    const runs = [
+      run('a', { projectId: 'p1', attention: attn('question', 5, 'a') }),
+      run('b', { projectId: 'p2', attention: attn('held', 5, 'b') }),
+    ];
+    // The project in view has nothing that needs you, the badge still counts 2.
+    expect(needsElsewhere(runs, {}, 'p3')).toBe(2);
+    expect(needsElsewhereHint(2, 0)).toBe('2 in other projects');
+    expect(needsElsewhereHint(1, 3)).toBe('+1 in other projects');
+    expect(needsElsewhereHint(0, 0)).toBeNull();
+    expect(needsElsewhereHint(0, 2)).toBeNull();
   });
 });

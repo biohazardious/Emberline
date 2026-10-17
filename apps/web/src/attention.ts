@@ -51,6 +51,15 @@ export function needsElsewhere(runs: readonly Run[], seen: SeenMap, projectId: s
   return projectId ? pendingAttention(runs, seen).filter((run) => run.projectId !== projectId).length : 0;
 }
 
+/**
+ * Fleet's note on what other projects add to Needs you: "+N …" next to the section's own runs,
+ * "N …" on its own when the project in view has none; null when nothing waits elsewhere.
+ */
+export function needsElsewhereHint(elsewhere: number, own: number): string | null {
+  if (elsewhere <= 0) return null;
+  return `${own > 0 ? '+' : ''}${elsewhere} in other projects`;
+}
+
 export type TicketName = { key: string; title: string };
 
 /** An Inbox item's heading: the ticket's key and current title; the run title when the ticket is not known. */
