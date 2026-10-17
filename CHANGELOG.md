@@ -13,6 +13,9 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - Phone and webhook pages are sent once per thing that needs you: a permission prompt and Claude's later reminder about it are one page. They are never repeated after a restart, and are not sent while you have that run open in a visible tab. Every kind of hold (merge failed, build checks failed, guard blocks, no completion signal, blocked) now pages when **Agent waiting on you** is on. Waits from before the update do not page. Failure pages still follow **Run finished**.
 - One count everywhere: the sidebar Inbox, the header and the Fleet badge show the same number of things that need you, across all projects. The Fleet badge used to show the number of active runs.
+- The sidebar's "N need you" button is replaced by the Inbox entry, and **Enable desktop alerts** moved to the top of the Inbox page. The header's "need you" pill now opens the Inbox.
+- A held or blocked ticket needs you only while it is in Review and only for its latest run: moving the ticket on, or starting it again, clears it from the Inbox. A hold of a run without a ticket shows for 24 hours.
+- A hold that the agent was already asked to fix (build checks, the slop and secret guards, the critic, a merge conflict) neither shows in the Inbox nor pages while the agent works on it. If that request cannot be sent, the hold shows and pages once.
 
 ### Fixed
 
