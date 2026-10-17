@@ -19,6 +19,7 @@ Think of it as an issue tracker, an editor and a git client in one browser tab, 
 - **Usage-aware scheduler.** Runs are queued with a concurrency limit. When a provider's usage limit is hit, Emberline reads the reset time, pauses dispatch and resumes the session automatically after the reset. **Settings → Quota & Concurrency** shows each provider's remaining limits.
 - **Review.** A Monaco diff of each run (branch vs. base, staged, unstaged), inline line comments that go back to the agent as a revision request, commit, push and pull requests to your forge. Finished runs are merged into the project's main workspace from the UI.
 - **Cross-provider review.** Optionally, a different CLI reviews a run's diff read-only before it is merged (for example, Codex reviewing Claude's work).
+- **Completion signal.** Claude agents confirm a ticket is finished with an `emberline` tool, with a handoff note for dependent tickets; the factory waits for it and holds blocked tickets for you.
 - **Quality gates.** A build/lint/test gate, and a pre-merge check for leftover secrets and debug code.
 - **Fleet view.** Watch up to four agent terminals side by side, filter to the ones waiting for you and steer them inline.
 - **Project tooling.** A new-project wizard that writes a `PROJECT.md` blueprint and starter tickets, a roadmap and brainstorming page, a code explorer and editor, a live view of the agent's headless browser, checkpoints with rollback, scheduled jobs and project export.

@@ -4,6 +4,14 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Agents now confirm that a ticket is finished. Claude runs get an `emberline` tool, `ticket_complete`, with a summary, an optional handoff note for dependent tickets and an optional list of blockers. In the factory, a ticket advances to merge and Done only after that signal. If a run ends its turn without it, the agent is asked once to confirm; if it still does not, the ticket stays in Review and you get a page. A signal that lists blockers also holds the ticket for you. The handoff note goes into the prompts of the tickets that depend on it, for every agent. The ticket drawer shows the completion (summary, handoff, blockers, run and time), the run timeline shows each step, and a Fleet card shows a "blocked" badge when the agent raised blockers. **Settings → Factory → Require agents to confirm completion** turns this off (on by default). **Upgrade note:** Review tickets left from Claude runs that never signalled are asked once to confirm on the next dispatch (they may resume their sessions) or wait for you; turn the setting off to keep the old behaviour.
+
+### Fixed
+
+- A factory ticket that was held is now re-checked on the agent's next turn, even after the factory chain has stopped.
+
 ## [0.2.2] - 2026-10-17
 
 ### Security

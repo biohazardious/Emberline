@@ -141,6 +141,7 @@ export function SettingsPage({
   const [selfHealingBuildGate, setSelfHealingBuildGate] = useState(true);
   const [antiSlopGate, setAntiSlopGate] = useState(true);
   const [secretGuardGate, setSecretGuardGate] = useState(true);
+  const [requireCompletionSignal, setRequireCompletionSignal] = useState(true);
   const [crossProviderCritic, setCrossProviderCritic] = useState(false);
   const [autoMoveToDone, setAutoMoveToDone] = useState(true);
   const [maxTicketDepth, setMaxTicketDepth] = useState(3);
@@ -192,6 +193,7 @@ export function SettingsPage({
         setSelfHealingBuildGate(res.selfHealingBuildGate);
         setAntiSlopGate(res.antiSlopGate ?? true);
         setSecretGuardGate(res.secretGuardGate ?? true);
+        setRequireCompletionSignal(res.requireCompletionSignal ?? true);
         setCrossProviderCritic(res.crossProviderCritic ?? false);
         setAutoMoveToDone(res.autoMoveToDone);
         setMaxTicketDepth(res.maxTicketDepth);
@@ -409,6 +411,7 @@ export function SettingsPage({
         selfHealingBuildGate,
         antiSlopGate,
         secretGuardGate,
+        requireCompletionSignal,
         crossProviderCritic,
         autoMoveToDone,
         maxTicketDepth,
@@ -630,6 +633,21 @@ export function SettingsPage({
                 </strong>
                 <div className="muted small">
                   Automatically scan every completed worktree diff for type evasion (<code>: any</code>, <code>as any</code>, <code>@ts-ignore</code>), unfinished <code>TODO</code>/<code>FIXME</code> stubs, skipped tests, leftover <code>console.log</code>/<code>debugger</code>, and generic AI gradient clichés. If blocked, auto-resume the agent once to clean its own code.
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={requireCompletionSignal}
+                onChange={(e) => setRequireCompletionSignal(e.target.checked)}
+                style={{ marginTop: '3px' }}
+              />
+              <div>
+                <strong>Require agents to confirm completion</strong>
+                <div className="muted small">
+                  Factory tickets advance only after the agent calls <code>ticket_complete</code>; otherwise it is asked once, then the ticket waits for you.
                 </div>
               </div>
             </label>

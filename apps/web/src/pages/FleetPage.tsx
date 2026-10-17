@@ -1,4 +1,5 @@
 import type { GarbageCollectRunsResponse, Project, Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
+import { latestCompletionBlockers } from '../completionSignal';
 import {
   Check,
   Circle,
@@ -82,9 +83,15 @@ function BuildOutputsBadge({ run }: { run: Run }) {
 /** The agent's final answer, last screen and build outputs, for a pane whose session finished. */
 function FinishedOutcome({ run }: { run: Run }) {
   const detail = useApi<RunDetail>(`/api/runs/${run.id}`, 10_000);
+  const blockers = latestCompletionBlockers(detail.data?.events ?? []);
   return (
     <div className="fleet-outcome">
       {detail.data?.finalMessage && <FinalAnswer text={detail.data.finalMessage} />}
+      {blockers.length > 0 && (
+        <span className="badge mono" title={blockers.join('\n')} style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}>
+          blocked
+        </span>
+      )}
       <BuildOutputsBadge run={run} />
       {detail.data?.lastScreen && !run.terminalId && <LastScreen text={detail.data.lastScreen} />}
     </div>

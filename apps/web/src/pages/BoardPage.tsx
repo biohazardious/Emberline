@@ -784,6 +784,39 @@ function TicketDrawer({
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
+            {ticket.completion && (
+              <section className="drawer-completion" aria-label="Completion">
+                <label className="drawer-label">
+                  Completion
+                  {ticket.completion.blockers.length > 0 && (
+                    <span className="badge mono" style={{ marginLeft: 8, borderColor: 'var(--warn)', color: 'var(--warn)' }}>
+                      blocked
+                    </span>
+                  )}
+                </label>
+                <p style={{ margin: '4px 0', whiteSpace: 'pre-wrap' }}>{ticket.completion.summary}</p>
+                {ticket.completion.blockers.length > 0 && (
+                  <ul className="small" style={{ margin: '4px 0', paddingLeft: 18 }}>
+                    {ticket.completion.blockers.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                  </ul>
+                )}
+                {ticket.completion.handoff && (
+                  <>
+                    <div className="muted small">Handoff for dependent tickets</div>
+                    <p className="small" style={{ margin: '2px 0', whiteSpace: 'pre-wrap' }}>
+                      {ticket.completion.handoff}
+                    </p>
+                  </>
+                )}
+                <div className="muted small mono">
+                  <Link href={`/runs/${ticket.completion.runId}/review`}>run {ticket.completion.runId.slice(0, 8)}</Link>
+                  {' · '}
+                  {timeAgo(ticket.completion.at)}
+                </div>
+              </section>
+            )}
             <label className="drawer-label">Specialist Persona</label>
             <PersonaPicker value={persona} onChange={setPersona} />
             <div className="drawer-row">

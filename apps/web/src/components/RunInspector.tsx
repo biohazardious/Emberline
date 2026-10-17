@@ -1,4 +1,5 @@
 import type { Run, RunDetail, RunEvent } from '@emberline/protocol';
+import { completionEventText } from '../completionSignal';
 import { Globe, KeyRound, Maximize2, TriangleAlert, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
@@ -239,6 +240,10 @@ const EVENT_LABEL: Record<string, string> = {
   stall_detected: 'stalled',
   waiting_input_timeout: 'stopped: nobody answered',
   auto_nudged: 'nudged to continue',
+  ticket_complete: 'Completed',
+  completion_nudged: 'Asked to confirm completion',
+  completion_missing: 'Held: no completion signal',
+  completion_blocked: 'Held: blocked',
 };
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
@@ -299,7 +304,7 @@ export function RunEventTimeline({ run }: { run: Run }) {
         const summary = payloadSummary(ev.payload);
         const tool = summary.tool;
         const dropped = ev.type === 'dependency_dropped' ? droppedDependencyText(ev.payload) : undefined;
-        const text = dropped ?? summary.detail;
+        const text = dropped ?? completionEventText(ev.type, ev.payload) ?? summary.detail;
         return (
           <li key={ev.id} className={`event-item event-src-${ev.source}`}>
             <div className="event-head">
