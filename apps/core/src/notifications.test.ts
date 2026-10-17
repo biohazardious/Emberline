@@ -548,7 +548,7 @@ describe('NotificationService on real hooks', () => {
         sent.push({ body: msg.body });
         return { ok: true, status: 200, error: null };
       };
-      const hook = (event: string, payload: object) =>
+      const hook = (event: string, payload: Record<string, unknown>) =>
         t.runs.ingestHook({ runId: 'run-sf', event: event as never, receivedAt: new Date().toISOString(), payload }, 'tok');
       hook('StopFailure', { error: 'invalid_request', message: 'Prompt is too long' });
       await new Promise((resolve) => setImmediate(resolve));
