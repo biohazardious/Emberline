@@ -17,6 +17,7 @@ import { projects, runEvents, runs, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
+import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient } from './issues.js';
 
 const SETTINGS_KEY = 'forge.config';
 
@@ -167,11 +168,24 @@ export function assertTrustedForgeApi(
   }
 }
 
+export interface ForgeServiceOptions {
+  /** Injectable for tests; defaults to the global fetch. */
+  fetch?: FetchLike;
+}
+
 export class ForgeService {
+  private readonly fetch: FetchLike;
+  /** Issue reads and write-back, sharing this service's fetch. */
+  readonly issues: IssuesClient;
+
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
-  ) {}
+    options: ForgeServiceOptions = {},
+  ) {
+    this.fetch = options.fetch ?? ((url, init) => globalThis.fetch(url, init));
+    this.issues = new IssuesClient({ fetch: this.fetch });
+  }
 
   private readStored(): StoredForgeConfig {
     const row = this.db.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).get();
@@ -239,6 +253,28 @@ export class ForgeService {
       }
     }
     return fallbackRepoUrl;
+  }
+
+  /**
+   * The forge repo and token for a project, for issue calls. The remote is `origin` of the main
+   * workspace, falling back to the project's repo URL. Throws 409 with a hint when the token or the
+   * remote is missing, or the host is not trusted with the token.
+   */
+  async projectRemote(projectId: string): Promise<ForgeTarget> {
+    const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
+    if (!project) throw notFound('no such project');
+    const stored = this.readStored();
+    if (!stored.token) {
+      throw conflict('Forge Personal Access Token is not configured. Add a token in Forge Settings first.');
+    }
+    const remoteUrl = await this.detectRemoteUrl('', project.path, project.repoUrl);
+    if (!remoteUrl) {
+      throw conflict('git remote "origin" is not configured for this project; add a remote or set its repository URL');
+    }
+    const remote = parseForgeRemote(remoteUrl, stored.provider, stored.apiUrl, project.defaultBranch);
+    if (!remote) throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
+    assertTrustedForgeApi(remote, { apiUrl: stored.apiUrl, projectRepoUrl: project.repoUrl });
+    return { remote, token: stored.token };
   }
 
   private recordedPullRequest(runId: string): ForgePullRequest | null {
@@ -385,7 +421,7 @@ export class ForgeService {
     input: { title: string; body: string; headBranch: string; baseBranch: string; draft: boolean },
   ): Promise<ForgePullRequest> {
     if (remote.provider === 'github') {
-      const res = await fetch(`${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls`, {
+      const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls`, {
         method: 'POST',
         headers: {
           Accept: 'application/vnd.github+json',
@@ -433,7 +469,7 @@ export class ForgeService {
     if (remote.provider === 'gitlab') {
       const projectId = encodeURIComponent(remote.repoPath);
       const glTitle = input.draft && !input.title.toLowerCase().startsWith('draft:') ? `Draft: ${input.title}` : input.title;
-      const res = await fetch(`${remote.apiBaseUrl}/projects/${projectId}/merge_requests`, {
+      const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/projects/${projectId}/merge_requests`, {
         method: 'POST',
         headers: {
           'PRIVATE-TOKEN': token,
@@ -473,7 +509,7 @@ export class ForgeService {
     }
 
     // Gitea / Forgejo
-    const res = await fetch(`${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls`, {
+    const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls`, {
       method: 'POST',
       headers: {
         Authorization: `token ${token}`,
@@ -518,7 +554,7 @@ export class ForgeService {
     pr: ForgePullRequest,
   ): Promise<ForgePullRequest> {
     if (remote.provider === 'github') {
-      const res = await fetch(`${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls/${pr.number}`, {
+      const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls/${pr.number}`, {
         headers: {
           Accept: 'application/vnd.github+json',
           Authorization: `Bearer ${token}`,
@@ -549,7 +585,7 @@ export class ForgeService {
 
     if (remote.provider === 'gitlab') {
       const projectId = encodeURIComponent(remote.repoPath);
-      const res = await fetch(`${remote.apiBaseUrl}/projects/${projectId}/merge_requests/${pr.number}`, {
+      const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/projects/${projectId}/merge_requests/${pr.number}`, {
         headers: { 'PRIVATE-TOKEN': token, 'User-Agent': 'Emberline-Core' },
       });
       if (!res.ok) return pr;
@@ -574,7 +610,7 @@ export class ForgeService {
   }
 
   private async fetchGithubCiStatus(remote: ParsedForgeRemote, token: string, sha: string): Promise<ForgeCiStatus> {
-    const res = await fetch(`${remote.apiBaseUrl}/repos/${remote.repoPath}/commits/${sha}/status`, {
+    const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/commits/${sha}/status`, {
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
