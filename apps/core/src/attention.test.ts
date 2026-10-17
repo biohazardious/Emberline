@@ -175,6 +175,12 @@ describe('computeAttention rules', () => {
       expect(computeAttention(done, facts({ pipeline: [ev(8, 'merged_to_main')] }), NOW)).toBeNull();
       expect(computeAttention(done, facts(), NOW)).toBeNull();
     });
+    it('a hold sent with an automatic fix request is not attention until it is noted again for a person', () => {
+      const fixing = facts({ pipeline: [ev(8, 'build_gate_failed', { autoFix: true })] });
+      expect(computeAttention(done, fixing, NOW)).toBeNull();
+      const undelivered = facts({ pipeline: [ev(8, 'build_gate_failed', { autoFix: true }), ev(9, 'build_gate_failed', { autoFix: false })] });
+      expect(computeAttention(done, undelivered, NOW)).toMatchObject({ reason: 'held', detail: 'Build checks failed', occurrence: 'r1:held:9' });
+    });
     it('a ticket run is held only as its ticket\'s latest run in Review; a ticketless hold for 24 h', () => {
       const ticketRun = { ...done, ticketId: 't1' };
       const hold = facts({ pipeline: [ev(8, 'merge_failed')] });
@@ -339,6 +345,12 @@ describe('attention through RunService', () => {
     seedEvent(latest, 'build_gate_failed');
     expect(find(latest).reviewReady).toBe(false);
     expect(find(latest).attention?.reason).toBe('held');
+    // The agent is fixing it: not attention, and still no Review card (the hold itself is unchanged).
+    const fixing = seedRun('done', { ticketId: ticket.id });
+    seedEvent(fixing, 'Stop', 'done');
+    seedEvent(fixing, 'build_gate_failed', null, { autoFix: true });
+    expect(find(fixing).attention).toBeNull();
+    expect(find(fixing).reviewReady).toBe(false);
     const plain = seedRun('done');
     expect(find(plain).reviewReady).toBe(false);
   });

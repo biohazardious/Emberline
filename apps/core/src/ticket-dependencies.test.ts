@@ -13,12 +13,18 @@ import { TicketService } from './tickets/service.js';
 
 /** A critic verdict for the next pipelines to get instead of running the real critic (null: the real one). */
 const critic = vi.hoisted(() => ({ result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null } }));
+/** A build gate result for the next pipelines to get instead of building (null: the real build). */
+const build = vi.hoisted(() => ({ result: null as null | { ok: boolean; output: string } }));
 vi.mock('./factory/service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof FactoryService>();
   return {
     ...actual,
     runCrossProviderCritic: (async (params) =>
       critic.result ?? actual.runCrossProviderCritic(params)) as typeof actual.runCrossProviderCritic,
+    buildWorkspaceDemo: (async (params) =>
+      build.result
+        ? { ...build.result, targetId: params.targetId, demoEntryRelPath: null, demoUrl: null }
+        : actual.buildWorkspaceDemo(params)) as typeof actual.buildWorkspaceDemo,
   };
 });
 
@@ -60,6 +66,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   critic.result = null;
+  build.result = null;
   await t.close();
   await ptydServer.close();
 });
@@ -761,6 +768,37 @@ describe('one automatic merge-conflict resolution', () => {
     expect(followups(runB)).toHaveLength(1);
   });
 
+  it('a conflict the agent was asked to resolve is no attention and no page', async () => {
+    const { runB } = await conflictingPair();
+    const pages = await pagesOf();
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    expect(pages.sent).toEqual([]);
+    expect(t.runs.getRun(runB.id).attention).toBeNull();
+    const failed = await noteOf(runB, 'merge_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ autoFix: true, conflicts: ['app.js'] });
+    pages.stop();
+  });
+
+  it('a conflict whose resolution request could not be sent is held for a person and pages once', async () => {
+    const { project, b, runB } = await conflictingPair();
+    const passes = trackPipelines();
+    const pages = await pagesOf();
+    failPrompts();
+    await stopAgain(runB);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    const failed = await noteOf(runB, 'merge_failed');
+    expect(failed.map((n) => (n as { autoFix?: boolean }).autoFix)).toEqual([true, false]);
+    expect(failed[1]).toMatchObject({ conflicts: ['app.js'] });
+    expect(await statusOf(b.id)).toBe('review');
+    expect(t.runs.getRun(runB.id).attention).toMatchObject({ reason: 'held', detail: 'Merge failed' });
+    await expect.poll(() => pages.sent.length).toBe(1);
+    pages.stop();
+    await settle(project.id);
+  });
+
   it('names the branch the main workspace is on, not main', async () => {
     const { runB } = await conflictingPair('trunk');
     await stopAgain(runB);
@@ -1209,6 +1247,155 @@ describe('factory chain robustness', () => {
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(a.id)).not.toBe('done');
     expect(existsSync(path.join(project.path, '.env'))).toBe(false);
+    await settle(project.id);
+  });
+});
+
+/** Pages a NotificationService on the test app would send for "waiting on you" (sending stubbed). */
+async function pagesOf() {
+  const { NotificationService } = await import('./notifications/service.js');
+  const service = new NotificationService(t.db, t.runs);
+  service.getSettings = () => ({
+    enabled: true,
+    provider: 'webhook',
+    url: 'http://127.0.0.1:9/unused',
+    token: null,
+    onRateLimited: false,
+    onQuotaResumed: false,
+    onWaitingInput: true,
+    onRunFinished: false,
+  });
+  const sent: string[] = [];
+  service.dispatch = async (_cfg, msg) => {
+    sent.push(msg.body);
+    return { ok: true, status: 200, error: null };
+  };
+  return { sent, stop: () => service.stop() };
+}
+
+const noteOf = async (run: Run, type: string) =>
+  ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter((e) => e.type === type).map((e) => e.payload);
+
+const failPrompts = () => {
+  const fail = async () => {
+    throw new Error('no live session');
+  };
+  Object.assign(t.runs as object, { prompt: fail, sendPrompt: fail });
+};
+
+describe('a hold the agent is already fixing does not need you', () => {
+  /** A worktree with a build target, so the self-healing build gate runs. */
+  const buildable = (worktreePath: string) =>
+    writeFileSync(path.join(worktreePath, 'package.json'), JSON.stringify({ scripts: { build: 'exit 1' } }));
+
+  async function livingRun(project: { id: string }, ticketId: string): Promise<Run> {
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(ticketId)[0] as Run;
+    await waitFile(`ready-${run.id}`);
+    const token = await waitFile(`token-${run.id}`);
+    await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+    return run;
+  }
+
+  it('build gate: the fix request went out, so no attention and no page', async () => {
+    t.config.claudeCommand = writeLivingClaude(t.dir);
+    build.result = { ok: false, output: 'error TS2322' };
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const pages = await pagesOf();
+    const run = await livingRun(project, a.id);
+    buildable(run.worktreePath);
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
+    expect(pages.sent).toEqual([]);
+    expect(t.runs.getRun(run.id).attention).toBeNull();
+    expect(await noteOf(run, 'build_gate_failed')).toEqual([{ autoFix: true }]);
+    pages.stop();
+    await settle(project.id);
+  });
+
+  it('build gate: the fix request could not be sent, so the hold is attention and pages once', async () => {
+    build.result = { ok: false, output: 'error TS2322' };
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const pages = await pagesOf();
+    failPrompts();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    buildable(run.worktreePath);
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await noteOf(run, 'build_gate_failed')).toEqual([{ autoFix: true }, { autoFix: false }]);
+    expect(await statusOf(a.id)).toBe('review');
+    expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held', detail: 'Build checks failed' });
+    await expect.poll(() => pages.sent.length).toBe(1);
+    expect(pages.sent[0]).toContain('Build checks failed');
+    pages.stop();
+    await settle(project.id);
+  });
+
+  it('slop guard: a delivered clean-up request is no attention and no page', async () => {
+    t.config.claudeCommand = writeLivingClaude(t.dir);
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const pages = await pagesOf();
+    const run = await livingRun(project, a.id);
+    writeFileSync(path.join(run.worktreePath, 'slop.ts'), 'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'slop');
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(pages.sent).toEqual([]);
+    expect(t.runs.getRun(run.id).attention).toBeNull();
+    expect(await noteOf(run, 'slop_guard_blocked')).toEqual([{ autoFix: true }]);
+    pages.stop();
+    await settle(project.id);
+  });
+
+  it('critic: an undelivered follow-up is noted again for a person and pages once', async () => {
+    await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+    critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const pages = await pagesOf();
+    failPrompts();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await noteOf(run, 'critic_blocked')).toEqual([{ autoFix: true }, { autoFix: false }]);
+    expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held' });
+    await expect.poll(() => pages.sent.length).toBe(1);
+    pages.stop();
+    await settle(project.id);
+  });
+
+  it('secret guard: an undelivered clean-up request is noted again for a person and pages once', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const pages = await pagesOf();
+    failPrompts();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    commitSecret(run.worktreePath);
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    const notes = await noteOf(run, 'secret_guard_blocked');
+    expect(notes.map((n) => (n as { autoFix?: boolean }).autoFix)).toEqual([true, false]);
+    expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held' });
+    await expect.poll(() => pages.sent.length).toBe(1);
+    pages.stop();
     await settle(project.id);
   });
 });

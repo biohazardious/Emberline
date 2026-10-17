@@ -19,15 +19,24 @@ export function decidePipelineOutcome(types: readonly string[]): PipelineOutcome
 }
 
 /**
- * The hold a person has to look at, among the notes after the latest `done` (ascending ids): the
- * newest HOLD_EVENTS note except `completion_nudged` (the agent is answering that nudge). Null when
- * the outcome is not a hold.
+ * Whether a hold note went out together with an automatic fix request (payload `autoFix: true`):
+ * the agent is working on it. Should the request not arrive, the gate notes the hold again without it.
  */
-export function currentHold<T extends { type: string }>(events: readonly T[]): T | null {
+export function isAutoFixHold(payload: unknown): boolean {
+  return Boolean(payload && typeof payload === 'object' && (payload as { autoFix?: unknown }).autoFix === true);
+}
+
+/**
+ * The hold a person has to look at, among the notes after the latest `done` (ascending ids): the
+ * newest HOLD_EVENTS note except those the agent is answering (`completion_nudged`, and holds noted
+ * with an automatic fix request). Null when the outcome is not a hold or nothing is left for a
+ * person. Attention only: the pipeline outcome (and so dispatch and merge) still counts every hold.
+ */
+export function currentHold<T extends { type: string; payload?: unknown }>(events: readonly T[]): T | null {
   if (decidePipelineOutcome(events.map((e) => e.type)) !== 'held') return null;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i] as T;
-    if (HOLD_EVENTS.includes(event.type) && event.type !== 'completion_nudged') return event;
+    if (HOLD_EVENTS.includes(event.type) && event.type !== 'completion_nudged' && !isAutoFixHold(event.payload)) return event;
   }
   return null;
 }

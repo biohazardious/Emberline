@@ -877,8 +877,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // B17: a gate that could not run is not a pass; leave the ticket for a person.
       if (!buildRes) return;
       if (!buildRes.ok) {
-        // Held for the agent's fix: its next stop runs the pipeline again (see HOLD_EVENTS).
-        this.runs.note(run.id, 'build_gate_failed', {});
+        // Held for the agent's fix: its next stop runs the pipeline again (see HOLD_EVENTS). Not
+        // for a person while the agent works on it (autoFix); noted again for one if the request fails.
+        this.runs.note(run.id, 'build_gate_failed', { autoFix: true });
         const errorExcerpt = buildRes.output.slice(-2_400);
         await this.runs
           .prompt(
@@ -886,7 +887,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.${this.completeAgain(run, ' ')}`,
             { automatic: true },
           )
-          .catch(() => undefined);
+          .catch(() => this.runs.note(run.id, 'build_gate_failed', { autoFix: false }));
         return;
       }
     }
@@ -911,22 +912,28 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           !slopReport.passed,
       );
 
+      const autoFix = Boolean(
+        (hasSecretViolation || hasSlopViolation) &&
+          slopReport?.autoFixPrompt &&
+          !this.slopHealedRuns.has(run.id) &&
+          (!run.endedAt || run.resumable),
+      );
+      const secretNote = { secretLeakCount: slopReport?.secretLeakCount ?? 0 };
       // Held first, also while the agent is asked to clean up: should the request not arrive, a
       // later dispatch must not merge the leak. The agent's next stop lifts the hold.
-      if (hasSecretViolation) {
-        this.runs.note(run.id, 'secret_guard_blocked', { secretLeakCount: slopReport?.secretLeakCount ?? 0 });
-      }
+      if (hasSecretViolation) this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix });
 
-      if (
-        (hasSecretViolation || hasSlopViolation) &&
-        slopReport?.autoFixPrompt &&
-        !this.slopHealedRuns.has(run.id) &&
-        (!run.endedAt || run.resumable)
-      ) {
+      if (autoFix && slopReport?.autoFixPrompt) {
         this.slopHealedRuns.add(run.id);
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
-        if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', {});
-        await this.runs.prompt(run.id, `${slopReport.autoFixPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true }).catch(() => undefined);
+        if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', { autoFix: true });
+        await this.runs
+          .prompt(run.id, `${slopReport.autoFixPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true })
+          .catch(() =>
+            hasSecretViolation
+              ? this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix: false })
+              : this.runs.note(run.id, 'slop_guard_blocked', { autoFix: false }),
+          );
         return;
       }
 
@@ -955,8 +962,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         criticRes.followUpPrompt &&
         (!run.endedAt || run.resumable)
       ) {
-        this.runs.note(run.id, 'critic_blocked', {});
-        await this.runs.prompt(run.id, `${criticRes.followUpPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true }).catch(() => undefined);
+        this.runs.note(run.id, 'critic_blocked', { autoFix: true });
+        await this.runs
+          .prompt(run.id, `${criticRes.followUpPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true })
+          .catch(() => this.runs.note(run.id, 'critic_blocked', { autoFix: false }));
         return;
       }
     }
@@ -974,14 +983,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       mergeBlocked = !merged.ok;
       // The agent gets one attempt to resolve the conflict itself; it is still alive and keeps the
       // ticket in Review. A later conflict (or a run that cannot take a prompt) falls through.
-      if (
-        !merged.ok &&
-        merged.conflicts.length > 0 &&
-        !run.endedAt &&
-        !this.conflictResolutionRequested(run.id) &&
-        (await this.requestConflictResolution(run, merged.conflicts, projectRow))
-      ) {
-        return;
+      if (!merged.ok && merged.autoFix) {
+        if (await this.requestConflictResolution(run, merged.conflicts, projectRow)) return;
+        // Undelivered: nobody is resolving it, so the hold is for a person after all.
+        this.runs.note(run.id, 'merge_failed', { summary: merged.summary, conflicts: merged.conflicts, autoFix: false });
       }
     }
 
@@ -1059,24 +1064,27 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /**
    * Merges a finished run's worktree into the main workspace. Failures are recorded on the run
-   * (`merge_failed`) instead of thrown; returns whether the work landed in main.
+   * (`merge_failed`) instead of thrown; returns whether the work landed in main, and `autoFix` when
+   * the agent gets its one request to resolve the conflicts (the note says so: not yet a person's).
    */
   private async mergeRunIntoMain(
     run: Run,
     mainWorkspacePath: string,
     ticketKey: string | null,
-  ): Promise<{ ok: boolean; conflicts: string[] }> {
+  ): Promise<{ ok: boolean; conflicts: string[]; summary: string; autoFix: boolean }> {
     const res = await syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
       mainWorkspacePath,
       ticketKey,
       runId: run.id,
     }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[] }));
+    const autoFix = !res.ok && res.conflicts.length > 0 && !run.endedAt && !this.conflictResolutionRequested(run.id);
     this.runs.note(run.id, res.ok ? 'merged_to_main' : 'merge_failed', {
       summary: res.summary,
       ...(res.conflicts.length > 0 ? { conflicts: res.conflicts } : {}),
+      ...(autoFix ? { autoFix } : {}),
     });
-    return { ok: res.ok, conflicts: res.conflicts };
+    return { ok: res.ok, conflicts: res.conflicts, summary: res.summary, autoFix };
   }
 
   /**
