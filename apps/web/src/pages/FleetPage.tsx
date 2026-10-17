@@ -35,7 +35,7 @@ import { FinalAnswer, LastScreen } from '../components/RunOutcome';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
-import { setPresenceRun } from '../hooks/eventHub';
+import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
 import { useInView } from '../hooks/useInView';
 import { toastError, toastInfo } from '../toast';
 import { timeAgo } from '../time';
@@ -519,7 +519,7 @@ export function FleetPage({
                     project={projectById.get(run.projectId)}
                     onInspect={() => onInspectRun(run.id)}
                     onError={setError}
-                    onDismiss={filter === 'active' && isRunCompleted(run) ? () => dismiss(run.id) : undefined}
+                    onDismiss={filter === 'active' && section !== 'needs' && isRunCompleted(run) ? () => dismiss(run.id) : undefined}
                   />
                 ))}
               </div>
@@ -573,7 +573,7 @@ function FleetPane({
   const inView = useInView(paneRef, '100px');
   const attachTerminal = view === 'live' && inView;
   // Focusing a pane (typing in its terminal or reply box) counts as looking at that run.
-  useEffect(() => () => setPresenceRun(null, 'fleet'), []);
+  useEffect(() => () => clearPresenceRun(run.id, 'fleet'), [run.id]);
   const showPromptFooter = (live && run.state !== 'queued') || (completed && showReopenBar && run.resumable);
 
   const act = async (name: string, fn: () => Promise<void>) => {
@@ -604,7 +604,7 @@ function FleetPane({
       id={`fleet-pane-${run.id}`}
       className={`fleet-pane fleet-pane-${run.state}`}
       onFocus={() => setPresenceRun(run.id, 'fleet')}
-      onBlur={() => setPresenceRun(null, 'fleet')}
+      onBlur={() => clearPresenceRun(run.id, 'fleet')}
     >
       <header className="fleet-pane-head">
         {selectable && (

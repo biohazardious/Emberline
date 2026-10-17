@@ -1,4 +1,5 @@
 import { type ClientPresenceMessage, ServerEvent } from '@emberline/protocol';
+import { clearSlotIfOwner, presentRunId, type PresenceSource } from '../presenceSlots';
 
 type Listener = { onEvent: (event: ServerEvent) => void; onOpen: () => void };
 
@@ -15,14 +16,11 @@ let overflowAt = 0;
 
 const HEARTBEAT_MS = 60_000;
 /** Which run each part of the UI has open; the first non-null by priority is what we report. */
-type PresenceSource = 'inspector' | 'fleet' | 'inbox';
-const PRESENCE_PRIORITY: PresenceSource[] = ['inspector', 'inbox', 'fleet'];
 const presenceRuns = new Map<PresenceSource, string>();
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 
 function presenceMessage(): ClientPresenceMessage {
-  const runId = PRESENCE_PRIORITY.map((source) => presenceRuns.get(source)).find(Boolean) ?? null;
-  return { type: 'presence', visible: document.visibilityState === 'visible', runId };
+  return { type: 'presence', visible: document.visibilityState === 'visible', runId: presentRunId(presenceRuns) };
 }
 
 function sendPresence(): void {
@@ -34,6 +32,11 @@ export function setPresenceRun(runId: string | null, source: PresenceSource = 'i
   if (runId) presenceRuns.set(source, runId);
   else presenceRuns.delete(source);
   sendPresence();
+}
+
+/** Clears a slot on unmount/blur, but only if it still holds this run (another card may have taken it). */
+export function clearPresenceRun(runId: string, source: PresenceSource): void {
+  if (clearSlotIfOwner(presenceRuns, runId, source)) sendPresence();
 }
 
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', sendPresence);

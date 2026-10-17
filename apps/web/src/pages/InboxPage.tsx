@@ -1,10 +1,10 @@
-import { HOLD_LABELS, type Project, type Run, type RunAttentionReason } from '@emberline/protocol';
+import { type Project, type Run, type RunAttentionReason } from '@emberline/protocol';
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
-import { ATTENTION_LABELS, dismissable, groupAttention, type SeenMap } from '../attention';
+import { ATTENTION_LABELS, dismissable, groupAttention, holdLabel, type SeenMap } from '../attention';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
-import { setPresenceRun } from '../hooks/eventHub';
+import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
 import { useApi } from '../hooks/useApi';
 import { timeAgo, useNow } from '../time';
 import { toastInfo } from '../toast';
@@ -37,10 +37,10 @@ function InboxItem({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   useNow(30_000);
-  useEffect(() => () => setPresenceRun(null, 'inbox'), []);
+  useEffect(() => () => clearPresenceRun(run.id, 'inbox'), [run.id]);
 
   // Held detail is already the HOLD_LABELS label; fall back to the map for an unexpected raw key.
-  const detail = attention.detail === null ? null : (HOLD_LABELS[attention.detail] ?? attention.detail);
+  const detail = attention.detail === null ? null : holdLabel(attention.detail);
   const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
 
   const send = async (e: FormEvent) => {
@@ -63,7 +63,9 @@ function InboxItem({
   return (
     <li className="inbox-item" data-reason={attention.reason}>
       <div className="inbox-item-head">
-        <span className={`inbox-chip inbox-chip-${attention.reason}`}>{ATTENTION_LABELS[attention.reason]}</span>
+        <span className={`inbox-chip inbox-chip-${attention.reason}`}>
+          {ATTENTION_LABELS[attention.reason]}
+        </span>
         <span className="inbox-project mono">{project?.name ?? 'Project'}</span>
         <span className="inbox-age muted mono" title={attention.since}>
           {timeAgo(attention.since)}
@@ -94,7 +96,7 @@ function InboxItem({
             aria-label={`Reply to ${run.title ?? 'the agent'}`}
             onChange={(e) => setText(e.target.value)}
             onFocus={() => setPresenceRun(run.id, 'inbox')}
-            onBlur={() => setPresenceRun(null, 'inbox')}
+            onBlur={() => clearPresenceRun(run.id, 'inbox')}
           />
           <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !text.trim()}>
             {busy ? 'Sending…' : 'Send'}
@@ -143,7 +145,9 @@ export function InboxPage({
       <header className="workspace-bar">
         <div className="workspace-bar-title">
           <h1>Inbox</h1>
-          <span className="muted small">Runs that need you, across all projects · Alt+N opens the oldest</span>
+          <span className="muted small">
+            Runs that need you, across all projects · Alt+N opens the oldest
+          </span>
         </div>
         {notificationsSupported() && permission === 'default' && (
           <button

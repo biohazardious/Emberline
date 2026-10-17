@@ -1,4 +1,4 @@
-import type { Run, RunAttentionReason } from '@emberline/protocol';
+import { HOLD_LABELS, type Run, type RunAttentionReason } from '@emberline/protocol';
 
 /** Inbox group order: what blocks a run hardest comes first. */
 export const ATTENTION_ORDER: readonly RunAttentionReason[] = [
@@ -92,3 +92,8 @@ export const FLEET_SECTION_LABELS: Record<FleetSection, string> = {
   recent: 'Recently finished',
 };
 export const FLEET_SECTION_ORDER: readonly FleetSection[] = ['needs', 'review', 'working', 'recent'];
+
+/** A hold's detail is normally already a label; raw keys map through HOLD_LABELS, anything else (agent text) stays as is. */
+export function holdLabel(detail: string): string {
+  return Object.hasOwn(HOLD_LABELS, detail) ? HOLD_LABELS[detail]! : detail;
+}

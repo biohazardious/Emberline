@@ -5,6 +5,7 @@ import {
   dismissable,
   fleetSection,
   groupAttention,
+  holdLabel,
   pendingAttention,
   pruneSeen,
 } from './attention';
@@ -146,5 +147,13 @@ describe('fleetSection', () => {
     const r = run('a', { state: 'failed', endedAt: iso(2), attention: attn('failed', 2, 'a') });
     expect(fleetSection(r, ctx)).toBe('needs');
     expect(fleetSection(r, { ...ctx, seen: { 'a:failed:e1': NOW } })).toBe('recent');
+  });
+});
+
+describe('holdLabel', () => {
+  it('maps known keys and leaves other text alone, including prototype names', () => {
+    expect(holdLabel('constructor')).toBe('constructor');
+    expect(holdLabel('toString')).toBe('toString');
+    expect(holdLabel('some agent text')).toBe('some agent text');
   });
 });
