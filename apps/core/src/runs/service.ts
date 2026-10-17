@@ -95,7 +95,7 @@ import {
   worktreeHeadSha,
 } from './git.js';
 import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } from './handoff.js';
-import { HOLD_EVENTS } from './hold-events.js';
+import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 import { providerAdapter } from './providers.js';
 import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
@@ -144,7 +144,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
  * tool's check-in and the turn boundary it is checked against (`ticket_complete`,
  * `completion_tool_ready`, `UserPromptSubmit`), one-shot markers
  * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
- * `merged_to_main`, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
+ * HOLD_ENDING_EVENTS, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
  */
 export const PRUNE_PROTECTED_EVENT_TYPES = [
   'last_screen',
@@ -157,7 +157,7 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'auto_nudged',
   'session_lost',
   ...HOLD_EVENTS,
-  'merged_to_main',
+  ...HOLD_ENDING_EVENTS,
   'conflict_resolution_requested',
   'pr_created',
   'stall_detected',

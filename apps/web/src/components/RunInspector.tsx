@@ -242,6 +242,7 @@ const EVENT_LABEL: Record<string, string> = {
   auto_nudged: 'nudged to continue',
   ticket_complete: 'Completed',
   completion_tool_ready: 'Completion tool available',
+  completion_accepted: 'Completion accepted',
   completion_nudged: 'Asked to confirm completion',
   completion_missing: 'Held: no completion signal',
   completion_blocked: 'Held: blocked',

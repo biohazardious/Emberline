@@ -43,7 +43,7 @@ import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './depende
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
-import { HOLD_EVENTS } from '../runs/hold-events.js';
+import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from '../runs/hold-events.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunService } from '../runs/service.js';
@@ -1033,7 +1033,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   private async completionGatePasses(run: Run): Promise<boolean> {
     const signal = this.runs.latestCompletion(run.id);
-    if (signal && signal.blockers.length === 0) return true;
+    if (signal && signal.blockers.length === 0) {
+      // Ends an earlier hold of this gate (stillHeld) even when no merge follows.
+      this.runs.note(run.id, 'completion_accepted', {});
+      return true;
+    }
     if (signal) {
       this.runs.note(run.id, 'completion_blocked', { blockers: signal.blockers });
       return false;
@@ -1107,7 +1111,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /**
    * Whether an earlier pipeline pass of this run left it held: of the pass outcomes recorded before
    * the run's latest switch to `done` (the current pass's own notes come after it), the newest is a
-   * HOLD_EVENTS note, not a merge. A hold that was later merged does not count.
+   * HOLD_EVENTS note, not a merge or an accepted completion signal. A hold that was later merged, or
+   * whose agent later signalled completion (no merge follows when auto-sync and auto-Done are off),
+   * does not count.
    */
   private stillHeld(runId: string): boolean {
     const lastDone = this.db
@@ -1125,7 +1131,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         and(
           eq(runEvents.runId, runId),
           lt(runEvents.id, lastDone.id),
-          inArray(runEvents.type, [...HOLD_EVENTS, 'merged_to_main']),
+          inArray(runEvents.type, [...HOLD_EVENTS, ...HOLD_ENDING_EVENTS]),
         ),
       )
       .orderBy(desc(runEvents.id))

@@ -15,3 +15,9 @@ export const HOLD_EVENTS: readonly string[] = [
   'completion_missing',
   'completion_blocked',
 ];
+/**
+ * Run notes that end an earlier hold (TicketService.stillHeld): the work was merged, or the
+ * completion gate accepted the agent's signal. Not holds, and not pipeline outcomes: only
+ * `merged_to_main` counts as "merged" for a dispatch's Review finalization. Protected from pruning.
+ */
+export const HOLD_ENDING_EVENTS: readonly string[] = ['merged_to_main', 'completion_accepted'];

@@ -6,6 +6,8 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runs, tickets } from './db/schema.js';
+import { HOLD_EVENTS } from './runs/hold-events.js';
+import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   DEPENDENCY_BLOCK_MAX,
@@ -181,6 +183,7 @@ describe('completion gate', () => {
     await stop(run, { summary: 'did A', handoff: 'A.txt exists' });
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
     expect(await eventTypes(run)).toContain('merged_to_main');
+    expect(await eventTypes(run)).toContain('completion_accepted');
     expect(await eventTypes(run)).not.toContain('completion_nudged');
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(true);
   });
@@ -308,6 +311,41 @@ describe('completion gate', () => {
     expect(count(after, 'completion_missing')).toBe(0);
     expect(count(after, 'completion_nudged')).toBe(1);
     expect(followups(run)).toEqual([NUDGE, 'one more tweak']);
+  });
+
+  it('without merge and Done (both off), an accepted signal ends the hold: a later follow-up is not piped or paged', async () => {
+    await api('PATCH', '/api/factory/settings', { autoSyncToMain: false, autoMoveToDone: false });
+    const { project, ticket, run } = await factoryTicket();
+    const passes = trackPipelines();
+    // Keep the CLI open after the step, so a person can continue the session.
+    const runsSvc = t.runs as unknown as { stop(id: string, opts?: { reason?: string }): Promise<Run> };
+    const realStop = runsSvc.stop.bind(t.runs);
+    runsSvc.stop = async (id, opts) => (opts?.reason === 'factory_step_finished' ? t.runs.get(id) : realStop(id, opts));
+    await begin(run);
+    await stop(run);
+    await settled(passes, 1);
+    await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBe(1);
+    await nextTurn(run, { summary: 'confirmed' });
+    await settled(passes, 2);
+    const accepted = await eventTypes(run);
+    expect(accepted).toContain('completion_accepted');
+    expect(accepted).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+
+    await t.tickets.prompt(ticket.id, 'one more tweak');
+    await nextTurn(run);
+    await settled(passes, 3);
+    const after = await eventTypes(run);
+    expect(after).not.toContain('completion_missing');
+    expect(after.filter((x) => x === 'completion_nudged')).toHaveLength(1);
+    expect(after.filter((x) => x === 'completion_accepted')).toHaveLength(1);
+    expect(followups(run)).toEqual([NUDGE, 'one more tweak']);
+  });
+
+  it('completion_accepted is no hold, and pruning keeps it', () => {
+    expect(HOLD_EVENTS).not.toContain('completion_accepted');
+    expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('completion_accepted');
   });
 
   it('a run that cannot take a prompt any more is held at once instead of nudged', async () => {
