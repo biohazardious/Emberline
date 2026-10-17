@@ -14,8 +14,8 @@
  * Identity: an output is the same build when its worktree-relative path, size and mtime match, or,
  * for a candidate with the same path and size archived from another run (runs that share the main
  * workspace, a committed file checked out in every worktree), when its SHA-256 matches. The quota
- * evicts the oldest unpinned copies and keeps their rows as hidden tombstones, so an evicted build
- * is never copied back.
+ * evicts the oldest unpinned copies, and a user delete removes one; both keep the row as a hidden
+ * tombstone, so that build is never copied back (a file that vanished on its own is forgotten).
  */
 import { createHash, type Hash, randomUUID } from 'node:crypto';
 import { type Dirent } from 'node:fs';
@@ -346,15 +346,34 @@ export class BuildOutputArchive {
     return row;
   }
 
-  /** Deletes an archived file and its row. A file that already vanished still drops the row, with 404. */
+  /**
+   * Deletes an archived file. Its row stays as a tombstone (like a quota eviction), so a later pass
+   * does not copy the same build back from a worktree that still holds it. A file that already
+   * vanished is forgotten the same way, with 404.
+   */
   async remove(id: string): Promise<void> {
     const row = this.get(id);
     if (!row) throw notFound('no such build output');
     const present = await this.lock.run(row.projectId, async () => {
       const current = this.get(id);
-      return current ? this.deleteRow(current) : false;
+      return current ? this.tombstone(current) : false;
     });
     if (!present) throw notFound('file no longer on disk');
+  }
+
+  /**
+   * When archiving this run's outputs first failed (a copy error, or a worktree or archive root
+   * reached through a link); time-outs do not count. Null when it never failed.
+   */
+  firstFailureAt(runId: string): Date | null {
+    const failures = this.db
+      .select({ ts: runEvents.ts, payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'build_outputs_archive_failed')))
+      .orderBy(asc(runEvents.ts))
+      .all()
+      .filter((e) => (e.payload as { reason?: unknown } | null)?.reason !== 'timeout');
+    return failures[0]?.ts ?? null;
   }
 
   /**
@@ -575,15 +594,18 @@ export class BuildOutputArchive {
           continue;
         }
         // Identical bytes already archived in the project (another run in the same workspace, a
-        // committed file in another worktree): hashed only when such a candidate exists.
-        const twins = projectRows.filter(
-          (r) => live(r) && r.sourcePath === output.path && r.sizeBytes === source.size,
-        );
+        // committed file in another worktree), or evicted or deleted (a tombstone, whatever its
+        // mtime): hashed only when such a candidate exists.
+        const twins = projectRows.filter((r) => r.sourcePath === output.path && r.sizeBytes === source.size);
         if (twins.length > 0) {
           const digest = await this.sourceDigest(run, output.path, source);
+          if (twins.some((r) => !live(r) && r.sha256 === digest)) {
+            counts.skipped += 1;
+            continue;
+          }
           let twin: BuildOutputRow | undefined;
           for (const candidate of twins) {
-            if (candidate.sha256 === digest && (await this.files.hasFile(candidate.storedPath))) {
+            if (live(candidate) && candidate.sha256 === digest && (await this.files.hasFile(candidate.storedPath))) {
               twin = candidate;
               break;
             }
@@ -833,20 +855,23 @@ export class BuildOutputArchive {
     for (const row of rows) {
       if (total <= quota) break;
       if (row.pinned) continue;
-      await this.files.unlinkFile(row.storedPath).catch(() => false);
-      this.db.update(buildOutputs).set({ evictedAt: new Date() }).where(eq(buildOutputs.id, row.id)).run();
-      await this.removeRunDirIfEmpty(row.storedPath);
+      await this.tombstone(row);
       total -= row.sizeBytes;
     }
   }
 
   /**
-   * Removes the row and its file. The file is unlinked only inside its verified directory (a link
-   * planted in its place is removed itself, never its target). True if the file was there.
+   * Removes the file and keeps the row as a hidden tombstone (evicted or deleted). The file is
+   * unlinked only inside its verified directory (a link planted in its place is removed itself,
+   * never its target). True if the file was there.
    */
-  private async deleteRow(row: BuildOutputRow): Promise<boolean> {
+  private async tombstone(row: BuildOutputRow): Promise<boolean> {
     const removed = await this.files.unlinkFile(row.storedPath).catch(() => false);
-    this.db.delete(buildOutputs).where(eq(buildOutputs.id, row.id)).run();
+    this.db
+      .update(buildOutputs)
+      .set({ evictedAt: new Date(), pinned: false })
+      .where(eq(buildOutputs.id, row.id))
+      .run();
     await this.removeRunDirIfEmpty(row.storedPath);
     return removed;
   }

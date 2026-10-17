@@ -169,6 +169,8 @@ const IDLE_DONE_NON_RESUMABLE_TTL_MS = 30 * 60_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 /** Time all pre-prune archive passes of one auto-GC pass may take together. */
 export const AUTO_GC_ARCHIVE_BUDGET_MS = 60_000;
+/** Auto-GC keeps retrying a run whose outputs fail to archive this long (from the first failure), then prunes. */
+const AUTO_GC_ARCHIVE_RETRY_MS = 24 * 3_600_000;
 /** With less budget left than this, auto-GC stops and prunes the rest on its next pass. */
 const AUTO_GC_MIN_ARCHIVE_MS = 5_000;
 /**
@@ -2144,9 +2146,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
               const budgetLeft = archiveDeadline - Date.now();
               if (budgetLeft < AUTO_GC_MIN_ARCHIVE_MS) break autoGc;
               // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
-              // worktree (and row) until a later pass archives them.
+              // worktree (and row) and is tried again on the next pass. A copy that keeps failing
+              // (a worktree reached through a link, unreadable files) holds it for 24 h at most.
               const archived = await this.outputs.archiveBeforePrune(stale.id, budgetLeft, { keepOnTimeout: true });
-              if (archived !== 'archived') continue;
+              if (archived === 'timeout') continue;
+              if (archived === 'failed') {
+                const firstFailure = this.outputs.firstFailureAt(stale.id);
+                if (firstFailure && Date.now() - firstFailure.getTime() < AUTO_GC_ARCHIVE_RETRY_MS) continue;
+              }
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);

@@ -1127,8 +1127,9 @@ describe('build output archive', () => {
     expect(ids.filter((id) => id === first.id || id === second.id)).toHaveLength(1);
   });
 
-  it('auto-GC keeps a worktree whose archive pass timed out or failed, and prunes it on a later pass', async () => {
-    const project = await createProject('Archive auto GC keeps', true);
+  /** A stale, merged run behind ten newer ones, a live run, and a way to trigger auto-GC now. */
+  const staleRunForAutoGc = async (name: string) => {
+    const project = await createProject(name, true);
     const stale = await finishRun(project.id);
     mergeIgnoringBuild(stale, project.path);
     putApk(stale.worktreePath, 2048);
@@ -1139,17 +1140,35 @@ describe('build output archive', () => {
       (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
       await t.runs.reconcile();
     };
+    const failureNote = (ts: Date) =>
+      t.db
+        .insert(runEvents)
+        .values({
+          runId: stale.id,
+          ts,
+          source: 'system',
+          type: 'build_outputs_archive_failed',
+          payload: { message: 'Could not archive 1 build output(s): EACCES' },
+        })
+        .run();
+    const kept = () => t.runs.list().some((r) => r.id === stale.id) && existsSync(stale.worktreePath);
+    return { project, stale, autoGc, failureNote, kept };
+  };
+
+  it('auto-GC keeps a worktree whose archive timed out, or failed less than 24 h ago, and prunes it later', async () => {
+    const { project, stale, autoGc, failureNote, kept } = await staleRunForAutoGc('Archive auto GC keeps');
     const spy = vi
       .spyOn(t.runs.outputs, 'archiveBeforePrune')
       .mockResolvedValueOnce('timeout')
-      .mockResolvedValueOnce('failed');
+      .mockImplementationOnce(async () => {
+        failureNote(new Date(Date.now() - 23 * 3_600_000));
+        return 'failed';
+      });
     try {
       await autoGc();
-      expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
-      expect(existsSync(stale.worktreePath)).toBe(true);
+      expect(kept()).toBe(true);
       await autoGc();
-      expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
-      expect(existsSync(stale.worktreePath)).toBe(true);
+      expect(kept()).toBe(true);
       expect(spy.mock.calls.map((c) => c[2])).toEqual([{ keepOnTimeout: true }, { keepOnTimeout: true }]);
     } finally {
       spy.mockRestore();
@@ -1158,6 +1177,22 @@ describe('build output archive', () => {
     expect(t.runs.list().map((r) => r.id)).not.toContain(stale.id);
     expect(existsSync(stale.worktreePath)).toBe(false);
     await expectArchivedApk(project.id, stale.id, 2048);
+  });
+
+  it('auto-GC prunes as before once archiving has failed for 24 h', async () => {
+    const { stale, autoGc, failureNote, kept } = await staleRunForAutoGc('Archive auto GC gives up');
+    failureNote(new Date(Date.now() - 25 * 3_600_000));
+    // A later, deduplicated note does not restart the 24 hours.
+    failureNote(new Date());
+    const spy = vi.spyOn(t.runs.outputs, 'archiveBeforePrune').mockResolvedValue('failed');
+    try {
+      await autoGc();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(kept()).toBe(false);
+    expect(t.runs.list().map((r) => r.id)).not.toContain(stale.id);
+    expect(existsSync(stale.worktreePath)).toBe(false);
   });
 
   it('manual GC keeps runs it could not archive within its time budget, as archive_pending', async () => {

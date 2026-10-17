@@ -241,8 +241,8 @@ export const buildOutputs = sqliteTable(
     /** SHA-256 (hex) of the bytes copied, to recognise the same file archived from another run. */
     sha256: text('sha256').notNull(),
     /**
-     * Set when the quota deleted the file: the row stays as a tombstone (hidden from the list and
-     * the usage) so the same build is never copied back.
+     * Set when the quota or the user deleted the file: the row stays as a tombstone (hidden from
+     * the list and the usage) so the same build is never copied back.
      */
     evictedAt: integer('evicted_at', { mode: 'timestamp_ms' }),
   },

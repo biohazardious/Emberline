@@ -1090,3 +1090,94 @@ describe('BuildOutputArchive without a host path for the workspaces', () => {
     });
   });
 });
+
+describe('BuildOutputArchive deletes and identical tombstones', () => {
+  it('a deleted output stays deleted: done, Collect and pre-prune passes do not copy it back', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100, { mtimeSec: 1_700_000_000 });
+    await archive.archiveRun('r1');
+    const row = rowsOf('p1')[0];
+    await archive.remove(row?.id ?? '');
+    expect(existsSync(stored('p1/r1/app.apk'))).toBe(false);
+    expect(allRowsOf('p1').map((r) => r.evictedAt !== null)).toEqual([true]);
+    expect(archive.list('p1').outputs).toEqual([]);
+
+    const copies = hookCopies(() => undefined);
+    try {
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+      expect(await archive.collectProject('p1')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+      expect(await archive.archiveBeforePrune('r1')).toBe('archived');
+      expect(copies).not.toHaveBeenCalled();
+    } finally {
+      copies.mockRestore();
+    }
+    // A real rebuild is archived again.
+    put(wt, 'dist/app.apk', 120, { mtimeSec: 1_700_000_100 });
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.sizeBytes)).toEqual([120]);
+  });
+
+  it('a file that vanished from the archive is forgotten for good, so a surviving worktree archives it again', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    await archive.archiveRun('r1');
+    const row = rowsOf('p1')[0];
+    rmSync(stored(row?.storedPath ?? ''));
+    await expect(archive.open(row?.id ?? '')).rejects.toMatchObject({ statusCode: 404 });
+    expect(allRowsOf('p1')).toEqual([]);
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+  });
+
+  it('an evicted committed file is not copied back from a new worktree with a new mtime', async () => {
+    setQuotaBytes(1000);
+    addProject('p1');
+    const wt1 = addWorktree('r1');
+    addRun('r1', 'p1', wt1);
+    put(wt1, 'firmware/fw.bin', 800, { fill: 2, mtimeSec: 1_700_000_000 });
+    await archive.archiveRun('r1');
+    const wt2 = addWorktree('r2');
+    addRun('r2', 'p1', wt2);
+    put(wt2, 'dist/new.apk', 900, { mtimeSec: 1_700_000_100 });
+    await archive.archiveRun('r2');
+    expect(rowsOf('p1').map((r) => r.runId)).toEqual(['r2']);
+
+    const wt3 = addWorktree('r3');
+    addRun('r3', 'p1', wt3);
+    put(wt3, 'firmware/fw.bin', 800, { fill: 2, mtimeSec: 1_700_000_900 });
+    expect(await archive.archiveRun('r3')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.runId)).toEqual(['r2']);
+
+    // Same path and size but other bytes: a different build.
+    const wt4 = addWorktree('r4');
+    addRun('r4', 'p1', wt4);
+    put(wt4, 'firmware/fw.bin', 800, { fill: 3, mtimeSec: 1_700_000_900 });
+    expect(await archive.archiveRun('r4')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+  });
+
+  it('reports a worktree or archive root reached through a link as failed, and when archiving first failed', async () => {
+    addProject('p1');
+    const outside = outsideDir();
+    try {
+      mkdirSync(path.join(dir, '.worktrees'), { recursive: true });
+      symlinkSync(outside, path.join(dir, '.worktrees', 'r1'));
+      addRun('r1', 'p1', path.join(dir, '.worktrees', 'r1'));
+      expect(archive.firstFailureAt('r1')).toBeNull();
+      expect(await archive.archiveBeforePrune('r1', 5_000, { keepOnTimeout: true })).toBe('failed');
+      const first = archive.firstFailureAt('r1');
+      expect(first).toBeInstanceOf(Date);
+      // A timeout note is not a failure to copy.
+      addRun('r2', 'p1', addWorktree('r2'));
+      db()
+        .insert(runEvents)
+        .values({ runId: 'r2', ts: new Date(), source: 'system', type: 'build_outputs_archive_failed', payload: { reason: 'timeout', message: 'x' } })
+        .run();
+      expect(archive.firstFailureAt('r2')).toBeNull();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});

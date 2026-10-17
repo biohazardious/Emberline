@@ -138,7 +138,7 @@ describe('build outputs API', () => {
     expect((await t.app.inject({ method: 'PATCH', url: '/api/build-outputs/nope', headers: mut, payload: { pinned: true } })).statusCode).toBe(404);
   });
 
-  it('deletes the file and the row', async () => {
+  it('deletes the file and hides the row (kept as a tombstone)', async () => {
     addProject();
     const wt = addRun('r1', 'p1');
     put(wt, 'a.apk', 'x');
@@ -149,7 +149,8 @@ describe('build outputs API', () => {
     const res = await t.app.inject({ method: 'DELETE', url: `/api/build-outputs/${row.id}`, headers: mut });
     expect(res.statusCode).toBe(204);
     expect(existsSync(file)).toBe(false);
-    expect(t.db.select().from(buildOutputs).all()).toHaveLength(0);
+    expect(t.db.select().from(buildOutputs).all().map((o) => o.evictedAt !== null)).toEqual([true]);
+    expect((await listOf()).outputs).toEqual([]);
     expect((await t.app.inject({ method: 'DELETE', url: `/api/build-outputs/${row.id}`, headers: mut })).statusCode).toBe(404);
   });
 
