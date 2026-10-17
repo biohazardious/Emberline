@@ -140,8 +140,9 @@ const EVENT_PRUNE_INTERVAL_MS = 5 * 60_000;
 export const MAX_EVENTS_PER_RUN = 5000;
 /**
  * Event kinds that logic reads back later, so pruning never removes them: the one `last_screen`
- * snapshot, the `queued` event (unattended origin, queued prompts), the completion signal and the
- * turn boundary it is checked against (`ticket_complete`, `UserPromptSubmit`), one-shot markers
+ * snapshot, the `queued` event (unattended origin, queued prompts), the completion signal, its
+ * tool's check-in and the turn boundary it is checked against (`ticket_complete`,
+ * `completion_tool_ready`, `UserPromptSubmit`), one-shot markers
  * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
  * `merged_to_main`, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
  */
@@ -149,6 +150,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'last_screen',
   'queued',
   'ticket_complete',
+  // The run's agent has the tool; the completion gate applies only then.
+  'completion_tool_ready',
   // The turn boundary latestCompletion compares the signal with.
   'UserPromptSubmit',
   'auto_nudged',
@@ -163,6 +166,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'preview_started',
   'preview_stopped',
 ];
+/** Events that never become a run's `lastEvent`. */
+const BOOKKEEPING_EVENT_TYPES = new Set(['last_screen', 'completion_tool_ready']);
 /** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
 const PRUNE_RUNS_PER_PASS = 10;
 /**
@@ -1263,12 +1268,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * and, for a ticket run, as the ticket's completion (latest wins).
    */
   recordCompletion(runId: string, token: string | undefined, input: TicketCompleteBody): void {
-    const row = this.db.select().from(runs).where(eq(runs.id, runId)).get();
-    if (!row) throw new HttpError(404, 'not_found', 'run not found');
-    if (!token || !tokenMatches(token, row.hookTokenHash)) {
-      throw new HttpError(401, 'unauthorized', 'invalid hook token');
-    }
-    if (row.endedAt || row.cancelledAt) throw new HttpError(409, 'run_ended', 'the run has ended');
+    const row = this.liveRunForAgent(runId, token);
     const body = TicketCompleteBody.parse(input);
     if (row.ticketId) {
       const now = new Date();
@@ -1277,6 +1277,28 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // After the ticket row: TicketService broadcasts the ticket on this note.
     this.note(runId, 'ticket_complete', { summary: body.summary, handoff: body.handoff, blockers: body.blockers });
+  }
+
+  /**
+   * The `emberline-mcp` server's check-in when the agent's CLI starts it: this run's agent has the
+   * `ticket_complete` tool, so the completion gate may wait for it. Noted once per run (protected
+   * from pruning); a later check-in (a resumed session starts the server again) changes nothing.
+   */
+  recordCompletionToolReady(runId: string, token: string | undefined): void {
+    this.liveRunForAgent(runId, token);
+    if (this.hasEvent(runId, 'completion_tool_ready')) return;
+    this.note(runId, 'completion_tool_ready');
+  }
+
+  /** The run an agent-side call (hook token) is for: 404 unknown, 401 wrong token, 409 ended. */
+  private liveRunForAgent(runId: string, token: string | undefined): RunRow {
+    const row = this.db.select().from(runs).where(eq(runs.id, runId)).get();
+    if (!row) throw new HttpError(404, 'not_found', 'run not found');
+    if (!token || !tokenMatches(token, row.hookTokenHash)) {
+      throw new HttpError(401, 'unauthorized', 'invalid hook token');
+    }
+    if (row.endedAt || row.cancelledAt) throw new HttpError(409, 'run_ended', 'the run has ended');
+    return row;
   }
 
   /**
@@ -2305,10 +2327,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           payload: event.payload ?? null,
         })
         .run();
-      // A saved screen is bookkeeping, not something the run did: it does not become its last event.
+      // Bookkeeping (a saved screen, the tool check-in) is not something the run did: it does not
+      // become its last event (a waiting run's `SessionStart` must stay its last event, for example).
       const set: Partial<RunRow> = {
         ...event.patch,
-        lastEvent: event.type === 'last_screen' ? current.lastEvent : event.type,
+        lastEvent: BOOKKEEPING_EVENT_TYPES.has(event.type) ? current.lastEvent : event.type,
       };
       if (changed) Object.assign(set, { state: event.state, stateChangedAt: now });
       return tx.update(runs).set(set).where(eq(runs.id, id)).returning().get();

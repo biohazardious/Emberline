@@ -1431,3 +1431,70 @@ describe('ticket_complete endpoint', () => {
     expect((await ticketOf(ticket.id)).updatedAt).toBe(pushed?.updatedAt);
   });
 });
+
+describe('completion-tool check-in endpoint', () => {
+  const checkIn = (runId: string, token: string | undefined) =>
+    t.app.inject({
+      method: 'POST',
+      url: `/api/internal/runs/${runId}/completion-tool`,
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+  const readyEvents = (runId: string) =>
+    t.db
+      .select()
+      .from(runEvents)
+      .where(eq(runEvents.runId, runId))
+      .all()
+      .filter((e) => e.type === 'completion_tool_ready');
+
+  async function liveRun(name: string) {
+    const project = await createProject(name, false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    return { run, token };
+  }
+
+  it('rejects a missing, wrong or other run token with 401, unknown run with 404', async () => {
+    const a = await liveRun('ToolA');
+    const b = await liveRun('ToolB');
+    expect((await checkIn(a.run.id, undefined)).statusCode).toBe(401);
+    expect((await checkIn(a.run.id, 'wrong')).statusCode).toBe(401);
+    expect((await checkIn(a.run.id, b.token)).statusCode).toBe(401);
+    expect((await checkIn('no-such-run', a.token)).statusCode).toBe(404);
+    expect(readyEvents(a.run.id)).toHaveLength(0);
+  });
+
+  it('answers 409 for an ended run', async () => {
+    const { run, token } = await liveRun('ToolEnded');
+    t.db.update(runs).set({ endedAt: new Date() }).where(eq(runs.id, run.id)).run();
+    expect((await checkIn(run.id, token)).statusCode).toBe(409);
+    expect(readyEvents(run.id)).toHaveLength(0);
+  });
+
+  it('records completion_tool_ready once per run; later check-ins are no-ops', async () => {
+    const { run, token } = await liveRun('ToolOnce');
+    expect((await checkIn(run.id, token)).statusCode).toBe(200);
+    expect((await checkIn(run.id, token)).statusCode).toBe(200);
+    expect(readyEvents(run.id)).toHaveLength(1);
+    expect(t.runs.hasEvent(run.id, 'completion_tool_ready')).toBe(true);
+  });
+
+  it('does not become the run\'s last event (a waiting run keeps SessionStart)', async () => {
+    const { run, token } = await liveRun('ToolLastEvent');
+    await hook(run.id, 'SessionStart', token, { session_id: 's-tool' });
+    const before = t.runs.get(run.id).lastEvent;
+    expect((await checkIn(run.id, token)).statusCode).toBe(200);
+    expect(t.runs.get(run.id).lastEvent).toBe(before);
+  });
+
+  it('event pruning keeps completion_tool_ready', async () => {
+    const { run, token } = await liveRun('ToolPrune');
+    await checkIn(run.id, token);
+    t.db
+      .insert(runEvents)
+      .values(Array.from({ length: 5100 }, () => ({ runId: run.id, ts: new Date(), source: 'hook', type: 'PreToolUse' })))
+      .run();
+    t.runs.pruneRunEvents();
+    expect(readyEvents(run.id)).toHaveLength(1);
+  });
+});

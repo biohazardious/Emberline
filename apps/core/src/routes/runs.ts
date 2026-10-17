@@ -190,4 +190,12 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     runs.recordCompletion(request.params.id, token, request.body as TicketCompleteBody);
     return { ok: true };
   });
+
+  /** `emberline-mcp` checks in on startup: this run's agent has the `ticket_complete` tool. No body. */
+  app.post<{ Params: { id: string } }>('/api/internal/runs/:id/completion-tool', async (request) => {
+    const header = request.headers.authorization;
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+    runs.recordCompletionToolReady(request.params.id, token);
+    return { ok: true };
+  });
 }

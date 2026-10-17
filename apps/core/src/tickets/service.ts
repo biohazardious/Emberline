@@ -190,7 +190,10 @@ function hasVerifiableBuildTarget(workspacePath: string): boolean {
 /** CreateTicketBody's body limit. */
 const TICKET_BODY_MAX = 20_000;
 
-/** Closes every re-prompt: the earlier completion signal no longer counts once the person or a gate spoke. */
+/**
+ * Closes every gate re-prompt to a run whose agent has the tool: the earlier completion signal no
+ * longer counts once the person or a gate spoke.
+ */
 const COMPLETE_AGAIN = 'When finished, call `ticket_complete` again.';
 
 /** The one automatic prompt to a run that stopped without its completion signal. */
@@ -839,12 +842,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       this.chainOn(run.projectId);
     }
 
-    // 1b. The agent's completion signal: a stop is not "done" unless the agent said so.
+    // 1b. The agent's completion signal: a stop is not "done" unless the agent said so. Only for a
+    //     run whose agent has the tool (its `emberline-mcp` checked in): a runner image without it,
+    //     or a session started before the upgrade, advances the old way instead of stalling.
     if (
       fSettings.requireCompletionSignal &&
       ticketRow &&
       !isFactoryOrchestratorTicket &&
-      providerAdapter(run.agent).claudeNative &&
+      this.hasCompletionTool(run) &&
       !(await this.completionGatePasses(run))
     ) {
       return;
@@ -878,7 +883,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         await this.runs
           .prompt(
             run.id,
-            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing. ${COMPLETE_AGAIN}`,
+            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.${this.completeAgain(run, ' ')}`,
             { automatic: true },
           )
           .catch(() => undefined);
@@ -921,7 +926,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         this.slopHealedRuns.add(run.id);
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
         if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', {});
-        await this.runs.prompt(run.id, `${slopReport.autoFixPrompt}\n\n${COMPLETE_AGAIN}`, { automatic: true }).catch(() => undefined);
+        await this.runs.prompt(run.id, `${slopReport.autoFixPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true }).catch(() => undefined);
         return;
       }
 
@@ -951,7 +956,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         (!run.endedAt || run.resumable)
       ) {
         this.runs.note(run.id, 'critic_blocked', {});
-        await this.runs.prompt(run.id, `${criticRes.followUpPrompt}\n\n${COMPLETE_AGAIN}`, { automatic: true }).catch(() => undefined);
+        await this.runs.prompt(run.id, `${criticRes.followUpPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true }).catch(() => undefined);
         return;
       }
     }
@@ -1005,6 +1010,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     } else if (movedToDone && run.ticketId) {
       this.dispatchUnblocked(run.projectId, this.dependentIds(run.ticketId));
     }
+  }
+
+  /**
+   * Whether the run's agent has the `ticket_complete` tool: a Claude CLI whose `emberline-mcp`
+   * checked in. Secondary CLIs never have it; neither has a Claude run on an older runner image.
+   */
+  private hasCompletionTool(run: Run): boolean {
+    return providerAdapter(run.agent).claudeNative && this.runs.hasEvent(run.id, 'completion_tool_ready');
+  }
+
+  /** {@link COMPLETE_AGAIN} after `separator`, for a run whose agent has the tool; empty otherwise. */
+  private completeAgain(run: Run, separator: string): string {
+    return this.hasCompletionTool(run) ? `${separator}${COMPLETE_AGAIN}` : '';
   }
 
   /**
@@ -1136,7 +1154,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   ): Promise<boolean> {
     // The merge goes into whatever the main workspace has checked out; the column is the fallback.
     const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
-    const text = `${conflictResolutionPrompt(branch, conflicts)} ${COMPLETE_AGAIN}`;
+    const text = `${conflictResolutionPrompt(branch, conflicts)}${this.completeAgain(run, ' ')}`;
     try {
       await this.runs.sendPrompt(run.id, text, { automatic: true });
     } catch (error) {

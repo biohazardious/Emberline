@@ -88,14 +88,15 @@ const createTicket = async (projectId: string, body: object): Promise<Ticket> =>
 
 const getTicket = async (id: string): Promise<Ticket> => (await api('GET', `/api/tickets/${id}`)).json();
 
-/** The agent's `ticket_complete` call: Claude ticket runs in a factory advance only with it. */
-const signal = (runId: string, token: string, summary = 'done') =>
-  t.app.inject({
-    method: 'POST',
-    url: `/api/internal/runs/${runId}/complete`,
-    headers: { authorization: `Bearer ${token}` },
-    payload: { summary },
-  });
+/**
+ * The agent's `ticket_complete` call: Claude ticket runs in a factory advance only with it. Its
+ * `emberline-mcp` checks in first (once per run, as on startup), so the run is gated like a real one.
+ */
+const signal = async (runId: string, token: string, summary = 'done') => {
+  const headers = { authorization: `Bearer ${token}` };
+  await t.app.inject({ method: 'POST', url: `/api/internal/runs/${runId}/completion-tool`, headers });
+  return t.app.inject({ method: 'POST', url: `/api/internal/runs/${runId}/complete`, headers, payload: { summary } });
+};
 
 async function waitFile(name: string): Promise<string> {
   const file = path.join(t.dir, name);

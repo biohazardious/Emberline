@@ -91,6 +91,8 @@ const eventTypes = async (run: Run) =>
   ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
 const eventPayload = async (run: Run, type: string) =>
   ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find((e) => e.type === type)?.payload;
+/** A note of the completion gate itself (the tool check-in is not one). */
+const isGateNote = (type: string) => type.startsWith('completion_') && type !== 'completion_tool_ready';
 const followups = (run: Run) => {
   const file = path.join(t.dir, `followups-${run.id}`);
   return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
@@ -120,11 +122,23 @@ function trackPipelines(service: TicketService = t.tickets): Promise<void>[] {
   return passes;
 }
 
-/** Starts the agent's session and its first turn. */
-async function begin(run: Run): Promise<string> {
+/** What `emberline-mcp` does when the agent's CLI starts it: the run's agent has the tool. */
+async function checkIn(run: Run): Promise<void> {
+  const token = await waitFile(`token-${run.id}`);
+  const res = await t.app.inject({
+    method: 'POST',
+    url: `/api/internal/runs/${run.id}/completion-tool`,
+    headers: { authorization: `Bearer ${token}` },
+  });
+  expect(res.statusCode).toBe(200);
+}
+
+/** Starts the agent's session (its `emberline-mcp` checks in unless `tool: false`) and its first turn. */
+async function begin(run: Run, { tool = true }: { tool?: boolean } = {}): Promise<string> {
   await waitFile(`ready-${run.id}`);
   const token = await waitFile(`token-${run.id}`);
   await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+  if (tool) await checkIn(run);
   await hook(run.id, 'UserPromptSubmit', token);
   return token;
 }
@@ -356,8 +370,30 @@ describe('completion gate', () => {
       await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
       const types = await eventTypes(run);
       expect(types).toContain('merged_to_main');
-      expect(types.some((x) => x.startsWith('completion_'))).toBe(false);
+      expect(types.some(isGateNote)).toBe(false);
       expect(followups(run)).toEqual([]);
+    });
+
+    it('a run whose agent never got the tool (no emberline-mcp check-in): Stop alone advances the ticket', async () => {
+      const { ticket, run } = await factoryTicket();
+      await begin(run, { tool: false });
+      await stop(run);
+      await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+      const types = await eventTypes(run);
+      expect(types).toContain('merged_to_main');
+      expect(types.some(isGateNote)).toBe(false);
+      expect(followups(run)).toEqual([]);
+    });
+
+    it('the same run is gated once its emberline-mcp has checked in', async () => {
+      const { ticket, run } = await factoryTicket();
+      const passes = trackPipelines();
+      await begin(run, { tool: false });
+      await checkIn(run);
+      await stop(run);
+      await settled(passes, 1);
+      expect(await eventTypes(run)).toContain('completion_nudged');
+      expect(await statusOf(ticket.id)).not.toBe('done');
     });
 
     it('a secondary CLI run (its exit code is its signal)', async () => {
@@ -366,7 +402,7 @@ describe('completion gate', () => {
       t.db.update(runs).set({ agent: 'codex' }).where(eq(runs.id, run.id)).run();
       await stop(run);
       await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
-      expect((await eventTypes(run)).some((x) => x.startsWith('completion_'))).toBe(false);
+      expect((await eventTypes(run)).some(isGateNote)).toBe(false);
     });
 
     it('the [Factory] product-owner orchestrator ticket (its tickets file is its signal)', async () => {
@@ -381,7 +417,7 @@ describe('completion gate', () => {
       await begin(run);
       await stop(run);
       await expect.poll(() => statusOf(po.id), { timeout: 10_000 }).toBe('done');
-      expect((await eventTypes(run)).some((x) => x.startsWith('completion_'))).toBe(false);
+      expect((await eventTypes(run)).some(isGateNote)).toBe(false);
     });
 
     it('a run without a ticket', async () => {
@@ -392,7 +428,7 @@ describe('completion gate', () => {
       await begin(run);
       await stop(run);
       await settled(passes, 1);
-      expect((await eventTypes(run)).some((x) => x.startsWith('completion_'))).toBe(false);
+      expect((await eventTypes(run)).some(isGateNote)).toBe(false);
       expect(followups(run)).toEqual([]);
     });
 
@@ -404,9 +440,55 @@ describe('completion gate', () => {
       await begin(run);
       await stop(run);
       await settled(passes, 1);
-      expect((await eventTypes(run)).some((x) => x.startsWith('completion_'))).toBe(false);
+      expect((await eventTypes(run)).some(isGateNote)).toBe(false);
       expect(followups(run)).toEqual([]);
     });
+  });
+});
+
+describe('gate re-prompts and the completion tool', () => {
+  const AGAIN = 'When finished, call `ticket_complete` again.';
+  async function sloppyTicket() {
+    const made = await factoryTicket();
+    writeFileSync(path.join(made.run.worktreePath, 'slop.ts'), 'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n');
+    wgit(made.run.worktreePath, 'add', '-A');
+    wgit(made.run.worktreePath, 'commit', '-q', '-m', 'slop');
+    return made;
+  }
+
+  it('a Claude run is asked to call ticket_complete again after the clean-up', async () => {
+    const { run } = await sloppyTicket();
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'did A' });
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('slop_guard_blocked');
+    await expect.poll(() => followups(run).join('\n'), { timeout: 10_000 }).toContain(AGAIN);
+  });
+
+  it('a codex run (no such tool) gets the clean-up request without the tool', async () => {
+    const { run } = await sloppyTicket();
+    const passes = trackPipelines();
+    await begin(run);
+    t.db.update(runs).set({ agent: 'codex' }).where(eq(runs.id, run.id)).run();
+    await stop(run);
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('slop_guard_blocked');
+    await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
+    // The whole request has arrived once the follow-up file stops growing.
+    let last = -1;
+    await expect
+      .poll(
+        () => {
+          const now = followups(run).length;
+          const stable = now === last;
+          last = now;
+          return stable;
+        },
+        { timeout: 10_000, interval: 300 },
+      )
+      .toBe(true);
+    expect(followups(run).join('\n')).not.toContain('ticket_complete');
   });
 });
 

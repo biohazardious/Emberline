@@ -241,6 +241,7 @@ const EVENT_LABEL: Record<string, string> = {
   waiting_input_timeout: 'stopped: nobody answered',
   auto_nudged: 'nudged to continue',
   ticket_complete: 'Completed',
+  completion_tool_ready: 'Completion tool available',
   completion_nudged: 'Asked to confirm completion',
   completion_missing: 'Held: no completion signal',
   completion_blocked: 'Held: blocked',
