@@ -141,7 +141,9 @@ export class NotificationService {
       title: `Agent waiting on you: ${label}`,
       body:
         type === 'completion_blocked'
-          ? `Run "${label}" cannot finish its ticket and needs you:${blockers.map((b) => `\n- ${b}`).join('')}`
+          ? `Run "${label}" cannot finish its ticket and needs you:${
+              blockers.length > 0 ? blockers.map((b) => `\n- ${b}`).join('') : ' no details given.'
+            }`
           : `Run "${label}" stopped without confirming its ticket is finished; the ticket stays in Review until you answer it.`,
       priority: 'high',
       tags: ['hourglass_flowing_sand', 'emberline'],

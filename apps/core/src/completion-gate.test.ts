@@ -265,6 +265,37 @@ describe('completion gate', () => {
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(true);
   });
 
+  it('a hold that was later merged does not keep the run a factory run: a follow-up in a quiet project is not piped', async () => {
+    const { project, ticket, run } = await factoryTicket();
+    const passes = trackPipelines();
+    // The pipeline closes a finished CLI (which also makes it final); here it stays open, so a
+    // person can still continue the session after the ticket reached Done.
+    const runsSvc = t.runs as unknown as { stop(id: string, opts?: { reason?: string }): Promise<Run> };
+    const realStop = runsSvc.stop.bind(t.runs);
+    runsSvc.stop = async (id, opts) => (opts?.reason === 'factory_step_finished' ? t.runs.get(id) : realStop(id, opts));
+    await begin(run);
+    await stop(run);
+    await settled(passes, 1);
+    await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBe(1);
+    await nextTurn(run, { summary: 'confirmed' });
+    await settled(passes, 2);
+    expect(await statusOf(ticket.id)).toBe('done');
+    // Quiet project: the chain ended with the empty queue, no ready or [Factory] tickets.
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+
+    // A person continues the Done ticket's session later.
+    await t.tickets.prompt(ticket.id, 'one more tweak');
+    const before = await eventTypes(run);
+    await nextTurn(run);
+    await settled(passes, 3);
+    const after = await eventTypes(run);
+    const count = (types: string[], type: string) => types.filter((x) => x === type).length;
+    expect(count(after, 'merged_to_main')).toBe(count(before, 'merged_to_main'));
+    expect(count(after, 'completion_missing')).toBe(0);
+    expect(count(after, 'completion_nudged')).toBe(1);
+    expect(followups(run)).toEqual([NUDGE, 'one more tweak']);
+  });
+
   it('a run that cannot take a prompt any more is held at once instead of nudged', async () => {
     const { ticket, run } = await factoryTicket();
     const passes = trackPipelines();

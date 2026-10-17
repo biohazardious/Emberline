@@ -180,9 +180,11 @@ describe('NotificationService completion holds', () => {
       body: 'Run "DP-3 Build the APK" stopped without confirming its ticket is finished; the ticket stays in Review until you answer it.',
       priority: 'high',
     });
+    runs.emit('note', run, 'completion_blocked', { blockers: [] });
+    expect(sent[2]?.body).toBe('Run "DP-3 Build the APK" cannot finish its ticket and needs you: no details given.');
     onWaitingInput = false;
     runs.emit('note', run, 'completion_blocked', { blockers: ['x'] });
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
   });
 });
 

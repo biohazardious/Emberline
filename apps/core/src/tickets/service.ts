@@ -23,7 +23,7 @@ import {
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gt, inArray, max, min } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
@@ -820,15 +820,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       fSettings.autoPickupReady &&
       projectTickets.some((t) => t.title.startsWith('[Factory]') || t.status === 'ready');
 
-    // A run an earlier pass held stays a factory run: its next stop lifts the hold even when the
-    // chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
+    // A run an earlier pass left held stays a factory run: its next stop lifts the hold even when
+    // the chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
       Boolean(ingested) ||
       isFactoryOrchestratorTicket ||
       hasFactoryPipeline ||
-      this.wasHeld(run.id);
+      (ticketRow?.status !== 'done' && this.stillHeld(run.id));
     if (!isFactoryRun) return;
 
     // The gates, the merge and Done apply to every factory-looking run, but only the factory itself
@@ -1086,16 +1086,34 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return types.includes('merged_to_main') ? 'merged' : null;
   }
 
-  /** Whether a pipeline pass of this run ever held its ticket (a HOLD_EVENTS note). */
-  private wasHeld(runId: string): boolean {
-    return Boolean(
-      this.db
-        .select({ id: runEvents.id })
-        .from(runEvents)
-        .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, [...HOLD_EVENTS])))
-        .limit(1)
-        .get(),
-    );
+  /**
+   * Whether an earlier pipeline pass of this run left it held: of the pass outcomes recorded before
+   * the run's latest switch to `done` (the current pass's own notes come after it), the newest is a
+   * HOLD_EVENTS note, not a merge. A hold that was later merged does not count.
+   */
+  private stillHeld(runId: string): boolean {
+    const lastDone = this.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.state, 'done')))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get();
+    if (!lastDone) return false;
+    const newest = this.db
+      .select({ type: runEvents.type })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, runId),
+          lt(runEvents.id, lastDone.id),
+          inArray(runEvents.type, [...HOLD_EVENTS, 'merged_to_main']),
+        ),
+      )
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get();
+    return Boolean(newest && HOLD_EVENTS.includes(newest.type));
   }
 
   /** Whether the run already got its one automatic conflict-resolution attempt (survives a restart). */
