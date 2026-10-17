@@ -18,7 +18,16 @@ export function registerEventRoutes(
     const id = Symbol('events-socket');
     const send = (event: ServerEvent) => void sendBounded(socket, event, EVENTS_SEND_CAP);
     // Attention is computed once per emit (memoised on the payload), not once per connected socket.
-    const onRun = (run: Run) => send({ type: 'run', run: runs.attentionOf(run) });
+    // A failure there must not escape into RunService.record: the client gets the plain run.
+    const onRun = (run: Run) => {
+      let withAttention = run;
+      try {
+        withAttention = runs.attentionOf(run);
+      } catch (err) {
+        app.log.error({ err, runId: run.id }, 'events: computing run attention failed');
+      }
+      send({ type: 'run', run: withAttention });
+    };
     const onRunRemoved = (runId: string) => send({ type: 'run_removed', id: runId });
     const onTicket = (ticket: Ticket) => send({ type: 'ticket', ticket });
     const onTicketRemoved = (t: { id: string; projectId: string }) => send({ type: 'ticket_removed', ...t });

@@ -72,3 +72,33 @@ describe('presence over the events socket', () => {
     await expect.poll(() => t.presence.isWatched('r2')).toBe(false);
   });
 });
+
+describe('runs over the events socket', () => {
+  let t: TestApp;
+  let cookie: string;
+  beforeEach(async () => {
+    t = await createTestApp();
+    cookie = await setupAndLogin(t.app);
+  });
+  afterEach(async () => {
+    await t.close();
+  });
+
+  it('a failing attention computation neither escapes the emit nor drops the run update', async () => {
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const received: { type: string; run?: { id: string } }[] = [];
+    ws.on('message', (raw) => received.push(JSON.parse(String(raw))));
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    (t.runs as unknown as { attentionOf: () => never }).attentionOf = () => {
+      throw new Error('database is locked');
+    };
+    const run = { id: 'r-x', state: 'working' } as never;
+    expect(() => t.runs.emit('run', run, false)).not.toThrow();
+    await expect.poll(() => received.find((m) => m.type === 'run')?.run?.id).toBe('r-x');
+    ws.close();
+  });
+});
