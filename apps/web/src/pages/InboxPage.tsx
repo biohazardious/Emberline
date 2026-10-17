@@ -1,13 +1,26 @@
-import { type Project, type Run, type RunAttentionReason } from '@emberline/protocol';
+import { type Project, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
+import { useQueries } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
-import { ATTENTION_LABELS, dismissable, groupAttention, holdLabel, type SeenMap } from '../attention';
+import {
+  ATTENTION_LABELS,
+  dismissable,
+  groupAttention,
+  holdLabel,
+  inboxHeading,
+  type SeenMap,
+  type TicketName,
+} from '../attention';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
 import { useApi } from '../hooks/useApi';
 import { timeAgo, useNow } from '../time';
 import { toastInfo } from '../toast';
+
+/** Ticket key and title by id, from the projects' ticket lists (stable reference: re-run only on new data). */
+const ticketNames = (lists: { data?: Ticket[] }[]): Map<string, TicketName> =>
+  new Map(lists.flatMap((q) => (q.data ?? []).map((t) => [t.id, { key: t.key, title: t.title }] as const)));
 
 const REPLYABLE: ReadonlySet<RunAttentionReason> = new Set(['question', 'permission', 'held', 'blocked']);
 /** A long detail is clamped to this many lines until expanded (set in CSS as .inbox-detail-clamped). */
@@ -23,11 +36,13 @@ const REPLY_HINT: Partial<Record<RunAttentionReason, string>> = {
 function InboxItem({
   run,
   project,
+  heading,
   onOpen,
   onDismiss,
 }: {
   run: Run;
   project: Project | undefined;
+  heading: { key: string | null; title: string };
   onOpen: () => void;
   onDismiss: () => void;
 }) {
@@ -71,7 +86,9 @@ function InboxItem({
           {timeAgo(attention.since)}
         </span>
       </div>
-      <h3 className="inbox-title">{run.title ?? 'Ad-hoc run'}</h3>
+      <h3 className="inbox-title">
+        {heading.key && <span className="mono">{heading.key}</span>} {heading.title}
+      </h3>
       <div className="inbox-meta muted small">
         <span className="mono">{run.agent}</span>
         <PersonaBadge persona={run.persona} />
@@ -93,7 +110,7 @@ function InboxItem({
             rows={1}
             value={text}
             placeholder={REPLY_HINT[attention.reason]}
-            aria-label={`Reply to ${run.title ?? 'the agent'}`}
+            aria-label={`Reply to ${heading.key ?? heading.title}`}
             onChange={(e) => setText(e.target.value)}
             onFocus={() => setPresenceRun(run.id, 'inbox')}
             onBlur={() => clearPresenceRun(run.id, 'inbox')}
@@ -136,6 +153,19 @@ export function InboxPage({
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const groups = useMemo(() => groupAttention(runs ?? [], seen), [runs, seen]);
+  // Ticket key and current title: one tickets read per project that has a ticket run in the Inbox
+  // (the same cached request the Board makes).
+  const ticketProjects = useMemo(
+    () => [...new Set(groups.flatMap((g) => g.runs.filter((r) => r.ticketId).map((r) => r.projectId)))].sort(),
+    [groups],
+  );
+  const ticketsById = useQueries({
+    queries: ticketProjects.map((projectId) => {
+      const url = `/api/projects/${projectId}/tickets`;
+      return { queryKey: ['api', url], queryFn: () => api<Ticket[]>(url), refetchInterval: 15_000 };
+    }),
+    combine: ticketNames,
+  });
   const [permission, setPermission] = useState<NotificationPermission>(() =>
     notificationsSupported() ? Notification.permission : 'denied',
   );
@@ -175,6 +205,7 @@ export function InboxPage({
                   key={run.attention!.occurrence}
                   run={run}
                   project={projectById.get(run.projectId)}
+                  heading={inboxHeading(run, ticketsById)}
                   onOpen={() => onOpenRun(run.id)}
                   onDismiss={() => onDismiss(run)}
                 />

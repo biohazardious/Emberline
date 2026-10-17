@@ -6,6 +6,8 @@ import {
   fleetSection,
   groupAttention,
   holdLabel,
+  inboxHeading,
+  needsElsewhere,
   pendingAttention,
   pruneSeen,
 } from './attention';
@@ -155,5 +157,30 @@ describe('holdLabel', () => {
     expect(holdLabel('constructor')).toBe('constructor');
     expect(holdLabel('toString')).toBe('toString');
     expect(holdLabel('some agent text')).toBe('some agent text');
+  });
+});
+
+describe('inboxHeading', () => {
+  it('names the ticket by key and current title, else the run title', () => {
+    const ticketRun = run('a', { ticketId: 't1', title: 'EMB-4 Old name' });
+    expect(inboxHeading(ticketRun, new Map([['t1', { key: 'EMB-4', title: 'New name' }]]))).toEqual({ key: 'EMB-4', title: 'New name' });
+    // Tickets not loaded (yet): the run title, which starts with the key.
+    expect(inboxHeading(ticketRun, new Map())).toEqual({ key: null, title: 'EMB-4 Old name' });
+    expect(inboxHeading(run('b'), new Map())).toEqual({ key: null, title: 'Ad-hoc run' });
+  });
+});
+
+describe('needsElsewhere', () => {
+  it('counts pending attention outside the project in view, none when all projects are shown', () => {
+    const runs = [
+      run('a', { projectId: 'p1', attention: attn('question', 5, 'a') }),
+      run('b', { projectId: 'p2', attention: attn('held', 5, 'b') }),
+      run('c', { projectId: 'p2', attention: attn('failed', 5, 'c') }),
+      run('d', { projectId: 'p2' }),
+    ];
+    expect(needsElsewhere(runs, {}, 'p1')).toBe(2);
+    expect(needsElsewhere(runs, { 'c:failed:e1': NOW }, 'p1')).toBe(1);
+    expect(needsElsewhere(runs, {}, 'p2')).toBe(1);
+    expect(needsElsewhere(runs, {}, null)).toBe(0);
   });
 });
