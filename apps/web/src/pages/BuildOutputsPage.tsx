@@ -1,6 +1,6 @@
 import type { CollectBuildOutputsResponse, ProjectBuildOutput, ProjectBuildOutputsResponse } from '@emberline/protocol';
 import { Check, Copy, Download, Package, Pin, PinOff, RefreshCw, Search, Trash2, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import {
@@ -118,14 +118,11 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Poll faster while a collect pass runs.
-  const collectingRef = useRef(false);
-  const pollFast = collectingRef.current || starting;
   const { data, error: loadError, loading, refresh } = useApi<ProjectBuildOutputsResponse>(
     `/api/projects/${projectId}/build-outputs`,
-    pollFast ? 2_000 : 8_000,
+    (latest) => (starting || latest?.collecting ? 2_000 : 8_000),
   );
-  collectingRef.current = data?.collecting ?? false;
-  const collecting = collectingRef.current || starting;
+  const collecting = (data?.collecting ?? false) || starting;
 
   // The delete confirmation lapses on its own.
   useEffect(() => {
