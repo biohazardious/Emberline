@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-17
+
 ### Security
 
 - Downloading a run's build output now reads the file that was checked, through one open file handle that never follows a symbolic link. Before, an agent could swap the file for a link between the check and the download and have core send any file it can read, such as its own database. A run worktree that was replaced by a link is neither listed nor served. **Upgrade note:** this includes a `.worktrees` folder (or a single worktree) that you replaced with a symbolic link yourself, for example to keep worktrees on another disk: its build outputs are no longer listed, downloaded or archived. Mount the other disk at that path instead of linking it.
@@ -167,7 +169,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/biohazardious/emberline/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/biohazardious/emberline/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/biohazardious/emberline/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/biohazardious/emberline/compare/v0.1.2...v0.1.3
