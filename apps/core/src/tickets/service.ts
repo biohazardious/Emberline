@@ -106,6 +106,7 @@ export const toTicket = (
   depth: row.depth,
   dependsOn: deps.dependsOn,
   blockedBy: deps.blockedBy,
+  completion: row.completion ?? null,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

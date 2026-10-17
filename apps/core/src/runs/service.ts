@@ -52,6 +52,8 @@ import {
   type StartPreviewBody,
   StartPreviewBody as StartPreviewBodySchema,
   type ProjectUsageDay,
+  TicketCompleteBody,
+  type TicketCompletion,
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
@@ -145,6 +147,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
 export const PRUNE_PROTECTED_EVENT_TYPES = [
   'last_screen',
   'queued',
+  'ticket_complete',
   'auto_nudged',
   'session_lost',
   ...HOLD_EVENTS,
@@ -1248,6 +1251,47 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     void this.reconcile();
     return run;
+  }
+
+  /**
+   * The agent's `ticket_complete` call. Same credential as hooks. Recorded as a protected run event
+   * and, for a ticket run, as the ticket's completion (latest wins).
+   */
+  recordCompletion(runId: string, token: string | undefined, input: TicketCompleteBody): void {
+    const row = this.db.select().from(runs).where(eq(runs.id, runId)).get();
+    if (!row) throw new HttpError(404, 'not_found', 'run not found');
+    if (!token || !tokenMatches(token, row.hookTokenHash)) {
+      throw new HttpError(401, 'unauthorized', 'invalid hook token');
+    }
+    if (row.endedAt || row.cancelledAt) throw new HttpError(409, 'run_ended', 'the run has ended');
+    const body = TicketCompleteBody.parse(input);
+    this.note(runId, 'ticket_complete', { summary: body.summary, handoff: body.handoff, blockers: body.blockers });
+    if (row.ticketId) {
+      const completion: TicketCompletion = { runId, ...body, at: new Date().toISOString() };
+      this.db.update(tickets).set({ completion }).where(eq(tickets.id, row.ticketId)).run();
+    }
+  }
+
+  /**
+   * The run's completion signal of the current turn: the newest `ticket_complete` payload, only if
+   * it is newer than the run's latest `UserPromptSubmit` (a person's reply or an automatic prompt
+   * starts a new turn, which must signal again).
+   */
+  latestCompletion(runId: string): { summary: string; handoff: string; blockers: string[] } | null {
+    const newest = (type: string) =>
+      this.db
+        .select()
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), eq(runEvents.type, type)))
+        .orderBy(desc(runEvents.id))
+        .limit(1)
+        .get();
+    const signal = newest('ticket_complete');
+    if (!signal) return null;
+    const prompt = newest('UserPromptSubmit');
+    if (prompt && prompt.id > signal.id) return null;
+    const p = (signal.payload ?? {}) as { summary?: string; handoff?: string; blockers?: string[] };
+    return { summary: p.summary ?? '', handoff: p.handoff ?? '', blockers: p.blockers ?? [] };
   }
 
   /** Appends an informational system event (no state change) to a run's timeline. */

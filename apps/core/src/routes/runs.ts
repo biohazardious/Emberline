@@ -14,6 +14,7 @@ import {
   type RunDetail,
   type RunDiffSummary,
   type RunFileDiff,
+  type TicketCompleteBody,
   TicketPromptBody,
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
@@ -180,5 +181,13 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
     const run = runs.ingestHook(envelope, token);
     return { ok: true, state: run.state };
+  });
+
+  /** The agent's `ticket_complete` MCP tool; same per-run bearer token as the hooks. */
+  app.post<{ Params: { id: string } }>('/api/internal/runs/:id/complete', { bodyLimit: HOOK_BODY_LIMIT }, async (request) => {
+    const header = request.headers.authorization;
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+    runs.recordCompletion(request.params.id, token, request.body as TicketCompleteBody);
+    return { ok: true };
   });
 }

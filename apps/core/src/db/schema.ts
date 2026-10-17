@@ -1,4 +1,4 @@
-import type { Route } from '@emberline/protocol';
+import type { Route, TicketCompletion } from '@emberline/protocol';
 import { sql } from 'drizzle-orm';
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
@@ -50,6 +50,8 @@ export const tickets = sqliteTable(
     position: real('position').notNull(),
     /** Agent-ticket generation: 0 = created by a person, n + 1 = created by a run of a depth-n ticket. */
     depth: integer('depth').notNull().default(0),
+    /** Latest `ticket_complete` signal: { runId, summary, handoff, blockers, at }. */
+    completion: text('completion', { mode: 'json' }).$type<TicketCompletion>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },

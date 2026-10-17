@@ -12,6 +12,24 @@ export type TicketStatus = z.infer<typeof TicketStatus>;
 /** 0 = low ... 3 = urgent. */
 export const TicketPriority = z.number().int().min(0).max(3);
 
+/** Limits of the `ticket_complete` signal (the MCP tool truncates to them before sending). */
+export const TicketCompleteBody = z.object({
+  summary: z.string().trim().min(1).max(4000),
+  handoff: z.string().max(8000).default(''),
+  blockers: z.array(z.string().trim().min(1).max(500)).max(10).default([]),
+});
+export type TicketCompleteBody = z.input<typeof TicketCompleteBody>;
+
+/** The agent's latest completion signal for a ticket; non-empty `blockers` means "needs a person". */
+export const TicketCompletion = z.object({
+  runId: z.string(),
+  summary: z.string(),
+  handoff: z.string(),
+  blockers: z.array(z.string()),
+  at: z.string(),
+});
+export type TicketCompletion = z.infer<typeof TicketCompletion>;
+
 export const Ticket = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -32,6 +50,8 @@ export const Ticket = z.object({
   blockedBy: z
     .array(z.object({ id: z.string(), key: z.string(), title: z.string(), status: TicketStatus }))
     .default([]),
+  /** Latest `ticket_complete` signal of an agent run on this ticket. */
+  completion: TicketCompletion.nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

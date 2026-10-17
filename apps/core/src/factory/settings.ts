@@ -457,6 +457,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     maxAutoRunsPerProjectPerDay: raw.maxAutoRunsPerProjectPerDay ?? 40,
     maxParallelTicketsPerProject: raw.maxParallelTicketsPerProject ?? 2,
     buildOutputsQuotaGb: raw.buildOutputsQuotaGb ?? 5,
+    requireCompletionSignal: raw.requireCompletionSignal ?? true,
     mcpServers: mergedMcpServers,
     skillPlugins: mergedSkillPlugins,
     anthropicKeyConfigured,
@@ -529,6 +530,7 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     maxAutoRunsPerProjectPerDay: body.maxAutoRunsPerProjectPerDay ?? current.maxAutoRunsPerProjectPerDay,
     maxParallelTicketsPerProject: body.maxParallelTicketsPerProject ?? current.maxParallelTicketsPerProject,
     buildOutputsQuotaGb: body.buildOutputsQuotaGb ?? current.buildOutputsQuotaGb,
+    requireCompletionSignal: body.requireCompletionSignal ?? current.requireCompletionSignal,
     mcpServers: body.mcpServers ?? current.mcpServers,
     skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };

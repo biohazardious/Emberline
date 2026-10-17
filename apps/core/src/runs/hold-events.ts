@@ -10,4 +10,6 @@ export const HOLD_EVENTS: readonly string[] = [
   'critic_blocked',
   'build_gate_error',
   'build_gate_failed',
+  'completion_missing',
+  'completion_blocked',
 ];

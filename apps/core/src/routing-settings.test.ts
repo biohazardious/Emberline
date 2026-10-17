@@ -334,3 +334,18 @@ describe('Gemini auth reality', () => {
     });
   });
 });
+
+describe('requireCompletionSignal over HTTP', () => {
+  it('defaults to true and round-trips', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const patch = (value: unknown) =>
+      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', payload: { requireCompletionSignal: value }, headers: { ...CSRF, cookie } });
+    const read = async () =>
+      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: { ...CSRF, cookie } })).json().requireCompletionSignal;
+    expect(await read()).toBe(true);
+    expect((await patch(false)).json().requireCompletionSignal).toBe(false);
+    expect(await read()).toBe(false);
+    expect((await patch(true)).json().requireCompletionSignal).toBe(true);
+    expect((await patch('no')).statusCode).toBe(400);
+  });
+});

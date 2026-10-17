@@ -1308,3 +1308,99 @@ describe('build output archive', () => {
     expect(t.runs.outputs.list(project.id).outputs).toEqual([]);
   });
 });
+
+describe('ticket_complete endpoint', () => {
+  const complete = (runId: string, token: string | undefined, body: unknown) =>
+    t.app.inject({
+      method: 'POST',
+      url: `/api/internal/runs/${runId}/complete`,
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      payload: body as object,
+    });
+  const eventsOf = (runId: string, type: string) =>
+    t.db.select().from(runEvents).where(eq(runEvents.runId, runId)).all().filter((e) => e.type === type);
+
+  async function ticketRun(name = 'Complete') {
+    const project = await createProject(name, false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const ticket = t.tickets.create(project.id, { title: 'Do it', status: 'in_progress' });
+    t.db.update(runs).set({ ticketId: ticket.id }).where(eq(runs.id, run.id)).run();
+    const token = await tokenFor(run.id);
+    return { project, run, ticket, token };
+  }
+  const ticketOf = async (id: string) => (await api('GET', `/api/tickets/${id}`)).json();
+
+  it('rejects a missing, wrong or other run token with 401, unknown run with 404', async () => {
+    const a = await ticketRun('CompleteA');
+    const b = await ticketRun('CompleteB');
+    const body = { summary: 'done' };
+    expect((await complete(a.run.id, undefined, body)).statusCode).toBe(401);
+    expect((await complete(a.run.id, 'wrong', body)).statusCode).toBe(401);
+    expect((await complete(a.run.id, b.token, body)).statusCode).toBe(401);
+    expect((await complete('no-such-run', a.token, body)).statusCode).toBe(404);
+    expect(eventsOf(a.run.id, 'ticket_complete')).toHaveLength(0);
+  });
+
+  it('answers 409 for an ended run', async () => {
+    const { run, token } = await ticketRun('CompleteEnded');
+    t.db.update(runs).set({ endedAt: new Date() }).where(eq(runs.id, run.id)).run();
+    expect((await complete(run.id, token, { summary: 'late' })).statusCode).toBe(409);
+  });
+
+  it('rejects payloads over the limits or without a summary with 400', async () => {
+    const { run, token } = await ticketRun('CompleteLimits');
+    const bad = [
+      {},
+      { summary: '' },
+      { summary: 'x'.repeat(4001) },
+      { summary: 's', handoff: 'x'.repeat(8001) },
+      { summary: 's', blockers: Array.from({ length: 11 }, () => 'b') },
+      { summary: 's', blockers: ['x'.repeat(501)] },
+    ];
+    for (const body of bad) expect((await complete(run.id, token, body)).statusCode).toBe(400);
+    const edge = { summary: 'x'.repeat(4000), handoff: 'y'.repeat(8000), blockers: Array.from({ length: 10 }, () => 'z'.repeat(500)) };
+    expect((await complete(run.id, token, edge)).statusCode).toBe(200);
+  });
+
+  it('stores the event and ticket.completion; the latest call wins', async () => {
+    const { run, ticket, token } = await ticketRun('CompleteStore');
+    expect((await complete(run.id, token, { summary: 'first' })).statusCode).toBe(200);
+    expect((await complete(run.id, token, { summary: 'second', handoff: 'h', blockers: ['b1'] })).statusCode).toBe(200);
+    const events = eventsOf(run.id, 'ticket_complete');
+    expect(events).toHaveLength(2);
+    expect(events[1]?.payload).toMatchObject({ summary: 'second', handoff: 'h', blockers: ['b1'] });
+    const got = await ticketOf(ticket.id);
+    expect(got.completion).toMatchObject({ runId: run.id, summary: 'second', handoff: 'h', blockers: ['b1'] });
+    expect(typeof got.completion.at).toBe('string');
+  });
+
+  it('a run without a ticket still records the event', async () => {
+    const project = await createProject('CompleteNoTicket', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    expect((await complete(run.id, token, { summary: 'x' })).statusCode).toBe(200);
+    expect(eventsOf(run.id, 'ticket_complete')).toHaveLength(1);
+  });
+
+  it('latestCompletion is only valid for the turn: a later UserPromptSubmit invalidates it', async () => {
+    const { run, token } = await ticketRun('CompleteTurn');
+    expect(t.runs.latestCompletion(run.id)).toBeNull();
+    await complete(run.id, token, { summary: 'turn one' });
+    expect(t.runs.latestCompletion(run.id)).toMatchObject({ summary: 'turn one', blockers: [] });
+    await hook(run.id, 'UserPromptSubmit', token);
+    expect(t.runs.latestCompletion(run.id)).toBeNull();
+    await complete(run.id, token, { summary: 'turn two' });
+    expect(t.runs.latestCompletion(run.id)).toMatchObject({ summary: 'turn two' });
+  });
+
+  it('event pruning keeps ticket_complete', async () => {
+    const { run, token } = await ticketRun('CompletePrune');
+    await complete(run.id, token, { summary: 'keep me' });
+    t.db
+      .insert(runEvents)
+      .values(Array.from({ length: 5100 }, () => ({ runId: run.id, ts: new Date(), source: 'hook', type: 'PreToolUse' })))
+      .run();
+    t.runs.pruneRunEvents();
+    expect(eventsOf(run.id, 'ticket_complete')).toHaveLength(1);
+  });
+});
