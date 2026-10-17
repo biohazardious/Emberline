@@ -2,7 +2,7 @@
 export interface FinishedDependency {
   key: string;
   title: string;
-  completion: { summary: string; handoff: string; at: string };
+  completion: { summary: string; handoff: string; blockers?: string[]; at: string };
 }
 
 /** Longest block one dependency may take in the section (heading included). */
@@ -17,7 +17,8 @@ const ELLIPSIS = '…';
 const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}${ELLIPSIS}`);
 
 /**
- * The prompt section handing the finished dependencies' summary and handoff to a dependent ticket,
+ * The prompt section handing the finished dependencies' summary, handoff and any blockers they
+ * reported to a dependent ticket,
  * oldest completion first. Each dependency is capped at {@link DEPENDENCY_BLOCK_MAX}; when the
  * section would exceed `max` (default {@link DEPENDENCY_SECTION_MAX}) the oldest dependencies are
  * shortened first, down to their heading. Empty when there is nothing to hand over or not even the
@@ -31,6 +32,8 @@ export function dependencyContextSection(deps: FinishedDependency[], max = DEPEN
     const lines = [headings[i] as string, `Summary: ${dep.completion.summary.trim()}`];
     const handoff = dep.completion.handoff.trim();
     if (handoff) lines.push(`Handoff: ${handoff}`);
+    const blockers = (dep.completion.blockers ?? []).map((b) => b.trim()).filter(Boolean);
+    if (blockers.length > 0) lines.push(`Blockers: ${blockers.join('; ')}`);
     return clip(lines.join('\n'), DEPENDENCY_BLOCK_MAX);
   });
   const total = () => HEADING.length + blocks.reduce((sum, block) => sum + SEPARATOR.length + block.length, 0);

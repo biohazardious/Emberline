@@ -534,6 +534,21 @@ describe('dependency context in the dependent prompt', () => {
     expect(prompt).not.toContain('made the schema');
   });
 
+  it('passes a dependency\'s blockers on to the dependent prompt', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'Schema', status: 'done' });
+    const d = await createTicket(project.id, { title: 'Screen', status: 'backlog' });
+    await api('PATCH', `/api/tickets/${d.id}`, { dependsOn: [a.id] });
+    t.db
+      .update(tickets)
+      .set({ completion: { runId: 'r', summary: 'partial', handoff: '', blockers: ['no API key', 'pick a DB'], at: '2026-10-17T10:00:00.000Z' } })
+      .where(eq(tickets.id, a.id))
+      .run();
+    const { run } = (await api('POST', `/api/tickets/${d.id}/start`, {})).json() as { run: Run };
+    await waitFile(`token-${run.id}`);
+    expect(t.runs.get(run.id).prompt).toContain(`### ${a.key}: Schema\nSummary: partial\nBlockers: no API key; pick a DB`);
+  });
+
   it('adds nothing when no dependency has a completion', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'Schema', status: 'done' });
@@ -579,6 +594,36 @@ describe('dependencyContextSection', () => {
     expect(section).toBe(
       '## Context from finished dependencies\n\n### A: Title A\nSummary: a sum\n\n### B: Title B\nSummary: b sum\nHandoff: b hand',
     );
+  });
+
+  it('adds the blockers of a dependency as one line under its block', () => {
+    const blocked: FinishedDependency = {
+      key: 'A',
+      title: 'Title A',
+      completion: { summary: 'half', handoff: 'see a.ts', blockers: ['no signing key', ' needs a decision '], at: '2026-10-17T10:00:00.000Z' },
+    };
+    const clean: FinishedDependency = {
+      key: 'B',
+      title: 'Title B',
+      completion: { summary: 'b sum', handoff: '', blockers: [], at: '2026-10-17T11:00:00.000Z' },
+    };
+    expect(dependencyContextSection([blocked, clean])).toBe(
+      '## Context from finished dependencies\n\n### A: Title A\nSummary: half\nHandoff: see a.ts\nBlockers: no signing key; needs a decision\n\n### B: Title B\nSummary: b sum',
+    );
+  });
+
+  it('keeps a dependency with long blockers within its cap', () => {
+    const section = dependencyContextSection([
+      {
+        key: 'A',
+        title: 'Title A',
+        completion: { summary: 's', handoff: 'h', blockers: Array.from({ length: 10 }, () => 'b'.repeat(500)), at: '2026-10-17T10:00:00.000Z' },
+      },
+    ]);
+    const block = section.split('\n\n').slice(1).join('\n\n');
+    expect(block.length).toBe(DEPENDENCY_BLOCK_MAX);
+    expect(block).toContain('\nBlockers: bbb');
+    expect(block.endsWith('…')).toBe(true);
   });
 
   it('caps each dependency at 3000 chars with an ellipsis', () => {
