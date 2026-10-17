@@ -42,6 +42,14 @@ export const projects = sqliteTable('projects', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+/** Per-project settings as one JSON document (issue sync today; the wizard's gates later). */
+export const projectSettings = sqliteTable('project_settings', {
+  projectId: text('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+});
+
 /** Board tickets (PROJECT.md §5.4). The column mirrors the latest run while one is active. */
 export const tickets = sqliteTable(
   'tickets',
@@ -63,10 +71,22 @@ export const tickets = sqliteTable(
     depth: integer('depth').notNull().default(0),
     /** Latest `ticket_complete` signal: { runId, summary, handoff, blockers, at }. */
     completion: text('completion', { mode: 'json' }).$type<TicketCompletion>(),
+    /** Issue link (null for tickets created on the board): provider, the provider's stable id, visible number. */
+    externalSource: text('external_source', { enum: ['github', 'gitlab', 'gitea'] }),
+    externalId: text('external_id'),
+    externalNumber: integer('external_number'),
+    externalUrl: text('external_url'),
+    externalState: text('external_state', { enum: ['open', 'closed'] }),
+    externalLabels: text('external_labels', { mode: 'json' }).$type<string[]>(),
+    externalSyncedAt: integer('external_synced_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
-  (t) => [uniqueIndex('tickets_project_number_idx').on(t.projectId, t.number)],
+  (t) => [
+    uniqueIndex('tickets_project_number_idx').on(t.projectId, t.number),
+    // One ticket per issue: the guard that makes imports idempotent, also under concurrent imports.
+    uniqueIndex('tickets_external_idx').on(t.projectId, t.externalSource, t.externalId),
+  ],
 );
 
 /** One agent session working on a project, optionally for a ticket. */

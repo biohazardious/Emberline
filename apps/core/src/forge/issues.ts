@@ -10,20 +10,42 @@ export const FORGE_FETCH_TIMEOUT_MS = 15_000;
 export const ISSUES_PAGE_SIZE = 50;
 /** Below this many remaining requests the caller should stop syncing until the reset time. */
 export const RATE_LIMIT_LOW_WATER = 50;
-/** `findByExternalIds` never walks more than this many list pages. */
-const FIND_MAX_PAGES = 4;
 
 const PROVIDER_NAMES: Record<ForgeProvider, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
 export const TOKEN_SCOPE_HINT = 'the forge token needs issue read/write access';
 
-/** fetch with the shared 15 s timeout; a timeout becomes a 504. */
+function isAbort(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
+function timeoutError(): HttpError {
+  return new HttpError(504, 'forge_timeout', `the forge did not answer within ${FORGE_FETCH_TIMEOUT_MS / 1000} seconds`);
+}
+
+/**
+ * fetch with the shared 15 s timeout; a timeout becomes a 504. Redirects are not followed (a
+ * GitLab PRIVATE-TOKEN header would survive a cross-origin redirect), a 3xx becomes a 502.
+ */
 export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestInit = {}): Promise<Response> {
+  let res: Response;
   try {
-    return await fetchFn(url, { ...init, signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS) });
+    res = await fetchFn(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS) });
   } catch (err) {
-    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new HttpError(504, 'forge_timeout', `the forge did not answer within ${FORGE_FETCH_TIMEOUT_MS / 1000} seconds`);
-    }
+    if (isAbort(err)) throw timeoutError();
+    throw err;
+  }
+  if (res.status >= 300 && res.status < 400 && res.status !== 304) {
+    throw new HttpError(502, 'forge_error', 'forge API redirected; set the API URL');
+  }
+  return res;
+}
+
+/** Reads a JSON body; the request's timeout also covers the body, so an abort here is a 504 too. */
+export async function readJson<T = unknown>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    if (isAbort(err)) throw timeoutError();
     throw err;
   }
 }
@@ -228,7 +250,7 @@ export class IssuesClient {
     if (res.status === 304) {
       return { items: [], nextPage: null, notModified: true, etag: query.etag ?? null, rateLimit };
     }
-    const data = (await res.json()) as unknown;
+    const data = await readJson(res);
     const rows = (Array.isArray(data) ? data : ((data as { items?: unknown }).items ?? [])) as Raw[];
     const items: ForgeIssue[] = [];
     for (const row of rows) {
@@ -251,26 +273,10 @@ export class IssuesClient {
       headers: authHeaders(remote.provider, target.token),
       notFoundIsMissing: true,
     });
-    const raw = (await res.json()) as Raw;
+    const raw = await readJson<Raw>(res);
     const issue = remote.provider === 'gitlab' ? normaliseGitlab(raw) : normaliseGithubLike(raw);
     if (!issue) throw notFound(`#${number} is a pull request, not an issue`);
     return issue;
-  }
-
-  /**
-   * Providers cannot fetch an issue by its global id, so this walks the newest list pages (bounded) and
-   * returns the ones found. Ids that are not found are omitted.
-   */
-  async findByExternalIds(target: ForgeTarget, externalIds: string[]): Promise<ForgeIssue[]> {
-    const wanted = new Set(externalIds);
-    const found: ForgeIssue[] = [];
-    let page: number | null = 1;
-    for (let i = 0; i < FIND_MAX_PAGES && page !== null && found.length < wanted.size; i++) {
-      const res: IssueListResult = await this.list(target, { state: 'all', page });
-      for (const issue of res.items) if (wanted.has(issue.externalId)) found.push(issue);
-      page = res.nextPage;
-    }
-    return found.sort((a, b) => a.number - b.number);
   }
 
   async comment(target: ForgeTarget, number: number, text: string): Promise<void> {

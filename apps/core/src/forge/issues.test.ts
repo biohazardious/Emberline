@@ -198,18 +198,6 @@ describe('IssuesClient GitHub', () => {
     const err = await new IssuesClient({ fetch: fn }).get(target(gh), 6).catch((e) => e);
     expect(err.statusCode).toBe(404);
   });
-
-  it('resolves external ids by scanning list pages, bounded', async () => {
-    const { fn, calls } = fakeFetch((c) => {
-      const page = Number(new URL(c.url).searchParams.get('page'));
-      return json(page === 1 ? [ghIssue(1), ghIssue(2)] : [ghIssue(3)], {
-        headers: page === 1 ? { link: '<u?page=2>; rel="next"' } : {},
-      });
-    });
-    const found = await new IssuesClient({ fetch: fn }).findByExternalIds(target(gh), ['9003', '9001', '1']);
-    expect(found.map((i) => i.number)).toEqual([1, 3]);
-    expect(calls).toHaveLength(2);
-  });
 });
 
 describe('IssuesClient GitLab', () => {
@@ -354,6 +342,23 @@ describe('ForgeService.projectRemote', () => {
     // origin host differs from projects.repoUrl (null), so it is not trusted.
     await expect(forge.projectRemote('p5')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/not trusted/i) });
   });
+
+  it('409 when origin points at another repository than projects.repoUrl', async () => {
+    addProject('p6', 'https://github.com/acme/widget.git', 'git@github.com:acme/other.git');
+    const forge = new ForgeService(t.db, t.runs);
+    configure(forge, 'secret');
+    await expect(forge.projectRemote('p6')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'origin points at a different repository than the project',
+    });
+  });
+
+  it('accepts origin matching repoUrl across URL styles and case', async () => {
+    addProject('p7', 'https://github.com/Acme/Widget', 'git@github.com:acme/widget.git');
+    const forge = new ForgeService(t.db, t.runs);
+    configure(forge, 'secret');
+    expect((await forge.projectRemote('p7')).remote.repoPath).toBe('acme/widget');
+  });
 });
 
 describe('ForgeService fetch plumbing', () => {
@@ -371,6 +376,75 @@ describe('ForgeService fetch plumbing', () => {
       }).fetchGithubCiStatus(gh, 'tok', 'abc');
       expect(res).toBe('success');
       expect(calls[0]!.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe('forge fetch hardening', () => {
+  it('does not follow redirects and maps a 3xx to a 502 naming the API URL', async () => {
+    const { fn } = fakeFetch(
+      () => new Response(null, { status: 302, headers: { location: 'https://evil.example.org/x' } }),
+    );
+    await expect(new IssuesClient({ fetch: fn }).list(target(gl), {})).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'forge_error',
+      message: expect.stringMatching(/redirected; set the API URL/),
+    });
+  });
+
+  it('asks fetch for redirect: manual', async () => {
+    let seen: RequestInit | undefined;
+    const fn = (async (_url: string, init?: RequestInit) => {
+      seen = init;
+      return json([]);
+    }) as unknown as typeof fetch;
+    await new IssuesClient({ fetch: fn }).list(target(gh), {});
+    expect(seen?.redirect).toBe('manual');
+  });
+
+  it('a 304 is not a redirect', async () => {
+    const { fn } = fakeFetch(() => new Response(null, { status: 304 }));
+    const res = await new IssuesClient({ fetch: fn }).list(target(gh), { etag: 'W/"a"' });
+    expect(res.notModified).toBe(true);
+  });
+
+  it('a timeout while reading the body is a 504 like the request itself', async () => {
+    const { fn } = fakeFetch(
+      () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => {
+            throw new DOMException('timed out', 'TimeoutError');
+          },
+        }) as unknown as Response,
+    );
+    await expect(new IssuesClient({ fetch: fn }).list(target(gh), {})).rejects.toMatchObject({
+      statusCode: 504,
+      code: 'forge_timeout',
+    });
+    await expect(new IssuesClient({ fetch: fn }).get(target(gh), 1)).rejects.toMatchObject({ statusCode: 504 });
+  });
+
+  it('PR calls in the service map a body timeout to 504 too', async () => {
+    const t = await createTestApp();
+    try {
+      const fn = (async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => {
+            throw new DOMException('timed out', 'AbortError');
+          },
+        }) as unknown as Response) as typeof fetch;
+      const forge = new ForgeService(t.db, t.runs, { fetch: fn });
+      await expect(
+        (forge as unknown as { fetchGithubCiStatus(r: ParsedForgeRemote, tok: string, sha: string): Promise<string> }).fetchGithubCiStatus(gh, 'tok', 'abc'),
+      ).rejects.toMatchObject({ statusCode: 504 });
     } finally {
       await t.close();
     }

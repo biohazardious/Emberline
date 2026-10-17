@@ -17,7 +17,7 @@ import { projects, runEvents, runs, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
-import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient } from './issues.js';
+import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
 
 const SETTINGS_KEY = 'forge.config';
 
@@ -274,6 +274,14 @@ export class ForgeService {
     const remote = parseForgeRemote(remoteUrl, stored.provider, stored.apiUrl, project.defaultBranch);
     if (!remote) throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
     assertTrustedForgeApi(remote, { apiUrl: stored.apiUrl, projectRepoUrl: project.repoUrl });
+    // The agent can rewrite origin: it must still name the repository the project was set up with.
+    const declared = project.repoUrl ? parseForgeRemote(project.repoUrl) : null;
+    if (declared) {
+      const bare = (host: string) => host.toLowerCase().replace(/:\d+$/, '');
+      if (bare(declared.host) !== bare(remote.host) || declared.repoPath.toLowerCase() !== remote.repoPath.toLowerCase()) {
+        throw conflict('origin points at a different repository than the project');
+      }
+    }
     return { remote, token: stored.token };
   }
 
@@ -441,7 +449,7 @@ export class ForgeService {
         const text = await res.text().catch(() => '');
         throw new HttpError(res.status, 'forge_error', `GitHub PR creation failed (${res.status}): ${text.slice(0, 300)}`);
       }
-      const data = (await res.json()) as {
+      const data = await readJson<{
         number: number;
         title?: string;
         html_url?: string;
@@ -449,7 +457,7 @@ export class ForgeService {
         merged?: boolean;
         draft?: boolean;
         head?: { sha?: string };
-      };
+      }>(res);
       const ciStatus = data.head?.sha
         ? await this.fetchGithubCiStatus(remote, token, data.head.sha).catch((): ForgeCiStatus => 'unknown')
         : 'unknown';
@@ -487,14 +495,14 @@ export class ForgeService {
         const text = await res.text().catch(() => '');
         throw new HttpError(res.status, 'forge_error', `GitLab MR creation failed (${res.status}): ${text.slice(0, 300)}`);
       }
-      const data = (await res.json()) as {
+      const data = await readJson<{
         iid: number;
         title?: string;
         web_url?: string;
         state?: string;
         draft?: boolean;
         head_pipeline?: { status?: string } | null;
-      };
+      }>(res);
       return {
         provider: 'gitlab',
         number: data.iid,
@@ -527,14 +535,14 @@ export class ForgeService {
       const text = await res.text().catch(() => '');
       throw new HttpError(res.status, 'forge_error', `Gitea PR creation failed (${res.status}): ${text.slice(0, 300)}`);
     }
-    const data = (await res.json()) as {
+    const data = await readJson<{
       number: number;
       title?: string;
       html_url?: string;
       state?: string;
       merged?: boolean;
       draft?: boolean;
-    };
+    }>(res);
     return {
       provider: 'gitea',
       number: data.number,
@@ -562,14 +570,14 @@ export class ForgeService {
         },
       });
       if (!res.ok) return pr;
-      const data = (await res.json()) as {
+      const data = await readJson<{
         title?: string;
         html_url?: string;
         state?: string;
         merged?: boolean;
         draft?: boolean;
         head?: { sha?: string };
-      };
+      }>(res);
       const ciStatus = data.head?.sha
         ? await this.fetchGithubCiStatus(remote, token, data.head.sha).catch((): ForgeCiStatus => pr.ciStatus)
         : pr.ciStatus;
@@ -589,13 +597,13 @@ export class ForgeService {
         headers: { 'PRIVATE-TOKEN': token, 'User-Agent': 'Emberline-Core' },
       });
       if (!res.ok) return pr;
-      const data = (await res.json()) as {
+      const data = await readJson<{
         title?: string;
         web_url?: string;
         state?: string;
         draft?: boolean;
         head_pipeline?: { status?: string } | null;
-      };
+      }>(res);
       return {
         ...pr,
         title: data.title ?? pr.title,
@@ -618,7 +626,7 @@ export class ForgeService {
       },
     });
     if (!res.ok) return 'unknown';
-    const data = (await res.json()) as { state?: string };
+    const data = await readJson<{ state?: string }>(res);
     if (data.state === 'success') return 'success';
     if (data.state === 'failure' || data.state === 'error') return 'failure';
     if (data.state === 'pending') return 'pending';

@@ -17,6 +17,7 @@ import type { PtydBridge } from './ptyd-bridge.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerForgeRoutes } from './routes/forge.js';
+import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerReviewRoutes } from './routes/review.js';
@@ -30,6 +31,7 @@ import { ReviewService } from './review/service.js';
 import type { RunService } from './runs/service.js';
 import type { Scheduler } from './scheduler/service.js';
 import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.js';
+import { IssueImportService } from './tickets/issue-import.js';
 import type { TicketService } from './tickets/service.js';
 import { UpdateService } from './updates/service.js';
 
@@ -44,6 +46,8 @@ export interface CoreDeps {
   scheduler: Scheduler;
   /** Which clients are looking at which run; a fresh registry when omitted. */
   presence?: PresenceRegistry;
+  /** The forge service; built from `db` and `runs` when omitted. */
+  forge?: ForgeService;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -57,7 +61,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const startedAt = Date.now();
   const presence = deps.presence ?? new PresenceRegistry();
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, { presence, log: (message, err) => app.log.error({ err }, message) });
-  const forge = new ForgeService(deps.db, deps.runs);
+  const forge = deps.forge ?? new ForgeService(deps.db, deps.runs);
   const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);
   const updates = new UpdateService(deps.db, { version: VERSION });
   cron.start();
@@ -98,6 +102,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
+  registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge));
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);
   registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler, presence);

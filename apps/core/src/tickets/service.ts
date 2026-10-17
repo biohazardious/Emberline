@@ -15,6 +15,8 @@ import {
   FactoryRequestBody as FactoryRequestBodySchema,
   type FactoryRequestResponse,
   type FactorySettings,
+  type ForgeIssue,
+  type ForgeProvider,
   type Run,
   type StartTicketBody,
   StartTicketBody as StartTicketBodySchema,
@@ -39,6 +41,7 @@ import {
   runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
+import { mapIssueToTicket } from './issue-mapping.js';
 import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -86,6 +89,23 @@ export interface TicketServiceOptions {
   pipelineSettleMs: number;
 }
 
+/** A forge issue a ticket is created from. */
+export interface IssueLink {
+  source: ForgeProvider;
+  externalId: string;
+  number: number;
+  url: string;
+  state: 'open' | 'closed';
+  labels: string[];
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  for (let e: unknown = err, i = 0; e && i < 4; i++, e = (e as { cause?: unknown }).cause) {
+    if ((e as { code?: unknown }).code === 'SQLITE_CONSTRAINT_UNIQUE') return true;
+  }
+  return false;
+}
+
 /** See {@link TicketService.dispatchNextReadyTicket}. */
 interface DispatchOptions {
   only?: ReadonlySet<string>;
@@ -109,6 +129,16 @@ export const toTicket = (
   dependsOn: deps.dependsOn,
   blockedBy: deps.blockedBy,
   completion: row.completion ?? null,
+  external:
+    row.externalSource && row.externalNumber !== null && row.externalUrl !== null
+      ? {
+          source: row.externalSource,
+          number: row.externalNumber,
+          url: row.externalUrl,
+          state: row.externalState ?? 'open',
+          labels: row.externalLabels ?? [],
+        }
+      : null,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -1274,8 +1304,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return row ? this.withDependencies([row])[0] : undefined;
   }
 
-  /** `depth` is set by the factory for agent-created tickets; people always create depth 0. */
-  create(projectId: string, input: CreateTicketBody, depth = 0): Ticket {
+  /**
+   * `depth` is set by the factory for agent-created tickets; people always create depth 0.
+   * `external` links the ticket to a forge issue in the same insert; the unique index on
+   * (project, source, id) throws if that issue already has a ticket.
+   */
+  create(projectId: string, input: CreateTicketBody, depth = 0, external?: IssueLink): Ticket {
     const project = this.project(projectId);
     const body = CreateTicketBodySchema.parse(input);
     const now = new Date();
@@ -1307,6 +1341,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           persona: body.persona,
           position: this.edgePosition(projectId, body.status, 'bottom'),
           depth,
+          ...(external
+            ? {
+                externalSource: external.source,
+                externalId: external.externalId,
+                externalNumber: external.number,
+                externalUrl: external.url,
+                externalState: external.state,
+                externalLabels: external.labels,
+                externalSyncedAt: now,
+              }
+            : {}),
           createdAt: now,
           updatedAt: now,
         })
@@ -1314,6 +1359,59 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         .get();
     });
     return this.publish(row);
+  }
+
+  /** The tickets already linked to these issues of the provider, by the issue's external id. */
+  linkedTickets(projectId: string, source: ForgeProvider, externalIds: string[]): Map<string, Ticket> {
+    const out = new Map<string, Ticket>();
+    if (externalIds.length === 0) return out;
+    const rows = this.db
+      .select()
+      .from(tickets)
+      .where(and(eq(tickets.projectId, projectId), eq(tickets.externalSource, source), inArray(tickets.externalId, externalIds)))
+      .all();
+    for (const [i, ticket] of this.withDependencies(rows).entries()) out.set(rows[i]!.externalId as string, ticket);
+    return out;
+  }
+
+  /**
+   * One ticket per issue. An issue that already has a ticket (also one created a moment ago by a
+   * concurrent import) yields that ticket in `existing`; a second one is never created: the unique
+   * index is the guard, the lookup before the insert only saves a failed insert.
+   */
+  importIssues(
+    projectId: string,
+    source: ForgeProvider,
+    issues: ForgeIssue[],
+    status: 'backlog' | 'ready',
+  ): { created: Ticket[]; existing: Ticket[] } {
+    const created: Ticket[] = [];
+    const existing: Ticket[] = [];
+    for (const issue of issues) {
+      const link = (): Ticket | undefined => this.linkedTickets(projectId, source, [issue.externalId]).get(issue.externalId);
+      const already = link();
+      if (already) {
+        existing.push(already);
+        continue;
+      }
+      try {
+        created.push(
+          this.create(projectId, mapIssueToTicket(issue, status), 0, {
+            source,
+            externalId: issue.externalId,
+            number: issue.number,
+            url: issue.url,
+            state: issue.state,
+            labels: issue.labels,
+          }),
+        );
+      } catch (err) {
+        const winner = isUniqueViolation(err) ? link() : undefined;
+        if (!winner) throw err;
+        existing.push(winner);
+      }
+    }
+    return { created, existing };
   }
 
   update(id: string, input: UpdateTicketBody): Ticket {

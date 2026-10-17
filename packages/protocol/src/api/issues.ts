@@ -42,7 +42,8 @@ export const ForgeIssueListResponse = z.object({
 export type ForgeIssueListResponse = z.infer<typeof ForgeIssueListResponse>;
 
 export const ImportIssuesBody = z.object({
-  externalIds: z.array(z.string().min(1).max(100)).min(1).max(50),
+  /** The selected issues: the provider id plus the visible number core re-fetches them by. */
+  issues: z.array(z.object({ externalId: z.string().min(1).max(100), number: z.number().int().min(1) })).min(1).max(50),
   status: z.enum(['backlog', 'ready']).default('backlog'),
 });
 export type ImportIssuesBody = z.input<typeof ImportIssuesBody>;
@@ -50,6 +51,8 @@ export type ImportIssuesBody = z.input<typeof ImportIssuesBody>;
 export const ImportIssuesResponse = z.object({
   created: z.array(Ticket),
   existing: z.array(Ticket),
+  /** Selected issues core did not import, e.g. gone from the forge or not matching the id. */
+  skipped: z.array(z.object({ externalId: z.string(), reason: z.string() })),
 });
 export type ImportIssuesResponse = z.infer<typeof ImportIssuesResponse>;
 
@@ -68,3 +71,13 @@ export const IssueSyncSettings = z
     }
   });
 export type IssueSyncSettings = z.infer<typeof IssueSyncSettings>;
+
+/** PATCH body: any subset of the settings; the merged result must be valid. */
+export const UpdateIssueSyncBody = z.object({
+  enabled: z.boolean(),
+  label: z.string().trim().max(100),
+  status: z.enum(['backlog', 'ready']),
+  closeOnDone: z.boolean(),
+  commentOnProgress: z.boolean(),
+}).partial();
+export type UpdateIssueSyncBody = z.input<typeof UpdateIssueSyncBody>;

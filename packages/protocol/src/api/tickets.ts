@@ -1,5 +1,6 @@
 /** API contracts: tickets / board. */
 import { z } from 'zod';
+import { ForgeProvider } from './forge.js';
 import { AgentPersona, PermissionMode } from './projects.js';
 
 /**
@@ -30,6 +31,17 @@ export const TicketCompletion = z.object({
 });
 export type TicketCompletion = z.infer<typeof TicketCompletion>;
 
+/** The forge issue a ticket was imported from. */
+export const TicketExternal = z.object({
+  source: ForgeProvider,
+  /** The visible issue number (`#123`; GitLab iid). */
+  number: z.number().int(),
+  url: z.string(),
+  state: z.enum(['open', 'closed']),
+  labels: z.array(z.string()),
+});
+export type TicketExternal = z.infer<typeof TicketExternal>;
+
 export const Ticket = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -52,6 +64,8 @@ export const Ticket = z.object({
     .default([]),
   /** Latest `ticket_complete` signal of an agent run on this ticket. */
   completion: TicketCompletion.nullable().default(null),
+  /** The issue this ticket was imported from, if any. */
+  external: TicketExternal.nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

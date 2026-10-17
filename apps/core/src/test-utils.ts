@@ -5,6 +5,8 @@ import { CSRF_HEADER } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { CoreConfig } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
+import type { FetchLike } from './forge/issues.js';
+import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
@@ -22,6 +24,9 @@ export interface TestApp {
   tickets: TicketService;
   scheduler: Scheduler;
   presence: PresenceRegistry;
+  forge: ForgeService;
+  /** The forge's fetch: tests assign `current` to fake the provider (the default is the global fetch). */
+  forgeFetch: { current: FetchLike };
   close(): Promise<void>;
 }
 
@@ -65,7 +70,9 @@ export async function createTestApp(
   // Pipelines run right after a Stop unless a test asks for the settle window.
   const tickets = new TicketService(opened.db, runs, scheduler, { pipelineSettleMs: 0, ...ticketOptions });
   const presence = new PresenceRegistry();
-  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence });
+  const forgeFetch: { current: FetchLike } = { current: (url, init) => globalThis.fetch(url, init) };
+  const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
+  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge });
   return {
     app,
     config,
@@ -76,6 +83,8 @@ export async function createTestApp(
     tickets,
     scheduler,
     presence,
+    forge,
+    forgeFetch,
     async close() {
       await app.close();
       // Background archive passes must not outlive the DB and temp dir they use.
