@@ -1,8 +1,8 @@
 import { HOLD_LABELS, type Run } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { runEvents, runs } from './db/schema.js';
-import { attentionBoundsQuery, computeAttention, FAILURE_WINDOW_MS, type AttentionFacts } from './runs/attention.js';
+import { runEvents, runs, tickets } from './db/schema.js';
+import { attentionBoundsQuery, computeAttention, FAILURE_WINDOW_MS, HOLD_WINDOW_MS, type AttentionFacts } from './runs/attention.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -175,6 +175,17 @@ describe('computeAttention rules', () => {
       expect(computeAttention(done, facts({ pipeline: [ev(8, 'merged_to_main')] }), NOW)).toBeNull();
       expect(computeAttention(done, facts(), NOW)).toBeNull();
     });
+    it('a ticket run is held only as its ticket\'s latest run in Review; a ticketless hold for 24 h', () => {
+      const ticketRun = { ...done, ticketId: 't1' };
+      const hold = facts({ pipeline: [ev(8, 'merge_failed')] });
+      expect(computeAttention(ticketRun, hold, NOW, { inReview: true, latest: true })?.reason).toBe('held');
+      expect(computeAttention(ticketRun, hold, NOW, { inReview: false, latest: true })).toBeNull();
+      expect(computeAttention(ticketRun, hold, NOW, { inReview: true, latest: false })).toBeNull();
+      expect(computeAttention(ticketRun, hold, NOW)).toBeNull();
+      expect(HOLD_WINDOW_MS).toBe(24 * 3_600_000);
+      expect(computeAttention(done, facts({ pipeline: [ev(8, 'merge_failed', null, HOLD_WINDOW_MS - 1000)] }), NOW)).not.toBeNull();
+      expect(computeAttention(done, facts({ pipeline: [ev(8, 'merge_failed', null, HOLD_WINDOW_MS + 1000)] }), NOW)).toBeNull();
+    });
   });
 
   it('is null for runs that work or wait in the queue', () => {
@@ -216,8 +227,8 @@ describe('attention through RunService', () => {
       .run();
     return id;
   };
-  const seedEvent = (runId: string, type: string, state: string | null = null, payload: unknown = null) =>
-    t.db.insert(runEvents).values({ runId, ts: new Date(), source: 'hook', type, state, payload }).returning({ id: runEvents.id }).get().id;
+  const seedEvent = (runId: string, type: string, state: string | null = null, payload: unknown = null, ts = new Date()) =>
+    t.db.insert(runEvents).values({ runId, ts, source: 'hook', type, state, payload }).returning({ id: runEvents.id }).get().id;
   const find = (id: string) => t.runs.list().find((r) => r.id === id) as Run;
 
   it('a waiting run gets the permission attention, stable across reads and in the detail', () => {
@@ -270,6 +281,45 @@ describe('attention through RunService', () => {
     seedEvent(id, 'UserPromptSubmit', 'working');
     seedEvent(id, 'Stop', 'done');
     expect(find(id).attention).toBeNull();
+  });
+
+  it('a ticket hold is attention only while the ticket is in Review', () => {
+    const ticket = t.tickets.create(projectId, { title: 'Held', status: 'review' });
+    const id = seedRun('done', { ticketId: ticket.id });
+    seedEvent(id, 'Stop', 'done');
+    seedEvent(id, 'merge_failed');
+    expect(find(id).attention).toMatchObject({ reason: 'held', detail: 'Merge failed' });
+    t.db.update(tickets).set({ status: 'done' }).where(eq(tickets.id, ticket.id)).run();
+    expect(find(id).attention).toBeNull();
+    t.db.update(tickets).set({ status: 'review' }).where(eq(tickets.id, ticket.id)).run();
+    seedEvent(id, 'completion_blocked', null, { blockers: ['need a key'] });
+    expect(find(id).attention?.reason).toBe('blocked');
+    t.db.update(tickets).set({ status: 'backlog' }).where(eq(tickets.id, ticket.id)).run();
+    expect(find(id).attention).toBeNull();
+  });
+
+  it('a hold of a run that a newer run of its ticket superseded is not attention', () => {
+    const ticket = t.tickets.create(projectId, { title: 'Again', status: 'review' });
+    const older = seedRun('done', { ticketId: ticket.id });
+    seedEvent(older, 'Stop', 'done');
+    seedEvent(older, 'build_gate_failed');
+    expect(find(older).attention?.reason).toBe('held');
+    const newer = seedRun('done', { ticketId: ticket.id });
+    seedEvent(newer, 'Stop', 'done');
+    expect(find(older).attention).toBeNull();
+    expect(find(newer).attention).toBeNull();
+  });
+
+  it('a hold of a run without a ticket is attention for 24 h only', () => {
+    const DAY = 24 * 3_600_000;
+    const old = seedRun('done');
+    seedEvent(old, 'Stop', 'done', null, new Date(Date.now() - 90 * DAY));
+    seedEvent(old, 'merge_failed', null, null, new Date(Date.now() - 90 * DAY));
+    expect(find(old).attention).toBeNull();
+    const recent = seedRun('done');
+    seedEvent(recent, 'Stop', 'done', null, new Date(Date.now() - DAY + 60_000));
+    seedEvent(recent, 'merge_failed', null, null, new Date(Date.now() - DAY + 60_000));
+    expect(find(recent).attention?.reason).toBe('held');
   });
 
   it('a failed run reports the failing event type', () => {

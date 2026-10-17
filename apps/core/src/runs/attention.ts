@@ -7,6 +7,8 @@ import { currentHold, decidePipelineOutcome, PIPELINE_OUTCOME_EVENTS } from './h
 
 /** A failure stays in front of a person this long after the run ended. */
 export const FAILURE_WINDOW_MS = 24 * 60 * 60_000;
+/** A hold of a run without a ticket (no Review column to leave) stays this long after it was noted. */
+export const HOLD_WINDOW_MS = 24 * 60 * 60_000;
 
 /** One stored run event, as far as attention reads it. */
 export interface AttentionEvent {
@@ -28,7 +30,16 @@ export interface AttentionFacts {
   failure: AttentionEvent | null;
 }
 
-type AttentionRun = Pick<Run, 'id' | 'state' | 'lastEvent' | 'autoRetry' | 'cancelled' | 'handedOffTo' | 'endedAt' | 'stateChangedAt'>;
+type AttentionRun = Pick<Run, 'id' | 'state' | 'lastEvent' | 'autoRetry' | 'cancelled' | 'handedOffTo' | 'endedAt' | 'stateChangedAt'> & {
+  ticketId?: string | null;
+};
+
+/** Where a ticket run's ticket stands: a hold is attention only for its latest run while it is in Review. */
+export interface AttentionTicket {
+  inReview: boolean;
+  /** Whether this run is the ticket's latest. */
+  latest: boolean;
+}
 
 const WAITING_TYPES = ['Notification', 'stall_detected'];
 /** States whose attention needs the run's events. */
@@ -59,8 +70,16 @@ function blockersOf(event: AttentionEvent): string | null {
   return list.length > 0 ? list.join('\n') : null;
 }
 
-/** What the run needs from a person, in the spec's rule order; null when nothing. Pure. */
-export function computeAttention(run: AttentionRun, facts: AttentionFacts | undefined, now = Date.now()): RunAttention | null {
+/**
+ * What the run needs from a person, in the spec's rule order; null when nothing. Pure. `ticket` is
+ * the run's ticket (unknown: the hold does not count) and only matters for a run with one.
+ */
+export function computeAttention(
+  run: AttentionRun,
+  facts: AttentionFacts | undefined,
+  now = Date.now(),
+  ticket?: AttentionTicket,
+): RunAttention | null {
   switch (run.state) {
     case 'waiting_input': {
       if (run.lastEvent === 'SessionStart') return null;
@@ -96,6 +115,9 @@ export function computeAttention(run: AttentionRun, facts: AttentionFacts | unde
     case 'done': {
       const hold = currentHold(facts?.pipeline ?? []);
       if (!hold) return null;
+      // A hold waits in Review: once the ticket moved on, or a newer run took it over, nobody is
+      // asked any more. Without a ticket, it fades like a failure.
+      if (run.ticketId ? !(ticket?.inReview && ticket.latest) : now - hold.ts.getTime() > HOLD_WINDOW_MS) return null;
       const since = hold.ts.toISOString();
       if (hold.type === 'completion_blocked') return make(run, 'blocked', blockersOf(hold), since, hold.id);
       return make(run, 'held', HOLD_LABELS[hold.type] ?? hold.type, since, hold.id);
@@ -224,15 +246,13 @@ export function attachAttention(
 
   return list.map((run) => {
     const f = facts.get(run.id);
+    const ticket: AttentionTicket | undefined = run.ticketId
+      ? { inReview: status.get(run.ticketId) === 'review', latest: latestRun.get(run.ticketId) === run.id }
+      : undefined;
     return {
       ...run,
-      attention: computeAttention(run, f, now),
-      reviewReady:
-        run.state === 'done' &&
-        run.ticketId !== null &&
-        status.get(run.ticketId) === 'review' &&
-        latestRun.get(run.ticketId) === run.id &&
-        pipelineClear(f),
+      attention: computeAttention(run, f, now, ticket),
+      reviewReady: run.state === 'done' && ticket !== undefined && ticket.inReview && ticket.latest && pipelineClear(f),
     };
   });
 }
