@@ -123,7 +123,10 @@ export const runEvents = sqliteTable(
     state: text('state'),
     payload: text('payload', { mode: 'json' }).$type<unknown>(),
   },
-  (t) => [index('run_events_run_idx').on(t.runId, t.id), index('run_events_type_run_idx').on(t.type, t.runId)],
+  (t) => [index('run_events_run_idx').on(t.runId, t.id), index('run_events_type_run_idx').on(t.type, t.runId),
+    // State-changing events only: the bounds behind run attention read these, not every hook event.
+    index('run_events_state_idx').on(t.runId, t.id).where(sql`${t.state} IS NOT NULL`),
+  ],
 );
 
 /**

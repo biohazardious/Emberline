@@ -1,0 +1,1 @@
+CREATE INDEX `run_events_state_idx` ON `run_events` (`run_id`,`id`) WHERE "run_events"."state" IS NOT NULL;

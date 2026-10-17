@@ -659,6 +659,27 @@ describe('runs', () => {
     ws.close();
   });
 
+  it('sends run updates over /api/events with their computed attention', async () => {
+    const project = await createProject('Events attention', false);
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const events: { type: string; run?: Run }[] = [];
+    ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Notification', token, { notification_type: 'permission_prompt', message: 'Allow rm?' });
+    await expect
+      .poll(() => events.find((e) => e.type === 'run' && e.run?.id === run.id && e.run.state === 'waiting_input')?.run?.attention)
+      .toMatchObject({ reason: 'permission', detail: 'Allow rm?' });
+    expect(t.runs.getRun(run.id).attention?.reason).toBe('permission');
+    ws.close();
+  });
+
   it('rejects runs for unknown projects', async () => {
     expect((await api('POST', '/api/runs', { projectId: 'nope' })).statusCode).toBe(404);
   });

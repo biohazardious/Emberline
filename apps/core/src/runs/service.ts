@@ -621,7 +621,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** Plain run (no slot/quota checks); `queued` until {@link launch}. The scheduler owns dispatch. */
   getRun(id: string): Run {
-    return toRun(this.row(id));
+    return this.withAttention([toRun(this.row(id))])[0] as Run;
   }
 
   /**
@@ -1245,7 +1245,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         patch: { endedAt: row.endedAt ?? new Date(), cancelledAt },
       });
     }
-    if (row.endedAt) return toRun(row);
+    if (row.endedAt) return this.withAttention([toRun(row)])[0] as Run;
     // Live, or still spawning (no terminal yet): spawnAgent checks the flag once the terminal exists.
     const run = this.record(id, { source, type: 'stop_requested', payload: reasonPayload, patch: { cancelledAt } });
     const sessionId = row.ptydSessionId;
@@ -1368,12 +1368,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       )
       .orderBy(desc(runs.createdAt))
       .get();
-    return row ? toRun(row) : undefined;
+    return row ? (this.withAttention([toRun(row)])[0] as Run) : undefined;
   }
 
   latestRunForTicket(ticketId: string): Run | undefined {
     const row = this.db.select().from(runs).where(eq(runs.ticketId, ticketId)).orderBy(desc(runs.createdAt)).get();
-    return row ? toRun(row) : undefined;
+    return row ? (this.withAttention([toRun(row)])[0] as Run) : undefined;
   }
 
   /**

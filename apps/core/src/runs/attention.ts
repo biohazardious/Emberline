@@ -1,3 +1,4 @@
+import { isPermissionNotification } from '@emberline/adapter-sdk';
 import { HOLD_LABELS, type Run, type RunAttention } from '@emberline/protocol';
 import { inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -40,19 +41,15 @@ const message = (event: AttentionEvent | undefined): string | null => {
   return typeof value === 'string' && value.length > 0 ? value : null;
 };
 
-/** The permission-prompt test the Claude adapter applies to a Notification hook. */
-function isPermissionPrompt(payload: Record<string, unknown> | null): boolean {
-  const type = payload?.notification_type;
-  if (typeof type === 'string' && type) return type === 'permission_prompt';
-  const text = payload?.message;
-  return typeof text === 'string' && /permission/i.test(text);
-}
-
+/**
+ * The occurrence names the triggering event; without one (a run that never logged its state change)
+ * it falls back to the state's time, which is just as stable across reads.
+ */
 const make = (run: AttentionRun, reason: RunAttention['reason'], detail: string | null, since: string, eventId: number | null) => ({
   reason,
   detail,
   since,
-  occurrence: `${run.id}:${reason}:${eventId ?? 0}`,
+  occurrence: `${run.id}:${reason}:${eventId === null ? `t${Date.parse(run.stateChangedAt)}` : eventId}`,
 });
 
 /** Blockers of a `completion_blocked` note, joined into one text. */
@@ -67,16 +64,13 @@ export function computeAttention(run: AttentionRun, facts: AttentionFacts | unde
   switch (run.state) {
     case 'waiting_input': {
       if (run.lastEvent === 'SessionStart') return null;
-      const waiting = facts?.waiting ?? [];
-      const first = waiting[0];
-      if (first?.type === 'stall_detected') {
-        return make(run, 'stalled', message(first), first.ts.toISOString(), first.id);
-      }
-      const latest = [...waiting].reverse().find((e) => e.type === 'Notification');
+      // The latest reason since the state was entered decides (a stall after a question, or a prompt after a stall).
+      const latest = (facts?.waiting ?? []).at(-1);
       if (!latest) return make(run, 'question', null, run.stateChangedAt, facts?.enteredId ?? null);
+      if (latest.type === 'stall_detected') return make(run, 'stalled', message(latest), latest.ts.toISOString(), latest.id);
       return make(
         run,
-        isPermissionPrompt(latest.payload) ? 'permission' : 'question',
+        isPermissionNotification(latest.payload ?? {}) ? 'permission' : 'question',
         message(latest),
         latest.ts.toISOString(),
         latest.id,
@@ -107,10 +101,25 @@ export function computeAttention(run: AttentionRun, facts: AttentionFacts | unde
 const pipelineClear = (facts: AttentionFacts | undefined): boolean =>
   decidePipelineOutcome((facts?.pipeline ?? []).map((e) => e.type)) !== 'held';
 
+const idList = (ids: string[]) => sql.join(ids.map((id) => sql`${id}`), sql`, `);
+
 interface Bounds {
   run_id: string;
   entered: number | null;
+  last_done: number | null;
+  last_failed: number | null;
 }
+
+/**
+ * Per run: the newest state-changing event, the newest switch to `done` and to `failed`. Reads only
+ * `state IS NOT NULL` events, through the partial index `run_events_state_idx`.
+ */
+export const attentionBoundsQuery = (runIds: string[]) => sql`SELECT run_id,
+    MAX(id) AS entered,
+    MAX(CASE WHEN state = 'done' THEN id END) AS last_done,
+    MAX(CASE WHEN state = 'failed' THEN id END) AS last_failed
+  FROM run_events INDEXED BY run_events_state_idx
+  WHERE state IS NOT NULL AND run_id IN (${idList(runIds)}) GROUP BY run_id`;
 
 interface EventRow {
   id: number;
@@ -119,8 +128,6 @@ interface EventRow {
   type: string;
   payload: string | null;
 }
-
-const idList = (ids: string[]) => sql.join(ids.map((id) => sql`${id}`), sql`, `);
 
 const parse = (raw: string | null): Record<string, unknown> | null => {
   if (!raw) return null;
@@ -141,18 +148,18 @@ export function loadAttentionFacts(db: Db, runIds: string[]): Map<string, Attent
   const blank = (): AttentionFacts => ({ enteredId: null, waiting: [], pipeline: [], failure: null });
   for (let i = 0; i < runIds.length; i += CHUNK) {
     const ids = runIds.slice(i, i + CHUNK);
-    const list = idList(ids);
-    const bounds = sql`SELECT run_id,
-        MAX(CASE WHEN state IS NOT NULL THEN id END) AS entered,
-        MAX(CASE WHEN state = 'done' THEN id END) AS last_done,
-        MAX(CASE WHEN state = 'failed' THEN id END) AS last_failed
-      FROM run_events WHERE run_id IN (${list}) GROUP BY run_id`;
-    const boundRows = db.all<Bounds>(sql`SELECT run_id, entered FROM (${bounds})`);
+    const boundRows = db.all<Bounds>(attentionBoundsQuery(ids));
+    if (boundRows.length === 0) continue;
     for (const b of boundRows) facts.set(b.run_id, { ...blank(), enteredId: b.entered });
+    // The bounds travel back as values, so they are computed once.
+    const values = sql.join(
+      boundRows.map((b) => sql`(${b.run_id}, ${b.entered}, ${b.last_done}, ${b.last_failed})`),
+      sql`, `,
+    );
     const outcomeTypes = sql.join(PIPELINE_OUTCOME_EVENTS.map((t) => sql`${t}`), sql`, `);
     const waitingTypes = sql.join(WAITING_TYPES.map((t) => sql`${t}`), sql`, `);
     const rows = db.all<EventRow & { entered: number | null; last_done: number | null; last_failed: number | null }>(sql`
-      WITH b AS (${bounds})
+      WITH b(run_id, entered, last_done, last_failed) AS (VALUES ${values})
       SELECT e.id, e.run_id, e.ts, e.type, e.payload, b.entered, b.last_done, b.last_failed
       FROM run_events e JOIN b ON b.run_id = e.run_id
       WHERE (e.type IN (${waitingTypes}) AND e.id >= COALESCE(b.entered, 0))

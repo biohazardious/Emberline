@@ -8,7 +8,7 @@
  *
  * Rate-limit detection and reset-time parsing live in ./ratelimit.ts, behind fixture tests.
  */
-import type { AgentState, LaunchSpec } from '@emberline/adapter-sdk';
+import { type AgentState, isPermissionNotification, type LaunchSpec } from '@emberline/adapter-sdk';
 import type { AgentPersona, HookEventName, HookPayload } from '@emberline/protocol';
 import { isQuotaWaitNotification, type LimitContext, rateLimitFromHook } from './ratelimit.js';
 
@@ -611,14 +611,6 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
       ...extraEnv,
     },
   };
-}
-
-/** Notification hooks that mean "a human must act now" rather than "idle for a while". */
-function isPermissionNotification(payload: HookPayload): boolean {
-  const type = typeof payload.notification_type === 'string' ? payload.notification_type : undefined;
-  if (type) return type === 'permission_prompt';
-  const message = typeof payload.message === 'string' ? payload.message : '';
-  return /permission/i.test(message);
 }
 
 /**

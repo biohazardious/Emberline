@@ -14,7 +14,7 @@ export function registerEventRoutes(
 ): void {
   app.get('/api/events', { websocket: true }, (socket) => {
     const send = (event: ServerEvent) => void sendBounded(socket, event, EVENTS_SEND_CAP);
-    const onRun = (run: Run) => send({ type: 'run', run });
+    const onRun = (run: Run) => send({ type: 'run', run: runs.withAttention([run])[0] as Run });
     const onRunRemoved = (id: string) => send({ type: 'run_removed', id });
     const onTicket = (ticket: Ticket) => send({ type: 'ticket', ticket });
     const onTicketRemoved = (t: { id: string; projectId: string }) => send({ type: 'ticket_removed', ...t });

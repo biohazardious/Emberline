@@ -1,7 +1,8 @@
 import { HOLD_LABELS, type Run } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq, sql } from 'drizzle-orm';
 import { runEvents, runs } from './db/schema.js';
-import { computeAttention, FAILURE_WINDOW_MS, type AttentionFacts } from './runs/attention.js';
+import { attentionBoundsQuery, computeAttention, FAILURE_WINDOW_MS, type AttentionFacts } from './runs/attention.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -62,6 +63,26 @@ describe('computeAttention rules', () => {
   it('stalled: the first reason after entering the state is stall_detected', () => {
     const a = computeAttention(baseRun(), facts({ waiting: [ev(6, 'stall_detected', { message: 'No output for 20 minutes' })] }), NOW);
     expect(a).toMatchObject({ reason: 'stalled', detail: 'No output for 20 minutes', occurrence: 'r1:stalled:6' });
+  });
+
+  it('the latest of Notification and stall_detected decides', () => {
+    const stallLast = computeAttention(baseRun(), facts({ waiting: [ev(6, 'Notification', { message: 'q' }), ev(7, 'stall_detected')] }), NOW);
+    expect(stallLast).toMatchObject({ reason: 'stalled', occurrence: 'r1:stalled:7' });
+    const notificationLast = computeAttention(
+      baseRun(),
+      facts({ waiting: [ev(6, 'stall_detected'), ev(7, 'Notification', { notification_type: 'permission_prompt', message: 'ok?' })] }),
+      NOW,
+    );
+    expect(notificationLast).toMatchObject({ reason: 'permission', detail: 'ok?', occurrence: 'r1:permission:7' });
+  });
+
+  it('uses a deterministic time-based occurrence when no triggering event is known', () => {
+    const run = baseRun({ stateChangedAt: '2026-10-18T11:59:00.000Z' });
+    const t0 = Date.parse('2026-10-18T11:59:00.000Z');
+    expect(computeAttention(run, facts({ enteredId: null }), NOW)?.occurrence).toBe(`r1:question:t${t0}`);
+    expect(computeAttention(run, undefined, NOW)?.occurrence).toBe(`r1:question:t${t0}`);
+    expect(computeAttention({ ...run, state: 'rate_limited' }, facts({ enteredId: null }), NOW)?.occurrence).toBe(`r1:rate_limited:t${t0}`);
+    expect(computeAttention({ ...run, state: 'failed', endedAt: run.stateChangedAt }, facts(), NOW)?.occurrence).toBe(`r1:failed:5`);
   });
 
   it('skips a waiting run whose last event is SessionStart', () => {
@@ -181,6 +202,24 @@ describe('attention through RunService', () => {
     // A later note that does not change state leaves the occurrence alone.
     seedEvent(id, 'auto_nudged');
     expect(find(id).attention?.occurrence).toBe(first?.occurrence);
+  });
+
+  it('every Run handed out by the service carries attention', () => {
+    const id = seedRun('waiting_input', { lastEvent: 'Notification' });
+    seedEvent(id, 'Notification', 'waiting_input', { message: 'Which?' });
+    expect(t.runs.getRun(id).attention).toMatchObject({ reason: 'question', detail: 'Which?' });
+    const ticket = t.tickets.create(projectId, { title: 'TT', status: 'in_progress' });
+    t.db.update(runs).set({ ticketId: ticket.id }).where(eq(runs.id, id)).run();
+    expect(t.runs.latestRunForTicket(ticket.id)?.attention?.reason).toBe('question');
+    expect(t.runs.activeRunForTicket(ticket.id)?.attention?.reason).toBe('question');
+  });
+
+  it('reads the run bounds through the partial state index', () => {
+    const plan = (t.db as unknown as { all: (q: unknown) => { detail: string }[] }).all(
+      sql`EXPLAIN QUERY PLAN ${attentionBoundsQuery(['a', 'b'])}`,
+    );
+    const text = plan.map((r) => r.detail).join('\n');
+    expect(text).toContain('run_events_state_idx');
   });
 
   it('a hold after the latest done counts; one before it does not', () => {
