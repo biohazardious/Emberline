@@ -112,7 +112,7 @@ import {
   writeWorkspaceFileContent,
 } from '../factory/service.js';
 import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
-import { EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
+import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
 import { ToolchainService } from '../toolchain/service.js';
 
@@ -699,12 +699,11 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const { workspacePath } = resolveProjectTargetPath(request.params.id, targetId);
       try {
         const raw = await readWorkspaceFileRaw(workspacePath, relPath);
-        const safeName = raw.fileName.replace(/["\\\r\n]/g, '_');
         const disposition = request.query.inline === '1' ? 'inline' : 'attachment';
         return reply
           .header('content-type', raw.contentType)
           .header('content-length', String(raw.sizeBytes))
-          .header('content-disposition', `${disposition}; filename="${safeName}"`)
+          .header('content-disposition', contentDisposition(disposition, raw.fileName))
           .header('content-security-policy', UNTRUSTED_CONTENT_CSP)
           .send(raw.buffer);
       } catch (err) {
@@ -758,7 +757,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const archive = await exportProjectTarGz(row.path);
       return reply
         .header('content-type', 'application/gzip')
-        .header('content-disposition', `attachment; filename="${row.slug}.tar.gz"`)
+        .header('content-disposition', contentDisposition('attachment', `${row.slug}.tar.gz`))
         .send(archive);
     },
   );
