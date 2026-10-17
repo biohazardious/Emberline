@@ -2,6 +2,7 @@ import type { Run, SchedulerState, Ticket } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { api } from '../api';
+import { ticketEventRecomputesAttention } from '../attention';
 import { upsert, useEvents } from './useEvents';
 
 /** Query keys of the data `/api/events` keeps live. */
@@ -26,15 +27,20 @@ export function LiveEvents(): null {
         case 'run_removed':
           client.setQueryData<Run[]>(liveKeys.runs, (list) => list?.filter((r) => r.id !== event.id));
           break;
-        case 'ticket':
-          client.setQueryData<Ticket[]>(liveKeys.tickets(event.ticket.projectId), (list) =>
-            list ? upsert(list, event.ticket) : list,
-          );
+        case 'ticket': {
+          const key = liveKeys.tickets(event.ticket.projectId);
+          // Decided before the cache takes the new ticket: a move in or out of Review (or a new run
+          // starting it) changes held attention, which only core computes.
+          const recompute = ticketEventRecomputesAttention(client.getQueryData<Ticket[]>(key), event.ticket);
+          client.setQueryData<Ticket[]>(key, (list) => (list ? upsert(list, event.ticket) : list));
+          if (recompute) void client.invalidateQueries({ queryKey: liveKeys.runs });
           break;
+        }
         case 'ticket_removed':
           client.setQueryData<Ticket[]>(liveKeys.tickets(event.projectId), (list) =>
             list?.filter((t) => t.id !== event.id),
           );
+          void client.invalidateQueries({ queryKey: liveKeys.runs });
           break;
         case 'scheduler':
           client.setQueryData(liveKeys.scheduler, event.scheduler);
@@ -64,6 +70,13 @@ export function useRuns(): { runs: Run[] | undefined; refresh: () => Promise<voi
   return { runs: query.data, refresh };
 }
 
+/** Query options of a project's tickets, kept live by {@link LiveEvents} (shared by every reader). */
+export const ticketsQuery = (projectId: string) => ({
+  queryKey: liveKeys.tickets(projectId),
+  queryFn: () => api<Ticket[]>(`/api/projects/${projectId}/tickets`),
+  staleTime: Infinity,
+});
+
 /** A project's tickets, kept live by {@link LiveEvents}. */
 export function useTickets(projectId: string): {
   tickets: Ticket[] | undefined;
@@ -72,11 +85,7 @@ export function useTickets(projectId: string): {
   refresh: () => Promise<void>;
 } {
   const client = useQueryClient();
-  const query = useQuery({
-    queryKey: liveKeys.tickets(projectId),
-    queryFn: () => api<Ticket[]>(`/api/projects/${projectId}/tickets`),
-    staleTime: Infinity,
-  });
+  const query = useQuery(ticketsQuery(projectId));
   const patchLocal = useCallback(
     (ticket: Ticket) =>
       client.setQueryData<Ticket[]>(liveKeys.tickets(projectId), (list) => upsert(list, ticket)),

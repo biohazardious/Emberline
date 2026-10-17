@@ -15,6 +15,7 @@ import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
 import { useApi } from '../hooks/useApi';
+import { ticketsQuery } from '../hooks/liveData';
 import { timeAgo, useNow } from '../time';
 import { toastInfo } from '../toast';
 
@@ -153,17 +154,14 @@ export function InboxPage({
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const groups = useMemo(() => groupAttention(runs ?? [], seen), [runs, seen]);
-  // Ticket key and current title: one tickets read per project that has a ticket run in the Inbox
-  // (the same cached request the Board makes).
+  // Ticket key and current title from the live tickets cache (the Board's), one read per project
+  // that has a ticket run in the Inbox; ticket events keep it current.
   const ticketProjects = useMemo(
     () => [...new Set(groups.flatMap((g) => g.runs.filter((r) => r.ticketId).map((r) => r.projectId)))].sort(),
     [groups],
   );
   const ticketsById = useQueries({
-    queries: ticketProjects.map((projectId) => {
-      const url = `/api/projects/${projectId}/tickets`;
-      return { queryKey: ['api', url], queryFn: () => api<Ticket[]>(url), refetchInterval: 15_000 };
-    }),
+    queries: ticketProjects.map(ticketsQuery),
     combine: ticketNames,
   });
   const [permission, setPermission] = useState<NotificationPermission>(() =>

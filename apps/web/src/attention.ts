@@ -1,4 +1,4 @@
-import { HOLD_LABELS, type Run, type RunAttentionReason } from '@emberline/protocol';
+import { HOLD_LABELS, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
 
 /** Inbox group order: what blocks a run hardest comes first. */
 export const ATTENTION_ORDER: readonly RunAttentionReason[] = [
@@ -58,6 +58,19 @@ export function needsElsewhere(runs: readonly Run[], seen: SeenMap, projectId: s
 export function needsElsewhereHint(elsewhere: number, own: number): string | null {
   if (elsewhere <= 0) return null;
   return `${own > 0 ? '+' : ''}${elsewhere} in other projects`;
+}
+
+/**
+ * Whether a pushed ticket must refresh the runs: a hold is attention only while its ticket is in
+ * Review (core decides), and a ticket move emits no run event. True when the status changed, the
+ * ticket is new, or its project's tickets are not cached (no way to tell); not for other edits.
+ */
+export function ticketEventRecomputesAttention(
+  cached: readonly Pick<Ticket, 'id' | 'status'>[] | undefined,
+  ticket: Pick<Ticket, 'id' | 'status'>,
+): boolean {
+  const before = cached?.find((t) => t.id === ticket.id);
+  return !before || before.status !== ticket.status;
 }
 
 export type TicketName = { key: string; title: string };

@@ -11,6 +11,7 @@ import {
   needsElsewhereHint,
   pendingAttention,
   pruneSeen,
+  ticketEventRecomputesAttention,
 } from './attention';
 
 const NOW = Date.parse('2026-10-18T12:00:00.000Z');
@@ -198,5 +199,16 @@ describe('needsElsewhereHint', () => {
     expect(needsElsewhereHint(1, 3)).toBe('+1 in other projects');
     expect(needsElsewhereHint(0, 0)).toBeNull();
     expect(needsElsewhereHint(0, 2)).toBeNull();
+  });
+});
+
+describe('ticketEventRecomputesAttention', () => {
+  const ticket = (status: string) => ({ id: 't1', status }) as never;
+  it('asks for fresh runs when a ticket changes column, is new, or its project is not cached; not for other edits', () => {
+    expect(ticketEventRecomputesAttention([ticket('review')], ticket('done'))).toBe(true);
+    expect(ticketEventRecomputesAttention([ticket('review')], ticket('in_progress'))).toBe(true);
+    expect(ticketEventRecomputesAttention([], ticket('review'))).toBe(true);
+    expect(ticketEventRecomputesAttention(undefined, ticket('review'))).toBe(true);
+    expect(ticketEventRecomputesAttention([ticket('review')], ticket('review'))).toBe(false);
   });
 });
