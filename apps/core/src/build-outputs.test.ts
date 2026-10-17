@@ -8,6 +8,8 @@ import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.j
 
 let t: TestApp;
 let cookie: string;
+let auth: Record<string, string>;
+let mut: Record<string, string>;
 
 beforeEach(async () => {
   t = await createTestApp({ workspacesHostDir: '/srv/emberline/workspaces' });
@@ -18,9 +20,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await t.close();
 });
-
-let auth: Record<string, string>;
-let mut: Record<string, string>;
 
 function addProject(id = 'p1'): void {
   const p = path.join(t.dir, id);
@@ -107,7 +106,7 @@ describe('build outputs API', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/octet-stream');
     expect(res.headers['content-length']).toBe('7');
-    expect(res.headers['content-disposition']).toBe('attachment; filename="we_ird.apk"');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="we_ird.apk"; filename*=UTF-8\'\'we%22ird.apk');
     expect(res.headers['content-security-policy']).toBeTruthy();
     expect(res.body).toBe('APKDATA');
   });
@@ -154,7 +153,10 @@ describe('build outputs API', () => {
     expect((await t.app.inject({ method: 'DELETE', url: `/api/build-outputs/${row.id}`, headers: mut })).statusCode).toBe(404);
   });
 
-  it('collects from the project runs whose worktrees exist, and counts', async () => {
+  const collect = (id = 'p1') => t.app.inject({ method: 'POST', url: `/api/projects/${id}/build-outputs/collect`, headers: mut });
+  const listOf = async (id = 'p1') => (await t.app.inject({ method: 'GET', url: `/api/projects/${id}/build-outputs`, headers: auth })).json();
+
+  it('collects in the background: 202 at once, coalesced, progress and counts on the list', async () => {
     addProject();
     addProject('p2');
     const wt1 = addRun('r1', 'p1');
@@ -166,13 +168,68 @@ describe('build outputs API', () => {
     put(wt2, 'build/b.apk', 'bb');
     put(wtOther, 'build/c.apk', 'cc');
 
-    const res = await t.app.inject({ method: 'POST', url: '/api/projects/p1/build-outputs/collect', headers: mut });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ archived: 2, skipped: 0, failed: 0 });
+    const [first, second] = await Promise.all([collect(), collect()]);
+    expect(first.statusCode).toBe(202);
+    expect(first.json()).toEqual({ status: 'started' });
+    expect(second.statusCode).toBe(202);
+    expect(second.json()).toEqual({ status: 'running' });
+    const during = await listOf();
+    expect(during.collecting).toBe(true);
+    expect(during.lastCollect).toBeNull();
+
+    await t.runs.outputs.idle();
+    const done = await listOf();
+    expect(done.collecting).toBe(false);
+    expect(done.lastCollect).toMatchObject({ archived: 2, skipped: 0, failed: 0 });
+    expect(typeof done.lastCollect.finishedAt).toBe('string');
     expect(t.db.select().from(buildOutputs).all().map((o) => o.name).sort()).toEqual(['a.apk', 'b.apk']);
 
-    const again = await t.app.inject({ method: 'POST', url: '/api/projects/p1/build-outputs/collect', headers: mut });
-    expect(again.json()).toEqual({ archived: 0, skipped: 2, failed: 0 });
+    expect((await collect()).json()).toEqual({ status: 'started' });
+    await t.runs.outputs.idle();
+    expect((await listOf()).lastCollect).toMatchObject({ archived: 0, skipped: 2, failed: 0 });
+  });
+
+  it('collect skips runs that are mid-turn and takes every other state', async () => {
+    addProject();
+    const states = ['starting', 'working', 'waiting_input', 'failed', 'done'];
+    states.forEach((state, i) => {
+      const wt = addRun(`r${i}`, 'p1');
+      t.db.update(runs).set({ state }).where(eq(runs.id, `r${i}`)).run();
+      put(wt, `build/${state}.apk`, state);
+    });
+    await collect();
+    await t.runs.outputs.idle();
+    expect(t.db.select().from(buildOutputs).all().map((o) => o.name).sort()).toEqual(['done.apk', 'failed.apk', 'waiting_input.apk']);
+  });
+
+  it('a worktree that vanishes before its pass is skipped without failing the collect', async () => {
+    addProject();
+    const wt1 = addRun('r1', 'p1');
+    const wt2 = addRun('r2', 'p1');
+    put(wt1, 'build/a.apk', 'a');
+    put(wt2, 'build/b.apk', 'b');
+    const first = collect();
+    rmSync(wt2, { recursive: true });
+    await first;
+    await t.runs.outputs.idle();
+    const last = (await listOf()).lastCollect;
+    expect(last.archived).toBe(1);
+    expect(last.failed).toBe(0);
+  });
+
+  it('downloads names outside Latin-1 with an ASCII fallback and an encoded UTF-8 name', async () => {
+    addProject();
+    const wt = addRun('r1', 'p1');
+    put(wt, 'build/çıktı-üç-ü.apk', 'x');
+    put(wt, 'build/🚀 app.apk', 'y');
+    await archiveFrom('r1');
+    for (const o of t.db.select().from(buildOutputs).all()) {
+      const res = await t.app.inject({ method: 'GET', url: `/api/build-outputs/${o.id}/download`, headers: auth });
+      expect(res.statusCode).toBe(200);
+      const cd = res.headers['content-disposition'] as string;
+      expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent(o.name)}`);
+      expect(cd).toMatch(/^attachment; filename="[\x20-\x7e]*"; /);
+    }
   });
 
   it('collect ignores a worktree swapped for a symlink', async () => {
@@ -186,8 +243,9 @@ describe('build outputs API', () => {
       id: 'r1', projectId: 'p1', agent: 'claude', state: 'done', worktreePath: wt, hookTokenHash: 'x',
       stateChangedAt: new Date(), createdAt: new Date(),
     }).run();
-    const res = await t.app.inject({ method: 'POST', url: '/api/projects/p1/build-outputs/collect', headers: mut });
-    expect(res.json().archived).toBe(0);
+    await collect();
+    await t.runs.outputs.idle();
+    expect((await listOf()).lastCollect).toMatchObject({ archived: 0 });
     expect(t.db.select().from(buildOutputs).all()).toHaveLength(0);
   });
 });

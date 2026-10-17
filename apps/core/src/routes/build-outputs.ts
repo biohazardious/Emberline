@@ -10,7 +10,7 @@ import type { Db } from '../db/index.js';
 import { projects } from '../db/schema.js';
 import { notFound } from '../errors.js';
 import type { BuildOutputArchive } from '../outputs/archive.js';
-import { UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
+import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
 
 /** Archived run deliverables: the per-project list, download, pin, delete and "collect now". */
 export function registerBuildOutputRoutes(app: FastifyInstance, db: Db, archive: BuildOutputArchive): void {
@@ -23,22 +23,31 @@ export function registerBuildOutputRoutes(app: FastifyInstance, db: Db, archive:
     return archive.list(request.params.id);
   });
 
-  /** Archives now from the project's runs whose worktrees still exist (outputs built before archiving, or by hand). */
+  /**
+   * Archives now from the project's runs whose worktrees still exist (outputs built before
+   * archiving, or by hand). Runs in the background: 202 at once, the list reports progress.
+   */
   app.post<{ Params: { id: string } }>(
     '/api/projects/:id/build-outputs/collect',
-    async (request): Promise<CollectBuildOutputsResponse> => {
+    async (request, reply): Promise<CollectBuildOutputsResponse> => {
       requireProject(request.params.id);
-      return archive.collectProject(request.params.id);
+      reply.code(202);
+      return { status: archive.startCollect(request.params.id) };
     },
   );
 
   /** Streams from a verified descriptor (APKs can be hundreds of MB), never inline. */
   app.get<{ Params: { id: string } }>('/api/build-outputs/:id/download', async (request, reply) => {
     const { stream, fileName, size } = await archive.open(request.params.id);
-    reply.header('Content-Type', 'application/octet-stream');
-    reply.header('Content-Length', String(size));
-    reply.header('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`);
-    reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
+    try {
+      reply.header('Content-Type', 'application/octet-stream');
+      reply.header('Content-Length', String(size));
+      reply.header('Content-Disposition', contentDisposition('attachment', fileName));
+      reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
+    } catch (error) {
+      stream.destroy();
+      throw error;
+    }
     return reply.send(stream);
   });
 

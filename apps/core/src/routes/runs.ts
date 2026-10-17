@@ -18,7 +18,7 @@ import {
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { badRequest } from '../errors.js';
-import { UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
+import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -110,7 +110,7 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
       if (!request.query.path) throw badRequest('query parameter "path" is required');
       const { buffer, contentType, fileName } = await runs.readArtifact(request.params.id, request.query.path);
       reply.header('Content-Type', contentType);
-      reply.header('Content-Disposition', `inline; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`);
+      reply.header('Content-Disposition', contentDisposition('inline', fileName));
       // Agent-written HTML/SVG must not run with the Emberline origin.
       reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
       return reply.send(buffer);
@@ -128,10 +128,15 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     async (request, reply) => {
       if (!request.query.path) throw badRequest('query parameter "path" is required');
       const { stream, fileName, size } = await runs.openBuildOutput(request.params.id, request.query.path);
-      reply.header('Content-Type', 'application/octet-stream');
-      reply.header('Content-Length', String(size));
-      reply.header('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`);
-      reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
+      try {
+        reply.header('Content-Type', 'application/octet-stream');
+        reply.header('Content-Length', String(size));
+        reply.header('Content-Disposition', contentDisposition('attachment', fileName));
+        reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
+      } catch (error) {
+        stream.destroy();
+        throw error;
+      }
       return reply.send(stream);
     },
   );

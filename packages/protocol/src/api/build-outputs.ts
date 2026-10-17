@@ -22,7 +22,17 @@ export const ProjectBuildOutput = z.object({
 });
 export type ProjectBuildOutput = z.infer<typeof ProjectBuildOutput>;
 
+export const CollectCounts = z.object({
+  archived: z.number().int().min(0),
+  skipped: z.number().int().min(0),
+  failed: z.number().int().min(0),
+});
+
 export const ProjectBuildOutputsResponse = z.object({
+  /** A "collect now" pass is running for the project. */
+  collecting: z.boolean(),
+  /** The last finished collect since core started. */
+  lastCollect: CollectCounts.extend({ finishedAt: z.string() }).nullable(),
   quotaBytes: z.number().min(0),
   usedBytes: z.number().min(0),
   hostArchiveDir: z.string(),
@@ -34,9 +44,6 @@ export type ProjectBuildOutputsResponse = z.infer<typeof ProjectBuildOutputsResp
 export const UpdateBuildOutputBody = z.object({ pinned: z.boolean() });
 export type UpdateBuildOutputBody = z.infer<typeof UpdateBuildOutputBody>;
 
-export const CollectBuildOutputsResponse = z.object({
-  archived: z.number().int().min(0),
-  skipped: z.number().int().min(0),
-  failed: z.number().int().min(0),
-});
+/** Collect runs in the background: `started` for a new pass, `running` when one already was. */
+export const CollectBuildOutputsResponse = z.object({ status: z.enum(['started', 'running']) });
 export type CollectBuildOutputsResponse = z.infer<typeof CollectBuildOutputsResponse>;

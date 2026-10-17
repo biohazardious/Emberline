@@ -27,6 +27,8 @@ describe('build output contracts', () => {
   it('parses a project build output and its list response', () => {
     expect(ProjectBuildOutput.parse(output).name).toBe('app-release.apk');
     const res = ProjectBuildOutputsResponse.parse({
+      collecting: false,
+      lastCollect: { archived: 1, skipped: 0, failed: 0, finishedAt: '2026-10-17T00:00:00.000Z' },
       quotaBytes: 5e9,
       usedBytes: 1234,
       hostArchiveDir: '/srv/ws/.emberline-outputs/p1',
@@ -45,8 +47,8 @@ describe('build output contracts', () => {
     expect(() => UpdateBuildOutputBody.parse({ pinned: 'yes' })).toThrow();
   });
 
-  it('collect response carries three counts', () => {
-    expect(CollectBuildOutputsResponse.parse({ archived: 1, skipped: 2, failed: 0 })).toEqual({ archived: 1, skipped: 2, failed: 0 });
-    expect(() => CollectBuildOutputsResponse.parse({ archived: 1 })).toThrow();
+  it('collect response carries a status', () => {
+    expect(CollectBuildOutputsResponse.parse({ status: 'started' })).toEqual({ status: 'started' });
+    expect(() => CollectBuildOutputsResponse.parse({ status: 'x' })).toThrow();
   });
 });

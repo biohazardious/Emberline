@@ -90,6 +90,9 @@ export class BuildOutputArchive {
   private readonly removedProjects = new Set<string>();
   /** When each project's stale `.part` files were last swept. */
   private readonly partSweepAt = new Map<string, number>();
+  /** "Collect now" jobs in flight, and each project's last finished one. */
+  private readonly collecting = new Map<string, Promise<void>>();
+  private readonly lastCollect = new Map<string, ArchiveCounts & { finishedAt: string }>();
 
   constructor(
     private readonly db: Db,
@@ -123,19 +126,39 @@ export class BuildOutputArchive {
   }
 
   /**
-   * "Collect now": archives, oldest run first (so a chain's earlier runs own their copies), from
-   * every run of the project whose worktree directory still exists. Passes run one after another
-   * under the project's lock; the counts are summed.
+   * "Collect now": starts archiving, in the background, from every run of the project whose
+   * worktree exists and is not mid-turn. A second call while one runs joins it ('running').
+   */
+  startCollect(projectId: string): 'started' | 'running' {
+    if (this.collecting.has(projectId)) return 'running';
+    const job = this.collectProject(projectId)
+      .then((counts) => {
+        this.lastCollect.set(projectId, { ...counts, finishedAt: new Date().toISOString() });
+      })
+      .catch(() => {
+        this.lastCollect.set(projectId, { archived: 0, skipped: 0, failed: 1, finishedAt: new Date().toISOString() });
+      })
+      .finally(() => this.collecting.delete(projectId));
+    this.collecting.set(projectId, job);
+    void this.track(job);
+    return 'started';
+  }
+
+  /**
+   * Archives, oldest run first (so a chain's earlier runs own their copies), one pass after
+   * another under the project's lock; the counts are summed. Runs that are starting or working
+   * are left alone: their outputs are still being written.
    */
   async collectProject(projectId: string): Promise<ArchiveCounts> {
     const total = noCounts();
     const rows = this.db
-      .select({ id: runs.id, worktreePath: runs.worktreePath })
+      .select({ id: runs.id, worktreePath: runs.worktreePath, state: runs.state })
       .from(runs)
       .where(eq(runs.projectId, projectId))
       .orderBy(asc(runs.createdAt))
       .all();
     for (const row of rows) {
+      if (row.state === 'starting' || row.state === 'working') continue;
       if (!(await lstat(row.worktreePath).catch(() => null))) continue;
       const counts = await this.archiveRun(row.id);
       total.archived += counts.archived;
@@ -198,6 +221,8 @@ export class BuildOutputArchive {
       .all();
     const hostRoot = path.join(this.config.workspacesHostDir ?? this.config.workspacesDir, ARCHIVE_DIR_NAME);
     return {
+      collecting: this.collecting.has(projectId),
+      lastCollect: this.lastCollect.get(projectId) ?? null,
       quotaBytes: this.quotaBytes(),
       usedBytes: rows.reduce((sum, r) => sum + r.output.sizeBytes, 0),
       hostArchiveDir: path.join(hostRoot, projectId),

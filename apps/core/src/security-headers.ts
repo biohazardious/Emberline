@@ -49,3 +49,13 @@ export function installSecurityHeaders(app: FastifyInstance): void {
     return payload;
   });
 }
+
+/**
+ * Content-Disposition for a file name from the workspace (agents choose it): an ASCII fallback
+ * plus the RFC 5987 UTF-8 form, so any name yields a valid header value.
+ */
+export function contentDisposition(kind: 'attachment' | 'inline', fileName: string): string {
+  const fallback = fileName.replace(/[^\x20-\x7e]|["\\%]/g, '_');
+  const encoded = encodeURIComponent(fileName).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${kind}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
