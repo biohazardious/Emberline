@@ -1376,8 +1376,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /**
    * One ticket per issue. An issue that already has a ticket (also one created a moment ago by a
-   * concurrent import) yields that ticket in `existing`; a second one is never created: the unique
-   * index is the guard, the lookup before the insert only saves a failed insert.
+   * concurrent import) yields that ticket in `existing`; a second one is never created. The lookup
+   * runs synchronously right before the insert, so within this process it is the guard; the unique
+   * index is the backstop (another process, or a lookup that missed) and resolves to the winner.
+   * Every ticket is mapped and validated first, so a bad issue creates nothing.
    */
   importIssues(
     projectId: string,
@@ -1385,9 +1387,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     issues: ForgeIssue[],
     status: 'backlog' | 'ready',
   ): { created: Ticket[]; existing: Ticket[] } {
+    const mapped = issues.map((issue) => ({ issue, input: CreateTicketBodySchema.parse(mapIssueToTicket(issue, source, status)) }));
     const created: Ticket[] = [];
     const existing: Ticket[] = [];
-    for (const issue of issues) {
+    for (const { issue, input } of mapped) {
       const link = (): Ticket | undefined => this.linkedTickets(projectId, source, [issue.externalId]).get(issue.externalId);
       const already = link();
       if (already) {
@@ -1396,7 +1399,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       try {
         created.push(
-          this.create(projectId, mapIssueToTicket(issue, status), 0, {
+          this.create(projectId, input, 0, {
             source,
             externalId: issue.externalId,
             number: issue.number,

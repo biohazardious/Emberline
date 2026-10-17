@@ -275,10 +275,10 @@ export class ForgeService {
     if (!remote) throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
     assertTrustedForgeApi(remote, { apiUrl: stored.apiUrl, projectRepoUrl: project.repoUrl });
     // The agent can rewrite origin: it must still name the repository the project was set up with.
-    const declared = project.repoUrl ? parseForgeRemote(project.repoUrl) : null;
-    if (declared) {
-      const bare = (host: string) => host.toLowerCase().replace(/:\d+$/, '');
-      if (bare(declared.host) !== bare(remote.host) || declared.repoPath.toLowerCase() !== remote.repoPath.toLowerCase()) {
+    if (project.repoUrl?.trim()) {
+      const declared = parseForgeRemote(project.repoUrl);
+      if (!declared) throw conflict(`unable to parse the project's repository URL: ${project.repoUrl}`);
+      if (declared.host.toLowerCase() !== remote.host.toLowerCase() || declared.repoPath.toLowerCase() !== remote.repoPath.toLowerCase()) {
         throw conflict('origin points at a different repository than the project');
       }
     }

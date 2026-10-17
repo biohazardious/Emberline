@@ -66,6 +66,36 @@ describe('openDb', () => {
     db.close();
   });
 
+  it('0019: ticket issue links are unique per project and source, and project_settings cascades', () => {
+    const db = openDb(':memory:');
+    const run = (query: string) => db.db.run(sql.raw(query));
+    for (const id of ['p', 'q']) run(`insert into projects (id, name, slug, path, created_at) values ('${id}', '${id}', '${id}', '/${id}', 0)`);
+    const ticket = (id: string, project: string, n: number, source: string | null, externalId: string | null) =>
+      run(
+        `insert into tickets (id, project_id, number, key, title, status, position, created_at, updated_at, external_source, external_id) values ('${id}', '${project}', ${n}, 'K-${n}', 't', 'ready', ${n}, 0, 0, ${source ? `'${source}'` : 'null'}, ${externalId ? `'${externalId}'` : 'null'})`,
+      );
+    // Board tickets carry NULLs, which never collide.
+    ticket('n1', 'p', 1, null, null);
+    ticket('n2', 'p', 2, null, null);
+    ticket('g1', 'p', 3, 'github', '1');
+    let failure: unknown;
+    try {
+      ticket('g2', 'p', 4, 'github', '1');
+    } catch (err) {
+      failure = err;
+    }
+    // drizzle wraps the driver error: the UNIQUE message is on the cause.
+    expect(`${(failure as Error).message} ${((failure as { cause?: Error }).cause)?.message}`).toMatch(/UNIQUE/i);
+    ticket('g3', 'q', 1, 'github', '1');
+    ticket('l1', 'p', 5, 'gitlab', '1');
+    run(`insert into project_settings (project_id, settings) values ('p', '{"issueSync":{}}')`);
+    const count = () => (db.db.all(sql.raw('select count(*) as n from project_settings')) as { n: number }[])[0]?.n;
+    expect(count()).toBe(1);
+    run(`delete from projects where id = 'p'`);
+    expect(count()).toBe(0);
+    db.close();
+  });
+
   it('does not back up a fresh or up-to-date database', () => {
     const file = path.join(dir, 'emberline.db');
     openDb(file).close();

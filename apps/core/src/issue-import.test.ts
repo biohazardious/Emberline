@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncSettings, Ticket } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, tickets } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -132,14 +132,14 @@ describe('POST /api/projects/:id/issues/import', () => {
     const [one, four] = out.created as [Ticket, Ticket];
     expect(one).toMatchObject({
       title: 'Issue 1',
-      body: 'Body 1\n\nSource: https://github.com/acme/widget/issues/1',
+      body: expect.stringMatching(/^Imported from github issue #1 by @octo\. .*\n\n---\nBody 1\n---\n\nSource: https:\/\/github\.com\/acme\/widget\/issues\/1$/s),
       persona: 'coder',
       priority: 1,
       status: 'ready',
       external: { source: 'github', number: 1, url: 'https://github.com/acme/widget/issues/1', state: 'open', labels: ['bug'] },
     });
     expect(four).toMatchObject({ persona: 'qa', priority: 3, external: { number: 4, labels: ['P0', 'persona:qa'] } });
-    expect(four.body).toBe(`${'x'.repeat(18_000)}…\n\nSource: https://github.com/acme/widget/issues/4`);
+    expect(four.body).toContain(`\n---\n${'x'.repeat(18_000)}…\n---\n\nSource: https://github.com/acme/widget/issues/4`);
     expect(events.map((e) => e.key)).toEqual(['DP-1', 'DP-2']);
     const row = t.db.select().from(tickets).where(eq(tickets.id, one.id)).get()!;
     expect(row).toMatchObject({ externalSource: 'github', externalId: '9001', externalNumber: 1, externalState: 'open' });
@@ -165,6 +165,16 @@ describe('POST /api/projects/:id/issues/import', () => {
   });
 
   it('two concurrent imports of the same issue produce exactly one ticket', async () => {
+    // Hold each request at its first issue fetch until both have arrived, so they interleave.
+    const inner = t.forgeFetch.current;
+    let arrived = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    t.forgeFetch.current = async (url, init) => {
+      if (/\/issues\/1$/.test(url) && ++arrived >= 2) release();
+      if (/\/issues\/1$/.test(url)) await gate;
+      return inner(url, init);
+    };
     const [a, b] = await Promise.all([
       post('/api/projects/p1/issues/import', sel(1, 2)),
       post('/api/projects/p1/issues/import', sel(1, 2)),
@@ -173,7 +183,28 @@ describe('POST /api/projects/:id/issues/import', () => {
     const outs = [a.json<ImportIssuesResponse>(), b.json<ImportIssuesResponse>()];
     expect(outs.reduce((n, o) => n + o.created.length, 0)).toBe(2);
     expect(outs.reduce((n, o) => n + o.existing.length, 0)).toBe(2);
+    // Both requests fetched both issues before either created: the imports really interleaved.
+    expect(seen).toHaveLength(4);
     expect(t.db.select().from(tickets).all()).toHaveLength(2);
+  });
+
+  it('a unique violation from a concurrent writer resolves to the existing ticket', () => {
+    const issue = { externalId: '9001', number: 1, title: 'a', body: '', labels: [], url: 'u', author: null, updatedAt: '', state: 'open' as const };
+    const first = t.tickets.importIssues('p1', 'github', [issue], 'backlog');
+    const lookup = vi.spyOn(t.tickets, 'linkedTickets').mockImplementationOnce(() => new Map());
+    const again = t.tickets.importIssues('p1', 'github', [issue], 'backlog');
+    expect(lookup).toHaveBeenCalled();
+    expect(again.created).toEqual([]);
+    expect(again.existing.map((e) => e.id)).toEqual(first.created.map((c) => c.id));
+    expect(t.db.select().from(tickets).all()).toHaveLength(1);
+  });
+
+  it('validates every mapped ticket before creating any', () => {
+    const ok = { externalId: '1', number: 1, title: 'a', body: '', labels: [], url: 'u', author: null, updatedAt: '', state: 'open' as const };
+    const bad = { ...ok, externalId: '2', number: 2 };
+    Object.defineProperty(bad, 'labels', { get: () => { throw new Error('boom'); } });
+    expect(() => t.tickets.importIssues('p1', 'github', [ok, bad], 'backlog')).toThrow('boom');
+    expect(t.db.select().from(tickets).all()).toHaveLength(0);
   });
 
   it('the unique index rejects a second link for the same issue', () => {
@@ -241,12 +272,16 @@ describe('POST /api/projects/:id/issues/import', () => {
 describe('issue-sync settings', () => {
   it('defaults, round trip and partial updates', async () => {
     const def = (await get('/api/projects/p1/issue-sync')).json<IssueSyncSettings>();
-    expect(def).toEqual({ enabled: false, label: '', status: 'backlog', closeOnDone: false, commentOnProgress: true });
+    expect(def).toEqual({ enabled: false, label: '', status: 'backlog', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
     const set = await patch('/api/projects/p1/issue-sync', { enabled: true, label: ' emberline ', status: 'ready' });
     expect(set.statusCode).toBe(200);
-    expect(set.json()).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true });
+    expect(set.json()).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
     const more = await patch('/api/projects/p1/issue-sync', { closeOnDone: true });
-    expect(more.json()).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true });
+    expect(more.json()).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true, trustedAuthors: [] });
+    const trusted = await patch('/api/projects/p1/issue-sync', { trustedAuthors: ['octo'] });
+    expect(trusted.json().trustedAuthors).toEqual(['octo']);
+    expect((await patch('/api/projects/p1/issue-sync', { trustedAuthors: Array.from({ length: 51 }, (_, i) => `u${i}`) })).statusCode).toBe(400);
+    await patch('/api/projects/p1/issue-sync', { trustedAuthors: [] });
     expect((await get('/api/projects/p1/issue-sync')).json()).toEqual(more.json());
   });
 

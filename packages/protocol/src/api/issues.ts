@@ -64,6 +64,12 @@ export const IssueSyncSettings = z
     status: z.enum(['backlog', 'ready']).default('backlog'),
     closeOnDone: z.boolean().default(false),
     commentOnProgress: z.boolean().default(true),
+    /**
+     * Issue authors (usernames) whose issues label sync may put straight into `status`. Label sync
+     * imports from anyone else always land in `backlog`. A manual import keeps the status the
+     * person chose.
+     */
+    trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
   })
   .superRefine((v, ctx) => {
     if (v.enabled && !v.label) {
@@ -79,5 +85,6 @@ export const UpdateIssueSyncBody = z.object({
   status: z.enum(['backlog', 'ready']),
   closeOnDone: z.boolean(),
   commentOnProgress: z.boolean(),
+  trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50),
 }).partial();
 export type UpdateIssueSyncBody = z.input<typeof UpdateIssueSyncBody>;

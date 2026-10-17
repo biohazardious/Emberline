@@ -353,6 +353,15 @@ describe('ForgeService.projectRemote', () => {
     });
   });
 
+  it('409 when projects.repoUrl cannot be parsed, and when only the port differs', async () => {
+    addProject('p8', 'not a url', 'git@github.com:acme/widget.git');
+    addProject('p9', 'https://git.example.com:8443/acme/widget.git', 'https://git.example.com/acme/widget.git');
+    const forge = new ForgeService(t.db, t.runs);
+    configure(forge, 'secret');
+    await expect(forge.projectRemote('p8')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/repository URL/) });
+    await expect(forge.projectRemote('p9')).rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it('accepts origin matching repoUrl across URL styles and case', async () => {
     addProject('p7', 'https://github.com/Acme/Widget', 'git@github.com:acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
