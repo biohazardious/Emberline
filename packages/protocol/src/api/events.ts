@@ -13,3 +13,11 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('scheduler'), scheduler: SchedulerState }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
+
+/** Browser -> core on the same socket: whether this client is looking, and at which run. */
+export const ClientPresenceMessage = z.object({
+  type: z.literal('presence'),
+  visible: z.boolean(),
+  runId: z.string().min(1).nullable(),
+});
+export type ClientPresenceMessage = z.infer<typeof ClientPresenceMessage>;

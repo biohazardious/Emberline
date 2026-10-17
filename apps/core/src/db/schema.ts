@@ -8,6 +8,17 @@ export const settings = sqliteTable('settings', {
   value: text('value', { mode: 'json' }).$type<unknown>().notNull(),
 });
 
+/**
+ * One row per paged attention occurrence (`Run.attention.occurrence`): a logged occurrence is never
+ * paged again, across restarts too. Rows older than 30 days are pruned daily.
+ */
+export const notificationLog = sqliteTable('notification_log', {
+  occurrence: text('occurrence').primaryKey(),
+  event: text('event').notNull(),
+  sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+  outcome: text('outcome', { enum: ['sent', 'suppressed', 'failed'] }).notNull(),
+});
+
 /** Login sessions. `id` is the SHA-256 of the cookie token; the token itself is never stored. */
 export const sessions = sqliteTable('sessions', {
   id: text('id').primaryKey(),

@@ -5,6 +5,7 @@ import { CSRF_HEADER } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { CoreConfig } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
+import { PresenceRegistry } from './notifications/presence.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
 import { Scheduler, type SchedulerOptions } from './scheduler/service.js';
@@ -20,6 +21,7 @@ export interface TestApp {
   runs: RunService;
   tickets: TicketService;
   scheduler: Scheduler;
+  presence: PresenceRegistry;
   close(): Promise<void>;
 }
 
@@ -62,7 +64,8 @@ export async function createTestApp(
   });
   // Pipelines run right after a Stop unless a test asks for the settle window.
   const tickets = new TicketService(opened.db, runs, scheduler, { pipelineSettleMs: 0, ...ticketOptions });
-  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler });
+  const presence = new PresenceRegistry();
+  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence });
   return {
     app,
     config,
@@ -72,6 +75,7 @@ export async function createTestApp(
     runs,
     tickets,
     scheduler,
+    presence,
     async close() {
       await app.close();
       // Background archive passes must not outlive the DB and temp dir they use.

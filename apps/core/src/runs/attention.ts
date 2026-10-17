@@ -118,7 +118,7 @@ export const attentionBoundsQuery = (runIds: string[]) => sql`SELECT run_id,
     MAX(id) AS entered,
     MAX(CASE WHEN state = 'done' THEN id END) AS last_done,
     MAX(CASE WHEN state = 'failed' THEN id END) AS last_failed
-  FROM run_events INDEXED BY run_events_state_idx
+  FROM run_events
   WHERE state IS NOT NULL AND run_id IN (${idList(runIds)}) GROUP BY run_id`;
 
 interface EventRow {

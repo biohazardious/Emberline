@@ -275,3 +275,20 @@ describe('attention through RunService', () => {
     expect(all.mock.calls.length).toBe(statementsSmall);
   });
 });
+
+describe('attentionOf', () => {
+  it('computes the attention of one emitted run once, for every listener', async () => {
+    const { createTestApp } = await import('./test-utils.js');
+    const t = await createTestApp();
+    try {
+      const spy = vi.spyOn(t.runs, 'withAttention');
+      const payload = { id: 'x', state: 'working' } as never;
+      const first = t.runs.attentionOf(payload);
+      const second = t.runs.attentionOf(payload);
+      expect(second).toBe(first);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      await t.close();
+    }
+  });
+});

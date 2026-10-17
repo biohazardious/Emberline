@@ -439,6 +439,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return attachAttention(this.db, list, (ids) => this.loadAttentionFacts(ids));
   }
 
+  private readonly attentionMemo = new WeakMap<Run, Run>();
+
+  /**
+   * The run of an in-process `run` event with its attention (those payloads carry none). Memoised on
+   * the emitted object, so every listener of one emit shares a single computation.
+   */
+  attentionOf(run: Run): Run {
+    let hit = this.attentionMemo.get(run);
+    if (!hit) {
+      hit = this.withAttention([run])[0] as Run;
+      this.attentionMemo.set(run, hit);
+    }
+    return hit;
+  }
+
   get(id: string): RunDetail {
     const row = this.row(id);
     const events = this.db

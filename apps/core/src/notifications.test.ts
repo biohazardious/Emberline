@@ -1,8 +1,11 @@
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import type { NotificationSettings } from '@emberline/protocol';
-import { describe, expect, it } from 'vitest';
-import type { Db } from './db/index.js';
-import { NotificationService } from './notifications/service.js';
+import { eq } from 'drizzle-orm';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type Db, openDb } from './db/index.js';
+import { notificationLog } from './db/schema.js';
+import { PresenceRegistry } from './notifications/presence.js';
+import { NotificationService, type NotificationServiceOptions } from './notifications/service.js';
 
 describe('NotificationService.dispatch', () => {
   it('delivers ntfy notifications whose title contains non-Latin-1 characters', async () => {
@@ -43,148 +46,281 @@ describe('NotificationService.dispatch', () => {
   });
 });
 
+
+const CFG: NotificationSettings = {
+  enabled: true,
+  provider: 'webhook',
+  url: 'http://127.0.0.1:9/unused',
+  token: null,
+  onRateLimited: false,
+  onQuotaResumed: false,
+  onWaitingInput: true,
+  onRunFinished: true,
+};
+
+type Attention = { reason: string; detail: string | null; since: string; occurrence: string };
+
+/** A service on a real in-memory DB, fed by a fake run source whose attention the test states per run. */
+async function harness(cfg: Partial<NotificationSettings> = {}, options: NotificationServiceOptions = {}, db: Db = openDb(':memory:').db) {
+  const { EventEmitter } = await import('node:events');
+  const runs = Object.assign(new EventEmitter(), {
+    attentionOf: (run: { attention?: Attention | null }) => ({ attention: null, ...run }),
+  });
+  const service = new NotificationService(db, runs as never, undefined, options);
+  let settings: NotificationSettings = { ...CFG, ...cfg };
+  service.getSettings = () => settings;
+  const sent: { event: string; title: string; body: string; priority?: string }[] = [];
+  let result = { ok: true, status: 200 as number | null, error: null as string | null };
+  service.dispatch = async (_cfg, msg) => {
+    sent.push({ event: msg.event, title: msg.title, body: msg.body, priority: msg.priority });
+    return result;
+  };
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  return {
+    db,
+    runs,
+    service,
+    sent,
+    flush,
+    set: (patch: Partial<NotificationSettings>) => {
+      settings = { ...settings, ...patch };
+    },
+    failSends: (ok: boolean) => {
+      result = ok ? { ok: true, status: 200, error: null } : { ok: false, status: 500, error: 'HTTP 500' };
+    },
+  };
+}
+
+const att = (reason: string, id: number, detail: string | null = null, runId = 'r1'): Attention => ({
+  reason,
+  detail,
+  since: '2026-10-18T10:00:00.000Z',
+  occurrence: `${runId}:${reason}:${id}`,
+});
+const run = (state: string, lastEvent: string, attention: Attention | null, extra: object = {}) => ({
+  id: 'r1',
+  projectId: 'p1',
+  title: 'T',
+  branch: null,
+  state,
+  lastEvent,
+  cancelled: false,
+  stateChangedAt: '2026-10-18T10:00:00.000Z',
+  attention,
+  ...extra,
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('NotificationService run events', () => {
   it('does not page on session startup or on runs the user cancelled (B14)', async () => {
-    const { EventEmitter } = await import('node:events');
-    const runs = new EventEmitter();
-    const service = new NotificationService({} as Db, runs as never);
-    const sent: string[] = [];
-    service.getSettings = () =>
-      ({
-        enabled: true,
-        provider: 'webhook',
-        url: 'http://127.0.0.1:9/unused',
-        token: null,
-        onRateLimited: true,
-        onQuotaResumed: true,
-        onWaitingInput: true,
-        onRunFinished: true,
-      }) satisfies NotificationSettings;
-    service.dispatch = async (_cfg, msg) => {
-      sent.push(msg.event);
-      return { ok: true, status: 200, error: null };
-    };
-    const run = (state: string, lastEvent: string, cancelled = false) => ({
-      id: 'r1',
-      title: 'T',
-      branch: null,
-      state,
-      lastEvent,
-      cancelled,
-    });
-    runs.emit('run', run('waiting_input', 'SessionStart'), true);
-    runs.emit('run', run('failed', 'cancelled', true), true);
-    expect(sent).toEqual([]);
-    runs.emit('run', run('waiting_input', 'Notification'), true);
-    runs.emit('run', run('failed', 'process_exited'), true);
-    expect(sent).toEqual(['waiting_input', 'run_finished']);
+    const h = await harness();
+    // Core computes no attention for these: SessionStart-only waiting, a cancelled failure.
+    h.runs.emit('run', run('waiting_input', 'SessionStart', null), true);
+    h.runs.emit('run', run('failed', 'cancelled', null, { cancelled: true }), true);
+    await h.flush();
+    expect(h.sent).toEqual([]);
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), true);
+    h.runs.emit('run', run('failed', 'process_exited', att('failed', 9)), true);
+    await h.flush();
+    expect(h.sent.map((m) => m.event)).toEqual(['waiting_input', 'run_finished']);
   });
 
   it('does not announce a handed-off run as completed', async () => {
-    const { EventEmitter } = await import('node:events');
-    const runs = new EventEmitter();
-    const service = new NotificationService({} as Db, runs as never);
-    const sent: string[] = [];
-    service.getSettings = () =>
-      ({
-        enabled: true,
-        provider: 'webhook',
-        url: 'http://127.0.0.1:9/unused',
-        token: null,
-        onRateLimited: true,
-        onQuotaResumed: true,
-        onWaitingInput: true,
-        onRunFinished: true,
-      }) satisfies NotificationSettings;
-    service.dispatch = async (_cfg, msg) => {
-      sent.push(msg.event);
-      return { ok: true, status: 200, error: null };
-    };
-    runs.emit('run', { id: 'r1', title: 'T', branch: null, state: 'done', lastEvent: 'Stop', cancelled: false, handedOffTo: 'x' }, true);
-    expect(sent).toEqual([]);
+    const h = await harness();
+    h.runs.emit('run', run('done', 'Stop', null, { handedOffTo: 'x' }), true);
+    await h.flush();
+    expect(h.sent).toEqual([]);
+  });
+
+  it('pages once per occurrence, however often the same attention is emitted', async () => {
+    const h = await harness();
+    const waiting = run('waiting_input', 'Notification', att('permission', 5, 'Allow Bash?'));
+    h.runs.emit('run', waiting, true);
+    h.runs.emit('run', { ...waiting }, false);
+    h.runs.emit('run', { ...waiting }, true);
+    await h.flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]!.body).toContain('Allow Bash?');
+    // A new occurrence (the agent asks again) pages again.
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 8, 'Which store?')), false);
+    await h.flush();
+    expect(h.sent).toHaveLength(2);
+  });
+
+  it('never repeats a logged occurrence after a restart', async () => {
+    const first = await harness();
+    first.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), true);
+    await first.flush();
+    expect(first.sent).toHaveLength(1);
+    const second = await harness({}, {}, first.db);
+    second.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), false);
+    second.runs.emit('run', run('waiting_input', 'Notification', att('question', 6)), false);
+    await second.flush();
+    expect(second.sent).toHaveLength(1);
+  });
+
+  it('maps attention reasons to the toggles: waiting-input covers all but failures, which follow run-finished', async () => {
+    const h = await harness({ onWaitingInput: false, onRunFinished: false });
+    for (const [n, reason] of ['question', 'permission', 'stalled', 'held', 'blocked', 'failed'].entries()) {
+      h.runs.emit('run', run('waiting_input', 'x', att(reason, n + 1)), true);
+    }
+    await h.flush();
+    expect(h.sent).toEqual([]);
+    h.set({ onWaitingInput: true });
+    for (const [n, reason] of ['question', 'permission', 'stalled', 'held', 'blocked', 'failed'].entries()) {
+      h.runs.emit('run', run(reason === 'failed' ? 'failed' : 'waiting_input', 'x', att(reason, n + 1)), true);
+    }
+    await h.flush();
+    expect(h.sent.map((m) => m.event)).toEqual(['waiting_input', 'waiting_input', 'waiting_input', 'waiting_input', 'waiting_input']);
+    h.set({ onRunFinished: true });
+    h.runs.emit('run', run('failed', 'x', att('failed', 6)), true);
+    await h.flush();
+    expect(h.sent.at(-1)!.event).toBe('run_finished');
+    h.set({ enabled: false });
+    h.runs.emit('run', run('waiting_input', 'x', att('question', 99)), true);
+    await h.flush();
+    expect(h.sent).toHaveLength(6);
+  });
+
+  it('pages a held or blocked ticket with the blockers as text, not on the nudge', async () => {
+    const h = await harness();
+    h.runs.emit('run', run('done', 'completion_nudged', null), false);
+    h.runs.emit('run', run('done', 'completion_blocked', att('blocked', 7, 'No signing key\nWhich store account?')), false);
+    h.runs.emit('run', run('done', 'completion_missing', att('held', 9, 'No completion signal')), false);
+    await h.flush();
+    expect(h.sent).toEqual([
+      {
+        event: 'waiting_input',
+        title: 'Agent waiting on you: T',
+        body: 'Run "T" cannot finish its ticket and needs you:\n- No signing key\n- Which store account?',
+        priority: 'high',
+      },
+      expect.objectContaining({ event: 'waiting_input', body: expect.stringContaining('No completion signal') }),
+    ]);
+  });
+
+  it('keeps the opt-in finished page, once per finish, and none for a failed or cancelled run', async () => {
+    const h = await harness({ onRunFinished: true });
+    h.runs.emit('run', run('done', 'Stop', null), true);
+    h.runs.emit('run', run('done', 'Stop', null), true);
+    await h.flush();
+    expect(h.sent.map((m) => m.title)).toEqual(['Run completed: T']);
+    const log = h.db.select().from(notificationLog).all();
+    expect(log).toHaveLength(1);
+    expect(log[0]!.occurrence).toMatch(/^r1:finished:/);
+    const off = await harness({ onRunFinished: false });
+    off.runs.emit('run', run('done', 'Stop', null), true);
+    await off.flush();
+    expect(off.sent).toEqual([]);
+  });
+
+  it('suppresses and logs a page for the run a visible client has open, only that run', async () => {
+    const presence = new PresenceRegistry();
+    const h = await harness({}, { presence });
+    const tab = Symbol('tab');
+    presence.set(tab, { visible: true, runId: 'r1' });
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), true);
+    await h.flush();
+    expect(h.sent).toEqual([]);
+    expect(h.db.select().from(notificationLog).where(eq(notificationLog.occurrence, 'r1:question:5')).get()?.outcome).toBe('suppressed');
+    // Leaving the run later does not resurrect the suppressed page.
+    presence.set(tab, { visible: true, runId: 'other' });
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), false);
+    await h.flush();
+    expect(h.sent).toEqual([]);
+    // Looking at another run, a hidden tab, or Fleet in general does not suppress a new occurrence.
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 6)), false);
+    presence.set(tab, { visible: false, runId: 'r1' });
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 7)), false);
+    presence.set(tab, { visible: true, runId: null });
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 8)), false);
+    await h.flush();
+    expect(h.sent).toHaveLength(3);
+  });
+
+  it('retries a failed page once after 60 s, then drops it', async () => {
+    vi.useFakeTimers();
+    const h = await harness();
+    h.failSends(false);
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sent).toHaveLength(1);
+    const outcome = () => h.db.select().from(notificationLog).get()?.outcome;
+    expect(outcome()).toBe('failed');
+    // The same occurrence is not re-sent by a new emit meanwhile.
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), false);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(h.sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.sent).toHaveLength(2);
+    expect(outcome()).toBe('failed');
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(h.sent).toHaveLength(2);
+  });
+
+  it('records the retry as sent when it gets through', async () => {
+    vi.useFakeTimers();
+    const h = await harness();
+    h.failSends(false);
+    h.runs.emit('run', run('waiting_input', 'Notification', att('question', 5)), true);
+    await vi.advanceTimersByTimeAsync(0);
+    h.failSends(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sent).toHaveLength(2);
+    expect(h.db.select().from(notificationLog).get()?.outcome).toBe('sent');
+  });
+
+  it('prunes log rows older than 30 days', async () => {
+    const day = 24 * 60 * 60_000;
+    const t0 = Date.parse('2026-10-18T00:00:00Z');
+    const h = await harness({}, { now: () => t0 });
+    const insert = (occurrence: string, ageDays: number) =>
+      h.db.insert(notificationLog).values({ occurrence, event: 'waiting_input', sentAt: new Date(t0 - ageDays * day), outcome: 'sent' }).run();
+    insert('old', 31);
+    insert('edge', 29);
+    h.service.prune();
+    expect(h.db.select().from(notificationLog).all().map((r) => r.occurrence)).toEqual(['edge']);
+  });
+
+  it('explains a waiting-input timeout instead of a generic failure', async () => {
+    const h = await harness();
+    h.runs.emit('run', run('failed', 'waiting_input_timeout', att('failed', 4), { title: 'Nightly' }), true);
+    await h.flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]!.title).toContain('Nightly');
+    expect(h.sent[0]!.body).toMatch(/permission/i);
+    expect(h.sent[0]!.body).toMatch(/30 minutes/);
+  });
+
+  it('says a stalled run may be stuck, through the waiting-input switch', async () => {
+    const h = await harness({ onRunFinished: false });
+    h.runs.emit('run', run('waiting_input', 'stall_detected', att('stalled', 3), { title: 'Big job' }), true);
+    await h.flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]!.event).toBe('waiting_input');
+    expect(h.sent[0]!.body).toMatch(/20 minutes/);
+    expect(h.sent[0]!.body).toMatch(/stuck/i);
   });
 });
 
 describe('NotificationService factory pause', () => {
-  it('pages when a factory chain pauses, under the "waiting on you" switch', async () => {
-    const { EventEmitter } = await import('node:events');
-    const runs = new EventEmitter();
-    const service = new NotificationService({} as Db, runs as never);
-    let onWaitingInput = true;
-    const sent: { event: string; title: string; body: string }[] = [];
-    service.getSettings = () =>
-      ({
-        enabled: true,
-        provider: 'webhook',
-        url: 'http://127.0.0.1:9/unused',
-        token: null,
-        onRateLimited: false,
-        onQuotaResumed: false,
-        onWaitingInput,
-        onRunFinished: false,
-      }) satisfies NotificationSettings;
-    service.dispatch = async (_cfg, msg) => {
-      sent.push({ event: msg.event, title: msg.title, body: msg.body });
-      return { ok: true, status: 200, error: null };
-    };
-    const run = { id: 'r1', title: 'DP-3: Build the APK', branch: null, state: 'failed', lastEvent: 'factory_chain_paused' };
+  it('pages when a factory chain pauses, once per pause, under the "waiting on you" switch', async () => {
+    const h = await harness({ onRunFinished: false });
+    const r = run('failed', 'factory_chain_paused', null, { title: 'DP-3: Build the APK' });
     const message = '2 ticket runs failed in a row; the factory paused — fix the cause and click Run pipeline';
-    runs.emit('note', run, 'retry_scheduled', {});
-    expect(sent).toEqual([]);
-    runs.emit('note', run, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
-    expect(sent).toEqual([{ event: 'factory_paused', title: 'Factory paused: DP-3: Build the APK', body: message }]);
-    onWaitingInput = false;
-    runs.emit('note', run, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
-    expect(sent).toHaveLength(1);
-  });
-});
-
-describe('NotificationService completion holds', () => {
-  it('pages "waiting on you" when the completion gate holds a ticket, with the blockers as text', async () => {
-    const { EventEmitter } = await import('node:events');
-    const runs = new EventEmitter();
-    const service = new NotificationService({} as Db, runs as never);
-    let onWaitingInput = true;
-    const sent: { event: string; title: string; body: string; priority?: string }[] = [];
-    service.getSettings = () =>
-      ({
-        enabled: true,
-        provider: 'webhook',
-        url: 'http://127.0.0.1:9/unused',
-        token: null,
-        onRateLimited: false,
-        onQuotaResumed: false,
-        onWaitingInput,
-        onRunFinished: false,
-      }) satisfies NotificationSettings;
-    service.dispatch = async (_cfg, msg) => {
-      sent.push({ event: msg.event, title: msg.title, body: msg.body, priority: msg.priority });
-      return { ok: true, status: 200, error: null };
-    };
-    const run = { id: 'r1', title: 'DP-3 Build the APK', branch: null, state: 'done', lastEvent: 'completion_blocked' };
-    runs.emit('note', run, 'completion_nudged', {});
-    expect(sent).toEqual([]);
-    runs.emit('note', run, 'completion_blocked', { blockers: ['No signing key', 'Which store account?'] });
-    expect(sent).toEqual([
-      {
-        event: 'waiting_input',
-        title: 'Agent waiting on you: DP-3 Build the APK',
-        body: 'Run "DP-3 Build the APK" cannot finish its ticket and needs you:\n- No signing key\n- Which store account?',
-        priority: 'high',
-      },
-    ]);
-    runs.emit('note', run, 'completion_missing', {});
-    expect(sent[1]).toEqual({
-      event: 'waiting_input',
-      title: 'Agent waiting on you: DP-3 Build the APK',
-      body: 'Run "DP-3 Build the APK" stopped without confirming its ticket is finished; the ticket stays in Review until you answer it.',
-      priority: 'high',
-    });
-    runs.emit('note', run, 'completion_blocked', { blockers: [] });
-    expect(sent[2]?.body).toBe('Run "DP-3 Build the APK" cannot finish its ticket and needs you: no details given.');
-    onWaitingInput = false;
-    runs.emit('note', run, 'completion_blocked', { blockers: ['x'] });
-    expect(sent).toHaveLength(3);
+    h.runs.emit('note', r, 'retry_scheduled', {});
+    await h.flush();
+    expect(h.sent).toEqual([]);
+    h.runs.emit('note', r, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
+    await h.flush();
+    expect(h.sent).toEqual([{ event: 'factory_paused', title: 'Factory paused: DP-3: Build the APK', body: message, priority: 'high' }]);
+    h.set({ onWaitingInput: false });
+    h.runs.emit('note', r, 'factory_chain_paused', { reason: 'failed_in_a_row', message });
+    await h.flush();
+    expect(h.sent).toHaveLength(1);
   });
 });
 
@@ -287,41 +423,5 @@ describe('NotificationService quota lanes', () => {
     expect(sent).toEqual(['Claude (all models) quota reached']);
     await emit([]);
     expect(sent).toEqual(['Claude (all models) quota reached', 'Claude (opus) quota is back']);
-  });
-
-  it('explains a waiting-input timeout instead of a generic failure', async () => {
-    const { EventEmitter } = await import('node:events');
-    const runs = new EventEmitter();
-    const service = new NotificationService({} as Db, runs as never);
-    const sent: { title: string; body: string }[] = [];
-    service.getSettings = () =>
-      ({ enabled: true, provider: 'webhook', url: 'http://127.0.0.1:9/unused', token: null, onRateLimited: true, onQuotaResumed: true, onWaitingInput: true, onRunFinished: true }) satisfies NotificationSettings;
-    service.dispatch = async (_cfg, msg) => {
-      sent.push({ title: msg.title, body: msg.body });
-      return { ok: true, status: 200, error: null };
-    };
-    runs.emit('run', { id: 'r1', title: 'Nightly', branch: null, state: 'failed', lastEvent: 'waiting_input_timeout', cancelled: false }, true);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.title).toContain('Nightly');
-    expect(sent[0]!.body).toMatch(/permission/i);
-    expect(sent[0]!.body).toMatch(/30 minutes/);
-  });
-
-  it('says a stalled run may be stuck, through the waiting-input switch', async () => {
-    const { EventEmitter } = await import('node:events');
-    const runs = new EventEmitter();
-    const service = new NotificationService({} as Db, runs as never);
-    const sent: { event: string; body: string }[] = [];
-    service.getSettings = () =>
-      ({ enabled: true, provider: 'webhook', url: 'http://127.0.0.1:9/unused', token: null, onRateLimited: true, onQuotaResumed: true, onWaitingInput: true, onRunFinished: false }) satisfies NotificationSettings;
-    service.dispatch = async (_cfg, msg) => {
-      sent.push({ event: msg.event, body: msg.body });
-      return { ok: true, status: 200, error: null };
-    };
-    runs.emit('run', { id: 'r1', title: 'Big job', branch: null, state: 'waiting_input', lastEvent: 'stall_detected', cancelled: false }, true);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.event).toBe('waiting_input');
-    expect(sent[0]!.body).toMatch(/20 minutes/);
-    expect(sent[0]!.body).toMatch(/stuck/i);
   });
 });

@@ -8,13 +8,14 @@ import {
   type UpdateNotificationSettingsBody,
   UpdateNotificationSettingsBody as UpdateNotificationSettingsBodySchema,
 } from '@emberline/protocol';
-import { eq } from 'drizzle-orm';
+import { and, eq, lt, max } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { settings } from '../db/schema.js';
+import { notificationLog, runEvents, settings } from '../db/schema.js';
 import { badRequest } from '../errors.js';
 import { providerAdapter } from '../runs/providers.js';
 import { minutesOf, type RunService, STALL_WATCHDOG_MS, WAITING_INPUT_TIMEOUT_MS } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
+import type { PresenceRegistry } from './presence.js';
 
 const SETTINGS_KEY = 'notifications.config';
 
@@ -36,6 +37,23 @@ export interface NotificationMessage {
   tags?: string[];
 }
 
+/** The page text for a run that needs a person, from its attention. */
+function waitingBody(label: string, run: Run, attention: NonNullable<Run['attention']>): string {
+  const detail = attention.detail;
+  switch (attention.reason) {
+    case 'stalled':
+      return `Run "${label}" showed no activity for ${minutesOf(STALL_WATCHDOG_MS)} minutes and may be stuck. Have a look at its terminal.`;
+    case 'blocked': {
+      const items = (detail ?? '').split('\n').filter(Boolean);
+      return `Run "${label}" cannot finish its ticket and needs you:${items.length > 0 ? items.map((b) => `\n- ${b}`).join('') : ' no details given.'}`;
+    }
+    case 'held':
+      return `Run "${label}" is held for you${detail ? `: ${detail}` : ''}. The ticket stays in Review until you answer it.`;
+    default:
+      return `Run "${label}" (${run.lastEvent ?? 'prompt'}) is waiting for your input or permission.${detail ? `\n${detail}` : ''}`;
+  }
+}
+
 const laneKey = (w: QuotaWindow) => `${w.agent}|${w.credential}|${w.pool}`;
 
 const CREDENTIAL_LABEL: Record<string, string> = { api_key: ' API key', credits: ' AI credits' };
@@ -47,15 +65,44 @@ function laneLabel(w: QuotaWindow): string {
   return `${name}${CREDENTIAL_LABEL[w.credential] ?? ''} (${w.pool === '*' ? 'all models' : w.pool})`;
 }
 
+/** A failed page is tried once more after this long, then dropped. */
+export const PAGE_RETRY_MS = 60_000;
+/** `notification_log` rows older than this are pruned. */
+export const LOG_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const PRUNE_EVERY_MS = 24 * 60 * 60_000;
+
+export interface NotificationServiceOptions {
+  /** Who is looking at which run; a page for a run someone is looking at is suppressed. */
+  presence?: Pick<PresenceRegistry, 'isWatched'>;
+  retryDelayMs?: number;
+  now?: () => number;
+}
+
+/** The part of a page that depends on what happened; the rest (log, presence, retry) is shared. */
+interface Page {
+  occurrence: string;
+  runId: string;
+  message: NotificationMessage;
+}
+
 export class NotificationService {
   /** Open quota windows as of the last scheduler state. */
   private lastWindows: QuotaWindow[] = [];
+  private readonly presence?: Pick<PresenceRegistry, 'isWatched'>;
+  private readonly retryDelayMs: number;
+  private readonly now: () => number;
+  private readonly retries = new Set<NodeJS.Timeout>();
+  private pruneTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly db: Db,
-    runs?: RunService,
+    private readonly runs?: RunService,
     scheduler?: Scheduler,
+    options: NotificationServiceOptions = {},
   ) {
+    this.presence = options.presence;
+    this.retryDelayMs = options.retryDelayMs ?? PAGE_RETRY_MS;
+    this.now = options.now ?? Date.now;
     if (scheduler) {
       this.lastWindows = scheduler.state().windows;
       scheduler.on('state', (state) => {
@@ -63,91 +110,175 @@ export class NotificationService {
       });
     }
     if (runs) {
-      runs.on('run', (run, stateChanged) => {
-        if (!stateChanged) return;
-        const label = run.title ?? run.branch ?? run.id.slice(0, 8);
-        // B14: every session reports waiting_input on SessionStart before its first prompt arrives;
-        // that is startup, not an agent waiting on a person.
-        if (run.state === 'waiting_input' && run.lastEvent !== 'SessionStart') {
-          const cfg = this.getSettings();
-          if (cfg.enabled && cfg.onWaitingInput) {
-            void this.dispatch(cfg, {
-              event: 'waiting_input',
-              title: `Agent waiting on you: ${label}`,
-              body:
-                run.lastEvent === 'stall_detected'
-                  ? `Run "${label}" showed no activity for ${minutesOf(STALL_WATCHDOG_MS)} minutes and may be stuck. Have a look at its terminal.`
-                  : `Run "${label}" (${run.lastEvent ?? 'prompt'}) is waiting for your input or permission.`,
-              priority: 'high',
-              tags: ['hourglass_flowing_sand', 'emberline'],
-            });
-          }
-        } else if ((run.state === 'done' || run.state === 'failed') && !run.cancelled && !run.handedOffTo) {
-          const cfg = this.getSettings();
-          if (cfg.enabled && cfg.onRunFinished) {
-            const failed = run.state === 'failed';
-            const timedOut = run.lastEvent === 'waiting_input_timeout';
-            void this.dispatch(cfg, {
-              event: 'run_finished',
-              title: timedOut ? `Run stopped, no one answered: ${label}` : failed ? `Run failed: ${label}` : `Run completed: ${label}`,
-              body: timedOut
-                ? `Run "${label}" waited ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes on a permission prompt or a stalled turn with nobody there, so it was stopped.`
-                : failed
-                ? `Run "${label}" exited with an error.`
-                : `Run "${label}" finished its turn and is ready for review.`,
-              priority: failed ? 'high' : 'default',
-              tags: [failed ? 'x' : 'white_check_mark', 'emberline'],
-            });
-          }
-        }
+      runs.on('run', (emitted, stateChanged) => {
+        // In-process payloads carry no attention; computed once per emit, shared with the events socket.
+        const run = runs.attentionOf(emitted);
+        this.onRun(run, stateChanged);
       });
       // A paused factory waits for a person like an agent does: same switch as waiting_input.
       runs.on('note', (run, type, payload) => {
-        if (type === 'completion_blocked' || type === 'completion_missing') {
-          this.completionHeld(run, type, payload);
-          return;
-        }
         if (type !== 'factory_chain_paused') return;
         const cfg = this.getSettings();
         if (!cfg.enabled || !cfg.onWaitingInput) return;
         const label = run.title ?? run.branch ?? run.id.slice(0, 8);
         const message = (payload as { message?: unknown } | null)?.message;
-        void this.dispatch(cfg, {
-          event: 'factory_paused',
-          title: `Factory paused: ${label}`,
-          body:
-            typeof message === 'string' && message
-              ? message
-              : 'The factory chain paused after failing ticket runs; fix the cause and click Run pipeline.',
-          priority: 'high',
-          tags: ['pause_button', 'emberline'],
+        void this.page(cfg, {
+          occurrence: `${run.projectId}:factory_paused:${this.latestEventId(run.id)}`,
+          runId: run.id,
+          message: {
+            event: 'factory_paused',
+            title: `Factory paused: ${label}`,
+            body:
+              typeof message === 'string' && message
+                ? message
+                : 'The factory chain paused after failing ticket runs; fix the cause and click Run pipeline.',
+            priority: 'high',
+            tags: ['pause_button', 'emberline'],
+          },
         });
       });
     }
   }
 
-  /**
-   * The completion gate left a ticket in Review for a person (the agent reported blockers, or
-   * stopped twice without confirming it was finished): the agent-waiting page, blockers as text.
-   */
-  private completionHeld(run: Run, type: 'completion_blocked' | 'completion_missing', payload: unknown): void {
-    const cfg = this.getSettings();
-    if (!cfg.enabled || !cfg.onWaitingInput) return;
+  /** Starts the daily pruning of the page log. */
+  start(): void {
+    this.prune();
+    this.pruneTimer = setInterval(() => this.prune(), PRUNE_EVERY_MS);
+    this.pruneTimer.unref();
+  }
+
+  stop(): void {
+    if (this.pruneTimer) clearInterval(this.pruneTimer);
+    this.pruneTimer = null;
+    for (const timer of this.retries) clearTimeout(timer);
+    this.retries.clear();
+  }
+
+  /** Drops log rows older than {@link LOG_RETENTION_MS}. */
+  prune(): void {
+    this.db
+      .delete(notificationLog)
+      .where(lt(notificationLog.sentAt, new Date(this.now() - LOG_RETENTION_MS)))
+      .run();
+  }
+
+  /** Id of the run's newest event, the stable part of an occurrence that has no event of its own. */
+  private latestEventId(runId: string): number | string {
+    try {
+      const row = this.db.select({ id: max(runEvents.id) }).from(runEvents).where(eq(runEvents.runId, runId)).get();
+      return row?.id ?? `t${this.now()}`;
+    } catch {
+      return `t${this.now()}`;
+    }
+  }
+
+  /** Id of the event that moved the run to its current state. */
+  private stateEventId(runId: string, state: string, stateChangedAt: string): number | string {
+    try {
+      const row = this.db
+        .select({ id: max(runEvents.id) })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), eq(runEvents.state, state)))
+        .get();
+      return row?.id ?? `t${Date.parse(stateChangedAt)}`;
+    } catch {
+      return `t${Date.parse(stateChangedAt)}`;
+    }
+  }
+
+  /** A run changed: page for a new attention occurrence, and (opt-in) for a finished run. */
+  private onRun(run: Run, stateChanged: boolean): void {
     const label = run.title ?? run.branch ?? run.id.slice(0, 8);
-    const raw = (payload as { blockers?: unknown } | null)?.blockers;
-    const blockers = Array.isArray(raw) ? raw.filter((b): b is string => typeof b === 'string' && b.length > 0) : [];
-    void this.dispatch(cfg, {
-      event: 'waiting_input',
-      title: `Agent waiting on you: ${label}`,
-      body:
-        type === 'completion_blocked'
-          ? `Run "${label}" cannot finish its ticket and needs you:${
-              blockers.length > 0 ? blockers.map((b) => `\n- ${b}`).join('') : ' no details given.'
-            }`
-          : `Run "${label}" stopped without confirming its ticket is finished; the ticket stays in Review until you answer it.`,
-      priority: 'high',
-      tags: ['hourglass_flowing_sand', 'emberline'],
-    });
+    const attention = run.attention;
+    if (attention && attention.reason !== 'rate_limited') {
+      const cfg = this.getSettings();
+      if (!cfg.enabled) return;
+      if (attention.reason === 'failed') {
+        // Failures page under the finished-runs switch, once, when the run fails.
+        if (stateChanged && cfg.onRunFinished) {
+          const timedOut = run.lastEvent === 'waiting_input_timeout';
+          void this.page(cfg, {
+            occurrence: attention.occurrence,
+            runId: run.id,
+            message: {
+              event: 'run_finished',
+              title: timedOut ? `Run stopped, no one answered: ${label}` : `Run failed: ${label}`,
+              body: timedOut
+                ? `Run "${label}" waited ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes on a permission prompt or a stalled turn with nobody there, so it was stopped.`
+                : `Run "${label}" exited with an error.`,
+              priority: 'high',
+              tags: ['x', 'emberline'],
+            },
+          });
+        }
+        return;
+      }
+      if (!cfg.onWaitingInput) return;
+      void this.page(cfg, {
+        occurrence: attention.occurrence,
+        runId: run.id,
+        message: {
+          event: 'waiting_input',
+          title: `Agent waiting on you: ${label}`,
+          body: waitingBody(label, run, attention),
+          priority: 'high',
+          tags: ['hourglass_flowing_sand', 'emberline'],
+        },
+      });
+      return;
+    }
+    if (stateChanged && run.state === 'done' && !run.cancelled && !run.handedOffTo) {
+      const cfg = this.getSettings();
+      if (!cfg.enabled || !cfg.onRunFinished) return;
+      void this.page(cfg, {
+        occurrence: `${run.id}:finished:${this.stateEventId(run.id, 'done', run.stateChangedAt)}`,
+        runId: run.id,
+        message: {
+          event: 'run_finished',
+          title: `Run completed: ${label}`,
+          body: `Run "${label}" finished its turn and is ready for review.`,
+          priority: 'default',
+          tags: ['white_check_mark', 'emberline'],
+        },
+      });
+    }
+  }
+
+  /**
+   * Sends one page unless its occurrence is logged already (sent, suppressed or failed: never twice,
+   * restarts included) or someone is looking at that run. The row is written first, so two emits of the
+   * same occurrence cannot both send. A failed send is retried once after {@link PAGE_RETRY_MS}.
+   */
+  private async page(cfg: NotificationSettings, page: Page): Promise<void> {
+    const watched = this.presence?.isWatched(page.runId) ?? false;
+    const inserted = this.db
+      .insert(notificationLog)
+      .values({
+        occurrence: page.occurrence,
+        event: page.message.event,
+        sentAt: new Date(this.now()),
+        outcome: watched ? 'suppressed' : 'sent',
+      })
+      .onConflictDoNothing()
+      .run();
+    if (inserted.changes === 0 || watched) return;
+    const result = await this.dispatch(cfg, page.message);
+    if (result.ok) return;
+    this.setOutcome(page.occurrence, 'failed');
+    const timer = setTimeout(() => {
+      this.retries.delete(timer);
+      const current = this.getSettings();
+      if (!current.enabled) return;
+      void this.dispatch(current, page.message).then((retry) => {
+        if (retry.ok) this.setOutcome(page.occurrence, 'sent');
+      });
+    }, this.retryDelayMs);
+    timer.unref();
+    this.retries.add(timer);
+  }
+
+  private setOutcome(occurrence: string, outcome: 'sent' | 'failed'): void {
+    this.db.update(notificationLog).set({ outcome }).where(eq(notificationLog.occurrence, occurrence)).run();
   }
 
   /**
