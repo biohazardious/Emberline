@@ -122,6 +122,29 @@ export class BuildOutputArchive {
     return counts;
   }
 
+  /**
+   * "Collect now": archives, oldest run first (so a chain's earlier runs own their copies), from
+   * every run of the project whose worktree directory still exists. Passes run one after another
+   * under the project's lock; the counts are summed.
+   */
+  async collectProject(projectId: string): Promise<ArchiveCounts> {
+    const total = noCounts();
+    const rows = this.db
+      .select({ id: runs.id, worktreePath: runs.worktreePath })
+      .from(runs)
+      .where(eq(runs.projectId, projectId))
+      .orderBy(asc(runs.createdAt))
+      .all();
+    for (const row of rows) {
+      if (!(await lstat(row.worktreePath).catch(() => null))) continue;
+      const counts = await this.archiveRun(row.id);
+      total.archived += counts.archived;
+      total.skipped += counts.skipped;
+      total.failed += counts.failed;
+    }
+    return total;
+  }
+
   /** Starts an archive pass in the background (run reached `done` or `failed`). Never throws. */
   archiveSoon(runId: string): void {
     void this.track(

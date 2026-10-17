@@ -19,7 +19,9 @@
  * - unlink a file named like an archived output (a deliverable extension) or like a `.part` temp
  *   file older than an hour (the sweep);
  * - `rm -r` a directory named after a project id (project deletion);
- * - move a copy with a deliverable's name into the target (the rename after a copy).
+ * - move a copy with a deliverable's name into the target (the rename after a copy);
+ * - `realDir({ create: true })` calls mkdir by path, so a swap there can create empty directories
+ *   inside a link's target (the realpath check that follows still refuses to use them).
  * Reads are not affected: everything core reads goes through a verified descriptor. A temp file
  * that a failed check finds outside its directory is removed again (it is ours: unique name, same
  * inode).

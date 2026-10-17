@@ -19,6 +19,7 @@ import { registerForgeRoutes } from './routes/forge.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerReviewRoutes } from './routes/review.js';
+import { registerBuildOutputRoutes } from './routes/build-outputs.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSchedulerRoutes } from './routes/scheduler.js';
 import { registerTerminalRoutes } from './routes/terminals.js';
@@ -85,6 +86,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerProjectRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);
+  registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
   registerReviewRoutes(app, new ReviewService(deps.db, deps.runs));
   registerTicketRoutes(app, deps.tickets);
   registerSchedulerRoutes(app, deps.scheduler);
