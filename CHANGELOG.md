@@ -6,7 +6,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Security
 
-- Downloading a run's build output now reads the file that was checked, through one open file handle that never follows a symbolic link. Before, an agent could swap the file for a link between the check and the download and have core send any file it can read, such as its own database.
+- Downloading a run's build output now reads the file that was checked, through one open file handle that never follows a symbolic link. Before, an agent could swap the file for a link between the check and the download and have core send any file it can read, such as its own database. A run worktree that was replaced by a link is neither listed nor served.
 
 ### Added
 

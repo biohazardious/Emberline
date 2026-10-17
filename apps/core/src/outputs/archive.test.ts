@@ -665,6 +665,28 @@ describe('BuildOutputArchive and agent-controlled files', () => {
     expect(archiveLeaks()).toBe(false);
   });
 
+  it('refuses a worktree swapped for a symlink, at its root or at its .worktrees/<slug> parent', async () => {
+    addProject('p1');
+    mkdirSync(path.join(outside, 'build'));
+    writeFileSync(path.join(outside, 'build/x.apk'), 'core secrets');
+    mkdirSync(path.join(dir, '.worktrees'), { recursive: true });
+    symlinkSync(outside, path.join(dir, '.worktrees', 'r1'));
+    addRun('r1', 'p1', path.join(dir, '.worktrees', 'r1'));
+    mkdirSync(path.join(outside, 'slug/r2/build'), { recursive: true });
+    writeFileSync(path.join(outside, 'slug/r2/build/y.apk'), 'core secrets');
+    symlinkSync(path.join(outside, 'slug'), path.join(dir, '.worktrees', 'slug'));
+    addRun('r2', 'p1', path.join(dir, '.worktrees', 'slug', 'r2'));
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 1 });
+    expect(await archive.archiveRun('r2')).toEqual({ archived: 0, skipped: 0, failed: 1 });
+    expect(rowsOf('p1')).toEqual([]);
+    expect(archiveLeaks()).toBe(false);
+    expect(notes.map((n) => [n.runId, n.type])).toEqual([
+      ['r1', 'build_outputs_archive_failed'],
+      ['r2', 'build_outputs_archive_failed'],
+    ]);
+  });
+
   it('never deletes outside the archive through a symlinked run directory or stored file', async () => {
     addProject('p1');
     const wt = addWorktree('r1');
@@ -781,5 +803,39 @@ describe('BuildOutputArchive notes and races', () => {
 
     expect(await archive.archiveRun('r2')).toEqual({ archived: 1, skipped: 0, failed: 0 });
     expect(existsSync(stored('p1/r2/app.apk'))).toBe(true);
+  });
+});
+
+describe('BuildOutputArchive and a newer pass', () => {
+  it('a failed insert never deletes the file a newer pass recorded for the same output', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    // While this pass copies, another one records the same output (the unique index then refuses
+    // this pass's insert).
+    const hook = hookCopies(() => {
+      db()
+        .insert(buildOutputs)
+        .values({
+          id: 'newer',
+          projectId: 'p1',
+          runId: 'r1',
+          name: 'app.apk',
+          sourcePath: 'dist/app.apk',
+          storedPath: 'p1/r1/app.apk',
+          sizeBytes: 100,
+          sourceMtime: new Date(),
+          archivedAt: new Date(),
+        })
+        .run();
+    });
+    try {
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 1 });
+    } finally {
+      hook.mockRestore();
+    }
+    expect(rowsOf('p1').map((r) => r.id)).toEqual(['newer']);
+    expect(existsSync(stored('p1/r1/app.apk'))).toBe(true);
   });
 });

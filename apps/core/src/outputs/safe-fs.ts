@@ -7,10 +7,22 @@
  * open), and the opened descriptor is checked: `/proc/self/fd/<fd>` must name exactly the expected
  * path and fstat must report a regular file. Reads, sizes and copies then go through that fd.
  *
- * Node has no openat/unlinkat, so renames and unlinks still go by path; they are done inside a
- * directory whose real path was verified just before, and an unlink never follows the final
- * component. A swap of a directory in that last window can at worst move or unlink a file with a
- * deliverable's name; it can never make core read a file it did not verify.
+ * Roots are checked from a base core trusts (the workspaces mount point, which agents cannot
+ * replace): a worktree or archive directory must really be `realpath(base)/<its relative path>`, so
+ * a worktree swapped for a symlink is refused rather than followed.
+ *
+ * The remaining race, stated plainly: Node has no openat/unlinkat/renameat, so `rename`, `unlink`
+ * and `rm` still take paths. Each one is issued right after the real path of its directory was
+ * verified, and none follows its final component. An agent that swaps a directory for a symlink
+ * inside that last window (between the verification and the system call) can redirect that one
+ * call into the link's target, limited to what core may write there:
+ * - unlink a file named like an archived output (a deliverable extension) or like a `.part` temp
+ *   file older than an hour (the sweep);
+ * - `rm -r` a directory named after a project id (project deletion);
+ * - move a copy with a deliverable's name into the target (the rename after a copy).
+ * Reads are not affected: everything core reads goes through a verified descriptor. A temp file
+ * that a failed check finds outside its directory is removed again (it is ours: unique name, same
+ * inode).
  */
 import { constants as fsConstants } from 'node:fs';
 import { type FileHandle, lstat, mkdir, open, readlink, realpath, rm, unlink } from 'node:fs/promises';
@@ -70,11 +82,21 @@ export async function openVerifiedFile(abs: string, expectedReal: string): Promi
 
 /**
  * Opens `relPath` (already validated as relative and inside, e.g. by resolveSafeWorktreePath) under
- * `rootDir` for reading: the file must really be `realpath(rootDir)/relPath`, reached without links.
+ * `rootDir` for reading. `rootDir` lies under `trustedBase`, and the file must really be
+ * `realpath(trustedBase)/<rootDir relative to it>/relPath`: no link anywhere from the base down,
+ * the root itself included.
  */
-export async function openFileUnder(rootDir: string, relPath: string): Promise<OpenedFile> {
-  const realRoot = await realpath(rootDir);
-  return openVerifiedFile(path.join(rootDir, relPath), path.join(realRoot, relPath));
+export async function openFileUnder(
+  trustedBase: string,
+  rootDir: string,
+  relPath: string,
+): Promise<OpenedFile> {
+  const rootRel = path.relative(trustedBase, rootDir);
+  if (rootRel.startsWith('..') || path.isAbsolute(rootRel)) {
+    throw new UnsafePathError(`${rootDir} is outside ${trustedBase}`);
+  }
+  const expected = path.join(await realpath(trustedBase), rootRel, relPath);
+  return openVerifiedFile(path.join(rootDir, relPath), expected);
 }
 
 /** Creates `name` in the verified directory `realDir`; fails if anything already exists there. */
@@ -82,13 +104,43 @@ export async function createExclusiveFile(realDir: string, name: string): Promis
   const target = path.join(realDir, name);
   const handle = await open(target, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644);
   try {
-    if ((await fdPath(handle)) !== target)
+    const actual = await fdPath(handle);
+    if (actual !== target) {
+      // A directory was swapped after it was verified: the new, empty file is elsewhere. Remove it
+      // only if the entry there is still this very file (same name, same inode); it was created with
+      // O_EXCL under a fresh unique name, so it is ours.
+      const [mine, there] = await Promise.all([handle.stat(), lstat(actual).catch(() => null)]);
+      if (there && path.basename(actual) === name && there.ino === mine.ino && there.dev === mine.dev) {
+        await unlink(actual).catch(() => undefined);
+      }
       throw new UnsafePathError(`${target} was created outside its directory`);
+    }
     return handle;
   } catch (error) {
     await handle.close().catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * The real path of `dir`, which must be `dir` itself under `trustedBase`: no component between the
+ * base and `dir` may be a link. Null when `dir` does not exist.
+ */
+export async function realDirUnder(trustedBase: string, dir: string): Promise<string | null> {
+  const rel = path.relative(trustedBase, dir);
+  if (rel.startsWith('..') || path.isAbsolute(rel))
+    throw new UnsafePathError(`${dir} is outside ${trustedBase}`);
+  let real: string;
+  try {
+    real = await realpath(dir);
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+  if (real !== path.join(await realpath(trustedBase), rel)) {
+    throw new UnsafePathError(`${dir} is reached through a symbolic link`);
+  }
+  return real;
 }
 
 /** Copies exactly `size` bytes from `src` to `dst` (both open descriptors). */
@@ -208,10 +260,18 @@ export class SafeRoot {
    * to) from its verified directory. True when something was removed.
    */
   async unlinkFile(relPath: string): Promise<boolean> {
-    const dir = await this.realDir(path.dirname(path.relative(this.root, this.resolve(relPath))));
+    const rel = path.relative(this.root, this.resolve(relPath));
+    return this.unlinkIn(path.dirname(rel), path.basename(rel));
+  }
+
+  /** Unlinks entry `name` of directory `relDir`, verifying the directory right before. */
+  async unlinkIn(relDir: string, name: string): Promise<boolean> {
+    if (!name || name === '.' || name === '..' || /[/\\\0]/.test(name))
+      throw new UnsafePathError('invalid name');
+    const dir = relDir === '.' ? await this.realRoot() : await this.realDir(relDir);
     if (!dir) return false;
     try {
-      await unlink(path.join(dir, path.basename(relPath)));
+      await unlink(path.join(dir, name));
       return true;
     } catch (error) {
       if (isMissing(error)) return false;
@@ -221,9 +281,20 @@ export class SafeRoot {
 
   /** Removes directory `relDir` and everything in it; rm never follows links inside it. */
   async removeTree(relDir: string): Promise<void> {
-    const abs = this.resolve(relDir);
-    if (!(await this.rootIsRealDir())) return;
-    const real = path.join(await this.expectedReal(), path.relative(this.root, abs));
-    await rm(real, { recursive: true, force: true });
+    const rel = path.relative(this.root, this.resolve(relDir));
+    const parentRel = path.dirname(rel);
+    const parent =
+      parentRel === '.' ? await this.realRoot().catch(() => null) : await this.realDir(parentRel);
+    if (!parent) return;
+    await rm(path.join(parent, path.basename(rel)), { recursive: true, force: true });
+  }
+
+  /** The root's real path, verified (a real directory where it should be); null when absent. */
+  private async realRoot(): Promise<string | null> {
+    if (!(await this.rootIsRealDir())) return null;
+    const real = await realpath(this.root);
+    if (real !== (await this.expectedReal()))
+      throw new UnsafePathError('the root is reached through a symbolic link');
+    return real;
   }
 }

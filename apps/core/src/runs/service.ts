@@ -39,6 +39,7 @@ import {
   type Route,
   type Run,
   type RunArtifact,
+  type RunBuildOutput,
   type RunBuildOutputsResponse,
   type RunDetail,
   type RunDiffSummary,
@@ -59,7 +60,7 @@ import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
-import { openFileUnder, streamOpenedFile } from '../outputs/safe-fs.js';
+import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
@@ -1392,7 +1393,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       hostRoot && row.worktreePath.startsWith(`${this.config.workspacesDir}/`)
         ? path.join(hostRoot, path.relative(this.config.workspacesDir, row.worktreePath))
         : null;
-    return { worktreePath: row.worktreePath, hostWorktreePath, outputs: await listBuildOutputs(row.worktreePath) };
+    return { worktreePath: row.worktreePath, hostWorktreePath, outputs: await this.listOwnBuildOutputs(row.worktreePath) };
+  }
+
+  /**
+   * listBuildOutputs for a worktree that really is where it should be under the workspaces root;
+   * one an agent swapped for a symlink is not walked (nothing is listed).
+   */
+  private async listOwnBuildOutputs(worktreePath: string): Promise<RunBuildOutput[]> {
+    const real = await realDirUnder(this.config.workspacesDir, worktreePath).catch(() => null);
+    return real ? listBuildOutputs(worktreePath) : [];
   }
 
   /**
@@ -1403,10 +1413,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async openBuildOutput(id: string, relPath: string): Promise<{ stream: Readable; fileName: string; size: number }> {
     const row = this.row(id);
     const { rel } = resolveSafeWorktreePath(row.worktreePath, relPath);
-    const outputs = await listBuildOutputs(row.worktreePath);
+    const outputs = await this.listOwnBuildOutputs(row.worktreePath);
     const match = outputs.find((o) => o.path === rel);
     if (!match) throw notFound('no such build output');
-    const opened = await openFileUnder(row.worktreePath, rel).catch(() => null);
+    const opened = await openFileUnder(this.config.workspacesDir, row.worktreePath, rel).catch(() => null);
     if (!opened) throw notFound('no such build output');
     return { stream: streamOpenedFile(opened), fileName: match.name, size: opened.size };
   }

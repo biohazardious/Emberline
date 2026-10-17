@@ -12,7 +12,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { type Dirent } from 'node:fs';
-import { type FileHandle, lstat, readdir, rename, unlink } from 'node:fs/promises';
+import { type FileHandle, lstat, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import type { AgentPersona, ProjectBuildOutputsResponse, RunBuildOutput } from '@emberline/protocol';
@@ -29,6 +29,7 @@ import {
   createExclusiveFile,
   type OpenedFile,
   openFileUnder,
+  realDirUnder,
   SafeRoot,
   streamOpenedFile,
   UnsafePathError,
@@ -308,11 +309,11 @@ export class BuildOutputArchive {
           );
           return Promise.race([pass, expired]);
         })
-        .catch(() => null);
-      const counts = await Promise.race([locked, expired]);
-      return counts
-        ? { counts, timedOut: false }
-        : { counts: { archived: 0, skipped: 0, failed: 1 }, timedOut: true };
+        .catch((error: unknown) => ({ error }));
+      const result = await Promise.race([locked, expired]);
+      if (result === null) return { counts: { archived: 0, skipped: 0, failed: 1 }, timedOut: true };
+      if ('error' in result) throw result.error;
+      return { counts: result, timedOut: false };
     } catch (error) {
       this.notify(runId, 'build_outputs_archive_failed', {
         failures: [{ path: '', error: errorText(error) }],
@@ -329,7 +330,9 @@ export class BuildOutputArchive {
     const run = this.db.select().from(runs).where(eq(runs.id, runId)).get();
     if (!run || control.aborted || this.projectGone(run.projectId)) return counts;
     await this.sweepPartFiles(run.projectId).catch(() => undefined);
-    const outputs = await listBuildOutputs(run.worktreePath);
+    // The worktree must really be where it should be: one swapped for a symlink is never walked.
+    const worktree = await realDirUnder(this.config.workspacesDir, run.worktreePath);
+    const outputs = worktree ? await listBuildOutputs(run.worktreePath) : [];
     const quota = this.quotaBytes();
     const projectRows = this.db
       .select()
@@ -368,6 +371,7 @@ export class BuildOutputArchive {
       let source: OpenedFile;
       try {
         source = await openFileUnder(
+          this.config.workspacesDir,
           run.worktreePath,
           resolveSafeWorktreePath(run.worktreePath, output.path).rel,
         );
@@ -511,14 +515,16 @@ export class BuildOutputArchive {
       } finally {
         await out.close();
       }
-      if (stopped()) throw new Error('the archive pass was stopped (time limit or project deleted)');
       if ((await this.files.realDir(relDir)) !== dir)
         throw new UnsafePathError(`${relDir} changed while copying`);
+      // Checked last, with no await before the rename is issued: a pass whose time ran out never
+      // places a file, so it cannot replace one that a newer pass (free to run now) placed.
+      if (stopped()) throw new Error('the archive pass was stopped (time limit or project deleted)');
       // rename replaces the destination entry itself, even if a link was planted there.
       await rename(path.join(dir, tempName), path.join(dir, base));
       placed = true;
     } finally {
-      if (!placed) await unlink(path.join(dir, tempName)).catch(() => undefined);
+      if (!placed) await this.files.unlinkIn(relDir, tempName).catch(() => undefined);
     }
     const values = {
       projectId: run.projectId,
@@ -547,8 +553,9 @@ export class BuildOutputArchive {
         .returning()
         .get();
     } catch (error) {
-      // No row (e.g. the project was deleted meanwhile): no file either.
-      await this.files.unlinkFile(storedPath).catch(() => undefined);
+      // The project was deleted meanwhile: no row, so no file either. Any other failure (e.g. the
+      // unique index, because another pass recorded this output) leaves the file to that row.
+      if (this.projectGone(run.projectId)) await this.files.unlinkFile(storedPath).catch(() => undefined);
       throw error;
     }
   }
@@ -621,7 +628,7 @@ export class BuildOutputArchive {
         if (!entry.isFile() || !PART_FILE.test(entry.name)) continue;
         const info = await lstat(path.join(dir, entry.name)).catch(() => null);
         if (info?.isFile() && now - info.mtimeMs > STALE_PART_MS) {
-          await unlink(path.join(dir, entry.name)).catch(() => undefined);
+          await this.files.unlinkIn(`${projectId}/${runDir.name}`, entry.name).catch(() => undefined);
         }
       }
     }

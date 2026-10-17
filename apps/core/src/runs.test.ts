@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -751,6 +752,26 @@ describe('runs', () => {
     // Only deliverables can be downloaded through this route.
     expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=.gitignore`)).statusCode).toBe(404);
     expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=../../etc/passwd`)).statusCode).toBeGreaterThanOrEqual(400);
+  });
+
+  it('neither lists nor serves build outputs of a worktree swapped for a symlink', async () => {
+    const project = await createProject('Build outputs link', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const outside = mkdtempSync(path.join(tmpdir(), 'core-data-'));
+    try {
+      mkdirSync(path.join(outside, 'build'));
+      writeFileSync(path.join(outside, 'build/x.apk'), 'core secrets');
+      rmSync(run.worktreePath, { recursive: true, force: true });
+      symlinkSync(outside, run.worktreePath);
+
+      const res = (await api('GET', `/api/runs/${run.id}/build-outputs`)).json() as RunBuildOutputsResponse;
+      expect(res.outputs).toEqual([]);
+      const download = await api('GET', `/api/runs/${run.id}/build-outputs/download?path=build/x.apk`);
+      expect(download.statusCode).toBe(404);
+      expect(download.body).not.toContain('core secrets');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('fails a Claude run with a clear message instead of leaving it at the sign-in screen', async () => {

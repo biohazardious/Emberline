@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  realDirUnder,
   createExclusiveFile,
   openFileUnder,
   SafeRoot,
@@ -42,7 +43,7 @@ const put = (rel: string, content: string) => {
 describe('openFileUnder', () => {
   it('opens a regular file and streams exactly its size', async () => {
     put('build/app.apk', 'apk bytes');
-    const opened = await openFileUnder(dir, 'build/app.apk');
+    const opened = await openFileUnder(dir, dir, 'build/app.apk');
     expect(opened.size).toBe(9);
     const chunks: Buffer[] = [];
     for await (const chunk of streamOpenedFile(opened)) chunks.push(chunk as Buffer);
@@ -52,17 +53,55 @@ describe('openFileUnder', () => {
   it('refuses a symlinked file, a symlinked directory and a FIFO without blocking', async () => {
     mkdirSync(path.join(dir, 'build'));
     symlinkSync(path.join(outside, 'secret.db'), path.join(dir, 'build/app.apk'));
-    await expect(openFileUnder(dir, 'build/app.apk')).rejects.toBeInstanceOf(UnsafePathError);
+    await expect(openFileUnder(dir, dir, 'build/app.apk')).rejects.toBeInstanceOf(UnsafePathError);
 
     symlinkSync(outside, path.join(dir, 'pkg'));
-    await expect(openFileUnder(dir, 'pkg/secret.db')).rejects.toBeInstanceOf(UnsafePathError);
+    await expect(openFileUnder(dir, dir, 'pkg/secret.db')).rejects.toBeInstanceOf(UnsafePathError);
 
     execFileSync('mkfifo', [path.join(dir, 'build/pipe.apk')]);
-    await expect(openFileUnder(dir, 'build/pipe.apk')).rejects.toBeInstanceOf(UnsafePathError);
+    await expect(openFileUnder(dir, dir, 'build/pipe.apk')).rejects.toBeInstanceOf(UnsafePathError);
+  });
+});
+
+describe('the worktree root itself', () => {
+  it('refuses a worktree root, or a parent of it, that is a symlink', async () => {
+    mkdirSync(path.join(outside, 'build'));
+    writeFileSync(path.join(outside, 'build/x.apk'), 'core secrets');
+    mkdirSync(path.join(dir, '.worktrees'));
+    symlinkSync(outside, path.join(dir, '.worktrees/wt'));
+    await expect(openFileUnder(dir, path.join(dir, '.worktrees/wt'), 'build/x.apk')).rejects.toBeInstanceOf(
+      UnsafePathError,
+    );
+    await expect(realDirUnder(dir, path.join(dir, '.worktrees/wt'))).rejects.toBeInstanceOf(UnsafePathError);
+
+    mkdirSync(path.join(outside, 'slug/wt/build'), { recursive: true });
+    writeFileSync(path.join(outside, 'slug/wt/build/x.apk'), 'core secrets');
+    symlinkSync(path.join(outside, 'slug'), path.join(dir, '.worktrees/slug'));
+    const nested = path.join(dir, '.worktrees/slug/wt');
+    await expect(openFileUnder(dir, nested, 'build/x.apk')).rejects.toBeInstanceOf(UnsafePathError);
+    await expect(realDirUnder(dir, nested)).rejects.toBeInstanceOf(UnsafePathError);
+
+    // Outside the base, missing, and the real thing.
+    await expect(realDirUnder(dir, outside)).rejects.toBeInstanceOf(UnsafePathError);
+    expect(await realDirUnder(dir, path.join(dir, '.worktrees/missing'))).toBeNull();
+    put('.worktrees/real/build/x.apk', 'apk');
+    expect(await realDirUnder(dir, path.join(dir, '.worktrees/real'))).toBe(
+      path.join(dir, '.worktrees/real'),
+    );
+    const opened = await openFileUnder(dir, path.join(dir, '.worktrees/real'), 'build/x.apk');
+    await opened.handle.close();
   });
 });
 
 describe('createExclusiveFile', () => {
+  it('removes its own file again when the directory turns out to be a link', async () => {
+    symlinkSync(outside, path.join(dir, 'swapped'));
+    await expect(createExclusiveFile(path.join(dir, 'swapped'), '.x.1234.part')).rejects.toBeInstanceOf(
+      UnsafePathError,
+    );
+    expect(existsSync(path.join(outside, '.x.1234.part'))).toBe(false);
+  });
+
   it('never opens an existing entry or a planted link', async () => {
     symlinkSync(path.join(outside, 'secret.db'), path.join(dir, '.x.part'));
     await expect(createExclusiveFile(dir, '.x.part')).rejects.toMatchObject({ code: 'EEXIST' });
