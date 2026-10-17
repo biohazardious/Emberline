@@ -21,6 +21,7 @@ Think of it as an issue tracker, an editor and a git client in one browser tab, 
 - **Cross-provider review.** Optionally, a different CLI reviews a run's diff read-only before it is merged (for example, Codex reviewing Claude's work).
 - **Completion signal.** Claude agents confirm a ticket is finished with an `emberline` tool, with a handoff note for dependent tickets; the factory waits for it and holds blocked tickets for you.
 - **Quality gates.** A build/lint/test gate, and a pre-merge check for leftover secrets and debug code.
+- **Inbox.** Every run that needs you, across all projects, in one list: answer a question inline, and dismiss failures. You get one page per thing that needs you, and none while you have that run open.
 - **Fleet view.** Watch up to four agent terminals side by side, filter to the ones waiting for you and steer them inline.
 - **Project tooling.** A new-project wizard that writes a `PROJECT.md` blueprint and starter tickets, a roadmap and brainstorming page, a code explorer and editor, a live view of the agent's headless browser, checkpoints with rollback, scheduled jobs and project export.
 - **Build outputs.** APKs, installers and firmware are archived per project when a run finishes, so they outlive worktree cleanup. A Build Outputs page lists, downloads, pins and prunes them within a per-project quota.
