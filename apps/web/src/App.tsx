@@ -829,7 +829,7 @@ function Shell() {
               )}
               <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`} title="Fleet">
                 <LayoutGrid className="icon" aria-hidden /> <span className="tab-label">Fleet</span>
-                {activeRuns.length > 0 && <span className="badge mono">{activeRuns.length}</span>}
+                {attention.count > 0 && <span className="badge mono">{attention.count}</span>}
               </Link>
               <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`} title="Settings">
                 <Settings className="icon" aria-hidden /> <span className="tab-label">Settings</span>
