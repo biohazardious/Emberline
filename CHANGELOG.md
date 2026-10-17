@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- On phones, a Fleet card whose ticket title wraps no longer cuts off its reply box at the bottom.
+
 ## [0.2.1] - 2026-10-17
 
 ### Security
