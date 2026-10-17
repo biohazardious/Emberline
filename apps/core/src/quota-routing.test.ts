@@ -4,7 +4,7 @@ import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { quotaWindows, runs as runsTable } from './db/schema.js';
+import { quotaWindows, runs as runsTable, tickets as ticketsTable } from './db/schema.js';
 import { computeProjectRecommendations } from './factory/workspace-status.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -218,6 +218,21 @@ describe('runs carry their route', () => {
 });
 
 describe('handoff', () => {
+  it('keeps the ticket completion: the successor continues the same work', async () => {
+    const { ticketId, run } = await startTicket('Keep my handoff');
+    const token = await work(run);
+    const completion = { runId: run.id, summary: 'half way', handoff: 'see notes.md', blockers: [], at: '2026-10-17T10:00:00.000Z' };
+    t.db.update(ticketsTable).set({ completion }).where(eq(ticketsTable.id, ticketId)).run();
+    await hook(run.id, 'StopFailure', token, AGY_QUOTA);
+    const successor: Run = await t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, {
+      reason: 'Individual quota reached',
+      source: 'system',
+      automatic: true,
+    });
+    expect(successor.ticketId).toBe(ticketId);
+    expect((await api('GET', `/api/tickets/${ticketId}`)).json().completion).toEqual(completion);
+  });
+
   it('continues a run as a successor in the same worktree and branch', async () => {
     const { run } = await startTicket('Colour-blind cats');
     const token = await work(run);

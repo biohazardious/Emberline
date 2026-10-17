@@ -575,6 +575,36 @@ describe('dependency context in the dependent prompt', () => {
   });
 });
 
+describe('the ticket completion and a new run', () => {
+  it('a fresh run of the ticket clears its old completion and broadcasts the ticket', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'Again', status: 'review' });
+    t.db
+      .update(tickets)
+      .set({ completion: { runId: 'old', summary: 'old work', handoff: '', blockers: ['stuck'], at: '2026-10-17T10:00:00.000Z' } })
+      .where(eq(tickets.id, ticket.id))
+      .run();
+    const seen: Ticket[] = [];
+    t.tickets.on('ticket', (x) => seen.push(x));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    await waitFile(`token-${run.id}`);
+    const got = (await api('GET', `/api/tickets/${ticket.id}`)).json() as Ticket;
+    expect(got.completion).toBeNull();
+    expect(Date.parse(got.updatedAt)).toBeGreaterThan(Date.parse(ticket.updatedAt));
+    const pushed = seen.filter((x) => x.id === ticket.id).at(-1);
+    expect(pushed?.completion).toBeNull();
+  });
+
+  it('a follow-up in the same run keeps the completion', async () => {
+    const { ticket, run } = await factoryTicket();
+    await begin(run);
+    await complete(run, { summary: 'kept' });
+    await t.tickets.prompt(ticket.id, 'one more thing');
+    expect(((await api('GET', `/api/tickets/${ticket.id}`)).json() as Ticket).completion).toMatchObject({ summary: 'kept' });
+  });
+});
+
 describe('dependencyContextSection', () => {
   const dep = (key: string, at: string, summary: string, handoff = ''): FinishedDependency => ({
     key,

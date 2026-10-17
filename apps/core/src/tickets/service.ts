@@ -1472,6 +1472,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         title: `${ticket.key} ${ticket.title}`,
       },
     );
+    // A fresh run must signal again; the old completion would hand stale work to dependents. A
+    // handoff successor or a resumed session continues the same work and does not come here.
+    // moveToTop bumps updatedAt and broadcasts the ticket.
+    if (ticket.completion) this.db.update(tickets).set({ completion: null }).where(eq(tickets.id, id)).run();
     return { ticket: this.moveToTop(id, 'in_progress'), run };
   }
 
