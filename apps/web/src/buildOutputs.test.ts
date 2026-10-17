@@ -48,6 +48,8 @@ describe('formatBytes', () => {
     expect(formatBytes(2048)).toBe('2.0 KB');
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB');
     expect(formatBytes(1.2 * 1024 ** 3)).toBe('1.2 GB');
+    expect(formatBytes(1023.96 * 1024)).toBe('1.0 MB');
+    expect(formatBytes(1023 * 1024)).toBe('1023.0 KB');
   });
 });
 
@@ -90,6 +92,7 @@ describe('clampQuotaGb', () => {
     expect(clampQuotaGb('0.1')).toBe(0.5);
     expect(clampQuotaGb('2000')).toBe(1000);
     expect(clampQuotaGb('7.5')).toBe(7.5);
+    expect(clampQuotaGb('7.3')).toBe(7.3);
     expect(clampQuotaGb('')).toBe(5);
     expect(clampQuotaGb('abc')).toBe(5);
   });

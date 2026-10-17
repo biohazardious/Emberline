@@ -1,6 +1,6 @@
 import type { CollectBuildOutputsResponse, ProjectBuildOutput, ProjectBuildOutputsResponse } from '@emberline/protocol';
 import { Check, Copy, Download, Package, Pin, PinOff, RefreshCw, Search, Trash2, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import {
@@ -11,6 +11,8 @@ import {
   usageFraction,
   usageText,
 } from '../buildOutputs';
+import { copyText } from '../clipboard';
+import { CopyFallback } from '../components/CopyFallback';
 import { PERSONA_BY_ID } from '../components/PersonaBadge';
 import { useApi } from '../hooks/useApi';
 import { useQueryParam } from '../hooks/navigation';
@@ -91,7 +93,7 @@ function Actions({
         type="button"
         className={confirming ? 'btn btn-sm danger' : 'icon-btn'}
         title="Delete this archived file"
-        aria-label={confirming ? `Confirm deleting ${output.name}` : `Delete ${output.name}`}
+        aria-label={confirming ? `Click again to confirm deleting ${output.name}` : `Delete ${output.name}`}
         disabled={busy}
         onClick={onDelete}
       >
@@ -113,15 +115,17 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Poll faster while a collect pass runs.
-  const [fast, setFast] = useState(false);
+  const collectingRef = useRef(false);
+  const pollFast = collectingRef.current || starting;
   const { data, error: loadError, loading, refresh } = useApi<ProjectBuildOutputsResponse>(
     `/api/projects/${projectId}/build-outputs`,
-    fast ? 2_000 : 8_000,
+    pollFast ? 2_000 : 8_000,
   );
-  const collecting = (data?.collecting ?? false) || starting;
-  useEffect(() => setFast(collecting), [collecting]);
+  collectingRef.current = data?.collecting ?? false;
+  const collecting = collectingRef.current || starting;
 
   // The delete confirmation lapses on its own.
   useEffect(() => {
@@ -168,11 +172,13 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
     }
   }
 
-  function copyPath(output: ProjectBuildOutput) {
-    void navigator.clipboard
-      ?.writeText(output.hostPath)
-      .then(() => setCopiedId(output.id))
-      .catch(() => setError('Could not copy to the clipboard.'));
+  async function copyPath(output: ProjectBuildOutput) {
+    if (await copyText(output.hostPath)) {
+      setManualCopy(null);
+      setCopiedId(output.id);
+    } else {
+      setManualCopy(output.hostPath);
+    }
   }
 
   function actionsFor(o: ProjectBuildOutput) {
@@ -182,7 +188,7 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
         busy={busyId === o.id}
         confirming={confirmId === o.id}
         copied={copiedId === o.id}
-        onCopy={() => copyPath(o)}
+        onCopy={() => void copyPath(o)}
         onPin={() => void mutate(o, () => api(`/api/build-outputs/${o.id}`, 'PATCH', { pinned: !o.pinned }))}
         onDelete={() => {
           if (confirmId !== o.id) {
@@ -255,6 +261,8 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
           {error ?? errorMessage(loadError)}
         </div>
       )}
+
+      {manualCopy && <CopyFallback text={manualCopy} onClose={() => setManualCopy(null)} />}
 
       {total > 0 && (
         <div className="build-outputs-filters">

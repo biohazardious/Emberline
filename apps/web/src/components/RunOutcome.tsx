@@ -2,6 +2,9 @@ import type { RunBuildOutput, RunBuildOutputsResponse } from '@emberline/protoco
 import { Copy, Download, Package } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { formatBytes } from '../buildOutputs';
+import { copyText } from '../clipboard';
+import { CopyFallback } from './CopyFallback';
 import { timeAgo } from '../time';
 
 /** Text longer than this (or with more lines) starts collapsed. */
@@ -53,15 +56,6 @@ export function LastScreen({ text }: { text: string }) {
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
-
-function copy(text: string): void {
-  void navigator.clipboard?.writeText(text).catch(() => undefined);
-}
 
 /**
  * Deliverables a run built (APKs, installers, firmware), wherever the build wrote them, with their
@@ -69,6 +63,7 @@ function copy(text: string): void {
  */
 export function BuildOutputsList({ runId, refreshKey }: { runId: string; refreshKey?: string | null }) {
   const [data, setData] = useState<RunBuildOutputsResponse | null>(null);
+  const [manualCopy, setManualCopy] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void api<RunBuildOutputsResponse>(`/api/runs/${runId}/build-outputs`)
@@ -106,7 +101,7 @@ export function BuildOutputsList({ runId, refreshKey }: { runId: string; refresh
                 type="button"
                 className="icon-btn"
                 title="Copy the full path"
-                onClick={() => copy(fullPath(o))}
+                onClick={() => void copyText(fullPath(o)).then((ok) => setManualCopy(ok ? null : fullPath(o)))}
               >
                 <Copy className="icon" aria-hidden />
               </button>
@@ -122,6 +117,7 @@ export function BuildOutputsList({ runId, refreshKey }: { runId: string; refresh
           </li>
         ))}
       </ul>
+      {manualCopy && <CopyFallback text={manualCopy} onClose={() => setManualCopy(null)} />}
     </section>
   );
 }

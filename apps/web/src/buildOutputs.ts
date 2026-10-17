@@ -43,12 +43,12 @@ export function formatBytes(bytes: number): string {
   const units = ['KB', 'MB', 'GB', 'TB'];
   let value = bytes / 1024;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
+  // Rounding 1023.96 KB to one decimal gives 1024.0, which belongs in the next unit.
+  while ((value >= 1024 || Number(value.toFixed(1)) >= 1024) && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
-  const rounded = value.toFixed(1);
-  return `${rounded.endsWith('.0') && value >= 100 ? rounded.slice(0, -2) : rounded} ${units[unit]}`;
+  return `${value.toFixed(1)} ${units[unit]}`;
 }
 
 /** Quota sizes read better without a trailing ".0" ("5 GB", "512 MB"). */

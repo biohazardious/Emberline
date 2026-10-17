@@ -741,7 +741,7 @@ export function SettingsPage({
                 className="input mono"
                 min={0.5}
                 max={1000}
-                step={0.5}
+                step="any"
                 value={buildOutputsQuotaGb}
                 onChange={(e) => setBuildOutputsQuotaGb(e.target.value)}
                 onBlur={() => setBuildOutputsQuotaGb(String(clampQuotaGb(buildOutputsQuotaGb)))}
