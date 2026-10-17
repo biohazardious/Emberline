@@ -8,6 +8,7 @@ import {
   formatBytes,
   OUTPUT_GROUPS,
   type OutputGroupFilter,
+  outputPath,
   usageFraction,
   usageText,
 } from '../buildOutputs';
@@ -58,6 +59,7 @@ function Actions({
   onPin: () => void;
   onDelete: () => void;
 }) {
+  const where = outputPath(output).where === 'host' ? 'on the host' : 'in the container';
   return (
     <div className="build-outputs-actions">
       <a
@@ -72,8 +74,8 @@ function Actions({
       <button
         type="button"
         className="icon-btn"
-        title="Copy the path on the host"
-        aria-label={`Copy host path of ${output.name}`}
+        title={`Copy the path ${where}`}
+        aria-label={`Copy the path of ${output.name} ${where}`}
         onClick={onCopy}
       >
         {copied ? <Check className="icon" aria-hidden /> : <Copy className="icon" aria-hidden />}
@@ -117,9 +119,11 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // With a run filter the list also reports that run's handoff chain, which the filter matches.
+  const runQuery = runFilter ? `?run=${encodeURIComponent(runFilter)}` : '';
   // Poll faster while a collect pass runs.
   const { data, error: loadError, loading, refresh } = useApi<ProjectBuildOutputsResponse>(
-    `/api/projects/${projectId}/build-outputs`,
+    `/api/projects/${projectId}/build-outputs${runQuery}`,
     (latest) => (starting || latest?.collecting ? 2_000 : 8_000),
   );
   const collecting = (data?.collecting ?? false) || starting;
@@ -137,8 +141,13 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   }, [copiedId]);
 
   const outputs = useMemo(
-    () => filterOutputs(data?.outputs ?? [], { group, query, runId: runFilter }),
-    [data?.outputs, group, query, runFilter],
+    () =>
+      filterOutputs(data?.outputs ?? [], {
+        group,
+        query,
+        runIds: runFilter ? (data?.runChain ?? [runFilter]) : null,
+      }),
+    [data?.outputs, data?.runChain, group, query, runFilter],
   );
   const pinnedBytes = (data?.outputs ?? []).filter((o) => o.pinned).reduce((sum, o) => sum + o.sizeBytes, 0);
   const quotaFull = data !== undefined && data.quotaBytes > 0 && pinnedBytes >= data.quotaBytes;
@@ -170,11 +179,12 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   }
 
   async function copyPath(output: ProjectBuildOutput) {
-    if (await copyText(output.hostPath)) {
+    const { path } = outputPath(output);
+    if (await copyText(path)) {
       setManualCopy(null);
       setCopiedId(output.id);
     } else {
-      setManualCopy(output.hostPath);
+      setManualCopy(path);
     }
   }
 
@@ -222,7 +232,8 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
             <strong className="mono">{usageText(data.usedBytes, data.quotaBytes)}</strong>
             {quotaFull && <span className="badge badge-bad">quota full</span>}
             <span className="muted small">
-              Archive: <code className="mono">{data.hostArchiveDir}</code>
+              {data.hostArchiveDir ? 'Archive on the host: ' : 'Archive (container path): '}
+              <code className="mono">{data.hostArchiveDir ?? data.archiveDir}</code>
             </span>
           </div>
           <div

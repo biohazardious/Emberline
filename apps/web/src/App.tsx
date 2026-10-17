@@ -326,7 +326,7 @@ function Shell() {
   const handleDeleteActiveProject = async () => {
     if (!activeProject) return;
     const confirmed = window.confirm(
-      `Delete project "${activeProject.name}" (${activeProject.slug})?\n\nThis will stop all runs, remove its tickets & worktrees, and delete the workspace folder (${activeProject.path}).`,
+      `Delete project "${activeProject.name}" (${activeProject.slug})?\n\nThis will stop all runs, remove its tickets & worktrees, and delete the workspace folder (${activeProject.path}). Its archived build outputs are deleted too, pinned ones included.`,
     );
     if (!confirmed) return;
     try {

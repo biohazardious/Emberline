@@ -19,6 +19,7 @@
  * - unlink a file named like an archived output (a deliverable extension) or like a `.part` temp
  *   file older than an hour (the sweep);
  * - `rm -r` a directory named after a project id (project deletion);
+ * - `rmdir` an empty directory named after a run id (after its last archived file went);
  * - move a copy with a deliverable's name into the target (the rename after a copy);
  * - `realDir({ create: true })` calls mkdir by path, so a swap there can create empty directories
  *   inside a link's target (the realpath check that follows still refuses to use them).
@@ -26,8 +27,9 @@
  * that a failed check finds outside its directory is removed again (it is ours: unique name, same
  * inode).
  */
+import { createHash, type Hash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { type FileHandle, lstat, mkdir, open, readlink, realpath, rm, unlink } from 'node:fs/promises';
+import { type FileHandle, lstat, mkdir, open, readlink, realpath, rm, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 
@@ -145,13 +147,22 @@ export async function realDirUnder(trustedBase: string, dir: string): Promise<st
   return real;
 }
 
-/** Copies exactly `size` bytes from `src` to `dst` (both open descriptors). */
-export async function copyBetweenHandles(src: FileHandle, dst: FileHandle, size: number): Promise<void> {
+/**
+ * Copies exactly `size` bytes from `src` to `dst` (both open descriptors), feeding them to `hash`
+ * when given.
+ */
+export async function copyBetweenHandles(
+  src: FileHandle,
+  dst: FileHandle,
+  size: number,
+  hash?: Hash,
+): Promise<void> {
   const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(size, COPY_CHUNK)));
   let position = 0;
   while (position < size) {
     const { bytesRead } = await src.read(buffer, 0, Math.min(buffer.length, size - position), position);
     if (bytesRead === 0) throw new Error('the file shrank while it was copied');
+    hash?.update(buffer.subarray(0, bytesRead));
     let written = 0;
     while (written < bytesRead) {
       const { bytesWritten } = await dst.write(buffer, written, bytesRead - written, position + written);
@@ -159,6 +170,20 @@ export async function copyBetweenHandles(src: FileHandle, dst: FileHandle, size:
     }
     position += bytesRead;
   }
+}
+
+/** SHA-256 (hex) of the first `size` bytes of an open descriptor. */
+export async function sha256OfHandle(handle: FileHandle, size: number): Promise<string> {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(size, COPY_CHUNK)));
+  let position = 0;
+  while (position < size) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, size - position), position);
+    if (bytesRead === 0) throw new Error('the file shrank while it was read');
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  return hash.digest('hex');
 }
 
 /** A download stream of exactly `size` bytes from an opened file; it closes the handle when done. */
@@ -277,6 +302,19 @@ export class SafeRoot {
       return true;
     } catch (error) {
       if (isMissing(error)) return false;
+      throw error;
+    }
+  }
+
+  /** Removes directory `relDir` if it is empty (verified first; rmdir never follows a link). */
+  async removeEmptyDir(relDir: string): Promise<boolean> {
+    const dir = await this.realDir(relDir);
+    if (!dir) return false;
+    try {
+      await rmdir(dir);
+      return true;
+    } catch (error) {
+      if (isMissing(error) || codeOf(error) === 'ENOTEMPTY' || codeOf(error) === 'EEXIST') return false;
       throw error;
     }
   }

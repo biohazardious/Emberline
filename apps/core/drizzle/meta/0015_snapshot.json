@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c1a72dda-a10b-4786-8232-6af273fd7944",
+  "id": "7be1a9b8-9e3f-4398-92da-eb380ce15348",
   "prevId": "8fb5068f-8c6c-45c6-9280-96ee0ba7bf98",
   "tables": {
     "build_outputs": {
@@ -84,6 +84,20 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evicted_at": {
+          "name": "evicted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {

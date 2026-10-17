@@ -1,6 +1,15 @@
 import type { ProjectBuildOutput } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { clampQuotaGb, filterOutputs, formatBytes, outputGroup, outputsBadge, usageFraction, usageText } from './buildOutputs';
+import {
+  clampQuotaGb,
+  filterOutputs,
+  formatBytes,
+  outputGroup,
+  outputPath,
+  outputsBadge,
+  usageFraction,
+  usageText,
+} from './buildOutputs';
 
 const out = (overrides: Partial<ProjectBuildOutput> = {}): ProjectBuildOutput => ({
   id: 'o1',
@@ -17,6 +26,7 @@ const out = (overrides: Partial<ProjectBuildOutput> = {}): ProjectBuildOutput =>
   persona: null,
   agent: 'claude',
   hostPath: '/srv/x/app-release.apk',
+  containerPath: '/workspaces/x/app-release.apk',
   ...overrides,
 });
 
@@ -72,18 +82,20 @@ describe('filterOutputs', () => {
     out({ id: 'o3', name: 'fw.hex', runId: 'run-2', ticketId: null, ticketKey: null, ticketTitle: null }),
   ];
   it('keeps everything with no filter', () => {
-    expect(filterOutputs(list, { group: 'all', query: '', runId: null })).toHaveLength(3);
+    expect(filterOutputs(list, { group: 'all', query: '', runIds: null })).toHaveLength(3);
   });
   it('filters by group', () => {
-    expect(filterOutputs(list, { group: 'firmware', query: '', runId: null }).map((o) => o.id)).toEqual(['o3']);
+    expect(filterOutputs(list, { group: 'firmware', query: '', runIds: null }).map((o) => o.id)).toEqual(['o3']);
   });
   it('searches name, ticket key and title case-insensitively', () => {
-    expect(filterOutputs(list, { group: 'all', query: 'SETUP', runId: null }).map((o) => o.id)).toEqual(['o2']);
-    expect(filterOutputs(list, { group: 'all', query: 'emb-7', runId: null }).map((o) => o.id)).toEqual(['o1']);
-    expect(filterOutputs(list, { group: 'all', query: 'installer', runId: null }).map((o) => o.id)).toEqual(['o2']);
+    expect(filterOutputs(list, { group: 'all', query: 'SETUP', runIds: null }).map((o) => o.id)).toEqual(['o2']);
+    expect(filterOutputs(list, { group: 'all', query: 'emb-7', runIds: null }).map((o) => o.id)).toEqual(['o1']);
+    expect(filterOutputs(list, { group: 'all', query: 'installer', runIds: null }).map((o) => o.id)).toEqual(['o2']);
   });
-  it('filters by run', () => {
-    expect(filterOutputs(list, { group: 'all', query: '', runId: 'run-2' }).map((o) => o.id)).toEqual(['o2', 'o3']);
+  it('filters by run, matching every run of its handoff chain', () => {
+    expect(filterOutputs(list, { group: 'all', query: '', runIds: ['run-2'] }).map((o) => o.id)).toEqual(['o2', 'o3']);
+    expect(filterOutputs(list, { group: 'all', query: '', runIds: ['run-3', 'run-1'] }).map((o) => o.id)).toEqual(['o1']);
+    expect(filterOutputs(list, { group: 'all', query: '', runIds: [] })).toEqual([]);
   });
 });
 
@@ -100,10 +112,24 @@ describe('clampQuotaGb', () => {
 
 describe('outputsBadge', () => {
   it('links to the run-filtered page and pluralises', () => {
-    expect(outputsBadge('p1', 'r 1', 1)).toEqual({ href: '/projects/p1/outputs?run=r%201', label: '1 output' });
-    expect(outputsBadge('p1', 'r1', 3)?.label).toBe('3 outputs');
+    expect(outputsBadge('p1', 'r 1', { live: 1, archived: 0 })).toEqual({
+      href: '/projects/p1/outputs?run=r%201',
+      label: '1 output',
+    });
+    expect(outputsBadge('p1', 'r1', { live: 3, archived: 1 })?.label).toBe('3 outputs');
+  });
+  it('counts the archived outputs once the worktree has none', () => {
+    expect(outputsBadge('p1', 'r1', { live: 0, archived: 1 })?.label).toBe('1 archived output');
+    expect(outputsBadge('p1', 'r1', { live: 0, archived: 2 })?.label).toBe('2 archived outputs');
   });
   it('renders nothing for zero', () => {
-    expect(outputsBadge('p1', 'r1', 0)).toBeNull();
+    expect(outputsBadge('p1', 'r1', { live: 0, archived: 0 })).toBeNull();
+  });
+});
+
+describe('outputPath', () => {
+  it('prefers the host path and falls back to the container path', () => {
+    expect(outputPath(out())).toEqual({ path: '/srv/x/app-release.apk', where: 'host' });
+    expect(outputPath(out({ hostPath: null }))).toEqual({ path: '/workspaces/x/app-release.apk', where: 'container' });
   });
 });

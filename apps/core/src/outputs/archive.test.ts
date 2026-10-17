@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import {
+  appendFileSync,
   type Dirent,
   existsSync,
   mkdirSync,
@@ -14,7 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoreConfig } from '../config.js';
 import { type OpenedDb, openDb } from '../db/index.js';
@@ -95,7 +96,13 @@ function addRun(
   id: string,
   projectId: string,
   worktreePath: string,
-  extra: { ticketId?: string; predecessorRunId?: string; handedOffTo?: string; persona?: string } = {},
+  extra: {
+    ticketId?: string;
+    predecessorRunId?: string;
+    handedOffTo?: string;
+    persona?: string;
+    state?: 'done' | 'working' | 'starting' | 'failed';
+  } = {},
 ): void {
   db()
     .insert(runs)
@@ -125,7 +132,15 @@ function setQuotaBytes(bytes: number): void {
   quota = bytes;
 }
 
+/** The project's archived outputs (quota tombstones left out). */
 const rowsOf = (projectId: string) =>
+  db()
+    .select()
+    .from(buildOutputs)
+    .where(and(eq(buildOutputs.projectId, projectId), isNull(buildOutputs.evictedAt)))
+    .all();
+/** Every row of the project, quota tombstones included. */
+const allRowsOf = (projectId: string) =>
   db().select().from(buildOutputs).where(eq(buildOutputs.projectId, projectId)).all();
 const stored = (storedPath: string) => path.join(dir, ARCHIVE_DIR_NAME, storedPath);
 const archiveRoot = () => path.join(dir, ARCHIVE_DIR_NAME);
@@ -383,6 +398,22 @@ describe('BuildOutputArchive.archiveRun', () => {
       symlinkSync(elsewhere, path.join(dir, ARCHIVE_DIR_NAME));
       expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 1 });
       expect(existsSync(path.join(elsewhere, 'p1'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('notes the same failure only once per run, so retried passes do not flood the timeline', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    const elsewhere = mkdtempSync(path.join(tmpdir(), 'elsewhere-'));
+    try {
+      symlinkSync(elsewhere, path.join(dir, ARCHIVE_DIR_NAME));
+      expect(await archive.archiveBeforePrune('r1', 5_000, { keepOnTimeout: true })).toBe('failed');
+      expect(await archive.archiveBeforePrune('r1', 5_000, { keepOnTimeout: true })).toBe('failed');
+      expect(notes.map((n) => n.type)).toEqual(['build_outputs_archive_failed']);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -827,6 +858,7 @@ describe('BuildOutputArchive and a newer pass', () => {
           sizeBytes: 100,
           sourceMtime: new Date(),
           archivedAt: new Date(),
+          sha256: 'x',
         })
         .run();
     });
@@ -837,5 +869,224 @@ describe('BuildOutputArchive and a newer pass', () => {
     }
     expect(rowsOf('p1').map((r) => r.id)).toEqual(['newer']);
     expect(existsSync(stored('p1/r1/app.apk'))).toBe(true);
+  });
+});
+
+describe('BuildOutputArchive quota tombstones', () => {
+  /** Runs r1..rN, each with its own 1000-byte APK built one second after the previous one. */
+  async function buildsInOrder(count: number): Promise<void> {
+    for (let i = 1; i <= count; i += 1) {
+      const wt = addWorktree(`r${i}`);
+      addRun(`r${i}`, 'p1', wt);
+      put(wt, 'dist/app.apk', 1000, { fill: i, mtimeSec: 1_700_000_000 + i });
+      await archive.archiveRun(`r${i}`);
+    }
+  }
+
+  it('keeps an evicted output as a hidden tombstone and never copies it back', async () => {
+    setQuotaBytes(3000);
+    addProject('p1');
+    await buildsInOrder(5);
+    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r3', 'r4', 'r5']);
+    const tombstones = allRowsOf('p1').filter((r) => r.evictedAt !== null);
+    expect(tombstones.map((r) => r.runId).sort()).toEqual(['r1', 'r2']);
+    expect(existsSync(stored('p1/r1/app.apk'))).toBe(false);
+    const listed = archive.list('p1');
+    expect(listed.outputs.map((o) => o.runId)).toEqual(['r5', 'r4', 'r3']);
+    expect(listed.usedBytes).toBe(3000);
+
+    // Collect (twice) and a pre-prune pass of an old run copy nothing and keep the newest builds.
+    const copies = hookCopies(() => undefined);
+    try {
+      expect(await archive.collectProject('p1')).toEqual({ archived: 0, skipped: 5, failed: 0 });
+      expect(await archive.collectProject('p1')).toEqual({ archived: 0, skipped: 5, failed: 0 });
+      expect(await archive.archiveBeforePrune('r1')).toBe('archived');
+      expect(copies).not.toHaveBeenCalled();
+    } finally {
+      copies.mockRestore();
+    }
+    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r3', 'r4', 'r5']);
+    expect(archive.get(tombstones[0]?.id ?? '')).toBeUndefined();
+    await expect(archive.open(tombstones[0]?.id ?? '')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('archives a rebuilt output of an evicted run again, in place of its tombstone', async () => {
+    setQuotaBytes(3000);
+    addProject('p1');
+    await buildsInOrder(4);
+    put(path.join(dir, '.worktrees', 'r1'), 'dist/app.apk', 1000, { fill: 9, mtimeSec: 1_700_000_100 });
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    const r1 = allRowsOf('p1').filter((r) => r.runId === 'r1');
+    expect(r1).toHaveLength(1);
+    expect(r1[0]?.evictedAt).toBeNull();
+    expect(readFileSync(stored('p1/r1/app.apk'))).toEqual(Buffer.alloc(1000, 9));
+  });
+
+  it('removes a run directory once its last file is evicted or deleted', async () => {
+    setQuotaBytes(2000);
+    addProject('p1');
+    await buildsInOrder(3);
+    expect(existsSync(path.join(archiveRoot(), 'p1', 'r1'))).toBe(false);
+    const r3 = rowsOf('p1').find((r) => r.runId === 'r3');
+    await archive.remove(r3?.id ?? '');
+    expect(existsSync(path.join(archiveRoot(), 'p1', 'r3'))).toBe(false);
+    expect(existsSync(path.join(archiveRoot(), 'p1', 'r2'))).toBe(true);
+  });
+
+  it('enforceQuota applies a lowered quota to every project at once', async () => {
+    setQuotaBytes(5000);
+    addProject('p1');
+    await buildsInOrder(4);
+    expect(rowsOf('p1')).toHaveLength(4);
+    setQuotaBytes(2000);
+    await archive.enforceQuota();
+    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r3', 'r4']);
+    expect(archive.list('p1').usedBytes).toBe(2000);
+  });
+});
+
+describe('BuildOutputArchive identical files across runs', () => {
+  it('archives a file once when several runs share the main workspace (no git)', async () => {
+    const workspace = addProject('p1');
+    addRun('r1', 'p1', workspace);
+    addRun('r2', 'p1', workspace);
+    addRun('r3', 'p1', workspace);
+    put(workspace, 'dist/app.apk', 1000, { mtimeSec: 1_700_000_000 });
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(await archive.archiveRun('r2')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+    expect(await archive.collectProject('p1')).toEqual({ archived: 0, skipped: 3, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.runId)).toEqual(['r1']);
+
+    // Rebuilt by a later run: a new build, archived under that run.
+    put(workspace, 'dist/app.apk', 1000, { fill: 4, mtimeSec: 1_700_000_500 });
+    expect(await archive.archiveRun('r3')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r1', 'r3']);
+  });
+
+  it('copies a committed deliverable once even though every worktree checks it out anew', async () => {
+    addProject('p1');
+    const wt1 = addWorktree('r1');
+    const wt2 = addWorktree('r2');
+    const wt3 = addWorktree('r3');
+    addRun('r1', 'p1', wt1);
+    addRun('r2', 'p1', wt2);
+    addRun('r3', 'p1', wt3);
+    put(wt1, 'firmware/fw.bin', 800, { fill: 2, mtimeSec: 1_700_000_000 });
+    put(wt2, 'firmware/fw.bin', 800, { fill: 2, mtimeSec: 1_700_000_900 });
+    // Same size, different bytes: a different build.
+    put(wt3, 'firmware/fw.bin', 800, { fill: 3, mtimeSec: 1_700_000_900 });
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(await archive.archiveRun('r2')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+    expect(await archive.archiveRun('r3')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r1', 'r3']);
+  });
+});
+
+describe('BuildOutputArchive and a worktree still in use', () => {
+  it('does not archive a run whose worktree a handoff successor is still building in', async () => {
+    addProject('p1');
+    const wt = addWorktree('shared');
+    addRun('r1', 'p1', wt, { handedOffTo: 'r2' });
+    addRun('r2', 'p1', wt, { predecessorRunId: 'r1', state: 'working' });
+    put(wt, 'dist/app.apk', 100);
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 0 });
+    expect(await archive.archiveBeforePrune('r1')).toBe('archived');
+    expect(await archive.collectProject('p1')).toEqual({ archived: 0, skipped: 0, failed: 0 });
+    expect(rowsOf('p1')).toEqual([]);
+
+    // The successor's own `done` archives it.
+    db().update(runs).set({ state: 'done' }).where(eq(runs.id, 'r2')).run();
+    expect(await archive.archiveRun('r2')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.runId)).toEqual(['r2']);
+  });
+
+  it('discards a copy of a file that changed while it was copied', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    const growing = hookCopies(() => appendFileSync(path.join(wt, 'dist/app.apk'), Buffer.alloc(50, 1)));
+    try {
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 1 });
+    } finally {
+      growing.mockRestore();
+    }
+    expect(rowsOf('p1')).toEqual([]);
+    expect(filesUnder(archiveRoot())).toEqual([]);
+  });
+});
+
+describe('BuildOutputArchive and free disk space', () => {
+  it('skips a copy that would leave less than 1 GiB free on the volume, and notes it once', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 1000);
+    const free = vi
+      .spyOn(archive as unknown as { freeBytes: () => Promise<number> }, 'freeBytes')
+      .mockResolvedValue(GIB + 999);
+    try {
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 1, failed: 0 });
+      expect(rowsOf('p1')).toEqual([]);
+      expect(notes).toEqual([
+        expect.objectContaining({
+          runId: 'r1',
+          type: 'build_outputs_disk_low',
+          payload: expect.objectContaining({ skipped: ['dist/app.apk'] }),
+        }),
+      ]);
+      free.mockResolvedValue(GIB + 1000);
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    } finally {
+      free.mockRestore();
+    }
+  });
+});
+
+describe('BuildOutputArchive handoff chains', () => {
+  it('counts and filters the archived outputs of a whole handoff chain', async () => {
+    addProject('p1');
+    const wt = addWorktree('shared');
+    addRun('r1', 'p1', wt, { handedOffTo: 'r2' });
+    addRun('r2', 'p1', wt, { predecessorRunId: 'r1' });
+    const other = addWorktree('other');
+    addRun('r3', 'p1', other);
+    put(wt, 'dist/app.apk', 100);
+    put(other, 'dist/other.apk', 100);
+    await archive.archiveRun('r1');
+    await archive.archiveRun('r2');
+    await archive.archiveRun('r3');
+
+    // The successor rebuilt nothing: the copy belongs to r1, but r2's badge and filter find it.
+    expect(archive.archivedCount('r2')).toBe(1);
+    expect(archive.archivedCount('r1')).toBe(1);
+    expect(archive.archivedCount('r3')).toBe(1);
+    expect(archive.list('p1', { runId: 'r2' }).runChain?.sort()).toEqual(['r1', 'r2']);
+    expect(archive.list('p1').runChain).toBeNull();
+    expect(archive.list('p1', { runId: 'gone' }).runChain).toEqual(['gone']);
+  });
+});
+
+describe('BuildOutputArchive without a host path for the workspaces', () => {
+  it('reports no host path, and the container path instead', async () => {
+    const config = { workspacesDir: dir, workspacesHostDir: undefined } as CoreConfig;
+    const plain = new BuildOutputArchive(opened.db, config, { quotaBytes: () => undefined });
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    await plain.archiveRun('r1');
+    const res = plain.list('p1');
+    expect(res.hostArchiveDir).toBeNull();
+    expect(res.archiveDir).toBe(path.join(dir, ARCHIVE_DIR_NAME, 'p1'));
+    expect(res.outputs[0]).toMatchObject({
+      hostPath: null,
+      containerPath: path.join(dir, ARCHIVE_DIR_NAME, 'p1/r1/app.apk'),
+    });
   });
 });

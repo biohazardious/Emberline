@@ -171,6 +171,11 @@ const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 export const AUTO_GC_ARCHIVE_BUDGET_MS = 60_000;
 /** With less budget left than this, auto-GC stops and prunes the rest on its next pass. */
 const AUTO_GC_MIN_ARCHIVE_MS = 5_000;
+/**
+ * Time all pre-prune archive passes of one manual GC (or "Clean up worktrees") request may take
+ * together; runs not archived by then keep their worktree and row, reported as `archive_pending`.
+ */
+export const MANUAL_GC_ARCHIVE_BUDGET_MS = 60_000;
 
 type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
 /** Auto-GC re-runs git on a kept worktree whose HEAD has not moved at most this often. */
@@ -1393,7 +1398,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       hostRoot && row.worktreePath.startsWith(`${this.config.workspacesDir}/`)
         ? path.join(hostRoot, path.relative(this.config.workspacesDir, row.worktreePath))
         : null;
-    return { worktreePath: row.worktreePath, hostWorktreePath, outputs: await this.listOwnBuildOutputs(row.worktreePath) };
+    return {
+      worktreePath: row.worktreePath,
+      hostWorktreePath,
+      outputs: await this.listOwnBuildOutputs(row.worktreePath),
+      archivedCount: this.outputs.archivedCount(id),
+    };
   }
 
   /**
@@ -1782,6 +1792,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       byProject.set(row.projectId, list);
     }
 
+    const archiveDeadline = Date.now() + MANUAL_GC_ARCHIVE_BUDGET_MS;
     for (const [projId, list] of byProject.entries()) {
       const toRemove = list.slice(body.keepRecent);
       const proj = projectMap.get(projId);
@@ -1796,8 +1807,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (shared) reportedPaths.add(shared);
           continue;
         }
-        // The run row goes away with or without its worktree: archive first, or its outputs become unreachable.
-        if (proj && row.worktreePath && row.worktreePath !== proj.path) await this.outputs.archiveBeforePrune(row.id);
+        // The run row goes away with or without its worktree: archive first, or its outputs become
+        // unreachable. Within one time budget per request; a run it cannot archive in time is kept.
+        if (proj && row.worktreePath && row.worktreePath !== proj.path) {
+          const budgetLeft = archiveDeadline - Date.now();
+          const archived =
+            budgetLeft >= AUTO_GC_MIN_ARCHIVE_MS
+              ? await this.outputs.archiveBeforePrune(row.id, budgetLeft, { keepOnTimeout: true })
+              : 'timeout';
+          if (archived === 'timeout') {
+            if (!reportedPaths.has(row.worktreePath)) keptWorktrees.push({ runId: row.id, reason: 'archive_pending' });
+            reportedPaths.add(row.worktreePath);
+            continue;
+          }
+        }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
@@ -2120,7 +2143,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
               const budgetLeft = archiveDeadline - Date.now();
               if (budgetLeft < AUTO_GC_MIN_ARCHIVE_MS) break autoGc;
-              await this.outputs.archiveBeforePrune(stale.id, budgetLeft);
+              // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
+              // worktree (and row) until a later pass archives them.
+              const archived = await this.outputs.archiveBeforePrune(stale.id, budgetLeft, { keepOnTimeout: true });
+              if (archived !== 'archived') continue;
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);

@@ -18,10 +18,15 @@ export function registerBuildOutputRoutes(app: FastifyInstance, db: Db, archive:
     if (!db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).get()) throw notFound('no such project');
   };
 
-  app.get<{ Params: { id: string } }>('/api/projects/:id/build-outputs', async (request): Promise<ProjectBuildOutputsResponse> => {
-    requireProject(request.params.id);
-    return archive.list(request.params.id);
-  });
+  /** `?run=<runId>` adds that run's handoff chain (`runChain`), which the page's run filter matches. */
+  app.get<{ Params: { id: string }; Querystring: { run?: string } }>(
+    '/api/projects/:id/build-outputs',
+    async (request): Promise<ProjectBuildOutputsResponse> => {
+      requireProject(request.params.id);
+      const runId = typeof request.query.run === 'string' && request.query.run ? request.query.run : undefined;
+      return archive.list(request.params.id, { runId });
+    },
+  );
 
   /**
    * Archives now from the project's runs whose worktrees still exist (outputs built before

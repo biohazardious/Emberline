@@ -106,6 +106,8 @@ export const RunBuildOutputsResponse = z.object({
   /** The same directory on the host, when core knows the host path of the workspaces volume. */
   hostWorktreePath: z.string().nullable(),
   outputs: z.array(RunBuildOutput),
+  /** Outputs archived from this run's handoff chain (they outlive the worktree). */
+  archivedCount: z.number().int().min(0),
 });
 export type RunBuildOutputsResponse = z.infer<typeof RunBuildOutputsResponse>;
 

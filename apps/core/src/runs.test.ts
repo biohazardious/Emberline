@@ -1127,6 +1127,75 @@ describe('build output archive', () => {
     expect(ids.filter((id) => id === first.id || id === second.id)).toHaveLength(1);
   });
 
+  it('auto-GC keeps a worktree whose archive pass timed out or failed, and prunes it on a later pass', async () => {
+    const project = await createProject('Archive auto GC keeps', true);
+    const stale = await finishRun(project.id);
+    mergeIgnoringBuild(stale, project.path);
+    putApk(stale.worktreePath, 2048);
+    staleRunsBehindTenNewer(project.id, project.path, [stale]);
+    const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(live.id);
+    const autoGc = async () => {
+      (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+      await t.runs.reconcile();
+    };
+    const spy = vi
+      .spyOn(t.runs.outputs, 'archiveBeforePrune')
+      .mockResolvedValueOnce('timeout')
+      .mockResolvedValueOnce('failed');
+    try {
+      await autoGc();
+      expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
+      expect(existsSync(stale.worktreePath)).toBe(true);
+      await autoGc();
+      expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
+      expect(existsSync(stale.worktreePath)).toBe(true);
+      expect(spy.mock.calls.map((c) => c[2])).toEqual([{ keepOnTimeout: true }, { keepOnTimeout: true }]);
+    } finally {
+      spy.mockRestore();
+    }
+    await autoGc();
+    expect(t.runs.list().map((r) => r.id)).not.toContain(stale.id);
+    expect(existsSync(stale.worktreePath)).toBe(false);
+    await expectArchivedApk(project.id, stale.id, 2048);
+  });
+
+  it('manual GC keeps runs it could not archive within its time budget, as archive_pending', async () => {
+    const project = await createProject('Archive manual GC budget', true);
+    const first = await finishRun(project.id);
+    const second = await finishRun(project.id);
+    const third = await finishRun(project.id);
+    for (const r of [first, second, third]) mergeIgnoringBuild(r, project.path);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spy = vi
+      .spyOn(t.runs.outputs, 'archiveBeforePrune')
+      .mockImplementationOnce(async () => 'timeout')
+      .mockImplementationOnce(async () => {
+        // This pass took 58 of the 60 seconds: nothing is left for the third run.
+        vi.setSystemTime(Date.now() + 58_000);
+        return 'archived';
+      });
+    let res;
+    let budgets: unknown[] = [];
+    try {
+      res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0, pruneWorktrees: true });
+      budgets = spy.mock.calls.map((c) => c[1]);
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+    expect(budgets).toHaveLength(2);
+    expect(budgets.every((b) => typeof b === 'number' && b <= 60_000)).toBe(true);
+    expect(res.removedRuns).toBe(1);
+    expect(res.keptWorktrees.map((k) => k.reason)).toEqual(['archive_pending', 'archive_pending']);
+    const kept = res.keptWorktrees.map((k) => k.runId);
+    expect(kept).toHaveLength(2);
+    for (const id of kept) {
+      expect(t.runs.list().map((r) => r.id)).toContain(id);
+      expect(existsSync(t.runs.getRun(id).worktreePath)).toBe(true);
+    }
+  });
+
   it('a per-run prune archives first', async () => {
     const project = await createProject('Archive prune', true);
     const run = await finishRun(project.id);

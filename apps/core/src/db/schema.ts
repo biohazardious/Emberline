@@ -238,6 +238,13 @@ export const buildOutputs = sqliteTable(
     sourceMtime: integer('source_mtime', { mode: 'timestamp_ms' }).notNull(),
     archivedAt: integer('archived_at', { mode: 'timestamp_ms' }).notNull(),
     pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    /** SHA-256 (hex) of the bytes copied, to recognise the same file archived from another run. */
+    sha256: text('sha256').notNull(),
+    /**
+     * Set when the quota deleted the file: the row stays as a tombstone (hidden from the list and
+     * the usage) so the same build is never copied back.
+     */
+    evictedAt: integer('evicted_at', { mode: 'timestamp_ms' }),
   },
   (t) => [
     index('build_outputs_project_archived_idx').on(t.projectId, t.archivedAt),

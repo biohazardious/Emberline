@@ -13,6 +13,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { keptWorktreesSummary } from '../gcSummary';
@@ -56,10 +57,20 @@ function finishedAt(r: Run): number {
   return Date.parse(r.endedAt ?? r.stateChangedAt);
 }
 
-/** Compact link to the Build Outputs page, filtered to this run; nothing when the run has none. */
+/**
+ * Compact link to the Build Outputs page, filtered to this run; nothing when the run has none. A
+ * finished run's outputs do not change on their own: fetched once per state change, never polled.
+ */
 function BuildOutputsBadge({ run }: { run: Run }) {
-  const res = useApi<RunBuildOutputsResponse>(`/api/runs/${run.id}/build-outputs`, 30_000);
-  const badge = outputsBadge(run.projectId, run.id, res.data?.outputs.length ?? 0);
+  const res = useQuery({
+    queryKey: ['run-build-outputs-badge', run.id, run.stateChangedAt],
+    queryFn: () => api<RunBuildOutputsResponse>(`/api/runs/${run.id}/build-outputs`),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const badge = outputsBadge(run.projectId, run.id, {
+    live: res.data?.outputs.length ?? 0,
+    archived: res.data?.archivedCount ?? 0,
+  });
   if (!badge) return null;
   return (
     <Link href={badge.href} className="fleet-outputs-badge">

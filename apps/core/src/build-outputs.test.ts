@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ARCHIVE_DIR_NAME } from './outputs/archive.js';
 import { buildOutputs, projects, runs, tickets } from './db/schema.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -247,5 +247,37 @@ describe('build outputs API', () => {
     await t.runs.outputs.idle();
     expect((await listOf()).lastCollect).toMatchObject({ archived: 0 });
     expect(t.db.select().from(buildOutputs).all()).toHaveLength(0);
+  });
+
+  it('a run\'s build outputs count what its handoff chain archived, and ?run= reports the chain', async () => {
+    addProject();
+    const wt = addRun('r1', 'p1');
+    t.db.insert(runs).values({
+      id: 'r2', projectId: 'p1', agent: 'claude', state: 'done', worktreePath: wt, hookTokenHash: 'x',
+      stateChangedAt: new Date(), createdAt: new Date(), predecessorRunId: 'r1',
+    }).run();
+    t.db.update(runs).set({ handedOffTo: 'r2' }).where(eq(runs.id, 'r1')).run();
+    put(wt, 'build/app.apk', 'apk');
+    await archiveFrom('r1');
+    await archiveFrom('r2');
+    rmSync(wt, { recursive: true });
+
+    const run = (await t.app.inject({ method: 'GET', url: '/api/runs/r2/build-outputs', headers: auth })).json();
+    expect(run).toMatchObject({ outputs: [], archivedCount: 1 });
+    const filtered = (await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs?run=r2', headers: auth })).json();
+    expect(filtered.runChain.sort()).toEqual(['r1', 'r2']);
+    expect(filtered.outputs.map((o: { runId: string }) => o.runId)).toEqual(['r1']);
+    expect((await listOf()).runChain).toBeNull();
+  });
+
+  it('saving a lower quota applies it at once; a higher or unchanged one does not', async () => {
+    const enforce = vi.spyOn(t.runs.outputs, 'enforceQuota');
+    const patch = (buildOutputsQuotaGb: number) =>
+      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', headers: mut, payload: { buildOutputsQuotaGb } });
+    expect((await patch(10)).statusCode).toBe(200);
+    expect((await patch(10)).statusCode).toBe(200);
+    expect(enforce).not.toHaveBeenCalled();
+    expect((await patch(2)).statusCode).toBe(200);
+    expect(enforce).toHaveBeenCalledTimes(1);
   });
 });

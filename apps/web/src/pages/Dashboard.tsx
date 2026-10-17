@@ -477,7 +477,7 @@ export function Dashboard({
                         onClick={async () => {
                           if (
                             !window.confirm(
-                              `Delete project "${p.name}" (${p.slug}) and remove its workspace directory (${p.path})?`,
+                              `Delete project "${p.name}" (${p.slug}) and remove its workspace directory (${p.path})?\n\nIts archived build outputs are deleted too, pinned ones included.`,
                             )
                           ) {
                             return;

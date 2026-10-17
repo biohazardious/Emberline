@@ -508,7 +508,10 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.patch('/api/factory/settings', async (request): Promise<FactorySettings> => {
     const patch = UpdateFactorySettingsBody.parse(request.body ?? {});
+    const quotaBefore = getFactorySettings(db).buildOutputsQuotaGb;
     const updated = updateFactorySettings(db, patch);
+    // A lower build output quota applies now, not at each project's next archive pass.
+    if (updated.buildOutputsQuotaGb < quotaBefore) void runs.outputs.enforceQuota();
     // A policy switch or a new key may let waiting runs move to a fallback route now.
     scheduler.wake();
     if (patch.enabledProviders && process.env.NODE_ENV === 'production') {

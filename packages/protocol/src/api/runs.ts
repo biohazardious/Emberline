@@ -651,12 +651,15 @@ export const GarbageCollectRunsResponse = z.object({
   removedRuns: z.number().int(),
   closedSessions: z.number().int(),
   prunedWorktrees: z.number().int(),
-  /** Finished runs whose worktree (and run row) were kept because removing it could lose work. */
+  /**
+   * Finished runs whose worktree (and run row) were kept because removing it could lose work.
+   * `archive_pending`: its build outputs could not be archived within the request's time budget.
+   */
   keptWorktrees: z
     .array(
       z.object({
         runId: z.string(),
-        reason: z.enum(['uncommitted_changes', 'unmerged_commits', 'in_review']),
+        reason: z.enum(['uncommitted_changes', 'unmerged_commits', 'in_review', 'archive_pending']),
       }),
     )
     .default([]),

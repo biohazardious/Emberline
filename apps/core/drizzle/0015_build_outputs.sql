@@ -10,6 +10,8 @@ CREATE TABLE `build_outputs` (
 	`source_mtime` integer NOT NULL,
 	`archived_at` integer NOT NULL,
 	`pinned` integer DEFAULT false NOT NULL,
+	`sha256` text NOT NULL,
+	`evicted_at` integer,
 	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint

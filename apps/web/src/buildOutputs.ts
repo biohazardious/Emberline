@@ -69,13 +69,14 @@ export function usageFraction(usedBytes: number, quotaBytes: number): number {
 export interface OutputFilter {
   group: OutputGroupFilter;
   query: string;
-  runId: string | null;
+  /** The filtered run and the rest of its handoff chain; null for no run filter. */
+  runIds: readonly string[] | null;
 }
 
 export function filterOutputs(outputs: ProjectBuildOutput[], filter: OutputFilter): ProjectBuildOutput[] {
   const q = filter.query.trim().toLowerCase();
   return outputs.filter((o) => {
-    if (filter.runId && o.runId !== filter.runId) return false;
+    if (filter.runIds && !filter.runIds.includes(o.runId)) return false;
     if (filter.group !== 'all' && outputGroup(o.name) !== filter.group) return false;
     if (!q) return true;
     return [o.name, o.ticketKey, o.ticketTitle].some((v) => v?.toLowerCase().includes(q));
@@ -89,11 +90,30 @@ export function clampQuotaGb(value: string): number {
   return Math.max(0.5, Math.min(1000, n));
 }
 
-/** Fleet badge: where it links and what it says; null when the run has no outputs. */
-export function outputsBadge(projectId: string, runId: string, count: number): { href: string; label: string } | null {
+/**
+ * Fleet badge: where it links and what it says; null when the run has no outputs. Counts the
+ * worktree's outputs, or, once there are none there (pruned), what its handoff chain archived.
+ */
+export function outputsBadge(
+  projectId: string,
+  runId: string,
+  counts: { live: number; archived: number },
+): { href: string; label: string } | null {
+  const archivedOnly = counts.live <= 0;
+  const count = archivedOnly ? counts.archived : counts.live;
   if (count <= 0) return null;
   return {
     href: `/projects/${encodeURIComponent(projectId)}/outputs?run=${encodeURIComponent(runId)}`,
-    label: `${count} ${count === 1 ? 'output' : 'outputs'}`,
+    label: `${count} ${archivedOnly ? 'archived ' : ''}${count === 1 ? 'output' : 'outputs'}`,
   };
+}
+
+/** The path to show and copy: on the host when core knows the host mapping, else in the container. */
+export function outputPath(output: Pick<ProjectBuildOutput, 'hostPath' | 'containerPath'>): {
+  path: string;
+  where: 'host' | 'container';
+} {
+  return output.hostPath
+    ? { path: output.hostPath, where: 'host' }
+    : { path: output.containerPath, where: 'container' };
 }

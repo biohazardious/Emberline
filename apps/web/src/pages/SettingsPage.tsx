@@ -750,7 +750,7 @@ export function SettingsPage({
               <div>
                 <strong>Build outputs archive per project (GB)</strong>
                 <div className="muted small">
-                  Archived APKs, installers and firmware images are kept per project up to this size (0.5-1000 GB). Beyond it the oldest unpinned outputs are deleted; pinned ones stay.
+                  Archived APKs, installers and firmware images are kept per project, on the workspaces volume, up to this size (0.5-1000 GB). Beyond it the oldest unpinned outputs are deleted; pinned ones stay. A lower value applies as soon as you save. Nothing is copied while the volume has less than 1 GB free.
                 </div>
               </div>
             </label>

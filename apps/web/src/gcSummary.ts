@@ -13,6 +13,7 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
         'commits not in the branch Emberline merges into (the one checked out in the project)',
       ],
       [count('in_review'), 'a ticket still in review'],
+      [count('archive_pending'), 'build outputs not archived in time (run the clean-up again)'],
     ] as const
   )
     .filter(([n]) => n)

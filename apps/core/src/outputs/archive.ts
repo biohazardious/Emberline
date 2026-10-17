@@ -8,15 +8,22 @@
  *
  * A pass never throws to its caller and never holds a project's lock past its time limit.
  * Problems become informational run events (`build_outputs_archive_failed`,
- * `build_outputs_quota_full`, `build_output_too_large`); the last two at most once per run and output.
+ * `build_outputs_quota_full`, `build_output_too_large`, `build_outputs_disk_low`); the last three at
+ * most once per run and output, and a failure with the same message only once per run.
+ *
+ * Identity: an output is the same build when its worktree-relative path, size and mtime match, or,
+ * for a candidate with the same path and size archived from another run (runs that share the main
+ * workspace, a committed file checked out in every worktree), when its SHA-256 matches. The quota
+ * evicts the oldest unpinned copies and keeps their rows as hidden tombstones, so an evicted build
+ * is never copied back.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, type Hash, randomUUID } from 'node:crypto';
 import { type Dirent } from 'node:fs';
-import { type FileHandle, lstat, readdir, rename } from 'node:fs/promises';
+import { type FileHandle, lstat, readdir, rename, statfs } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import type { AgentPersona, ProjectBuildOutputsResponse, RunBuildOutput } from '@emberline/protocol';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { buildOutputs, projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -31,6 +38,7 @@ import {
   openFileUnder,
   realDirUnder,
   SafeRoot,
+  sha256OfHandle,
   streamOpenedFile,
   UnsafePathError,
 } from './safe-fs.js';
@@ -42,6 +50,10 @@ export const PRE_PRUNE_ARCHIVE_TIMEOUT_MS = 60_000;
 /** Upper bound for a background pass (done/failed/collect); then it gives up and frees the project. */
 export const BACKGROUND_PASS_TIMEOUT_MS = 10 * 60_000;
 const GIB = 1024 ** 3;
+/** A copy must leave at least this much free on the workspaces volume, for the agents' own builds. */
+export const MIN_FREE_AFTER_COPY_BYTES = GIB;
+/** Source hashes remembered per (worktree, path, size, mtime), so shared files are not re-read every pass. */
+const HASH_CACHE_SIZE = 500;
 /** Handoff chains are short; this only stops a corrupt chain cycle. */
 const MAX_CHAIN_LENGTH = 100;
 /** Temp copies are `.<name>.<uuid>.part`; ones older than this were left by a crash and are swept. */
@@ -93,6 +105,7 @@ export class BuildOutputArchive {
   /** "Collect now" jobs in flight, and each project's last finished one. */
   private readonly collecting = new Map<string, Promise<void>>();
   private readonly lastCollect = new Map<string, ArchiveCounts & { finishedAt: string }>();
+  private readonly hashCache = new Map<string, string>();
 
   constructor(
     private readonly db: Db,
@@ -116,7 +129,7 @@ export class BuildOutputArchive {
     const timeoutMs = opts.timeoutMs ?? BACKGROUND_PASS_TIMEOUT_MS;
     const { counts, timedOut } = await this.boundedPass(runId, timeoutMs);
     if (timedOut) {
-      this.notify(runId, 'build_outputs_archive_failed', {
+      this.notifyFailure(runId, {
         reason: 'timeout',
         timeoutMs,
         message: `Archiving build outputs took longer than ${Math.round(timeoutMs / 1000)} s and was stopped`,
@@ -179,22 +192,68 @@ export class BuildOutputArchive {
 
   /**
    * The pass a prune waits for before it deletes a worktree, bounded by `timeoutMs` (queueing for
-   * the project included). On timeout the pass stops writing, the prune goes ahead, and the run's
-   * timeline says so.
+   * the project included). On timeout the pass stops writing and the run's timeline says so; with
+   * `keepOnTimeout` the caller keeps the worktree and tries again later, otherwise it prunes anyway.
+   * 'failed' means some output could not be copied.
    */
   async archiveBeforePrune(
     runId: string,
     timeoutMs = PRE_PRUNE_ARCHIVE_TIMEOUT_MS,
-  ): Promise<'archived' | 'timeout'> {
-    const { timedOut } = await this.track(this.boundedPass(runId, timeoutMs));
+    opts: { keepOnTimeout?: boolean } = {},
+  ): Promise<'archived' | 'timeout' | 'failed'> {
+    const { counts, timedOut } = await this.track(this.boundedPass(runId, timeoutMs));
     if (timedOut) {
-      this.notify(runId, 'build_outputs_archive_failed', {
+      this.notifyFailure(runId, {
         reason: 'timeout',
         timeoutMs,
-        message: `Archiving build outputs took longer than ${Math.round(timeoutMs / 1000)} s; the worktree was pruned without waiting for it`,
+        message: opts.keepOnTimeout
+          ? 'Archiving build outputs ran out of time; the worktree is kept and archiving is tried again at the next clean-up'
+          : `Archiving build outputs took longer than ${Math.round(timeoutMs / 1000)} s; the worktree was pruned without waiting for it`,
       });
+      return 'timeout';
     }
-    return timedOut ? 'timeout' : 'archived';
+    return counts.failed > 0 ? 'failed' : 'archived';
+  }
+
+  /**
+   * Applies the quota to every project now (it was lowered in Settings) instead of at each
+   * project's next pass. Never throws.
+   */
+  async enforceQuota(): Promise<void> {
+    const projectIds = new Set(
+      this.db
+        .select({ projectId: buildOutputs.projectId })
+        .from(buildOutputs)
+        .where(isNull(buildOutputs.evictedAt))
+        .all()
+        .map((r) => r.projectId),
+    );
+    await this.track(
+      Promise.all(
+        [...projectIds].map((projectId) =>
+          this.lock
+            .run(projectId, async () => {
+              if (!this.projectGone(projectId)) await this.evict(projectId, this.quotaBytes());
+            })
+            .catch(() => undefined),
+        ),
+      ),
+    );
+  }
+
+  /** The run and the other runs of its handoff chain; just the id when the run is gone. */
+  chainOf(runId: string): string[] {
+    const run = this.db.select().from(runs).where(eq(runs.id, runId)).get();
+    return run ? [run.id, ...this.chainIds(run)] : [runId];
+  }
+
+  /** Archived outputs of the run's whole handoff chain (a successor's copy may belong to its predecessor). */
+  archivedCount(runId: string): number {
+    return this.db
+      .select({ id: buildOutputs.id })
+      .from(buildOutputs)
+      .where(and(inArray(buildOutputs.runId, this.chainOf(runId)), isNull(buildOutputs.evictedAt)))
+      .all().length;
   }
 
   /** Test hook: resolves once every pass started so far (and any they started) settled. */
@@ -202,7 +261,8 @@ export class BuildOutputArchive {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
   }
 
-  list(projectId: string): ProjectBuildOutputsResponse {
+  /** `runId`: also report that run's handoff chain, for the page's run filter. */
+  list(projectId: string, opts: { runId?: string } = {}): ProjectBuildOutputsResponse {
     const rows = this.db
       .select({
         output: buildOutputs,
@@ -216,16 +276,20 @@ export class BuildOutputArchive {
       .from(buildOutputs)
       .leftJoin(runs, eq(runs.id, buildOutputs.runId))
       .leftJoin(tickets, eq(tickets.id, buildOutputs.ticketId))
-      .where(eq(buildOutputs.projectId, projectId))
+      .where(and(eq(buildOutputs.projectId, projectId), isNull(buildOutputs.evictedAt)))
       .orderBy(desc(buildOutputs.archivedAt), desc(buildOutputs.sourceMtime))
       .all();
-    const hostRoot = path.join(this.config.workspacesHostDir ?? this.config.workspacesDir, ARCHIVE_DIR_NAME);
+    // Without EMBERLINE_WORKSPACES_HOST_DIR core cannot know where the volume sits on the host.
+    const hostDir = this.config.workspacesHostDir;
+    const hostRoot = hostDir ? path.join(hostDir, ARCHIVE_DIR_NAME) : null;
     return {
       collecting: this.collecting.has(projectId),
       lastCollect: this.lastCollect.get(projectId) ?? null,
       quotaBytes: this.quotaBytes(),
       usedBytes: rows.reduce((sum, r) => sum + r.output.sizeBytes, 0),
-      hostArchiveDir: path.join(hostRoot, projectId),
+      hostArchiveDir: hostRoot ? path.join(hostRoot, projectId) : null,
+      archiveDir: path.join(this.files.root, projectId),
+      runChain: opts.runId ? this.chainOf(opts.runId) : null,
       outputs: rows.map(({ output, runId, runPersona, agent, ticketKey, ticketTitle, ticketPersona }) => ({
         id: output.id,
         name: output.name,
@@ -240,13 +304,19 @@ export class BuildOutputArchive {
         ticketTitle: ticketTitle ?? null,
         persona: ((runPersona ?? ticketPersona) as AgentPersona | null) ?? null,
         agent: agent ?? null,
-        hostPath: path.join(hostRoot, output.storedPath),
+        hostPath: hostRoot ? path.join(hostRoot, output.storedPath) : null,
+        containerPath: path.join(this.files.root, output.storedPath),
       })),
     };
   }
 
+  /** An archived output; quota tombstones count as gone. */
   get(id: string): BuildOutputRow | undefined {
-    return this.db.select().from(buildOutputs).where(eq(buildOutputs.id, id)).get();
+    return this.db
+      .select()
+      .from(buildOutputs)
+      .where(and(eq(buildOutputs.id, id), isNull(buildOutputs.evictedAt)))
+      .get();
   }
 
   /**
@@ -266,7 +336,12 @@ export class BuildOutputArchive {
   }
 
   setPinned(id: string, pinned: boolean): BuildOutputRow {
-    const row = this.db.update(buildOutputs).set({ pinned }).where(eq(buildOutputs.id, id)).returning().get();
+    const row = this.db
+      .update(buildOutputs)
+      .set({ pinned })
+      .where(and(eq(buildOutputs.id, id), isNull(buildOutputs.evictedAt)))
+      .returning()
+      .get();
     if (!row) throw notFound('no such build output');
     return row;
   }
@@ -310,6 +385,54 @@ export class BuildOutputArchive {
     }
   }
 
+  /** A `build_outputs_archive_failed` note, unless the run's timeline already has one saying the same. */
+  private notifyFailure(runId: string, payload: { message: string } & Record<string, unknown>): void {
+    const said = this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'build_outputs_archive_failed')))
+      .all()
+      .some((e) => (e.payload as { message?: unknown } | null)?.message === payload.message);
+    if (!said) this.notify(runId, 'build_outputs_archive_failed', payload);
+  }
+
+  /** Bytes free for core on the workspaces volume; unknown counts as plenty. */
+  private async freeBytes(): Promise<number> {
+    const stats = await statfs(this.config.workspacesDir).catch(() => null);
+    return stats ? stats.bavail * stats.bsize : Number.POSITIVE_INFINITY;
+  }
+
+  /** Another run (a handoff successor, or any run in a shared main workspace) is building there now. */
+  private sharedWithActiveRun(run: RunRow): boolean {
+    return Boolean(
+      this.db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            eq(runs.worktreePath, run.worktreePath),
+            ne(runs.id, run.id),
+            inArray(runs.state, ['starting', 'working']),
+          ),
+        )
+        .get(),
+    );
+  }
+
+  /** SHA-256 of an opened source, remembered while its path, size and mtime stay the same. */
+  private async sourceDigest(run: RunRow, relPath: string, source: OpenedFile): Promise<string> {
+    const key = [run.worktreePath, relPath, source.size, source.mtime.getTime()].join('\0');
+    const known = this.hashCache.get(key);
+    if (known) return known;
+    const digest = await sha256OfHandle(source.handle, source.size);
+    this.hashCache.set(key, digest);
+    if (this.hashCache.size > HASH_CACHE_SIZE) {
+      const oldest = this.hashCache.keys().next().value;
+      if (oldest !== undefined) this.hashCache.delete(oldest);
+    }
+    return digest;
+  }
+
   private quotaBytes(): number {
     const override = this.opts.quotaBytes?.();
     if (override !== undefined) return override;
@@ -348,7 +471,7 @@ export class BuildOutputArchive {
           if (control.aborted) return null;
           const pass = this.track(
             this.archivePass(runId, control).catch((error: unknown) => {
-              this.notify(runId, 'build_outputs_archive_failed', {
+              this.notifyFailure(runId, {
                 failures: [{ path: '', error: errorText(error) }],
                 message: `Could not archive build outputs: ${errorText(error)}`,
               });
@@ -363,7 +486,7 @@ export class BuildOutputArchive {
       if ('error' in result) throw result.error;
       return { counts: result, timedOut: false };
     } catch (error) {
-      this.notify(runId, 'build_outputs_archive_failed', {
+      this.notifyFailure(runId, {
         failures: [{ path: '', error: errorText(error) }],
         message: `Could not archive build outputs: ${errorText(error)}`,
       });
@@ -377,25 +500,36 @@ export class BuildOutputArchive {
     const counts = noCounts();
     const run = this.db.select().from(runs).where(eq(runs.id, runId)).get();
     if (!run || control.aborted || this.projectGone(run.projectId)) return counts;
+    // Files there may still be growing; the run building there archives them at its own `done`.
+    if (this.sharedWithActiveRun(run)) return counts;
     await this.sweepPartFiles(run.projectId).catch(() => undefined);
     // The worktree must really be where it should be: one swapped for a symlink is never walked.
     const worktree = await realDirUnder(this.config.workspacesDir, run.worktreePath);
     const outputs = worktree ? await listBuildOutputs(run.worktreePath) : [];
     const quota = this.quotaBytes();
+    // Every row of the project, quota tombstones included (they stop an evicted build coming back).
     const projectRows = this.db
       .select()
       .from(buildOutputs)
       .where(eq(buildOutputs.projectId, run.projectId))
       .all();
-    let pinnedBytes = projectRows.filter((r) => r.pinned).reduce((sum, r) => sum + r.sizeBytes, 0);
+    const live = (r: BuildOutputRow) => r.evictedAt === null;
+    let pinnedBytes = projectRows.filter((r) => live(r) && r.pinned).reduce((sum, r) => sum + r.sizeBytes, 0);
     const own = new Map(projectRows.filter((r) => r.runId === runId).map((r) => [r.sourcePath, r]));
     const chain = this.chainIds(run);
     const tooLarge: { path: string; name: string; sizeBytes: number }[] = [];
     const overQuota: string[] = [];
+    const noSpace: string[] = [];
     const failures: { path: string; error: string }[] = [];
     // Bytes copied in this pass: they are the newest, so they must fit next to the pinned ones.
     let copiedBytes = 0;
+    let freeBytes = Number.POSITIVE_INFINITY;
     const now = new Date();
+    const replaceRow = (row: BuildOutputRow) => {
+      const index = projectRows.findIndex((r) => r.id === row.id);
+      if (index >= 0) projectRows[index] = row;
+      else projectRows.push(row);
+    };
 
     // Newest first: when the quota cannot take everything, the latest builds win.
     for (const output of outputs) {
@@ -406,11 +540,17 @@ export class BuildOutputArchive {
         r.sizeBytes === output.sizeBytes &&
         r.sourceMtime.getTime() === listedMtime;
       const existing = own.get(output.path);
-      if (existing && same(existing) && (await this.files.hasFile(existing.storedPath))) {
+      // Unchanged since this run archived it, or since the quota evicted it (never copied back).
+      if (existing && same(existing) && (!live(existing) || (await this.files.hasFile(existing.storedPath)))) {
         counts.skipped += 1;
         continue;
       }
-      const chainCopy = projectRows.find((r) => chain.has(r.runId) && same(r));
+      // The same build, evicted from another run of the project (e.g. one sharing the main workspace).
+      if (projectRows.some((r) => !live(r) && same(r))) {
+        counts.skipped += 1;
+        continue;
+      }
+      const chainCopy = projectRows.find((r) => live(r) && chain.has(r.runId) && same(r));
       if (chainCopy && (await this.files.hasFile(chainCopy.storedPath))) {
         counts.skipped += 1;
         continue;
@@ -434,10 +574,46 @@ export class BuildOutputArchive {
           counts.skipped += 1;
           continue;
         }
+        // Identical bytes already archived in the project (another run in the same workspace, a
+        // committed file in another worktree): hashed only when such a candidate exists.
+        const twins = projectRows.filter(
+          (r) => live(r) && r.sourcePath === output.path && r.sizeBytes === source.size,
+        );
+        if (twins.length > 0) {
+          const digest = await this.sourceDigest(run, output.path, source);
+          let twin: BuildOutputRow | undefined;
+          for (const candidate of twins) {
+            if (candidate.sha256 === digest && (await this.files.hasFile(candidate.storedPath))) {
+              twin = candidate;
+              break;
+            }
+          }
+          if (twin) {
+            if (twin.id === existing?.id) {
+              // Touched, not rebuilt: remember the new mtime so the next pass needs no hash.
+              const updated = this.db
+                .update(buildOutputs)
+                .set({ sourceMtime: source.mtime })
+                .where(eq(buildOutputs.id, twin.id))
+                .returning()
+                .get();
+              if (updated) replaceRow(updated);
+            }
+            counts.skipped += 1;
+            continue;
+          }
+        }
         // A rebuilt pinned output stays pinned, so it replaces its own share of the pinned bytes.
-        const pinnedOthers = existing?.pinned ? pinnedBytes - existing.sizeBytes : pinnedBytes;
+        const pinnedOthers = existing?.pinned && live(existing) ? pinnedBytes - existing.sizeBytes : pinnedBytes;
         if (pinnedOthers + copiedBytes + source.size > quota) {
           overQuota.push(output.path);
+          counts.skipped += 1;
+          continue;
+        }
+        // Agents build on this volume too: never fill it.
+        freeBytes = await this.freeBytes();
+        if (freeBytes < source.size + MIN_FREE_AFTER_COPY_BYTES) {
+          noSpace.push(output.path);
           counts.skipped += 1;
           continue;
         }
@@ -445,9 +621,7 @@ export class BuildOutputArchive {
         counts.archived += 1;
         if (row.pinned) pinnedBytes = pinnedOthers + row.sizeBytes;
         else copiedBytes += row.sizeBytes;
-        const index = projectRows.findIndex((r) => r.id === row.id);
-        if (index >= 0) projectRows[index] = row;
-        else projectRows.push(row);
+        replaceRow(row);
       } catch (error) {
         counts.failed += 1;
         failures.push({ path: output.path, error: errorText(error) });
@@ -465,6 +639,14 @@ export class BuildOutputArchive {
       );
     }
 
+    const newlyNoSpace = noSpace.filter((p) => !this.alreadyNoted(runId, 'build_outputs_disk_low', p));
+    if (newlyNoSpace.length > 0) {
+      this.notify(runId, 'build_outputs_disk_low', {
+        skipped: newlyNoSpace,
+        freeBytes,
+        message: `The workspaces volume is nearly full (${formatBytes(freeBytes)} free); ${newlyNoSpace.length} build output(s) were not archived so at least ${formatBytes(MIN_FREE_AFTER_COPY_BYTES)} stays free`,
+      });
+    }
     for (const output of tooLarge) {
       if (this.alreadyNoted(runId, 'build_output_too_large', output.path)) continue;
       this.notify(runId, 'build_output_too_large', {
@@ -487,7 +669,7 @@ export class BuildOutputArchive {
       });
     }
     if (failures.length > 0) {
-      this.notify(runId, 'build_outputs_archive_failed', {
+      this.notifyFailure(runId, {
         failures,
         message: `Could not archive ${failures.length} build output(s): ${failures[0]?.error ?? ''}`,
       });
@@ -556,13 +738,18 @@ export class BuildOutputArchive {
     const base = path.basename(rel);
     const tempName = `.${base}.${randomUUID()}.part`;
     const out = await createExclusiveFile(dir, tempName);
+    const hash = createHash('sha256');
     let placed = false;
     try {
       try {
-        await this.copyBytes(source.handle, out, source.size);
+        await this.copyBytes(source.handle, out, source.size, hash);
       } finally {
         await out.close();
       }
+      // Still being written (a build in progress): a copy of part of it is worse than none.
+      const after = await source.handle.stat();
+      if (after.size !== source.size || after.mtime.getTime() !== source.mtime.getTime())
+        throw new Error('the file changed while it was copied');
       if ((await this.files.realDir(relDir)) !== dir)
         throw new UnsafePathError(`${relDir} changed while copying`);
       // Checked last, with no await before the rename is issued: a pass whose time ran out never
@@ -584,6 +771,8 @@ export class BuildOutputArchive {
       sizeBytes: source.size,
       sourceMtime: source.mtime,
       archivedAt: now,
+      sha256: hash.digest('hex'),
+      evictedAt: null,
     };
     try {
       if (existing) {
@@ -609,8 +798,8 @@ export class BuildOutputArchive {
   }
 
   /** The byte copy, separate so tests can make it slow. */
-  private async copyBytes(src: FileHandle, dst: FileHandle, size: number): Promise<void> {
-    await copyBetweenHandles(src, dst, size);
+  private async copyBytes(src: FileHandle, dst: FileHandle, size: number, hash?: Hash): Promise<void> {
+    await copyBetweenHandles(src, dst, size, hash);
   }
 
   /** `<projectId>/<runId>/<name>`; a second output with the same name gets a stable suffix. */
@@ -629,19 +818,24 @@ export class BuildOutputArchive {
     return `${run.projectId}/${run.id}/${stem}-${hash}${ext}`;
   }
 
-  /** Deletes the oldest unpinned outputs of the project until it fits its quota. */
+  /**
+   * Deletes the files of the oldest unpinned outputs of the project until it fits its quota. Their
+   * rows stay as tombstones, so the same build is not copied back by a later pass.
+   */
   private async evict(projectId: string, quota: number): Promise<void> {
     const rows = this.db
       .select()
       .from(buildOutputs)
-      .where(eq(buildOutputs.projectId, projectId))
+      .where(and(eq(buildOutputs.projectId, projectId), isNull(buildOutputs.evictedAt)))
       .orderBy(asc(buildOutputs.archivedAt), asc(buildOutputs.sourceMtime))
       .all();
     let total = rows.reduce((sum, r) => sum + r.sizeBytes, 0);
     for (const row of rows) {
       if (total <= quota) break;
       if (row.pinned) continue;
-      await this.deleteRow(row);
+      await this.files.unlinkFile(row.storedPath).catch(() => false);
+      this.db.update(buildOutputs).set({ evictedAt: new Date() }).where(eq(buildOutputs.id, row.id)).run();
+      await this.removeRunDirIfEmpty(row.storedPath);
       total -= row.sizeBytes;
     }
   }
@@ -653,7 +847,18 @@ export class BuildOutputArchive {
   private async deleteRow(row: BuildOutputRow): Promise<boolean> {
     const removed = await this.files.unlinkFile(row.storedPath).catch(() => false);
     this.db.delete(buildOutputs).where(eq(buildOutputs.id, row.id)).run();
+    await this.removeRunDirIfEmpty(row.storedPath);
     return removed;
+  }
+
+  /** The run directory of a stored file goes once its last file did. */
+  private async removeRunDirIfEmpty(storedPath: string): Promise<void> {
+    try {
+      const rel = path.relative(this.files.root, this.files.resolve(storedPath));
+      await this.files.removeEmptyDir(path.dirname(rel));
+    } catch {
+      // Not empty, already gone, or not a plain directory: leave it.
+    }
   }
 
   /**
