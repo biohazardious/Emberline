@@ -10,6 +10,8 @@ export const HOLD_EVENTS: readonly string[] = [
   'critic_blocked',
   'build_gate_error',
   'build_gate_failed',
+  // Held while the agent answers the completion nudge (like build_gate_failed while it fixes the build).
+  'completion_nudged',
   'completion_missing',
   'completion_blocked',
 ];

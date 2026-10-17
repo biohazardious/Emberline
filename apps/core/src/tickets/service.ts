@@ -40,9 +40,11 @@ import {
   syncWorktreeToMainWorkspace,
 } from '../factory/service.js';
 import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
+import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
 import { HOLD_EVENTS } from '../runs/hold-events.js';
+import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -191,6 +193,13 @@ const TICKET_BODY_MAX = 20_000;
 /** Closes every re-prompt: the earlier completion signal no longer counts once the person or a gate spoke. */
 const COMPLETE_AGAIN = 'When finished, call `ticket_complete` again.';
 
+/** The one automatic prompt to a run that stopped without its completion signal. */
+export const COMPLETION_NUDGE =
+  'You stopped without calling `ticket_complete`. If the ticket is finished, call it now with a summary and handoff. If something blocks you, call it with `blockers`. If you need an answer from a person, ask the question plainly and stop.';
+
+/** CreateRunBody's prompt limit: a ticket prompt plus its dependency context must stay within it. */
+const RUN_PROMPT_MAX = 20_000;
+
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
@@ -255,6 +264,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ) {
         this.ticketRunFailed(run, run.projectId);
       }
+    });
+    // RunService stored the agent's completion on the ticket: show it on the Board right away.
+    runs.on('note', (run, type) => {
+      if (type !== 'ticket_complete' || !run.ticketId) return;
+      const row = this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get();
+      if (row) this.publish(row);
     });
   }
 
@@ -805,12 +820,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       fSettings.autoPickupReady &&
       projectTickets.some((t) => t.title.startsWith('[Factory]') || t.status === 'ready');
 
+    // A run an earlier pass held stays a factory run: its next stop lifts the hold even when the
+    // chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
       Boolean(ingested) ||
       isFactoryOrchestratorTicket ||
-      hasFactoryPipeline;
+      hasFactoryPipeline ||
+      this.wasHeld(run.id);
     if (!isFactoryRun) return;
 
     // The gates, the merge and Done apply to every factory-looking run, but only the factory itself
@@ -819,6 +837,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // because a person's change unblocked it, does not start the rest of the queue when it finishes.
     if (fSettings.autoPickupReady && isFactoryOrchestratorTicket && ingested?.autoDispatch !== false) {
       this.chainOn(run.projectId);
+    }
+
+    // 1b. The agent's completion signal: a stop is not "done" unless the agent said so.
+    if (
+      fSettings.requireCompletionSignal &&
+      ticketRow &&
+      !isFactoryOrchestratorTicket &&
+      providerAdapter(run.agent).claudeNative &&
+      !(await this.completionGatePasses(run))
+    ) {
+      return;
     }
 
     // 2. Polyglot Self-Healing Build, Lint & Unit Test Gate: if enabled and the workspace has a
@@ -979,6 +1008,34 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
+   * A signal of this turn without blockers lets the pipeline go on. Blockers, or a second stop
+   * without a signal, hold the ticket in Review for a person (HOLD_EVENTS, paged by
+   * NotificationService); the first stop without one gets a single automatic nudge. Holds are lifted
+   * by the agent's next stop like every other gate's.
+   */
+  private async completionGatePasses(run: Run): Promise<boolean> {
+    const signal = this.runs.latestCompletion(run.id);
+    if (signal && signal.blockers.length === 0) return true;
+    if (signal) {
+      this.runs.note(run.id, 'completion_blocked', { blockers: signal.blockers });
+      return false;
+    }
+    if (!this.runs.hasEvent(run.id, 'completion_nudged') && (!run.endedAt || run.resumable)) {
+      // Noted first (a hold): a dispatch must not finalize the ticket while the agent answers.
+      this.runs.note(run.id, 'completion_nudged', {});
+      const sent = await this.runs.prompt(run.id, COMPLETION_NUDGE, { automatic: true }).then(
+        () => true,
+        () => false,
+      );
+      // Undelivered, no next stop will come: it waits for a person now.
+      if (!sent) this.runs.note(run.id, 'completion_missing', {});
+      return false;
+    }
+    this.runs.note(run.id, 'completion_missing', {});
+    return false;
+  }
+
+  /**
    * Merges a finished run's worktree into the main workspace. Failures are recorded on the run
    * (`merge_failed`) instead of thrown; returns whether the work landed in main.
    */
@@ -1027,6 +1084,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .map((e) => e.type);
     if (types.some((type) => HOLD_EVENTS.includes(type))) return 'held';
     return types.includes('merged_to_main') ? 'merged' : null;
+  }
+
+  /** Whether a pipeline pass of this run ever held its ticket (a HOLD_EVENTS note). */
+  private wasHeld(runId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, [...HOLD_EVENTS])))
+        .limit(1)
+        .get(),
+    );
   }
 
   /** Whether the run already got its one automatic conflict-resolution attempt (survives a restart). */
@@ -1355,7 +1424,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const run = await this.scheduler.submit(
       {
         projectId: ticket.projectId,
-        prompt: ticketPrompt(ticket),
+        prompt: this.promptWithDependencyContext(ticket),
         permissionMode,
         persona: effectivePersona,
         ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
@@ -1368,6 +1437,24 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       },
     );
     return { ticket: this.moveToTop(id, 'in_progress'), run };
+  }
+
+  /**
+   * The ticket prompt plus what its finished direct dependencies handed over (summary, handoff),
+   * for every agent. Kept within the run prompt limit.
+   */
+  private promptWithDependencyContext(ticket: Ticket): string {
+    const base = ticketPrompt(ticket);
+    if (ticket.dependsOn.length === 0) return base;
+    const finished = this.db
+      .select({ key: tickets.key, title: tickets.title, completion: tickets.completion })
+      .from(tickets)
+      .where(inArray(tickets.id, ticket.dependsOn))
+      .all()
+      .flatMap((dep) => (dep.completion ? [{ key: dep.key, title: dep.title, completion: dep.completion }] : []));
+    const room = Math.min(DEPENDENCY_SECTION_MAX, RUN_PROMPT_MAX - base.length - 2);
+    const section = room > 0 ? dependencyContextSection(finished, room) : '';
+    return section ? `${base}\n\n${section}` : base;
   }
 
   /**

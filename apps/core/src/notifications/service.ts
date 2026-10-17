@@ -2,6 +2,7 @@ import {
   type NotificationSettings,
   NotificationSettings as NotificationSettingsSchema,
   type QuotaWindow,
+  type Run,
   type SchedulerState,
   type TestNotificationResponse,
   type UpdateNotificationSettingsBody,
@@ -102,6 +103,10 @@ export class NotificationService {
       });
       // A paused factory waits for a person like an agent does: same switch as waiting_input.
       runs.on('note', (run, type, payload) => {
+        if (type === 'completion_blocked' || type === 'completion_missing') {
+          this.completionHeld(run, type, payload);
+          return;
+        }
         if (type !== 'factory_chain_paused') return;
         const cfg = this.getSettings();
         if (!cfg.enabled || !cfg.onWaitingInput) return;
@@ -119,6 +124,28 @@ export class NotificationService {
         });
       });
     }
+  }
+
+  /**
+   * The completion gate left a ticket in Review for a person (the agent reported blockers, or
+   * stopped twice without confirming it was finished): the agent-waiting page, blockers as text.
+   */
+  private completionHeld(run: Run, type: 'completion_blocked' | 'completion_missing', payload: unknown): void {
+    const cfg = this.getSettings();
+    if (!cfg.enabled || !cfg.onWaitingInput) return;
+    const label = run.title ?? run.branch ?? run.id.slice(0, 8);
+    const raw = (payload as { blockers?: unknown } | null)?.blockers;
+    const blockers = Array.isArray(raw) ? raw.filter((b): b is string => typeof b === 'string' && b.length > 0) : [];
+    void this.dispatch(cfg, {
+      event: 'waiting_input',
+      title: `Agent waiting on you: ${label}`,
+      body:
+        type === 'completion_blocked'
+          ? `Run "${label}" cannot finish its ticket and needs you:${blockers.map((b) => `\n- ${b}`).join('')}`
+          : `Run "${label}" stopped without confirming its ticket is finished; the ticket stays in Review until you answer it.`,
+      priority: 'high',
+      tags: ['hourglass_flowing_sand', 'emberline'],
+    });
   }
 
   /**

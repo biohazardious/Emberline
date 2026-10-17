@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
+import type { Run, RunBuildOutputsResponse, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
@@ -1402,5 +1402,32 @@ describe('ticket_complete endpoint', () => {
       .run();
     t.runs.pruneRunEvents();
     expect(eventsOf(run.id, 'ticket_complete')).toHaveLength(1);
+  });
+
+  it('event pruning keeps the UserPromptSubmit turn boundary, so a stale signal stays stale', async () => {
+    const { run, token } = await ticketRun('CompletePrunePrompt');
+    // The first turn's prompt is kept anyway (first `working` event); the later one is the boundary.
+    await hook(run.id, 'UserPromptSubmit', token);
+    await complete(run.id, token, { summary: 'before the reply' });
+    await hook(run.id, 'UserPromptSubmit', token);
+    t.db
+      .insert(runEvents)
+      .values(Array.from({ length: 5100 }, () => ({ runId: run.id, ts: new Date(), source: 'hook', type: 'PreToolUse' })))
+      .run();
+    t.runs.pruneRunEvents();
+    expect(eventsOf(run.id, 'UserPromptSubmit')).toHaveLength(2);
+    expect(t.runs.latestCompletion(run.id)).toBeNull();
+  });
+
+  it('bumps the ticket updatedAt and broadcasts the ticket so the Board refreshes live', async () => {
+    const { run, ticket, token } = await ticketRun('CompleteBroadcast');
+    const seen: Ticket[] = [];
+    t.tickets.on('ticket', (x) => seen.push(x));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect((await complete(run.id, token, { summary: 'live', handoff: 'next' })).statusCode).toBe(200);
+    const pushed = seen.filter((x) => x.id === ticket.id).at(-1);
+    expect(pushed?.completion).toMatchObject({ runId: run.id, summary: 'live', handoff: 'next' });
+    expect(Date.parse(pushed?.updatedAt ?? '')).toBeGreaterThan(Date.parse(ticket.updatedAt));
+    expect((await ticketOf(ticket.id)).updatedAt).toBe(pushed?.updatedAt);
   });
 });

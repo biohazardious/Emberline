@@ -139,6 +139,53 @@ describe('NotificationService factory pause', () => {
   });
 });
 
+describe('NotificationService completion holds', () => {
+  it('pages "waiting on you" when the completion gate holds a ticket, with the blockers as text', async () => {
+    const { EventEmitter } = await import('node:events');
+    const runs = new EventEmitter();
+    const service = new NotificationService({} as Db, runs as never);
+    let onWaitingInput = true;
+    const sent: { event: string; title: string; body: string; priority?: string }[] = [];
+    service.getSettings = () =>
+      ({
+        enabled: true,
+        provider: 'webhook',
+        url: 'http://127.0.0.1:9/unused',
+        token: null,
+        onRateLimited: false,
+        onQuotaResumed: false,
+        onWaitingInput,
+        onRunFinished: false,
+      }) satisfies NotificationSettings;
+    service.dispatch = async (_cfg, msg) => {
+      sent.push({ event: msg.event, title: msg.title, body: msg.body, priority: msg.priority });
+      return { ok: true, status: 200, error: null };
+    };
+    const run = { id: 'r1', title: 'DP-3 Build the APK', branch: null, state: 'done', lastEvent: 'completion_blocked' };
+    runs.emit('note', run, 'completion_nudged', {});
+    expect(sent).toEqual([]);
+    runs.emit('note', run, 'completion_blocked', { blockers: ['No signing key', 'Which store account?'] });
+    expect(sent).toEqual([
+      {
+        event: 'waiting_input',
+        title: 'Agent waiting on you: DP-3 Build the APK',
+        body: 'Run "DP-3 Build the APK" cannot finish its ticket and needs you:\n- No signing key\n- Which store account?',
+        priority: 'high',
+      },
+    ]);
+    runs.emit('note', run, 'completion_missing', {});
+    expect(sent[1]).toEqual({
+      event: 'waiting_input',
+      title: 'Agent waiting on you: DP-3 Build the APK',
+      body: 'Run "DP-3 Build the APK" stopped without confirming its ticket is finished; the ticket stays in Review until you answer it.',
+      priority: 'high',
+    });
+    onWaitingInput = false;
+    runs.emit('note', run, 'completion_blocked', { blockers: ['x'] });
+    expect(sent).toHaveLength(2);
+  });
+});
+
 describe('NotificationService quota lanes', () => {
   it('pages once per lane that runs out and once when it is back, naming the lane', async () => {
     const { EventEmitter } = await import('node:events');

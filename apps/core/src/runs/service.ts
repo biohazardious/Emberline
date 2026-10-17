@@ -140,7 +140,8 @@ const EVENT_PRUNE_INTERVAL_MS = 5 * 60_000;
 export const MAX_EVENTS_PER_RUN = 5000;
 /**
  * Event kinds that logic reads back later, so pruning never removes them: the one `last_screen`
- * snapshot, the `queued` event (unattended origin, queued prompts), one-shot markers
+ * snapshot, the `queued` event (unattended origin, queued prompts), the completion signal and the
+ * turn boundary it is checked against (`ticket_complete`, `UserPromptSubmit`), one-shot markers
  * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
  * `merged_to_main`, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
  */
@@ -148,6 +149,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'last_screen',
   'queued',
   'ticket_complete',
+  // The turn boundary latestCompletion compares the signal with.
+  'UserPromptSubmit',
   'auto_nudged',
   'session_lost',
   ...HOLD_EVENTS,
@@ -1267,11 +1270,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     if (row.endedAt || row.cancelledAt) throw new HttpError(409, 'run_ended', 'the run has ended');
     const body = TicketCompleteBody.parse(input);
-    this.note(runId, 'ticket_complete', { summary: body.summary, handoff: body.handoff, blockers: body.blockers });
     if (row.ticketId) {
-      const completion: TicketCompletion = { runId, ...body, at: new Date().toISOString() };
-      this.db.update(tickets).set({ completion }).where(eq(tickets.id, row.ticketId)).run();
+      const now = new Date();
+      const completion: TicketCompletion = { runId, ...body, at: now.toISOString() };
+      this.db.update(tickets).set({ completion, updatedAt: now }).where(eq(tickets.id, row.ticketId)).run();
     }
+    // After the ticket row: TicketService broadcasts the ticket on this note.
+    this.note(runId, 'ticket_complete', { summary: body.summary, handoff: body.handoff, blockers: body.blockers });
   }
 
   /**

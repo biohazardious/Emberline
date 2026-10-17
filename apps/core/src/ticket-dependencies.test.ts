@@ -88,6 +88,15 @@ const createTicket = async (projectId: string, body: object): Promise<Ticket> =>
 
 const getTicket = async (id: string): Promise<Ticket> => (await api('GET', `/api/tickets/${id}`)).json();
 
+/** The agent's `ticket_complete` call: Claude ticket runs in a factory advance only with it. */
+const signal = (runId: string, token: string, summary = 'done') =>
+  t.app.inject({
+    method: 'POST',
+    url: `/api/internal/runs/${runId}/complete`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { summary },
+  });
+
 async function waitFile(name: string): Promise<string> {
   const file = path.join(t.dir, name);
   await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
@@ -111,6 +120,7 @@ async function ingestDrafts(projectId: string, drafts: Draft[]): Promise<{ run: 
   const token = await waitFile(`token-${run.id}`);
   await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
   await hook(run.id, 'UserPromptSubmit', token);
+  await signal(run.id, token);
   await hook(run.id, 'Stop', token);
   const list = async () =>
     ((await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[]).filter((x) => x.id !== po.id);
@@ -300,11 +310,12 @@ const ticketRuns = (projectId: string) =>
 const runsFor = (ticketId: string) => t.runs.list().filter((r) => r.ticketId === ticketId);
 const ACTIVE = new Set<Run['state']>(['queued', 'starting', 'working', 'waiting_input', 'rate_limited']);
 
-/** Lets a started agent work and finish its turn; the pipeline then moves its ticket on. */
+/** Lets a started agent work and finish its turn (signalled); the pipeline then moves its ticket on. */
 async function finish(run: Run): Promise<void> {
   const token = await waitFile(`token-${run.id}`);
   await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
   await hook(run.id, 'UserPromptSubmit', token);
+  await signal(run.id, token);
   await hook(run.id, 'Stop', token);
 }
 
@@ -462,6 +473,7 @@ describe('dependency-aware dispatch', () => {
     ] as const) {
       await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
       await hook(run.id, 'UserPromptSubmit', token);
+      await signal(run.id, token);
     }
     await Promise.all([hook(r1.id, 'Stop', k1), hook(r2.id, 'Stop', k2)]);
     await expect.poll(() => passes.length, { timeout: 5_000 }).toBe(2);
@@ -675,9 +687,11 @@ const followups = (run: Run) => {
 const eventTypes = async (run: Run) =>
   ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
 
+/** A new (signalled) turn of the agent, e.g. after a gate's follow-up. */
 const stopAgain = async (run: Run) => {
   const token = await waitFile(`token-${run.id}`);
   await hook(run.id, 'UserPromptSubmit', token);
+  await signal(run.id, token);
   await hook(run.id, 'Stop', token);
 };
 
