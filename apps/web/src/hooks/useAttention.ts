@@ -1,37 +1,41 @@
 import type { Run } from '@emberline/protocol';
+import { dismissable, pendingAttention, pruneSeen, type SeenMap } from '../attention';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const SEEN_KEY = 'emberline.attention.seen';
-/** Failures older than this are history, not something to act on. */
-const FAILED_RECENT_MS = 24 * 60 * 60_000;
 const BASE_TITLE = 'Emberline';
 
-/** States in which a run needs a human: an answer, a fix, or awareness of a paused quota. */
-export function needsAttention(run: Run, now = Date.now()): boolean {
-  // A fresh session reports waiting_input until its first prompt lands: not a person's turn yet.
-  if (run.state === 'waiting_input') return run.lastEvent !== 'SessionStart';
-  // A temporary provider error retries on its own; a usage limit is worth knowing about.
-  if (run.state === 'rate_limited') return !run.autoRetry;
-  if (run.state === 'failed' && !run.cancelled)
-    return now - Date.parse(run.stateChangedAt) < FAILED_RECENT_MS;
-  return false;
-}
-
+/** Short sentence for a desktop notification title. */
 export function attentionReason(run: Run): string {
-  if (run.state === 'waiting_input') return 'needs your input';
-  if (run.state === 'rate_limited') return 'hit a usage limit';
-  return 'failed';
+  switch (run.attention?.reason) {
+    case 'permission':
+      return 'needs your permission';
+    case 'question':
+      return 'needs your input';
+    case 'blocked':
+      return 'is blocked';
+    case 'held':
+      return 'is held for you';
+    case 'stalled':
+      return 'looks stalled';
+    case 'rate_limited':
+      return 'hit a usage limit';
+    default:
+      return 'failed';
+  }
 }
 
-function readSeen(): Record<string, string> {
+function readSeen(): SeenMap {
   try {
-    return JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}') as Record<string, string>;
+    const parsed = JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}') as Record<string, unknown>;
+    // The old format keyed by run id with a state timestamp string: those entries match no occurrence.
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'number')) as SeenMap;
   } catch {
     return {};
   }
 }
 
-function writeSeen(seen: Record<string, string>): void {
+function writeSeen(seen: SeenMap): void {
   try {
     localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
   } catch {
@@ -43,52 +47,59 @@ function writeSeen(seen: Record<string, string>): void {
 export const notificationsSupported = () => typeof Notification !== 'undefined' && window.isSecureContext;
 
 /**
- * Runs that need the user, oldest first, minus the ones already acknowledged in their current
- * state. Keeps the tab title and favicon badge in sync and raises a desktop notification when a
- * run newly needs attention while the tab is in the background.
+ * Runs that need the user (server-computed `run.attention`), oldest first, minus the failures and
+ * rate limits already dismissed. Keeps the tab title and favicon badge in sync and raises a desktop
+ * notification when a run newly needs attention while the tab is in the background.
  */
 export function useAttention(
   runs: Run[] | undefined,
   onOpen: (run: Run) => void,
-): { items: Run[]; acknowledge: (run: Run) => void } {
-  const [seen, setSeen] = useState<Record<string, string>>(readSeen);
-  const items = useMemo(
-    () =>
-      (runs ?? [])
-        .filter((run) => needsAttention(run) && seen[run.id] !== run.stateChangedAt)
-        .sort((a, b) => Date.parse(a.stateChangedAt) - Date.parse(b.stateChangedAt)),
-    [runs, seen],
-  );
+): { items: Run[]; count: number; seen: SeenMap; dismiss: (run: Run) => void } {
+  const [seen, setSeen] = useState<SeenMap>(readSeen);
+  const items = useMemo(() => pendingAttention(runs ?? [], seen), [runs, seen]);
 
-  const acknowledge = useCallback((run: Run) => {
+  const dismiss = useCallback((run: Run) => {
+    const attention = run.attention;
+    if (!attention || !dismissable(attention.reason)) return;
     setSeen((prev) => {
-      // Drop entries for runs that changed state since; keeps the map small.
-      const next = { ...prev, [run.id]: run.stateChangedAt };
+      const next = { ...prev, [attention.occurrence]: Date.now() };
       writeSeen(next);
       return next;
     });
   }, []);
 
+  // Forget acknowledgements of occurrences that are gone (only once runs have loaded).
   useEffect(() => {
-    document.title = items.length > 0 ? `(${items.length}) ${BASE_TITLE}` : BASE_TITLE;
-    setFaviconBadge(items.length > 0);
-  }, [items.length]);
+    if (!runs) return;
+    setSeen((prev) => {
+      const next = pruneSeen(prev, runs);
+      if (Object.keys(next).length === Object.keys(prev).length) return prev;
+      writeSeen(next);
+      return next;
+    });
+  }, [runs]);
 
-  // Desktop notifications for runs that just entered an attention state.
-  const known = useRef<Map<string, string> | null>(null);
+  const count = items.length;
+  useEffect(() => {
+    document.title = count > 0 ? `(${count}) ${BASE_TITLE}` : BASE_TITLE;
+    setFaviconBadge(count > 0);
+  }, [count]);
+
+  // Desktop notifications for runs that just gained an attention occurrence.
+  const known = useRef<Set<string> | null>(null);
   const openRef = useRef(onOpen);
   openRef.current = onOpen;
   useEffect(() => {
     if (!runs) return;
     const previous = known.current;
-    known.current = new Map(runs.map((run) => [run.id, `${run.state}@${run.stateChangedAt}`]));
+    known.current = new Set(runs.flatMap((run) => (run.attention ? [run.attention.occurrence] : [])));
     if (!previous || !notificationsSupported() || Notification.permission !== 'granted') return;
     if (document.visibilityState === 'visible') return;
     for (const run of runs) {
-      if (!needsAttention(run) || previous.get(run.id) === `${run.state}@${run.stateChangedAt}`) continue;
+      const attention = run.attention;
+      if (!attention || previous.has(attention.occurrence) || seen[attention.occurrence] !== undefined) continue;
       const note = new Notification(`${run.title ?? 'Agent run'} ${attentionReason(run)}`, {
-        body:
-          run.state === 'failed' ? 'Open Emberline to see what went wrong.' : 'Open Emberline to respond.',
+        body: attention.reason === 'failed' ? 'Open Emberline to see what went wrong.' : 'Open Emberline to respond.',
         tag: run.id,
         icon: '/favicon.svg',
       });
@@ -98,9 +109,11 @@ export function useAttention(
         note.close();
       };
     }
+    // `seen` only gates dismissed occurrences; the effect must run on new runs, not on dismissals.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs]);
 
-  return { items, acknowledge };
+  return { items, count, seen, dismiss };
 }
 
 let originalIcon: string | null = null;

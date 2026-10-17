@@ -11,12 +11,19 @@ import {
   RotateCw,
   Square,
   Trash,
-  TriangleAlert,
   X,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
+import {
+  FLEET_SECTION_LABELS,
+  FLEET_SECTION_ORDER,
+  type FleetSection,
+  fleetSection,
+  isRunCompleted,
+  type SeenMap,
+} from '../attention';
 import { keptWorktreesSummary } from '../gcSummary';
 import { api, errorMessage } from '../api';
 import { HandoffMenu } from '../components/QuotaLanes';
@@ -28,21 +35,16 @@ import { FinalAnswer, LastScreen } from '../components/RunOutcome';
 import { RunStatePill } from '../components/RunStatePill';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
+import { setPresenceRun } from '../hooks/eventHub';
 import { useInView } from '../hooks/useInView';
 import { toastError, toastInfo } from '../toast';
 import { timeAgo } from '../time';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
 
-type FleetFilter = 'active' | 'attention' | 'queued' | 'completed' | 'all';
+type FleetFilter = 'active' | 'queued' | 'completed' | 'all';
 type GridLayout = 'grid' | 'cols' | 'single';
 
-function isRunCompleted(r: Run): boolean {
-  return Boolean(r.endedAt) || r.state === 'done' || r.state === 'failed';
-}
-
-/** A finished run stays in the Active view this long, so its last answer can still be read. */
-const FINISHED_GRACE_MS = 15 * 60_000;
 const DISMISSED_KEY = 'emberline.fleet.dismissed';
 
 function readDismissed(): Set<string> {
@@ -52,10 +54,6 @@ function readDismissed(): Set<string> {
   } catch {
     return new Set();
   }
-}
-
-function finishedAt(r: Run): number {
-  return Date.parse(r.endedAt ?? r.stateChangedAt);
 }
 
 /**
@@ -100,9 +98,12 @@ function FinishedOutcome({ run }: { run: Run }) {
 
 export function FleetPage({
   activeProjectId,
+  seen,
   onInspectRun,
 }: {
   activeProjectId?: string | null;
+  /** Dismissed attention occurrences (shared with the Inbox). */
+  seen: SeenMap;
   onInspectRun: (runId: string) => void;
 }) {
   const { runs } = useRuns();
@@ -124,9 +125,9 @@ export function FleetPage({
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
-  const recentlyFinished = useCallback(
-    (r: Run) => isRunCompleted(r) && !dismissed.has(r.id) && now - finishedAt(r) < FINISHED_GRACE_MS,
-    [dismissed, now],
+  const sectionOf = useCallback(
+    (r: Run) => fleetSection(r, { now, seen, hidden: dismissed }),
+    [now, seen, dismissed],
   );
   const dismiss = (id: string) =>
     setDismissed((prev) => {
@@ -149,25 +150,19 @@ export function FleetPage({
   const counts = useMemo(() => {
     const all = scopedRuns;
     const completed = all.filter((r) => isRunCompleted(r)).length;
-    const active = all.filter((r) => !isRunCompleted(r) || recentlyFinished(r)).length;
+    const active = all.filter((r) => sectionOf(r) !== null).length;
     return {
       active,
-      attention: all.filter((r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed')
-        .length,
       queued: all.filter((r) => r.state === 'queued' && !isRunCompleted(r)).length,
       completed,
       total: all.length,
     };
-  }, [scopedRuns, recentlyFinished]);
+  }, [scopedRuns, sectionOf]);
 
   const visibleRuns = useMemo(() => {
     switch (filter) {
       case 'active':
-        return scopedRuns.filter((r) => !isRunCompleted(r) || recentlyFinished(r));
-      case 'attention':
-        return scopedRuns.filter(
-          (r) => r.state === 'waiting_input' || r.state === 'rate_limited' || r.state === 'failed',
-        );
+        return scopedRuns.filter((r) => sectionOf(r) !== null);
       case 'queued':
         return scopedRuns.filter((r) => r.state === 'queued' && !isRunCompleted(r));
       case 'completed':
@@ -175,7 +170,19 @@ export function FleetPage({
       case 'all':
         return scopedRuns;
     }
-  }, [scopedRuns, filter, recentlyFinished]);
+  }, [scopedRuns, filter, sectionOf]);
+
+  const sections = useMemo(() => {
+    const bySection = new Map<FleetSection, Run[]>();
+    for (const run of visibleRuns) {
+      const section = sectionOf(run);
+      if (section) bySection.set(section, [...(bySection.get(section) ?? []), run]);
+    }
+    return FLEET_SECTION_ORDER.flatMap((section) => {
+      const list = bySection.get(section);
+      return list ? [{ section, runs: list }] : [];
+    });
+  }, [visibleRuns, sectionOf]);
 
   const selectableIds = new Set(visibleRuns.filter((r) => !isRunCompleted(r) && r.state !== 'queued').map((r) => r.id));
   const selectedIds = [...selected].filter((id) => selectableIds.has(id));
@@ -314,16 +321,6 @@ export function FleetPage({
               title="Only live running, waiting, or queued sessions"
             >
               <Circle className="icon" aria-hidden fill="currentColor" style={{ color: 'var(--ok)' }} /> Live ({counts.active})
-            </button>
-            <button
-              id="fleet-filter-attention"
-              type="button"
-              role="tab"
-              aria-selected={filter === 'attention'}
-              className={filter === 'attention' ? 'active' : ''}
-              onClick={() => setFilter('attention')}
-            >
-              <TriangleAlert className="icon" aria-hidden /> Attention ({counts.attention})
             </button>
             <button
               id="fleet-filter-queued"
@@ -502,20 +499,31 @@ export function FleetPage({
           </p>
         </div>
       ) : (
-        <div className={`fleet-grid fleet-grid-${layout}`}>
-          {visibleRuns.map((run) => (
-            <FleetPane
-              key={run.id}
-              run={run}
-              view={view}
-              selectable={selectableIds.has(run.id)}
-              selected={selected.has(run.id)}
-              onToggleSelected={() => toggleSelected(run.id)}
-              project={projectById.get(run.projectId)}
-              onInspect={() => onInspectRun(run.id)}
-              onError={setError}
-              onDismiss={filter === 'active' && isRunCompleted(run) ? () => dismiss(run.id) : undefined}
-            />
+        <div className="fleet-sections">
+          {(filter === 'active' ? sections : [{ section: null, runs: visibleRuns }]).map(({ section, runs: list }) => (
+            <section key={section ?? 'all'} className="fleet-section" aria-label={section ? FLEET_SECTION_LABELS[section] : undefined}>
+              {section && (
+                <h2 className="fleet-section-head">
+                  {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
+                </h2>
+              )}
+              <div className={`fleet-grid fleet-grid-${layout}`}>
+                {list.map((run) => (
+                  <FleetPane
+                    key={run.id}
+                    run={run}
+                    view={view}
+                    selectable={selectableIds.has(run.id)}
+                    selected={selected.has(run.id)}
+                    onToggleSelected={() => toggleSelected(run.id)}
+                    project={projectById.get(run.projectId)}
+                    onInspect={() => onInspectRun(run.id)}
+                    onError={setError}
+                    onDismiss={filter === 'active' && isRunCompleted(run) ? () => dismiss(run.id) : undefined}
+                  />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
@@ -564,6 +572,8 @@ function FleetPane({
   const paneRef = useRef<HTMLElement>(null);
   const inView = useInView(paneRef, '100px');
   const attachTerminal = view === 'live' && inView;
+  // Focusing a pane (typing in its terminal or reply box) counts as looking at that run.
+  useEffect(() => () => setPresenceRun(null, 'fleet'), []);
   const showPromptFooter = (live && run.state !== 'queued') || (completed && showReopenBar && run.resumable);
 
   const act = async (name: string, fn: () => Promise<void>) => {
@@ -589,7 +599,13 @@ function FleetPane({
   };
 
   return (
-    <article ref={paneRef} id={`fleet-pane-${run.id}`} className={`fleet-pane fleet-pane-${run.state}`}>
+    <article
+      ref={paneRef}
+      id={`fleet-pane-${run.id}`}
+      className={`fleet-pane fleet-pane-${run.state}`}
+      onFocus={() => setPresenceRun(run.id, 'fleet')}
+      onBlur={() => setPresenceRun(null, 'fleet')}
+    >
       <header className="fleet-pane-head">
         {selectable && (
           <input

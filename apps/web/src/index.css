@@ -3957,3 +3957,156 @@ dialog.cmd-dialog::backdrop {
   flex: 1 1 240px;
   min-width: 0;
 }
+
+/* --- inbox & fleet sections ------------------------------------------------- */
+
+.fleet-sections {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fleet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fleet-section-head,
+.inbox-group-head {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.inbox-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.inbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.inbox-item-head,
+.inbox-meta,
+.inbox-actions,
+.inbox-reply {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inbox-item-head {
+  flex-wrap: wrap;
+}
+
+.inbox-age {
+  margin-left: auto;
+  font-size: 0.72rem;
+}
+
+.inbox-project {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.inbox-title {
+  margin: 0;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.inbox-chip {
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in hsl, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.inbox-chip-failed {
+  border-color: color-mix(in srgb, var(--bad) 50%, var(--border));
+  background: color-mix(in hsl, var(--bad) 12%, transparent);
+  color: var(--bad);
+}
+
+.inbox-chip-rate_limited,
+.inbox-chip-stalled {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.inbox-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+}
+
+.inbox-detail-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.inbox-reply {
+  align-items: flex-end;
+}
+
+.inbox-reply-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.2rem;
+  max-height: 12rem;
+  resize: none;
+  field-sizing: content;
+}
+
+.inbox-actions {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .inbox-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inbox-item {
+    width: 100%;
+  }
+}

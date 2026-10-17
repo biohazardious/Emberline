@@ -17,6 +17,7 @@ import {
   Eraser,
   FileCode,
   Globe,
+  Inbox,
   LayoutDashboard,
   LayoutGrid,
   Menu,
@@ -46,7 +47,8 @@ import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
 import { useTrackPageViews } from './hooks/navigation';
-import { attentionReason, notificationsSupported, useAttention } from './hooks/useAttention';
+import { setPresenceRun } from './hooks/eventHub';
+import { useAttention } from './hooks/useAttention';
 import { Dashboard } from './pages/Dashboard';
 import { Toasts, toastError, toastInfo } from './toast';
 
@@ -67,6 +69,7 @@ const LiveBrowserPage = lazy(() =>
 const RoadmapPage = lazy(() =>
   import('./pages/RoadmapPage').then((m) => ({ default: m.RoadmapPage })),
 );
+const InboxPage = lazy(() => import('./pages/InboxPage').then((m) => ({ default: m.InboxPage })));
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
@@ -274,21 +277,19 @@ function Shell() {
     });
   }, [runs, activeProject]);
 
-  const waitingRuns = useMemo(() => activeRuns.filter((r) => r.state === 'waiting_input'), [activeRuns]);
   const inspectedRun = useMemo(() => (runs ?? []).find((r) => r.id === inspectRunId), [runs, inspectRunId]);
 
   const openRun = useCallback((run: Run) => setInspectRunId(run.id), []);
   const attention = useAttention(runs, openRun);
-  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(() =>
-    notificationsSupported() ? Notification.permission : 'denied',
-  );
-  /** Docks the longest-waiting run that needs the user and marks it seen. */
+  /** Docks the run that has waited longest for the user (the oldest Inbox item). */
   const openNextAttention = useCallback(() => {
     const next = attention.items[0];
-    if (!next) return;
-    attention.acknowledge(next);
-    setInspectRunId(next.id);
-  }, [attention]);
+    if (next) setInspectRunId(next.id);
+  }, [attention.items]);
+  // Core suppresses a page while this tab shows exactly that run.
+  useEffect(() => {
+    setPresenceRun(inspectRunId ?? null, 'inspector');
+  }, [inspectRunId]);
   const openNextAttentionRef = useRef(openNextAttention);
   openNextAttentionRef.current = openNextAttention;
 
@@ -520,6 +521,22 @@ function Shell() {
             </Link>
           )}
           <Link
+            id="nav-inbox"
+            href="/inbox"
+            className={`nav-item${location === '/inbox' ? ' active' : ''}`}
+            title="Inbox: runs that need you (Alt+N opens the oldest)"
+          >
+            <span className="nav-icon mono">
+              <Inbox className="icon" aria-hidden />
+            </span>
+            <span className="nav-label">Inbox</span>
+            {attention.count > 0 && (
+              <span className="nav-badge nav-badge-warn mono" title="Runs that need you, all projects">
+                {attention.count}
+              </span>
+            )}
+          </Link>
+          <Link
             id="nav-fleet"
             href="/fleet"
             className={`nav-item${location === '/fleet' ? ' active' : ''}`}
@@ -529,9 +546,9 @@ function Shell() {
               <LayoutGrid className="icon" aria-hidden />
             </span>
             <span className="nav-label">Fleet Multiplexer</span>
-            {activeRuns.length > 0 && (
-              <span className={`nav-badge mono${waitingRuns.length > 0 ? ' nav-badge-warn' : ''}`}>
-                {activeRuns.length}
+            {attention.count > 0 && (
+              <span className="nav-badge nav-badge-warn mono" title="Runs that need you, all projects">
+                {attention.count}
               </span>
             )}
           </Link>
@@ -547,36 +564,6 @@ function Shell() {
             <span className="nav-label">Factory Settings</span>
           </Link>
         </nav>
-
-        {attention.items.length > 0 && (
-          <div className="sidebar-section">
-            <button
-              type="button"
-              className="attention-next"
-              onClick={openNextAttention}
-              title="Open the agent that has waited longest for you (Alt+N)"
-            >
-              <span className="dot run-waiting_input" />
-              <span>
-                <span className="attention-count">{attention.items.length} need you</span>
-                <span className="muted">
-                  {' '}
-                  · {attention.items[0]?.title ?? 'Agent run'} {attention.items[0] && attentionReason(attention.items[0])}
-                </span>
-              </span>
-              <kbd>Alt+N</kbd>
-            </button>
-            {notificationsSupported() && notifyPermission === 'default' && (
-              <button
-                type="button"
-                className="attention-enable"
-                onClick={() => void Notification.requestPermission().then(setNotifyPermission)}
-              >
-                Enable desktop alerts
-              </button>
-            )}
-          </div>
-        )}
 
         <div className="sidebar-section sidebar-section-grow">
           <div className="sidebar-section-head">
@@ -876,16 +863,16 @@ function Shell() {
                 </>
               )}
             </button>
-            {waitingRuns[0] && (
+            {attention.count > 0 && (
               <button
                 id="attention-pill"
                 type="button"
                 className="pill pill-attention"
-                onClick={() => setInspectRunId(waitingRuns[0]?.id)}
-                title="Click to inspect the agent waiting for your input"
+                onClick={() => navigate('/inbox')}
+                title="Open the Inbox: runs that need you, across all projects"
               >
                 <span className="dot" />
-                {waitingRuns.length} waiting on you
+                {attention.count} need you
               </button>
             )}
             <button
@@ -965,10 +952,21 @@ function Shell() {
                   <SettingsPage theme={theme} onChangeTheme={applyTheme} />
                 </Suspense>
               </Route>
+              <Route path="/inbox">
+                <Suspense fallback={<div className="inbox-page" aria-busy="true" />}>
+                  <InboxPage
+                    runs={runs}
+                    seen={attention.seen}
+                    onOpenRun={(id) => setInspectRunId(id)}
+                    onDismiss={attention.dismiss}
+                  />
+                </Suspense>
+              </Route>
               <Route path="/fleet">
                 <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
                   <FleetPage
                     activeProjectId={activeProject?.id ?? null}
+                    seen={attention.seen}
                     onInspectRun={(id) => setInspectRunId(id)}
                   />
                 </Suspense>

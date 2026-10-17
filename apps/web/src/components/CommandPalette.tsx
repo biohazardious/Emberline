@@ -86,6 +86,14 @@ export function CommandPalette({
         run: () => navigate('/'),
       },
       {
+        id: 'nav-inbox',
+        group: 'Navigation',
+        label: 'Go to Inbox',
+        meta: 'Runs that need you, across all projects',
+        badge: 'G I',
+        run: () => navigate('/inbox'),
+      },
+      {
         id: 'nav-fleet',
         group: 'Navigation',
         label: 'Go to Fleet Multiplexer',
