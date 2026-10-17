@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import {
+  type Dirent,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -16,7 +18,8 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoreConfig } from '../config.js';
 import { type OpenedDb, openDb } from '../db/index.js';
-import { buildOutputs, projects, runs, tickets } from '../db/schema.js';
+import type { Readable } from 'node:stream';
+import { buildOutputs, projects, runEvents, runs, tickets } from '../db/schema.js';
 import { updateFactorySettings } from '../factory/settings.js';
 import { ARCHIVE_DIR_NAME, BuildOutputArchive } from './archive.js';
 
@@ -28,16 +31,30 @@ let archive: BuildOutputArchive;
 let notes: { runId: string; type: string; payload: unknown }[];
 /** Quota for the next passes; undefined reads the factory setting. */
 let quota: number | undefined;
+/** Runs when a pass reads the quota, i.e. right after it listed the worktree. */
+let onQuotaRead: (() => void) | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'outputs-'));
   opened = openDb(':memory:');
   notes = [];
   quota = undefined;
+  onQuotaRead = undefined;
   const config = { workspacesDir: dir, workspacesHostDir: '/srv/emberline/workspaces' } as CoreConfig;
   archive = new BuildOutputArchive(opened.db, config, {
-    note: (runId, type, payload) => notes.push({ runId, type, payload }),
-    quotaBytes: () => quota,
+    // Like RunService.note: the event lands in the run's timeline (the archive reads it back).
+    note: (runId, type, payload) => {
+      notes.push({ runId, type, payload });
+      try {
+        opened.db.insert(runEvents).values({ runId, ts: new Date(), source: 'system', type, payload }).run();
+      } catch {
+        // The run row is gone.
+      }
+    },
+    quotaBytes: () => {
+      onQuotaRead?.();
+      return quota;
+    },
   });
 });
 
@@ -48,6 +65,11 @@ afterEach(async () => {
 });
 
 const db = () => opened.db;
+const readAll = async (stream: Readable) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+};
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-C', cwd, '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args]);
 
@@ -106,6 +128,38 @@ function setQuotaBytes(bytes: number): void {
 const rowsOf = (projectId: string) =>
   db().select().from(buildOutputs).where(eq(buildOutputs.projectId, projectId)).all();
 const stored = (storedPath: string) => path.join(dir, ARCHIVE_DIR_NAME, storedPath);
+const archiveRoot = () => path.join(dir, ARCHIVE_DIR_NAME);
+
+/** Every non-directory entry under `root`, relative; [] when it does not exist. */
+function filesUnder(root: string): string[] {
+  if (!existsSync(root)) return [];
+  return (readdirSync(root, { recursive: true, withFileTypes: true }) as Dirent[])
+    .filter((e) => !e.isDirectory())
+    .map((e) => path.relative(root, path.join(e.parentPath, e.name)))
+    .sort();
+}
+
+/** Makes every archive copy wait for `gate` first (a slow disk), or run `before` first. */
+function hookCopies(before: () => Promise<void> | void) {
+  const target = archive as unknown as { copyBytes: (...args: unknown[]) => Promise<void> };
+  const original = target.copyBytes.bind(archive);
+  return vi.spyOn(target, 'copyBytes').mockImplementation(async (...args: unknown[]) => {
+    await before();
+    return original(...args);
+  });
+}
+const slowCopies = (gate: Promise<void>) => hookCopies(() => gate);
+
+/** A directory outside the workspaces root standing in for core's /data. */
+function outsideDir(): string {
+  const outside = mkdtempSync(path.join(tmpdir(), 'core-data-'));
+  writeFileSync(path.join(outside, 'emberline.db'), 'core secrets');
+  return outside;
+}
+const archiveLeaks = () =>
+  filesUnder(archiveRoot()).some((f) =>
+    readFileSync(path.join(archiveRoot(), f), 'utf8').includes('core secrets'),
+  );
 
 describe('BuildOutputArchive.archiveRun', () => {
   it('copies tracked and git-ignored outputs into <archive>/<projectId>/<runId>/', async () => {
@@ -368,12 +422,13 @@ describe('BuildOutputArchive background passes', () => {
     expect(rowsOf('p1')).toHaveLength(1);
   });
 
-  it('archiveBeforePrune gives up after its timeout and records it', async () => {
+  it('archiveBeforePrune gives up after its timeout, records it and frees the project', async () => {
     addProject('p1');
     addRun('r1', 'p1', addWorktree('r1'));
     let release: () => void = () => undefined;
+    // A pass that hangs (a stuck mount) and would hold the project's lock forever.
     const spy = vi
-      .spyOn(archive, 'archiveRun')
+      .spyOn(archive as unknown as { archivePass: () => Promise<unknown> }, 'archivePass')
       .mockImplementation(
         () => new Promise((resolve) => (release = () => resolve({ archived: 0, skipped: 0, failed: 0 }))),
       );
@@ -386,11 +441,32 @@ describe('BuildOutputArchive background passes', () => {
           payload: expect.objectContaining({ reason: 'timeout' }),
         }),
       ]);
+      // The lock was released on timeout: the next pass runs while the hung one still hangs.
+      spy.mockRestore();
+      expect(await archive.archiveBeforePrune('r1', 5_000)).toBe('archived');
     } finally {
       release();
       spy.mockRestore();
     }
-    expect(await archive.archiveBeforePrune('r1', 5_000)).toBe('archived');
+  });
+
+  it('a pass that ran out of time writes nothing when it finally gets there', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = slowCopies(gate);
+    try {
+      expect(await archive.archiveBeforePrune('r1', 20)).toBe('timeout');
+    } finally {
+      release();
+    }
+    await archive.idle();
+    slow.mockRestore();
+    expect(rowsOf('p1')).toEqual([]);
+    expect(filesUnder(path.join(dir, ARCHIVE_DIR_NAME))).toEqual([]);
   });
 });
 
@@ -469,7 +545,7 @@ describe('BuildOutputArchive by id', () => {
     const row = await archived('p1', 'r1', 'app.apk', 321);
     const opened1 = await archive.open(row.id);
     expect(opened1).toMatchObject({ fileName: 'app.apk', size: 321 });
-    expect(readFileSync(opened1.abs).length).toBe(321);
+    expect(await readAll(opened1.stream)).toEqual(Buffer.alloc(321, 1));
     await expect(archive.open('no-such-id')).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -490,13 +566,15 @@ describe('BuildOutputArchive by id', () => {
     const secret = path.join(dir, 'secret.txt');
     writeFileSync(secret, 'core secret');
     db().update(buildOutputs).set({ storedPath: '../secret.txt' }).where(eq(buildOutputs.id, row.id)).run();
-    await expect(archive.open(row.id)).rejects.toMatchObject({ statusCode: expect.any(Number) });
+    await expect(archive.open(row.id)).rejects.toMatchObject({ statusCode: 404 });
+    expect(archive.get(row.id)).toBeUndefined();
 
     // A symlink planted in the archive (the workspaces volume is agent-writable) is refused too.
     const planted = await archived('p1', 'r2');
     rmSync(stored(planted.storedPath));
     symlinkSync(secret, stored(planted.storedPath));
     await expect(archive.open(planted.id)).rejects.toMatchObject({ statusCode: 404 });
+    expect(archive.get(planted.id)).toBeUndefined();
     expect(readFileSync(secret, 'utf8')).toBe('core secret');
   });
 
@@ -521,5 +599,187 @@ describe('BuildOutputArchive by id', () => {
     expect(existsSync(path.join(dir, ARCHIVE_DIR_NAME, 'p1'))).toBe(false);
     expect(rowsOf('p2')).toHaveLength(1);
     expect(existsSync(stored(keep.storedPath))).toBe(true);
+  });
+});
+
+describe('BuildOutputArchive and agent-controlled files', () => {
+  let outside: string;
+  beforeEach(() => {
+    outside = outsideDir();
+  });
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('never copies an output that is a symlink', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/real.apk', 10);
+    symlinkSync(path.join(outside, 'emberline.db'), path.join(wt, 'dist/evil.apk'));
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(rowsOf('p1').map((r) => r.name)).toEqual(['real.apk']);
+    expect(archiveLeaks()).toBe(false);
+  });
+
+  it('refuses, and records, a file or directory swapped for a symlink after the listing', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    put(wt, 'pkg/fw.apk', 100);
+    writeFileSync(path.join(outside, 'fw.apk'), 'core secrets');
+    onQuotaRead = () => {
+      onQuotaRead = undefined;
+      rmSync(path.join(wt, 'dist/app.apk'));
+      symlinkSync(path.join(outside, 'emberline.db'), path.join(wt, 'dist/app.apk'));
+      rmSync(path.join(wt, 'pkg'), { recursive: true });
+      symlinkSync(outside, path.join(wt, 'pkg'));
+    };
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 2 });
+    expect(rowsOf('p1')).toEqual([]);
+    expect(archiveLeaks()).toBe(false);
+    const failed = notes.find((n) => n.type === 'build_outputs_archive_failed')?.payload as {
+      failures: { path: string }[];
+    };
+    expect(failed.failures.map((f) => f.path).sort()).toEqual(['dist/app.apk', 'pkg/fw.apk']);
+  });
+
+  it('copies the bytes of the file it opened, even if a symlink is swapped in during the copy', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100, { fill: 3 });
+    const hook = hookCopies(() => {
+      rmSync(path.join(wt, 'dist/app.apk'));
+      symlinkSync(path.join(outside, 'emberline.db'), path.join(wt, 'dist/app.apk'));
+    });
+    try {
+      expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    } finally {
+      hook.mockRestore();
+    }
+    expect(readFileSync(stored('p1/r1/app.apk'))).toEqual(Buffer.alloc(100, 3));
+    expect(archiveLeaks()).toBe(false);
+  });
+
+  it('never deletes outside the archive through a symlinked run directory or stored file', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    put(wt, 'dist/other.apk', 100);
+    await archive.archiveRun('r1');
+    const [app, other] = ['app.apk', 'other.apk'].map((n) => rowsOf('p1').find((r) => r.name === n));
+    writeFileSync(path.join(outside, 'other.apk'), 'keep me');
+
+    // A link planted in place of a stored file: the link goes, its target stays.
+    rmSync(stored('p1/r1/other.apk'));
+    symlinkSync(path.join(outside, 'other.apk'), stored('p1/r1/other.apk'));
+    await archive.remove(other?.id ?? '');
+    expect(readFileSync(path.join(outside, 'other.apk'), 'utf8')).toBe('keep me');
+
+    // The run directory swapped for a link: nothing is deleted there.
+    writeFileSync(path.join(outside, 'app.apk'), 'keep me too');
+    rmSync(path.join(archiveRoot(), 'p1', 'r1'), { recursive: true });
+    symlinkSync(outside, path.join(archiveRoot(), 'p1', 'r1'));
+    await expect(archive.remove(app?.id ?? '')).rejects.toMatchObject({ statusCode: 404 });
+    expect(archive.get(app?.id ?? '')).toBeUndefined();
+    expect(readFileSync(path.join(outside, 'app.apk'), 'utf8')).toBe('keep me too');
+  });
+
+  it('leaves no temp file behind when placing the copy fails', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    // A directory where the copy should land: the rename fails.
+    mkdirSync(stored('p1/r1/app.apk'), { recursive: true });
+
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 1 });
+    expect(filesUnder(path.join(archiveRoot(), 'p1', 'r1'))).toEqual([]);
+  });
+
+  it('sweeps temp files a crash left behind, once they are an hour old', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    const crashed = path.join(archiveRoot(), 'p1', 'old-run');
+    mkdirSync(crashed, { recursive: true });
+    writeFileSync(path.join(crashed, '.app.apk.1111.part'), 'half');
+    writeFileSync(path.join(crashed, '.app.apk.2222.part'), 'in flight');
+    const twoHoursAgo = Date.now() / 1000 - 2 * 3600;
+    utimesSync(path.join(crashed, '.app.apk.1111.part'), twoHoursAgo, twoHoursAgo);
+
+    await archive.archiveRun('r1');
+    expect(filesUnder(crashed)).toEqual(['.app.apk.2222.part']);
+  });
+});
+
+describe('BuildOutputArchive notes and races', () => {
+  it('notes an oversized output and a full quota once per run and output', async () => {
+    quota = 3000;
+    addProject('p1');
+    const wt1 = addWorktree('r1');
+    addRun('r1', 'p1', wt1);
+    put(wt1, 'dist/keep.apk', 2900);
+    await archive.archiveRun('r1');
+    archive.setPinned(rowsOf('p1')[0]?.id ?? '', true);
+    const wt2 = addWorktree('r2');
+    addRun('r2', 'p1', wt2);
+    put(wt2, 'dist/huge.apk', 5000);
+    put(wt2, 'dist/next.apk', 500);
+
+    await archive.archiveRun('r2');
+    await archive.archiveRun('r2');
+    expect(notes.map((n) => n.type).sort()).toEqual(['build_output_too_large', 'build_outputs_quota_full']);
+
+    // A new output that does not fit is still news.
+    put(wt2, 'dist/third.apk', 400);
+    await archive.archiveRun('r2');
+    const quotaNotes = notes.filter((n) => n.type === 'build_outputs_quota_full');
+    expect(quotaNotes.map((n) => (n.payload as { skipped: string[] }).skipped)).toEqual([
+      ['dist/next.apk'],
+      ['dist/third.apk'],
+    ]);
+  });
+
+  it('a project being deleted wins against a pass in flight and a pass queued after it', async () => {
+    addProject('p1');
+    const wt = addWorktree('r1');
+    addRun('r1', 'p1', wt);
+    put(wt, 'dist/app.apk', 100);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = slowCopies(gate);
+    const pass = archive.archiveRun('r1');
+    await vi.waitFor(() => expect(slow).toHaveBeenCalled());
+    const removal = archive.removeProject('p1');
+    release();
+    await pass;
+    await removal;
+    slow.mockRestore();
+    expect(rowsOf('p1')).toEqual([]);
+    expect(existsSync(path.join(archiveRoot(), 'p1'))).toBe(false);
+
+    // The route deletes the project row afterwards; a pass in between writes nothing.
+    expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 0 });
+    await archive.idle();
+    expect(existsSync(path.join(archiveRoot(), 'p1'))).toBe(false);
+  });
+
+  it('copies again when the handoff chain copy it would reuse is gone from disk', async () => {
+    addProject('p1');
+    const wt = addWorktree('shared');
+    addRun('r1', 'p1', wt, { handedOffTo: 'r2' });
+    addRun('r2', 'p1', wt, { predecessorRunId: 'r1' });
+    put(wt, 'dist/app.apk', 100);
+    await archive.archiveRun('r1');
+    rmSync(stored('p1/r1/app.apk'));
+
+    expect(await archive.archiveRun('r2')).toEqual({ archived: 1, skipped: 0, failed: 0 });
+    expect(existsSync(stored('p1/r2/app.apk'))).toBe(true);
   });
 });

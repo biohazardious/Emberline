@@ -3,32 +3,49 @@
  *
  * Files live at `<workspacesDir>/.emberline-outputs/<projectId>/<runId>/<file name>` on the same
  * volume as the worktrees; core reads and writes them directly (no command runs in the runner).
- * That volume is writable by agents, so every archive path is checked with `realpath`: no
- * component may be a symbolic link, and nothing outside the archive root is read or written.
+ * That volume is writable by agents, so sources and stored files are only ever read through
+ * descriptors verified by ./safe-fs.ts, and nothing outside the worktree or the archive is read.
  *
- * A pass never throws to its caller. Problems become informational run events
- * (`build_outputs_archive_failed`, `build_outputs_quota_full`, `build_output_too_large`).
+ * A pass never throws to its caller and never holds a project's lock past its time limit.
+ * Problems become informational run events (`build_outputs_archive_failed`,
+ * `build_outputs_quota_full`, `build_output_too_large`); the last two at most once per run and output.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, lstat, mkdir, realpath, rename, rm, stat } from 'node:fs/promises';
+import { type Dirent } from 'node:fs';
+import { type FileHandle, lstat, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 import type { AgentPersona, ProjectBuildOutputsResponse, RunBuildOutput } from '@emberline/protocol';
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
-import { buildOutputs, projects, runs, tickets } from '../db/schema.js';
-import { badRequest, notFound } from '../errors.js';
+import { buildOutputs, projects, runEvents, runs, tickets } from '../db/schema.js';
+import { notFound } from '../errors.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { listBuildOutputs, resolveSafeWorktreePath } from '../runs/git.js';
+import {
+  copyBetweenHandles,
+  createExclusiveFile,
+  type OpenedFile,
+  openFileUnder,
+  SafeRoot,
+  streamOpenedFile,
+  UnsafePathError,
+} from './safe-fs.js';
 
 /** Directory under the workspaces root that holds the archive. */
 export const ARCHIVE_DIR_NAME = '.emberline-outputs';
 /** How long a prune waits for its pre-prune archive pass before it deletes the worktree anyway. */
 export const PRE_PRUNE_ARCHIVE_TIMEOUT_MS = 60_000;
+/** Upper bound for a background pass (done/failed/collect); then it gives up and frees the project. */
+export const BACKGROUND_PASS_TIMEOUT_MS = 10 * 60_000;
 const GIB = 1024 ** 3;
-/** Handoff chains are short; this only stops a corrupt predecessor cycle. */
+/** Handoff chains are short; this only stops a corrupt chain cycle. */
 const MAX_CHAIN_LENGTH = 100;
+/** Temp copies are `.<name>.<uuid>.part`; ones older than this were left by a crash and are swept. */
+const PART_FILE = /^\..+\.part$/;
+const STALE_PART_MS = 60 * 60_000;
 
 export interface ArchiveCounts {
   archived: number;
@@ -45,11 +62,13 @@ export interface BuildOutputArchiveOptions {
 
 export type BuildOutputRow = typeof buildOutputs.$inferSelect;
 type RunRow = typeof runs.$inferSelect;
+/** Set once a pass ran out of time: from then on it writes nothing. */
+interface PassControl {
+  aborted: boolean;
+}
 
 const noCounts = (): ArchiveCounts => ({ archived: 0, skipped: 0, failed: 0 });
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
-const isMissing = (error: unknown) =>
-  (error as { code?: string }).code === 'ENOENT' || (error as { code?: string }).code === 'ENOTDIR';
 
 /** Human-readable size for event messages. */
 export function formatBytes(bytes: number): string {
@@ -60,72 +79,78 @@ export function formatBytes(bytes: number): string {
 }
 
 export class BuildOutputArchive {
-  /** Archive root as configured (not resolved through links). */
-  readonly root: string;
+  /** The archive directory and its path checks. */
+  readonly files: SafeRoot;
   /** One archive pass, removal or project wipe at a time per project. */
   private readonly lock = new KeyedMutex();
-  /** Background passes still running; {@link idle} waits for them. */
+  /** Passes still running (including ones that ran out of time); {@link idle} waits for them. */
   private readonly pending = new Set<Promise<unknown>>();
+  /** Projects being deleted: queued or late passes for them write nothing. */
+  private readonly removedProjects = new Set<string>();
+  /** When each project's stale `.part` files were last swept. */
+  private readonly partSweepAt = new Map<string, number>();
 
   constructor(
     private readonly db: Db,
     private readonly config: CoreConfig,
     private readonly opts: BuildOutputArchiveOptions = {},
   ) {
-    this.root = path.join(config.workspacesDir, ARCHIVE_DIR_NAME);
+    this.files = new SafeRoot(config.workspacesDir, ARCHIVE_DIR_NAME);
+  }
+
+  /** Archive root as configured (not resolved through links). */
+  get root(): string {
+    return this.files.root;
   }
 
   /**
    * Copies the run's current build outputs into the archive, then applies the project's quota.
-   * Never throws: failures are counted and recorded as a run event.
+   * Never throws: failures are counted and recorded as a run event. After `timeoutMs` the pass
+   * stops writing and releases the project.
    */
-  async archiveRun(runId: string): Promise<ArchiveCounts> {
-    try {
-      const run = this.db.select({ projectId: runs.projectId }).from(runs).where(eq(runs.id, runId)).get();
-      if (!run) return noCounts();
-      return await this.lock.run(run.projectId, () => this.archivePass(runId));
-    } catch (error) {
+  async archiveRun(runId: string, opts: { timeoutMs?: number } = {}): Promise<ArchiveCounts> {
+    const timeoutMs = opts.timeoutMs ?? BACKGROUND_PASS_TIMEOUT_MS;
+    const { counts, timedOut } = await this.boundedPass(runId, timeoutMs);
+    if (timedOut) {
       this.notify(runId, 'build_outputs_archive_failed', {
-        failures: [{ error: errorText(error) }],
-        message: `Could not archive build outputs: ${errorText(error)}`,
+        reason: 'timeout',
+        timeoutMs,
+        message: `Archiving build outputs took longer than ${Math.round(timeoutMs / 1000)} s and was stopped`,
       });
-      return { archived: 0, skipped: 0, failed: 1 };
     }
+    return counts;
   }
 
   /** Starts an archive pass in the background (run reached `done` or `failed`). Never throws. */
   archiveSoon(runId: string): void {
-    void this.startPass(runId);
+    void this.track(
+      Promise.resolve()
+        .then(() => this.archiveRun(runId))
+        .catch(() => noCounts()),
+    );
   }
 
   /**
-   * The pass a prune waits for before it deletes a worktree, bounded by `timeoutMs`. On timeout the
-   * prune goes ahead (the pass keeps running and fails once its source is gone) and the run's
+   * The pass a prune waits for before it deletes a worktree, bounded by `timeoutMs` (queueing for
+   * the project included). On timeout the pass stops writing, the prune goes ahead, and the run's
    * timeline says so.
    */
   async archiveBeforePrune(
     runId: string,
     timeoutMs = PRE_PRUNE_ARCHIVE_TIMEOUT_MS,
   ): Promise<'archived' | 'timeout'> {
-    const pass = this.startPass(runId);
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<'timeout'>((resolve) => {
-      timer = setTimeout(() => resolve('timeout'), timeoutMs);
-      timer.unref();
-    });
-    const outcome = await Promise.race([pass.then(() => 'archived' as const), timeout]);
-    clearTimeout(timer);
-    if (outcome === 'timeout') {
+    const { timedOut } = await this.track(this.boundedPass(runId, timeoutMs));
+    if (timedOut) {
       this.notify(runId, 'build_outputs_archive_failed', {
         reason: 'timeout',
         timeoutMs,
         message: `Archiving build outputs took longer than ${Math.round(timeoutMs / 1000)} s; the worktree was pruned without waiting for it`,
       });
     }
-    return outcome;
+    return timedOut ? 'timeout' : 'archived';
   }
 
-  /** Test hook: resolves once every background pass started so far (and any they started) settled. */
+  /** Test hook: resolves once every pass started so far (and any they started) settled. */
   async idle(): Promise<void> {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
   }
@@ -176,19 +201,19 @@ export class BuildOutputArchive {
   }
 
   /**
-   * Resolves an archived file for download. A file that vanished (or was replaced by a link) is
-   * forgotten: its row is removed and the caller gets 404.
+   * Opens an archived file for download through a verified descriptor; the stream is exactly
+   * `size` bytes and closes the file when done. A file that vanished (or was replaced by a link)
+   * is forgotten: its row is removed and the caller gets 404.
    */
-  async open(id: string): Promise<{ abs: string; fileName: string; size: number }> {
+  async open(id: string): Promise<{ stream: Readable; fileName: string; size: number }> {
     const row = this.get(id);
     if (!row) throw notFound('no such build output');
-    const abs = await this.verifiedStoredFile(row.storedPath).catch(() => null);
-    const info = abs ? await stat(abs).catch(() => null) : null;
-    if (!abs || !info?.isFile()) {
+    const opened = await this.files.openFile(row.storedPath).catch(() => null);
+    if (!opened) {
       this.db.delete(buildOutputs).where(eq(buildOutputs.id, id)).run();
       throw notFound('file no longer on disk');
     }
-    return { abs, fileName: row.name, size: info.size };
+    return { stream: streamOpenedFile(opened), fileName: row.name, size: opened.size };
   }
 
   setPinned(id: string, pinned: boolean): BuildOutputRow {
@@ -208,26 +233,24 @@ export class BuildOutputArchive {
     if (!present) throw notFound('file no longer on disk');
   }
 
-  /** Project deletion: every row of the project and its archive directory. */
+  /**
+   * Project deletion: every row of the project and its archive directory. Passes queued for the
+   * project, or still running after their time ran out, write nothing from here on.
+   */
   async removeProject(projectId: string): Promise<void> {
+    this.removedProjects.add(projectId);
     await this.lock.run(projectId, async () => {
       this.db.delete(buildOutputs).where(eq(buildOutputs.projectId, projectId)).run();
-      const dir = this.storedAbs(projectId);
-      // Only through a real archive root; rm itself never follows a link it removes.
-      if (await this.rootIsRealDir()) await rm(dir, { recursive: true, force: true });
+      await this.files.removeTree(projectId);
     });
   }
 
   // --- internals -------------------------------------------------------------------------------
 
-  /** A tracked pass that starts after the caller's synchronous work and never rejects. */
-  private startPass(runId: string): Promise<ArchiveCounts> {
-    const pass = Promise.resolve()
-      .then(() => this.archiveRun(runId))
-      .catch(() => ({ archived: 0, skipped: 0, failed: 1 }));
-    this.pending.add(pass);
-    void pass.finally(() => this.pending.delete(pass));
-    return pass;
+  private track<T>(promise: Promise<T>): Promise<T> {
+    this.pending.add(promise);
+    void promise.finally(() => this.pending.delete(promise)).catch(() => undefined);
+    return promise;
   }
 
   private notify(runId: string, type: string, payload: unknown): void {
@@ -244,16 +267,68 @@ export class BuildOutputArchive {
     return Math.round(getFactorySettings(this.db).buildOutputsQuotaGb * GIB);
   }
 
-  private async archivePass(runId: string): Promise<ArchiveCounts> {
+  /** The project is being deleted, or is gone: nothing may be written for it. */
+  private projectGone(projectId: string): boolean {
+    if (this.removedProjects.has(projectId)) return true;
+    return !this.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get();
+  }
+
+  /**
+   * Runs a pass under the project's lock for at most `timeoutMs`, queueing included. When time is
+   * up the pass is told to stop writing and the lock is released; the pass itself may still be
+   * finishing a read, and stays tracked for {@link idle}. Never throws.
+   */
+  private async boundedPass(
+    runId: string,
+    timeoutMs: number,
+  ): Promise<{ counts: ArchiveCounts; timedOut: boolean }> {
+    const control: PassControl = { aborted: false };
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        control.aborted = true;
+        resolve(null);
+      }, timeoutMs);
+      timer.unref();
+    });
+    try {
+      const run = this.db.select({ projectId: runs.projectId }).from(runs).where(eq(runs.id, runId)).get();
+      if (!run) return { counts: noCounts(), timedOut: false };
+      const locked = this.lock
+        .run(run.projectId, async () => {
+          if (control.aborted) return null;
+          const pass = this.track(
+            this.archivePass(runId, control).catch((error: unknown) => {
+              this.notify(runId, 'build_outputs_archive_failed', {
+                failures: [{ path: '', error: errorText(error) }],
+                message: `Could not archive build outputs: ${errorText(error)}`,
+              });
+              return { archived: 0, skipped: 0, failed: 1 };
+            }),
+          );
+          return Promise.race([pass, expired]);
+        })
+        .catch(() => null);
+      const counts = await Promise.race([locked, expired]);
+      return counts
+        ? { counts, timedOut: false }
+        : { counts: { archived: 0, skipped: 0, failed: 1 }, timedOut: true };
+    } catch (error) {
+      this.notify(runId, 'build_outputs_archive_failed', {
+        failures: [{ path: '', error: errorText(error) }],
+        message: `Could not archive build outputs: ${errorText(error)}`,
+      });
+      return { counts: { archived: 0, skipped: 0, failed: 1 }, timedOut: false };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async archivePass(runId: string, control: PassControl): Promise<ArchiveCounts> {
     const counts = noCounts();
     const run = this.db.select().from(runs).where(eq(runs.id, runId)).get();
-    if (!run) return counts;
-    const project = this.db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.id, run.projectId))
-      .get();
-    if (!project) return counts;
+    if (!run || control.aborted || this.projectGone(run.projectId)) return counts;
+    await this.sweepPartFiles(run.projectId).catch(() => undefined);
     const outputs = await listBuildOutputs(run.worktreePath);
     const quota = this.quotaBytes();
     const projectRows = this.db
@@ -264,7 +339,7 @@ export class BuildOutputArchive {
     let pinnedBytes = projectRows.filter((r) => r.pinned).reduce((sum, r) => sum + r.sizeBytes, 0);
     const own = new Map(projectRows.filter((r) => r.runId === runId).map((r) => [r.sourcePath, r]));
     const chain = this.chainIds(run);
-    const tooLarge: RunBuildOutput[] = [];
+    const tooLarge: { path: string; name: string; sizeBytes: number }[] = [];
     const overQuota: string[] = [];
     const failures: { path: string; error: string }[] = [];
     // Bytes copied in this pass: they are the newest, so they must fit next to the pinned ones.
@@ -273,36 +348,48 @@ export class BuildOutputArchive {
 
     // Newest first: when the quota cannot take everything, the latest builds win.
     for (const output of outputs) {
-      const mtime = Date.parse(output.mtime);
+      if (control.aborted || this.projectGone(run.projectId)) break;
+      const listedMtime = Date.parse(output.mtime);
       const same = (r: BuildOutputRow) =>
-        r.sourcePath === output.path && r.sizeBytes === output.sizeBytes && r.sourceMtime.getTime() === mtime;
+        r.sourcePath === output.path &&
+        r.sizeBytes === output.sizeBytes &&
+        r.sourceMtime.getTime() === listedMtime;
       const existing = own.get(output.path);
-      if (
-        existing &&
-        same(existing) &&
-        (await this.verifiedStoredFile(existing.storedPath).catch(() => null))
-      ) {
+      if (existing && same(existing) && (await this.files.hasFile(existing.storedPath))) {
         counts.skipped += 1;
         continue;
       }
-      if (projectRows.some((r) => chain.has(r.runId) && same(r))) {
+      const chainCopy = projectRows.find((r) => chain.has(r.runId) && same(r));
+      if (chainCopy && (await this.files.hasFile(chainCopy.storedPath))) {
         counts.skipped += 1;
         continue;
       }
-      if (output.sizeBytes > quota) {
-        tooLarge.push(output);
-        counts.skipped += 1;
-        continue;
-      }
-      // A rebuilt pinned output stays pinned, so it replaces its own share of the pinned bytes.
-      const pinnedOthers = existing?.pinned ? pinnedBytes - existing.sizeBytes : pinnedBytes;
-      if (pinnedOthers + copiedBytes + output.sizeBytes > quota) {
-        overQuota.push(output.path);
-        counts.skipped += 1;
+      // From here on the opened descriptor is the source: its size and mtime, its bytes.
+      let source: OpenedFile;
+      try {
+        source = await openFileUnder(
+          run.worktreePath,
+          resolveSafeWorktreePath(run.worktreePath, output.path).rel,
+        );
+      } catch (error) {
+        counts.failed += 1;
+        failures.push({ path: output.path, error: errorText(error) });
         continue;
       }
       try {
-        const row = await this.copyIn(run, output, mtime, now, existing, projectRows);
+        if (source.size > quota) {
+          tooLarge.push({ path: output.path, name: output.name, sizeBytes: source.size });
+          counts.skipped += 1;
+          continue;
+        }
+        // A rebuilt pinned output stays pinned, so it replaces its own share of the pinned bytes.
+        const pinnedOthers = existing?.pinned ? pinnedBytes - existing.sizeBytes : pinnedBytes;
+        if (pinnedOthers + copiedBytes + source.size > quota) {
+          overQuota.push(output.path);
+          counts.skipped += 1;
+          continue;
+        }
+        const row = await this.copyIn(run, output, source, now, existing, projectRows, control);
         counts.archived += 1;
         if (row.pinned) pinnedBytes = pinnedOthers + row.sizeBytes;
         else copiedBytes += row.sizeBytes;
@@ -312,32 +399,39 @@ export class BuildOutputArchive {
       } catch (error) {
         counts.failed += 1;
         failures.push({ path: output.path, error: errorText(error) });
+      } finally {
+        await source.handle.close().catch(() => undefined);
       }
     }
 
-    await this.evict(run.projectId, quota).catch((error: unknown) =>
-      failures.push({ path: '', error: `quota cleanup failed: ${errorText(error)}` }),
-    );
+    if (this.projectGone(run.projectId)) {
+      // A pass that raced the project's deletion may have recreated its directory: remove it again.
+      await this.files.removeTree(run.projectId).catch(() => undefined);
+    } else if (!control.aborted) {
+      await this.evict(run.projectId, quota).catch((error: unknown) =>
+        failures.push({ path: '', error: `quota cleanup failed: ${errorText(error)}` }),
+      );
+    }
 
     for (const output of tooLarge) {
+      if (this.alreadyNoted(runId, 'build_output_too_large', output.path)) continue;
       this.notify(runId, 'build_output_too_large', {
-        path: output.path,
-        name: output.name,
-        sizeBytes: output.sizeBytes,
+        ...output,
         quotaBytes: quota,
         message: `${output.name} (${formatBytes(output.sizeBytes)}) is larger than the project's whole build output quota (${formatBytes(quota)}) and was not archived`,
       });
     }
-    if (overQuota.length > 0) {
+    const newlyOverQuota = overQuota.filter((p) => !this.alreadyNoted(runId, 'build_outputs_quota_full', p));
+    if (newlyOverQuota.length > 0) {
       const pinnedFull = pinnedBytes >= quota;
       this.notify(runId, 'build_outputs_quota_full', {
         reason: pinnedFull ? 'pinned' : 'run_outputs',
-        skipped: overQuota,
+        skipped: newlyOverQuota,
         quotaBytes: quota,
         pinnedBytes,
         message: pinnedFull
-          ? `Pinned build outputs fill the project's quota (${formatBytes(pinnedBytes)} of ${formatBytes(quota)}); ${overQuota.length} new output(s) were not archived. Unpin or delete some, or raise the quota.`
-          : `The project's build output quota (${formatBytes(quota)}) has no room for ${overQuota.length} more output(s) of this run; the newest ones were archived.`,
+          ? `Pinned build outputs fill the project's quota (${formatBytes(pinnedBytes)} of ${formatBytes(quota)}); ${newlyOverQuota.length} new output(s) were not archived. Unpin or delete some, or raise the quota.`
+          : `The project's build output quota (${formatBytes(quota)}) has no room for ${newlyOverQuota.length} more output(s) of this run; the newest ones were archived.`,
       });
     }
     if (failures.length > 0) {
@@ -347,6 +441,19 @@ export class BuildOutputArchive {
       });
     }
     return counts;
+  }
+
+  /** True when this run's timeline already has a `type` note about the output at `sourcePath`. */
+  private alreadyNoted(runId: string, type: string, sourcePath: string): boolean {
+    return this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, type)))
+      .all()
+      .some(({ payload }) => {
+        const p = payload as { path?: unknown; skipped?: unknown } | null;
+        return p?.path === sourcePath || (Array.isArray(p?.skipped) && p.skipped.includes(sourcePath));
+      });
   }
 
   /**
@@ -374,32 +481,44 @@ export class BuildOutputArchive {
     return ids;
   }
 
+  /**
+   * Copies an opened source into the archive: an exclusive temp file in the verified run directory,
+   * filled from the source descriptor, renamed into place once the directory is verified again.
+   */
   private async copyIn(
     run: RunRow,
     output: RunBuildOutput,
-    mtime: number,
+    source: OpenedFile,
     now: Date,
     existing: BuildOutputRow | undefined,
     projectRows: BuildOutputRow[],
+    control: PassControl,
   ): Promise<BuildOutputRow> {
-    const source = await this.verifiedSource(run.worktreePath, output.path);
+    const stopped = () => control.aborted || this.projectGone(run.projectId);
+    if (stopped()) throw new Error('the archive pass was stopped');
     const storedPath = existing?.storedPath ?? this.freshStoredPath(run, output, projectRows);
-    const dest = this.storedAbs(storedPath);
-    if (!(await this.rootIsRealDir({ create: true })))
-      throw new Error('the archive directory is not a plain directory');
-    await mkdir(path.dirname(dest), { recursive: true });
-    const realDir = await realpath(path.dirname(dest));
-    if (realDir !== path.dirname(await this.expectedRealPath(storedPath))) {
-      throw new Error('the archive directory contains a symbolic link');
-    }
-    const temp = path.join(realDir, `.${path.basename(dest)}.${randomUUID()}.part`);
+    const rel = path.relative(this.files.root, this.files.resolve(storedPath));
+    const relDir = path.dirname(rel);
+    const dir = await this.files.realDir(relDir, { create: true });
+    if (!dir) throw new Error('the archive directory could not be created');
+    const base = path.basename(rel);
+    const tempName = `.${base}.${randomUUID()}.part`;
+    const out = await createExclusiveFile(dir, tempName);
+    let placed = false;
     try {
-      await copyFile(source, temp);
-      // rename replaces the destination entry itself, even if it were a link.
-      await rename(temp, dest);
-    } catch (error) {
-      await rm(temp, { force: true }).catch(() => undefined);
-      throw error;
+      try {
+        await this.copyBytes(source.handle, out, source.size);
+      } finally {
+        await out.close();
+      }
+      if (stopped()) throw new Error('the archive pass was stopped (time limit or project deleted)');
+      if ((await this.files.realDir(relDir)) !== dir)
+        throw new UnsafePathError(`${relDir} changed while copying`);
+      // rename replaces the destination entry itself, even if a link was planted there.
+      await rename(path.join(dir, tempName), path.join(dir, base));
+      placed = true;
+    } finally {
+      if (!placed) await unlink(path.join(dir, tempName)).catch(() => undefined);
     }
     const values = {
       projectId: run.projectId,
@@ -408,24 +527,35 @@ export class BuildOutputArchive {
       name: output.name,
       sourcePath: output.path,
       storedPath,
-      sizeBytes: output.sizeBytes,
-      sourceMtime: new Date(mtime),
+      sizeBytes: source.size,
+      sourceMtime: source.mtime,
       archivedAt: now,
     };
-    if (existing) {
-      const updated = this.db
-        .update(buildOutputs)
-        .set(values)
-        .where(eq(buildOutputs.id, existing.id))
+    try {
+      if (existing) {
+        const updated = this.db
+          .update(buildOutputs)
+          .set(values)
+          .where(eq(buildOutputs.id, existing.id))
+          .returning()
+          .get();
+        if (updated) return updated;
+      }
+      return this.db
+        .insert(buildOutputs)
+        .values({ id: randomUUID(), ...values })
         .returning()
         .get();
-      if (updated) return updated;
+    } catch (error) {
+      // No row (e.g. the project was deleted meanwhile): no file either.
+      await this.files.unlinkFile(storedPath).catch(() => undefined);
+      throw error;
     }
-    return this.db
-      .insert(buildOutputs)
-      .values({ id: randomUUID(), ...values })
-      .returning()
-      .get();
+  }
+
+  /** The byte copy, separate so tests can make it slow. */
+  private async copyBytes(src: FileHandle, dst: FileHandle, size: number): Promise<void> {
+    await copyBetweenHandles(src, dst, size);
   }
 
   /** `<projectId>/<runId>/<name>`; a second output with the same name gets a stable suffix. */
@@ -461,65 +591,39 @@ export class BuildOutputArchive {
     }
   }
 
-  /** Removes the row and its file (when it is safely inside the archive). True if the file was there. */
+  /**
+   * Removes the row and its file. The file is unlinked only inside its verified directory (a link
+   * planted in its place is removed itself, never its target). True if the file was there.
+   */
   private async deleteRow(row: BuildOutputRow): Promise<boolean> {
-    const abs = await this.verifiedStoredFile(row.storedPath).catch(() => null);
-    if (abs) await rm(abs, { force: true });
+    const removed = await this.files.unlinkFile(row.storedPath).catch(() => false);
     this.db.delete(buildOutputs).where(eq(buildOutputs.id, row.id)).run();
-    return abs !== null;
+    return removed;
   }
 
-  /** Lexically resolves an archive-relative path; anything that leaves the root is refused. */
-  private storedAbs(storedPath: string): string {
-    const normalized = storedPath.replace(/\\/g, '/');
-    if (!normalized || normalized.startsWith('/') || normalized.includes('\0'))
-      throw badRequest('invalid archive path');
-    const abs = path.resolve(this.root, normalized);
-    const rel = path.relative(this.root, abs);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel))
-      throw badRequest('archive path outside the archive');
-    return abs;
-  }
-
-  /** Where `storedPath` must resolve to when no component of it is a link. */
-  private async expectedRealPath(storedPath: string): Promise<string> {
-    const rel = path.relative(this.root, this.storedAbs(storedPath));
-    return path.join(await realpath(this.config.workspacesDir), ARCHIVE_DIR_NAME, rel);
-  }
-
-  /** The stored file's real path, or null when it does not exist. Throws when a link is involved. */
-  private async verifiedStoredFile(storedPath: string): Promise<string | null> {
-    const abs = this.storedAbs(storedPath);
-    let real: string;
-    try {
-      real = await realpath(abs);
-    } catch (error) {
-      if (isMissing(error)) return null;
-      throw error;
+  /**
+   * Removes `.part` temp files older than an hour from the project's run directories (left by a
+   * crash mid-copy), at most once an hour per project.
+   */
+  private async sweepPartFiles(projectId: string): Promise<void> {
+    const now = Date.now();
+    if (now - (this.partSweepAt.get(projectId) ?? 0) < STALE_PART_MS) return;
+    this.partSweepAt.set(projectId, now);
+    const projectDir = await this.files.realDir(projectId).catch(() => null);
+    if (!projectDir) return;
+    const runDirs: Dirent[] = await readdir(projectDir, { withFileTypes: true }).catch(() => []);
+    for (const runDir of runDirs) {
+      if (!runDir.isDirectory()) continue;
+      const dir = await this.files.realDir(`${projectId}/${runDir.name}`).catch(() => null);
+      if (!dir) continue;
+      const entries: Dirent[] = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isFile() || !PART_FILE.test(entry.name)) continue;
+        const info = await lstat(path.join(dir, entry.name)).catch(() => null);
+        if (info?.isFile() && now - info.mtimeMs > STALE_PART_MS) {
+          await unlink(path.join(dir, entry.name)).catch(() => undefined);
+        }
+      }
     }
-    if (real !== (await this.expectedRealPath(storedPath)))
-      throw badRequest('archive path outside the archive');
-    return real;
-  }
-
-  /** True when the archive root is a real directory (created on request), never a link. */
-  private async rootIsRealDir(opts: { create?: boolean } = {}): Promise<boolean> {
-    const info = await lstat(this.root).catch((error: unknown) => {
-      if (isMissing(error)) return null;
-      throw error;
-    });
-    if (info) return info.isDirectory();
-    if (!opts.create) return false;
-    await mkdir(this.root, { recursive: true });
-    return (await lstat(this.root)).isDirectory();
-  }
-
-  /** The source file's real path: a regular file inside the worktree, reached without links. */
-  private async verifiedSource(worktreePath: string, relPath: string): Promise<string> {
-    const { abs, rel } = resolveSafeWorktreePath(worktreePath, relPath);
-    const [realRoot, realFile] = await Promise.all([realpath(worktreePath), realpath(abs)]);
-    if (realFile !== path.join(realRoot, rel)) throw new Error(`${rel} is reached through a symbolic link`);
-    if (!(await stat(realFile)).isFile()) throw new Error(`${rel} is not a regular file`);
-    return realFile;
   }
 }

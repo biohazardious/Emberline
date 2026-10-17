@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
 import type { AgentState } from '@emberline/adapter-sdk';
 import {
@@ -58,6 +59,7 @@ import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
+import { openFileUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
@@ -164,6 +166,10 @@ const PRUNE_RUNS_PER_PASS = 10;
 const IDLE_DONE_RESUMABLE_TTL_MS = 2 * 60_000;
 const IDLE_DONE_NON_RESUMABLE_TTL_MS = 30 * 60_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
+/** Time all pre-prune archive passes of one auto-GC pass may take together. */
+export const AUTO_GC_ARCHIVE_BUDGET_MS = 60_000;
+/** With less budget left than this, auto-GC stops and prunes the rest on its next pass. */
+const AUTO_GC_MIN_ARCHIVE_MS = 5_000;
 
 type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
 /** Auto-GC re-runs git on a kept worktree whose HEAD has not moved at most this often. */
@@ -1389,14 +1395,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { worktreePath: row.worktreePath, hostWorktreePath, outputs: await listBuildOutputs(row.worktreePath) };
   }
 
-  /** Opens a build output for download; only files the lister reports as deliverables qualify. */
-  async openBuildOutput(id: string, relPath: string): Promise<{ abs: string; fileName: string; size: number }> {
+  /**
+   * Opens a build output for download; only files the lister reports as deliverables qualify. The
+   * file is opened once without following links and streamed from that descriptor, so an agent
+   * cannot swap a symlink in after the check (the worktree is agent-writable).
+   */
+  async openBuildOutput(id: string, relPath: string): Promise<{ stream: Readable; fileName: string; size: number }> {
     const row = this.row(id);
-    const { abs, rel } = resolveSafeWorktreePath(row.worktreePath, relPath);
+    const { rel } = resolveSafeWorktreePath(row.worktreePath, relPath);
     const outputs = await listBuildOutputs(row.worktreePath);
     const match = outputs.find((o) => o.path === rel);
     if (!match) throw notFound('no such build output');
-    return { abs, fileName: match.name, size: match.sizeBytes };
+    const opened = await openFileUnder(row.worktreePath, rel).catch(() => null);
+    if (!opened) throw notFound('no such build output');
+    return { stream: streamOpenedFile(opened), fileName: match.name, size: opened.size };
   }
 
   async readArtifact(
@@ -1774,8 +1786,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (shared) reportedPaths.add(shared);
           continue;
         }
+        // The run row goes away with or without its worktree: archive first, or its outputs become unreachable.
+        if (proj && row.worktreePath && row.worktreePath !== proj.path) await this.outputs.archiveBeforePrune(row.id);
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
-          await this.outputs.archiveBeforePrune(row.id);
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
@@ -2084,19 +2097,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           byProj.set(r.projectId, arr);
         }
         const seen = new Set<string>();
-        // A pre-prune archive pass that times out ends this auto-GC pass, so one slow disk holds
-        // reconcile for at most one timeout per interval; the rest waits for the next pass.
-        let archiveTimedOut = false;
+        // Archiving before prunes shares one time budget per auto-GC pass, so reconcile (exits,
+        // watchdogs) is never held much longer than that; what is left waits for the next pass.
+        const archiveDeadline = Date.now() + AUTO_GC_ARCHIVE_BUDGET_MS;
         autoGc: for (const [projId, arr] of byProj.entries()) {
           if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
           const proj = projectMap.get(projId);
           const branch = proj ? await this.mergeTarget(proj) : undefined;
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
-            if (archiveTimedOut) break autoGc;
             seen.add(stale.id);
             if (await this.mustKeepForReview(stale, proj, { branch, cached: true })) continue;
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
-              archiveTimedOut = (await this.outputs.archiveBeforePrune(stale.id)) === 'timeout';
+              const budgetLeft = archiveDeadline - Date.now();
+              if (budgetLeft < AUTO_GC_MIN_ARCHIVE_MS) break autoGc;
+              await this.outputs.archiveBeforePrune(stale.id, budgetLeft);
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);

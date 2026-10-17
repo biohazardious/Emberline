@@ -1,4 +1,3 @@
-import { createReadStream } from 'node:fs';
 import {
   DiffScope,
   GitCommitBody,
@@ -128,12 +127,12 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     '/api/runs/:id/build-outputs/download',
     async (request, reply) => {
       if (!request.query.path) throw badRequest('query parameter "path" is required');
-      const { abs, fileName, size } = await runs.openBuildOutput(request.params.id, request.query.path);
+      const { stream, fileName, size } = await runs.openBuildOutput(request.params.id, request.query.path);
       reply.header('Content-Type', 'application/octet-stream');
       reply.header('Content-Length', String(size));
       reply.header('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`);
       reply.header('Content-Security-Policy', UNTRUSTED_CONTENT_CSP);
-      return reply.send(createReadStream(abs));
+      return reply.send(stream);
     },
   );
 

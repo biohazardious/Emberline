@@ -1012,24 +1012,21 @@ describe('build output archive', () => {
     const { outputs } = t.runs.outputs.list(projectId);
     expect(outputs).toEqual([expect.objectContaining({ name: 'app-release.apk', runId, sizeBytes: bytes })]);
     const file = await t.runs.outputs.open(outputs[0]?.id ?? '');
-    expect(readFileSync(file.abs)).toEqual(Buffer.alloc(bytes, 5));
+    const chunks: Buffer[] = [];
+    for await (const chunk of file.stream) chunks.push(chunk as Buffer);
+    expect(Buffer.concat(chunks)).toEqual(Buffer.alloc(bytes, 5));
   };
-
-  it('auto-GC archives an APK in a git-ignored build/ dir before it prunes the merged worktree', async () => {
-    const project = await createProject('Archive auto GC', true);
-    const stale = await finishRun(project.id);
-    mergeIgnoringBuild(stale, project.path);
-    putApk(stale.worktreePath, 4096);
-    t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, stale.id)).run();
+  const staleRunsBehindTenNewer = (projectId: string, projectPath: string, stale: Run[]) => {
+    stale.forEach((r, i) => t.db.update(runs).set({ createdAt: new Date(1_000 + i) }).where(eq(runs.id, r.id)).run());
     for (let i = 0; i < 10; i += 1) {
       t.db
         .insert(runs)
         .values({
           id: `synthetic-${i}`,
-          projectId: project.id,
+          projectId,
           agent: 'claude',
           state: 'done',
-          worktreePath: project.path,
+          worktreePath: projectPath,
           hookTokenHash: 'x',
           stateChangedAt: new Date(10_000 + i),
           createdAt: new Date(10_000 + i),
@@ -1037,6 +1034,14 @@ describe('build output archive', () => {
         })
         .run();
     }
+  };
+
+  it('auto-GC archives an APK in a git-ignored build/ dir before it prunes the merged worktree', async () => {
+    const project = await createProject('Archive auto GC', true);
+    const stale = await finishRun(project.id);
+    mergeIgnoringBuild(stale, project.path);
+    putApk(stale.worktreePath, 4096);
+    staleRunsBehindTenNewer(project.id, project.path, [stale]);
     const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     await tokenFor(live.id);
     (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
@@ -1059,6 +1064,46 @@ describe('build output archive', () => {
     expect(res.prunedWorktrees).toBe(1);
     expect(existsSync(run.worktreePath)).toBe(false);
     await expectArchivedApk(project.id, run.id, 3000);
+  });
+
+  it('manual GC that keeps worktrees still archives the runs it removes', async () => {
+    const project = await createProject('Archive GC keep worktrees', true);
+    const run = await finishRun(project.id);
+    mergeIgnoringBuild(run, project.path);
+    putApk(run.worktreePath, 1200);
+
+    const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0, pruneWorktrees: false });
+    expect(res.removedRuns).toBe(1);
+    expect(existsSync(run.worktreePath)).toBe(true);
+    await expectArchivedApk(project.id, run.id, 1200);
+  });
+
+  it('auto-GC spends one archive time budget per pass and leaves the rest for the next pass', async () => {
+    const project = await createProject('Archive auto GC budget', true);
+    const first = await finishRun(project.id);
+    const second = await finishRun(project.id);
+    for (const r of [first, second]) mergeIgnoringBuild(r, project.path);
+    staleRunsBehindTenNewer(project.id, project.path, [second, first]);
+    const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    await tokenFor(live.id);
+    const budgets: number[] = [];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spy = vi.spyOn(t.runs.outputs, 'archiveBeforePrune').mockImplementation(async (_id, timeoutMs) => {
+      budgets.push(timeoutMs ?? -1);
+      // This pass took 58 of the 60 seconds.
+      vi.setSystemTime(Date.now() + 58_000);
+      return 'archived';
+    });
+    try {
+      (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+      await t.runs.reconcile();
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+    expect(budgets).toEqual([60_000]);
+    const ids = t.runs.list().map((r) => r.id);
+    expect(ids.filter((id) => id === first.id || id === second.id)).toHaveLength(1);
   });
 
   it('a per-run prune archives first', async () => {

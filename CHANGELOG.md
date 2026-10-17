@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Security
+
+- Downloading a run's build output now reads the file that was checked, through one open file handle that never follows a symbolic link. Before, an agent could swap the file for a link between the check and the download and have core send any file it can read, such as its own database.
+
 ### Added
 
 - Settings: a per-project quota for archived build outputs (`buildOutputsQuotaGb`, default 5 GB, 0.5 to 1000 GB). The archive itself arrives in the next changes.
