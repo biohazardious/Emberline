@@ -22,6 +22,8 @@ export interface ProviderLaunchContext {
   claude: {
     command?: string;
     playwrightMcp: boolean;
+    /** The run works on a ticket (its prompt carries the completion instruction). */
+    ticketRun?: boolean;
     customMcpServers?: Record<string, ClaudeMcpServerSpec>;
     extraSystemPrompt?: string;
   };
@@ -54,6 +56,7 @@ const claude: ProviderAdapter = {
       prompt: ctx.prompt,
       resumeSessionId: ctx.resumeSessionId,
       playwrightMcp: ctx.claude.playwrightMcp,
+      ticketRun: ctx.claude.ticketRun,
       customMcpServers: ctx.claude.customMcpServers,
       extraSystemPrompt: ctx.claude.extraSystemPrompt,
     }),

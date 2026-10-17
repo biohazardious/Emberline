@@ -146,6 +146,13 @@ export function decoratePromptWithPersona(prompt: string | undefined, persona: A
   return `[Role: ${spec.roleTitle}]\n${spec.systemPrompt}${qualityRules}\n\n---\nTask:\n${prompt}`;
 }
 
+/** The tool through which a Claude run tells Emberline its ticket is finished (served by `emberline-mcp`). */
+export const COMPLETION_TOOL = 'mcp__emberline__ticket_complete';
+
+/** Appended to the prompt of a run that works on a ticket. */
+export const COMPLETION_INSTRUCTION =
+  'When this ticket is finished and its work is saved in the worktree, call the `ticket_complete` tool with a short summary and a handoff note for whoever builds on it. If it cannot be finished, call it with `blockers` listing why. Do not call it while you are waiting for an answer to a question.';
+
 /** Hooks Emberline listens to for state detection (PROJECT.md §3.3). */
 export const WATCHED_HOOKS: readonly HookEventName[] = [
   'SessionStart',
@@ -241,11 +248,12 @@ export function buildHookSettings(
       askUserQuestionTimeout: '60s',
       permissions: {
         defaultMode: 'auto',
-        allow: [...AUTONOMOUS_ALLOWED_TOOLS],
+        allow: [...AUTONOMOUS_ALLOWED_TOOLS, COMPLETION_TOOL],
       },
     };
   }
-  return { ...base, permissions: { defaultMode: permissionMode } };
+  // The completion tool is allowed in every mode: signalling "done" must never wait for an approval.
+  return { ...base, permissions: { defaultMode: permissionMode, allow: [COMPLETION_TOOL] } };
 }
 
 export interface ClaudeMcpServerSpec {
@@ -274,6 +282,27 @@ export function buildPlaywrightMcpConfig(
       playwright: {
         command: 'playwright-mcp',
         args: ['--cdp-endpoint', cdpEndpoint, '--output-dir', outputDir],
+      },
+    },
+  };
+}
+
+/**
+ * The `emberline` stdio server (`emberline-mcp`, serving `ticket_complete`). The run's identity
+ * reaches it through `${VAR}` expansion of the CLI process env, so the hook token never appears on
+ * a command line.
+ */
+export function buildEmberlineMcpConfig(): ClaudeMcpConfig {
+  return {
+    mcpServers: {
+      emberline: {
+        type: 'stdio',
+        command: 'emberline-mcp',
+        env: {
+          EMBERLINE_RUN_ID: '${EMBERLINE_RUN_ID}',
+          EMBERLINE_HOOK_TOKEN: '${EMBERLINE_HOOK_TOKEN}',
+          EMBERLINE_CORE_URL: '${EMBERLINE_CORE_URL}',
+        },
       },
     },
   };
@@ -316,6 +345,8 @@ export interface ClaudeLaunchOptions {
   playwrightMcp?: boolean;
   /** Optional persona-scoped MCP servers from the Factory MCP Registry. */
   customMcpServers?: Record<string, ClaudeMcpServerSpec>;
+  /** The run works on a ticket: its prompt gets the `ticket_complete` instruction. */
+  ticketRun?: boolean;
   /** Optional active Skill / Rule Plugin instructions to append to the system prompt. */
   extraSystemPrompt?: string;
 }
@@ -368,15 +399,13 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   // Claude in Chrome would offer to drive the user's own browser (its extension is found through the
   // account) in a dialog nobody answers; runs use the runner's headless Chromium instead.
   const args = ['--settings', JSON.stringify(settings), '--no-chrome'];
-  if (customServerKeys.length > 0) {
-    const mergedServers: Record<string, ClaudeMcpServerSpec> = {
-      ...(options.playwrightMcp ? buildPlaywrightMcpConfig().mcpServers : {}),
-      ...options.customMcpServers,
-    };
-    args.push('--mcp-config', JSON.stringify({ mcpServers: mergedServers }));
-  } else if (options.playwrightMcp) {
-    args.push('--mcp-config', JSON.stringify(buildPlaywrightMcpConfig()));
-  }
+  // `emberline` is added last so a registry server can never shadow it.
+  const mergedServers: Record<string, ClaudeMcpServerSpec> = {
+    ...(options.playwrightMcp ? buildPlaywrightMcpConfig().mcpServers : {}),
+    ...options.customMcpServers,
+    ...buildEmberlineMcpConfig().mcpServers,
+  };
+  args.push('--mcp-config', JSON.stringify({ mcpServers: mergedServers }));
   const cliModel = resolveClaudeCliModelFlag(options.model);
   if (cliModel) {
     args.push('--model', cliModel);
@@ -402,7 +431,9 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
   }
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId);
   // `--` ends option parsing so a prompt starting with "-" is never read as a flag.
-  if (options.prompt) args.push('--', options.prompt);
+  if (options.prompt) {
+    args.push('--', options.ticketRun ? `${options.prompt}\n\n${COMPLETION_INSTRUCTION}` : options.prompt);
+  }
   return {
     file: options.claudeCommand ?? 'claude',
     args,
@@ -444,7 +475,10 @@ const CLAUDE_DIALOG_ENV = {
 /** Run settings for the Claude fallback of a secondary CLI: every pre-answered dialog, no hooks. */
 function claudeFallbackSettings(autonomous: boolean): Omit<ClaudeHookSettings, 'hooks'> {
   const { hooks: _hooks, ...dialogs } = buildHookSettings('emberline-hook', 5, autonomous);
-  return dialogs;
+  // Secondary CLIs have no `emberline` MCP server and signal completion by their exit code.
+  const { allow, ...permissions } = dialogs.permissions ?? {};
+  const kept = (allow ?? []).filter((rule) => rule !== COMPLETION_TOOL);
+  return { ...dialogs, permissions: { ...permissions, ...(kept.length > 0 ? { allow: kept } : {}) } };
 }
 
 /**

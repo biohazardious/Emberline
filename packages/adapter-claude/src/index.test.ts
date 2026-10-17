@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  buildEmberlineMcpConfig,
   buildHookSettings,
   buildLaunchSpec,
   buildPlaywrightMcpConfig,
@@ -53,7 +54,8 @@ describe('buildLaunchSpec', () => {
     expect(spec.file).toBe('claude');
     expect(spec.args[0]).toBe('--settings');
     expect(JSON.parse(spec.args[1] ?? '')).toEqual(buildHookSettings('emberline-hook'));
-    expect(spec.args.slice(2)).toEqual(['--no-chrome', '--append-system-prompt', RUNNER_ENVIRONMENT]);
+    expect(spec.args.slice(2, 4)).toEqual(['--no-chrome', '--mcp-config']);
+    expect(spec.args.slice(5)).toEqual(['--append-system-prompt', RUNNER_ENVIRONMENT]);
     expect(spec.env).toMatchObject({
       EMBERLINE_RUN_ID: 'r1',
       EMBERLINE_HOOK_TOKEN: 'tok',
@@ -72,6 +74,8 @@ describe('buildLaunchSpec', () => {
     });
     expect(spec.args.slice(2)).toEqual([
       '--no-chrome',
+      '--mcp-config',
+      JSON.stringify(buildEmberlineMcpConfig()),
       '--permission-mode',
       'acceptEdits',
       '--append-system-prompt',
@@ -89,7 +93,9 @@ describe('buildLaunchSpec', () => {
       playwrightMcp: true,
     });
     expect(spec.args[3]).toBe('--mcp-config');
-    expect(JSON.parse(spec.args[4] ?? '')).toEqual(buildPlaywrightMcpConfig());
+    expect(JSON.parse(spec.args[4] ?? '')).toEqual({
+      mcpServers: { ...buildPlaywrightMcpConfig().mcpServers, ...buildEmberlineMcpConfig().mcpServers },
+    });
   });
 
   it('enables auto permission mode, pre-allowed tools, and autonomous system prompt in auto mode', () => {
@@ -127,7 +133,7 @@ describe('buildLaunchSpec', () => {
       });
       const settings = JSON.parse(spec.args[1] ?? '');
       // The mode is always stated (it stops Claude Code's "make auto the default" nudge), with nothing pre-allowed.
-      expect(settings.permissions).toEqual({ defaultMode: permissionMode });
+      expect(settings.permissions).toEqual({ defaultMode: permissionMode, allow: ['mcp__emberline__ticket_complete'] });
       expect(spec.args).not.toContain('auto');
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
@@ -342,4 +348,67 @@ describe('secondary CLIs start without first-run questions', () => {
     expect(payload.message.length).toBeLessThanOrEqual(420);
     expect(nextStateFromHook('working', 'StopFailure', payload, { agent: 'antigravity' })).toBe('rate_limited');
   }, 20_000);
+});
+
+describe('emberline completion tool', () => {
+  const base = { runId: 'r1', hookToken: 'tok', coreUrl: 'http://core:7420' };
+  const mcpServers = (args: string[]) => JSON.parse(args[args.indexOf('--mcp-config') + 1] ?? '{}').mcpServers;
+
+  it.each(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'] as const)(
+    'always wires the emberline stdio server and allows its tool in %s mode',
+    (permissionMode) => {
+      const spec = buildLaunchSpec({ ...base, permissionMode });
+      const servers = mcpServers(spec.args);
+      expect(Object.keys(servers)).toEqual(['emberline']);
+      expect(servers.emberline).toEqual({
+        type: 'stdio',
+        command: 'emberline-mcp',
+        env: {
+          EMBERLINE_RUN_ID: '${EMBERLINE_RUN_ID}',
+          EMBERLINE_HOOK_TOKEN: '${EMBERLINE_HOOK_TOKEN}',
+          EMBERLINE_CORE_URL: '${EMBERLINE_CORE_URL}',
+        },
+      });
+      const settings = JSON.parse(spec.args[1] ?? '');
+      expect(settings.permissions.allow).toContain('mcp__emberline__ticket_complete');
+    },
+  );
+
+  it('keeps the token out of the command line', () => {
+    expect(buildLaunchSpec({ ...base, hookToken: 'secret-token' }).args.join(' ')).not.toContain('secret-token');
+  });
+
+  it('keeps emberline next to Playwright and custom servers', () => {
+    const spec = buildLaunchSpec({
+      ...base,
+      playwrightMcp: true,
+      customMcpServers: { context7: { type: 'stdio', command: 'npx' } },
+    });
+    expect(Object.keys(mcpServers(spec.args)).sort()).toEqual(['context7', 'emberline', 'playwright']);
+  });
+
+  it('a custom server cannot shadow emberline', () => {
+    const spec = buildLaunchSpec({ ...base, customMcpServers: { emberline: { command: 'evil' } } });
+    expect(mcpServers(spec.args).emberline.command).toBe('emberline-mcp');
+  });
+
+  it('appends the completion instruction only for ticket runs', () => {
+    const ticket = buildLaunchSpec({ ...base, prompt: 'KEY-1: do it', ticketRun: true });
+    const prompt = ticket.args[ticket.args.length - 1] ?? '';
+    expect(prompt.startsWith('KEY-1: do it')).toBe(true);
+    expect(prompt).toContain('ticket_complete');
+    expect(prompt).toContain('blockers');
+    const plain = buildLaunchSpec({ ...base, prompt: 'KEY-1: do it' });
+    expect(plain.args[plain.args.length - 1]).toBe('KEY-1: do it');
+  });
+
+  it('adds no instruction when there is no prompt', () => {
+    expect(buildLaunchSpec({ ...base, ticketRun: true }).args).not.toContain('--');
+  });
+
+  it('leaves secondary CLIs alone', () => {
+    const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'gemini', prompt: 'go' });
+    expect(JSON.stringify(spec)).not.toContain('ticket_complete');
+    expect(JSON.stringify(spec)).not.toContain('emberline-mcp');
+  });
 });

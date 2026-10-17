@@ -13,7 +13,7 @@
 #   dev     toolbox used by compose.dev.yaml (source bind-mounted, deps in volumes)
 #   check   lint + typecheck + test inside the build (used by CI: `make ci`)
 #   core    production core (API + static web UI)
-#   runner  generic Ubuntu 26.04 LTS runner (ptyd + emberline-hook + /opt/ai-tools volume)
+#   runner  generic Ubuntu 26.04 LTS runner (ptyd + emberline-hook + emberline-mcp + /opt/ai-tools volume)
 
 ARG UBUNTU_VERSION=26.04
 ARG NODE_VERSION=24
@@ -190,8 +190,9 @@ ENV SHELL=/bin/bash \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd
 COPY --from=build /out/hook /opt/emberline/hook
-RUN chmod +x /opt/emberline/hook/dist/main.js \
+RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
   && ln -sf /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \
+  && ln -sf /opt/emberline/hook/dist/mcp.js /usr/local/bin/emberline-mcp \
   && mkdir -p /opt/emberline/wrappers \
   && cp /opt/emberline/hook/wrappers/* /opt/emberline/wrappers/ \
   && chmod +x /opt/emberline/wrappers/* \

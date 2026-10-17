@@ -683,7 +683,7 @@ const stopAgain = async (run: Run) => {
 
 describe('one automatic merge-conflict resolution', () => {
   const FOLLOW_UP = (files: string, branch = 'main') =>
-    `${branch} has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${files}). Merge ${branch} into your branch (git merge ${branch}), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`;
+    `${branch} has moved on while you worked and your branch no longer merges cleanly (conflicts in: ${files}). Merge ${branch} into your branch (git merge ${branch}), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish. When finished, call \`ticket_complete\` again.`;
 
   /** Two tickets editing the same line; A has been merged into main, B conflicts with it. */
   async function conflictingPair(branch = 'main') {

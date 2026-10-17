@@ -188,6 +188,9 @@ function hasVerifiableBuildTarget(workspacePath: string): boolean {
 /** CreateTicketBody's body limit. */
 const TICKET_BODY_MAX = 20_000;
 
+/** Closes every re-prompt: the earlier completion signal no longer counts once the person or a gate spoke. */
+const COMPLETE_AGAIN = 'When finished, call `ticket_complete` again.';
+
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
@@ -846,7 +849,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         await this.runs
           .prompt(
             run.id,
-            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.`,
+            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing. ${COMPLETE_AGAIN}`,
             { automatic: true },
           )
           .catch(() => undefined);
@@ -889,7 +892,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         this.slopHealedRuns.add(run.id);
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
         if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', {});
-        await this.runs.prompt(run.id, slopReport.autoFixPrompt, { automatic: true }).catch(() => undefined);
+        await this.runs.prompt(run.id, `${slopReport.autoFixPrompt}\n\n${COMPLETE_AGAIN}`, { automatic: true }).catch(() => undefined);
         return;
       }
 
@@ -919,7 +922,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         (!run.endedAt || run.resumable)
       ) {
         this.runs.note(run.id, 'critic_blocked', {});
-        await this.runs.prompt(run.id, criticRes.followUpPrompt, { automatic: true }).catch(() => undefined);
+        await this.runs.prompt(run.id, `${criticRes.followUpPrompt}\n\n${COMPLETE_AGAIN}`, { automatic: true }).catch(() => undefined);
         return;
       }
     }
@@ -1046,7 +1049,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   ): Promise<boolean> {
     // The merge goes into whatever the main workspace has checked out; the column is the fallback.
     const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
-    const text = conflictResolutionPrompt(branch, conflicts);
+    const text = `${conflictResolutionPrompt(branch, conflicts)} ${COMPLETE_AGAIN}`;
     try {
       await this.runs.sendPrompt(run.id, text, { automatic: true });
     } catch (error) {

@@ -1,0 +1,166 @@
+import { spawn } from 'node:child_process';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createEmberlineMcpServer } from './mcp-server.js';
+
+interface Seen {
+  url?: string;
+  method?: string;
+  auth?: string;
+  contentType?: string;
+  body?: unknown;
+}
+
+let core: Server;
+let coreUrl: string;
+let seen: Seen;
+let reply: { status: number; body: unknown };
+
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+beforeEach(async () => {
+  seen = {};
+  reply = { status: 200, body: { ok: true } };
+  core = createServer((req, res) => {
+    void readBody(req).then((raw) => {
+      seen = {
+        url: req.url,
+        method: req.method,
+        auth: req.headers.authorization,
+        contentType: req.headers['content-type'],
+        body: raw ? JSON.parse(raw) : undefined,
+      };
+      res.writeHead(reply.status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(reply.body));
+    });
+  });
+  await new Promise<void>((resolve) => core.listen(0, '127.0.0.1', resolve));
+  coreUrl = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
+});
+
+afterEach(async () => {
+  await new Promise<void>((resolve) => core.close(() => resolve()));
+});
+
+async function connect(env: Record<string, string | undefined>): Promise<Client> {
+  const server = createEmberlineMcpServer(env);
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: 'test', version: '0' });
+  await client.connect(clientSide);
+  return client;
+}
+
+const text = (r: unknown): string => ((r as { content: { text: string }[] }).content[0] as { text: string }).text;
+
+describe('emberline MCP server', () => {
+  const env = () => ({ EMBERLINE_RUN_ID: 'run 1', EMBERLINE_HOOK_TOKEN: 'tok', EMBERLINE_CORE_URL: coreUrl });
+
+  it('lists the ticket_complete tool with its schema', async () => {
+    const client = await connect(env());
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(['ticket_complete']);
+    const schema = tools[0]?.inputSchema as { required?: string[]; properties: Record<string, unknown> };
+    expect(Object.keys(schema.properties).sort()).toEqual(['blockers', 'handoff', 'summary']);
+    expect(schema.required).toEqual(['summary']);
+  });
+
+  it('posts the signal to core with the bearer token', async () => {
+    const client = await connect(env());
+    const r = await client.callTool({
+      name: 'ticket_complete',
+      arguments: { summary: 'Added the board', handoff: 'See src/board.ts' },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(text(r)).toBe('Recorded. Stop now; Emberline runs the checks and merges.');
+    expect(seen.method).toBe('POST');
+    expect(seen.url).toBe('/api/internal/runs/run%201/complete');
+    expect(seen.auth).toBe('Bearer tok');
+    expect(seen.contentType).toContain('application/json');
+    expect(seen.body).toEqual({ summary: 'Added the board', handoff: 'See src/board.ts', blockers: [] });
+  });
+
+  it('answers a blocker signal differently', async () => {
+    const client = await connect(env());
+    const r = await client.callTool({
+      name: 'ticket_complete',
+      arguments: { summary: 'Stuck', blockers: ['needs an API key'] },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(text(r)).toBe('Recorded the blockers; a person will look at this ticket. Stop now.');
+    expect(seen.body).toEqual({ summary: 'Stuck', handoff: '', blockers: ['needs an API key'] });
+  });
+
+  it('truncates over-long input to the limits before sending', async () => {
+    const client = await connect(env());
+    await client.callTool({
+      name: 'ticket_complete',
+      arguments: {
+        summary: 's'.repeat(5000),
+        handoff: 'h'.repeat(9000),
+        blockers: Array.from({ length: 12 }, () => 'b'.repeat(600)),
+      },
+    });
+    const body = seen.body as { summary: string; handoff: string; blockers: string[] };
+    expect(body.summary).toHaveLength(4000);
+    expect(body.handoff).toHaveLength(8000);
+    expect(body.blockers).toHaveLength(10);
+    expect(body.blockers.every((b) => b.length === 500)).toBe(true);
+  });
+
+  it.each([
+    [401, 'rejected the token'],
+    [404, 'does not know this run'],
+    [409, 'already ended'],
+    [400, 'rejected the signal'],
+    [500, 'HTTP 500'],
+  ])('maps HTTP %i to a tool error', async (status, fragment) => {
+    reply = { status, body: { error: 'nope' } };
+    const client = await connect(env());
+    const r = await client.callTool({ name: 'ticket_complete', arguments: { summary: 'done' } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain(fragment);
+  });
+
+  it('reports an unreachable core as a tool error', async () => {
+    const client = await connect({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' });
+    const r = await client.callTool({ name: 'ticket_complete', arguments: { summary: 'done' } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('Could not reach Emberline');
+  });
+
+  it('refuses to run outside Emberline', async () => {
+    const client = await connect({});
+    const r = await client.callTool({ name: 'ticket_complete', arguments: { summary: 'done' } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe('not running under Emberline');
+  });
+
+  it('speaks MCP over stdio from the built entry point', async () => {
+    const entry = new URL('./mcp.ts', import.meta.url).pathname;
+    const child = spawn(process.execPath, ['--import', 'tsx', entry], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const lines: string[] = [];
+    child.stdout.on('data', (d: Buffer) => lines.push(d.toString('utf8')));
+    const send = (m: unknown) => child.stdin.write(`${JSON.stringify(m)}\n`);
+    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+    send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    await new Promise<void>((resolve) => {
+      const t = setInterval(() => {
+        if (lines.join('').includes('ticket_complete')) {
+          clearInterval(t);
+          resolve();
+        }
+      }, 50);
+    });
+    child.kill();
+    expect(lines.join('')).toContain('"name":"emberline"');
+  }, 20_000);
+});

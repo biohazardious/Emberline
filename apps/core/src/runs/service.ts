@@ -1006,6 +1006,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       claude: {
         command: this.config.claudeCommand,
         playwrightMcp: enablePlaywrightMcp,
+        // Only a fresh start carries the ticket prompt; a resumed session already has the instruction.
+        ticketRun: options.type === 'spawned' && !!row.ticketId,
         customMcpServers: isRealClaude && Object.keys(customMcpServers).length > 0 ? customMcpServers : undefined,
         extraSystemPrompt: activeSkillPrompt || undefined,
       },
