@@ -7,6 +7,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 const TIMEOUT_MS = 15_000;
+/** The startup check-in must never hold anything up. */
+const CHECK_IN_TIMEOUT_MS = 5_000;
 const LIMITS = { summary: 4000, handoff: 8000, blockers: 10, blocker: 500 } as const;
 
 /** Inputs are cut to core's limits here so a long note is trimmed rather than refused. */
@@ -31,6 +33,33 @@ const HTTP_MESSAGES: Record<number, string> = {
   404: 'Emberline does not know this run.',
   409: 'This run has already ended; the signal was not recorded.',
 };
+
+/**
+ * Tells core on startup that this run's agent has the `ticket_complete` tool, so the completion gate
+ * may wait for it (a run whose server never checked in advances the old way). Best effort: a failure
+ * only goes to `log` (stderr), never throws. Resolves whether core recorded it.
+ */
+export async function announceCompletionTool(
+  env: Record<string, string | undefined> = process.env,
+  log: (message: string) => void = (m) => process.stderr.write(m),
+): Promise<boolean> {
+  const runId = env.EMBERLINE_RUN_ID;
+  const token = env.EMBERLINE_HOOK_TOKEN;
+  if (!runId || !token) return false;
+  const base = env.EMBERLINE_CORE_URL || 'http://127.0.0.1:7420';
+  try {
+    const res = await fetch(new URL(`/api/internal/runs/${encodeURIComponent(runId)}/completion-tool`, base), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(CHECK_IN_TIMEOUT_MS),
+    });
+    if (res.ok) return true;
+    log(`emberline-mcp: check-in failed: HTTP ${res.status}\n`);
+  } catch (err) {
+    log(`emberline-mcp: check-in failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
+  return false;
+}
 
 export function createEmberlineMcpServer(env: Record<string, string | undefined> = process.env): McpServer {
   const server = new McpServer({ name: 'emberline', version: '1.0.0' });

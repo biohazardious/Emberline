@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createEmberlineMcpServer } from './mcp-server.js';
+import { announceCompletionTool, createEmberlineMcpServer } from './mcp-server.js';
 
 interface Seen {
   url?: string;
@@ -142,6 +142,82 @@ describe('emberline MCP server', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toBe('not running under Emberline');
   });
+
+  describe('check-in (announceCompletionTool)', () => {
+    it('posts to the completion-tool endpoint with the bearer token and no body', async () => {
+      const logs: string[] = [];
+      expect(await announceCompletionTool(env(), (m) => logs.push(m))).toBe(true);
+      expect(seen.method).toBe('POST');
+      expect(seen.url).toBe('/api/internal/runs/run%201/completion-tool');
+      expect(seen.auth).toBe('Bearer tok');
+      expect(seen.contentType).toBeUndefined();
+      expect(seen.body).toBeUndefined();
+      expect(logs).toEqual([]);
+    });
+
+    it.each([401, 404, 409, 500])('reports HTTP %i to the log and resolves', async (status) => {
+      reply = { status, body: { error: 'nope' } };
+      const logs: string[] = [];
+      expect(await announceCompletionTool(env(), (m) => logs.push(m))).toBe(false);
+      expect(logs.join('')).toContain(`HTTP ${status}`);
+    });
+
+    it('survives an unreachable core', async () => {
+      const logs: string[] = [];
+      expect(await announceCompletionTool({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' }, (m) => logs.push(m))).toBe(false);
+      expect(logs.join('')).toContain('emberline-mcp: check-in failed');
+    });
+
+    it('sends nothing outside Emberline', async () => {
+      const logs: string[] = [];
+      expect(await announceCompletionTool({}, (m) => logs.push(m))).toBe(false);
+      expect(seen.url).toBeUndefined();
+      expect(logs).toEqual([]);
+    });
+  });
+
+  const spawnEntry = (extraEnv: Record<string, string>) => {
+    const entry = new URL('./mcp.ts', import.meta.url).pathname;
+    const child = spawn(process.execPath, ['--import', 'tsx', entry], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, ...extraEnv },
+    });
+    const out: string[] = [];
+    const err: string[] = [];
+    child.stdout.on('data', (d: Buffer) => out.push(d.toString('utf8')));
+    child.stderr.on('data', (d: Buffer) => err.push(d.toString('utf8')));
+    const send = (m: unknown) => child.stdin.write(`${JSON.stringify(m)}\n`);
+    const listTools = async () => {
+      send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+      send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+      await expect.poll(() => out.join('').includes('ticket_complete'), { timeout: 15_000 }).toBe(true);
+    };
+    return { child, out, err, listTools };
+  };
+
+  it('the entry point checks in on startup', async () => {
+    const { child, listTools } = spawnEntry(env());
+    try {
+      await expect.poll(() => seen.url, { timeout: 15_000 }).toBe('/api/internal/runs/run%201/completion-tool');
+      expect(seen.auth).toBe('Bearer tok');
+      await listTools();
+    } finally {
+      child.kill();
+    }
+  }, 30_000);
+
+  it('the entry point keeps serving when the check-in fails', async () => {
+    reply = { status: 500, body: { error: 'down' } };
+    const { child, err, listTools } = spawnEntry(env());
+    try {
+      await expect.poll(() => err.join(''), { timeout: 15_000 }).toContain('HTTP 500');
+      await listTools();
+      expect(child.exitCode).toBeNull();
+    } finally {
+      child.kill();
+    }
+  }, 30_000);
 
   it('speaks MCP over stdio from the built entry point', async () => {
     const entry = new URL('./mcp.ts', import.meta.url).pathname;
