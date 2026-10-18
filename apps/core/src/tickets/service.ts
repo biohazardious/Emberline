@@ -28,6 +28,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
+import { readProjectSettings, writeProjectSettings } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
@@ -38,11 +39,14 @@ import {
   factoryTicketTitle,
   effectiveFactorySettings,
   getFactorySettings,
+  committedWithContent,
   ingestAgentTicketsFile,
   mainWorkspaceBranch,
   persistFactoryAttachments,
+  runBranchBase,
   runCrossProviderCritic,
   syncWorktreeToMainWorkspace,
+  type TicketsFileHooks,
 } from '../factory/service.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
@@ -74,6 +78,9 @@ const POSITION_STEP = 1024;
 const ACTIVE_RUN_STATES = new Set<Run['state']>(['queued', 'starting', 'working', 'waiting_input', 'rate_limited']);
 
 type Blocker = Ticket['blockedBy'][number];
+
+/** How many imported tickets-file hashes a project remembers (`ingestedTicketFiles`). */
+const INGESTED_TICKET_FILES_MAX = 50;
 
 /** Settings key of the projects whose factory chain is on (JSON array of project ids). */
 const ACTIVE_CHAINS_KEY = 'factory.activeChains';
@@ -753,6 +760,20 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return started;
   }
 
+  /**
+   * Records an imported tickets file's sha256 for the project; false when that content was imported
+   * before. Synchronous, so two pipelines cannot both claim the same content.
+   */
+  private claimTicketsFile(projectId: string, sha256: string): boolean {
+    const stored = readProjectSettings(this.db, projectId).ingestedTicketFiles;
+    const seen = Array.isArray(stored) ? stored.filter((x): x is string => typeof x === 'string') : [];
+    if (seen.includes(sha256)) return false;
+    writeProjectSettings(this.db, projectId, {
+      ingestedTicketFiles: [...seen, sha256].slice(-INGESTED_TICKET_FILES_MAX),
+    });
+    return true;
+  }
+
   private async handleRunCompleted(run: Run, opts: PipelineOptions = {}): Promise<void> {
     // With parallel tickets another run's dispatch may finalize Review tickets meanwhile; it must
     // not merge this run before its gates have passed.
@@ -797,14 +818,38 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
       : undefined;
 
-    // 1. Check if the agent wrote `.emberline/new-tickets.json` in its worktree or main workspace
-    const rejected = (message: string) => this.runs.note(run.id, 'tickets_file_rejected', { message });
-    const fromWorktree = run.worktreePath ? await ingestAgentTicketsFile(run.worktreePath, rejected) : null;
+    // 1. Check if the agent wrote `.emberline/new-tickets.json` in its worktree or main workspace.
+    //    A file committed where the run's branch started came from main, not from this run, and a
+    //    content imported before is not imported again: either would recreate the same tickets.
+    const projectId = run.projectId;
+    const inherited: string[] = [];
+    let duplicate = false;
+    const hooksFor = (baseRef: () => Promise<string>, where: string): TicketsFileHooks => ({
+      onRejected: (message) => this.runs.note(run.id, 'tickets_file_rejected', { message }),
+      isInherited: async (relPath, raw) => committedWithContent(where, await baseRef(), relPath, raw),
+      claim: (sha256) => this.claimTicketsFile(projectId, sha256),
+      onSkipped: (reason, file, sha256) => {
+        if (reason === 'inherited') {
+          inherited.push(file);
+          return;
+        }
+        duplicate = true;
+        this.runs.note(run.id, 'tickets_file_duplicate', { file, sha256 });
+      },
+    });
+    const worktreePath = run.worktreePath;
+    const fromWorktree = worktreePath
+      ? await ingestAgentTicketsFile(
+          worktreePath,
+          hooksFor(async () => runBranchBase(worktreePath, await mainWorkspaceBranch(projectRow.path)), worktreePath),
+        )
+      : null;
     const fromMain =
       !fromWorktree && projectRow.path !== run.worktreePath
-        ? await ingestAgentTicketsFile(projectRow.path, rejected)
+        ? await ingestAgentTicketsFile(projectRow.path, hooksFor(async () => 'HEAD', projectRow.path))
         : null;
     const ingested = fromWorktree ?? fromMain;
+    if (inherited.length > 0) this.runs.note(run.id, 'tickets_file_inherited', { files: [...new Set(inherited)] });
 
     const draftDepth = (ticketRow?.depth ?? 0) + 1;
     const fSettingsForDepth = getFactorySettings(this.db);
@@ -862,6 +907,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (
       isFactoryOrchestratorTicket &&
       !ingested &&
+      !duplicate &&
       !this.runs.hasEvent(run.id, 'auto_nudged') &&
       (!run.endedAt || run.resumable)
     ) {

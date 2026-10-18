@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- A factory project could create the same tickets over and over when a tickets file an agent had staged ended up committed to main; Emberline now never commits its scratch files, ignores a tickets file a run inherited from main, removes ones already committed on the next merge, and never imports the same tickets file twice.
+
 ## [0.3.0] - 2026-10-18
 
 ### Added

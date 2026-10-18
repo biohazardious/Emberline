@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
+import { commitWorktree } from './runs/git.js';
 
 let dir: string;
 let main: string;
@@ -110,5 +111,76 @@ describe('syncWorktreeToMainWorkspace (git merge)', () => {
     const again = await sync(a, 'T-1');
     expect(again.ok).toBe(true);
     expect(git(main, 'rev-parse', 'HEAD')).toBe(head);
+  });
+});
+
+describe('Emberline commits never carry scratch files', () => {
+  const TICKETS = '.emberline/new-tickets.json';
+  const writeTickets = (cwd: string, title = 'Again') => {
+    mkdirSync(path.join(cwd, '.emberline'), { recursive: true });
+    writeFileSync(path.join(cwd, TICKETS), JSON.stringify({ tickets: [{ title }] }));
+  };
+  const filesIn = (cwd: string, rev: string) => git(cwd, 'show', '--name-only', '--format=', rev).split('\n').filter(Boolean);
+
+  it('leaves out a tickets file the agent staged itself (git add -A, no commit)', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeTickets(a);
+    mkdirSync(path.join(a, 'docs', '.emberline'), { recursive: true });
+    writeFileSync(path.join(a, 'docs', '.emberline', 'tickets.json'), '[]');
+    mkdirSync(path.join(a, '.emberline', 'attachments'), { recursive: true });
+    writeFileSync(path.join(a, '.emberline', 'attachments', 'shot.png'), 'png');
+    git(a, 'add', '-A');
+
+    const res = await sync(a, 'T-1');
+    expect(res.ok).toBe(true);
+    expect(filesIn(a, 'HEAD')).toEqual(['feature-a.js']);
+    expect(git(main, 'ls-files', '.emberline', 'docs')).toBe('');
+    expect(existsSync(path.join(main, TICKETS))).toBe(false);
+    // The agent's file stays on disk in its worktree for core to read.
+    expect(existsSync(path.join(a, TICKETS))).toBe(true);
+  });
+
+  it("removes a scratch file main already tracks with the next run's merge", async () => {
+    writeTickets(main);
+    git(main, 'add', '-A');
+    git(main, 'commit', '-q', '-m', 'factory run output (old bug)');
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+
+    const res = await sync(a, 'T-1');
+    expect(res.ok).toBe(true);
+    expect(git(main, 'ls-files', TICKETS)).toBe('');
+    expect(existsSync(path.join(main, TICKETS))).toBe(false);
+    expect(git(main, 'status', '--porcelain')).toBe('');
+  });
+
+  it('leaves out scratch files staged in the main workspace from the snapshot commit', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeFileSync(path.join(main, 'app.js'), 'line1\nedited in main\nline3\n');
+    writeTickets(main);
+    git(main, 'add', '-A');
+
+    const res = await sync(a, 'T-1');
+    expect(res.ok).toBe(true);
+    const snapshot = git(main, 'log', '--format=%H', '--grep', 'snapshot workspace edits');
+    expect(snapshot).not.toBe('');
+    expect(filesIn(main, snapshot)).toEqual(['app.js']);
+    expect(git(main, 'ls-files', '.emberline')).toBe('');
+  });
+
+  it('commitWorktree (stage all, or files staged by hand) never commits scratch files', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeTickets(a);
+    await commitWorktree(a, 'emberline/a', { message: 'stage all', stageAll: true });
+    expect(filesIn(a, 'HEAD')).toEqual(['feature-a.js']);
+
+    writeFileSync(path.join(a, 'feature-b.js'), 'b\n');
+    git(a, 'add', '-A');
+    await commitWorktree(a, 'emberline/a', { message: 'staged by hand' });
+    expect(filesIn(a, 'HEAD')).toEqual(['feature-b.js']);
+    expect(git(a, 'ls-files', '.emberline')).toBe('');
   });
 });

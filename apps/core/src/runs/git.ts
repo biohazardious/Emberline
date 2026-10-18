@@ -17,6 +17,7 @@ import type {
   RunFileDiff,
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { unstageScratchFiles } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
@@ -637,6 +638,7 @@ export async function commitWorktree(
   if (body.stageAll) {
     await git(worktreePath, ['add', '-A']);
   }
+  await unstageScratchFiles(worktreePath);
   const staged = await git(worktreePath, ['diff', '--cached', '--name-only']);
   if (!staged) throw conflict('no changes staged to commit');
 

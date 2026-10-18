@@ -1,4 +1,5 @@
 /** Factory orchestration: request attachments, the orchestrator prompt and agent-written ticket drafts. */
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import {
   type AgentTicketDraft,
   type FactoryAttachmentInput,
 } from '@emberline/protocol';
+import { execGitFile } from '../git-exec.js';
 
 export async function persistFactoryAttachments(
   workspacePath: string,
@@ -117,32 +119,91 @@ ${attachmentSection}
 5. **Autonomous Execution Rule (CRITICAL):** Do NOT ask the user clarifying questions and do NOT wait for confirmation. Always select the cleanest architecture-appropriate design that fits \`PROJECT.md\` and write \`.emberline/new-tickets.json\` in this turn.`;
 }
 
+/** Why a tickets file was consumed without creating tickets. */
+export type TicketsFileSkip = 'inherited' | 'duplicate';
+
+export interface TicketsFileHooks {
+  /** A file that is not valid JSON or not a valid batch: why. */
+  onRejected?: (message: string) => void;
+  /**
+   * Whether the file is the one the run's branch started with (`relPath` is relative to the
+   * workspace): such a file came from main, not from this run, and creates no tickets.
+   */
+  isInherited?: (relPath: string, raw: Buffer) => Promise<boolean>;
+  /**
+   * Called synchronously with a valid file's sha256 just before it is imported: false when that
+   * content was imported before (the file is skipped), true after recording it.
+   */
+  claim?: (sha256: string) => boolean;
+  onSkipped?: (reason: TicketsFileSkip, file: string, sha256: string) => void;
+}
+
 /**
  * Reads and consumes the drafts file an agent wrote. A file that is not valid JSON or not a valid
  * batch is still removed; `onRejected` hears why, so the run can say so instead of failing silently.
+ * A file the hooks skip (inherited from main, or already imported) is removed too.
  */
 export async function ingestAgentTicketsFile(
   workspacePath: string,
-  onRejected?: (message: string) => void,
-): Promise<{ autoDispatch: boolean; tickets: AgentTicketDraft[] } | null> {
-  const candidates = [
-    path.join(workspacePath, '.emberline', 'new-tickets.json'),
-    path.join(workspacePath, '.emberline', 'tickets.json'),
-  ];
-  for (const filePath of candidates) {
+  hooks: TicketsFileHooks = {},
+): Promise<{ autoDispatch: boolean; tickets: AgentTicketDraft[]; sha256: string } | null> {
+  const { onRejected, isInherited, claim, onSkipped } = hooks;
+  for (const name of ['new-tickets.json', 'tickets.json']) {
+    const relPath = `.emberline/${name}`;
+    const filePath = path.join(workspacePath, '.emberline', name);
     if (!existsSync(filePath)) continue;
     try {
-      const raw = await readFile(filePath, 'utf-8');
+      const raw = await readFile(filePath);
+      const sha256 = createHash('sha256').update(raw).digest('hex');
+      const inherited = isInherited ? await isInherited(relPath, raw).catch(() => false) : false;
       await rm(filePath, { force: true });
-      const json = JSON.parse(raw) as unknown;
+      if (inherited) {
+        onSkipped?.('inherited', name, sha256);
+        continue;
+      }
+      const json = JSON.parse(raw.toString('utf-8')) as unknown;
       const parsed = AgentCreateTicketsPayload.parse(
         Array.isArray(json) ? { autoDispatch: true, tickets: json } : json,
       );
-      return parsed;
+      if (claim && !claim(sha256)) {
+        onSkipped?.('duplicate', name, sha256);
+        continue;
+      }
+      return { ...parsed, sha256 };
     } catch (error) {
       await rm(filePath, { force: true }).catch(() => undefined);
-      onRejected?.(`${path.basename(filePath)}: ${(error as Error).message}`.slice(0, 500));
+      onRejected?.(`${name}: ${(error as Error).message}`.slice(0, 500));
     }
   }
   return null;
+}
+
+/**
+ * Whether `relPath` is committed at `ref` with exactly the bytes `raw` (hardened `ls-tree` and
+ * `cat-file`; the size from the tree is checked before the blob is read). False when it is not
+ * committed there, or on any git error.
+ */
+export async function committedWithContent(workspacePath: string, ref: string, relPath: string, raw: Buffer): Promise<boolean> {
+  const inDir = { cwd: workspacePath };
+  const tree = await execGitFile(['ls-tree', '-l', '-z', ref, '--', relPath], inDir).catch(() => ({ stdout: '' }));
+  const record = tree.stdout.split('\0').find(Boolean);
+  if (!record) return false;
+  const tab = record.indexOf('\t');
+  const [mode, type, oid, size] = record.slice(0, tab).split(/\s+/);
+  if (record.slice(tab + 1) !== relPath || mode === '120000' || type !== 'blob' || !oid || !/^[0-9a-f]{40,64}$/.test(oid)) {
+    return false;
+  }
+  if (Number(size) !== raw.length) return false;
+  const blob = await execGitFile(['cat-file', 'blob', oid], { ...inDir, encoding: 'buffer', maxBuffer: raw.length + 1 });
+  return blob.stdout.equals(raw);
+}
+
+/**
+ * The commit a run's branch started from (its merge-base with the main workspace's branch), or
+ * HEAD when there is no such branch or no common history.
+ */
+export async function runBranchBase(worktreePath: string, mainBranch: string | null): Promise<string> {
+  if (!mainBranch) return 'HEAD';
+  const res = await execGitFile(['merge-base', 'HEAD', `refs/heads/${mainBranch}`], { cwd: worktreePath }).catch(() => ({ stdout: '' }));
+  return res.stdout.trim() || 'HEAD';
 }

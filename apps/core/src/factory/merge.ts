@@ -38,6 +38,20 @@ const RUN_OUTPUT_EXCLUDES = [
   ...EMBERLINE_SCRATCH_PATHS.map((p) => `:(exclude,glob)**/${p}`),
 ];
 
+/** The scratch files at any depth, as pathspecs. */
+const SCRATCH_PATHSPECS = EMBERLINE_SCRATCH_PATHS.map((p) => `:(glob)**/${p}`);
+
+/**
+ * Takes Emberline's scratch files out of the index right before an Emberline commit. A pathspec
+ * exclude on `git add` is not enough: a file the agent staged itself stays in the index, and
+ * `git commit` takes the whole index. Scratch files that are already tracked are removed from the
+ * index too, so the commit deletes them from the repository; the files on disk are left alone.
+ */
+export async function unstageScratchFiles(cwd: string): Promise<void> {
+  // -f: the staged content may differ from both HEAD and the file on disk; only the index changes.
+  await execGitFile(['rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', ...SCRATCH_PATHSPECS], { cwd });
+}
+
 /** One merge into a main workspace at a time (parallel runs finish independently). */
 const mainWorkspaceLock = new KeyedMutex();
 
@@ -117,6 +131,7 @@ export async function syncWorktreeToMainWorkspace(params: {
 
     // 1. Commit the run's output on its own branch; .gitignore keeps secrets and build output out.
     await execGitFile(['add', '-A', '--', '.', ...RUN_OUTPUT_EXCLUDES], inWorktree);
+    await unstageScratchFiles(worktreePath);
     const staged = await execGitFile(['diff', '--cached', '--name-only'], inWorktree);
     if (staged.stdout.trim()) {
       await execGitFile([...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `feat(${label}): factory run output`], inWorktree);
@@ -140,6 +155,7 @@ export async function syncWorktreeToMainWorkspace(params: {
     const editedTracked = await execGitFile(['diff', 'HEAD', '--name-only'], inMain);
     if (editedTracked.stdout.trim()) {
       await execGitFile(['add', '-u'], inMain);
+      await unstageScratchFiles(mainWorkspacePath);
       await execGitFile(
         [...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `chore: snapshot workspace edits before merging ${label}`],
         inMain,

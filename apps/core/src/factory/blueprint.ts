@@ -20,6 +20,7 @@ import {
   type WorktreeHints,
 } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
+import { unstageScratchFiles } from './merge.js';
 import type { TicketService } from '../tickets/service.js';
 
 /** Labels come from the protocol registry, the only source for project type names. */
@@ -571,6 +572,7 @@ export async function initLocalGitRepository(projectPath: string, defaultBranch 
   try {
     await execGitFile(['init', '-b', defaultBranch], { cwd: projectPath });
     await execGitFile(['add', '-A'], { cwd: projectPath });
+    await unstageScratchFiles(projectPath);
     await execGitFile(
       [
         '-c',
