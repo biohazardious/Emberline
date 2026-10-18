@@ -945,6 +945,38 @@ const APP_TYPE_PROFILES: Record<ProjectAppType, AppTypeProfile> = {
     },
   },
 
+  static_site: {
+    id: 'static_site',
+    icon: Globe,
+    label: 'Static Website',
+    desc: 'Landing pages, portfolios, docs and blogs served as plain files',
+    layerLabels: STANDARD_LAYER_LABELS,
+    defaultArchNotes:
+      '- Ship semantic, accessible HTML with a responsive layout.\n- Keep assets small; no runtime server is required.',
+    presets: [
+      {
+        label: 'Plain HTML/CSS/JS',
+        summary: 'Hand-written index.html, styles.css and script.js with no build step',
+        stack: {
+          language: 'JavaScript (ESNext)',
+          frontend: 'Plain HTML/CSS/JS',
+          backend: 'None',
+          database: 'None',
+          styling: 'Plain CSS',
+          testing: 'None',
+        },
+      },
+    ],
+    catalog: {
+      language: ['JavaScript (ESNext)', 'TypeScript (Node.js)'],
+      frontend: ['Plain HTML/CSS/JS', 'Vite (vanilla)', 'Astro', 'Eleventy'],
+      backend: ['None'],
+      database: ['None'],
+      styling: ['Plain CSS', 'Tailwind CSS', 'Modern CSS / Design Tokens'],
+      testing: ['None', 'HTML validation + link check'],
+    },
+  },
+
   custom: {
     id: 'custom',
     icon: Puzzle,

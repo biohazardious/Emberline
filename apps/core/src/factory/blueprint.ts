@@ -23,6 +23,7 @@ export const APP_TYPE_LABELS: Record<ProjectAppType, string> = {
   embedded_iot: 'Embedded / IoT / Hardware Firmware',
   library: 'SDK / Package Library',
   game_interactive: 'Interactive Canvas / Game App',
+  static_site: 'Static Website',
   custom: 'Custom Multi-Layer Project',
 };
 
