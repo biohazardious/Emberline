@@ -175,6 +175,32 @@ describe('label sync', () => {
     expect(Object.fromEntries(byNumber)).toEqual({ 1: 'ready', 2: 'backlog', 3: 'backlog' });
   });
 
+  it('marks imports from untrusted authors as needing triage; trusted ones and manual imports do not', async () => {
+    const repo = addProject('p1', 'widget', { status: 'backlog', trustedAuthors: ['octo'] });
+    repo.issues = [ghIssue('widget', 1, { user: { login: 'Octo' } }), ghIssue('widget', 2, { user: { login: 'mallory' } }), ghIssue('widget', 3, { user: null })];
+    await sync.tick();
+    const triage = Object.fromEntries(ticketsOf('p1').map((tk) => [tk.external?.number, [tk.status, tk.external?.triage]]));
+    expect(triage).toEqual({ 1: ['backlog', false], 2: ['backlog', true], 3: ['backlog', true] });
+    const manual = t.tickets.importIssues('p1', 'github', [{ externalId: '1', number: 99, title: 'M', body: '', labels: [], url: '', author: 'mallory', updatedAt: '', state: 'open' }], 'backlog');
+    expect(manual.created[0]!.external?.triage).toBe(false);
+  });
+
+  it('a person clears triage by moving or editing the ticket; a reorder in its column and internal moves keep it', async () => {
+    const repo = addProject('p1', 'widget');
+    repo.issues = [ghIssue('widget', 1), ghIssue('widget', 2)];
+    await sync.tick();
+    const [a, b] = ticketsOf('p1').sort((x, y) => x.external!.number - y.external!.number);
+    const cookie = await setupAndLogin(t.app);
+    const patch = (id: string, payload: object) =>
+      t.app.inject({ method: 'PATCH', url: `/api/tickets/${id}`, payload, headers: { ...CSRF, cookie } });
+    expect((await patch(a!.id, { status: 'backlog', position: 1 })).json().external.triage).toBe(true);
+    expect((await patch(a!.id, { position: 2 })).json().external.triage).toBe(true);
+    // The pipeline or the roadmap moving it is no person's decision.
+    expect(t.tickets.update(a!.id, { status: 'ready' }).external?.triage).toBe(true);
+    expect((await patch(a!.id, { status: 'backlog' })).json().external.triage).toBe(false);
+    expect((await patch(b!.id, { title: 'Reviewed' })).json().external.triage).toBe(false);
+  });
+
   it('reads at most 2 pages per project', async () => {
     const repo = addProject('p1', 'widget');
     repo.issues = Array.from({ length: 250 }, (_, i) => ghIssue('widget', i + 1));

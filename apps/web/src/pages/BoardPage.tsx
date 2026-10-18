@@ -472,7 +472,7 @@ function QuickAdd({
   );
 }
 
-/** The issue a ticket was imported from: `#123` linking to it, its labels, and whether it is closed. */
+/** The issue a ticket was imported from: `#123` linking to it, its labels, whether it is closed or needs triage. */
 function IssueChips({ external }: { external: Ticket['external'] }) {
   if (!external) return null;
   return (
@@ -488,6 +488,14 @@ function IssueChips({ external }: { external: Ticket['external'] }) {
       >
         #{external.number}
       </a>
+      {external.triage && (
+        <span
+          className="badge badge-warn"
+          title="Label sync imported this from an author who is not in Trusted authors. Automatic dispatch skips it until you move or edit it."
+        >
+          needs triage
+        </span>
+      )}
       {external.state === 'closed' && <span className="badge badge-soft">closed</span>}
       {external.labels.map((l) => (
         <span key={l} className="badge badge-soft card-issue-label">

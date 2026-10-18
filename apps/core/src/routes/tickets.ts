@@ -18,7 +18,7 @@ export function registerTicketRoutes(app: FastifyInstance, tickets: TicketServic
 
   app.patch<{ Params: { id: string } }>(
     '/api/tickets/:id',
-    async (request): Promise<Ticket> => tickets.update(request.params.id, (request.body ?? {}) as never),
+    async (request): Promise<Ticket> => tickets.update(request.params.id, (request.body ?? {}) as never, { byPerson: true }),
   );
 
   app.delete<{ Params: { id: string } }>('/api/tickets/:id', async (request) => {
@@ -29,7 +29,7 @@ export function registerTicketRoutes(app: FastifyInstance, tickets: TicketServic
   app.post<{ Params: { id: string } }>(
     '/api/tickets/:id/start',
     async (request, reply): Promise<{ ticket: Ticket; run: Run }> => {
-      const result = await tickets.start(request.params.id, (request.body ?? {}) as never);
+      const result = await tickets.start(request.params.id, (request.body ?? {}) as never, { byPerson: true });
       reply.code(201);
       return result;
     },

@@ -112,6 +112,20 @@ describe('openDb', () => {
     db.close();
   });
 
+  it('0021: tickets get external_triage, false for existing and new rows', () => {
+    const db = openDb(':memory:');
+    const run = (query: string) => db.db.run(sql.raw(query));
+    run(`insert into projects (id, name, slug, path, created_at) values ('p', 'p', 'p', '/p', 0)`);
+    run(`insert into tickets (id, project_id, number, key, title, status, position, created_at, updated_at) values ('a', 'p', 1, 'P-1', 'a', 'backlog', 1, 0, 0)`);
+    run(`insert into tickets (id, project_id, number, key, title, status, position, created_at, updated_at, external_triage) values ('b', 'p', 2, 'P-2', 'b', 'backlog', 2, 0, 0, 1)`);
+    expect(db.db.all(sql.raw('select id, external_triage as triage from tickets order by id'))).toEqual([
+      { id: 'a', triage: 0 },
+      { id: 'b', triage: 1 },
+    ]);
+    expect(() => run(`update tickets set external_triage = null where id = 'a'`)).toThrow();
+    db.close();
+  });
+
   it('does not back up a fresh or up-to-date database', () => {
     const file = path.join(dir, 'emberline.db');
     openDb(file).close();

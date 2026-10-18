@@ -320,7 +320,8 @@ export class IssueSyncService {
 
   /**
    * Imports the open, unlinked issues: into the configured status only when a trusted author opened
-   * them (anyone can open an issue with an auto-applied label), into Backlog otherwise. Linked
+   * them (anyone can open an issue with an auto-applied label), into Backlog and marked for triage
+   * otherwise, so no automatic dispatch starts them before a person has looked. Linked
    * tickets get the issue's state and labels and are never moved.
    */
   private apply(projectId: string, source: ForgeProvider, settings: IssueSyncSettings, items: ForgeIssue[]): void {
@@ -339,10 +340,11 @@ export class IssueSyncService {
       items.map((i) => i.externalId),
     );
     const fresh = items.filter((i) => i.state === 'open' && !linked.has(i.externalId) && !dismissed.has(i.externalId));
-    const promoted = settings.status === 'backlog' ? [] : fresh.filter(isTrusted);
-    const backlog = fresh.filter((i) => !promoted.includes(i));
-    if (promoted.length > 0) this.tickets.importIssues(projectId, source, promoted, settings.status);
-    if (backlog.length > 0) this.tickets.importIssues(projectId, source, backlog, 'backlog');
+    const trustedIssues = fresh.filter(isTrusted);
+    // Untrusted imports also need a person's triage before any automatic dispatch (Backlog auto-pickup).
+    const untrusted = fresh.filter((i) => !isTrusted(i));
+    if (trustedIssues.length > 0) this.tickets.importIssues(projectId, source, trustedIssues, settings.status);
+    if (untrusted.length > 0) this.tickets.importIssues(projectId, source, untrusted, 'backlog', { triage: true });
     const known = items.filter((i) => linked.has(i.externalId));
     if (known.length > 0) this.tickets.syncIssueLinks(projectId, source, known, new Date(this.now()));
   }

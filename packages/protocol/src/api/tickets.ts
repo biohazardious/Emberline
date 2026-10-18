@@ -39,6 +39,11 @@ export const TicketExternal = z.object({
   url: z.string(),
   state: z.enum(['open', 'closed']),
   labels: z.array(z.string()),
+  /**
+   * Label sync imported it from an author not in trustedAuthors: automatic dispatch (Backlog
+   * auto-pickup, Run pipeline, chains) skips it until a person moves or edits the ticket.
+   */
+  triage: z.boolean().default(false),
 });
 export type TicketExternal = z.infer<typeof TicketExternal>;
 

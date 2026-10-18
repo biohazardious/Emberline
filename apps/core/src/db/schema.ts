@@ -96,6 +96,11 @@ export const tickets = sqliteTable(
     externalState: text('external_state', { enum: ['open', 'closed'] }),
     externalLabels: text('external_labels', { mode: 'json' }).$type<string[]>(),
     externalSyncedAt: integer('external_synced_at', { mode: 'timestamp_ms' }),
+    /**
+     * Label sync imported it from an author not in trustedAuthors: no automatic dispatch starts it
+     * until a person moves or edits it (which clears this).
+     */
+    externalTriage: integer('external_triage', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },

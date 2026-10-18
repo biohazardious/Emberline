@@ -786,3 +786,49 @@ describe('issue write-back in the pipeline', () => {
     await expect.poll(() => eventTypes(run), { timeout: 5_000 }).toEqual(expect.arrayContaining(['issue_comment_failed', 'issue_close_failed']));
   });
 });
+
+describe('issue triage', () => {
+  it('auto-pickup never starts an untrusted label-sync import; once a person moves it to Ready it dispatches', async () => {
+    const project = await createProject('Triage Project');
+    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, project.id)).run();
+    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    const issue = {
+      id: 9001,
+      number: 1,
+      title: 'Run me',
+      body: 'please',
+      state: 'open',
+      labels: [{ name: 'emberline' }],
+      html_url: 'https://github.com/acme/widget/issues/1',
+      user: { login: 'mallory' },
+      updated_at: '2026-10-18T10:00:00Z',
+    };
+    t.forgeFetch.current = async (url) =>
+      new Response(JSON.stringify(new URL(url).pathname === '/repos/acme/widget/issues' ? [issue] : {}), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    writeIssueSync(t.db, project.id, IssueSyncSettings.parse({ enabled: true, label: 'emberline', status: 'ready', trustedAuthors: ['octo'] }));
+    await api('PATCH', '/api/factory/settings', { autoPickupBacklog: true });
+    expect((await api('POST', `/api/projects/${project.id}/issue-sync/run`)).json().lastError).toBeNull();
+    const [ticket] = t.tickets.list(project.id);
+    expect(ticket).toMatchObject({ status: 'backlog', external: { number: 1, triage: true } });
+
+    // "Run pipeline", a chaining dispatch and a restart's resumeChains all pass it by.
+    const run = (await api('POST', `/api/projects/${project.id}/run-pipeline`)).json() as { dispatched: unknown[] };
+    expect(run.dispatched).toEqual([]);
+    t.tickets.setAutoChain(project.id, true);
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
+    t.tickets.setAutoChain(project.id, true);
+    await t.tickets.resumeChains();
+    expect(runsFor(ticket!.id)).toEqual([]);
+    expect(await statusOf(ticket!.id)).toBe('backlog');
+
+    // A person moves it to Ready: that is the triage.
+    const moved = (await api('PATCH', `/api/tickets/${ticket!.id}`, { status: 'ready' })).json() as Ticket;
+    expect(moved.external).toMatchObject({ triage: false });
+    const again = (await api('POST', `/api/projects/${project.id}/run-pipeline`)).json() as { dispatched: { ticket: Ticket }[] };
+    expect(again.dispatched.map((d) => d.ticket.id)).toEqual([ticket!.id]);
+    expect(runsFor(ticket!.id)).toHaveLength(1);
+  });
+});

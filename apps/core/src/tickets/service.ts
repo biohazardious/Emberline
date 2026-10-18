@@ -97,6 +97,13 @@ export interface IssueLink {
   url: string;
   state: 'open' | 'closed';
   labels: string[];
+  /** Label sync from an untrusted author: no automatic dispatch until a person triages it. */
+  triage?: boolean;
+}
+
+/** What a person (a tickets route) did, as opposed to the pipeline or the roadmap. */
+export interface ByPerson {
+  byPerson?: boolean;
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -137,6 +144,7 @@ export const toTicket = (
           url: row.externalUrl,
           state: row.externalState ?? 'open',
           labels: row.externalLabels ?? [],
+          triage: row.externalTriage,
         }
       : null,
   createdAt: row.createdAt.toISOString(),
@@ -429,7 +437,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         const list = this.list(id);
         if (
           list.some((t) => t.title.startsWith('[Factory]')) &&
-          list.some((t) => startable.has(t.status) && t.blockedBy.length === 0)
+          list.some((t) => startable.has(t.status) && t.blockedBy.length === 0 && !t.external?.triage)
         ) {
           seeded.add(id);
         }
@@ -685,7 +693,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // Read after the finalization above: tickets it moved to Done may unblock others.
-    const allTickets = this.list(projectId).filter((t) => !only || only.has(t.id));
+    // An untrusted issue import waits for a person (external.triage); no automatic path starts it.
+    const allTickets = this.list(projectId).filter((t) => (!only || only.has(t.id)) && !t.external?.triage);
     const byPriority = (a: Ticket, b: Ticket) => b.priority - a.priority || a.position - b.position;
     const queue = [
       ...allTickets.filter((t) => t.status === 'ready').sort(byPriority),
@@ -1352,6 +1361,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
                 externalState: external.state,
                 externalLabels: external.labels,
                 externalSyncedAt: now,
+                externalTriage: external.triage ?? false,
               }
             : {}),
           createdAt: now,
@@ -1405,6 +1415,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     source: ForgeProvider,
     issues: ForgeIssue[],
     status: 'backlog' | 'ready',
+    { triage = false }: { triage?: boolean } = {},
   ): { created: Ticket[]; existing: Ticket[] } {
     const mapped = issues.map((issue) => ({ issue, input: CreateTicketBodySchema.parse(mapIssueToTicket(issue, source, status)) }));
     const created: Ticket[] = [];
@@ -1436,6 +1447,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             url: issue.url,
             state: issue.state,
             labels: issue.labels,
+            triage,
           }),
         );
       } catch (err) {
@@ -1479,12 +1491,20 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return changed.map((id) => this.get(id));
   }
 
-  update(id: string, input: UpdateTicketBody): Ticket {
+  /**
+   * `byPerson`: a tickets route, so a move or an edit is the person's triage of an untrusted issue
+   * import (a reorder inside its column is not). The pipeline and the roadmap never clear it.
+   */
+  update(id: string, input: UpdateTicketBody, { byPerson = false }: ByPerson = {}): Ticket {
     const current = this.row(id);
     const { dependsOn, ...patch } = UpdateTicketBodySchema.parse(input);
     const blockedBefore = dependsOn ? this.dependenciesOf([id]) : undefined;
     if (dependsOn) this.replaceDependencies(current, dependsOn);
     const set: Partial<TicketRow> = { ...patch, updatedAt: new Date() };
+    const reorderOnly =
+      dependsOn === undefined &&
+      Object.entries(patch).every(([k, v]) => v === undefined || k === 'position' || (k === 'status' && v === current.status));
+    if (byPerson && current.externalTriage && !reorderOnly) set.externalTriage = false;
     // Moved to another column without an explicit slot: append at the bottom.
     if (patch.status && patch.status !== current.status && patch.position === undefined) {
       set.position = this.edgePosition(current.projectId, patch.status, 'bottom');
@@ -1580,11 +1600,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   async start(
     id: string,
     input: StartTicketBody,
-    opts: { unattended?: boolean } = {},
+    opts: { unattended?: boolean } & ByPerson = {},
   ): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
     if (this.runs.activeRunForTicket(id) || this.startingTickets.has(id)) {
       throw conflict('this ticket already has a running agent');
+    }
+    // A person starting it is its triage; an unattended start never is.
+    if (opts.byPerson && !opts.unattended && ticket.external?.triage) {
+      this.db.update(tickets).set({ externalTriage: false }).where(eq(tickets.id, id)).run();
     }
     this.startingTickets.add(id);
     try {

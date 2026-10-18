@@ -1,0 +1,1 @@
+ALTER TABLE `tickets` ADD `external_triage` integer DEFAULT false NOT NULL;
