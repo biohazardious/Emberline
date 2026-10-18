@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { loadConfig, parseAllowedHosts } from './config.js';
 import { CSRF, createTestApp, setupAndLogin, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
+import { appCsp } from './security-headers.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -140,6 +141,34 @@ describe('hardening', () => {
       expect(api.headers['x-content-type-options']).toBe('nosniff');
       expect(api.headers['referrer-policy']).toBe('same-origin');
     } finally {
+      rmSync(webDir, { recursive: true, force: true });
+    }
+  });
+
+  it('lets the web UI frame previews on its own host only, on any port', async () => {
+    const webDir = mkdtempSync(path.join(tmpdir(), 'web-'));
+    writeFileSync(path.join(webDir, 'index.html'), '<h1>ember</h1>');
+    const saved = process.env.EMBERLINE_PREVIEW_HOST;
+    try {
+      delete process.env.EMBERLINE_PREVIEW_HOST;
+      t = await createTestApp({ webDir });
+      const frameSrc = async (host: string) => {
+        const page = await t!.app.inject({ url: '/', headers: { host } });
+        return /frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1];
+      };
+      expect(await frameSrc('192.168.1.16:7420')).toBe("'self' http://192.168.1.16:*");
+      expect(await frameSrc('localhost:7497')).toBe("'self' http://localhost:*");
+      expect(await frameSrc('[::1]:7420')).toBe("'self' http://[::1]:*");
+      // A malformed Host never reaches the policy.
+      expect(appCsp("evil; script-src 'unsafe-inline'")).toContain("frame-src 'self';");
+      expect(appCsp(undefined)).toContain("frame-src 'self';");
+      process.env.EMBERLINE_PREVIEW_HOST = 'http://previews.lan/';
+      expect(await frameSrc('192.168.1.16:7420')).toBe("'self' http://previews.lan:*");
+      process.env.EMBERLINE_PREVIEW_HOST = 'javascript:alert(1)';
+      expect(await frameSrc('192.168.1.16:7420')).toBe("'self'");
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
+      else process.env.EMBERLINE_PREVIEW_HOST = saved;
       rmSync(webDir, { recursive: true, force: true });
     }
   });

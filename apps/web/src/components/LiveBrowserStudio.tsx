@@ -1,10 +1,12 @@
 import type {
   BrowserActionBody,
   BrowserConsoleEntry,
+  BrowserUrlResponse,
   BrowserViewportSnapshot,
   BuildDemoResponse,
   FactoryRequestResponse,
   Project,
+  SystemStatus,
 } from '@emberline/protocol';
 import { type FormEvent, type MouseEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -26,7 +28,10 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { type PreviewLike, choosePrimaryView, qaRequestPrompt, resolveRunnerBrowserUrl } from '../containerPreview';
+import { useApi } from '../hooks/useApi';
 import { PersonaBadge } from './PersonaBadge';
+import { previewApiPath } from './PreviewAndBuildView';
 
 const QUICK_KEYS = [
   { label: 'Space', key: 'Space' },
@@ -62,7 +67,9 @@ export function LiveBrowserStudio({
   const [clickMarker, setClickMarker] = useState<{ xPct: number; yPct: number; id: number } | null>(
     null,
   );
-  const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
+  const [banner, setBanner] = useState<{ kind: 'ok' | 'err' | 'info'; text: string }>();
+  // Shared with the shell's poll: whether the Docker engine can run container previews.
+  const systemPoll = useApi<SystemStatus>('/api/system', 5_000);
   const [launchingQa, setLaunchingQa] = useState(false);
 
   const inFlightRef = useRef(false);
@@ -128,17 +135,49 @@ export function LiveBrowserStudio({
     await sendAction({ action: 'navigate', url: trimmed });
   };
 
+  /**
+   * The target's URL as the runner's browser reaches it (`browser-url`). A target with a container
+   * preview gets it started first, and this waits until it answers; otherwise the static demo is
+   * built first. Null, with the reason in the banner, when there is nothing to open.
+   */
+  const targetBrowserUrl = async (): Promise<string | null> => {
+    const path = previewApiPath(project.id, { id: targetId, kind: targetId === 'main' ? 'main' : 'worktree' });
+    const first = await api<PreviewLike>(path).catch(() => undefined);
+    const container =
+      choosePrimaryView(
+        { kind: targetId === 'main' ? 'main' : 'worktree', exists: true },
+        first,
+        systemPoll.data?.docker.available ?? false,
+      ) === 'container';
+    if (container && first?.status !== 'running') {
+      setBanner({ kind: 'info', text: 'Starting the container preview; the browser opens it once it answers…' });
+    }
+    const res = await resolveRunnerBrowserUrl({
+      container,
+      status: () => api<PreviewLike>(path),
+      start: () => api<PreviewLike>(`${path}/start`, 'POST', {}),
+      buildStatic: async () => {
+        await api<BuildDemoResponse>(`/api/projects/${project.id}/build-demo`, 'POST', { targetId });
+      },
+      browserUrl: () =>
+        api<BrowserUrlResponse>(`/api/projects/${project.id}/browser-url?target=${encodeURIComponent(targetId)}`),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now: () => Date.now(),
+      describeError: errorMessage,
+    });
+    setBanner(res.message ? { kind: res.problem ? 'err' : 'info', text: res.message } : undefined);
+    return res.url;
+  };
+
   const handleOpenProjectDemo = async () => {
     setActing(true);
     setBanner(undefined);
     try {
-      await api<BuildDemoResponse>(`/api/projects/${project.id}/build-demo`, 'POST', {
-        targetId,
-      }).catch(() => null);
-      const demoUrl = `http://localhost:7420/api/projects/${project.id}/demo/${targetId}/`;
+      const url = await targetBrowserUrl();
+      if (!url) return;
       setEditingUrl(false);
-      setUrlInput(demoUrl);
-      await sendAction({ action: 'navigate', url: demoUrl });
+      setUrlInput(url);
+      await sendAction({ action: 'navigate', url });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
     } finally {
@@ -155,8 +194,18 @@ export function LiveBrowserStudio({
     }
     setLiveFollow(true);
     setSideTab('activity');
-    const demoUrl = `http://localhost:7420/api/projects/${project.id}/demo/${targetId}/`;
-    await sendAction({ action: 'start_playtest', url: demoUrl });
+    setActing(true);
+    let url: string | null;
+    try {
+      url = await targetBrowserUrl();
+    } catch (err) {
+      setBanner({ kind: 'err', text: errorMessage(err) });
+      return;
+    } finally {
+      setActing(false);
+    }
+    if (!url) return;
+    await sendAction({ action: 'start_playtest', url });
     setBanner({
       kind: 'ok',
       text: 'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
@@ -186,13 +235,14 @@ export function LiveBrowserStudio({
     setLaunchingQa(true);
     setBanner(undefined);
     try {
-      const demoUrl = `http://localhost:7420/api/projects/${project.id}/demo/${targetId}/`;
-      await sendAction({ action: 'navigate', url: demoUrl }).catch(() => null);
+      // Show the person the target meanwhile; the QA run opens its own work with the `preview` tool.
+      const url = await targetBrowserUrl().catch(() => null);
+      if (url) await sendAction({ action: 'navigate', url }).catch(() => null);
       const res = await api<FactoryRequestResponse>(
         `/api/projects/${project.id}/factory-request`,
         'POST',
         {
-          prompt: `[Live Browser QA Verification] Open ${demoUrl} using your Playwright MCP browser tools (mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click / mcp__playwright__browser_press_key, mcp__playwright__browser_take_screenshot). Visually inspect the application, interact with the primary UI controls and workflows, verify there are no console errors, and leave the app open in the browser.`,
+          prompt: qaRequestPrompt(),
           leadPersona: 'qa',
           permissionMode: 'auto',
           autoDispatch: true,
@@ -373,7 +423,7 @@ export function LiveBrowserStudio({
             className="btn btn-sm"
             disabled={acting}
             onClick={() => void handleOpenProjectDemo()}
-            title="Build (if needed) and open this project's Live Demo inside the shared browser"
+            title="Open this target in the shared browser: its container preview when it has one (started if needed), else its static build"
           >
             <Target className="icon" aria-hidden /> Open Project Demo
           </button>
@@ -556,7 +606,8 @@ export function LiveBrowserStudio({
           onFocus={() => setEditingUrl(true)}
           onBlur={() => setEditingUrl(false)}
           onChange={(e) => setUrlInput(e.target.value)}
-          placeholder="http://localhost:7420/api/projects/.../demo/main/ or http://localhost:5173"
+          aria-label="Address as the runner's browser sees it"
+          placeholder="Address as the runner sees it, e.g. http://localhost:5173"
           style={{
             flex: 1,
             width: 'auto',
@@ -571,7 +622,8 @@ export function LiveBrowserStudio({
 
       {banner && (
         <div
-          className={`banner ${banner.kind === 'ok' ? 'banner-ok' : 'banner-error'}`}
+          className={`banner browser-target-notice ${banner.kind === 'ok' ? 'banner-ok' : banner.kind === 'info' ? 'banner-info' : 'banner-error'}`}
+          role={banner.kind === 'err' ? 'alert' : 'status'}
           style={{
             borderRadius: 0,
             display: 'flex',

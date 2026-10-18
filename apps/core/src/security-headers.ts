@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { hostNameOf } from './runs/preview-url.js';
 
 /** Default request body cap; routes that accept uploads raise it per route. */
 export const DEFAULT_BODY_LIMIT = 1024 * 1024;
@@ -11,6 +12,7 @@ export const EDITOR_BODY_LIMIT = 16 * 1024 * 1024;
  * Policy for the web UI. Monaco injects `<style>` elements and runs its workers from blob URLs;
  * the Inter / JetBrains Mono web fonts come from Google Fonts;
  * the demo and artifact iframes are same-origin but sandboxed by their own response CSP.
+ * {@link appCsp} adds the host of the container previews to `frame-src`.
  */
 export const APP_CSP = [
   "default-src 'self'",
@@ -28,6 +30,36 @@ export const APP_CSP = [
 ].join('; ');
 
 /**
+ * Where the browser opens previews, as a CSP source on any port: `EMBERLINE_PREVIEW_HOST`'s host,
+ * else the host the page was requested on (the same rule as `previewUrl`). Null when neither is a
+ * plain http(s) host name, so nothing malformed reaches the policy.
+ */
+export function previewFrameSource(hostHeader: string | undefined, override = process.env.EMBERLINE_PREVIEW_HOST): string | null {
+  const base = override?.trim();
+  if (base) {
+    try {
+      const url = new URL(base);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+      const name = hostNameOf(url.hostname);
+      return name ? `${url.protocol}//${name}:*` : null;
+    } catch {
+      return null;
+    }
+  }
+  const name = hostNameOf(hostHeader);
+  return name ? `http://${name}:*` : null;
+}
+
+/**
+ * The web UI's policy for one request: {@link APP_CSP}, with the container previews' host in
+ * `frame-src` so Preview & Build can show a preview, which answers on its own port.
+ */
+export function appCsp(hostHeader: string | undefined): string {
+  const preview = previewFrameSource(hostHeader);
+  return preview ? APP_CSP.replace("frame-src 'self'", `frame-src 'self' ${preview}`) : APP_CSP;
+}
+
+/**
  * For agent-written HTML/SVG served from core (live demo, artifacts, inline downloads). The
  * `sandbox` directive gives the document an opaque origin, so its scripts cannot read the
  * Emberline origin or send authenticated API requests.
@@ -36,13 +68,13 @@ export const UNTRUSTED_CONTENT_CSP =
   'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock';
 
 export function installSecurityHeaders(app: FastifyInstance): void {
-  app.addHook('onSend', async (_request, reply, payload) => {
+  app.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'same-origin');
     if (!reply.hasHeader('content-security-policy')) {
       const type = String(reply.getHeader('content-type') ?? '');
       if (type.startsWith('text/html')) {
-        reply.header('content-security-policy', APP_CSP);
+        reply.header('content-security-policy', appCsp(request.headers.host));
         reply.header('x-frame-options', 'SAMEORIGIN');
       }
     }

@@ -7,6 +7,7 @@ import type {
   ProjectCheckpoint,
   ProjectStatusSummary,
   SyncWorktreeResponse,
+  SystemStatus,
   Ticket,
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
@@ -45,6 +46,7 @@ import { useApi } from '../hooks/useApi';
 import { startableCount } from '../ticketDeps';
 import { LiveBrowserStudio } from './LiveBrowserStudio';
 import { PersonaBadge } from './PersonaBadge';
+import { PreviewAndBuildView } from './PreviewAndBuildView';
 
 function getFactoryExamples(project: Project, target?: WorkspaceDemoTarget): string[] {
   const appType = project.appType ?? 'fullstack';
@@ -165,6 +167,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const ticketsPoll = useApi<Ticket[]>(`/api/projects/${project.id}/tickets`, 5_000);
   const settingsPoll = useApi<FactorySettings>('/api/factory/settings', 15_000);
   const checkpointsPoll = useApi<ProjectCheckpoint[]>(`/api/projects/${project.id}/checkpoints`, 10_000);
+  // Shared with the shell's poll: whether the Docker engine can run container previews.
+  const systemPoll = useApi<SystemStatus>('/api/system', 5_000);
 
   const [activeTab, setActiveTab] = useState<StudioTab>('factory');
   const [selectedTargetId, setSelectedTargetId] = useState<string>('main');
@@ -861,6 +865,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       {banner && (
         <div
           className={`banner ${banner.kind === 'ok' ? 'banner-ok' : 'banner-error'}`}
+          role={banner.kind === 'err' ? 'alert' : 'status'}
           style={{
             display: 'flex',
             justifyContent: 'space-between',
@@ -1285,118 +1290,251 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
       {/* TAB 2: Embedded Live Preview & Universal Build / Verification Console */}
       {activeTab === 'demo' && (
-        <div>
-          {activeTarget.demoUrl ? (
-            <div
-              style={
-                fullscreen
-                  ? {
-                      position: 'fixed',
-                      inset: 16,
-                      zIndex: 1000,
-                      background: 'var(--bg)',
-                      border: '1px solid var(--ember-1)',
-                      borderRadius: 'var(--radius)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      boxShadow: '0 24px 64px rgba(0,0,0,0.75)',
-                    }
-                  : {
-                      border: '1px solid var(--ember-1)',
-                      borderRadius: 'var(--radius-sm)',
-                      overflow: 'hidden',
-                      background: 'var(--bg)',
-                    }
-              }
+        <PreviewAndBuildView
+          project={project}
+          target={activeTarget}
+          engineAvailable={systemPoll.data?.docker.available ?? false}
+          freshness={<DemoFreshness target={activeTarget} />}
+          targetSelect={
+            <select
+              className="input preview-target-select"
+              aria-label="Preview target"
+              value={activeTarget.id}
+              onChange={(e) => {
+                setSelectedTargetId(e.target.value);
+                setDemoErrors([]);
+                buildIfStale(targets.find((t) => t.id === e.target.value));
+              }}
             >
+              {targets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          }
+        >
+          <div>
+            {activeTarget.demoUrl ? (
               <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  padding: '8px 12px',
-                  background: 'var(--bg-elevated)',
-                  borderBottom: '1px solid var(--border)',
-                  flexWrap: 'wrap',
-                }}
+                style={
+                  fullscreen
+                    ? {
+                        position: 'fixed',
+                        inset: 16,
+                        zIndex: 1000,
+                        background: 'var(--bg)',
+                        border: '1px solid var(--ember-1)',
+                        borderRadius: 'var(--radius)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        boxShadow: '0 24px 64px rgba(0,0,0,0.75)',
+                      }
+                    : {
+                        border: '1px solid var(--ember-1)',
+                        borderRadius: 'var(--radius-sm)',
+                        overflow: 'hidden',
+                        background: 'var(--bg)',
+                      }
+                }
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ok)' }}>
-                    ● Live Interactive Preview
-                  </span>
-                  <select
-                    className="input"
-                    value={activeTarget.id}
-                    onChange={(e) => {
-                      setSelectedTargetId(e.target.value);
-                      setIframeNonce((n) => n + 1);
-                      setDemoErrors([]);
-                      buildIfStale(targets.find((t) => t.id === e.target.value));
-                    }}
-                    style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
-                  >
-                    {targets.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : `(${t.detectedStack ?? 'no bundle'})`}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="mono muted small">{activeTarget.demoEntryRelPath}</span>
-                  <DemoFreshness target={activeTarget} />
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    padding: '8px 12px',
+                    background: 'var(--bg-elevated)',
+                    borderBottom: '1px solid var(--border)',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ok)' }}>
+                      ● Live Interactive Preview
+                    </span>
+                    <select
+                      className="input"
+                      value={activeTarget.id}
+                      onChange={(e) => {
+                        setSelectedTargetId(e.target.value);
+                        setIframeNonce((n) => n + 1);
+                        setDemoErrors([]);
+                        buildIfStale(targets.find((t) => t.id === e.target.value));
+                      }}
+                      style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
+                    >
+                      {targets.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : `(${t.detectedStack ?? 'no bundle'})`}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mono muted small">{activeTarget.demoEntryRelPath}</span>
+                    <DemoFreshness target={activeTarget} />
+                  </div>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        setDemoErrors([]);
+                        setIframeNonce((n) => n + 1);
+                      }}
+                    >
+                      <RotateCw className="icon" aria-hidden /> Reload
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => setFullscreen((f) => !f)}
+                    >
+                      {fullscreen ? (
+                        <>
+                          <Minimize2 className="icon" aria-hidden /> Exit Fullscreen
+                        </>
+                      ) : (
+                        <>
+                          <Maximize2 className="icon" aria-hidden /> Fullscreen
+                        </>
+                      )}
+                    </button>
+                    <a
+                      href={activeTarget.demoUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-sm"
+                    >
+                      <ExternalLink className="icon" aria-hidden /> New Tab
+                    </a>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => {
+                        setFullscreen(false);
+                        setActiveTab('factory');
+                      }}
+                    >
+                      <X className="icon" aria-hidden /> Close
+                    </button>
+                  </div>
                 </div>
-                <div className="actions">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => {
-                      setDemoErrors([]);
-                      setIframeNonce((n) => n + 1);
+
+                {demoErrors.length > 0 && (
+                  <div
+                    className="banner banner-error"
+                    style={{
+                      borderRadius: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      flexWrap: 'wrap',
                     }}
                   >
-                    <RotateCw className="icon" aria-hidden /> Reload
-                  </button>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <strong>
+                        <Bug className="icon" aria-hidden /> Runtime Error Detected in Live Preview ({demoErrors[0]!.timestamp}):
+                      </strong>
+                      <div
+                        className="mono small"
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={demoErrors[0]!.message}
+                      >
+                        {demoErrors[0]!.message}
+                      </div>
+                    </div>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        disabled={submittingTweak}
+                        onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
+                      >
+                        <Wrench className="icon" aria-hidden /> Fix Error with Coder Agent
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => setDemoErrors([])}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <form
+                  onSubmit={(e) => void handleQuickDemoTweak(e)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 12px',
+                    background: 'var(--surface-2)',
+                    borderBottom: '1px solid var(--border)',
+                  }}
+                >
+                  <span className="mono muted small">
+                    <MessageSquare className="icon" aria-hidden /> Quick Live Tweak:
+                  </span>
+                  <input
+                    type="text"
+                    className="input"
+                    value={quickTweakPrompt}
+                    onChange={(e) => setQuickTweakPrompt(e.target.value)}
+                    placeholder='Type an instant UI, API, or logic tweak (e.g. "Add CSV export button to table" or "Refine form validation")…'
+                    style={{ width: 'auto', flex: 1, fontSize: '0.78rem', padding: '4px 8px' }}
+                  />
                   <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => setFullscreen((f) => !f)}
+                    type="submit"
+                    className="btn btn-sm btn-primary"
+                    disabled={submittingTweak || !quickTweakPrompt.trim()}
                   >
-                    {fullscreen ? (
-                      <>
-                        <Minimize2 className="icon" aria-hidden /> Exit Fullscreen
-                      </>
+                    {submittingTweak ? (
+                      'Sending…'
                     ) : (
                       <>
-                        <Maximize2 className="icon" aria-hidden /> Fullscreen
+                        <Sparkles className="icon" aria-hidden /> Apply Tweak
                       </>
                     )}
                   </button>
-                  <a
-                    href={activeTarget.demoUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-sm"
-                  >
-                    <ExternalLink className="icon" aria-hidden /> New Tab
-                  </a>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setFullscreen(false);
-                      setActiveTab('factory');
-                    }}
-                  >
-                    <X className="icon" aria-hidden /> Close
-                  </button>
-                </div>
-              </div>
+                </form>
 
-              {demoErrors.length > 0 && (
-                <div
-                  className="banner banner-error"
+                <iframe
+                  ref={demoFrameRef}
+                  key={`${activeTarget.id}-${iframeNonce}`}
+                  src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
+                  sandbox={DEMO_IFRAME_SANDBOX}
+                  title={`Live Preview - ${activeTarget.label}`}
                   style={{
-                    borderRadius: 0,
+                    width: '100%',
+                    height: fullscreen ? '100%' : 520,
+                    flex: fullscreen ? 1 : undefined,
+                    border: 'none',
+                    background: 'var(--surface)',
+                  }}
+                />
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: '16px 18px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 12,
+                }}
+              >
+                <div
+                  style={{
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
@@ -1404,250 +1542,142 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     flexWrap: 'wrap',
                   }}
                 >
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <strong>
-                      <Bug className="icon" aria-hidden /> Runtime Error Detected in Live Preview ({demoErrors[0]!.timestamp}):
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <strong style={{ fontSize: '0.88rem' }}>
+                      <Wrench className="icon" aria-hidden /> Workspace Build, Verification &amp;
+                      Architecture Console
                     </strong>
-                    <div
-                      className="mono small"
-                      style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                    <select
+                      className="input"
+                      value={activeTarget.id}
+                      onChange={(e) => {
+                        setSelectedTargetId(e.target.value);
+                        buildIfStale(targets.find((t) => t.id === e.target.value));
                       }}
-                      title={demoErrors[0]!.message}
+                      style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
                     >
-                      {demoErrors[0]!.message}
-                    </div>
+                      {targets.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label} ({t.detectedStack ?? `${t.fileCount} files`})
+                        </option>
+                      ))}
+                    </select>
+                    <DemoFreshness target={activeTarget} />
                   </div>
+
                   <div className="actions">
+                    {activeTarget.hasBuildScript && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        disabled={buildingTargetId === activeTarget.id}
+                        onClick={() => void handleBuildAndPlay(activeTarget, true)}
+                      >
+                        {buildingTargetId === activeTarget.id ? (
+                          'Running Build / Verification…'
+                        ) : (
+                          <>
+                            <Hammer className="icon" aria-hidden />{' '}
+                            {`Run Build & Verify${activeTarget.buildCommand ? ` (${activeTarget.buildCommand})` : ''}`}
+                          </>
+                        )}
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="btn btn-sm btn-primary"
-                      disabled={submittingTweak}
-                      onClick={() => void handleFixDemoErrorWithCoder(demoErrors[0]!)}
+                      className="btn btn-sm"
+                      onClick={() => setActiveTab('browser')}
                     >
-                      <Wrench className="icon" aria-hidden /> Fix Error with Coder Agent
+                      <Globe className="icon" aria-hidden /> Live Browser Studio
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => setDemoErrors([])}
+                      className="btn btn-sm"
+                      onClick={() => navigate(`/projects/${project.id}/code`)}
                     >
-                      Dismiss
+                      <FileCode className="icon" aria-hidden /> Code Explorer
                     </button>
                   </div>
                 </div>
-              )}
 
-              <form
-                onSubmit={(e) => void handleQuickDemoTweak(e)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '6px 12px',
-                  background: 'var(--surface-2)',
-                  borderBottom: '1px solid var(--border)',
-                }}
-              >
-                <span className="mono muted small">
-                  <MessageSquare className="icon" aria-hidden /> Quick Live Tweak:
-                </span>
-                <input
-                  type="text"
-                  className="input"
-                  value={quickTweakPrompt}
-                  onChange={(e) => setQuickTweakPrompt(e.target.value)}
-                  placeholder='Type an instant UI, API, or logic tweak (e.g. "Add CSV export button to table" or "Refine form validation")…'
-                  style={{ width: 'auto', flex: 1, fontSize: '0.78rem', padding: '4px 8px' }}
-                />
-                <button
-                  type="submit"
-                  className="btn btn-sm btn-primary"
-                  disabled={submittingTweak || !quickTweakPrompt.trim()}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    padding: '8px 10px',
+                    borderRadius: 'var(--radius-xs)',
+                    background: 'var(--bg)',
+                    border: '1px solid var(--border)',
+                  }}
                 >
-                  {submittingTweak ? (
-                    'Sending…'
-                  ) : (
+                  <span className="muted small">Detected Stack:</span>
+                  <span className="badge mono">{activeTarget.detectedStack ?? 'Polyglot / Custom'}</span>
+                  {activeTarget.buildCommand && (
                     <>
-                      <Sparkles className="icon" aria-hidden /> Apply Tweak
+                      <span className="muted small">Build / Check Command:</span>
+                      <span className="badge badge-soft mono">{activeTarget.buildCommand}</span>
                     </>
                   )}
-                </button>
-              </form>
-
-              <iframe
-                ref={demoFrameRef}
-                key={`${activeTarget.id}-${iframeNonce}`}
-                src={`${activeTarget.demoUrl}?v=${iframeNonce}`}
-                sandbox={DEMO_IFRAME_SANDBOX}
-                title={`Live Preview - ${activeTarget.label}`}
-                style={{
-                  width: '100%',
-                  height: fullscreen ? '100%' : 520,
-                  flex: fullscreen ? 1 : undefined,
-                  border: 'none',
-                  background: 'var(--surface)',
-                }}
-              />
-            </div>
-          ) : (
-            <div
-              style={{
-                padding: '16px 18px',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 12,
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <strong style={{ fontSize: '0.88rem' }}>
-                    <Wrench className="icon" aria-hidden /> Workspace Build, Verification &amp;
-                    Architecture Console
-                  </strong>
-                  <select
-                    className="input"
-                    value={activeTarget.id}
-                    onChange={(e) => {
-                      setSelectedTargetId(e.target.value);
-                      buildIfStale(targets.find((t) => t.id === e.target.value));
-                    }}
-                    style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
-                  >
-                    {targets.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.label} ({t.detectedStack ?? `${t.fileCount} files`})
-                      </option>
-                    ))}
-                  </select>
-                  <DemoFreshness target={activeTarget} />
-                </div>
-
-                <div className="actions">
-                  {activeTarget.hasBuildScript && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      disabled={buildingTargetId === activeTarget.id}
-                      onClick={() => void handleBuildAndPlay(activeTarget, true)}
-                    >
-                      {buildingTargetId === activeTarget.id ? (
-                        'Running Build / Verification…'
-                      ) : (
-                        <>
-                          <Hammer className="icon" aria-hidden />{' '}
-                          {`Run Build & Verify${activeTarget.buildCommand ? ` (${activeTarget.buildCommand})` : ''}`}
-                        </>
-                      )}
-                    </button>
+                  {activeTarget.detectedLayers && activeTarget.detectedLayers.length > 0 && (
+                    <>
+                      <span className="muted small">Layers:</span>
+                      {activeTarget.detectedLayers.map((layer) => (
+                        <span key={layer} className="badge" style={{ fontSize: '0.7rem' }}>
+                          {layer}
+                        </span>
+                      ))}
+                    </>
                   )}
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => setActiveTab('browser')}
-                  >
+                </div>
+
+                <p className="muted small" style={{ margin: 0, lineHeight: 1.5 }}>
+                  This workspace target does not expose a static HTML bundle yet (common for{' '}
+                  <strong>Backend APIs, CLI / System Automation, Desktop &amp; Mobile Apps, Embedded / ESP32 Firmware</strong>,
+                  or unbuilt web projects). Use <strong>
+                    <Hammer className="icon" aria-hidden /> Run Build &amp; Verify
+                  </strong> above to compile or syntax-check the
+                  project, or open <strong>
                     <Globe className="icon" aria-hidden /> Live Browser Studio
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => navigate(`/projects/${project.id}/code`)}
-                  >
-                    <FileCode className="icon" aria-hidden /> Code Explorer
-                  </button>
-                </div>
-              </div>
+                  </strong> to inspect any running web server URL.
+                </p>
 
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  padding: '8px 10px',
-                  borderRadius: 'var(--radius-xs)',
-                  background: 'var(--bg)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                <span className="muted small">Detected Stack:</span>
-                <span className="badge mono">{activeTarget.detectedStack ?? 'Polyglot / Custom'}</span>
-                {activeTarget.buildCommand && (
-                  <>
-                    <span className="muted small">Build / Check Command:</span>
-                    <span className="badge badge-soft mono">{activeTarget.buildCommand}</span>
-                  </>
-                )}
-                {activeTarget.detectedLayers && activeTarget.detectedLayers.length > 0 && (
-                  <>
-                    <span className="muted small">Layers:</span>
-                    {activeTarget.detectedLayers.map((layer) => (
-                      <span key={layer} className="badge" style={{ fontSize: '0.7rem' }}>
-                        {layer}
-                      </span>
-                    ))}
-                  </>
-                )}
-              </div>
-
-              <p className="muted small" style={{ margin: 0, lineHeight: 1.5 }}>
-                This workspace target does not expose a static HTML bundle yet (common for{' '}
-                <strong>Backend APIs, CLI / System Automation, Desktop &amp; Mobile Apps, Embedded / ESP32 Firmware</strong>,
-                or unbuilt web projects). Use <strong>
-                  <Hammer className="icon" aria-hidden /> Run Build &amp; Verify
-                </strong> above to compile or syntax-check the
-                project, or open <strong>
-                  <Globe className="icon" aria-hidden /> Live Browser Studio
-                </strong> to inspect any running web server URL.
-              </p>
-
-              {lastBuildOutput && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span className="mono muted small">Last Build / Compiler Verification Output:</span>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => setLastBuildOutput('')}
+                {lastBuildOutput && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span className="mono muted small">Last Build / Compiler Verification Output:</span>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => setLastBuildOutput('')}
+                      >
+                        Clear Log
+                      </button>
+                    </div>
+                    <pre
+                      className="mono"
+                      style={{
+                        margin: 0,
+                        padding: '10px 12px',
+                        borderRadius: 'var(--radius-xs)',
+                        background: 'var(--bg-0)',
+                        border: '1px solid var(--border-strong)',
+                        fontSize: '0.74rem',
+                        lineHeight: 1.45,
+                        maxHeight: 280,
+                        overflowY: 'auto',
+                        whiteSpace: 'pre-wrap',
+                      }}
                     >
-                      Clear Log
-                    </button>
+                      {lastBuildOutput}
+                    </pre>
                   </div>
-                  <pre
-                    className="mono"
-                    style={{
-                      margin: 0,
-                      padding: '10px 12px',
-                      borderRadius: 'var(--radius-xs)',
-                      background: 'var(--bg-0)',
-                      border: '1px solid var(--border-strong)',
-                      fontSize: '0.74rem',
-                      lineHeight: 1.45,
-                      maxHeight: 280,
-                      overflowY: 'auto',
-                      whiteSpace: 'pre-wrap',
-                    }}
-                  >
-                    {lastBuildOutput}
-                  </pre>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+                )}
+              </div>
+            )}
+          </div>
+        </PreviewAndBuildView>
       )}
 
       {/* TAB 3: Live Browser Studio */}
