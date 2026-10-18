@@ -6,7 +6,7 @@ import {
   blockingMessage,
   carriedMessage,
   commentsOffDiff,
-  composerEscape,
+  escapeDraft,
   glyphHoverText,
   requestTargets,
   reviewBlockedCount,
@@ -203,11 +203,12 @@ describe('glyphHoverText', () => {
   });
 });
 
-describe('composerEscape', () => {
-  it('cancels an empty draft and asks before discarding a written one', () => {
-    expect(composerEscape('')).toBe('cancel');
-    expect(composerEscape('   ')).toBe('cancel');
-    expect(composerEscape('half a thought')).toBe('confirm');
+describe('escapeDraft', () => {
+  it('closes an empty draft, asks before discarding a written one, and keeps it on a second Escape', () => {
+    expect(escapeDraft('', false)).toBe('close');
+    expect(escapeDraft('   ', false)).toBe('close');
+    expect(escapeDraft('half a thought', false)).toBe('confirm');
+    expect(escapeDraft('half a thought', true)).toBe('keep');
   });
 });
 

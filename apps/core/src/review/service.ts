@@ -17,7 +17,7 @@ import { reviewBlockedIsCurrent } from '../runs/hold-outcome.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
 import { anchorTextOf, type Anchored, reanchor } from './anchor.js';
-import { CARRIED_BLOCKING_EVENT, openBlockingCount, openCarriedBlocking } from './blocking.js';
+import { CARRIED_BLOCKING_EVENT, CARRIED_VERIFIED_EVENT, openBlockingCount, openCarriedBlocking } from './blocking.js';
 import { type BatchComment, type BatchKind, newRunFeedbackSection, sameRunPrompt } from './batch.js';
 
 type CommentRow = typeof reviewComments.$inferSelect;
@@ -275,14 +275,14 @@ export class ReviewService {
 
   /**
    * A person checked that the new attempt did what the blocking feedback it carried asked for: the
-   * carried marker no longer holds the merge gate (`review_unblocked`, which also lifts a current
-   * `review_blocked` hold of the run). 409 when nothing carried is waiting.
+   * carried marker no longer holds the merge gate ({@link CARRIED_VERIFIED_EVENT}). A current
+   * `review_blocked` hold of the run (or of a handoff successor) is lifted only once nothing else
+   * blocks it. 409 when nothing carried is waiting.
    */
   verifyCarried(runId: string): void {
     this.runs.getRun(runId);
     if (!openCarriedBlocking(this.db, runId)) throw conflict('this run carries no blocking feedback to verify');
-    this.runs.note(runId, 'review_unblocked', {});
-    // A handoff successor the pipeline held meanwhile: its hold is lifted once nothing blocks it.
+    this.runs.note(runId, CARRIED_VERIFIED_EVENT, {});
     this.noteUnblocked(runId);
   }
 

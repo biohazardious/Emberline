@@ -167,6 +167,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'review_blocking_overridden',
   // Blocking feedback a fresh run carried: the merge gate counts it until a person verifies.
   'review_carried_blocking',
+  // ...and the person's check that ends it.
+  'review_carried_verified',
   'conflict_resolution_requested',
   'pr_created',
   // The issue write-back reads these back so a comment or a close never repeats.

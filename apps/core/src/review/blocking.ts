@@ -9,9 +9,11 @@ export const CHAIN_MAX = 20;
 /**
  * Blocking feedback a fresh run of the ticket carried in its prompt (payload `{ count, fromRun }`).
  * The comments were resolved on the earlier run, so the marker stands for them until a person
- * verifies the new attempt (`review_unblocked`, see ReviewService.verifyCarried).
+ * verifies the new attempt ({@link CARRIED_VERIFIED_EVENT}, see ReviewService.verifyCarried).
  */
 export const CARRIED_BLOCKING_EVENT = 'review_carried_blocking';
+/** A person checked the new attempt: the carried markers before it in the chain no longer count. */
+export const CARRIED_VERIFIED_EVENT = 'review_carried_verified';
 
 /** The run and the predecessors it took over from by handoff, per root (bounded by CHAIN_MAX). */
 const chainCte = (ids: ReturnType<typeof sql.join>) => sql`
@@ -22,14 +24,14 @@ const chainCte = (ids: ReturnType<typeof sql.join>) => sql`
     FROM chain JOIN runs r ON r.id = chain.id
     WHERE r.predecessor_run_id IS NOT NULL AND chain.depth < ${CHAIN_MAX}
   ),
-  -- Carried markers in the chain no later review_unblocked of the chain has answered.
+  -- Carried markers in the chain no later verification in the chain has answered.
   carried AS (
     SELECT DISTINCT chain.root AS root, e.id AS event_id, e.run_id AS run_id,
       COALESCE(CAST(json_extract(e.payload, '$.count') AS INTEGER), 0) AS n,
       json_extract(e.payload, '$.fromRun') AS from_run
     FROM chain JOIN run_events e ON e.run_id = chain.id AND e.type = ${CARRIED_BLOCKING_EVENT}
     WHERE NOT EXISTS (
-      SELECT 1 FROM chain c2 JOIN run_events u ON u.run_id = c2.id AND u.type = 'review_unblocked'
+      SELECT 1 FROM chain c2 JOIN run_events u ON u.run_id = c2.id AND u.type = ${CARRIED_VERIFIED_EVENT}
       WHERE c2.root = chain.root AND u.id > e.id
     )
   )`;

@@ -158,9 +158,13 @@ export function glyphHoverText(c: Pick<ReviewComment, 'priority' | 'body'>): str
   return `${c.priority}: ${body.replace(MARKDOWN_SPECIAL, '\\$&')}`;
 }
 
-/** Escape in the comment composer: an empty one closes, a written draft is never dropped silently. */
-export function composerEscape(body: string): 'cancel' | 'confirm' {
-  return body.trim() === '' ? 'cancel' : 'confirm';
+/**
+ * Escape on something a person is writing (a comment, a note): an empty one closes, a written one
+ * asks first ("Discard draft?"), and Escape on that question keeps the text. Never dropped silently.
+ */
+export function escapeDraft(text: string, confirming: boolean): 'close' | 'confirm' | 'keep' {
+  if (confirming) return 'keep';
+  return text.trim() === '' ? 'close' : 'confirm';
 }
 
 /** Where Request changes can send: a new run from main needs the run's ticket. */

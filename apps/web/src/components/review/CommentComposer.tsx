@@ -1,6 +1,6 @@
 import type { ReviewCommentIntent, ReviewCommentPriority } from '@emberline/protocol';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { composerEscape, INTENT_OPTIONS, PRIORITY_OPTIONS } from '../../reviewComments';
+import { escapeDraft, INTENT_OPTIONS, PRIORITY_OPTIONS } from '../../reviewComments';
 
 export interface CommentDraft {
   body: string;
@@ -79,8 +79,9 @@ export function CommentComposer({ target, busy, onSubmit, onCancel }: Props) {
     if (e.key !== 'Escape') return;
     e.preventDefault();
     e.stopPropagation();
-    if (confirmDiscard) keepDraft();
-    else if (composerEscape(body) === 'cancel') onCancel();
+    const action = escapeDraft(body, confirmDiscard);
+    if (action === 'keep') keepDraft();
+    else if (action === 'close') onCancel();
     else setConfirmDiscard(true);
   };
 

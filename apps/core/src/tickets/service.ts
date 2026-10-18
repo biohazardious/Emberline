@@ -48,7 +48,7 @@ import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-c
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
 import { openBlockingCount } from '../review/blocking.js';
-import { pipelineOutcome, stillHeld } from '../runs/hold-outcome.js';
+import { pipelineOutcome, reviewUnblockPending, stillHeld } from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunService } from '../runs/service.js';
@@ -870,14 +870,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // A run an earlier pass left held stays a factory run: its next stop lifts the hold even when
     // the chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
-    // So does one held for blocking review feedback that a person lifted since (review_unblocked).
+    // So does one whose review hold a person lifted since, until another outcome decides it.
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
       Boolean(ingested) ||
       isFactoryOrchestratorTicket ||
       hasFactoryPipeline ||
-      (ticketRow?.status !== 'done' && (this.stillHeld(run.id) || this.runs.hasEvent(run.id, 'review_blocked')));
+      (ticketRow?.status !== 'done' && (this.stillHeld(run.id) || reviewUnblockPending(this.db, run.id)));
     if (!isFactoryRun) return;
 
     // The gates, the merge and Done apply to every factory-looking run, but only the factory itself

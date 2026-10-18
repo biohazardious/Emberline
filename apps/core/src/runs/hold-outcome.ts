@@ -116,6 +116,32 @@ export function stillHeld(db: Db, runId: string): boolean {
   return isHoldType(left.at(-1));
 }
 
+/**
+ * Whether a person lifted a review hold of an earlier pass and nothing has decided the run since: of
+ * the HOLD/ending notes before the run's latest switch to `done` (unfiltered), the newest is
+ * `review_unblocked` and the newest other one is `review_blocked`. A merge, a person's merge or an
+ * accepted completion signal after the unblock ends it.
+ */
+export function reviewUnblockPending(db: Db, runId: string): boolean {
+  const lastDone = latestDoneEventId(db, runId);
+  if (lastDone === undefined) return false;
+  const types = db
+    .select({ type: runEvents.type })
+    .from(runEvents)
+    .where(
+      and(
+        eq(runEvents.runId, runId),
+        lt(runEvents.id, lastDone),
+        inArray(runEvents.type, [...HOLD_EVENTS, ...HOLD_ENDING_EVENTS]),
+      ),
+    )
+    .orderBy(runEvents.id)
+    .all()
+    .map((e) => e.type);
+  if (types.at(-1) !== 'review_unblocked') return false;
+  return types.filter((type) => type !== 'review_unblocked').at(-1) === 'review_blocked';
+}
+
 /** Whether the run's current pipeline pass (after its latest `done`) stands on a `review_blocked` hold. */
 export function reviewBlockedIsCurrent(db: Db, runId: string): boolean {
   const newest = db

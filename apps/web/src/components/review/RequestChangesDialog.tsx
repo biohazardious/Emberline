@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ApiRequestError, errorMessage } from '../../api';
 import { trapTab } from '../../focusTrap';
-import { requestSummary } from '../../reviewComments';
+import { escapeDraft, requestSummary } from '../../reviewComments';
 
 type Target = 'same' | 'new';
 
@@ -25,6 +25,19 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
   const [canStartNew, setCanStartNew] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
+  // Escape (or a click outside) on a typed note asks first instead of dropping it.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const keepNote = () => {
+    setConfirmDiscard(false);
+    noteRef.current?.focus();
+  };
+  const dismissRef = useRef<(() => void) | null>(null);
+  dismissRef.current = () => {
+    const action = escapeDraft(note, confirmDiscard);
+    if (action === 'close') onClose();
+    else if (action === 'confirm') setConfirmDiscard(true);
+    else keepNote();
+  };
 
   // Focus starts in the note and stays in the dialog; it goes back where it was on close.
   useEffect(() => {
@@ -35,12 +48,14 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      else trapTab(dialogRef.current, e);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        dismissRef.current?.();
+      } else trapTab(dialogRef.current, e);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, []);
 
   const send = async (chosen: Target) => {
     setBusy(true);
@@ -58,7 +73,7 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
   const empty = comments.length === 0 && !note.trim();
 
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
+    <div className="drawer-backdrop" onClick={() => dismissRef.current?.()}>
       <aside
         ref={dialogRef}
         className="drawer request-dialog"
@@ -89,6 +104,17 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
             onChange={(e) => setNote(e.target.value)}
           />
         </label>
+        {confirmDiscard && (
+          <div className="comment-composer-discard" role="alert">
+            <span className="small">Discard the note?</span>
+            <button type="button" className="btn btn-sm" onClick={onClose}>
+              Discard
+            </button>
+            <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={keepNote}>
+              Keep
+            </button>
+          </div>
+        )}
         <fieldset className="request-dialog-targets">
           <legend className="muted small">Send to</legend>
           <label>

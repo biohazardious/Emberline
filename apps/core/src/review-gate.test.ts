@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attachAttention } from './runs/attention.js';
 import { eq } from 'drizzle-orm';
 import { runs } from './db/schema.js';
-import { stillHeld } from './runs/hold-outcome.js';
+import { reviewUnblockPending, stillHeld } from './runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import type { TicketService } from './tickets/service.js';
@@ -419,6 +419,27 @@ describe('a new run that carried blocking feedback', () => {
     expect(existsSync(path.join(project.path, 'B.txt'))).toBe(true);
   });
 
+  it('a verified carried marker leaves the run held while its own blocking comment is open', async () => {
+    const { project, ticket, b, tokenB, passes } = await carried();
+    const own = await comment(b, 'blocking');
+    t.tickets.setAutoChain(project.id, true);
+    await finishTurn(b, tokenB);
+    await settled(passes, 2);
+    expect(await eventPayload(b, 'review_blocked')).toEqual({ count: 2 });
+
+    expect((await api('POST', `/api/runs/${b.id}/review/verify-carried`)).statusCode).toBe(200);
+    expect(await eventTypes(b)).toContain('review_carried_verified');
+    expect(await eventTypes(b)).not.toContain('review_unblocked');
+    expect(await reviewState(b)).toMatchObject({ blockingOpen: 1, carriedBlocking: null });
+    expect((await runRow(b)).reviewReady).toBe(false);
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: b.id })).json()).toMatchObject({ blocking: 1 });
+
+    // Resolving its own comment then opens the gate.
+    await api('PATCH', `/api/runs/${b.id}/review/comments/${own.id}`, { status: 'resolved' });
+    expect(await eventTypes(b)).toContain('review_unblocked');
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
   it('verify-carried is a 409 for a run that carried no blocking feedback', async () => {
     const { run } = await factoryTicket();
     expect((await api('POST', `/api/runs/${run.id}/review/verify-carried`)).statusCode).toBe(409);
@@ -427,6 +448,7 @@ describe('a new run that carried blocking feedback', () => {
 
   it('keeps the carried marker through event pruning', () => {
     expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('review_carried_blocking');
+    expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('review_carried_verified');
   });
 });
 
@@ -487,5 +509,71 @@ describe('a review_blocked pass', () => {
     expect(await statusOf(a.id)).toBe('review');
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(false);
     await expect.poll(() => t.runs.list().some((r) => r.ticketId === b.id), { timeout: 10_000 }).toBe(true);
+  });
+});
+
+describe('a lifted review hold keeps a run in the factory only until the next outcome', () => {
+  /** A person's own follow-up turn: new work, no completion signal. */
+  async function followUp(run: Run, token: string, file: string) {
+    await hook(run.id, 'UserPromptSubmit', token);
+    writeFileSync(path.join(run.worktreePath, file), `${file}\n`);
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', file);
+    await hook(run.id, 'Stop', token);
+  }
+
+  it('reviewUnblockPending: only while the newest outcome is an unblock of a review hold', async () => {
+    const { run, token } = await factoryTicket();
+    t.runs.note(run.id, 'review_blocked', { count: 1 });
+    t.runs.note(run.id, 'review_unblocked', {});
+    await hook(run.id, 'Stop', token);
+    expect(reviewUnblockPending(t.db, run.id)).toBe(true);
+    t.runs.note(run.id, 'completion_accepted', {});
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Stop', token);
+    expect(reviewUnblockPending(t.db, run.id)).toBe(false);
+  });
+
+  it('after an unblocked, accepted pass with merging off, a follow-up in a quiet project is not piped', async () => {
+    await api('PATCH', '/api/factory/settings', { autoSyncToMain: false, autoMoveToDone: false });
+    const { project, ticket, run, token } = await factoryTicket();
+    const c = await comment(run, 'blocking');
+    const passes = trackPipelines();
+    await finishTurn(run, token);
+    await settled(passes, 1);
+    await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { status: 'resolved' });
+    // The session stays at its prompt (the step's close is skipped), so the person can follow up in it.
+    vi.spyOn(t.runs, 'stop').mockImplementation(async (id: string) => t.runs.getRun(id));
+    await hook(run.id, 'UserPromptSubmit', token);
+    await finishTurn(run, token);
+    await settled(passes, 2);
+    expect(await eventTypes(run)).toContain('completion_accepted');
+    expect(t.tickets.isAutoChainActive(project.id)).toBe(false);
+
+    await followUp(run, token, 'C.txt');
+    await settled(passes, 3);
+    const types = await eventTypes(run);
+    expect(types).not.toContain('completion_nudged');
+    expect(types).not.toContain('completion_missing');
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  it('after Merge anyway and Done, a reopened ticket’s follow-up is not merged automatically', async () => {
+    const { project, ticket, run, token } = await factoryTicket();
+    const c = await comment(run, 'blocking');
+    const passes = trackPipelines();
+    await finishTurn(run, token);
+    await settled(passes, 1);
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id, force: true })).json()).toMatchObject({ ok: true });
+    await api('PATCH', `/api/tickets/${ticket.id}`, { status: 'done' });
+    await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { status: 'resolved' });
+    await api('PATCH', `/api/tickets/${ticket.id}`, { status: 'review' });
+
+    await followUp(run, token, 'C.txt');
+    await settled(passes, 2);
+    const types = await eventTypes(run);
+    expect(types).not.toContain('merged_to_main');
+    expect(types).not.toContain('completion_nudged');
+    expect(existsSync(path.join(project.path, 'C.txt'))).toBe(false);
   });
 });
