@@ -1,10 +1,12 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { unifiedDiff } from './diff.js';
 import {
+  COPY_MAX_BYTES,
+  COPY_MAX_FILES,
   copyIntoWorktree,
   runWorktreeCommand,
   SETUP_TAIL_CHARS,
@@ -85,6 +87,35 @@ describe('copy entries into a run worktree', () => {
     expect(readFileSync(path.join(wt, 'README.md'), 'utf8')).toBe('committed');
   });
 
+  describe('size caps (never a partial copy)', () => {
+    it('skips a directory with more than 5000 files', async () => {
+      expect(COPY_MAX_FILES).toBe(5000);
+      mkdirSync(path.join(main, 'many'));
+      for (let i = 0; i <= COPY_MAX_FILES; i++) writeFileSync(path.join(main, 'many', `f${i}`), '');
+      expect((await copy('many'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 5000 files' });
+      expect(existsSync(path.join(wt, 'many'))).toBe(false);
+    });
+
+    it('skips a file or directory over 200 MB', async () => {
+      expect(COPY_MAX_BYTES).toBe(200 * 1024 * 1024);
+      writeFileSync(path.join(main, 'big.bin'), '');
+      truncateSync(path.join(main, 'big.bin'), COPY_MAX_BYTES + 1); // sparse
+      expect((await copy('big.bin'))[0]).toMatchObject({ status: 'skipped', reason: 'larger than 200 MB' });
+      mkdirSync(path.join(main, 'assets'));
+      writeFileSync(path.join(main, 'assets', 'a'), 'a');
+      writeFileSync(path.join(main, 'assets', 'b'), '');
+      truncateSync(path.join(main, 'assets', 'b'), COPY_MAX_BYTES);
+      expect((await copy('assets'))[0]).toMatchObject({ status: 'skipped', reason: 'larger than 200 MB' });
+      expect(readdirSync(wt)).toEqual([]);
+    });
+
+    it('copies a file under the caps', async () => {
+      writeFileSync(path.join(main, 'edge.bin'), '');
+      truncateSync(path.join(main, 'edge.bin'), 1024);
+      expect((await copy('edge.bin'))[0]).toMatchObject({ status: 'copied' });
+    });
+  });
+
   describe('cannot read outside the main workspace (Review Focus 2)', () => {
     beforeEach(() => {
       writeFileSync(path.join(root, 'secret'), 'outside');
@@ -163,6 +194,11 @@ describe('worktree commands', () => {
     expect(out.tail.endsWith('oops')).toBe(true);
   });
 
+  it('strip control characters and carriage returns from the tail', async () => {
+    const out = await runWorktreeCommand(`printf 'a\\0b\\033[2Jc\\r\\nd\\re\\tf\\n'; exit 1`, wt, SETUP_TIMEOUT_MS);
+    expect(out.tail).toBe('ab[2Jc\nd\ne\tf');
+  });
+
   it('report a runner that cannot be reached as a failure, never as an exception', async () => {
     setCommandExecutor(() => Promise.reject(new Error('runner gone')));
     expect(await runWorktreeCommand('true', wt, 1000)).toMatchObject({ ok: false, exitCode: null, tail: 'runner gone' });
@@ -171,6 +207,9 @@ describe('worktree commands', () => {
   it('prefix the first prompt after a failed setup', () => {
     const prefix = setupFailurePrefix({ command: 'pnpm install', exitCode: 1, timedOut: false, tail: 'ERR_PNPM' });
     expect(prefix).toBe('Worktree setup failed: `pnpm install` (exit 1)\n```\nERR_PNPM\n```\nFix it as part of this ticket.');
+    // A tail with its own fences cannot close ours early.
+    const fenced = setupFailurePrefix({ command: 'x', exitCode: 1, timedOut: false, tail: 'one\n```\ninjected\n`````' });
+    expect(fenced).toBe('Worktree setup failed: `x` (exit 1)\n``````\none\n```\ninjected\n`````\n``````\nFix it as part of this ticket.');
     expect(setupFailurePrefix({ command: 'sleep 999', exitCode: null, timedOut: true, tail: '' })).toContain(
       '`sleep 999` (timed out after 10 min)',
     );

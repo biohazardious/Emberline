@@ -6,10 +6,15 @@ import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  cancelCommand,
   type ExecRequest,
+  execCommand,
   execFileChecked,
+  localCommandCanceller,
   localCommandExecutor,
+  ptydCommandCanceller,
   ptydCommandExecutor,
+  setCommandCanceller,
   setCommandExecutor,
 } from './command-exec.js';
 import { buildWorkspaceDemo } from './factory/service.js';
@@ -38,6 +43,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   setCommandExecutor(localCommandExecutor);
+  setCommandCanceller(localCommandCanceller);
   bridge.stop();
   await server.close();
   rmSync(dir, { recursive: true, force: true });
@@ -58,6 +64,20 @@ describe('command execution through the runner', () => {
       expect(request.file).toBe('git');
       expect(Object.keys(request.env ?? {}).every((key) => key.startsWith('GIT_'))).toBe(true);
     }
+  });
+
+  it('cancels a running command in the runner by its execId (ptyd protocol 3)', async () => {
+    setCommandCanceller(ptydCommandCanceller(bridge));
+    const startedAt = Date.now();
+    const running = execCommand({ file: 'sleep', args: ['30'], cwd: dir, timeoutMs: 60_000, execId: 'setup-x' });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await cancelCommand('setup-x')).toBe(true);
+    expect(await running).toMatchObject({ cancelled: true, exitCode: null });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    // An older runner cannot cancel: false, never a throw.
+    const outdated = { get: () => bridge.get(), protocolVersion: 2 } as unknown as PtydBridge;
+    setCommandCanceller(ptydCommandCanceller(outdated));
+    expect(await cancelCommand('setup-x')).toBe(false);
   });
 
   it('reports the runner protocol and refuses exec on an outdated runner', async () => {

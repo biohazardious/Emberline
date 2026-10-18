@@ -79,8 +79,10 @@ export const WorktreeConfigStatusResponse = z.object({
   approved: ApprovedWorktreeConfig.nullable(),
   /** HEAD's committed `.emberline/worktree.yml`; null when there is none or it cannot be read safely. */
   head: z.object({ content: z.string(), sha256: z.string() }).nullable(),
-  /** HEAD has a file whose content differs from the approved one (the "changed — review" banner). */
+  /** HEAD differs from the approved content: another file, or none (`removed`). The "changed — review" banner. */
   changed: z.boolean(),
+  /** HEAD no longer has the file while an approval exists; approving `{ removal: true }` clears it. */
+  removed: z.boolean(),
   /** Unified diff from the approved content to HEAD's, bounded; empty when unchanged. */
   diff: z.string(),
   /** Why HEAD's file cannot be approved (read or schema errors); empty when it can. */
@@ -88,6 +90,12 @@ export const WorktreeConfigStatusResponse = z.object({
 });
 export type WorktreeConfigStatusResponse = z.infer<typeof WorktreeConfigStatusResponse>;
 
-/** `POST /api/projects/:id/worktree-config/approve`: the sha256 of the HEAD content the person reviewed. */
-export const ApproveWorktreeConfigBody = z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/) }).strict();
+/**
+ * `POST /api/projects/:id/worktree-config/approve`: the sha256 of the HEAD content the person
+ * reviewed, or `{ removal: true }` to accept that HEAD removed the file (runs then get no lifecycle).
+ */
+export const ApproveWorktreeConfigBody = z.union([
+  z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
+  z.object({ removal: z.literal(true) }).strict(),
+]);
 export type ApproveWorktreeConfigBody = z.infer<typeof ApproveWorktreeConfigBody>;

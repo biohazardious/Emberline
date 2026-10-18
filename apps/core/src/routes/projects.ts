@@ -1153,6 +1153,10 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       if (!row) throw notFound('no such project');
 
       tickets.setAutoChain(projectId, false);
+      // worktree.yml teardown (e.g. `docker compose down`) before the worktrees go; best effort.
+      await runs.teardownProjectWorktrees(projectId).catch((err: unknown) => {
+        request.log.warn({ err, projectId }, 'worktree.yml teardown before deleting the project failed');
+      });
       for (const run of runs.list()) {
         if (run.projectId === projectId) {
           await runs.remove(run.id).catch(() => {});

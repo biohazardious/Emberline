@@ -2,7 +2,7 @@
  * Core entrypoint. Configuration comes from EMBERLINE_* env vars (see config.ts).
  */
 import path from 'node:path';
-import { ptydCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { ptydCommandCanceller, ptydCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
 import { loadConfig, parseAllowedHosts } from './config.js';
 import { openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
@@ -16,6 +16,7 @@ const { db, close: closeDb } = openDb(path.join(config.dataDir, 'emberline.db'))
 const ptyd = new PtydBridge(config.ptydSocket);
 // git, builds and tests for workspaces run in the runner container, never here.
 setCommandExecutor(ptydCommandExecutor(ptyd));
+setCommandCanceller(ptydCommandCanceller(ptyd));
 const runs = new RunService(db, config, ptyd);
 const scheduler = new Scheduler(db, runs, ptyd, config);
 const tickets = new TicketService(db, runs, scheduler);

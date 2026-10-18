@@ -65,6 +65,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   });
   const startedAt = Date.now();
   const presence = deps.presence ?? new PresenceRegistry();
+  deps.runs.setLogger(app.log);
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, { presence, log: (message, err) => app.log.error({ err }, message) });
   const forge = deps.forge ?? new ForgeService(deps.db, deps.runs);
   const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);

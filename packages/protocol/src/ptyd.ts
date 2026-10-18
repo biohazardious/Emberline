@@ -47,9 +47,9 @@ export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
 /**
  * Bumped whenever ptyd gains or changes a method. Core reads it on connect (`hello`) and refuses
  * features the runner does not have yet, instead of failing with an unknown-method error.
- * 1: sessions only · 2: `exec` + `hello`.
+ * 1: sessions only · 2: `exec` + `hello` · 3: `exec` with `execId` + `execCancel`.
  */
-export const PTYD_PROTOCOL_VERSION = 2;
+export const PTYD_PROTOCOL_VERSION = 3;
 
 /** Per stream; keeps a base64 stdout plus stderr inside one 16 MiB frame. */
 export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -105,6 +105,8 @@ export const ptydMethods = {
       maxOutputBytes: z.number().int().min(1).max(MAX_EXEC_OUTPUT_BYTES).default(MAX_EXEC_OUTPUT_BYTES),
       /** `base64` for binary stdout (e.g. `git show <blob>`); stderr is always UTF-8. */
       encoding: z.enum(['utf8', 'base64']).default('utf8'),
+      /** Caller-chosen id that `execCancel` can stop this command by (unique while it runs). */
+      execId: z.string().min(1).max(128).optional(),
     }),
     result: z.object({
       exitCode: z.number().int().nullable(),
@@ -113,7 +115,14 @@ export const ptydMethods = {
       stderr: z.string(),
       timedOut: z.boolean(),
       truncated: z.boolean(),
+      /** Stopped by `execCancel` (its process group was killed). */
+      cancelled: z.boolean().optional(),
     }),
+  },
+  /** Kills the process group of a running `exec` started with this `execId`; false when none runs. */
+  execCancel: {
+    params: z.object({ execId: z.string().min(1).max(128) }),
+    result: z.object({ cancelled: z.boolean() }),
   },
 } as const;
 

@@ -22,14 +22,29 @@ export async function worktreeConfigStatus(db: Db, project: { id: string; path: 
     : null;
   const read = await readHeadWorktreeYml(project.path);
   const head = read?.content != null && read.sha256 ? { content: read.content, sha256: read.sha256 } : null;
-  const changed = head !== null && head.sha256 !== approved?.sha256;
+  // No entry at all in HEAD (not one that cannot be read): the file was deleted.
+  const removed = read === null && approved !== null;
+  const changed = removed || (head !== null && head.sha256 !== approved?.sha256);
   return {
     approved,
     head,
     changed,
-    diff: changed ? unifiedDiff(approved?.content ?? '', head.content) : '',
+    removed,
+    diff: changed ? unifiedDiff(approved?.content ?? '', head?.content ?? '') : '',
     errors: read?.errors ?? [],
   };
+}
+
+/** Accepts that HEAD removed the file: the approval goes, and runs get no worktree lifecycle. */
+export async function approveWorktreeConfigRemoval(db: Db, project: { id: string; path: string }): Promise<WorktreeConfigStatusResponse> {
+  const current = await worktreeConfigStatus(db, project);
+  if (!current.removed) {
+    throw conflict(
+      current.approved ? 'HEAD still has .emberline/worktree.yml (or one that cannot be read); there is no removal to approve' : 'nothing is approved',
+    );
+  }
+  db.delete(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).run();
+  return worktreeConfigStatus(db, project);
 }
 
 /**

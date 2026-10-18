@@ -239,6 +239,50 @@ describe('ptyd', () => {
     expect((await client.list()).sessions).toHaveLength(0);
   });
 
+  it('cancels a running exec by its id, with the whole process group (execCancel)', async () => {
+    const client = await connect();
+    const pidFile = path.join(dir, 'cancel.pid');
+    const startedAt = Date.now();
+    const running = client.exec({
+      file: 'sh',
+      args: ['-c', `sleep 30 & echo $! > "${pidFile}"; wait`],
+      cwd: dir,
+      timeoutMs: 60_000,
+      execId: 'setup-1',
+    });
+    let bgPid = 0;
+    for (let i = 0; i < 40 && !bgPid; i++) {
+      try {
+        bgPid = Number(readFileSync(pidFile, 'utf8').trim());
+      } catch {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    expect(bgPid).toBeGreaterThan(1);
+    expect(await client.execCancel('setup-1')).toEqual({ cancelled: true });
+    const result = await running;
+    expect(result).toMatchObject({ cancelled: true, timedOut: false, exitCode: null });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    let gone = false;
+    for (let i = 0; i < 40 && !gone; i++) {
+      try {
+        process.kill(bgPid, 0);
+        await new Promise((r) => setTimeout(r, 50));
+      } catch (error) {
+        gone = (error as NodeJS.ErrnoException).code === 'ESRCH';
+      }
+    }
+    expect(gone).toBe(true);
+    // Unknown or finished ids: nothing to cancel.
+    expect(await client.execCancel('setup-1')).toEqual({ cancelled: false });
+    // An id in use is refused rather than shadowed.
+    const first = client.exec({ file: 'sleep', args: ['5'], cwd: dir, execId: 'dup' });
+    await new Promise((r) => setTimeout(r, 100));
+    await expect(client.exec({ file: 'true', cwd: dir, execId: 'dup' })).rejects.toMatchObject({ code: 'conflict' });
+    await client.execCancel('dup');
+    await first;
+  });
+
   it('refuses to start a second server on a live socket', async () => {
     const second = new PtydServer({ socketPath });
     await expect(second.listen()).rejects.toThrow(/already listening/);

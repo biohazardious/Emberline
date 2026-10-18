@@ -150,6 +150,9 @@ export class PtydClient extends EventEmitter<ClientEvents> {
     // ptyd enforces the command's own timeout; allow for it plus transfer.
     return this.request('exec', params, { timeoutMs: (params.timeoutMs ?? 60_000) + 15_000 });
   }
+  execCancel(execId: string) {
+    return this.request('execCancel', { execId });
+  }
 
   close(): void {
     this.socket.end();

@@ -9,6 +9,8 @@ import type { PtydParsedParams, PtydResult } from '@emberline/protocol';
 export function runExec(
   params: PtydParsedParams<'exec'>,
   baseEnv: Record<string, string>,
+  /** Called with a canceller once the process runs (for `execCancel`), and with null when it ended. */
+  onCancellable?: (cancel: (() => void) | null) => void,
 ): Promise<PtydResult<'exec'>> {
   if (!existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
     return Promise.reject(new ExecCwdError(`cwd does not exist: ${params.cwd}`));
@@ -24,6 +26,7 @@ export function runExec(
     const stdout = new Capped(params.maxOutputBytes);
     const stderr = new Capped(params.maxOutputBytes);
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
     const killGroup = () => {
       try {
@@ -36,12 +39,17 @@ export function runExec(
       timedOut = true;
       killGroup();
     }, params.timeoutMs);
+    onCancellable?.(() => {
+      cancelled = true;
+      killGroup();
+    });
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
     const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      onCancellable?.(null);
       resolve({
         exitCode,
         signal,
@@ -49,6 +57,7 @@ export function runExec(
         stderr: stderr.read().toString('utf8'),
         timedOut,
         truncated: stdout.truncated || stderr.truncated,
+        ...(cancelled ? { cancelled: true } : {}),
       });
     };
     child.on('error', (error) => {

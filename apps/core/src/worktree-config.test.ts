@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, Ticket, WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -187,6 +187,27 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     expect(existsSync(path.join(run.worktreePath, 'evil-ran'))).toBe(false);
   });
 
+  it('HEAD removing the file shows as a removal that a person approves to clear the approval', async () => {
+    const project = await createProject(setupYml('echo ok > setup-ran'));
+    await approveHead(project.id);
+    // Not while HEAD still has the file.
+    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    execFileSync('git', ['-C', project.path, 'rm', '-q', YML]);
+    execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'drop']);
+    const s = await status(project.id);
+    expect(s).toMatchObject({ head: null, changed: true, removed: true, errors: [] });
+    expect(s.diff).toContain('-setup:');
+    // Until approved, runs keep the approved content.
+    const before = await startRun(project.id);
+    expect(existsSync(path.join(before.worktreePath, 'setup-ran'))).toBe(true);
+    const res = await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ approved: null, head: null, changed: false, removed: false });
+    const after = await startRun(project.id);
+    expect(existsSync(path.join(after.worktreePath, 'setup-ran'))).toBe(false);
+    expect((await typesOf(after.id)).filter((x) => x.startsWith('worktree_'))).toEqual([]);
+  });
+
   it('a HEAD file that is a symbolic link is refused', async () => {
     const project = await createProject();
     mkdirSync(path.join(project.path, '.emberline'));
@@ -194,8 +215,9 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     execFileSync('git', ['-C', project.path, 'add', YML]);
     execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'link']);
     const s = await status(project.id);
-    expect(s).toMatchObject({ head: null, changed: false });
+    expect(s).toMatchObject({ head: null, changed: false, removed: false });
     expect(s.errors.join()).toContain('symbolic link');
+    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
   });
 
   it('answers 404 for an unknown project and 400 for a bad body', async () => {
@@ -222,6 +244,28 @@ describe('run worktree lifecycle', () => {
         { path: 'missing.txt', status: 'skipped', reason: 'missing in the main workspace' },
       ],
     });
+  });
+
+  it('notes an entry over the copy caps as skipped, and copies nothing of it', async () => {
+    const project = await createProject('version: 1\ncopy:\n  - big.bin\n');
+    writeFileSync(path.join(project.path, 'big.bin'), '');
+    truncateSync(path.join(project.path, 'big.bin'), 201 * 1024 * 1024);
+    await approveHead(project.id);
+    const run = await startRun(project.id);
+    expect(existsSync(path.join(run.worktreePath, 'big.bin'))).toBe(false);
+    expect(await payloadOf(run.id, 'worktree_copy_skipped')).toEqual({ path: 'big.bin', reason: 'larger than 200 MB' });
+  });
+
+  it('flags copied files the worktree does not ignore, and warns about secrets in the first prompt', async () => {
+    const project = await createProject('version: 1\ncopy:\n  - .env\n  - .env.local\n  - notes.txt\n');
+    writeFileSync(path.join(project.path, '.gitignore'), '.env.local\n');
+    execFileSync('git', ['-C', project.path, 'add', '.gitignore']);
+    execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'ignore']);
+    for (const f of ['.env', '.env.local', 'notes.txt']) writeFileSync(path.join(project.path, f), 'x');
+    await approveHead(project.id);
+    const run = await startRun(project.id, 'work');
+    expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({ notIgnored: ['.env', 'notes.txt'] });
+    expect(await promptOf(run.id)).toBe('Note: the copied `.env` is not in .gitignore — don\'t commit it.\n\nwork');
   });
 
   it('runs setup in order in the worktree, with started and finished events', async () => {
@@ -346,6 +390,63 @@ describe('run worktree lifecycle', () => {
       expect(t.runs.getRun(run.id)).toMatchObject({ state: 'failed', terminalId: null });
       expect(existsSync(path.join(t.dir, `token-${run.id}`))).toBe(false);
     });
+
+    it('a stop during setup kills the running setup command', async () => {
+      const pidFile = path.join(t.dir, 'setup.pid');
+      const project = await createProject(setupYml(`sleep 30 & echo $! > ${pidFile}; wait`));
+      await approveHead(project.id);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'x' })).json();
+      const pid = Number((await waitFile(pidFile)).trim());
+      const stoppedAt = Date.now();
+      await api('POST', `/api/runs/${run.id}/stop`, {});
+      const alive = () => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      await expect.poll(alive, { timeout: 5_000 }).toBe(false);
+      expect(Date.now() - stoppedAt).toBeLessThan(5_000);
+      await new Promise((r) => setTimeout(r, 200));
+      const types = await typesOf(run.id);
+      expect(types).not.toContain('worktree_setup_failed');
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'failed', terminalId: null });
+    });
+
+    it('caps the whole setup at 30 minutes: the commands left are skipped with a note', async () => {
+      const seen: number[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      setCommandExecutor(async (request) => {
+        if (request.file === 'sh' && request.args[1]?.includes('step-')) {
+          seen.push(request.timeoutMs ?? 0);
+          if (request.args[1].includes('step-one')) await gate;
+        }
+        return localCommandExecutor(request);
+      });
+      const project = await createProject('version: 1\nsetup:\n  - echo step-one\n  - echo step-two\n  - echo step-three\n');
+      await approveHead(project.id);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'go' })).json();
+      await expect.poll(() => seen.length).toBe(1);
+      expect(seen[0]).toBe(10 * 60_000);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 31 * 60_000);
+      release();
+      await expect.poll(() => t.runs.getRun(run.id).terminalId, { timeout: 8_000 }).not.toBeNull();
+      expect(seen).toHaveLength(1);
+      expect(await payloadOf(run.id, 'worktree_setup_skipped')).toEqual({
+        commands: ['echo step-two', 'echo step-three'],
+        reason: 'the whole setup may take 30 min',
+      });
+      vi.useRealTimers();
+      expect(await promptOf(run.id)).toBe(
+        'Worktree setup stopped after 30 min; not run: `echo step-two`, `echo step-three`. Run them as part of this ticket.\n\ngo',
+      );
+    });
   });
 });
 
@@ -396,8 +497,68 @@ describe('teardown before prune', () => {
     await t.runs.enqueue({ projectId: project.id, prompt: 'open' });
     await t.runs.reconcile();
     const oldest = ended[0]!;
-    expect(existsSync(oldest.worktreePath)).toBe(false);
+    await expect.poll(() => existsSync(oldest.worktreePath), { timeout: 8_000 }).toBe(false);
     expect(readFileSync(log, 'utf8').trim()).toBe(path.basename(oldest.worktreePath));
+    await expect.poll(() => t.runs.list().some((r) => r.id === oldest.id)).toBe(false);
+  });
+
+  it('an auto-GC teardown never holds reconcile, runs once, and the prune waits for it', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let teardowns = 0;
+    setCommandExecutor(async (request) => {
+      if (request.file === 'sh' && request.args[1]?.includes('slow-teardown')) {
+        teardowns++;
+        await gate;
+      }
+      return localCommandExecutor(request);
+    });
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const ended: Run[] = [];
+    for (let i = 0; i < 11; i++) ended.push(await endedRun(project.id));
+    await t.runs.enqueue({ projectId: project.id, prompt: 'open' });
+    const oldest = ended[0]!;
+
+    await t.runs.reconcile(); // returns although the teardown is still held
+    await expect.poll(() => teardowns).toBe(1);
+    expect(existsSync(oldest.worktreePath)).toBe(true);
+
+    // The next auto-GC pass (a minute later) does not start it again.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 2 * 60_000);
+    await t.runs.reconcile();
+    expect(teardowns).toBe(1);
+    expect(existsSync(oldest.worktreePath)).toBe(true);
+    vi.useRealTimers();
+
+    release();
+    await expect.poll(() => existsSync(oldest.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => t.runs.list().some((r) => r.id === oldest.id)).toBe(false);
+    expect(teardowns).toBe(1);
+  });
+
+  it('logs a failed teardown too', async () => {
+    const warn = vi.fn();
+    t.runs.setLogger({ warn });
+    const project = await createProject('version: 1\nteardown:\n  - exit 5\n');
+    await approveHead(project.id);
+    const run = await endedRun(project.id);
+    await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ runId: run.id, command: 'exit 5', exitCode: 5 }), expect.stringContaining('teardown'));
+  });
+
+  it('a project delete runs teardown in each run worktree first', async () => {
+    const log = path.join(t.dir, 'teardown.log');
+    const project = await createProject(`version: 1\nteardown:\n  - ${JSON.stringify(`basename "$PWD" >> ${log}`)}\n`);
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await t.runs.enqueue({ projectId: project.id, prompt: 'x' });
+    expect((await api('DELETE', `/api/projects/${project.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+    expect(readFileSync(log, 'utf8').trim().split('\n').sort()).toEqual([path.basename(a.worktreePath), path.basename(b.worktreePath)].sort());
+    expect(existsSync(a.worktreePath)).toBe(false);
   });
 });
 

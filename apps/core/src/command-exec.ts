@@ -18,6 +18,8 @@ export interface ExecRequest {
   timeoutMs?: number;
   maxOutputBytes?: number;
   encoding?: 'utf8' | 'base64';
+  /** Lets {@link cancelCommand} stop this command while it runs (unique while it runs). */
+  execId?: string;
 }
 
 export type ExecResult = PtydResult<'exec'>;
@@ -26,6 +28,30 @@ export type CommandExecutor = (request: ExecRequest) => Promise<ExecResult>;
 const DEFAULT_TIMEOUT_MS = 60_000;
 /** First ptyd protocol with the `exec` method. */
 const EXEC_PROTOCOL_VERSION = 2;
+/** First ptyd protocol with `execId` and `execCancel`. */
+const CANCEL_PROTOCOL_VERSION = 3;
+
+/** Stops a running command by its `execId`; resolves whether one was running. */
+export type CommandCanceller = (execId: string) => Promise<boolean>;
+
+let canceller: CommandCanceller = async () => false;
+
+export function setCommandCanceller(next: CommandCanceller): void {
+  canceller = next;
+}
+
+/** Kills the command started with this `execId` (its whole process group); never throws. */
+export function cancelCommand(execId: string): Promise<boolean> {
+  return canceller(execId).catch(() => false);
+}
+
+/** Cancels through ptyd `execCancel`; an older runner cannot, and its command runs to its timeout. */
+export function ptydCommandCanceller(ptyd: PtydBridge): CommandCanceller {
+  return async (execId) => {
+    if ((ptyd.protocolVersion ?? 0) < CANCEL_PROTOCOL_VERSION) return false;
+    return (await ptyd.get().execCancel(execId)).cancelled;
+  };
+}
 
 let executor: CommandExecutor = () =>
   Promise.reject(new Error('command execution is not configured; core runs commands in the runner'));
@@ -57,6 +83,7 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
       timeoutMs,
       maxOutputBytes: Math.min(request.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES, MAX_EXEC_OUTPUT_BYTES),
       encoding: request.encoding ?? 'utf8',
+      ...(request.execId && (ptyd.protocolVersion ?? 0) >= CANCEL_PROTOCOL_VERSION ? { execId: request.execId } : {}),
     });
     // ptyd enforces the timeout; this only guards against a reply that never comes.
     let timer: NodeJS.Timeout | undefined;
@@ -71,6 +98,17 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
   };
 }
 
+const localExecs = new Map<string, () => void>();
+
+/** Cancels a command of {@link localCommandExecutor}. Only for tests and local development tools. */
+export const localCommandCanceller: CommandCanceller = async (execId) => {
+  const cancel = localExecs.get(execId);
+  if (!cancel) return false;
+  localExecs.delete(execId);
+  cancel();
+  return true;
+};
+
 /** Runs commands in this process's container. Only for tests and local development tools. */
 export const localCommandExecutor: CommandExecutor = (request) =>
   new Promise((resolve) => {
@@ -79,7 +117,23 @@ export const localCommandExecutor: CommandExecutor = (request) =>
       cwd: request.cwd,
       env: { ...process.env, ...request.env },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Own process group, as in ptyd: a timeout or a cancel also kills what the command started.
+      detached: true,
     });
+    const killGroup = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
+    let cancelled = false;
+    if (request.execId) {
+      localExecs.set(request.execId, () => {
+        cancelled = true;
+        killGroup();
+      });
+    }
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let outSize = 0;
@@ -88,7 +142,7 @@ export const localCommandExecutor: CommandExecutor = (request) =>
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killGroup();
     }, request.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     child.stdout.on('data', (chunk: Buffer) => {
       if (outSize + chunk.length > max) truncated = true;
@@ -105,6 +159,7 @@ export const localCommandExecutor: CommandExecutor = (request) =>
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (request.execId) localExecs.delete(request.execId);
       resolve({
         exitCode,
         signal,
@@ -112,6 +167,7 @@ export const localCommandExecutor: CommandExecutor = (request) =>
         stderr: Buffer.concat(err).toString('utf8'),
         timedOut,
         truncated,
+        ...(cancelled ? { cancelled: true } : {}),
       });
     };
     child.on('error', (error) => {

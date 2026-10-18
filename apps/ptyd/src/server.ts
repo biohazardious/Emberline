@@ -52,6 +52,8 @@ type Handler<M extends PtydMethod> = (
 
 export class PtydServer {
   private readonly sessions = new Map<string, PtySession>();
+  /** Cancellers of running `exec` calls that carry an `execId`. */
+  private readonly execs = new Map<string, () => void>();
   private readonly connections = new Set<Connection>();
   private server?: net.Server;
 
@@ -161,8 +163,14 @@ export class PtydServer {
     hello: () => ({ protocolVersion: PTYD_PROTOCOL_VERSION }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
+      const { execId } = params;
+      if (execId && this.execs.has(execId)) throw new PtydError('conflict', `exec ${execId} is already running`);
       try {
-        const result = await runExec(params, pickBaseEnv());
+        const result = await runExec(params, pickBaseEnv(), (cancel) => {
+          if (!execId) return;
+          if (cancel) this.execs.set(execId, cancel);
+          else this.execs.delete(execId);
+        });
         this.options.log?.(
           `exec ${params.file} ${params.args.slice(0, 3).join(' ')} -> ${result.timedOut ? 'timeout' : (result.exitCode ?? result.signal)}`,
         );
@@ -171,6 +179,13 @@ export class PtydServer {
         if (error instanceof ExecCwdError) throw new PtydError('bad_request', error.message);
         throw error;
       }
+    },
+    execCancel: (_conn, { execId }) => {
+      const cancel = this.execs.get(execId);
+      if (!cancel) return { cancelled: false };
+      this.execs.delete(execId);
+      cancel();
+      return { cancelled: true };
     },
     detach: (conn, { sessionId }) => {
       conn.attachments.get(sessionId)?.();

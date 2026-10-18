@@ -6,7 +6,7 @@ import { projects } from '../db/schema.js';
 import { badRequest, notFound } from '../errors.js';
 import { assertNotCloning } from '../factory/project-import.js';
 import type { CoreDeps } from '../server.js';
-import { approveWorktreeConfig, worktreeConfigStatus } from '../worktree-config/trust.js';
+import { approveWorktreeConfig, approveWorktreeConfigRemoval, worktreeConfigStatus } from '../worktree-config/trust.js';
 
 export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd }: CoreDeps): void {
   const projectOr404 = (id: string) => {
@@ -29,9 +29,13 @@ export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd }:
     async (request): Promise<WorktreeConfigStatusResponse> => {
       const project = projectOr404(request.params.id);
       const body = ApproveWorktreeConfigBody.safeParse(request.body ?? {});
-      if (!body.success) throw badRequest('sha256 must be the 64-character hex sha256 of the reviewed content');
+      if (!body.success) {
+        throw badRequest('send { sha256 } (the 64-character hex sha256 of the reviewed content) or { removal: true }');
+      }
       await assertNotCloning(ptyd, project.id);
-      return approveWorktreeConfig(db, project, body.data.sha256);
+      return 'removal' in body.data
+        ? approveWorktreeConfigRemoval(db, project)
+        : approveWorktreeConfig(db, project, body.data.sha256);
     },
   );
 }
