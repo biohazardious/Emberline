@@ -54,8 +54,9 @@ afterEach(async () => {
   vi.useRealTimers();
   setCommandExecutor(localCommandExecutor);
   setCommandCanceller(localCommandCanceller);
-  await t.close();
+  // Kill the fake agents first: one still writing into its worktree makes removing the temp dir fail (ENOTEMPTY).
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
