@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CommandExecutor, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { projectWorktreeConfig, runs } from './db/schema.js';
+import { syncWorktreeToMainWorkspace } from './factory/merge.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -170,6 +171,28 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     await approveHead(project.id);
     const second = await startRun(project.id);
     expect(existsSync(path.join(second.worktreePath, 'evil-ran'))).toBe(true);
+  });
+
+  it("an agent's uncommitted worktree.yml edit reaches main with its run's merge (scratch files stay out)", async () => {
+    const project = await createProject(setupYml('echo ok > setup-ran'));
+    await approveHead(project.id);
+    const wt = path.join(t.dir, 'agent-wt');
+    execFileSync('git', ['-C', project.path, 'worktree', 'add', '-q', '-b', 'emberline/run-agent', wt, 'HEAD']);
+    writeFileSync(path.join(wt, YML), setupYml('echo new > new-ran'));
+    for (const scratch of ['new-tickets.json', 'tickets.json', 'brainstorm-suggestions.json', 'roadmap.json', 'roadmap-generated.json', 'cross-critic-r1.json']) {
+      writeFileSync(path.join(wt, '.emberline', scratch), '{}\n');
+    }
+    mkdirSync(path.join(wt, '.emberline', 'attachments'));
+    writeFileSync(path.join(wt, '.emberline', 'attachments', 'shot.png'), 'png');
+    writeFileSync(path.join(wt, '.emberline', 'notes.md'), 'kept\n');
+
+    const res = await syncWorktreeToMainWorkspace({ worktreePath: wt, mainWorkspacePath: project.path, ticketKey: 'T-1', runId: 'run-agent' });
+    expect(res.ok).toBe(true);
+    const tracked = execFileSync('git', ['-C', project.path, 'ls-files', '.emberline'], { encoding: 'utf8' }).trim().split('\n').sort();
+    expect(tracked).toEqual(['.emberline/notes.md', YML]);
+    const s = await status(project.id);
+    expect(s.changed).toBe(true);
+    expect(s.diff).toContain('+  - "echo new > new-ran"');
   });
 
   it('an invalid HEAD file shows its errors, cannot be approved, and runs keep the old content', async () => {

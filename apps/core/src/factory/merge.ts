@@ -17,8 +17,26 @@ export const FACTORY_GIT_IDENTITY = (['user', 'author', 'committer'] as const).f
   `${who}.email=factory@emberline.local`,
 ]);
 
+/**
+ * Emberline's scratch files under `.emberline/`: agents write them for core to read (tickets,
+ * brainstorm and roadmap output, critic reports, attachments). Everything else there, above all
+ * `.emberline/worktree.yml`, is project content and is committed like any other file, so an
+ * agent's edit reaches main and shows up for review.
+ */
+export const EMBERLINE_SCRATCH_PATHS = [
+  '.emberline/new-tickets.json',
+  '.emberline/tickets.json',
+  '.emberline/brainstorm-suggestions.json',
+  '.emberline/roadmap*.json',
+  '.emberline/cross-critic-*.json',
+  '.emberline/attachments/**',
+] as const;
+
 /** Never committed from a run's worktree even when the project forgot to ignore them. */
-const RUN_OUTPUT_EXCLUDES = [':(exclude,glob)**/node_modules/**', ':(exclude,glob)**/.emberline/**'];
+const RUN_OUTPUT_EXCLUDES = [
+  ':(exclude,glob)**/node_modules/**',
+  ...EMBERLINE_SCRATCH_PATHS.map((p) => `:(exclude,glob)**/${p}`),
+];
 
 /** One merge into a main workspace at a time (parallel runs finish independently). */
 const mainWorkspaceLock = new KeyedMutex();
