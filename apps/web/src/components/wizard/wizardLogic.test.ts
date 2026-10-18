@@ -4,6 +4,7 @@ import {
   buildAdoptBody,
   buildCreateBody,
   canVisit,
+  choiceHint,
   draftOf,
   hasImportableFolders,
   initialWizardState,
@@ -20,6 +21,7 @@ import {
   stepProblem,
   stepsFor,
   stripUrlCredentials,
+  visionProblem,
   type WizardAction,
   type WizardState,
   wizardReducer,
@@ -28,14 +30,17 @@ import {
 
 const run = (actions: WizardAction[], from: WizardState = initialWizardState()) => actions.reduce(wizardReducer, from);
 
-/** A new project with a valid name, type and preset, standing on the type step. */
+/** A new project with a valid name, type and a concrete preset, standing on the type step. */
 const typed = () =>
   run([
     { type: 'source', source: 'preset' },
     { type: 'go', step: 'type' },
     { type: 'field', field: 'name', value: 'Shop' },
     { type: 'appType', appType: 'web_saas' },
+    { type: 'preset', presetId: 'web-react-fastify' },
   ]);
+
+const VISION = 'An order portal for a small bakery and its regulars.';
 
 const detectResponse = (o: Partial<ProjectDetectResponse['detected']> = {}): ProjectDetectResponse => ({
   detected: {
@@ -78,11 +83,58 @@ describe('per-step validation', () => {
     expect(nameProblem('Şirket')).toBeNull();
   });
 
-  it('picks the first preset of a type and refuses a preset of another type', () => {
-    const s = typed();
+  it('picks the Auto preset of a type by default and refuses a preset of another type', () => {
+    const s = run([{ type: 'appType', appType: 'web_saas' }], typed());
     expect(s.presetId).toBe('web-react-fastify');
-    const wrong = { ...s, presetId: 'static-plain' };
+    const fresh = run([{ type: 'source', source: 'preset' }, { type: 'appType', appType: 'static_site' }]);
+    expect(fresh.presetId).toBe('auto-static_site');
+    expect(fresh.choices.frontend).toBe('agent');
+    expect(fresh.choices.auth).toBe('agent');
+    const retyped = wizardReducer(typed(), { type: 'appType', appType: 'fullstack' });
+    expect(retyped.presetId).toBe('auto-fullstack');
+    const wrong = { ...typed(), presetId: 'static-plain' };
     expect(stepProblem(wrong, 'type')).toMatch(/preset/i);
+  });
+
+  it('Auto needs a vision of at least 20 characters (trimmed) on the type step', () => {
+    const auto = run([{ type: 'preset', presetId: 'auto-web_saas' }], typed());
+    expect(stepProblem(auto, 'type')).toMatch(/vision/i);
+    const short = wizardReducer(auto, { type: 'field', field: 'vision', value: `   ${'x'.repeat(19)}   ` });
+    expect(visionProblem(short)).toMatch(/20 characters/);
+    expect(stepProblem(short, 'type')).toMatch(/vision/i);
+    const ok = wizardReducer(auto, { type: 'field', field: 'vision', value: 'x'.repeat(20) });
+    expect(stepProblem(ok, 'type')).toBeNull();
+    // a concrete preset keeps the vision optional
+    expect(visionProblem(typed())).toBeNull();
+    expect(stepProblem(typed(), 'type')).toBeNull();
+  });
+
+  it('a stack with three or more primary dimensions left to the agent needs the vision too', () => {
+    const two = run(
+      [
+        { type: 'choice', dimension: 'frontend', value: 'agent' },
+        { type: 'choice', dimension: 'backend', value: 'agent' },
+      ],
+      typed(),
+    );
+    expect(stepProblem(two, 'stack')).toBeNull();
+    const three = wizardReducer(two, { type: 'choice', dimension: 'deploy', value: 'agent' });
+    expect(stepProblem(three, 'stack')).toMatch(/vision/i);
+    expect(stepProblem(three, 'type')).toMatch(/vision/i);
+    expect(stepProblem(wizardReducer(three, { type: 'field', field: 'vision', value: VISION }), 'stack')).toBeNull();
+    // a blank project leaves everything to the agent
+    const blank = run([{ type: 'source', source: 'blank' }, { type: 'field', field: 'name', value: 'Lab' }]);
+    expect(stepProblem(blank, 'type')).toMatch(/vision/i);
+  });
+
+  it('imports never need the vision for Auto reasons', () => {
+    const s = run([
+      { type: 'source', source: 'import_folder' },
+      { type: 'field', field: 'folder', value: 'old-app' },
+      { type: 'importCreated', projectId: 'p1' },
+      { type: 'detected', detect: detectResponse() },
+    ]);
+    expect(visionProblem(s)).toBeNull();
   });
 
   it('validates the import URL with the protocol schema and needs a branch', () => {
@@ -239,9 +291,9 @@ describe('dirty-dimension merge', () => {
     const edited = wizardReducer(typed(), { type: 'choice', dimension: 'auth', value: 'none' });
     expect(edited.dirty).toEqual(['auth']);
     const retyped = wizardReducer(edited, { type: 'appType', appType: 'fullstack' });
-    expect(retyped.presetId).toBe('fullstack-react-fastify');
+    expect(retyped.presetId).toBe('auto-fullstack');
     expect(retyped.choices.auth).toBe('none');
-    expect(retyped.choices.frontend).toBe('react-vite');
+    expect(retyped.choices.frontend).toBe('agent');
     const represet = wizardReducer(retyped, { type: 'preset', presetId: 'fullstack-nextjs' });
     expect(represet.choices.frontend).toBe('nextjs');
     expect(represet.choices.auth).toBe('none');
@@ -261,6 +313,17 @@ describe('dirty-dimension merge', () => {
     expect(s.dirty).toEqual([]);
     // Only missing files with a suggestion are ticked by default.
     expect(s.write).toEqual(['projectMd', 'worktreeYml']);
+  });
+});
+
+describe('choice hints', () => {
+  it('names what the selected option is best for, and explains none, agent and Other', () => {
+    expect(choiceHint('frontend', 'astro')).toMatch(/static HTML/i);
+    expect(choiceHint('frontend', 'agent')).toBe('The Bootstrap agent decides from your vision.');
+    expect(choiceHint('frontend', undefined)).toBe('The Bootstrap agent decides from your vision.');
+    expect(choiceHint('database', 'none')).toBe("This project won't have one.");
+    expect(choiceHint('database', { other: 'DuckDB' })).toMatch(/as you describe/i);
+    expect(choiceHint('frontend', 'no-such-option')).toBe('');
   });
 });
 

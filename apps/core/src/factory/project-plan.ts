@@ -15,6 +15,8 @@ import {
   STACK_DIMENSION_IDS,
   type StackChoice,
   type StackDimensionId,
+  VISION_MIN_LENGTH,
+  visionRequired,
 } from '@emberline/protocol';
 import { badRequest } from '../errors.js';
 import {
@@ -107,6 +109,11 @@ export function planNewProject(body: ProjectCreateInput): ProjectPlan {
   }
 
   const vision = (body.vision ?? body.description).trim();
+  if (visionRequired(preset?.id, choices) && vision.length < VISION_MIN_LENGTH) {
+    throw badRequest(
+      `vision: describe the project in at least ${VISION_MIN_LENGTH} characters; the agent picks the open stack choices from it`,
+    );
+  }
   const versionPolicy = body.techStack?.versionPolicy;
   const projectMd = generateProjectBlueprint({
     name: body.name,
@@ -118,7 +125,7 @@ export function planNewProject(body: ProjectCreateInput): ProjectPlan {
     referenceDocs: body.referenceDocs,
   });
   const starter = preset?.starter ? STARTERS[preset.starter]({ name: body.name, description: vision }) : {};
-  const ctx = { name: body.name, appType, choices, preset };
+  const ctx = { name: body.name, appType, choices, preset, vision };
   const tickets = [bootstrapTicket(ctx), deployTicket(ctx)].filter((x): x is WizardTicketSpec => x !== null);
 
   return {

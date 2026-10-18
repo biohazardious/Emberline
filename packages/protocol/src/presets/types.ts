@@ -74,6 +74,8 @@ export interface ProjectTypeDef {
 export interface StackOption {
   id: string;
   label: string;
+  /** One short sentence (at most 140 characters): when to pick it, and its main catch if any. */
+  bestFor: string;
   /** Project types this option applies to. */
   types: readonly ProjectTypeId[];
   worktree?: WorktreeHints;
@@ -84,6 +86,8 @@ export interface StackDimensionDef {
   label: string;
   /** Shown under "Advanced" in the wizard. */
   advanced: boolean;
+  /** One line: what this choice changes downstream. */
+  affects: string;
   options: readonly StackOption[];
 }
 
@@ -94,6 +98,10 @@ export interface PresetDef {
   type: ProjectTypeId;
   label: string;
   description: string;
+  /** One sentence starting "Best for", at most 140 characters. */
+  bestFor: string;
+  /** One sentence: the cost, or what you give up, at most 140 characters. */
+  tradeoff: string;
   /** dimension -> option id | 'none' | 'agent'. */
   choices: Partial<Record<StackDimensionId, string>>;
   /** Built-in file template written at creation, or null (the Bootstrap ticket builds the skeleton). */

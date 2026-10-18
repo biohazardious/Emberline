@@ -21,6 +21,8 @@ import {
   StackChoice,
   type StackDimensionId,
   VERSION_POLICIES,
+  VISION_MIN_LENGTH,
+  visionRequired,
   type WorkspaceFolder,
 } from '@emberline/protocol';
 import type { GateChoice } from '../../projectSettings';
@@ -160,6 +162,17 @@ export function choiceProblem(choice: StackChoice | undefined): string | null {
   return StackChoice.safeParse({ other: choice.other }).success ? null : 'Describe it in one line (1-200 characters).';
 }
 
+/**
+ * New projects on Auto (or with three or more primary dimensions left to the agent) need a vision
+ * the agent can decide from. Imports never do: the code is the input there.
+ */
+export function visionProblem(s: Pick<WizardState, 'source' | 'presetId' | 'choices' | 'vision'>): string | null {
+  if (isImport(s.source) || !visionRequired(s.presetId, s.choices)) return null;
+  return s.vision.trim().length >= VISION_MIN_LENGTH
+    ? null
+    : `Describe the vision in at least ${VISION_MIN_LENGTH} characters: the agent picks the stack from it.`;
+}
+
 /** The first thing keeping `step` from being valid, or null when it is. */
 export function stepProblem(s: WizardState, step: StepId): string | null {
   switch (step) {
@@ -171,7 +184,7 @@ export function stepProblem(s: WizardState, step: StepId): string | null {
       if (!s.appType) return 'Choose a project type.';
       const preset = s.presetId ? getPreset(s.presetId) : undefined;
       if (!preset || preset.type !== s.appType) return 'Choose a preset for this type.';
-      return null;
+      return visionProblem(s);
     }
     case 'repo':
       // In the order the step shows its fields.
@@ -184,8 +197,11 @@ export function stepProblem(s: WizardState, step: StepId): string | null {
         const p = choiceProblem(s.choices[id]);
         if (p) return `${getDimension(id)?.label ?? id}: ${p}`;
       }
-      if (!isImport(s.source)) return branchProblem(s.defaultBranch);
-      return null;
+      if (isImport(s.source)) return null;
+      if (visionProblem(s)) {
+        return `With this many choices left to the agent, the vision needs at least ${VISION_MIN_LENGTH} characters: add it on the Type step.`;
+      }
+      return branchProblem(s.defaultBranch);
     }
     case 'factory':
       return isImport(s.source) && s.startFactory && !s.vision.trim()
@@ -304,6 +320,14 @@ export function worktreeYmlImportNote(state: Pick<WizardState, 'detect' | 'write
     return `The repository's .emberline/worktree.yml is approved when you import. ${scripts}`;
   }
   return null;
+}
+
+/** The line under a Stack row's control: what the selected choice is best for. */
+export function choiceHint(dimension: StackDimensionId, choice: StackChoice | undefined): string {
+  if (choice === undefined || choice === 'agent') return 'The Bootstrap agent decides from your vision.';
+  if (choice === 'none') return "This project won't have one.";
+  if (typeof choice !== 'string') return 'Your own choice: the agent sets it up as you describe it.';
+  return findOption(dimension, choice)?.bestFor ?? '';
 }
 
 /** The label of a choice for the summary. */

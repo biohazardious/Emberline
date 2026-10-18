@@ -4843,6 +4843,30 @@ dialog.cmd-dialog::backdrop {
   line-height: 1.4;
 }
 
+/* Preset guidance: what it is best for, then the cost in a quieter line. */
+.wizard-card-best {
+  font-size: 0.76rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wizard-card-tradeoff {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: italic;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wizard-vision-hint {
+  display: grid;
+  gap: 2px;
+}
+
+.wizard-vision-hint p {
+  margin: 0;
+}
+
 .wizard-draft {
   display: flex;
   flex-wrap: wrap;
@@ -4919,6 +4943,26 @@ dialog.cmd-dialog::backdrop {
   gap: 6px;
   font-size: 0.8rem;
   font-weight: 500;
+}
+
+/* Label and what the dimension affects, stacked in the row's first column. */
+.wizard-dim-head {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wizard-dim-affects,
+.wizard-dim-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wizard-dim-hint {
+  font-size: 0.74rem;
 }
 
 .wizard-dim-edited {
@@ -5144,12 +5188,13 @@ dialog.cmd-dialog::backdrop {
 
 @media (min-width: 640px) {
   .wizard-dim {
-    grid-template-columns: 160px minmax(0, 1fr);
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 5px 12px;
     align-items: start;
   }
 
   .wizard-dim-label {
-    min-height: 36px;
+    min-height: 24px;
   }
 
   .wizard-sum-list div {

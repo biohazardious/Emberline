@@ -10,7 +10,7 @@ import {
   VERSION_POLICIES,
 } from '@emberline/protocol';
 import { type Dispatch, useState } from 'react';
-import { branchProblem, choiceProblem, isImport, type WizardAction, type WizardState } from './wizardLogic';
+import { branchProblem, choiceHint, choiceProblem, isImport, type WizardAction, type WizardState } from './wizardLogic';
 
 const OTHER = '__other';
 
@@ -39,17 +39,25 @@ function DimensionRow({
   const problem = other !== null && other.length > 0 ? choiceProblem(value) : null;
   const typeLabel = getProjectType(type)?.label ?? type;
 
+  const hint = choiceHint(dimension.id, value);
+
   return (
     <div className="wizard-dim">
-      <label htmlFor={id} className="wizard-dim-label">
-        {dimension.label}
-        {edited && <span className="wizard-dim-edited">changed</span>}
-      </label>
+      <div className="wizard-dim-head">
+        <label htmlFor={id} className="wizard-dim-label">
+          {dimension.label}
+          {edited && <span className="wizard-dim-edited">changed</span>}
+        </label>
+        <p id={`${id}-affects`} className="wizard-dim-affects">
+          {dimension.affects}
+        </p>
+      </div>
       <div className="wizard-dim-control">
         <select
           id={id}
           className="input"
           value={selectValue}
+          aria-describedby={hint ? `${id}-affects ${id}-hint` : `${id}-affects`}
           data-autofocus={autoFocus ? '' : undefined}
           onChange={(e) => {
             const v = e.target.value;
@@ -71,6 +79,11 @@ function DimensionRow({
             <option value={OTHER}>Other…</option>
           </optgroup>
         </select>
+        {hint && (
+          <p id={`${id}-hint`} className="wizard-dim-hint">
+            {hint}
+          </p>
+        )}
         {other !== null && (
           <>
             <input

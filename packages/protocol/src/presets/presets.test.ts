@@ -5,9 +5,13 @@ import {
   STACK_DIMENSIONS,
   VERSION_POLICIES,
   getPreset,
+  isAutoPreset,
   optionsForType,
+  presetsForType,
   StackChoice,
   ProjectChoices,
+  VISION_MIN_LENGTH,
+  visionRequired,
 } from './index.js';
 import { ProjectAppType, CreateProjectBody } from '../api/projects.js';
 
@@ -82,7 +86,7 @@ describe('preset registry integrity', () => {
 
   it('static_site presets: plain starter and the three agent-built ones', () => {
     const labels = PRESETS.filter((p) => p.type === 'static_site').map((p) => p.label);
-    expect(labels).toEqual(['Plain HTML/CSS/JS', 'Vite (vanilla)', 'Astro', 'Eleventy']);
+    expect(labels).toEqual(['Auto — let the agent choose', 'Plain HTML/CSS/JS', 'Vite (vanilla)', 'Astro', 'Eleventy']);
     const plain = getPreset('static-plain')!;
     expect(plain.starter).toBe('static-plain');
     expect(plain.choices.frontend).toBe('plain-html');
@@ -92,6 +96,62 @@ describe('preset registry integrity', () => {
       expect(p.starter).toBeNull();
     }
     for (const p of PRESETS.filter((x) => x.starter !== null)) expect(p.starter).toBe('static-plain');
+  });
+
+  it('every type lists an Auto preset first: every dimension that applies is "agent", no starter', () => {
+    for (const t of PROJECT_TYPES) {
+      const [first] = presetsForType(t.id);
+      expect(first?.id, t.id).toBe(`auto-${t.id}`);
+      expect(isAutoPreset(first!.id)).toBe(true);
+      expect(first!.label).toBe('Auto — let the agent choose');
+      expect(first!.description).toMatch(/vision/i);
+      expect(first!.starter).toBeNull();
+      for (const d of STACK_DIMENSIONS) {
+        const applies = optionsForType(d.id, t.id).length > 0;
+        expect(first!.choices[d.id], `${t.id}.${d.id}`).toBe(applies ? 'agent' : 'none');
+      }
+      expect(first!.bootstrap.join('\n')).toMatch(/worktree\.yml/);
+    }
+    expect(isAutoPreset('static-plain')).toBe(false);
+    expect(isAutoPreset('custom-blank')).toBe(false);
+  });
+
+  it('every preset says what it is best for and what it costs, in one short sentence each', () => {
+    for (const p of PRESETS) {
+      expect(p.bestFor, p.id).toMatch(/^Best for \S/);
+      for (const text of [p.bestFor, p.tradeoff]) {
+        expect(text.trim(), p.id).toBe(text);
+        expect(text.length, `${p.id}: ${text}`).toBeGreaterThan(15);
+        expect(text.length, `${p.id}: ${text}`).toBeLessThanOrEqual(140);
+        expect(text, p.id).toMatch(/\.$/);
+        expect(text, p.id).not.toMatch(/\n/);
+      }
+    }
+  });
+
+  it('every dimension says what it affects and every option what it is best for', () => {
+    for (const d of STACK_DIMENSIONS) {
+      expect(d.affects.length, d.id).toBeGreaterThan(15);
+      expect(d.affects.length, d.id).toBeLessThanOrEqual(140);
+      expect(d.affects.trim()).toBe(d.affects);
+      for (const o of d.options) {
+        expect(o.bestFor.trim(), o.id).toBe(o.bestFor);
+        expect(o.bestFor.length, o.id).toBeGreaterThan(10);
+        expect(o.bestFor.length, `${o.id}: ${o.bestFor}`).toBeLessThanOrEqual(140);
+        expect(o.bestFor, o.id).toMatch(/\.$/);
+      }
+    }
+  });
+
+  it('a vision is required for Auto and whenever three or more primary dimensions are left to the agent', () => {
+    expect(VISION_MIN_LENGTH).toBe(20);
+    expect(visionRequired('auto-static_site', {})).toBe(true);
+    expect(visionRequired('static-plain', getPreset('static-plain')!.choices)).toBe(false);
+    expect(visionRequired(undefined, { frontend: 'agent', backend: 'agent' })).toBe(false);
+    expect(visionRequired(undefined, { frontend: 'agent', backend: 'agent', deploy: 'agent' })).toBe(true);
+    // the advanced dimensions do not count
+    expect(visionRequired(undefined, { frontend: 'agent', language: 'agent', styling: 'agent', testing: 'agent' })).toBe(false);
+    expect(visionRequired('custom-blank', getPreset('custom-blank')!.choices)).toBe(true);
   });
 
   it('exposes version policies', () => {

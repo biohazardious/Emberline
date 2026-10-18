@@ -6,6 +6,7 @@ import {
   type CreateProjectResponse,
   type ProjectPreviewResponse,
   findOption,
+  getPreset,
   PRESETS,
   PROJECT_TYPES,
   type Ticket,
@@ -17,6 +18,7 @@ import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
 import { APP_TYPE_LABELS, generateProjectBlueprint, generateWorktreeYml } from './factory/blueprint.js';
 import { STARTERS } from './factory/starters.js';
+import { parseWorktreeYml } from './worktree-config/load.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /** Makes `git init` fail while set (the rest of git keeps working). */
@@ -79,6 +81,14 @@ const WEB: CreateProjectBody = {
   choices: { auth: { other: 'company SSO' }, database: 'agent' },
   startFactory: false,
 };
+const AUTO: CreateProjectBody = {
+  name: 'Cafe Site',
+  source: 'new',
+  appType: 'static_site',
+  presetId: 'auto-static_site',
+  vision: 'A one-page site for a cafe: menu, opening hours and a map.',
+  startFactory: false,
+};
 const API: CreateProjectBody = {
   name: 'Orders API',
   source: 'new',
@@ -123,6 +133,43 @@ describe('generators', () => {
     expect(web).toContain('test: "pnpm test"');
     expect(web).toContain('pnpm dev --port $PORT --host 0.0.0.0');
     expect(generateWorktreeYml({ frontend: 'agent' }, undefined).trim().split('\n').pop()).toBe('version: 1');
+  });
+
+  it('Auto: PROJECT.md lists every open dimension under "Decided by the agent", with the vision deciding', () => {
+    const sectionOf = (type: 'fullstack' | 'static_site') => {
+      const md = generateProjectBlueprint({
+        name: 'Cafe',
+        appType: type,
+        description: 'A cafe site.',
+        choices: { ...getPreset(`auto-${type}`)!.choices },
+      });
+      return md.split('### Decided by the agent')[1]?.split('\n---')[0] ?? '';
+    };
+    const full = sectionOf('fullstack');
+    expect(full).toMatch(/vision/i);
+    expect(full).toMatch(/one-line reason/i);
+    for (const label of ['Frontend', 'Backend', 'Database', 'Authentication', 'Deploy target', 'Language & runtime', 'Styling', 'Testing']) {
+      expect(full, label).toContain(`- ${label}:`);
+    }
+    // a static site has no backend option, so Auto marks it none instead of leaving it open
+    const site = sectionOf('static_site');
+    expect(site).toContain('- Frontend:');
+    expect(site).not.toContain('- Backend:');
+  });
+
+  it('a stack with no command hints gives a minimal worktree.yml that passes the strict schema', () => {
+    for (const choices of [{}, { ...getPreset('auto-fullstack')!.choices }, { frontend: 'agent', backend: 'none' }]) {
+      const yml = generateWorktreeYml(choices, undefined);
+      expect(yml.trim().split('\n').pop()).toBe('version: 1');
+      const parsed = parseWorktreeYml(yml);
+      expect(parsed.ok, yml).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.config.setup).toEqual([]);
+        expect(parsed.config.services).toEqual([]);
+        expect(parsed.config.checks).toEqual({});
+      }
+    }
+    for (const preset of PRESETS) expect(parseWorktreeYml(generateWorktreeYml({}, preset)).ok, preset.id).toBe(true);
   });
 
   it('the static-plain starter is three small files', () => {
@@ -213,6 +260,50 @@ describe('worktree.yml hints', () => {
   });
 });
 
+describe('Auto preset', () => {
+  it('the Bootstrap ticket chooses from the vision, records reasons and writes the worktree commands for approval', async () => {
+    const { project } = (await create(AUTO)).json() as CreateProjectResponse;
+    const body = ticketsOf(project.id).find((x) => x.title.startsWith('Bootstrap'))?.body ?? '';
+    expect(body).toContain(AUTO.vision!);
+    expect(body).toMatch(/choose a stack that fits the vision and the constraints in PROJECT\.md/i);
+    expect(body).toMatch(/each choice and a one-line reason in PROJECT\.md/i);
+    expect(body).toMatch(/setup.*build.*lint.*test.*preview service.*\.emberline\/worktree\.yml/is);
+    expect(body).toMatch(/a person approves the file before Emberline runs those commands/i);
+    expect(body).toMatch(/until then runs have no setup/i);
+    // there are no generated checks to satisfy, so the ticket does not say "do not edit them"
+    expect(body).not.toMatch(/rather than editing the checks/i);
+  });
+
+  it('a concrete preset keeps the satisfy-the-checks wording and has no decide section', async () => {
+    const { project } = (await create(STATIC)).json() as CreateProjectResponse;
+    const body = ticketsOf(project.id).find((x) => x.title.startsWith('Bootstrap'))?.body ?? '';
+    expect(body).not.toMatch(/choose a stack that fits the vision/i);
+    expect(body).toMatch(/rather than editing the checks/i);
+  });
+
+  it('stores the minimal generated worktree.yml as approved by the wizard', async () => {
+    const res = await create(AUTO);
+    expect(res.statusCode).toBe(201);
+    const { project } = res.json() as CreateProjectResponse;
+    const yml = read(project.path, '.emberline/worktree.yml');
+    expect(parseWorktreeYml(yml).ok).toBe(true);
+    const row = t.db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+    expect(row?.content).toBe(yml);
+    expect(row?.sha256).toBe(createHash('sha256').update(yml).digest('hex'));
+    expect(row?.approvedBy).toBe('wizard');
+    expect(read(project.path, 'PROJECT.md')).toContain('### Decided by the agent');
+  });
+
+  it('refuses Auto, or three primary dimensions left to the agent, without a 20-character vision', async () => {
+    expect((await preview({ ...AUTO, vision: '  too short  ' })).statusCode).toBe(400);
+    expect((await create({ ...AUTO, vision: undefined })).statusCode).toBe(400);
+    const open3 = { ...STATIC, vision: 'short', choices: { frontend: 'agent', backend: 'agent', database: 'agent' } } as const;
+    expect((await preview(open3)).statusCode).toBe(400);
+    expect((await preview({ ...open3, vision: AUTO.vision })).statusCode).toBe(200);
+    expect((await preview(AUTO)).statusCode).toBe(200);
+  });
+});
+
 describe('POST /api/projects/preview', () => {
   it('has no side effects', async () => {
     const res = await preview(STATIC);
@@ -259,7 +350,7 @@ const bodyFor = (preset: (typeof PRESETS)[number]): CreateProjectBody => ({
   source: 'new',
   appType: preset.type,
   presetId: preset.id,
-  vision: 'A thing.',
+  vision: 'A small thing that people will actually use.',
   startFactory: false,
 });
 

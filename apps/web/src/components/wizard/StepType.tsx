@@ -1,4 +1,4 @@
-import { PROJECT_TYPES, presetsForType } from '@emberline/protocol';
+import { PROJECT_TYPES, presetsForType, VISION_MIN_LENGTH, visionRequired } from '@emberline/protocol';
 import {
   Bot,
   Building,
@@ -59,8 +59,13 @@ export function NameField({
 
 const REFERENCE_DOCS_MAX = 40_000;
 
+const VISION_EXAMPLE =
+  'A booking site for a small yoga studio: the weekly class schedule, sign-up for a class, and a simple admin page for the teacher.';
+
 export function StepType({ state, dispatch }: { state: WizardState; dispatch: Dispatch<WizardAction> }) {
   const presets = state.appType ? presetsForType(state.appType) : [];
+  const required = visionRequired(state.presetId, state.choices);
+  const visionLength = state.vision.trim().length;
   const [fileError, setFileError] = useState<string | null>(null);
 
   const attach = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -123,6 +128,8 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
                 />
                 <span className="wizard-card-title">{p.label}</span>
                 <span className="wizard-card-hint">{p.description}</span>
+                <span className="wizard-card-best">{p.bestFor}</span>
+                <span className="wizard-card-tradeoff">Trade-off: {p.tradeoff}</span>
               </label>
             ))}
           </div>
@@ -130,19 +137,27 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
       )}
 
       <div className="field">
-        <label htmlFor="wizard-vision">Vision</label>
+        <label htmlFor="wizard-vision">Vision{required ? ' (required)' : ''}</label>
         <textarea
           id="wizard-vision"
           className="input wizard-textarea"
           rows={4}
           maxLength={4000}
+          aria-required={required || undefined}
           aria-describedby="wizard-vision-hint"
           value={state.vision}
           onChange={(e) => dispatch({ type: 'field', field: 'vision', value: e.target.value })}
         />
-        <p id="wizard-vision-hint" className="muted small">
-          What the product does and for whom. The product owner turns it into the first tickets.
-        </p>
+        <div id="wizard-vision-hint" className="wizard-vision-hint muted small">
+          <p>
+            {required
+              ? `The agent picks the stack from it, so say what the product does and for whom (at least ${VISION_MIN_LENGTH} characters${
+                  visionLength < VISION_MIN_LENGTH ? `, ${visionLength} so far` : ''
+                }).`
+              : 'What the product does and for whom. The product owner turns it into the first tickets.'}
+          </p>
+          {required && <p>Example: {VISION_EXAMPLE}</p>}
+        </div>
       </div>
 
       <details className="wizard-details">
