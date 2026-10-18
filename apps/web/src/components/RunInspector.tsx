@@ -246,6 +246,11 @@ const EVENT_LABEL: Record<string, string> = {
   completion_nudged: 'Asked to confirm completion',
   completion_missing: 'Held: no completion signal',
   completion_blocked: 'Held: blocked',
+  worktree_setup_pending: 'worktree setup queued',
+  worktree_setup_started: 'worktree setup started',
+  worktree_setup_finished: 'worktree setup finished',
+  worktree_setup_failed: 'worktree setup failed',
+  worktree_teardown_failed: 'worktree teardown failed',
 };
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
