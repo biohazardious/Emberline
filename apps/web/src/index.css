@@ -4843,6 +4843,13 @@ dialog.cmd-dialog::backdrop {
   line-height: 1.4;
 }
 
+/* A card whose label holds only the name and description (preset cards): it stacks like the card. */
+.wizard-card-label {
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+
 /* Preset guidance: what it is best for, then the cost in a quieter line. */
 .wizard-card-best {
   font-size: 0.76rem;

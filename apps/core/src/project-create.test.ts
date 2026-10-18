@@ -281,6 +281,32 @@ describe('Auto preset', () => {
     expect(body).toMatch(/rather than editing the checks/i);
   });
 
+  it('Auto with every dimension filled in by the person gets the satisfy-the-checks steps, not the open ones', async () => {
+    const filled = {
+      ...AUTO,
+      name: 'Filled Auto',
+      choices: {
+        language: 'javascript', frontend: 'plain-html', backend: 'none', database: 'none',
+        auth: 'none', deploy: 'static-hosting', styling: 'plain-css', testing: 'none',
+      },
+    } as const;
+    const { project } = (await create(filled)).json() as CreateProjectResponse;
+    const body = ticketsOf(project.id).find((x) => x.title.startsWith('Bootstrap'))?.body ?? '';
+    expect(body).not.toContain('## Decide the open choices');
+    expect(body).not.toMatch(/commands you write into `\.emberline\/worktree\.yml`/);
+    expect(body).toMatch(/make the project satisfy them/i);
+  });
+
+  it('caps the vision quoted in the Bootstrap ticket at 2000 characters', async () => {
+    const long = `${'A cafe site with a menu. '.repeat(100)}END-MARKER`;
+    const { project } = (await create({ ...AUTO, name: 'Long Vision', vision: long })).json() as CreateProjectResponse;
+    const body = ticketsOf(project.id).find((x) => x.title.startsWith('Bootstrap'))?.body ?? '';
+    const quoted = body.split('### Vision')[1]?.split('## What to do')[0] ?? '';
+    expect(quoted).not.toContain('END-MARKER');
+    expect(quoted.trim().endsWith('…')).toBe(true);
+    expect(quoted.replace(/^> ?/gm, '').trim().length).toBeLessThanOrEqual(2001);
+  });
+
   it('stores the minimal generated worktree.yml as approved by the wizard', async () => {
     const res = await create(AUTO);
     expect(res.statusCode).toBe(201);

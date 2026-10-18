@@ -458,22 +458,30 @@ export interface WizardTicketSpec {
   dependsOn: string[];
 }
 
-const BOOTSTRAP_FALLBACK = [
+/** Generic Bootstrap steps when the generated worktree.yml has commands to satisfy. */
+const BOOTSTRAP_DECIDED = [
   'Set up the project skeleton for the stack chosen in PROJECT.md.',
   'The build gate runs the approved `checks` in `.emberline/worktree.yml`: make the project satisfy them (add the build, lint and test scripts) instead of editing them; an edited worktree.yml only applies after a person approves it in the project banner. Make `setup` and the preview service real as well.',
   'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
 ];
 
-const BOOTSTRAP_FALLBACK_OPEN = [
+/** Generic Bootstrap steps when choices are left open and nothing was generated: the agent writes the commands. */
+const BOOTSTRAP_OPEN = [
   'Set up the project skeleton for the stack you choose, and make the setup, build, lint and test commands you write into `.emberline/worktree.yml` pass.',
   'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
 ];
 
+/** The vision is quoted in the ticket up to this many characters; PROJECT.md keeps the whole text. */
+const TICKET_VISION_MAX = 2000;
+
+const openDimensions = (choices: ProjectChoices): StackDimensionId[] => STACK_ORDER.filter((id) => choices[id] === 'agent');
+
 /** The "decide the open choices" section, or '' when nothing is left to the agent. */
 function decideSection(ctx: WizardTicketContext, emptyWorktree: boolean): string {
-  const open = STACK_ORDER.filter((id) => ctx.choices[id] === 'agent').map((id) => getDimension(id)?.label ?? id);
+  const open = openDimensions(ctx.choices).map((id) => getDimension(id)?.label ?? id);
   if (open.length === 0) return '';
-  const vision = ctx.vision?.trim();
+  const full = ctx.vision?.trim() ?? '';
+  const vision = full.length > TICKET_VISION_MAX ? `${full.slice(0, TICKET_VISION_MAX).trimEnd()}…` : full;
   const commands = emptyWorktree
     ? 'Write the setup, build, lint and test commands and the preview service into `.emberline/worktree.yml`. A person approves the file before Emberline runs those commands; until then runs have no setup.'
     : 'Add the setup, build, lint and test commands and the preview service these choices need to `.emberline/worktree.yml`. A person approves the edited file before Emberline runs the new commands; until then runs use the approved version.';
@@ -491,8 +499,10 @@ ${vision ? `\n### Vision\n\n${vision.split('\n').map((l) => `> ${l}`.trimEnd()).
 export function bootstrapTicket(ctx: WizardTicketContext): WizardTicketSpec {
   const stack = STACK_ORDER.map((id) => `- ${getDimension(id)?.label ?? id}: ${describeChoice(id, ctx.choices[id])}`);
   const emptyWorktree = isEmptyWorktree(worktreeParts(ctx.choices, ctx.preset));
-  const steps = ctx.preset?.bootstrap.length ? ctx.preset.bootstrap : emptyWorktree ? BOOTSTRAP_FALLBACK_OPEN : BOOTSTRAP_FALLBACK;
-  const worktreeCriteria = emptyWorktree
+  // From the final choices, not the preset: an Auto project the person filled in is a decided one.
+  const open = openDimensions(ctx.choices).length > 0 && emptyWorktree;
+  const steps = [...(ctx.preset?.bootstrap ?? []), ...(open ? BOOTSTRAP_OPEN : BOOTSTRAP_DECIDED)];
+  const worktreeCriteria = open
     ? `- \`.emberline/worktree.yml\` has the real \`setup\` commands, the build, lint and test \`checks\` and the preview \`services\` entry for the chosen stack, ready for a person to approve in the project banner.
 - Those commands pass in the worktree.`
     : `- The build gate runs the approved \`checks\` (build, lint, test) from \`.emberline/worktree.yml\`. Make the project satisfy them: add the matching build, lint and test scripts or targets rather than editing the checks. An edited \`worktree.yml\` only applies after a person approves it in the project banner.

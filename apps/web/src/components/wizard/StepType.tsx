@@ -117,21 +117,33 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
         <fieldset className="wizard-fieldset">
           <legend className="wizard-legend">Preset</legend>
           <div className="wizard-cards wizard-cards-2">
-            {presets.map((p) => (
-              <label key={p.id} className="wizard-card">
-                <input
-                  type="radio"
-                  name="wizard-preset"
-                  value={p.id}
-                  checked={state.presetId === p.id}
-                  onChange={() => dispatch({ type: 'preset', presetId: p.id })}
-                />
-                <span className="wizard-card-title">{p.label}</span>
-                <span className="wizard-card-hint">{p.description}</span>
-                <span className="wizard-card-best">{p.bestFor}</span>
-                <span className="wizard-card-tradeoff">Trade-off: {p.tradeoff}</span>
-              </label>
-            ))}
+            {presets.map((p) => {
+              const guide = `wizard-preset-${p.id}`;
+              // The label names the preset; the guidance lines describe the radio. The radio still
+              // covers the whole card, so clicking the guidance selects it too.
+              return (
+                <div key={p.id} className="wizard-card">
+                  <label className="wizard-card-label">
+                    <input
+                      type="radio"
+                      name="wizard-preset"
+                      value={p.id}
+                      checked={state.presetId === p.id}
+                      aria-describedby={`${guide}-best ${guide}-tradeoff`}
+                      onChange={() => dispatch({ type: 'preset', presetId: p.id })}
+                    />
+                    <span className="wizard-card-title">{p.label}</span>
+                    <span className="wizard-card-hint">{p.description}</span>
+                  </label>
+                  <span id={`${guide}-best`} className="wizard-card-best">
+                    {p.bestFor}
+                  </span>
+                  <span id={`${guide}-tradeoff`} className="wizard-card-tradeoff">
+                    Trade-off: {p.tradeoff}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </fieldset>
       )}

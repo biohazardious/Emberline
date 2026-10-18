@@ -106,7 +106,10 @@ export interface PresetDef {
   choices: Partial<Record<StackDimensionId, string>>;
   /** Built-in file template written at creation, or null (the Bootstrap ticket builds the skeleton). */
   starter: StarterId | null;
-  /** Fragments joined into the Bootstrap ticket body. */
+  /**
+   * Preset-specific steps for the Bootstrap ticket. The generic steps follow them there, chosen from
+   * the final choices (open or decided), so they are not part of the preset.
+   */
   bootstrap: readonly string[];
 }
 

@@ -2,18 +2,6 @@
 import { optionsForType, PROJECT_TYPES } from './options.js';
 import { type PresetDef, type ProjectChoices, STACK_DIMENSION_IDS, type StackDimensionId } from './types.js';
 
-const COMMON = [
-  'Set up the project skeleton for the stack chosen in PROJECT.md.',
-  'The build gate runs the approved `checks` in `.emberline/worktree.yml`: make the project satisfy them (add the build, lint and test scripts) instead of editing them; an edited worktree.yml only applies after a person approves it in the project banner. Make `setup` and the preview service real as well.',
-  'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
-];
-
-/** For presets that leave the stack open: there are no generated commands to satisfy yet. */
-const OPEN = [
-  'Set up the project skeleton for the stack you choose, and make the setup, build, lint and test commands you write into `.emberline/worktree.yml` pass.',
-  'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
-];
-
 function p(
   id: string,
   type: PresetDef['type'],
@@ -24,9 +12,8 @@ function p(
   choices: PresetDef['choices'],
   bootstrap: string[] = [],
   starter: PresetDef['starter'] = null,
-  steps: readonly string[] = COMMON,
 ): PresetDef {
-  return { id, type, label, description, bestFor, tradeoff, choices, starter, bootstrap: [...bootstrap, ...steps] };
+  return { id, type, label, description, bestFor, tradeoff, choices, starter, bootstrap };
 }
 
 export const AUTO_PRESET_PREFIX = 'auto-';
@@ -47,9 +34,6 @@ function autoPreset(type: PresetDef['type']): PresetDef {
     'Best for when you are not sure which stack fits: the agent picks one from your vision.',
     'You review its picks in PROJECT.md, and runs have no setup until you approve its worktree.yml.',
     choices,
-    [],
-    null,
-    OPEN,
   );
 }
 
@@ -315,13 +299,13 @@ export const PRESETS: readonly PresetDef[] = [
     'Several toolchains to set up and keep working from the repo root.',
   {
     language: 'agent', frontend: 'agent', backend: 'agent', database: 'agent', auth: 'agent', deploy: 'agent',
-  }, [], null, OPEN),
+  }),
   p('custom-blank', 'custom', 'Blank project', 'Only the project docs; the agent proposes a stack in the Bootstrap ticket',
     'Best for starting from the project docs alone and reviewing the stack the agent proposes.',
     'Nothing is set up until the Bootstrap ticket runs and you approve its worktree.yml.',
   {
     language: 'agent', frontend: 'agent', backend: 'agent', database: 'agent', auth: 'agent', deploy: 'agent',
-  }, [], null, OPEN),
+  }),
 ];
 
 export function getPreset(id: string): PresetDef | undefined {

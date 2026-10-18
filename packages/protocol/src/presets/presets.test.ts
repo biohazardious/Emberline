@@ -110,7 +110,8 @@ describe('preset registry integrity', () => {
         const applies = optionsForType(d.id, t.id).length > 0;
         expect(first!.choices[d.id], `${t.id}.${d.id}`).toBe(applies ? 'agent' : 'none');
       }
-      expect(first!.bootstrap.join('\n')).toMatch(/worktree\.yml/);
+      // the generic steps come from the final choices in the Bootstrap ticket, not from the preset
+      expect(first!.bootstrap).toEqual([]);
     }
     expect(isAutoPreset('static-plain')).toBe(false);
     expect(isAutoPreset('custom-blank')).toBe(false);
@@ -152,6 +153,10 @@ describe('preset registry integrity', () => {
     // the advanced dimensions do not count
     expect(visionRequired(undefined, { frontend: 'agent', language: 'agent', styling: 'agent', testing: 'agent' })).toBe(false);
     expect(visionRequired('custom-blank', getPreset('custom-blank')!.choices)).toBe(true);
+  });
+
+  it('preset bootstrap fragments are preset-specific only (no generic checks step)', () => {
+    for (const p of PRESETS) expect(p.bootstrap.join('\n'), p.id).not.toMatch(/build gate runs the approved/);
   });
 
   it('exposes version policies', () => {
