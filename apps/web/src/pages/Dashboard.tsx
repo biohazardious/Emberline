@@ -15,6 +15,7 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
 import { keptWorktreesSummary } from '../gcSummary';
+import { dockerEngineLine } from '../dockerEngine';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -154,6 +155,7 @@ export function Dashboard({
     }
   };
 
+  const dockerLine = dockerEngineLine(system?.docker);
   const projectName = (id: string | null) => projects.data?.find((p) => p.id === id)?.name;
 
   return (
@@ -174,6 +176,11 @@ export function Dashboard({
           Runner update available: stopping a run during setup waits for its current command. <code>make up</code> when
           convenient (restarts agents).
         </div>
+      )}
+      {dockerLine && (
+        <p className="muted dashboard-docker" title="Isolated Docker engine for agents and previews (compose profile docker)">
+          {dockerLine}
+        </p>
       )}
       {system && system.apiVersion !== API_VERSION && (
         <div className="banner banner-warn" role="status">

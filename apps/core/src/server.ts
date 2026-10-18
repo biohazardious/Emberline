@@ -123,6 +123,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
       deps.ptyd.status === 'connected' &&
       (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
+    docker: deps.runs.docker.status,
   }));
   registerProjectRoutes(app, deps);
   registerProjectImportRoutes(app, deps);

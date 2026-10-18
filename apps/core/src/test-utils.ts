@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CSRF_HEADER } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
-import type { CoreConfig } from './config.js';
+import { type CoreConfig, DEFAULT_PREVIEW_PORTS } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import type { FetchLike } from './forge/issues.js';
@@ -58,6 +58,7 @@ export async function createTestApp(
     setupToken: TEST_SETUP_TOKEN,
     allowedHosts: [],
     transcriptsDir: path.join(dir, 'transcripts'),
+    previewPorts: DEFAULT_PREVIEW_PORTS,
     ...overrides,
   };
   const opened: OpenedDb = openDb(':memory:');

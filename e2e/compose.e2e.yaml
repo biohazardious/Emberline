@@ -10,3 +10,7 @@ services:
       EMBERLINE_METRICS_TOKEN: e2e-metrics-token
   runner:
     image: emberline/runner:e2e
+    # Preview ports stay unpublished: a running Emberline already holds them.
+    ports: !reset []
+  docker:
+    ports: !reset []

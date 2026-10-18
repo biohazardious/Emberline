@@ -298,6 +298,8 @@ export async function runWorktreeCommand(
   timeoutMs: number,
   /** Lets cancelCommand(execId) kill it (a stop during setup). */
   execId?: string,
+  /** Extra variables, e.g. the Docker engine's `DOCKER_HOST` and `EMBERLINE_COMPOSE_PROJECT`. */
+  env: Record<string, string> = {},
 ): Promise<CommandOutcome> {
   try {
     const result = await execCommand({
@@ -305,7 +307,7 @@ export async function runWorktreeCommand(
       args: ['-c', `exec 2>&1\n${command}`],
       cwd,
       timeoutMs,
-      env: { FORCE_COLOR: '0' },
+      env: { ...env, FORCE_COLOR: '0' },
       ...(execId ? { execId } : {}),
     });
     const cancelled = result.cancelled === true;

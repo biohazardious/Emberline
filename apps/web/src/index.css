@@ -1398,6 +1398,12 @@ a {
   font-size: 0.82rem;
 }
 
+.dashboard-docker {
+  margin: 0;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .banner-warn {
   border: 1px solid hsl(40 90% 50% / 0.4);
   background: hsl(40 80% 20% / 0.2);

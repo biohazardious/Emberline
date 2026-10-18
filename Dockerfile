@@ -179,6 +179,37 @@ RUN apt-get update \
 ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN npm install -g --prefix /usr/local --no-fund --no-audit @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
   && test -x /usr/local/bin/playwright-mcp
+# Docker CLI with the compose and buildx plugins, for the opt-in isolated engine (compose profile
+# `docker`). The runner has no daemon and never sees the host's socket: core sets DOCKER_HOST per run
+# while the sidecar answers. Static binaries at exact versions; change a version together with its
+# checksums (docker/compose and docker/buildx publish theirs; the CLI tarball's were taken at pin time).
+# Compose >= 2.24 is required for `!override` (compose previews); compose v5 builds through buildx.
+ARG DOCKER_CLI_VERSION=29.8.2
+ARG DOCKER_COMPOSE_VERSION=5.6.0
+ARG DOCKER_BUILDX_VERSION=0.37.2
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) arch=x86_64; goarch=amd64; \
+      cli_sha=995d1ef289677f74fd58d8d2c35727b6a4ee389c69db8638a3e42d0487aa5b0f; \
+      compose_sha=40343e21ca777173e69cff5dbafeb37c6f81f3b0d57d9e597f036e95eb63e76a; \
+      buildx_sha=982ca20490b45ed1ec8d99795974d3d874a358f75938c9c237305010e6b7e548 ;; \
+    arm64) arch=aarch64; goarch=arm64; \
+      cli_sha=76a624e4a8e5da654d1150e808175125efb5a6f1b6aa1cbd9caee18f51047a50; \
+      compose_sha=733ec76717ceb59052a9609b9dadfb523b2df8eab57a54212872d10a58078ea2; \
+      buildx_sha=efa38cb7aa7db2dbb9ad049b00b0a9737f66f033626177b5a4e845184ad7ab29 ;; \
+    *) echo "no pinned Docker CLI for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  tmp="$(mktemp -d)"; \
+  curl -fsSL -o "$tmp/docker.tgz" "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+  curl -fsSL -o "$tmp/docker-compose" "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${arch}"; \
+  curl -fsSL -o "$tmp/docker-buildx" "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.linux-${goarch}"; \
+  printf '%s  %s\n' "$cli_sha" "$tmp/docker.tgz" "$compose_sha" "$tmp/docker-compose" "$buildx_sha" "$tmp/docker-buildx" | sha256sum -c -; \
+  tar -xzf "$tmp/docker.tgz" -C "$tmp" docker/docker; \
+  install -m 0755 "$tmp/docker/docker" /usr/local/bin/docker; \
+  install -d /usr/local/lib/docker/cli-plugins; \
+  install -m 0755 "$tmp/docker-compose" "$tmp/docker-buildx" /usr/local/lib/docker/cli-plugins/; \
+  rm -rf "$tmp"; \
+  docker --version; docker compose version; docker buildx version
 # SDKs that `emberline-sdk` installs into the runner-tools volume, at fixed paths.
 ENV JAVA_HOME=/opt/ai-tools/sdk/jdk \
     ANDROID_HOME=/opt/ai-tools/sdk/android \

@@ -20,6 +20,19 @@ export type HealthResponse = z.infer<typeof HealthResponse>;
  */
 export const API_VERSION = 1;
 
+/** The opt-in Docker engine sidecar (compose profile `docker`), as core's last probe saw it. */
+export const DockerEngineStatus = z.object({
+  /** `EMBERLINE_DOCKER_HOST` is set; false = Docker is off. */
+  enabled: z.boolean(),
+  /** The engine answered the last probe; runs get `DOCKER_HOST` only then. */
+  available: z.boolean(),
+  /** The engine's server version, while available. */
+  version: z.string().nullable(),
+  /** Why an enabled engine is unavailable (CLI output, one line). */
+  error: z.string().optional(),
+});
+export type DockerEngineStatus = z.infer<typeof DockerEngineStatus>;
+
 export const SystemStatus = z.object({
   version: z.string(),
   apiVersion: z.number().int(),
@@ -28,6 +41,7 @@ export const SystemStatus = z.object({
   runnerOutdated: z.boolean(),
   /** The runner works but is older than PTYD_PROTOCOL_VERSION: an update brings extras, nothing breaks. */
   runnerUpdateAvailable: z.boolean(),
+  docker: DockerEngineStatus,
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;
 

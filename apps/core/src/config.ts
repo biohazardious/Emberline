@@ -40,6 +40,37 @@ export interface CoreConfig {
   allowedHosts: string[];
   /** Claude Code transcripts (runner home, mounted read-only); only paths under it are read. */
   transcriptsDir: string;
+  /**
+   * The isolated Docker engine (compose profile `docker`, `tcp://docker:2375`) that runs and
+   * worktree.yml commands get as `DOCKER_HOST` while it answers. Unset: no Docker.
+   */
+  dockerHost?: string;
+  /**
+   * Host ports published for previews (compose.yaml): the runner's for command previews, the
+   * `docker` service's for compose previews. Disjoint, so the two never claim the same port.
+   */
+  previewPorts: { runner: PortRange; docker: PortRange };
+}
+
+/** Inclusive TCP port range. */
+export interface PortRange {
+  first: number;
+  last: number;
+}
+
+export const DEFAULT_PREVIEW_PORTS: CoreConfig['previewPorts'] = {
+  runner: { first: 4300, last: 4324 },
+  docker: { first: 4325, last: 4349 },
+};
+
+/** `4300-4324` or a single port `4300` (1-65535, first <= last); null otherwise. */
+export function parsePortRange(raw: string): PortRange | null {
+  const match = /^\s*(\d{1,5})\s*(?:-\s*(\d{1,5})\s*)?$/.exec(raw);
+  if (!match) return null;
+  const first = Number(match[1]);
+  const last = Number(match[2] ?? match[1]);
+  if (first < 1 || last > 65_535 || first > last) return null;
+  return { first, last };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
@@ -63,7 +94,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
+    dockerHost: env.EMBERLINE_DOCKER_HOST?.trim() || undefined,
+    previewPorts: {
+      runner: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_RUNNER ?? '') ?? DEFAULT_PREVIEW_PORTS.runner,
+      docker: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_DOCKER ?? '') ?? DEFAULT_PREVIEW_PORTS.docker,
+    },
   };
+}
+
+/** Preview port variables that are set but not a port range; core logs them and uses the default. */
+export function invalidPreviewPortVars(env: NodeJS.ProcessEnv): string[] {
+  return (['EMBERLINE_PREVIEW_PORTS_RUNNER', 'EMBERLINE_PREVIEW_PORTS_DOCKER'] as const).filter(
+    (name) => (env[name] ?? '').trim() !== '' && parsePortRange(env[name]!) === null,
+  );
 }
 
 const HOST_LABEL = '[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?';

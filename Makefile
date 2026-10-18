@@ -5,7 +5,7 @@ E2E  := docker compose -p emberline-e2e -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password up down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password up up-docker down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -59,6 +59,9 @@ e2e: ## End-to-end smoke test on an isolated core + runner stack (port 7498, rem
 
 up: ## Build and start core + runner
 	$(PROD) up -d --build
+
+up-docker: ## Same with the isolated Docker engine for agents and compose previews (profile docker)
+	COMPOSE_PROFILES=docker EMBERLINE_DOCKER_HOST=$${EMBERLINE_DOCKER_HOST:-tcp://docker:2375} $(PROD) up -d --build
 
 down: ## Stop core + runner
 	$(PROD) down

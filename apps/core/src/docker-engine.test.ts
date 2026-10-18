@@ -1,0 +1,306 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { Run, SystemStatus } from '@emberline/protocol';
+import { PtydServer } from '@emberline/ptyd/server';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  type CommandExecutor,
+  type ExecRequest,
+  type ExecResult,
+  localCommandExecutor,
+  setCommandExecutor,
+} from './command-exec.js';
+import { loadConfig, parsePortRange } from './config.js';
+import { composeProjectName, DOCKER_PROBE_INTERVAL_MS, DOCKER_PROMPT_PARAGRAPH, DockerEngine } from './docker/engine.js';
+import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+
+const ok = (stdout: string): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
+const failed = (stderr: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout: '', stderr, timedOut: false, truncated: false });
+
+describe('config: Docker host and preview port ranges', () => {
+  it('reads EMBERLINE_DOCKER_HOST; blank or unset is off', () => {
+    expect(loadConfig({ EMBERLINE_DOCKER_HOST: 'tcp://docker:2375' }).dockerHost).toBe('tcp://docker:2375');
+    expect(loadConfig({ EMBERLINE_DOCKER_HOST: '  ' }).dockerHost).toBeUndefined();
+    expect(loadConfig({}).dockerHost).toBeUndefined();
+  });
+
+  it('defaults the preview ports to 4300-4324 (runner) and 4325-4349 (docker)', () => {
+    expect(loadConfig({}).previewPorts).toEqual({ runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4349 } });
+  });
+
+  it('reads both ranges, and falls back to the default for an invalid one', () => {
+    const config = loadConfig({ EMBERLINE_PREVIEW_PORTS_RUNNER: ' 5000 - 5009 ', EMBERLINE_PREVIEW_PORTS_DOCKER: '6000-5000' });
+    expect(config.previewPorts).toEqual({ runner: { first: 5000, last: 5009 }, docker: { first: 4325, last: 4349 } });
+  });
+
+  it('parses a range or a single port, and rejects anything else', () => {
+    expect(parsePortRange('4300-4349')).toEqual({ first: 4300, last: 4349 });
+    expect(parsePortRange('8080')).toEqual({ first: 8080, last: 8080 });
+    for (const bad of ['', 'abc', '0-10', '4300-70000', '4350-4300', '4300-', '-4300', '4300:4349', '1e3-2e3']) {
+      expect(parsePortRange(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe('composeProjectName', () => {
+  it('is emberline-<first 8 of the run id>', () => {
+    expect(composeProjectName('AB12cd34-0000-4000-8000-000000000000')).toBe('emberline-ab12cd34');
+  });
+
+  it('follows the worktree, so a handoff successor shares its predecessor\'s project', () => {
+    expect(composeProjectName('99999999-0000-4000-8000-000000000000', '/workspaces/.worktrees/shop/1a2b3c4d')).toBe('emberline-1a2b3c4d');
+    // In place (no worktree of its own): the run's id.
+    expect(composeProjectName('99999999-0000-4000-8000-000000000000', '/workspaces/shop')).toBe('emberline-99999999');
+  });
+});
+
+describe('DockerEngine probe', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is off without a host and never runs the CLI', async () => {
+    const exec = vi.fn<CommandExecutor>();
+    const engine = new DockerEngine(undefined, { exec });
+    expect(await engine.probe()).toEqual({ enabled: false, available: false, version: null });
+    engine.start();
+    engine.stop();
+    expect(exec).not.toHaveBeenCalled();
+    expect(engine.runEnv('emberline-ab12cd34')).toEqual({});
+  });
+
+  it('runs `docker version` in the runner with DOCKER_HOST and caches the server version', async () => {
+    const exec = vi.fn<CommandExecutor>(async () => ok('"29.8.2"\n'));
+    const engine = new DockerEngine('tcp://docker:2375', { exec, cwd: '/workspaces' });
+    expect(engine.status).toEqual({ enabled: true, available: false, version: null });
+    expect(await engine.probe()).toEqual({ enabled: true, available: true, version: '29.8.2' });
+    expect(engine.status).toEqual({ enabled: true, available: true, version: '29.8.2' });
+    const request = exec.mock.calls[0]![0] as ExecRequest;
+    expect(request).toMatchObject({
+      file: 'docker',
+      args: ['version', '--format', '{{json .Server.Version}}'],
+      cwd: '/workspaces',
+      env: { DOCKER_HOST: 'tcp://docker:2375' },
+    });
+    expect(engine.runEnv('emberline-ab12cd34')).toEqual({
+      DOCKER_HOST: 'tcp://docker:2375',
+      EMBERLINE_COMPOSE_PROJECT: 'emberline-ab12cd34',
+    });
+  });
+
+  it('an unreachable engine is unavailable with the CLI error, sanitised and short', async () => {
+    const message = `Cannot connect to the Docker daemon at tcp://docker:2375. Is the docker daemon running?\u001b[31m\n${'x'.repeat(600)}`;
+    const engine = new DockerEngine('tcp://docker:2375', { exec: async () => failed(message) });
+    const status = await engine.probe();
+    expect(status).toMatchObject({ enabled: true, available: false, version: null });
+    expect(status.error).not.toContain('\u001b');
+    expect(status.error!.length).toBeLessThanOrEqual(300);
+    expect(engine.runEnv('emberline-ab12cd34')).toEqual({});
+  });
+
+  it('says so when the runner image has no Docker CLI', async () => {
+    const engine = new DockerEngine('tcp://docker:2375', { exec: async () => failed('spawn docker ENOENT\n', 127) });
+    expect((await engine.probe()).error).toBe('the runner image has no Docker CLI; rebuild it (make up-docker)');
+  });
+
+  it('a runner that is not reachable is an error too, never a throw', async () => {
+    const engine = new DockerEngine('tcp://docker:2375', { exec: async () => Promise.reject(new Error('ptyd is not connected')) });
+    expect(await engine.probe()).toEqual({ enabled: true, available: false, version: null, error: 'ptyd is not connected' });
+  });
+
+  it('an answer that is not a version string is an error', async () => {
+    const engine = new DockerEngine('tcp://docker:2375', { exec: async () => ok('null\n') });
+    expect(await engine.probe()).toMatchObject({ available: false, error: 'unexpected `docker version` output' });
+  });
+
+  it('probes at start and every 60 s; a change is reported once', async () => {
+    vi.useFakeTimers();
+    let answer: ExecResult = ok('"29.8.2"');
+    const exec = vi.fn<CommandExecutor>(async () => answer);
+    const changes: string[] = [];
+    const engine = new DockerEngine('tcp://docker:2375', {
+      exec,
+      onChange: (s) => changes.push(s.available ? `on ${s.version}` : `off ${s.error}`),
+    });
+    engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(engine.status.available).toBe(true);
+    await vi.advanceTimersByTimeAsync(DOCKER_PROBE_INTERVAL_MS);
+    expect(exec).toHaveBeenCalledTimes(2);
+    answer = failed('connection refused');
+    await vi.advanceTimersByTimeAsync(DOCKER_PROBE_INTERVAL_MS);
+    expect(engine.status).toMatchObject({ available: false, error: 'connection refused' });
+    expect(changes).toEqual(['on 29.8.2', 'off connection refused']);
+    engine.stop();
+    await vi.advanceTimersByTimeAsync(DOCKER_PROBE_INTERVAL_MS * 3);
+    expect(exec).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares one probe between concurrent callers', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const exec = vi.fn<CommandExecutor>(async () => {
+      await gate;
+      return ok('"29.8.2"');
+    });
+    const engine = new DockerEngine('tcp://docker:2375', { exec });
+    const both = Promise.all([engine.probe(), engine.probe()]);
+    release();
+    await both;
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Docker engine in core: /api/system, run env, first prompt, worktree.yml commands', () => {
+  let t: TestApp;
+  let ptydServer: PtydServer;
+  let cookie: string;
+  /** What the fake `docker version` answers. */
+  let dockerAnswer: ExecResult;
+
+  afterEach(async () => {
+    setCommandExecutor(localCommandExecutor);
+    await t.close();
+    await ptydServer.close();
+  });
+
+  /**
+   * Core with EMBERLINE_DOCKER_HOST set (or not), a ptyd and a fake Claude that leaks its prompt and
+   * its Docker variables to files. `docker` itself is faked in the command executor.
+   */
+  async function start(dockerHost: string | undefined) {
+    t = await createTestApp(dockerHost ? { dockerHost } : {});
+    const fake = path.join(t.dir, 'fake-claude.sh');
+    writeFileSync(
+      fake,
+      [
+        '#!/bin/sh',
+        'last=""; for a in "$@"; do last="$a"; done',
+        `printf %s "$last" > "${t.dir}/.prompt-$EMBERLINE_RUN_ID"`,
+        `printf '%s|%s' "\${DOCKER_HOST-unset}" "\${EMBERLINE_COMPOSE_PROJECT-unset}" > "${t.dir}/.docker-$EMBERLINE_RUN_ID"`,
+        `mv "${t.dir}/.docker-$EMBERLINE_RUN_ID" "${t.dir}/docker-$EMBERLINE_RUN_ID"`,
+        `mv "${t.dir}/.prompt-$EMBERLINE_RUN_ID" "${t.dir}/prompt-$EMBERLINE_RUN_ID"`,
+        'read line',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    t.config.claudeCommand = fake;
+    dockerAnswer = ok('"29.8.2"\n');
+    setCommandExecutor(async (request) => (request.file === 'docker' ? dockerAnswer : localCommandExecutor(request)));
+    ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+    await ptydServer.listen();
+    t.ptyd.start();
+    await t.ptyd.waitUntilConnected();
+    cookie = await setupAndLogin(t.app);
+  }
+
+  const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
+    t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+
+  async function waitFile(file: string): Promise<string> {
+    await expect.poll(() => existsSync(file), { timeout: 8_000 }).toBe(true);
+    return readFileSync(file, 'utf8');
+  }
+
+  async function gitProject(worktreeYml?: string): Promise<{ id: string; path: string }> {
+    const { project } = (await api('POST', '/api/projects', { name: 'Shop', initGit: false })).json();
+    const git = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
+    git('init', '-q', '-b', 'main');
+    if (worktreeYml) {
+      execFileSync('mkdir', ['-p', path.join(project.path, '.emberline')]);
+      writeFileSync(path.join(project.path, '.emberline/worktree.yml'), worktreeYml);
+      git('add', '.emberline/worktree.yml');
+    }
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    if (worktreeYml) {
+      const { head } = (await api('GET', `/api/projects/${project.id}/worktree-config`)).json();
+      expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: head.sha256 })).statusCode).toBe(200);
+    }
+    return project;
+  }
+
+  async function startRun(projectId: string, prompt = 'build it'): Promise<{ run: Run; prompt: string; docker: string }> {
+    const run: Run = (await api('POST', '/api/runs', { projectId, prompt })).json();
+    const docker = await waitFile(path.join(t.dir, `docker-${run.id}`));
+    return { run, prompt: await waitFile(path.join(t.dir, `prompt-${run.id}`)), docker };
+  }
+
+  it('off: /api/system says so, and runs get neither the variables nor the paragraph', async () => {
+    await start(undefined);
+    const system: SystemStatus = (await api('GET', '/api/system')).json();
+    expect(system.docker).toEqual({ enabled: false, available: false, version: null });
+    const project = await gitProject();
+    const { prompt, docker } = await startRun(project.id);
+    expect(docker).toBe('unset|unset');
+    expect(prompt).toBe('build it');
+  });
+
+  it('on: /api/system reports the version; a run gets DOCKER_HOST, its compose project and one paragraph', async () => {
+    await start('tcp://docker:2375');
+    await t.runs.docker.probe();
+    const system: SystemStatus = (await api('GET', '/api/system')).json();
+    expect(system.docker).toEqual({ enabled: true, available: true, version: '29.8.2' });
+    const project = await gitProject();
+    const { run, prompt, docker } = await startRun(project.id);
+    expect(docker).toBe(`tcp://docker:2375|emberline-${run.id.slice(0, 8)}`);
+    expect(prompt).toBe(`build it\n\n${DOCKER_PROMPT_PARAGRAPH}`);
+    expect(DOCKER_PROMPT_PARAGRAPH).toContain('$EMBERLINE_COMPOSE_PROJECT');
+  });
+
+  it('unreachable: /api/system carries the error, and runs get no DOCKER_HOST', async () => {
+    await start('tcp://docker:2375');
+    dockerAnswer = failed('Cannot connect to the Docker daemon at tcp://docker:2375. Is the docker daemon running?');
+    await t.runs.docker.probe();
+    const system: SystemStatus = (await api('GET', '/api/system')).json();
+    expect(system.docker).toEqual({
+      enabled: true,
+      available: false,
+      version: null,
+      error: 'Cannot connect to the Docker daemon at tcp://docker:2375. Is the docker daemon running?',
+    });
+    const project = await gitProject();
+    const { prompt, docker } = await startRun(project.id);
+    expect(docker).toBe('unset|unset');
+    expect(prompt).toBe('build it');
+  });
+
+  it('worktree.yml setup and teardown commands get the Docker variables when the engine is on', async () => {
+    await start('tcp://docker:2375');
+    await t.runs.docker.probe();
+    const log = path.join(t.dir, 'teardown.log');
+    const project = await gitProject(
+      [
+        'version: 1',
+        'setup:',
+        `  - ${JSON.stringify('printf "%s|%s" "$DOCKER_HOST" "$EMBERLINE_COMPOSE_PROJECT" > setup-env')}`,
+        'teardown:',
+        `  - ${JSON.stringify(`printf "%s|%s" "$DOCKER_HOST" "$EMBERLINE_COMPOSE_PROJECT" > ${log}`)}`,
+        '',
+      ].join('\n'),
+    );
+    const { run } = await startRun(project.id);
+    const expected = `tcp://docker:2375|emberline-${run.id.slice(0, 8)}`;
+    expect(readFileSync(path.join(run.worktreePath, 'setup-env'), 'utf8')).toBe(expected);
+    await t.runs.stop(run.id);
+    // The terminal's exit is recorded by reconciliation (each prune attempt reconciles first).
+    await expect
+      .poll(async () => (await api('POST', `/api/runs/${run.id}/worktree/prune`, { force: true })).statusCode, { timeout: 8_000 })
+      .not.toBe(409);
+    expect(existsSync(run.worktreePath)).toBe(false);
+    expect(readFileSync(log, 'utf8')).toBe(expected);
+  });
+
+  it('worktree.yml commands get no Docker variables when the engine is off', async () => {
+    await start(undefined);
+    const project = await gitProject(
+      `version: 1\nsetup:\n  - ${JSON.stringify('printf "%s|%s" "${DOCKER_HOST-unset}" "${EMBERLINE_COMPOSE_PROJECT-unset}" > setup-env')}\n`,
+    );
+    const { run } = await startRun(project.id);
+    expect(readFileSync(path.join(run.worktreePath, 'setup-env'), 'utf8')).toBe('unset|unset');
+  });
+});
