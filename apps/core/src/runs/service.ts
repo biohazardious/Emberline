@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
@@ -102,6 +102,7 @@ import {
 import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } from './handoff.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 import { providerAdapter } from './providers.js';
+import { detectPreviewCommand } from './preview-command.js';
 import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
 
@@ -1651,21 +1652,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   private detectPreviewCommand(worktreePath: string): string | null {
-    const pkgFile = path.join(worktreePath, 'package.json');
-    if (!existsSync(pkgFile)) return null;
-    try {
-      const pkg = JSON.parse(readFileSync(pkgFile, 'utf8')) as {
-        scripts?: Record<string, string>;
-      };
-      const hasPnpmLock = existsSync(path.join(worktreePath, 'pnpm-lock.yaml'));
-      const runner = hasPnpmLock ? 'pnpm' : 'npm run';
-      if (pkg.scripts?.dev) return `${runner} dev`;
-      if (pkg.scripts?.start) return `${runner} start`;
-      if (pkg.scripts?.preview) return `${runner} preview`;
-    } catch {
-      // ignore invalid package.json
-    }
-    return null;
+    return detectPreviewCommand(worktreePath);
   }
 
   /**

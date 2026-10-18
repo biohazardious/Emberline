@@ -396,15 +396,20 @@ describe('create v2 behaviour', () => {
     expect((await create(STATIC)).statusCode).toBe(201);
   });
 
-  it('writes the row, worktree config and gates together or not at all', async () => {
+  it('a ticket failure after the commit keeps the project and answers 201 with a warning', async () => {
     vi.spyOn(t.tickets, 'create').mockImplementation(() => {
       throw new Error('boom');
     });
+    const error = vi.spyOn(t.app.log, 'error');
     // tickets are created after the commit: the project stays, with its config and gates
     const res = await create({ ...STATIC, gates: { antiSlopGate: true } });
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(201);
+    const out = res.json() as CreateProjectResponse;
+    expect(out.warning).toMatch(/tickets/i);
     const row = t.db.select().from(projects).get();
     expect(row).toBeDefined();
+    expect(out.project.id).toBe(row!.id);
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ projectId: row!.id }), expect.any(String));
     expect(t.db.select().from(projectWorktreeConfig).all()).toHaveLength(1);
     expect(readProjectSettings(t.db, row!.id).gates).toEqual({ antiSlopGate: true });
     expect(existsSync(row!.path)).toBe(true);

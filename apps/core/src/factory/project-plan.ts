@@ -61,7 +61,7 @@ export function isWizardCreate(body: ProjectCreateInput): boolean {
 }
 
 /** `none` and `agent` are always valid; an option id must exist in the dimension and fit the type. */
-function validateChoices(choices: ProjectChoices, appType: ProjectAppType): void {
+export function validateChoices(choices: ProjectChoices, appType: ProjectAppType): void {
   for (const [dimension, choice] of Object.entries(choices) as [StackDimensionId, StackChoice][]) {
     if (typeof choice !== 'string' || choice === 'none' || choice === 'agent') continue;
     const option = findOption(dimension, choice);
@@ -73,7 +73,7 @@ function validateChoices(choices: ProjectChoices, appType: ProjectAppType): void
 }
 
 /** Legacy `techStack` text derived from the choices, so the project row and old views keep working. */
-function techStackFromChoices(choices: ProjectChoices, versionPolicy?: string): ProjectTechStack {
+export function techStackFromChoices(choices: ProjectChoices, versionPolicy?: string): ProjectTechStack {
   const text = (id: StackDimensionId): string => {
     const choice = choices[id];
     if (choice === undefined || choice === 'none') return '';

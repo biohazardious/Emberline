@@ -6,13 +6,18 @@ import { HttpError } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 
-const FACTORY_GIT_IDENTITY = ['-c', 'user.name=Emberline AI Factory', '-c', 'user.email=factory@emberline.local'];
+export const FACTORY_GIT_IDENTITY = ['-c', 'user.name=Emberline AI Factory', '-c', 'user.email=factory@emberline.local'];
 
 /** Never committed from a run's worktree even when the project forgot to ignore them. */
 const RUN_OUTPUT_EXCLUDES = [':(exclude,glob)**/node_modules/**', ':(exclude,glob)**/.emberline/**'];
 
 /** One merge into a main workspace at a time (parallel runs finish independently). */
 const mainWorkspaceLock = new KeyedMutex();
+
+/** Runs `fn` while no merge (or other locked change) touches this main workspace. */
+export function withMainWorkspaceLock<T>(mainWorkspacePath: string, fn: () => Promise<T>): Promise<T> {
+  return mainWorkspaceLock.run(path.resolve(mainWorkspacePath), fn);
+}
 
 function gitLines(stdout: string): string[] {
   return stdout

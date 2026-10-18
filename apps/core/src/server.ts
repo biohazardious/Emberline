@@ -20,6 +20,7 @@ import { registerEventRoutes } from './routes/events.js';
 import { registerForgeRoutes } from './routes/forge.js';
 import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
+import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerReviewRoutes } from './routes/review.js';
 import { registerBuildOutputRoutes } from './routes/build-outputs.js';
@@ -118,6 +119,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     runnerOutdated: deps.ptyd.status === 'connected' && (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
   }));
   registerProjectRoutes(app, deps);
+  registerProjectImportRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);

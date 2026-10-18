@@ -122,6 +122,8 @@ export const CreateProjectResponse = z.object({
   project: Project,
   /** Terminal running `git clone`, when a repo URL was given. */
   terminalId: z.string().nullable(),
+  /** The project exists but a later step failed (e.g. its tickets); shown to the person. */
+  warning: z.string().optional(),
 });
 export type CreateProjectResponse = z.infer<typeof CreateProjectResponse>;
 
@@ -160,8 +162,24 @@ export type ImportStatusResponse = z.infer<typeof ImportStatusResponse>;
 
 const DetectedService = z.object({ name: z.string(), command: z.string(), preview: z.boolean().optional() });
 
+/** Largest `.emberline/worktree.yml` detection reads and an import may approve. */
+export const MAX_WORKTREE_YML_BYTES = 64 * 1024;
+
+/** A repo's own `.emberline/worktree.yml`, as found on disk. */
+export const ExistingWorktreeYml = z.object({
+  /** Null when the file could not be read safely (symlink, not a regular file, too large). */
+  content: z.string().nullable(),
+  /** sha256 of `content`; adopt's `worktreeYmlSha256` must match it to approve the file. */
+  sha256: z.string().nullable(),
+  /** Read or schema errors; a file with errors can never be approved. */
+  errors: z.array(z.string()),
+});
+export type ExistingWorktreeYml = z.infer<typeof ExistingWorktreeYml>;
+
 export const ProjectDetectResponse = z.object({
   detected: z.object({
+    /** Best-effort project type, used to scope the choices. */
+    appType: ProjectAppType,
     choices: ProjectChoices,
     commands: z.object({
       setup: z.array(z.string()),
@@ -176,7 +194,10 @@ export const ProjectDetectResponse = z.object({
       agentsMd: z.boolean(),
       worktreeYml: z.boolean(),
     }),
+    /** Present when the repo has a `.emberline/worktree.yml`. */
+    worktreeYml: ExistingWorktreeYml.nullable(),
   }),
+  /** Generated content, only for files the repo does not have. */
   suggestions: z.object({
     projectMd: z.string().optional(),
     claudeMd: z.string().optional(),
@@ -188,17 +209,72 @@ export type ProjectDetectResponse = z.infer<typeof ProjectDetectResponse>;
 export const AdoptWriteFile = z.enum(['projectMd', 'claudeMd', 'worktreeYml']);
 export type AdoptWriteFile = z.infer<typeof AdoptWriteFile>;
 
-export const AdoptProjectBody = z.object({
-  choices: ProjectChoices.default({}),
-  gates: ProjectGateOverrides.default({}),
-  /** Missing files to write and commit; existing files are never overwritten. */
-  write: z.array(AdoptWriteFile).max(3).default([]),
-  startFactory: z.boolean().default(false),
-  vision: z.string().trim().max(4000).default(''),
-});
+export const AdoptProjectBody = z
+  .object({
+    /** Detected (or corrected) project type; the project row keeps its type when absent. */
+    appType: ProjectAppType.optional(),
+    choices: ProjectChoices.default({}),
+    gates: ProjectGateOverrides.default({}),
+    /** Missing files to write and commit; existing files are never overwritten. */
+    write: z.array(AdoptWriteFile).max(3).default([]),
+    startFactory: z.boolean().default(false),
+    vision: z.string().trim().max(4000).default(''),
+    /** The person ticked the repo's own worktree.yml on the summary: store it as approved. */
+    approveWorktreeYml: z.boolean().default(false),
+    /** sha256 of the worktree.yml content the person reviewed (from detection). */
+    worktreeYmlSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  })
+  .refine((b) => !b.approveWorktreeYml || b.worktreeYmlSha256 !== undefined, {
+    path: ['worktreeYmlSha256'],
+    message: 'approving the repo\'s worktree.yml needs the sha256 of the reviewed content',
+  })
+  .refine((b) => !(b.approveWorktreeYml && b.write.includes('worktreeYml')), {
+    path: ['approveWorktreeYml'],
+    message: 'approve the repo\'s worktree.yml or write a new one, not both',
+  })
+  .refine((b) => !b.startFactory || b.vision.length > 0, {
+    path: ['vision'],
+    message: 'starting the factory needs a vision',
+  });
 export type AdoptProjectBody = z.input<typeof AdoptProjectBody>;
 
-export const WorkspaceFolder = z.object({ name: z.string(), path: z.string() });
+/** Path of each adopt file in the repository. */
+export const ADOPT_FILE_PATHS = {
+  projectMd: 'PROJECT.md',
+  claudeMd: 'CLAUDE.md',
+  worktreeYml: '.emberline/worktree.yml',
+} as const satisfies Record<AdoptWriteFile, string>;
+
+export const ADOPT_COMMIT_MESSAGE = 'chore: add Emberline project files';
+
+/** `POST /api/projects/:id/adopt/preview`: what adopt would write and commit. No side effects. */
+export const AdoptPreviewResponse = z.object({
+  /** Repository path -> content, for the ticked missing files. */
+  files: z.record(z.string(), z.string()),
+  /** Null when nothing is written. */
+  commitMessage: z.string().nullable(),
+  /** Which worktree.yml runs will use after adopt: Emberline's, the repo's (ticked) or none. */
+  worktreeConfig: z.enum(['generated', 'existing']).nullable(),
+});
+export type AdoptPreviewResponse = z.infer<typeof AdoptPreviewResponse>;
+
+export const AdoptProjectResponse = AdoptPreviewResponse.extend({
+  project: Project,
+  /** The commit on the checked-out branch, when files were written. Never pushed. */
+  commitSha: z.string().nullable(),
+  /** The `[Factory]` ticket, when `startFactory` was set. */
+  factoryTicketId: z.string().nullable(),
+  /** The files were committed but a later step failed (e.g. the ticket); shown to the person. */
+  warning: z.string().optional(),
+});
+export type AdoptProjectResponse = z.infer<typeof AdoptProjectResponse>;
+
+export const WorkspaceFolder = z.object({
+  name: z.string(),
+  path: z.string(),
+  isGitRepo: z.boolean(),
+  hasRemote: z.boolean(),
+});
 export type WorkspaceFolder = z.infer<typeof WorkspaceFolder>;
 
 export const WorkspaceFoldersResponse = z.object({ folders: z.array(WorkspaceFolder) });

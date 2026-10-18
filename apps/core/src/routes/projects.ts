@@ -115,6 +115,7 @@ import {
   writeProjectBlueprint,
   writeWorkspaceFileContent,
 } from '../factory/service.js';
+import { inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
 import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
 import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
 import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
@@ -273,18 +274,29 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     const project = toProject(row);
     saveActiveProjectId(project.id);
 
-    const created = new Map<string, Ticket>();
-    for (const spec of plan.tickets) {
-      created.set(spec.key, tickets.create(project.id, { ...spec, status: 'ready' }));
-    }
-    const bootstrap = created.get('bootstrap');
-    if (plan.startFactory && plan.vision && bootstrap) {
-      created.set('factory', tickets.createFactoryTicket(project.id, plan.vision, { autoDispatch: true }));
-    }
-    for (const spec of [...plan.tickets, { key: 'factory', dependsOn: ['bootstrap'] }]) {
-      const ticket = created.get(spec.key);
-      const dependsOn = spec.dependsOn.flatMap((k) => created.get(k)?.key ?? []);
-      if (ticket && dependsOn.length > 0) tickets.update(ticket.id, { dependsOn });
+    reply.code(201);
+    try {
+      const created = new Map<string, Ticket>();
+      for (const spec of plan.tickets) {
+        created.set(spec.key, tickets.create(project.id, { ...spec, status: 'ready' }));
+      }
+      const bootstrap = created.get('bootstrap');
+      if (plan.startFactory && plan.vision && bootstrap) {
+        created.set('factory', tickets.createFactoryTicket(project.id, plan.vision, { autoDispatch: true }));
+      }
+      for (const spec of [...plan.tickets, { key: 'factory', dependsOn: ['bootstrap'] }]) {
+        const ticket = created.get(spec.key);
+        const dependsOn = spec.dependsOn.flatMap((k) => created.get(k)?.key ?? []);
+        if (ticket && dependsOn.length > 0) tickets.update(ticket.id, { dependsOn });
+      }
+    } catch (err) {
+      // The project is committed and registered: say so instead of failing a create that happened.
+      log.error({ err, projectId: project.id }, 'wizard: creating the project tickets failed');
+      return {
+        project,
+        terminalId: null,
+        warning: 'The project was created, but its tickets could not be created. Add them from the board.',
+      };
     }
     if (plan.startFactory) {
       // Chaining starts Bootstrap now and carries on with the PO and Deploy once it is merged.
@@ -293,7 +305,46 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         log.warn({ err, projectId: project.id }, 'wizard: starting the factory failed');
       });
     }
+    return { project, terminalId: null };
+  }
 
+  /** Registers an existing repository in the workspaces directory where it is: no copy, no new files. */
+  async function importFolderProject(
+    body: ReturnType<typeof CreateProjectBody.parse>,
+    folder: string,
+    slug: string,
+    reply: FastifyReply,
+  ): Promise<CreateProjectResponse> {
+    const projectPath = await resolveWorkspaceFolder(config.workspacesDir, folder);
+    const isProject = () =>
+      db
+        .select({ path: projects.path })
+        .from(projects)
+        .all()
+        .some((r) => path.resolve(r.path) === path.resolve(projectPath));
+    if (isProject()) throw conflict(`"${folder}" is already a project`);
+    const { branch } = await inspectImportFolder(projectPath);
+    // Checked again after the awaits, right before the insert (no await in between).
+    if (isProject()) throw conflict(`"${folder}" is already a project`);
+    if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
+      throw conflict(`a project with slug "${slug}" already exists`);
+    }
+    const row: ProjectRow = {
+      id: randomUUID(),
+      name: body.name,
+      slug,
+      repoUrl: null,
+      // Runs are merged into the branch the folder has checked out.
+      defaultBranch: branch ?? body.defaultBranch,
+      path: projectPath,
+      appType: body.appType,
+      description: (body.vision ?? body.description).trim(),
+      techStack: null,
+      createdAt: new Date(),
+    };
+    db.insert(projects).values(row).run();
+    const project = toProject(row);
+    saveActiveProjectId(project.id);
     reply.code(201);
     return { project, terminalId: null };
   }
@@ -305,7 +356,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
       throw conflict(`a project with slug "${slug}" already exists`);
     }
-    if (body.source === 'import_folder') throw badRequest('importing a workspace folder is not available yet');
+    if (body.source === 'import_folder' && body.folder !== undefined) {
+      return importFolderProject(body, body.folder, slug, reply);
+    }
     if (isWizardCreate(body)) {
       if (body.repoUrl) throw badRequest('a new project cannot have a repoUrl; use source "import_url"');
       // A double submit must not write twice into the same directory.
