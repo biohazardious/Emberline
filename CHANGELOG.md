@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-18
+
 ### Added
 
 - An optional Docker engine for agents and previews (compose profile `docker`: set `COMPOSE_PROFILES=docker` and `EMBERLINE_DOCKER_HOST=tcp://docker:2376` in `.env`, or run `make up-docker`). It is a rootless Docker-in-Docker container of its own; it runs privileged, never gets the host's Docker socket, and its API takes only the runner's client certificate. Agents get `DOCKER_HOST` and a compose project of their own, and the Dashboard shows whether the engine is on. See the README and SECURITY.md before you turn it on.
@@ -238,7 +240,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/biohazardious/emberline/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/biohazardious/emberline/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/biohazardious/emberline/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/biohazardious/emberline/compare/v0.2.1...v0.2.2
