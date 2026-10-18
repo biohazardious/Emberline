@@ -34,6 +34,7 @@ import {
   buildFactoryOrchestratorPrompt,
   buildWorkspaceDemo,
   conflictResolutionPrompt,
+  factoryTicketTitle,
   getFactorySettings,
   ingestAgentTicketsFile,
   mainWorkspaceBranch,
@@ -502,6 +503,26 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     else this.chainOff(projectId);
   }
 
+  /** The `[Factory]` ticket for a request (ready, not started); `submitFactoryRequest` and the wizard share it. */
+  createFactoryTicket(
+    projectId: string,
+    prompt: string,
+    opts: { autoDispatch?: boolean; attachmentContext?: string; leadPersona?: AgentPersona } = {},
+  ): Ticket {
+    return this.create(projectId, {
+      title: factoryTicketTitle(prompt),
+      body: buildFactoryOrchestratorPrompt(
+        prompt,
+        opts.autoDispatch ?? true,
+        opts.attachmentContext ?? '',
+        getFactorySettings(this.db).maxParallelTicketsPerProject,
+      ),
+      persona: opts.leadPersona ?? 'product_owner',
+      priority: 3,
+      status: 'ready',
+    });
+  }
+
   /**
    * High-level AI Coding Factory request: creates a Lead Persona (e.g. Product Owner) ticket
    * that refines the user's request, writes `.emberline/new-tickets.json` for specialist personas
@@ -514,18 +535,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       body.attachments && body.attachments.length > 0
         ? await persistFactoryAttachments(projectRow.path, body.attachments)
         : '';
-    const firstLine = body.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Feature Request';
-    const ticket = this.create(projectId, {
-      title: `[Factory] ${firstLine}`,
-      body: buildFactoryOrchestratorPrompt(
-        body.prompt,
-        body.autoDispatch,
-        attachmentContext,
-        getFactorySettings(this.db).maxParallelTicketsPerProject,
-      ),
-      persona: body.leadPersona,
-      priority: 3,
-      status: 'ready',
+    const ticket = this.createFactoryTicket(projectId, body.prompt, {
+      autoDispatch: body.autoDispatch,
+      attachmentContext,
+      leadPersona: body.leadPersona,
     });
     if (body.autoDispatch) {
       this.chainOn(projectId);

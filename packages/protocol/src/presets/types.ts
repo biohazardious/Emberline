@@ -20,7 +20,17 @@ export type StackDimensionId = z.infer<typeof StackDimensionId>;
  */
 export const StackChoice = z.union([
   z.string().min(1).max(100),
-  z.object({ other: z.string().trim().min(1).max(200) }).strict(),
+  z
+    .object({
+      other: z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        // eslint-disable-next-line no-control-regex
+        .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), 'must be a single line without control characters'),
+    })
+    .strict(),
 ]);
 export type StackChoice = z.infer<typeof StackChoice>;
 

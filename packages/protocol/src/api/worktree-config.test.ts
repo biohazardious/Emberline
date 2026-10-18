@@ -64,4 +64,15 @@ describe('WorktreeConfig v1', () => {
       bad({ services: [{ name: 'a', command: 'x', preview: true }, { name: 'b', command: 'y', preview: true }] }).success,
     ).toBe(false);
   });
+  it('trims commands and rejects whitespace-only ones', () => {
+    const r = bad({ setup: ['  pnpm install  '], checks: { build: ' pnpm build ' } });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.setup).toEqual(['pnpm install']);
+      expect(r.data.checks.build).toBe('pnpm build');
+    }
+    expect(bad({ setup: ['   '] }).success).toBe(false);
+    expect(bad({ services: [{ name: 'w', command: ' \t' }] }).success).toBe(false);
+    expect(bad({ checks: { test: '  ' } }).success).toBe(false);
+  });
 });

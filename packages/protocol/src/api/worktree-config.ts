@@ -6,7 +6,7 @@ export const WORKTREE_CONFIG_LIMITS = {
   maxCommandChars: 2000,
 } as const;
 
-const Command = z.string().min(1).max(WORKTREE_CONFIG_LIMITS.maxCommandChars);
+const Command = z.string().trim().min(1).max(WORKTREE_CONFIG_LIMITS.maxCommandChars);
 
 /**
  * Shape check only: relative, no `..` segment, no NUL, no drive/UNC/home prefix. Symlink and

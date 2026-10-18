@@ -3,29 +3,30 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  findOption,
+  getDimension,
+  getProjectType,
+  type PresetDef,
   type Project,
   type ProjectAppType,
   type ProjectBlueprintResponse,
+  type ProjectChoices,
+  PROJECT_TYPES,
   type ProjectTechStack,
+  type StackChoice,
+  type StackDimensionId,
   type TaskTemplate,
   type Ticket,
+  type WorktreeHints,
 } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
 import type { TicketService } from '../tickets/service.js';
 
-export const APP_TYPE_LABELS: Record<ProjectAppType, string> = {
-  web_saas: 'Web SaaS / Enterprise Portal',
-  fullstack: 'Full-Stack Multi-Layer Platform',
-  api_service: 'Backend API / Microservice',
-  ai_agents: 'Multi-Agent AI / Orchestration Platform',
-  cli_tool: 'CLI Tool / System & Infra Automation',
-  mobile_desktop: 'Desktop / Mobile Application',
-  embedded_iot: 'Embedded / IoT / Hardware Firmware',
-  library: 'SDK / Package Library',
-  game_interactive: 'Interactive Canvas / Game App',
-  static_site: 'Static Website',
-  custom: 'Custom Multi-Layer Project',
-};
+/** Labels come from the protocol registry, the only source for project type names. */
+export const APP_TYPE_LABELS = Object.fromEntries(PROJECT_TYPES.map((t) => [t.id, t.label])) as Record<
+  ProjectAppType,
+  string
+>;
 
 export const TASK_TEMPLATES: readonly TaskTemplate[] = [
   {
@@ -137,6 +138,58 @@ export interface BlueprintGeneratorInput {
   techStack?: ProjectTechStack | null;
   architectureNotes?: string;
   referenceDocs?: string;
+  /** Wizard v2: every stack dimension as chosen (option id, `none`, `agent` or free text). */
+  choices?: ProjectChoices;
+  versionPolicy?: string;
+}
+
+/** Order of the stack lines in PROJECT.md and of the hints in worktree.yml. */
+const STACK_ORDER: readonly StackDimensionId[] = [
+  'language',
+  'frontend',
+  'backend',
+  'database',
+  'styling',
+  'testing',
+  'auth',
+  'deploy',
+];
+
+const LAYER_NOUN: Partial<Record<StackDimensionId, string>> = {
+  frontend: 'frontend',
+  backend: 'backend',
+  database: 'database',
+  auth: 'authentication',
+  deploy: 'deploy target',
+};
+
+/** Human text for one choice. `none`/`agent` are special; an unknown option id is shown as is. */
+export function describeChoice(dimension: StackDimensionId, choice: StackChoice | undefined): string {
+  if (choice === undefined) return 'Not specified.';
+  if (typeof choice !== 'string') return `${choice.other} (custom)`;
+  if (choice === 'none') return `None. This project has no ${LAYER_NOUN[dimension] ?? dimension} layer.`;
+  if (choice === 'agent') return 'Decided by the agent. The Bootstrap ticket picks it and records it here.';
+  return findOption(dimension, choice)?.label ?? choice;
+}
+
+function stackSectionFromChoices(choices: ProjectChoices, versionPolicy?: string): string {
+  const lines: string[] = [];
+  if (versionPolicy) lines.push(`- **Release & Version Policy:** ${versionPolicy}`);
+  const agentDecided: string[] = [];
+  for (const id of STACK_ORDER) {
+    const label = getDimension(id)?.label ?? id;
+    lines.push(`- **${label}:** ${describeChoice(id, choices[id])}`);
+    if (choices[id] === 'agent') agentDecided.push(label);
+  }
+  if (agentDecided.length > 0) {
+    lines.push(
+      '',
+      '### Decided by the agent',
+      '',
+      ...agentDecided.map((l) => `- ${l}: pick it, then replace the line above with the decision and the reason.`),
+    );
+  }
+  return lines.join('\n');
 }
 
 export function generateProjectBlueprint(input: BlueprintGeneratorInput): string {
@@ -151,8 +204,9 @@ export function generateProjectBlueprint(input: BlueprintGeneratorInput): string
   if (stack?.styling) stackLines.push(`- **UI / Styling / Output:** ${stack.styling}`);
   if (stack?.testing) stackLines.push(`- **Testing & Verification:** ${stack.testing}`);
 
-  const stackSection =
-    stackLines.length > 0
+  const stackSection = input.choices
+    ? stackSectionFromChoices(input.choices, input.versionPolicy ?? stack?.versionPolicy)
+    : stackLines.length > 0
       ? stackLines.join('\n')
       : '- *Tech stack not yet locked — System Architect agent should document selected stack here.*';
 
@@ -162,6 +216,7 @@ export function generateProjectBlueprint(input: BlueprintGeneratorInput): string
 
   const archSection =
     input.architectureNotes?.trim() ||
+    (input.choices ? getProjectType(input.appType)?.archNotes : undefined) ||
     `- Keep module boundaries explicit and cohesive.
 - Validate all external inputs at the boundary.
 - Maintain automated tests alongside every feature change.`;
@@ -263,6 +318,130 @@ export function generateClaudeInstructions(name: string): string {
 4. **Verify your work:** Run the project's appropriate build, compiler, linter, and test suite (e.g., \`pnpm/npm run build\`, \`pytest\`, \`go test ./...\`, \`cargo check\`, \`pio run\`, \`make\`, or \`bash -n\`) before concluding your turn.
 5. **Keep \`PROJECT.md\` up to date** whenever architectural boundaries, commands, or milestones evolve.
 `;
+}
+
+function hintsOf(choices: ProjectChoices): { dimension: StackDimensionId; hints: WorktreeHints }[] {
+  const out: { dimension: StackDimensionId; hints: WorktreeHints }[] = [];
+  for (const dimension of STACK_ORDER) {
+    const choice = choices[dimension];
+    const hints = typeof choice === 'string' ? findOption(dimension, choice)?.worktree : undefined;
+    if (hints) out.push({ dimension, hints });
+  }
+  return out;
+}
+
+/**
+ * `.emberline/worktree.yml` (schema v1) from the commands the chosen options contribute. The
+ * preset's choices are the base; `choices` overrides them per dimension. Scalars are JSON strings,
+ * which are valid YAML, so no command needs escaping.
+ */
+export function generateWorktreeYml(choices: ProjectChoices, preset: PresetDef | undefined): string {
+  const merged: ProjectChoices = { ...(preset?.choices ?? {}), ...choices };
+  const hinted = hintsOf(merged);
+  const joined = (key: 'setup' | 'build' | 'lint' | 'test'): string[] => [
+    ...new Set(hinted.map((h) => h.hints[key]).filter((c): c is string => Boolean(c))),
+  ];
+  const q = JSON.stringify;
+  const out = ['# Generated by the Emberline project wizard. Runs read the approved copy of this file.', 'version: 1'];
+
+  const setup = joined('setup');
+  if (setup.length > 0) out.push('setup:', ...setup.map((c) => `  - ${q(c)}`));
+
+  const service = hinted.find((h) => h.dimension === 'frontend' && h.hints.service)
+    ? { name: 'web', command: hinted.find((h) => h.dimension === 'frontend')?.hints.service }
+    : hinted.find((h) => h.dimension === 'backend' && h.hints.service)
+      ? { name: 'api', command: hinted.find((h) => h.dimension === 'backend')?.hints.service }
+      : undefined;
+  if (service?.command) {
+    out.push('services:', `  - name: ${service.name}`, `    command: ${q(service.command)}`, '    preview: true');
+  }
+
+  const checks = (['build', 'lint', 'test'] as const)
+    .map((k) => [k, joined(k).join(' && ')] as const)
+    .filter(([, v]) => v);
+  if (checks.length > 0) out.push('checks:', ...checks.map(([k, v]) => `  ${k}: ${q(v)}`));
+  return out.join('\n') + '\n';
+}
+
+export interface WizardTicketContext {
+  name: string;
+  appType: ProjectAppType;
+  choices: ProjectChoices;
+  preset?: PresetDef;
+}
+
+export interface WizardTicketSpec {
+  /** Stable id within the plan; `dependsOn` refers to it. */
+  key: 'bootstrap' | 'deploy';
+  title: string;
+  body: string;
+  persona: Ticket['persona'];
+  priority: number;
+  dependsOn: string[];
+}
+
+const BOOTSTRAP_FALLBACK = [
+  'Set up the project skeleton for the stack chosen in PROJECT.md.',
+  'Make the `setup`, `build`, `test` and `services` commands in `.emberline/worktree.yml` real and passing.',
+  'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
+];
+
+export function bootstrapTicket(ctx: WizardTicketContext): WizardTicketSpec {
+  const stack = STACK_ORDER.map((id) => `- ${getDimension(id)?.label ?? id}: ${describeChoice(id, ctx.choices[id])}`);
+  const steps = ctx.preset?.bootstrap.length ? ctx.preset.bootstrap : BOOTSTRAP_FALLBACK;
+  return {
+    key: 'bootstrap',
+    title: 'Bootstrap: project skeleton and worktree commands',
+    persona: 'architect',
+    priority: 3,
+    dependsOn: [],
+    body: `## Objective
+
+Set up the skeleton of **${ctx.name}** (${APP_TYPE_LABELS[ctx.appType]}${ctx.preset ? `, preset "${ctx.preset.label}"` : ''}) so every later ticket starts from a project that builds, tests and runs.
+
+## Chosen stack
+
+${stack.join('\n')}
+
+## What to do
+
+${steps.map((x, i) => `${i + 1}. ${x}`).join('\n')}
+
+## Acceptance Criteria
+
+- The skeleton exists for the chosen stack and is committed.
+- Every command in \`.emberline/worktree.yml\` (\`setup\`, \`checks\`, the preview \`services\` entry) runs for real and passes; fix the file where the generated commands do not fit.
+- \`PROJECT.md\` lists the final stack, including everything marked "decided by the agent".
+`,
+  };
+}
+
+export function deployTicket(ctx: WizardTicketContext): WizardTicketSpec | null {
+  const choice = ctx.choices.deploy;
+  if (choice === undefined || choice === 'none') return null;
+  const target = describeChoice('deploy', choice).replace(/\.$/, '');
+  return {
+    key: 'deploy',
+    title: `Deploy: prepare ${typeof choice === 'string' && choice !== 'agent' ? target : 'the deploy target'}`,
+    persona: 'architect',
+    priority: 1,
+    dependsOn: ['bootstrap'],
+    body: `## Objective
+
+Prepare **${ctx.name}** for deployment to: ${choice === 'agent' ? 'a target you choose (record the decision in `PROJECT.md`)' : target}.
+
+## What to do
+
+1. Add the configuration the target needs (build or start commands, container or platform files, environment variable names with placeholder values).
+2. Write a short deployment guide in the repository (for example \`docs/deploy.md\`): prerequisites, one command per step, and how to roll back.
+3. Update the deploy section of \`PROJECT.md\`.
+
+## Rules
+
+- Emberline does not run the deploy; prepare it so a person can.
+- Put no credentials, tokens or private keys in the repository. Document the environment variables and where to set them instead.
+`,
+  };
 }
 
 /**

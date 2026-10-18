@@ -42,12 +42,27 @@ export const projects = sqliteTable('projects', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
-/** Per-project settings as one JSON document (issue sync today; the wizard's gates later). */
+/** Per-project settings as one JSON document (issue sync, and the wizard's `gates`). */
 export const projectSettings = sqliteTable('project_settings', {
   projectId: text('project_id')
     .primaryKey()
     .references(() => projects.id, { onDelete: 'cascade' }),
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+});
+
+/**
+ * The approved `.emberline/worktree.yml` of a project: runs always use this content, never the
+ * file in the workspace, until a person approves a changed version. The wizard's own file is
+ * stored as approved at creation.
+ */
+export const projectWorktreeConfig = sqliteTable('project_worktree_config', {
+  projectId: text('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  sha256: text('sha256').notNull(),
+  approvedAt: integer('approved_at', { mode: 'timestamp_ms' }).notNull(),
+  approvedBy: text('approved_by').notNull(),
 });
 
 /**

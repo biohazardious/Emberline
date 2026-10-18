@@ -62,6 +62,14 @@ export const Project = z.object({
 });
 export type Project = z.infer<typeof Project>;
 
+/** A direct child of the workspaces directory: one path segment, no separators, `..` or NUL. */
+const FolderName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine((f) => !/[/\\\0]/.test(f) && f !== '.' && f !== '..', 'must be a single folder name');
+
 export const ProjectSource = z.enum(['new', 'import_url', 'import_folder']);
 export type ProjectSource = z.infer<typeof ProjectSource>;
 
@@ -78,7 +86,7 @@ export const ProjectGateOverrides = z
   .strict();
 export type ProjectGateOverrides = z.infer<typeof ProjectGateOverrides>;
 
-export const CreateProjectBody = z.object({
+const CreateProjectFields = z.object({
   name: z.string().trim().min(1).max(80),
   mode: z.enum(['manual', 'wizard']).default('manual'),
   repoUrl: RepoUrl.optional().or(z.literal('').transform(() => undefined)),
@@ -98,7 +106,12 @@ export const CreateProjectBody = z.object({
   startFactory: z.boolean().optional(),
   vision: z.string().trim().max(4000).optional(),
   /** `import_folder`: name of a direct child of the workspaces directory. */
-  folder: z.string().trim().min(1).max(255).optional(),
+  folder: FolderName.optional(),
+});
+
+export const CreateProjectBody = CreateProjectFields.refine((b) => b.source !== 'import_folder' || b.folder !== undefined, {
+  path: ['folder'],
+  message: 'folder is required for import_folder',
 });
 export type CreateProjectBody = z.input<typeof CreateProjectBody>;
 
@@ -120,9 +133,11 @@ export const ProjectPreviewResponse = z.object({
   starterFiles: z.array(z.string()),
   tickets: z.array(
     z.object({
+      /** Stable id within the preview ('bootstrap', 'deploy', 'factory'); `dependsOn` refers to it. */
+      key: z.string(),
       title: z.string(),
       persona: AgentPersona,
-      /** Titles of the tickets this one depends on. */
+      /** Keys of the tickets this one depends on. */
       dependsOn: z.array(z.string()),
     }),
   ),

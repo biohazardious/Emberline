@@ -60,6 +60,11 @@ export async function persistFactoryAttachments(
   return sections.join('\n\n');
 }
 
+/** Title of the `[Factory]` ticket for a request: its first line, cut at 120 chars. */
+export function factoryTicketTitle(prompt: string): string {
+  return `[Factory] ${prompt.split('\n')[0]?.trim().slice(0, 120) || 'Feature Request'}`;
+}
+
 export function buildFactoryOrchestratorPrompt(
   userRequest: string,
   autoDispatch = true,

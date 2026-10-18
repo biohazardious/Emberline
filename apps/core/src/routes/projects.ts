@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActiveProjectPreference,
@@ -28,6 +28,8 @@ import {
   type FactorySettings,
   type Project,
   type ProjectAppType,
+  ProjectPreviewBody,
+  type ProjectPreviewResponse,
   type ProjectBlueprintResponse,
   type ProjectCheckpoint,
   type ProjectRecommendation,
@@ -63,7 +65,8 @@ import {
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { projects, settings } from '../db/schema.js';
+import { writeProjectSettings } from '../db/project-settings.js';
+import { projects, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { openBlockingCount } from '../review/blocking.js';
 import {
@@ -112,6 +115,7 @@ import {
   writeProjectBlueprint,
   writeWorkspaceFileContent,
 } from '../factory/service.js';
+import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
 import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
 import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
@@ -188,12 +192,105 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.get('/api/factory/templates', async (): Promise<readonly TaskTemplate[]> => TASK_TEMPLATES);
 
+  /** What creating a new project would write and create. No side effects. */
+  app.post('/api/projects/preview', async (request): Promise<ProjectPreviewResponse> => {
+    const plan = planNewProject(ProjectPreviewBody.parse(request.body));
+    return {
+      projectMd: plan.projectMd,
+      claudeMd: plan.claudeMd,
+      worktreeYml: plan.worktreeYml,
+      starterFiles: Object.keys(plan.starter).sort(),
+      tickets: plannedTickets(plan),
+      gates: plan.gates,
+    };
+  });
+
+  /** Preset-driven creation: files, git commit, approved worktree.yml, gates, then the tickets. */
+  async function createNewProject(
+    body: ReturnType<typeof CreateProjectBody.parse>,
+    slug: string,
+    reply: FastifyReply,
+  ): Promise<CreateProjectResponse> {
+    const plan = planNewProject(body);
+    const projectPath = path.join(config.workspacesDir, slug);
+    if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
+      throw conflict(`directory already exists and is not empty: ${projectPath}`);
+    }
+    await mkdir(path.join(projectPath, '.emberline'), { recursive: true });
+    const files: Record<string, string> = {
+      'PROJECT.md': plan.projectMd,
+      'CLAUDE.md': plan.claudeMd,
+      '.emberline/worktree.yml': plan.worktreeYml,
+      ...plan.starter,
+    };
+    for (const [rel, content] of Object.entries(files)) {
+      await writeFile(path.join(projectPath, rel), content, 'utf8');
+    }
+    if (body.initGit ?? true) await initLocalGitRepository(projectPath, body.defaultBranch);
+
+    const row: ProjectRow = {
+      id: randomUUID(),
+      name: body.name,
+      slug,
+      repoUrl: null,
+      defaultBranch: body.defaultBranch,
+      path: projectPath,
+      appType: plan.appType,
+      description: plan.vision,
+      techStack: plan.techStack,
+      createdAt: new Date(),
+    };
+    db.transaction((tx) => {
+      tx.insert(projects).values(row).run();
+      // The wizard's own file counts as approved: runs use this content until a person approves a change.
+      tx.insert(projectWorktreeConfig)
+        .values({
+          projectId: row.id,
+          content: plan.worktreeYml,
+          sha256: createHash('sha256').update(plan.worktreeYml).digest('hex'),
+          approvedAt: row.createdAt,
+          approvedBy: 'wizard',
+        })
+        .run();
+    });
+    if (Object.keys(plan.gates).length > 0) writeProjectSettings(db, row.id, { gates: plan.gates });
+    const project = toProject(row);
+    saveActiveProjectId(project.id);
+
+    const created = new Map<string, Ticket>();
+    for (const spec of plan.tickets) {
+      created.set(spec.key, tickets.create(project.id, { ...spec, status: 'ready' }));
+    }
+    const bootstrap = created.get('bootstrap');
+    if (plan.startFactory && plan.vision && bootstrap) {
+      created.set('factory', tickets.createFactoryTicket(project.id, plan.vision, { autoDispatch: true }));
+    }
+    for (const spec of [...plan.tickets, { key: 'factory', dependsOn: ['bootstrap'] }]) {
+      const ticket = created.get(spec.key);
+      const dependsOn = spec.dependsOn.flatMap((k) => created.get(k)?.key ?? []);
+      if (ticket && dependsOn.length > 0) tickets.update(ticket.id, { dependsOn });
+    }
+    if (plan.startFactory) {
+      // Chaining starts Bootstrap now and carries on with the PO and Deploy once it is merged.
+      tickets.setAutoChain(project.id, true);
+      void tickets.dispatchNextReadyTicket(project.id).catch(() => undefined);
+    }
+
+    reply.code(201);
+    return { project, terminalId: null };
+  }
+
   app.post('/api/projects', async (request, reply): Promise<CreateProjectResponse> => {
     const body = CreateProjectBody.parse(request.body);
     const slug = slugify(body.name);
     if (!slug) throw badRequest('name must contain at least one letter or digit');
     if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
       throw conflict(`a project with slug "${slug}" already exists`);
+    }
+    if (body.source === 'import_folder') throw badRequest('importing a workspace folder is not available yet');
+    if (isWizardCreate(body)) {
+      if (body.repoUrl) throw badRequest('a new project cannot have a repoUrl; use source "import_url"');
+      return createNewProject(body, slug, reply);
     }
 
     const id = randomUUID();

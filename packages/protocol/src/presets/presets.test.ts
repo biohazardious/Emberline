@@ -163,4 +163,20 @@ describe('CreateProjectBody back-compat', () => {
     expect(CreateProjectBody.safeParse({ name: 'x', source: 'bogus' }).success).toBe(false);
     expect(CreateProjectBody.safeParse({ name: 'x', gates: { nope: true } }).success).toBe(false);
   });
+  it('rejects control characters and newlines in {other}', () => {
+    expect(StackChoice.safeParse({ other: 'rsync to box' }).success).toBe(true);
+    expect(StackChoice.safeParse({ other: 'a\nb' }).success).toBe(false);
+    expect(StackChoice.safeParse({ other: 'a\u0000b' }).success).toBe(false);
+    expect(StackChoice.safeParse({ other: 'a\tb' }).success).toBe(false);
+  });
+
+  it('validates folder names and requires one for import_folder', () => {
+    const ok = CreateProjectBody.safeParse({ name: 'x', source: 'import_folder', folder: 'my-app' });
+    expect(ok.success).toBe(true);
+    for (const folder of ['a/b', 'a\\b', '..', '.', 'a\u0000b']) {
+      expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_folder', folder }).success).toBe(false);
+    }
+    expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_folder' }).success).toBe(false);
+    expect(CreateProjectBody.safeParse({ name: 'x', source: 'new' }).success).toBe(true);
+  });
 });
