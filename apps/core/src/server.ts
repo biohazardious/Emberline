@@ -70,13 +70,23 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const issueSync =
     deps.issueSync ??
     new IssueSyncService(deps.db, deps.tickets, deps.runs, forge, { log: (message, err) => app.log.warn({ err }, message) });
+  // A person's review feedback for a fresh attempt starts the ticket like the Board's Start does.
+  const review = new ReviewService(
+    deps.db,
+    deps.runs,
+    (message, err) => app.log.warn({ err }, message),
+    async ({ ticketId, permissionMode, persona, extraPromptSection }) =>
+      (await deps.tickets.start(ticketId, { permissionMode, persona }, { byPerson: true, extraPromptSection })).run,
+  );
   cron.start();
   notifications.start();
+  review.start();
   updates.start();
   issueSync.start();
   app.addHook('onClose', async () => {
     cron.stop();
     notifications.stop();
+    review.stop();
     updates.stop();
     await issueSync.stop();
   });
@@ -105,7 +115,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
-  registerReviewRoutes(app, new ReviewService(deps.db, deps.runs, (message, err) => app.log.warn({ err }, message)));
+  registerReviewRoutes(app, review);
   registerTicketRoutes(app, deps.tickets);
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);

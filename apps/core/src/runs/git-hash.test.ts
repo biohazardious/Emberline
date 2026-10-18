@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { DiffFile } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { assignHashes, inspectDiff, readReviewSide } from './git.js';
+import { UnsafePathError } from '../outputs/safe-fs.js';
+import { assignHashes, blobHashNoFollow, inspectDiff, readReviewSide } from './git.js';
 
 let dir: string;
 let outside: string;
@@ -70,6 +71,47 @@ describe('assignHashes', () => {
     const f = file('r.txt');
     await assignHashes(dir, [f], '');
     expect(f.hash).toBe(execFileSync('git', ['-C', dir, 'hash-object', 'r.txt']).toString().trim());
+  });
+});
+
+describe('blobHashNoFollow', () => {
+  it('computes the git blob id in Node, equal to git hash-object', async () => {
+    const content = Buffer.concat([Buffer.from('binary\0bytes\n'), Buffer.alloc(3000, 7)]);
+    writeFileSync(path.join(dir, 'b.bin'), content);
+    writeFileSync(path.join(dir, 'empty.txt'), '');
+    for (const name of ['b.bin', 'empty.txt']) {
+      expect(await blobHashNoFollow(dir, name)).toBe(
+        execFileSync('git', ['-C', dir, 'hash-object', '--no-filters', name]).toString().trim(),
+      );
+    }
+  });
+
+  it('never follows a symlink swapped in for the file (O_NOFOLLOW) or a symlinked parent', async () => {
+    writeFileSync(path.join(outside, 'secret.txt'), 'secret\n');
+    symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'swapped.txt'));
+    await expect(blobHashNoFollow(dir, 'swapped.txt')).rejects.toBeInstanceOf(UnsafePathError);
+    symlinkSync(outside, path.join(dir, 'dirlink'));
+    await expect(blobHashNoFollow(dir, 'dirlink/secret.txt')).rejects.toBeInstanceOf(UnsafePathError);
+  });
+
+  it('refuses a FIFO without blocking', async () => {
+    execFileSync('mkfifo', [path.join(dir, 'pipe')]);
+    await expect(blobHashNoFollow(dir, 'pipe')).rejects.toBeInstanceOf(UnsafePathError);
+  });
+});
+
+describe('inspectDiff untracked files', () => {
+  it('counts lines of an untracked file but never through a symlink', async () => {
+    writeFileSync(path.join(dir, 'base.txt'), 'base\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'init');
+    writeFileSync(path.join(dir, 'new.txt'), 'a\nb\n');
+    writeFileSync(path.join(outside, 'secret.txt'), 'one\ntwo\nthree\n');
+    symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'leak.txt'));
+    const summary = await inspectDiff(dir, 'main', 'branch', 'r', 'main');
+    const byPath = Object.fromEntries(summary.files.map((f) => [f.path, f]));
+    expect(byPath['new.txt']).toMatchObject({ status: 'untracked', additions: 2 });
+    expect(byPath['leak.txt']).toMatchObject({ status: 'untracked', additions: 0 });
   });
 });
 

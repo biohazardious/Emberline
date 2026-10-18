@@ -18,6 +18,7 @@ import type {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
+import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
 
 const MAX_TEXT_BYTES = 512 * 1024;
@@ -164,7 +165,6 @@ function statusFromCode(code: string): DiffFileStatus {
   return 'modified';
 }
 
-const HASH_CHUNK = 200;
 /** Files larger than this are not hashed (they get the `unhashed:` fallback). */
 const MAX_HASH_BYTES = 64 * 1024 * 1024;
 
@@ -190,39 +190,83 @@ async function parentInside(root: string, abs: string): Promise<boolean> {
 }
 
 /**
- * Content hashes for paths present in the worktree. Each path is `lstat`ed first, so nothing git
- * opens can be a FIFO, device or a link out of the worktree: symlinks are hashed by their link text
- * (`link:<sha1>`), only regular files within the size cap reach `git hash-object` (batched in chunks;
- * core's exec path has no stdin for --stdin-paths). Unhashable paths map to null.
+ * Opens `rel` inside the worktree for reading through one verified descriptor: O_NOFOLLOW on the
+ * last component, the descriptor's real path must be `realpath(worktree)/rel` (no symlinked parent)
+ * and it must be a regular file. So an agent swapping a link, FIFO or device in after a check cannot
+ * make core read it. Throws UnsafePathError for those, the plain error when missing.
+ */
+async function openWorktreeFile(worktreePath: string, rel: string): Promise<OpenedFile> {
+  const real = path.join(await realpath(worktreePath), rel);
+  return openVerifiedFile(real, real);
+}
+
+/** Reads exactly `size` bytes of an open file, chunk by chunk, into `onChunk`. */
+async function readOpened({ handle, size }: OpenedFile, onChunk: (chunk: Buffer) => void): Promise<void> {
+  const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(size, 1024 * 1024)));
+  let position = 0;
+  while (position < size) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, size - position), position);
+    if (bytesRead === 0) throw new Error('the file shrank while it was read');
+    onChunk(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+}
+
+/** The whole content of a regular worktree file of at most `max` bytes (null when larger). */
+async function readWorktreeBytes(worktreePath: string, rel: string, max: number): Promise<Buffer | null> {
+  const opened = await openWorktreeFile(worktreePath, rel);
+  try {
+    if (opened.size > max) return null;
+    const parts: Buffer[] = [];
+    await readOpened(opened, (chunk) => parts.push(Buffer.from(chunk)));
+    return Buffer.concat(parts);
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * The git blob id of a regular worktree file, computed in Node as sha1(`blob <size>\0` + content)
+ * (what `git hash-object --no-filters` reports), read through {@link openWorktreeFile}. Null over
+ * the 64 MB cap; throws UnsafePathError for a link, a symlinked parent or anything not a regular file.
+ */
+export async function blobHashNoFollow(worktreePath: string, rel: string): Promise<string | null> {
+  const opened = await openWorktreeFile(worktreePath, rel);
+  try {
+    if (opened.size > MAX_HASH_BYTES) return null;
+    const hash = createHash('sha1').update(`blob ${opened.size}\0`);
+    await readOpened(opened, (chunk) => hash.update(chunk));
+    return hash.digest('hex');
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Content hashes for paths present in the worktree. Regular files are hashed in Node through a
+ * verified, non-following descriptor ({@link blobHashNoFollow}); symlinks are hashed by their link
+ * text (`link:<sha1>`), never followed. Anything else (FIFO, device, directory, a link out of the
+ * worktree, over the size cap) maps to null.
  */
 async function contentHashes(worktreePath: string, relPaths: string[]): Promise<Map<string, string | null>> {
   const result = new Map<string, string | null>();
-  const regular: string[] = [];
   const root = path.resolve(worktreePath);
   for (const rel of relPaths) {
     result.set(rel, null);
     const abs = path.resolve(root, rel);
-    if (!abs.startsWith(root + path.sep) || !(await parentInside(root, abs))) continue;
+    if (!abs.startsWith(root + path.sep)) continue;
     try {
-      const info = await lstat(abs);
-      if (info.isSymbolicLink()) result.set(rel, `link:${createHash('sha1').update(await readlink(abs)).digest('hex')}`);
-      else if (info.isFile() && info.size <= MAX_HASH_BYTES) regular.push(rel);
-    } catch {
-      // missing or unreadable: stays null
-    }
-  }
-  for (let i = 0; i < regular.length; i += HASH_CHUNK) {
-    const chunk = regular.slice(i, i + HASH_CHUNK);
-    const out = await gitRaw(worktreePath, ['hash-object', '--', ...chunk]).catch(() => null);
-    const ids = out?.split('\n').filter(Boolean);
-    if (ids && ids.length === chunk.length) {
-      chunk.forEach((rel, n) => result.set(rel, ids[n]!));
-      continue;
-    }
-    // Last resort: a failing path must not blank the whole chunk.
-    for (const rel of chunk) {
-      const one = (await gitRaw(worktreePath, ['hash-object', '--', rel]).catch(() => '')).trim();
-      result.set(rel, one || null);
+      result.set(rel, await blobHashNoFollow(root, path.relative(root, abs)));
+    } catch (error) {
+      if (!(error instanceof UnsafePathError)) continue;
+      // Not a regular file reached directly: a link inside the worktree is hashed by its text.
+      try {
+        if ((await lstat(abs)).isSymbolicLink() && (await parentInside(root, abs))) {
+          result.set(rel, `link:${createHash('sha1').update(await readlink(abs)).digest('hex')}`);
+        }
+      } catch {
+        // swapped again or gone: stays null
+      }
     }
   }
   return result;
@@ -276,19 +320,20 @@ export async function readReviewSide(
 ): Promise<string | null> {
   const { abs, rel } = resolveSafeWorktreePath(worktreePath, relPath);
   if (side === 'modified') {
-    let info;
+    let buf: Buffer | null;
     try {
-      info = await lstat(abs);
-    } catch {
-      return null;
+      // The text ends up in agent prompts: read through a verified descriptor, never a link.
+      buf = await readWorktreeBytes(worktreePath, rel, MAX_ANCHOR_BYTES);
+    } catch (error) {
+      if (isMissing(error)) return null;
+      if (error instanceof UnsafePathError) {
+        const info = await lstat(abs).catch(() => null);
+        if (info && !info.isSymbolicLink() && !info.isFile() && (await parentInside(path.resolve(worktreePath), abs))) return null;
+        throw new Error(`${rel} is a symlink, lies behind one or is not a regular file`);
+      }
+      throw error;
     }
-    // The text ends up in agent prompts: never read through a link out of the worktree.
-    if (info.isSymbolicLink() || !(await parentInside(path.resolve(worktreePath), abs))) {
-      throw new Error(`${rel} is a symlink or lies behind one`);
-    }
-    if (!info.isFile()) return null;
-    if (info.size > MAX_ANCHOR_BYTES) throw new Error(`${rel} is larger than ${MAX_ANCHOR_BYTES} bytes`);
-    const buf = await readFile(abs);
+    if (buf === null) throw new Error(`${rel} is larger than ${MAX_ANCHOR_BYTES} bytes`);
     if (isBinaryBuffer(buf)) throw new Error(`${rel} is binary`);
     return buf.toString('utf8');
   }
@@ -419,12 +464,9 @@ export async function inspectDiff(
       if (porc.indexStatus === '?' && porc.worktreeStatus === '?' && !filesByPath.has(filePath)) {
         let additions = 0;
         try {
-          const abs = path.join(worktreePath, filePath);
-          const info = await stat(abs);
-          if (info.isFile() && info.size <= MAX_TEXT_BYTES) {
-            const buf = await readFile(abs);
-            if (!isBinaryBuffer(buf)) additions = countLines(buf.toString('utf8'));
-          }
+          // Never through a link: an agent's symlink must not make core read outside the worktree.
+          const buf = await readWorktreeBytes(worktreePath, filePath, MAX_TEXT_BYTES);
+          if (buf && !isBinaryBuffer(buf)) additions = countLines(buf.toString('utf8'));
         } catch {
           // Ignore unreadable untracked file
         }

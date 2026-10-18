@@ -1,5 +1,6 @@
 /** API contracts: review: git diff, commit/push & artifacts (M6). */
 import { z } from 'zod';
+import type { Run } from './runs.js';
 
 /**
  * `branch` compares the working tree against the merge-base with the project's default branch.
@@ -17,7 +18,10 @@ export const DiffFile = z.object({
   status: DiffFileStatus,
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
-  /** Content hash: sha1 of the worktree file, `deleted:<old blob id>` for a deleted file ('' if unreadable). */
+  /**
+   * Content hash: the git blob id of the worktree file, `link:<sha1 of the link text>` for a symlink,
+   * `deleted:<old blob id>` for a deleted file, `unhashed:<status>:<adds>:<dels>` when unhashable.
+   */
   hash: z.string(),
   staged: z.boolean(),
   unstaged: z.boolean(),
@@ -196,11 +200,26 @@ export const UpdateReviewCommentBody = z
   .partial();
 export type UpdateReviewCommentBody = z.input<typeof UpdateReviewCommentBody>;
 
+/** `same`: type into (or resume) the reviewed run · `new`: start a fresh run of its ticket from main. */
+export const RequestChangesTarget = z.enum(['same', 'new']);
+export type RequestChangesTarget = z.infer<typeof RequestChangesTarget>;
+
 export const RequestChangesBody = z.object({
   /** Optional overall note sent before the line comments. */
   note: z.string().trim().max(10_000).default(''),
+  target: RequestChangesTarget.default('same'),
 });
 export type RequestChangesBody = z.input<typeof RequestChangesBody>;
+
+/**
+ * `run` is the run that got the feedback (the new one for target `new`); `sent` counts the comments
+ * included. A 409 for target `same` carries `canStartNew: true` when the run can no longer take a
+ * prompt but its ticket can start a new run.
+ */
+export interface RequestChangesResponse {
+  run: Run;
+  sent: number;
+}
 
 export const MarkFileViewedBody = z.object({
   filePath: z.string().trim().min(1).max(1024),

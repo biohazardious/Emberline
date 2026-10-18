@@ -1,0 +1,267 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { ReviewComment, Run, RunReviewState, Ticket } from '@emberline/protocol';
+import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runs } from './db/schema.js';
+import { conflict } from './errors.js';
+import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+
+let t: TestApp;
+let ptydServer: PtydServer;
+let cookie: string;
+
+beforeEach(async () => {
+  t = await createTestApp();
+  // Agent stand-in: leaks its hook token and stays at its prompt.
+  const fake = path.join(t.dir, 'fake-claude.sh');
+  writeFileSync(
+    fake,
+    [
+      '#!/bin/sh',
+      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${t.dir}/.token-$EMBERLINE_RUN_ID"`,
+      `mv "${t.dir}/.token-$EMBERLINE_RUN_ID" "${t.dir}/token-$EMBERLINE_RUN_ID"`,
+      'sleep 20',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  t.config.claudeCommand = fake;
+  ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+  await ptydServer.listen();
+  t.ptyd.start();
+  await t.ptyd.waitUntilConnected();
+  cookie = await setupAndLogin(t.app);
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await t.close();
+  await ptydServer.close();
+});
+
+const api = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
+  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+
+async function token(run: Run): Promise<string> {
+  const file = path.join(t.dir, `token-${run.id}`);
+  await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
+  return readFileSync(file, 'utf8');
+}
+
+const hook = async (run: Run, event: string, payload: object = {}) =>
+  t.app.inject({
+    method: 'POST',
+    url: '/api/internal/hooks',
+    headers: { authorization: `Bearer ${await token(run)}` },
+    payload: { runId: run.id, event, receivedAt: new Date().toISOString(), payload },
+  });
+
+async function project(name: string): Promise<{ id: string; path: string }> {
+  const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json();
+  const git = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
+  git('init', '-q', '-b', 'main');
+  git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  return project;
+}
+
+/** An ad-hoc run at its prompt (`waiting_input`). */
+async function adHocRun(): Promise<Run> {
+  const p = await project('Rounds');
+  const run: Run = (await api('POST', '/api/runs', { projectId: p.id, prompt: 'x' })).json();
+  expect((await hook(run, 'SessionStart', { session_id: 's' })).json().state).toBe('waiting_input');
+  return run;
+}
+
+async function ticketRun(): Promise<{ ticket: Ticket; run: Run }> {
+  const p = await project('Ticketed');
+  const ticket: Ticket = (await api('POST', `/api/projects/${p.id}/tickets`, { title: 'Add a parser', body: 'Parse it.' })).json();
+  const res = await api('POST', `/api/tickets/${ticket.id}/start`, {});
+  expect(res.statusCode).toBe(201);
+  return res.json();
+}
+
+const comment = async (run: Run, body: object): Promise<ReviewComment> => {
+  const res = await api('POST', `/api/runs/${run.id}/review/comments`, { filePath: 'src/a.ts', ...body });
+  expect(res.statusCode).toBe(201);
+  return res.json();
+};
+const comments = async (run: Run): Promise<ReviewComment[]> =>
+  ((await api('GET', `/api/runs/${run.id}/review`)).json() as RunReviewState).comments;
+const byBody = async (run: Run) => Object.fromEntries((await comments(run)).map((c) => [c.body, c]));
+const requestChanges = (run: Run, body: object = {}) => api('POST', `/api/runs/${run.id}/review/request-changes`, body);
+
+/** Captures prompts instead of typing them into the PTY. */
+function capturePrompts(): string[] {
+  const sent: string[] = [];
+  vi.spyOn(t.runs, 'prompt').mockImplementation(async (id: string, text: string) => {
+    sent.push(text);
+    return t.runs.getRun(id);
+  });
+  return sent;
+}
+
+describe('review rounds (target same)', () => {
+  it('moves sent comments to addressed on the next done and pins them until resolved', async () => {
+    const run = await adHocRun();
+    const sent = capturePrompts();
+    await comment(run, { line: 3, body: 'Null deref', priority: 'blocking' });
+    await comment(run, { line: 9, body: 'Rename', priority: 'suggestion', intent: 'change' });
+
+    const first = await requestChanges(run, { note: 'Nearly there' });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().sent).toBe(2);
+    expect(sent[0]).toContain('Blocking — Must be fixed before this can merge:');
+    expect(sent[0]).toContain('- `src/a.ts:3` (fix) Null deref');
+    let all = await byBody(run);
+    expect(all['Null deref']).toMatchObject({ status: 'sent', round: 1 });
+    expect(all['Null deref']!.sentAt).toBeTruthy();
+
+    // The agent's turn ends: what it was sent waits for the person's verification.
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'Stop');
+    all = await byBody(run);
+    expect(all['Null deref']!.status).toBe('addressed');
+    expect(all['Rename']!.status).toBe('addressed');
+
+    // Next round: the new comment plus the unverified ones, pinned.
+    await comment(run, { line: 12, body: 'Add a test' });
+    const second = await requestChanges(run);
+    expect(second.json().sent).toBe(3);
+    expect(sent[1]).toContain(
+      'Blocking — Must be fixed before this can merge:\nFrom the previous round — please check this is done:\n- `src/a.ts:3` (fix) Null deref',
+    );
+    expect(sent[1]).toContain('Important:\n- `src/a.ts:12` (fix) Add a test');
+    expect(sent[1]).toContain('Suggestions:\nFrom the previous round — please check this is done:\n- `src/a.ts:9` (change) Rename');
+    all = await byBody(run);
+    expect(all['Null deref']).toMatchObject({ status: 'sent', round: 2 });
+    expect(all['Add a test']).toMatchObject({ status: 'sent', round: 1 });
+
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'Stop');
+    all = await byBody(run);
+    // Verify: resolved and verified, never sent again.
+    const verified: ReviewComment = (
+      await api('PATCH', `/api/runs/${run.id}/review/comments/${all['Null deref']!.id}`, { status: 'resolved' })
+    ).json();
+    expect(verified.status).toBe('resolved');
+    expect(verified.verifiedAt).toBeTruthy();
+    // Not done: back to open (kept round), so it goes out as a new comment.
+    const notDone: ReviewComment = (
+      await api('PATCH', `/api/runs/${run.id}/review/comments/${all['Rename']!.id}`, { status: 'open' })
+    ).json();
+    expect(notDone).toMatchObject({ status: 'open', round: 2 });
+
+    const third = await requestChanges(run);
+    expect(third.json().sent).toBe(2);
+    expect(sent[2]).not.toContain('Null deref');
+    expect(sent[2]).toContain('Suggestions:\n- `src/a.ts:9` (change) Rename');
+    expect(sent[2]).toContain('Important:\nFrom the previous round — please check this is done:\n- `src/a.ts:12` (fix) Add a test');
+    all = await byBody(run);
+    expect(all['Rename']).toMatchObject({ status: 'sent', round: 3 });
+  });
+
+  it('does not move comments to addressed for a done that came before the send', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'Stop');
+    await comment(run, { line: 1, body: 'Fix it' });
+    await requestChanges(run);
+    // Another update of the done run (no new turn) must not count as the agent's revision.
+    await hook(run, 'Stop');
+    expect((await byBody(run))['Fix it']!.status).toBe('sent');
+  });
+
+  it('reminds of sent comments the run ended without addressing, and only then', async () => {
+    const run = await adHocRun();
+    const sent = capturePrompts();
+    await comment(run, { line: 1, body: 'First' });
+    await requestChanges(run);
+    await comment(run, { line: 2, body: 'Second' });
+    // Still working on the first: it is not repeated.
+    await hook(run, 'UserPromptSubmit');
+    await requestChanges(run);
+    expect(sent[1]).not.toContain('First');
+    expect(sent[1]).toContain('Second');
+    // The run fails without addressing them: both come back as reminders.
+    t.db.update(runs).set({ state: 'failed', endedAt: new Date() }).where(eq(runs.id, run.id)).run();
+    await requestChanges(run, { note: 'Try again' });
+    expect(sent[2]).toContain('From the previous round — not yet addressed:\n- `src/a.ts:1` (fix) First\n- `src/a.ts:2` (fix) Second');
+    expect((await byBody(run))['First']).toMatchObject({ status: 'sent', round: 2 });
+  });
+
+  it('leaves statuses unchanged when the send fails, with a plain 409 for a run without a ticket', async () => {
+    const run = await adHocRun();
+    vi.spyOn(t.runs, 'prompt').mockRejectedValue(conflict('this run was stopped; start a new run'));
+    await comment(run, { line: 1, body: 'Keep me open' });
+    const res = await requestChanges(run);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().canStartNew).toBeUndefined();
+    expect((await byBody(run))['Keep me open']).toMatchObject({ status: 'open', round: 0, sentAt: null });
+  });
+});
+
+describe('review rounds (send target)', () => {
+  it('offers a new run when the ticket run cannot take a prompt, and carries the feedback into it', async () => {
+    const { ticket, run } = await ticketRun();
+    await hook(run, 'SessionStart', { session_id: 's' });
+    await comment(run, { line: 4, body: 'Validate input', priority: 'blocking' });
+    await comment(run, { line: null, body: 'Split this file' });
+    await api('POST', `/api/runs/${run.id}/stop`);
+    await expect.poll(() => t.runs.getRun(run.id).endedAt, { timeout: 5_000 }).toBeTruthy();
+
+    const same = await requestChanges(run, { target: 'same' });
+    expect(same.statusCode).toBe(409);
+    expect(same.json().canStartNew).toBe(true);
+    expect((await comments(run)).every((c) => c.status === 'open' && c.round === 0)).toBe(true);
+
+    const res = await requestChanges(run, { note: 'Start over', target: 'new' });
+    expect(res.statusCode).toBe(200);
+    const { run: fresh, sent } = res.json() as { run: Run; sent: number };
+    expect(sent).toBe(2);
+    expect(fresh.id).not.toBe(run.id);
+    expect(fresh.ticketId).toBe(ticket.id);
+    expect(fresh.prompt.startsWith(`${ticket.key}: Add a parser\n\nParse it.\n\n## Review feedback`)).toBe(true);
+    expect(fresh.prompt).toContain(`## Review feedback from the previous attempt (run ${run.id.slice(0, 8)})`);
+    expect(fresh.prompt).toContain('not in this worktree');
+    expect(fresh.prompt).toContain('Overall note: Start over');
+    expect(fresh.prompt).toContain('Blocking — Must be fixed before this can merge:\n- `src/a.ts:4` (fix) Validate input');
+    expect(fresh.prompt).toContain('- `src/a.ts` (whole file) (fix) Split this file');
+
+    for (const c of await comments(run)) {
+      expect(c).toMatchObject({ status: 'resolved', carriedTo: fresh.id });
+      expect(c.resolvedAt).toBeTruthy();
+    }
+    // Nothing left to send on the old run.
+    expect((await requestChanges(run, { target: 'new' })).statusCode).toBe(400);
+  });
+
+  it('gives a plain 409 when the run is only starting', async () => {
+    const { run } = await ticketRun();
+    await comment(run, { line: 1, body: 'Wait for it' });
+    const res = await requestChanges(run);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().canStartNew).toBeUndefined();
+    expect((await byBody(run))['Wait for it']!.status).toBe('open');
+  });
+
+  it('refuses a new run for a run without a ticket', async () => {
+    const run = await adHocRun();
+    await comment(run, { line: 1, body: 'x' });
+    const res = await requestChanges(run, { target: 'new' });
+    expect(res.statusCode).toBe(409);
+    expect((await byBody(run))['x']!.status).toBe('open');
+  });
+
+  it('clips a long feedback section to the run prompt limit instead of failing', async () => {
+    const p = await project('Long');
+    const ticket: Ticket = (await api('POST', `/api/projects/${p.id}/tickets`, { title: 'Big', body: 'b'.repeat(15_000) })).json();
+    const { run } = await t.tickets.start(ticket.id, {}, { extraPromptSection: `## Feedback\n${'f'.repeat(30_000)}` });
+    expect(run.prompt.length).toBeLessThanOrEqual(20_000);
+    expect(run.prompt).toContain('## Feedback\nfff');
+    expect(run.prompt.startsWith(`${ticket.key}: Big\n\n${'b'.repeat(15_000)}\n\n## Feedback`)).toBe(true);
+  });
+});

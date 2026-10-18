@@ -3,17 +3,19 @@ import {
   CreateReviewCommentBody,
   MarkFileViewedBody,
   RequestChangesBody,
+  type RequestChangesResponse,
   type ReviewComment,
   type Run,
   type RunReviewState,
   UpdateReviewCommentBody,
 } from '@emberline/protocol';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { reviewComments, reviewFileViews } from '../db/schema.js';
-import { badRequest, notFound } from '../errors.js';
+import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import type { RunService } from '../runs/service.js';
 import { anchorTextOf, type Anchored, reanchor } from './anchor.js';
+import { type BatchComment, type BatchKind, newRunFeedbackSection, sameRunPrompt } from './batch.js';
 
 type CommentRow = typeof reviewComments.$inferSelect;
 
@@ -49,12 +51,56 @@ function parse<T>(schema: { safeParse(v: unknown): { success: true; data: T } | 
  * Line comments and per-file "viewed" marks on a run's diff, stored in SQLite so a review survives
  * reloads and can be continued after the agent has addressed part of it.
  */
+/** Starts a fresh run of a ticket with an extra prompt section (TicketService.start, injected to avoid a cycle). */
+export type StartTicketRun = (input: {
+  ticketId: string;
+  permissionMode: Run['permissionMode'];
+  persona: Run['persona'];
+  extraPromptSection: string;
+}) => Promise<Run>;
+
 export class ReviewService {
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
     private readonly log: (message: string, error?: unknown) => void = (message, error) => console.warn(message, error),
+    private readonly startTicketRun?: StartTicketRun,
   ) {}
+
+  private readonly onRun = (run: Run, stateChanged: boolean): void => {
+    if (!stateChanged || run.state !== 'done') return;
+    try {
+      this.settle(run.id, new Date(run.stateChangedAt));
+    } catch (error) {
+      this.log(`review: marking the comments of run ${run.id} addressed failed`, error);
+    }
+  };
+
+  /** Follows the runs: a run that reaches `done` after comments were sent to it has addressed them. */
+  start(): void {
+    this.runs.on('run', this.onRun);
+  }
+
+  stop(): void {
+    this.runs.off('run', this.onRun);
+  }
+
+  /**
+   * `sent` -> `addressed` for comments sent to the run before `doneAt`, the moment it last reached
+   * `done`. Also run lazily before reads and sends, so a done missed by the listener (core restart)
+   * still counts.
+   */
+  private settle(runId: string, doneAt: Date): void {
+    this.db
+      .update(reviewComments)
+      .set({ status: 'addressed' })
+      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'sent'), lt(reviewComments.sentAt, doneAt)))
+      .run();
+  }
+
+  private settleFor(run: Run): void {
+    if (run.state === 'done') this.settle(run.id, new Date(run.stateChangedAt));
+  }
 
   private readonly warned = new Set<string>();
 
@@ -125,7 +171,7 @@ export class ReviewService {
   }
 
   async state(runId: string): Promise<RunReviewState> {
-    this.runs.getRun(runId);
+    this.settleFor(this.runs.getRun(runId));
     const rows = this.db
       .select()
       .from(reviewComments)
@@ -211,9 +257,10 @@ export class ReviewService {
         verifiedAt: existing.status === 'addressed' ? new Date() : existing.verifiedAt,
       });
     }
-    // Reopening keeps the history of whether it was sent.
+    // Reopening ("Not done") makes it open again, so it goes out with the next batch; its round and
+    // sentAt stay as history. A carried comment reopened here belongs to this run again.
     if (body.status === 'open' && existing.status !== 'open') {
-      Object.assign(patch, { status: existing.sentAt ? 'sent' : 'open', resolvedAt: null, verifiedAt: null });
+      Object.assign(patch, { status: 'open', resolvedAt: null, verifiedAt: null, carriedTo: null });
     }
     if (Object.keys(patch).length === 0) return (await this.anchor(runId, [existing]))[0]!;
     const updated = this.db
@@ -230,30 +277,78 @@ export class ReviewService {
     this.db.delete(reviewComments).where(eq(reviewComments.id, commentId)).run();
   }
 
-  /** Sends every open comment (plus an optional note) to the agent as one prompt and marks them sent. */
-  async requestChanges(runId: string, raw: unknown): Promise<{ run: Run; sent: number }> {
-    const { note } = parse(RequestChangesBody, raw);
-    const open = this.db
+  /**
+   * What the next request-changes sends: every open comment; every addressed one (pinned until a
+   * person resolves it); and sent ones only once the run has ended without addressing them (while
+   * it is still at work they are with the agent already).
+   */
+  private async batch(run: Run): Promise<{ rows: CommentRow[]; comments: BatchComment[] }> {
+    this.settleFor(run);
+    const ended = run.state === 'failed' || run.endedAt !== null || run.cancelled;
+    const statuses = ended ? ['open', 'addressed', 'sent'] : ['open', 'addressed'];
+    const rows = this.db
       .select()
       .from(reviewComments)
-      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'open')))
-      .orderBy(asc(reviewComments.filePath), asc(reviewComments.line))
+      .where(and(eq(reviewComments.runId, run.id), inArray(reviewComments.status, statuses)))
+      .orderBy(asc(reviewComments.filePath), asc(reviewComments.line), asc(reviewComments.createdAt))
       .all();
-    if (open.length === 0 && !note) throw badRequest('nothing to send: add a line comment or a note');
-    const lines = ['Please address the following code review feedback on this branch:', ''];
-    if (note) lines.push(`Overall note: ${note}`, '');
-    if (open.length > 0) {
-      lines.push('Line comments:');
-      for (const c of open) {
-        lines.push(`- \`${c.filePath}${c.line === null ? '' : `:${c.line}`}\`${c.line === null ? ' (whole file)' : ''}${c.side === 'original' ? ' (removed code)' : ''}: ${c.body}`);
-      }
-    }
-    const run = await this.runs.prompt(runId, lines.join('\n'));
+    const kindOf: Record<string, BatchKind> = { open: 'new', sent: 'reminder', addressed: 'pinned' };
+    const anchored = await this.anchor(run.id, rows);
+    return { rows, comments: anchored.map((c) => ({ ...c, kind: kindOf[c.status] ?? 'new' })) };
+  }
+
+  /**
+   * Sends the batch (plus an optional note) as one prompt. `same` types into or resumes the run and
+   * marks the comments sent (round + 1); `new` starts a fresh run of the ticket carrying the
+   * feedback and resolves the comments here with `carriedTo`. A failed send changes no status.
+   */
+  async requestChanges(runId: string, raw: unknown): Promise<RequestChangesResponse> {
+    const { note, target } = parse(RequestChangesBody, raw);
+    const run = this.runs.getRun(runId);
+    const { rows, comments } = await this.batch(run);
+    if (rows.length === 0 && !note) throw badRequest('nothing to send: add a comment or a note');
+    // Taken before the send: the agent's next done must come after it to count as addressing these.
     const sentAt = new Date();
-    for (const c of open) {
-      this.db.update(reviewComments).set({ status: 'sent', sentAt }).where(eq(reviewComments.id, c.id)).run();
+    const ids = rows.map((r) => r.id);
+    if (target === 'new') {
+      if (!run.ticketId || !this.startTicketRun) throw conflict('only a ticket run can start a new run');
+      const fresh = await this.startTicketRun({
+        ticketId: run.ticketId,
+        permissionMode: run.permissionMode,
+        persona: run.persona,
+        extraPromptSection: newRunFeedbackSection(run.id, note, comments),
+      });
+      this.markAll(ids, { status: 'resolved', sentAt, resolvedAt: sentAt, carriedTo: fresh.id });
+      return { run: fresh, sent: rows.length };
     }
-    return { run, sent: open.length };
+    let prompted: Run;
+    try {
+      prompted = await this.runs.prompt(runId, sameRunPrompt(note, comments));
+    } catch (error) {
+      throw this.cannotPrompt(runId, error);
+    }
+    this.markAll(ids, { status: 'sent', sentAt });
+    return { run: prompted, sent: rows.length };
+  }
+
+  /** A run that can no longer take a prompt (stopped, handed off, no session) offers a new run of its ticket. */
+  private cannotPrompt(runId: string, error: unknown): unknown {
+    if (!(error instanceof HttpError) || error.statusCode !== 409) return error;
+    const run = this.runs.getRun(runId);
+    // Queued or starting is only a wait: sending again soon works.
+    const waiting = run.state === 'queued' || run.state === 'starting';
+    if (!run.ticketId || !this.startTicketRun || waiting) return error;
+    return new HttpError(409, error.code, error.message, { ...error.details, canStartNew: true });
+  }
+
+  /** Applies a status change to the batch's comments in one statement; every send counts a round. */
+  private markAll(ids: string[], set: Partial<CommentRow>): void {
+    if (ids.length === 0) return;
+    this.db
+      .update(reviewComments)
+      .set({ ...set, round: sql`${reviewComments.round} + 1` })
+      .where(inArray(reviewComments.id, ids))
+      .run();
   }
 
   async markViewed(runId: string, raw: unknown): Promise<RunReviewState> {

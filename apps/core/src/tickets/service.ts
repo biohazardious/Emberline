@@ -243,6 +243,9 @@ export const COMPLETION_NUDGE =
 /** CreateRunBody's prompt limit: a ticket prompt plus its dependency context must stay within it. */
 const RUN_PROMPT_MAX = 20_000;
 
+/** `text` cut to at most `max` characters, marked with an ellipsis when cut. */
+const clipText = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`);
+
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
@@ -1603,7 +1606,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   async start(
     id: string,
     input: StartTicketBody,
-    opts: { unattended?: boolean } & ByPerson = {},
+    opts: {
+      unattended?: boolean;
+      /** Appended after the dependency context (e.g. review feedback on an earlier run), clipped to fit the prompt limit. */
+      extraPromptSection?: string;
+    } & ByPerson = {},
   ): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
     if (this.runs.activeRunForTicket(id) || this.startingTickets.has(id)) {
@@ -1615,13 +1622,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
     this.startingTickets.add(id);
     try {
-      return await this.startUnguarded(ticket, input, opts.unattended);
+      return await this.startUnguarded(ticket, input, opts.unattended, opts.extraPromptSection);
     } finally {
       this.startingTickets.delete(id);
     }
   }
 
-  private async startUnguarded(ticket: Ticket, input: StartTicketBody, unattended = false): Promise<{ ticket: Ticket; run: Run }> {
+  private async startUnguarded(
+    ticket: Ticket,
+    input: StartTicketBody,
+    unattended = false,
+    extraPromptSection = '',
+  ): Promise<{ ticket: Ticket; run: Run }> {
     const id = ticket.id;
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
     const effectivePersona = persona ?? ticket.persona;
@@ -1630,7 +1642,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const run = await this.scheduler.submit(
       {
         projectId: ticket.projectId,
-        prompt: this.promptWithDependencyContext(ticket),
+        prompt: this.startPrompt(ticket, extraPromptSection),
         permissionMode,
         persona: effectivePersona,
         ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
@@ -1650,11 +1662,24 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * The ticket prompt plus what its finished direct dependencies handed over (summary, handoff),
-   * for every agent. Kept within the run prompt limit.
+   * The ticket prompt, what its finished direct dependencies handed over, then `extra` (review
+   * feedback for a fresh attempt). Kept within the run prompt limit: `extra` is a person's direct
+   * feedback, so it gets its room before the dependency context and is clipped, never refused.
    */
-  private promptWithDependencyContext(ticket: Ticket): string {
+  private startPrompt(ticket: Ticket, extra: string): string {
     const base = ticketPrompt(ticket);
+    const extraRoom = RUN_PROMPT_MAX - base.length - 2;
+    const section = extra.trim() && extraRoom > 1 ? clipText(extra.trim(), extraRoom) : '';
+    const reserved = section ? section.length + 2 : 0;
+    const withDeps = this.promptWithDependencyContext(ticket, base, RUN_PROMPT_MAX - reserved);
+    return section ? `${withDeps}\n\n${section}` : withDeps;
+  }
+
+  /**
+   * The ticket prompt plus what its finished direct dependencies handed over (summary, handoff),
+   * for every agent. Kept within `max` (the run prompt limit).
+   */
+  private promptWithDependencyContext(ticket: Ticket, base: string, max: number): string {
     if (ticket.dependsOn.length === 0) return base;
     const finished = this.db
       .select({ key: tickets.key, title: tickets.title, completion: tickets.completion })
@@ -1662,7 +1687,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .where(inArray(tickets.id, ticket.dependsOn))
       .all()
       .flatMap((dep) => (dep.completion ? [{ key: dep.key, title: dep.title, completion: dep.completion }] : []));
-    const room = Math.min(DEPENDENCY_SECTION_MAX, RUN_PROMPT_MAX - base.length - 2);
+    const room = Math.min(DEPENDENCY_SECTION_MAX, max - base.length - 2);
     const section = room > 0 ? dependencyContextSection(finished, room) : '';
     return section ? `${base}\n\n${section}` : base;
   }

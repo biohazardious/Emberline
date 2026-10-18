@@ -95,7 +95,9 @@ describe('persistent code review', () => {
     const reopened: ReviewComment = (
       await api('PATCH', `/api/runs/${run.id}/review/comments/${a.id}`, { status: 'open' })
     ).json();
-    expect(reopened.status).toBe('sent');
+    // Reopened ("Not done"): open again, so the next batch sends it; its history stays.
+    expect(reopened).toMatchObject({ status: 'open', round: 1 });
+    expect(reopened.sentAt).toBeTruthy();
 
     expect((await api('DELETE', `/api/runs/${run.id}/review/comments/${a.id}`)).statusCode).toBe(204);
     expect((await api('DELETE', `/api/runs/${run.id}/review/comments/${a.id}`)).statusCode).toBe(404);

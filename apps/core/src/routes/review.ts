@@ -1,4 +1,4 @@
-import type { ReviewComment, Run, RunReviewState } from '@emberline/protocol';
+import type { RequestChangesResponse, ReviewComment, RunReviewState } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { ReviewService } from '../review/service.js';
 
@@ -29,7 +29,7 @@ export function registerReviewRoutes(app: FastifyInstance, review: ReviewService
   );
   app.post<{ Params: { id: string } }>(
     '/api/runs/:id/review/request-changes',
-    async (request): Promise<{ run: Run; sent: number }> => review.requestChanges(request.params.id, request.body),
+    async (request): Promise<RequestChangesResponse> => review.requestChanges(request.params.id, request.body),
   );
   app.put<{ Params: { id: string } }>(
     '/api/runs/:id/review/viewed',
