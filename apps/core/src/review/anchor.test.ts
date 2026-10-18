@@ -39,4 +39,10 @@ describe('reanchor', () => {
   it('matches ignoring surrounding whitespace', () => {
     expect(reanchor(1, 'foo()', lines('', '    foo()  '))).toEqual({ currentLine: 2, outdated: false });
   });
+
+  it('treats one-character lines as weak: never searches the whole file', () => {
+    const file = Array.from({ length: 200 }, (_, i) => (i === 150 ? '}' : `l${i}`));
+    expect(reanchor(10, '}', file)).toEqual({ currentLine: null, outdated: true });
+    expect(reanchor(140, '}', file)).toEqual({ currentLine: 151, outdated: false });
+  });
 });

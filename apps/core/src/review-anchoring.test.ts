@@ -145,4 +145,15 @@ describe('re-anchoring on read', () => {
     writeFileSync(path.join(wt, 'a.txt'), 'line three\n' + 'z'.repeat(2 * 1024 * 1024 + 10));
     expect((await state(run)).comments.find((x) => x.id === c.id)).toMatchObject({ currentLine: 3, outdated: false });
   });
+
+  it('stores no anchor for a blank line and returns re-anchored fields from PATCH', async () => {
+    const { run, wt } = await setup();
+    writeFileSync(path.join(wt, 'a.txt'), 'first\n\nthird\n');
+    const blank = await comment(run, { filePath: 'a.txt', line: 2, body: 'blank' });
+    expect(blank.anchorText).toBeNull();
+    const c = await comment(run, { filePath: 'a.txt', line: 3, body: 'x' });
+    writeFileSync(path.join(wt, 'a.txt'), 'new\nfirst\n\nthird\n');
+    const patched = (await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { priority: 'blocking' })).json();
+    expect(patched).toMatchObject({ priority: 'blocking', currentLine: 4, outdated: false });
+  });
 });

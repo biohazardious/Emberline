@@ -160,14 +160,15 @@ describe('openDb', () => {
       .map((c) => c.name);
     old.prepare(`insert into runs (id, ${cols.join(', ')}) values ('r', ${cols.map((c) => (/_at$/.test(c) ? '0' : "'x'")).join(', ')})`).run();
     old.exec(
-      `insert into review_comments (id, run_id, file_path, line, side, body, status, created_at) values ('c1', 'r', 'a.ts', 4, 'modified', 'old', 'sent', 5)`,
+      `insert into review_comments (id, run_id, file_path, line, side, body, status, created_at, sent_at, resolved_at) values ('c1', 'r', 'a.ts', 4, 'original', 'old', 'sent', 5, 7, 9)`,
     );
     old.close();
 
     const db = openDb(file);
     const row = db.db.all(sql.raw(`select * from review_comments where id = 'c1'`))[0] as Record<string, unknown>;
     expect(row).toMatchObject({
-      line: 4, body: 'old', status: 'sent', created_at: 5,
+      id: 'c1', run_id: 'r', file_path: 'a.ts', line: 4, side: 'original', body: 'old', status: 'sent',
+      created_at: 5, sent_at: 7, resolved_at: 9,
       intent: 'fix', priority: 'important', round: 0, anchor_text: null, anchor_hash: null, verified_at: null, carried_to: null,
     });
     db.db.run(

@@ -20,6 +20,7 @@ CREATE TABLE `__new_review_comments` (
 	FOREIGN KEY (`run_id`) REFERENCES `runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
+-- Hand-edited: drizzle-kit selected the new columns from the old table. Only the legacy columns are copied; the new ones take their defaults.
 INSERT INTO `__new_review_comments`("id", "run_id", "file_path", "line", "side", "body", "status", "created_at", "sent_at", "resolved_at") SELECT "id", "run_id", "file_path", "line", "side", "body", "status", "created_at", "sent_at", "resolved_at" FROM `review_comments`;--> statement-breakpoint
 DROP TABLE `review_comments`;--> statement-breakpoint
 ALTER TABLE `__new_review_comments` RENAME TO `review_comments`;--> statement-breakpoint

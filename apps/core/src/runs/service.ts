@@ -83,6 +83,7 @@ import {
   git,
   inspectDiff,
   inspectFileDiff,
+  hashWorktreeFile,
   readReviewSide,
   listBuildOutputs,
   listWorktreeArtifacts,
@@ -1459,6 +1460,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async fileDiff(id: string, relPath: string, scope: DiffScope = 'branch'): Promise<RunFileDiff> {
     const row = this.row(id);
     return inspectFileDiff(row.worktreePath, this.defaultBranch(row.projectId), scope, relPath);
+  }
+
+  /** Content hash of one file as the diff listing reports it (null when unhashable). */
+  async fileHash(id: string, relPath: string): Promise<string | null> {
+    const row = this.row(id);
+    return hashWorktreeFile(row.worktreePath, this.defaultBranch(row.projectId), relPath);
   }
 
   /** One side of a file (worktree or base branch) for re-anchoring review comments; null when absent, throws when unreadable or over 2 MB. */

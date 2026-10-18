@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   ArtifactKind,
@@ -164,6 +165,8 @@ function statusFromCode(code: string): DiffFileStatus {
 }
 
 const HASH_CHUNK = 200;
+/** Files larger than this are not hashed (they get the `unhashed:` fallback). */
+const MAX_HASH_BYTES = 64 * 1024 * 1024;
 
 /** Old blob ids of deleted files from `git diff --raw --no-abbrev` output. */
 function deletedBlobs(rawOut: string): Map<string, string> {
@@ -176,12 +179,60 @@ function deletedBlobs(rawOut: string): Map<string, string> {
   return blobs;
 }
 
+/** True when `abs`'s parent directory really lives inside the worktree (no symlinked directory escapes). */
+async function parentInside(root: string, abs: string): Promise<boolean> {
+  try {
+    const [realRoot, realParent] = await Promise.all([realpath(root), realpath(path.dirname(abs))]);
+    return realParent === realRoot || realParent.startsWith(realRoot + path.sep);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Fills `DiffFile.hash`: `git hash-object` over the files present in the worktree (batched; core's
- * exec path has no stdin, so paths go as arguments in chunks rather than via --stdin-paths), and
- * `deleted:<old blob>` for deleted files. An unhashable file keeps '' (reads never fail the diff).
+ * Content hashes for paths present in the worktree. Each path is `lstat`ed first, so nothing git
+ * opens can be a FIFO, device or a link out of the worktree: symlinks are hashed by their link text
+ * (`link:<sha1>`), only regular files within the size cap reach `git hash-object` (batched in chunks;
+ * core's exec path has no stdin for --stdin-paths). Unhashable paths map to null.
  */
-async function assignHashes(worktreePath: string, files: DiffFile[], rawOut: string): Promise<void> {
+async function contentHashes(worktreePath: string, relPaths: string[]): Promise<Map<string, string | null>> {
+  const result = new Map<string, string | null>();
+  const regular: string[] = [];
+  const root = path.resolve(worktreePath);
+  for (const rel of relPaths) {
+    result.set(rel, null);
+    const abs = path.resolve(root, rel);
+    if (!abs.startsWith(root + path.sep) || !(await parentInside(root, abs))) continue;
+    try {
+      const info = await lstat(abs);
+      if (info.isSymbolicLink()) result.set(rel, `link:${createHash('sha1').update(await readlink(abs)).digest('hex')}`);
+      else if (info.isFile() && info.size <= MAX_HASH_BYTES) regular.push(rel);
+    } catch {
+      // missing or unreadable: stays null
+    }
+  }
+  for (let i = 0; i < regular.length; i += HASH_CHUNK) {
+    const chunk = regular.slice(i, i + HASH_CHUNK);
+    const out = await gitRaw(worktreePath, ['hash-object', '--', ...chunk]).catch(() => null);
+    const ids = out?.split('\n').filter(Boolean);
+    if (ids && ids.length === chunk.length) {
+      chunk.forEach((rel, n) => result.set(rel, ids[n]!));
+      continue;
+    }
+    // Last resort: a failing path must not blank the whole chunk.
+    for (const rel of chunk) {
+      const one = (await gitRaw(worktreePath, ['hash-object', '--', rel]).catch(() => '')).trim();
+      result.set(rel, one || null);
+    }
+  }
+  return result;
+}
+
+/**
+ * Fills `DiffFile.hash`: content hash for files in the worktree, `link:<sha1>` for symlinks,
+ * `deleted:<old blob>` for deleted files, and a varying `unhashed:<status>:<adds>:<dels>` otherwise.
+ */
+export async function assignHashes(worktreePath: string, files: DiffFile[], rawOut: string): Promise<void> {
   const blobs = deletedBlobs(rawOut);
   const present: DiffFile[] = [];
   for (const f of files) {
@@ -189,17 +240,25 @@ async function assignHashes(worktreePath: string, files: DiffFile[], rawOut: str
     if (blob) f.hash = `deleted:${blob}`;
     else if (f.status !== 'deleted') present.push(f);
   }
-  for (let i = 0; i < present.length; i += HASH_CHUNK) {
-    const chunk = present.slice(i, i + HASH_CHUNK);
-    const out = await gitRaw(worktreePath, ['hash-object', '--', ...chunk.map((f) => f.path)]).catch(() => null);
-    const ids = out?.split('\n').filter(Boolean);
-    if (ids && ids.length === chunk.length) {
-      chunk.forEach((f, n) => (f.hash = ids[n]!));
-      continue;
-    }
-    // One bad path (e.g. a submodule directory) must not blank the whole chunk.
-    for (const f of chunk) f.hash = (await gitRaw(worktreePath, ['hash-object', '--', f.path]).catch(() => '')).trim();
+  const hashes = await contentHashes(worktreePath, present.map((f) => f.path));
+  for (const f of files) {
+    if (f.hash) continue;
+    f.hash = hashes.get(f.path) ?? `unhashed:${f.status}:${f.additions}:${f.deletions}`;
   }
+}
+
+/**
+ * Hash of a single file as `inspectDiff` would report it (null when unhashable), without listing the
+ * whole diff. A file missing from the worktree reports `deleted:<blob at the base>`.
+ */
+export async function hashWorktreeFile(worktreePath: string, baseBranch: string, relPath: string): Promise<string | null> {
+  const { rel } = resolveSafeWorktreePath(worktreePath, relPath);
+  const present = (await contentHashes(worktreePath, [rel])).get(rel) ?? null;
+  if (present) return present;
+  if (await lstat(path.join(worktreePath, rel)).then(() => true, () => false)) return null;
+  const baseRef = await resolveBaseRef(worktreePath, baseBranch);
+  const blob = (await gitRaw(worktreePath, ['rev-parse', '--verify', '-q', `${baseRef}:${rel}`]).catch(() => '')).trim();
+  return blob ? `deleted:${blob}` : null;
 }
 
 /** Largest file side read when re-anchoring review comments. */
@@ -219,9 +278,13 @@ export async function readReviewSide(
   if (side === 'modified') {
     let info;
     try {
-      info = await stat(abs);
+      info = await lstat(abs);
     } catch {
       return null;
+    }
+    // The text ends up in agent prompts: never read through a link out of the worktree.
+    if (info.isSymbolicLink() || !(await parentInside(path.resolve(worktreePath), abs))) {
+      throw new Error(`${rel} is a symlink or lies behind one`);
     }
     if (!info.isFile()) return null;
     if (info.size > MAX_ANCHOR_BYTES) throw new Error(`${rel} is larger than ${MAX_ANCHOR_BYTES} bytes`);
@@ -230,9 +293,24 @@ export async function readReviewSide(
     return buf.toString('utf8');
   }
   const baseRef = await resolveBaseRef(worktreePath, baseBranch);
-  const exists = await gitRaw(worktreePath, ['cat-file', '-e', `${baseRef}:${rel}`]).then(() => true, () => false);
-  if (!exists) return null;
-  const { stdout } = await execGitFile(['-C', worktreePath, 'show', `${baseRef}:${rel}`], {
+  let basePath = rel;
+  const exists = (p: string) => gitRaw(worktreePath, ['cat-file', '-e', `${baseRef}:${p}`]).then(() => true, () => false);
+  if (!(await exists(rel))) {
+    // A renamed file's original lives under its old path.
+    const tokens = (await gitRaw(worktreePath, ['diff', baseRef, '--name-status', '-z', '-M']).catch(() => '')).split('\0');
+    let old: string | null = null;
+    for (let i = 0; i < tokens.length; i++) {
+      const code = tokens[i];
+      if (!code) continue;
+      if (code.startsWith('R') || code.startsWith('C')) {
+        if (tokens[i + 2] === rel) old = tokens[i + 1] ?? null;
+        i += 2;
+      } else i += 1;
+    }
+    if (!old || !(await exists(old))) return null;
+    basePath = old;
+  }
+  const { stdout } = await execGitFile(['-C', worktreePath, 'show', `${baseRef}:${basePath}`], {
     timeout: 15_000,
     maxBuffer: MAX_ANCHOR_BYTES + 1024,
     encoding: 'buffer',
@@ -283,30 +361,41 @@ export async function inspectDiff(
     scope === 'staged' ? ['diff', '--cached'] : scope === 'unstaged' ? ['diff'] : ['diff', baseRef];
 
   const [numstatOut, nameStatusOut, rawOut] = await Promise.all([
-    gitRaw(worktreePath, [...diffArgs, '--numstat']),
-    gitRaw(worktreePath, [...diffArgs, '--name-status']),
+    gitRaw(worktreePath, [...diffArgs, '--numstat', '-z']),
+    gitRaw(worktreePath, [...diffArgs, '--name-status', '-z']),
     gitRaw(worktreePath, [...diffArgs, '--raw', '--no-abbrev']).catch(() => ''),
   ]);
 
+  // NUL-delimited output: renames come as `R<score> \0 old \0 new` and paths are never quoted.
   const statusByPath = new Map<string, { status: DiffFileStatus; oldPath: string | null }>();
-  for (const line of nameStatusOut.split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    const code = parts[0] ?? 'M';
-    if (code.startsWith('R') && parts[1] && parts[2]) {
-      statusByPath.set(parts[2], { status: 'renamed', oldPath: parts[1] });
-    } else if (parts[1]) {
-      statusByPath.set(parts[1], { status: statusFromCode(code), oldPath: null });
+  const nameTokens = nameStatusOut.split('\0');
+  for (let i = 0; i < nameTokens.length; i++) {
+    const code = nameTokens[i];
+    if (!code) continue;
+    if (code.startsWith('R') || code.startsWith('C')) {
+      const oldP = nameTokens[++i];
+      const newP = nameTokens[++i];
+      if (oldP && newP) statusByPath.set(newP, { status: code.startsWith('R') ? 'renamed' : 'added', oldPath: oldP });
+    } else {
+      const p = nameTokens[++i];
+      if (p) statusByPath.set(p, { status: statusFromCode(code), oldPath: null });
     }
   }
 
   const filesByPath = new Map<string, DiffFile>();
-  for (const line of numstatOut.split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
+  const numTokens = numstatOut.split('\0');
+  for (let i = 0; i < numTokens.length; i++) {
+    const head = numTokens[i];
+    if (!head) continue;
+    const parts = head.replace(/^\n/, '').split('\t');
     const addRaw = parts[0] ?? '0';
     const delRaw = parts[1] ?? '0';
-    const pathPart = parts.slice(2).join('\t');
+    let pathPart = parts.slice(2).join('\t');
+    if (!pathPart) {
+      // rename/copy: the next two tokens are the old and the new path
+      i++;
+      pathPart = numTokens[++i] ?? '';
+    }
     if (!pathPart) continue;
     const additions = addRaw === '-' ? 0 : Number.parseInt(addRaw, 10) || 0;
     const deletions = delRaw === '-' ? 0 : Number.parseInt(delRaw, 10) || 0;

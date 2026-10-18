@@ -30,6 +30,7 @@ export function reanchor(line: number, anchorText: string, fileLines: readonly s
     if (best === null || d < Math.abs(best - line)) best = m;
   }
   if (best !== null) return { currentLine: best, outdated: false };
-  if (matches.length === 1) return { currentLine: matches[0]!, outdated: false };
+  // One-character lines (`}`, `{`) say too little to be trusted across the whole file.
+  if (matches.length === 1 && anchorText.length > 1) return { currentLine: matches[0]!, outdated: false };
   return { currentLine: null, outdated: true };
 }

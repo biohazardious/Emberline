@@ -56,12 +56,25 @@ export class ReviewService {
     private readonly log: (message: string, error?: unknown) => void = (message, error) => console.warn(message, error),
   ) {}
 
+  private readonly warned = new Set<string>();
+
+  /** Reads happen on every GET: log a run's problem once, not per request. */
+  private warnOnce(runId: string, message: string, error: unknown): void {
+    if (this.warned.has(runId)) return;
+    if (this.warned.size > 1000) this.warned.clear();
+    this.warned.add(runId);
+    this.log(message, error);
+  }
+
   /** The file hashes of the run's branch diff; null when the diff cannot be read. */
   private async fileHashes(runId: string): Promise<Map<string, string> | null> {
     try {
-      return new Map((await this.runs.diff(runId, 'branch')).files.map((f) => [f.path, f.hash]));
+      const summary = await this.runs.diff(runId, 'branch');
+      // A worktree that is gone says nothing about the files: keep the stored lines.
+      if (!summary.isGitRepo) return null;
+      return new Map(summary.files.map((f) => [f.path, f.hash]));
     } catch (error) {
-      this.log(`review: reading the diff of run ${runId} failed`, error);
+      this.warnOnce(runId, `review: reading the diff of run ${runId} failed`, error);
       return null;
     }
   }
@@ -83,7 +96,7 @@ export class ReviewService {
           this.runs.reviewSide(runId, filePath, side).then(
             (text) => (text === null ? null : text.split(/\r?\n/)),
             (error) => {
-              this.log(`review: re-anchoring ${filePath} failed`, error);
+              this.warnOnce(runId, `review: re-anchoring ${filePath} failed`, error);
               throw error;
             },
           ),
@@ -133,15 +146,21 @@ export class ReviewService {
     this.runs.getRun(runId);
     const body = parse(CreateReviewCommentBody, raw);
     const line = body.line ?? null;
-    const anchorHash = (await this.fileHashes(runId))?.get(body.filePath) ?? null;
+    let anchorHash: string | null = null;
+    try {
+      anchorHash = await this.runs.fileHash(runId, body.filePath);
+    } catch (error) {
+      this.warnOnce(runId, `review: hashing ${body.filePath} for the comment anchor failed`, error);
+    }
     let anchorText: string | null = null;
     if (line !== null) {
       try {
         const text = await this.runs.reviewSide(runId, body.filePath, body.side);
         const lineText = text?.split(/\r?\n/)[line - 1];
-        if (lineText !== undefined) anchorText = anchorTextOf(lineText);
+        // A blank line is no anchor: such a comment keeps its line number.
+        if (lineText !== undefined && lineText.trim() !== '') anchorText = anchorTextOf(lineText);
       } catch (error) {
-        this.log(`review: reading ${body.filePath} for the comment anchor failed`, error);
+        this.warnOnce(runId, `review: reading ${body.filePath} for the comment anchor failed`, error);
       }
     }
     const row: CommentRow = {
@@ -177,7 +196,7 @@ export class ReviewService {
     return row;
   }
 
-  updateComment(runId: string, commentId: string, raw: unknown): ReviewComment {
+  async updateComment(runId: string, commentId: string, raw: unknown): Promise<ReviewComment> {
     const existing = this.comment(runId, commentId);
     const body = parse(UpdateReviewCommentBody, raw);
     const patch: Partial<CommentRow> = {};
@@ -196,14 +215,14 @@ export class ReviewService {
     if (body.status === 'open' && existing.status !== 'open') {
       Object.assign(patch, { status: existing.sentAt ? 'sent' : 'open', resolvedAt: null, verifiedAt: null });
     }
-    if (Object.keys(patch).length === 0) return toComment(existing);
+    if (Object.keys(patch).length === 0) return (await this.anchor(runId, [existing]))[0]!;
     const updated = this.db
       .update(reviewComments)
       .set(patch)
       .where(eq(reviewComments.id, commentId))
       .returning()
       .get();
-    return toComment(updated!);
+    return (await this.anchor(runId, [updated!]))[0]!;
   }
 
   deleteComment(runId: string, commentId: string): void {

@@ -18,7 +18,7 @@ export function registerReviewRoutes(app: FastifyInstance, review: ReviewService
   app.patch<{ Params: { id: string; commentId: string } }>(
     '/api/runs/:id/review/comments/:commentId',
     async (request): Promise<ReviewComment> =>
-      review.updateComment(request.params.id, request.params.commentId, request.body),
+      await review.updateComment(request.params.id, request.params.commentId, request.body),
   );
   app.delete<{ Params: { id: string; commentId: string } }>(
     '/api/runs/:id/review/comments/:commentId',
