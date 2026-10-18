@@ -6,7 +6,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Added
 
-- A Docker page (sidebar **Docker**, shown while the Docker engine is on) lists Emberline's own compose projects in the engine, grouped as Agents, Previews, Build & Verify and Leftovers, with their containers, state and published ports linked. You can read a project's logs, stop or remove it after a confirmation (for a running agent's project it warns that the agent may be using it, but does not block), see the engine's disk use and when the cleanup last ran, and start the cleanup now. Projects with other names are never listed or touched.
+- A Docker page (sidebar **Docker**, shown while the Docker engine is on) lists Emberline's own compose projects in the engine, grouped as Agents, Previews, Build & Verify and Leftovers, with their containers, state and published ports (ports of the compose preview range are links). You can read a project's logs, stop or remove it after a confirmation (leftovers can only be removed) (for a running agent's project it warns that the agent may be using it, but does not block), see the engine's disk use and when the cleanup last ran, and start the cleanup now. Projects with other names are never listed or touched.
 
 ## [0.3.2] - 2026-10-18
 

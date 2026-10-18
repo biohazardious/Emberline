@@ -86,6 +86,7 @@ class FakeEngine {
   dfResult: ExecResult | null = null;
   failDown = new Set<string>();
   failLogs = false;
+  failPrune = false;
   logs = 'web-1  | \u001b[31mready\u001b[0m\n';
   /** While set, the next `compose ls` waits for it. */
   lsGate: Promise<void> | null = null;
@@ -146,7 +147,7 @@ class FakeEngine {
     }
     if (args[0] === 'system' && args[1] === 'df') return this.dfResult ?? ok(`${DF}\n`);
     if ((args[0] === 'image' || args[0] === 'builder') && args[1] === 'prune')
-      return ok('Total reclaimed space: 0B\n');
+      return this.failPrune ? failed('prune: disk I/O error') : ok('Total reclaimed space: 0B\n');
     if (args[0] !== 'compose') return failed(`unexpected docker ${args.join(' ')}`);
     if (args[1] === 'ls') {
       const gate = this.lsGate;
@@ -372,7 +373,7 @@ describe('engine off', () => {
     expect(await overview()).toMatchObject({
       engine: { enabled: false, available: false },
       disk: { rows: [] },
-      cleanup: { lastSweepAt: null, lastSweepRemoved: [], lastPruneAt: null, sweeping: false },
+      cleanup: { lastSweepAt: null, lastSweepRemoved: [], lastPruneAt: null, lastPruneOkAt: null, sweeping: false },
       projects: [],
     });
     for (const [method, url] of [
@@ -399,8 +400,31 @@ describe('engine off', () => {
       disk: { rows: [] },
     });
     expect(o.error).toContain('not reachable');
-    expect((await api('POST', '/api/docker/projects/emberline-abcd1234/stop')).statusCode).toBe(409);
+    for (const [method, url] of [
+      ['POST', '/api/docker/projects/emberline-abcd1234/stop'],
+      ['POST', '/api/docker/projects/emberline-abcd1234/remove'],
+      ['GET', '/api/docker/projects/emberline-abcd1234/logs'],
+      ['POST', '/api/docker/cleanup'],
+    ] as const) {
+      const res = await api(method, url);
+      expect(res.statusCode, url).toBe(409);
+      // Enabled but not answering: enabling it again would not help.
+      expect(res.json().message, url).toContain('not reachable');
+      expect(res.json().hint, url).toBeUndefined();
+    }
     expect(engine.calls).toEqual([]);
+  });
+
+  it('a sweep that finds the engine unreachable says so', async () => {
+    await start();
+    engine.available = false;
+    await t.runs.docker.probe();
+    expect(await t.runs.sweepDockerProjects()).toEqual({
+      removed: [],
+      listed: false,
+      pruned: false,
+      error: 'the Docker engine is not reachable',
+    });
   });
 });
 
@@ -459,7 +483,7 @@ describe('inventory and ownership (Review Focus 3, 4)', () => {
       expect.objectContaining({
         service: 'web',
         state: 'running',
-        ports: [4330],
+        ports: [{ port: 4330, url: 'http://localhost:4330' }],
         image: 'web:latest',
         runningFor: '5 minutes ago',
         name: `${agent}-web-1`,
@@ -530,7 +554,58 @@ describe('inventory and ownership (Review Focus 3, 4)', () => {
   });
 });
 
+describe('published port links', () => {
+  const portsOf = (o: DockerOverview, name: string) =>
+    o.projects.find((x) => x.name === name)!.containers.flatMap((c) => c.ports);
+  const overviewFrom = async (host: string) => {
+    const res = await t.app.inject({ method: 'GET', url: '/api/docker', headers: { cookie, host } });
+    expect(res.statusCode).toBe(200);
+    return DockerOverview.parse(res.json());
+  };
+
+  it('links a port of the compose preview range on the host the page was opened by; other ports are not published', async () => {
+    await start();
+    engine.add('emberline-deadbeef');
+    engine.published.set(4330, 'emberline-deadbeef');
+    engine.add('emberline-main-00000000');
+    engine.published.set(8080, 'emberline-main-00000000');
+    engine.add('emberline-feedf00d');
+    // The runner's range is published by the runner, not by the engine.
+    engine.published.set(4300, 'emberline-feedf00d');
+    const o = await overviewFrom('192.168.1.21:7420');
+    expect(portsOf(o, 'emberline-deadbeef')).toEqual([{ port: 4330, url: 'http://192.168.1.21:4330' }]);
+    expect(portsOf(o, 'emberline-main-00000000')).toEqual([{ port: 8080, url: null }]);
+    expect(portsOf(o, 'emberline-feedf00d')).toEqual([{ port: 4300, url: null }]);
+  });
+
+  it('EMBERLINE_PREVIEW_HOST overrides the host, as for previews', async () => {
+    await start();
+    engine.add('emberline-deadbeef');
+    engine.published.set(4349, 'emberline-deadbeef');
+    vi.stubEnv('EMBERLINE_PREVIEW_HOST', 'https://previews.example.net/');
+    try {
+      expect(portsOf(await overviewFrom('192.168.1.21:7420'), 'emberline-deadbeef')).toEqual([
+        { port: 4349, url: 'https://previews.example.net:4349' },
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('stop and remove', () => {
+  it('a leftover can only be removed: Stop is 409 with a hint and runs no down', async () => {
+    await start();
+    engine.add('emberline-deadbeef');
+    const res = await api('POST', '/api/docker/projects/emberline-deadbeef/stop');
+    expect(res.statusCode).toBe(409);
+    expect(res.json().hint).toBe(
+      'use Remove: a stopped leftover keeps its volumes and the cleanup can no longer find it',
+    );
+    expect(engine.downs()).toEqual([]);
+    expect(engine.projects.has('emberline-deadbeef')).toBe(true);
+  });
+
   it("stopping a live agent's project: down without volumes, a note on the run, a warning; the run's state is unchanged", async () => {
     await start();
     const p = await createProject();
@@ -806,6 +881,20 @@ describe('Clean up now (Review Focus 5)', () => {
     expect(cleanup).toMatchObject({ lastSweepRemoved: ['emberline-deadbeef'], sweeping: false });
     expect(cleanup.lastSweepAt).not.toBeNull();
     expect(cleanup.lastPruneAt).not.toBeNull();
+    expect(cleanup.lastPruneOkAt).toBe(cleanup.lastPruneAt);
+  });
+
+  it('a failed prune moves the last attempt, not the last successful prune', async () => {
+    await start();
+    await t.runs.sweepDockerProjects(Date.parse('2026-10-18T08:00:00Z'));
+    engine.failPrune = true;
+    expect(await t.runs.sweepDockerProjects(Date.parse('2026-10-18T09:00:00Z'), { forcePrune: true })).toMatchObject({
+      pruned: false,
+    });
+    expect((await overview()).cleanup).toMatchObject({
+      lastPruneAt: '2026-10-18T09:00:00.000Z',
+      lastPruneOkAt: '2026-10-18T08:00:00.000Z',
+    });
   });
 
   it('a failed listing still runs the forced prune and says so: 200, listed false, with the error', async () => {

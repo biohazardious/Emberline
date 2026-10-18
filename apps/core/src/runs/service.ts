@@ -558,6 +558,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private dockerGcTimer?: NodeJS.Timeout;
   private dockerSweeping = false;
   private lastImagePruneAt = 0;
+  /** The last image prune that succeeded (0 = none yet). */
+  private lastImagePruneOkAt = 0;
   /** The last sweep that listed the engine, and what it removed (the Docker page shows them). */
   private lastDockerSweep: { at: number; removed: string[] } | null = null;
 
@@ -2272,7 +2274,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     try {
       await this.docker.ready();
       const env = this.docker.cliEnv();
-      if (!env.DOCKER_HOST) return result;
+      if (!env.DOCKER_HOST) {
+        result.error = 'the Docker engine is not reachable';
+        return result;
+      }
       const listed = await composeProjects(env);
       if (listed.ok) {
         result.listed = true;
@@ -2294,6 +2299,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         this.lastImagePruneAt = now;
         const prune = await pruneImages(env);
         result.pruned = prune.ok;
+        if (prune.ok) this.lastImagePruneOkAt = now;
         if (!prune.ok) this.log?.warn({ output: prune.output.slice(-500) }, 'compose sweep: image prune failed');
       }
     } finally {
@@ -2342,11 +2348,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * the engine's disk use and the cleanup state. Never throws on a docker failure: each listing
    * carries its own error.
    */
-  async dockerOverview(): Promise<DockerOverview> {
+  async dockerOverview(requestHost?: string): Promise<DockerOverview> {
     const cleanup = {
       lastSweepAt: this.lastDockerSweep ? new Date(this.lastDockerSweep.at).toISOString() : null,
       lastSweepRemoved: this.lastDockerSweep?.removed ?? [],
       lastPruneAt: this.lastImagePruneAt ? new Date(this.lastImagePruneAt).toISOString() : null,
+      lastPruneOkAt: this.lastImagePruneOkAt ? new Date(this.lastImagePruneOkAt).toISOString() : null,
       sweeping: this.dockerSweeping,
     };
     const empty = { disk: { rows: [] }, cleanup, projects: [] };
@@ -2359,7 +2366,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     const inventory = await gatherDockerInventory(env);
     // Read after the listing, like the sweep: a listed project belongs to a run that existed before it.
-    const listed = buildDockerProjects({ ls: inventory.ls, ps: inventory.ps, facts: this.dockerOwnershipFacts() });
+    // Only the compose preview range is published on the host (by the engine's container); any
+    // other port a project publishes stays inside the engine.
+    const { first, last } = this.config.previewPorts.docker;
+    const listed = buildDockerProjects({
+      ls: inventory.ls,
+      ps: inventory.ps,
+      facts: this.dockerOwnershipFacts(),
+      portUrl: (port) => (port >= first && port <= last ? previewUrl(port, requestHost) : null),
+    });
     return {
       engine: this.docker.status,
       disk: inventory.df.ok ? { rows: inventory.df.value } : { rows: [], error: inventory.df.error },
@@ -2387,6 +2402,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private async downDockerProject(name: string, action: 'stop' | 'remove'): Promise<DockerProjectActionResponse> {
     const env = await this.dockerPageEnv(name);
     const owner = resolveDockerOwner(name, this.dockerOwnershipFacts());
+    if (action === 'stop' && owner.kind === 'orphan') {
+      // A stopped leftover has no containers left, so `compose ls` (and the sweep) no longer sees it,
+      // while its volumes stay behind for good.
+      throw new HttpError(409, 'docker_leftover', `${name} is a leftover: remove it instead`, {
+        hint: 'use Remove: a stopped leftover keeps its volumes and the cleanup can no longer find it',
+      });
+    }
     const opts = action === 'remove' ? CLEANUP_DOWN : {};
     const down =
       owner.kind === 'preview'
@@ -2454,14 +2476,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   private async dockerPageEnv(name: string | null): Promise<Record<string, string>> {
     if (name !== null && !isEmberlineComposeProject(name)) throw badRequest('not a compose project Emberline made');
-    const off = () =>
-      new HttpError(409, 'docker_off', `the Docker engine is ${this.docker.host ? 'not reachable' : 'off'}`, {
+    if (!this.docker.host) {
+      throw new HttpError(409, 'docker_off', 'the Docker engine is off', {
         hint: 'enable the Docker engine (COMPOSE_PROFILES=docker)',
       });
-    if (!this.docker.host) throw off();
+    }
     await this.docker.ready();
     const env = this.docker.cliEnv();
-    if (!env.DOCKER_HOST) throw off();
+    // Enabled but not answering: enabling it would not help, so no hint.
+    if (!env.DOCKER_HOST) {
+      const why = this.docker.status.error;
+      throw new HttpError(409, 'docker_off', `the Docker engine is not reachable${why ? `: ${why}` : ''}`);
+    }
     return env;
   }
 

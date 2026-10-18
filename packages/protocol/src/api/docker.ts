@@ -53,6 +53,14 @@ export const DockerContainerState = z.enum([
 ]);
 export type DockerContainerState = z.infer<typeof DockerContainerState>;
 
+/**
+ * A published host port. `url` is set only for ports of the compose preview range, which the engine
+ * publishes on the host (on the host the page was opened by, or `EMBERLINE_PREVIEW_HOST`); other
+ * ports stay inside the engine and are not reachable from a browser.
+ */
+export const DockerPublishedPort = z.object({ port: z.number().int(), url: z.string().nullable() });
+export type DockerPublishedPort = z.infer<typeof DockerPublishedPort>;
+
 export const DockerContainer = z.object({
   name: z.string(),
   /** The compose service (label `com.docker.compose.service`). */
@@ -60,8 +68,8 @@ export const DockerContainer = z.object({
   state: DockerContainerState,
   /** Docker's status text, e.g. "Up 2 hours", "Exited (1) 3 minutes ago". */
   status: z.string(),
-  /** Published host ports (unique, ascending). */
-  ports: z.array(z.number().int()),
+  /** Published ports (unique, ascending). */
+  ports: z.array(DockerPublishedPort),
   image: z.string(),
   /** As Docker prints them: "2026-10-18 08:00:00 +0000 UTC", "2 hours ago". */
   createdAt: z.string(),
@@ -97,8 +105,10 @@ export const DockerCleanupState = z.object({
   lastSweepAt: z.string().nullable(),
   /** The projects that sweep removed. */
   lastSweepRemoved: z.array(z.string()),
-  /** When images and build cache were last pruned; null before the first prune. */
+  /** When the image and build cache prune last ran (it may have failed); null before the first one. */
   lastPruneAt: z.string().nullable(),
+  /** When that prune last succeeded; null before the first success. */
+  lastPruneOkAt: z.string().nullable(),
   /** A sweep is running now. */
   sweeping: z.boolean(),
 });

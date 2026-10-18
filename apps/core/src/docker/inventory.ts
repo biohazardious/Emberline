@@ -28,7 +28,8 @@ export interface ComposeLsRow {
   status: string | null;
 }
 
-export type InventoryContainer = DockerContainer & { project: string };
+/** A container as `docker ps` lists it: its published ports are plain numbers until the page links them. */
+export type InventoryContainer = Omit<DockerContainer, 'ports'> & { project: string; ports: number[] };
 
 const TEXT_MAX = 300;
 const PROJECT_LABEL = 'com.docker.compose.project';
@@ -248,16 +249,20 @@ export function buildDockerProjects(input: {
   ls: Parsed<ComposeLsRow[]>;
   ps: Parsed<InventoryContainer[]>;
   facts: OwnershipFacts;
+  /** The browser link of a published port, or null when it is not published on the host. */
+  portUrl?: (port: number) => string | null;
 }): { projects: DockerProject[]; projectsError?: string; containersError?: string } {
+  const portUrl = input.portUrl ?? (() => null);
   const status = new Map<string, string | null>();
   if (input.ls.ok)
     for (const row of input.ls.value)
       if (isEmberlineComposeProject(row.name)) status.set(row.name, row.status);
   const containers = new Map<string, DockerContainer[]>();
   if (input.ps.ok) {
-    for (const { project, ...container } of input.ps.value) {
+    for (const { project, ports, ...container } of input.ps.value) {
       if (!isEmberlineComposeProject(project)) continue;
-      containers.set(project, [...(containers.get(project) ?? []), container]);
+      const linked = { ...container, ports: ports.map((port) => ({ port, url: portUrl(port) })) };
+      containers.set(project, [...(containers.get(project) ?? []), linked]);
     }
   }
   const names = [...new Set([...status.keys(), ...containers.keys()])].sort();

@@ -16,7 +16,9 @@ import {
   groupDockerProjects,
   ownerBadges,
   ownerSummary,
-  portHref,
+  actionsFor,
+  doneStillCurrent,
+  portLink,
   projectServices,
   projectStatusTone,
   runOwnerName,
@@ -159,12 +161,34 @@ describe('confirmText', () => {
     expect(confirmText(project('emberline-abcd1234', agent({ live: false })), 'stop').warning).toBeNull();
   });
 
-  it("says a preview project's Stop ends the run's preview", () => {
+  it("says a preview project's Stop ends the run's compose preview", () => {
     expect(confirmText(project('emberline-abcd1234-preview', preview()), 'stop')).toEqual({
       question:
-        'Stop emberline-abcd1234-preview? Its containers are taken down; volumes and images stay. The preview of SHOP-1 stops.',
+        "Stop emberline-abcd1234-preview? Its containers are taken down; volumes and images stay. The run's compose preview stops if it is running.",
       warning: null,
     });
+  });
+});
+
+describe('actionsFor', () => {
+  it('offers only Remove for a leftover: a stopped one keeps its volumes and the cleanup no longer sees it', () => {
+    expect(actionsFor(orphan)).toEqual(['remove']);
+    expect(actionsFor(agent())).toEqual(['stop', 'remove']);
+    expect(actionsFor(preview())).toEqual(['stop', 'remove']);
+    expect(actionsFor(main)).toEqual(['stop', 'remove']);
+  });
+});
+
+describe('doneStillCurrent', () => {
+  const listed = [project('emberline-abcd1234', agent())];
+  it('keeps "Stopped/Removed <name>" while the project stays gone, and drops it once it is listed again', () => {
+    expect(
+      doneStillCurrent({ project: 'emberline-deadbeef', text: 'Removed emberline-deadbeef.' }, listed),
+    ).toBe(true);
+    expect(
+      doneStillCurrent({ project: 'emberline-abcd1234', text: 'Stopped emberline-abcd1234.' }, listed),
+    ).toBe(false);
+    expect(doneStillCurrent(null, listed)).toBe(false);
   });
 });
 
@@ -207,6 +231,7 @@ describe('cleanupLines', () => {
     lastSweepAt: null,
     lastSweepRemoved: [],
     lastPruneAt: null,
+    lastPruneOkAt: null,
     sweeping: false,
     ...over,
   });
@@ -220,10 +245,27 @@ describe('cleanupLines', () => {
 
   it('says when the last sweep and prune ran and how many projects went', () => {
     expect(
-      cleanupLines(state({ lastSweepAt: 'T1', lastSweepRemoved: ['emberline-a'], lastPruneAt: 'T2' }), ago),
+      cleanupLines(
+        state({
+          lastSweepAt: 'T1',
+          lastSweepRemoved: ['emberline-a'],
+          lastPruneAt: 'T2',
+          lastPruneOkAt: 'T2',
+        }),
+        ago,
+      ),
     ).toEqual({ sweep: 'Last cleanup ago(T1): removed 1 project.', prune: 'Images last pruned ago(T2).' });
     expect(cleanupLines(state({ lastSweepAt: 'T1' }), ago).sweep).toBe(
       'Last cleanup ago(T1): removed 0 projects.',
+    );
+  });
+
+  it('says when the latest prune failed, and when one last succeeded', () => {
+    expect(cleanupLines(state({ lastPruneAt: 'T3', lastPruneOkAt: 'T2' }), ago).prune).toBe(
+      'Image prune last ran ago(T3) (failed). Images last pruned ago(T2).',
+    );
+    expect(cleanupLines(state({ lastPruneAt: 'T3' }), ago).prune).toBe(
+      'Image prune last ran ago(T3) (failed). Images not pruned yet.',
     );
   });
 });
@@ -274,9 +316,12 @@ describe('chips, ports and services', () => {
     expect(projectStatusTone(null)).toBeNull();
   });
 
-  it('links a published port on the host Emberline was opened by', () => {
-    expect(portHref('192.168.1.21', 14325)).toBe('http://192.168.1.21:14325');
-    expect(portHref('[::1]', 8080)).toBe('http://[::1]:8080');
+  it("links a published port only when core gave it a URL (the engine's preview range)", () => {
+    expect(portLink({ port: 4330, url: 'http://192.168.1.21:4330' })).toEqual({
+      text: ':4330',
+      href: 'http://192.168.1.21:4330',
+    });
+    expect(portLink({ port: 8080, url: null })).toEqual({ text: ':8080', href: null });
   });
 
   it("lists a project's services once, sorted", () => {

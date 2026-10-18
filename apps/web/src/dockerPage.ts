@@ -5,6 +5,7 @@ import type {
   DockerOwnerKind,
   DockerProject,
   DockerProjectOwner,
+  DockerPublishedPort,
 } from '@emberline/protocol';
 import { ApiRequestError, errorMessage } from './api';
 
@@ -88,6 +89,25 @@ export function ownerBadges(owner: DockerProjectOwner): { text: string; tone: To
 
 export type DockerAction = 'stop' | 'remove';
 
+/**
+ * The actions a project offers. A leftover only gets Remove: a stopped one keeps its volumes, and
+ * with no containers left the cleanup can no longer find it (core refuses that Stop too).
+ */
+export function actionsFor(owner: DockerProjectOwner): DockerAction[] {
+  return owner.kind === 'orphan' ? ['remove'] : ['stop', 'remove'];
+}
+
+/** The page's "Stopped/Removed <name>." line. */
+export interface DockerDone {
+  project: string;
+  text: string;
+}
+
+/** The done line still describes the page until that project is listed again (something started it anew). */
+export function doneStillCurrent(done: DockerDone | null, projects: DockerProject[]): boolean {
+  return done !== null && !projects.some((p) => p.name === done.project);
+}
+
 /** The inline confirm row of Stop / Remove. A live agent only warns: a person may need to stop a runaway container. */
 export function confirmText(
   project: DockerProject,
@@ -98,7 +118,7 @@ export function confirmText(
     action === 'stop'
       ? `Stop ${project.name}? Its containers are taken down; volumes and images stay.`
       : `Remove ${project.name}? Its containers, volumes and the images it built are deleted.`;
-  if (owner.kind === 'preview') question += ` The preview of ${runOwnerName(owner)} stops.`;
+  if (owner.kind === 'preview') question += " The run's compose preview stops if it is running.";
   const warning =
     owner.kind === 'agent' && owner.live
       ? `The agent of ${runOwnerName(owner)} is running and may be using it.`
@@ -126,8 +146,19 @@ export function cleanupLines(
     sweep: cleanup.lastSweepAt
       ? `Last cleanup ${ago(cleanup.lastSweepAt)}: removed ${plural(cleanup.lastSweepRemoved.length, 'project')}.`
       : 'No cleanup has run since Emberline started.',
-    prune: cleanup.lastPruneAt ? `Images last pruned ${ago(cleanup.lastPruneAt)}.` : 'Images not pruned yet.',
+    prune: pruneLine(cleanup, ago),
   };
+}
+
+function pruneLine(cleanup: DockerCleanupState, ago: (iso: string) => string): string {
+  const ok = cleanup.lastPruneOkAt
+    ? `Images last pruned ${ago(cleanup.lastPruneOkAt)}.`
+    : 'Images not pruned yet.';
+  // The latest attempt failed when it is not also the latest success.
+  if (cleanup.lastPruneAt && cleanup.lastPruneAt !== cleanup.lastPruneOkAt) {
+    return `Image prune last ran ${ago(cleanup.lastPruneAt)} (failed). ${ok}`;
+  }
+  return ok;
 }
 
 /** An action's error: the message (with the engine-off hint) and the failed command's output, shown as text. */
@@ -165,9 +196,9 @@ export function projectStatusTone(status: string | null): Exclude<Tone, 'soft'> 
   return 'warn';
 }
 
-/** A published port, on the host name Emberline was opened by. */
-export function portHref(hostname: string, port: number): string {
-  return `http://${hostname}:${port}`;
+/** A published port: a link only when core gave it a URL (ports outside the engine's preview range are not on the host). */
+export function portLink(port: DockerPublishedPort): { text: string; href: string | null } {
+  return { text: `:${port.port}`, href: port.url };
 }
 
 export function projectServices(project: DockerProject): string[] {

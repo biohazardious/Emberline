@@ -12,16 +12,19 @@ import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { dockerEngineLine } from '../dockerEngine';
 import {
+  actionsFor,
   cleanupLines,
   cleanupResultText,
   confirmText,
   containerStateTone,
   type DockerAction,
+  type DockerDone,
+  doneStillCurrent,
   dockerErrorDetails,
   groupDockerProjects,
   ownerBadges,
   ownerSummary,
-  portHref,
+  portLink,
   projectServices,
   projectStatusTone,
 } from '../dockerPage';
@@ -51,17 +54,23 @@ function ContainerRow({ container }: { container: DockerContainer }) {
         {container.service ?? container.name}
       </span>
       <span className={`badge${tone ? ` badge-${tone}` : ''}`}>{container.state}</span>
-      {container.ports.map((port) => (
-        <a
-          key={port}
-          className="mono docker-port"
-          href={portHref(window.location.hostname, port)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          :{port}
-        </a>
-      ))}
+      {container.ports.map((published) => {
+        const { text, href } = portLink(published);
+        // Only the engine's preview range is published on the host; other ports are shown, not linked.
+        return href ? (
+          <a key={published.port} className="mono docker-port" href={href} target="_blank" rel="noreferrer">
+            {text}
+          </a>
+        ) : (
+          <span
+            key={published.port}
+            className="mono muted docker-port"
+            title="Published inside the Docker engine only, not on the host"
+          >
+            {text}
+          </span>
+        );
+      })}
       <span className="mono muted small docker-image">{container.image}</span>
       <span className="muted small" title={container.createdAt}>
         {container.status} · created {container.runningFor}
@@ -88,7 +97,9 @@ function LogsPanel({ project }: { project: DockerProject }) {
         if (!cancelled) setLogs(res.logs);
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(dockerErrorDetails(e));
+        if (cancelled) return;
+        setLogs(null);
+        setError(dockerErrorDetails(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -104,7 +115,15 @@ function LogsPanel({ project }: { project: DockerProject }) {
         {services.length > 1 && (
           <label className="docker-logs-service">
             <span className="muted small">Service</span>
-            <select className="input" value={service} onChange={(e) => setService(e.target.value)}>
+            <select
+              className="input"
+              value={service}
+              onChange={(e) => {
+                // Another service's output must not stand in for this one's while it loads.
+                setLogs(null);
+                setService(e.target.value);
+              }}
+            >
               <option value="">All services</option>
               {services.map((s) => (
                 <option key={s} value={s}>
@@ -136,10 +155,12 @@ function LogsPanel({ project }: { project: DockerProject }) {
 
 function ProjectCard({
   project,
+  onStart,
   onDone,
 }: {
   project: DockerProject;
-  onDone: (text: string) => Promise<void>;
+  onStart: () => void;
+  onDone: (done: DockerDone) => Promise<void>;
 }) {
   const [confirm, setConfirm] = useState<DockerAction | null>(null);
   const [busy, setBusy] = useState<DockerAction | null>(null);
@@ -157,9 +178,13 @@ function ProjectCard({
     setConfirm(null);
     setError(null);
     setBusy(action);
+    onStart();
     try {
       await api<DockerProjectActionResponse>(`${projectPath(project.name)}/${action}`, 'POST');
-      await onDone(`${action === 'stop' ? 'Stopped' : 'Removed'} ${project.name}.`);
+      await onDone({
+        project: project.name,
+        text: `${action === 'stop' ? 'Stopped' : 'Removed'} ${project.name}.`,
+      });
     } catch (e) {
       setError(dockerErrorDetails(e));
     } finally {
@@ -168,6 +193,7 @@ function ProjectCard({
   }
 
   const prompt = confirm ? confirmText(project, confirm) : null;
+  const actions = actionsFor(project.owner);
 
   return (
     <li className="docker-project">
@@ -214,15 +240,17 @@ function ProjectCard({
         >
           <FileText className="icon" aria-hidden /> {logsOpen ? 'Hide logs' : 'Logs'}
         </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          disabled={busy !== null}
-          aria-pressed={confirm === 'stop'}
-          onClick={() => setConfirm(confirm === 'stop' ? null : 'stop')}
-        >
-          <Square className="icon" aria-hidden /> {busy === 'stop' ? 'Stopping…' : 'Stop'}
-        </button>
+        {actions.includes('stop') && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy !== null}
+            aria-pressed={confirm === 'stop'}
+            onClick={() => setConfirm(confirm === 'stop' ? null : 'stop')}
+          >
+            <Square className="icon" aria-hidden /> {busy === 'stop' ? 'Stopping…' : 'Stop'}
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-sm danger"
@@ -260,7 +288,15 @@ function ProjectCard({
   );
 }
 
-function EngineCard({ data, onCleaned }: { data: DockerOverview; onCleaned: () => Promise<void> }) {
+function EngineCard({
+  data,
+  onStart,
+  onCleaned,
+}: {
+  data: DockerOverview;
+  onStart: () => void;
+  onCleaned: () => Promise<void>;
+}) {
   const [cleaning, setCleaning] = useState(false);
   const [result, setResult] = useState<{ text: string; ok: boolean } | null>(null);
   const [error, setError] = useState<ErrorDetails | null>(null);
@@ -271,6 +307,7 @@ function EngineCard({ data, onCleaned }: { data: DockerOverview; onCleaned: () =
     setCleaning(true);
     setResult(null);
     setError(null);
+    onStart();
     try {
       setResult(cleanupResultText(await api<DockerCleanupResponse>('/api/docker/cleanup', 'POST')));
       await onCleaned();
@@ -339,15 +376,26 @@ function EngineCard({ data, onCleaned }: { data: DockerOverview; onCleaned: () =
 
 export function DockerPage() {
   const { data, error: loadError, loading, refresh } = useApi<DockerOverview>('/api/docker', 10_000);
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState<DockerDone | null>(null);
+  const statusLine = useRef<HTMLParagraphElement>(null);
 
+  const clearDone = useCallback(() => setDone(null), []);
+  // Set after the refetch, so the line shows (and takes focus) once the list no longer has the project.
   const onDone = useCallback(
-    async (text: string) => {
-      setDone(text);
+    async (next: DockerDone) => {
       await refresh();
+      setDone(next);
     },
     [refresh],
   );
+  // The card that had focus is gone after a Stop or Remove: focus moves to the line saying what happened.
+  useEffect(() => {
+    if (done) statusLine.current?.focus();
+  }, [done]);
+  // Once that project is listed again (something started it anew), the line no longer holds.
+  useEffect(() => {
+    if (done && data && !doneStillCurrent(done, data.projects)) setDone(null);
+  }, [data, done]);
 
   const groups = data ? groupDockerProjects(data.projects) : [];
   const enabled = data?.engine.enabled ?? false;
@@ -386,11 +434,11 @@ export function DockerPage() {
 
       {data && enabled && (
         <>
-          <EngineCard data={data} onCleaned={refresh} />
+          <EngineCard data={data} onStart={clearDone} onCleaned={refresh} />
 
-          {done && (
-            <p className="small" role="status">
-              {done}
+          {done && doneStillCurrent(done, data.projects) && (
+            <p ref={statusLine} className="small docker-done" role="status" tabIndex={-1}>
+              {done.text}
             </p>
           )}
           {data.projectsError && (
@@ -412,7 +460,7 @@ export function DockerPage() {
               <p className="muted small docker-group-hint">{group.hint}</p>
               <ul className="docker-projects">
                 {group.projects.map((p) => (
-                  <ProjectCard key={p.name} project={p} onDone={onDone} />
+                  <ProjectCard key={p.name} project={p} onStart={clearDone} onDone={onDone} />
                 ))}
               </ul>
             </section>

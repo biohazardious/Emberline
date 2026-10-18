@@ -13,7 +13,8 @@ import type { RunService } from '../runs/service.js';
  * Only names Emberline makes are acted on (400 otherwise); with the engine off, actions are 409.
  */
 export function registerDockerRoutes(app: FastifyInstance, runs: RunService): void {
-  app.get('/api/docker', async (): Promise<DockerOverview> => runs.dockerOverview());
+  // The Host header was checked by the auth hook; port links use it, as preview links do.
+  app.get('/api/docker', async (request): Promise<DockerOverview> => runs.dockerOverview(request.headers.host));
 
   app.post<{ Params: { name: string } }>(
     '/api/docker/projects/:name/stop',
