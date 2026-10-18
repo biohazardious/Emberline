@@ -4,6 +4,8 @@ import { z } from 'zod';
 export const AuthState = z.object({
   setupRequired: z.boolean(),
   authenticated: z.boolean(),
+  /** Why a session cookie the browser holds no longer signs it in (e.g. its network address changed). */
+  signedOut: z.string().optional(),
 });
 export type AuthState = z.infer<typeof AuthState>;
 

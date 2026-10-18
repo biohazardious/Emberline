@@ -25,6 +25,8 @@ export const sessions = sqliteTable('sessions', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
   userAgent: text('user_agent'),
+  /** The client address that signed in (`request.ip`); a session is only valid from it. Null: from before 0.3.3. */
+  clientIp: text('client_ip'),
 });
 
 export const projects = sqliteTable('projects', {

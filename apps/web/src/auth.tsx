@@ -76,7 +76,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
   if (!state) return <div className="splash" aria-busy="true" />;
   if (state.setupRequired) return <SetupForm onDone={refresh} />;
-  if (!state.authenticated) return <LoginForm onDone={refresh} />;
+  if (!state.authenticated) return <LoginForm onDone={refresh} notice={state.signedOut} />;
   return <AuthContext.Provider value={{ logout }}>{children}</AuthContext.Provider>;
 }
 
@@ -420,7 +420,7 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
   );
 }
 
-function LoginForm({ onDone }: { onDone: () => Promise<void> }) {
+function LoginForm({ onDone, notice }: { onDone: () => Promise<void>; notice?: string }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -458,6 +458,12 @@ function LoginForm({ onDone }: { onDone: () => Promise<void> }) {
           autoComplete="current-password"
           autoFocus
         />
+        {notice && !error && (
+          <p className="auth-notice" role="status">
+            {/* "signed out: …" from core; shown as a sentence. */}
+            {notice.charAt(0).toUpperCase() + notice.slice(1)}. Sign in again.
+          </p>
+        )}
         {error && (
           <p className="auth-error" role="alert">
             <TriangleAlert className="icon" aria-hidden /> {error}

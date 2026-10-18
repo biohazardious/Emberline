@@ -169,6 +169,13 @@
       "when": 1792294499410,
       "tag": "0023_project_wizard",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792359158128,
+      "tag": "0024_session_client_ip",
+      "breakpoints": true
     }
   ]
 }

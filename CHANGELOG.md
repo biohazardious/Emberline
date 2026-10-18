@@ -24,11 +24,13 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Security
 
+- Logins are bound to the network address that signed in, and a session cookie that arrives from Emberline's own containers (the runner, the Docker engine) is refused with HTTP 403. Browsers send Emberline's cookie to previews on the same host name, where an agent's code could otherwise replay it. `EMBERLINE_SESSION_BIND_IP=false` turns the address binding off. For full isolation, set `EMBERLINE_PREVIEW_HOST` to a separate host name so previews never get the cookie (it is now passed through `compose.yaml`); see SECURITY.md.
 - Reading a workspace's git HEAD (for the build freshness) and the files the build gate plans from (`package.json`, `platformio.ini`) no longer follows FIFOs or symbolic links and is size-capped, so a crafted workspace can no longer hang core or make it read files outside the workspace.
 - The web UI may now frame pages from the host you opened it by on any port (or from `EMBERLINE_PREVIEW_HOST`), for the container preview in Preview & Build. The frame is sandboxed and, in Chromium-based browsers, loaded without Emberline's cookies.
 
 ### Upgrade notes
 
+- Everyone is signed out once: logins from before the upgrade have no address recorded. From then on a login ends when your network address changes, for example a laptop moving to another network; the login screen then says "signed out: your network address changed". Set `EMBERLINE_SESSION_BIND_IP=false` in `.env` if that happens often. Behind a reverse proxy, set `EMBERLINE_TRUST_PROXY=true`, or every login is bound to the proxy's address.
 - Update the runner too, not only core, so Claude runs get the `preview` tool: with the published images `docker compose pull && docker compose up -d`, from source `make up`. Restarting the runner stops running agents, so update it when they are idle. Until then agents fall back to `$EMBERLINE_DEMO_URL`, which now points at the run's own work.
 - The rebuild after a merge runs main's approved setup and checks after every merge (an `npm ci`, for example), so busy projects spend more build time. It runs outside the merge lock: if the build rewrites tracked files, those changes land in the next merge's "snapshot workspace edits" commit, as after a manual **Run Build & Verify** on main. Keep build output in `.gitignore`.
 - A refresh of the main preview after a merge that fails takes the main preview down. Preview & Build shows the error with "the refresh after the last merge failed — Start to retry".

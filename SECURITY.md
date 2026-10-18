@@ -46,6 +46,19 @@ With the compose profile `docker` on, Emberline runs a Docker engine of its own 
 
 The runner publishes the command-preview range `EMBERLINE_PREVIEW_PORTS_RUNNER` (default 4300-4324) on `EMBERLINE_BIND` on every install, with or without the Docker engine. With the default `127.0.0.1` only the Docker host reaches them. With `EMBERLINE_BIND=0.0.0.0`, every dev server a preview starts is reachable from your network without logging in to Emberline, so use a private interface, a firewall or a VPN, and don't preview anything you would not show to the network.
 
+### Preview ports and the session cookie
+
+Browsers scope cookies by host name, not by port. On a plain-HTTP install, your browser therefore sends Emberline's session cookie (`emberline_session`) to every preview on the same host name, for example `http://127.0.0.1:4325/` next to `http://127.0.0.1:7420/`. A preview runs code an agent wrote, so it can read the cookie and try to use it against Emberline. Over HTTPS the cookie is `Secure` and is never sent to a plain-HTTP preview.
+
+Since 0.3.3 Emberline does two things against a replayed cookie:
+
+- **A session is bound to the address that signed in.** A request with the cookie from any other client address gets HTTP 401 ("signed out: your network address changed"). Behind a reverse proxy with `EMBERLINE_TRUST_PROXY=true`, the forwarded address counts. `EMBERLINE_SESSION_BIND_IP=false` turns this off.
+- **Cookies from Emberline's own containers are refused.** A request with a session cookie that comes from the `runner` or the `docker` container gets HTTP 403 (`session_from_container`), whatever proxy header it sends. Agents' own credentials (hook tokens, the demo capability URLs) are not affected.
+
+**What remains.** When the browser runs on the Docker host itself and Emberline is bound to `0.0.0.0`, the browser and a container that connects to the host's published port can arrive from the same address (Docker's port forwarding). A replay is then not told apart from you.
+
+**Full isolation (opt-in).** Set `EMBERLINE_PREVIEW_HOST` (in `.env`) to a host name other than the one you open Emberline by. For example, open Emberline as `http://emberline.lan:7420` and set `EMBERLINE_PREVIEW_HOST=http://previews.lan`, with both names pointing at the same machine. Previews then live on another host name and never receive Emberline's cookie.
+
 ### Recommended setup
 
 - Keep the default `127.0.0.1` bind and reach Emberline through Tailscale, WireGuard or a TLS reverse proxy (set `EMBERLINE_TRUST_PROXY=true` behind a proxy).

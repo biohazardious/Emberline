@@ -19,6 +19,10 @@ services:
       EMBERLINE_HOOK_URL: http://core:7420
       # Extra host names you reach Emberline by (reverse proxy, truenas.local). IPs and localhost always work.
       EMBERLINE_ALLOWED_HOSTS: ${EMBERLINE_ALLOWED_HOSTS:-}
+      # A login is valid only from the network address that signed in; `false` turns that off.
+      EMBERLINE_SESSION_BIND_IP: ${EMBERLINE_SESSION_BIND_IP:-true}
+      # Where the browser opens previews (`http://previews.lan`); unset: the host name you opened Emberline by.
+      EMBERLINE_PREVIEW_HOST: ${EMBERLINE_PREVIEW_HOST:-}
       # Zone used to read wall-clock reset times such as "resets 2pm" (quota scheduler).
       TZ: ${TZ:-UTC}
       # Enables GET /metrics (Prometheus) for scrapers that send this bearer token.

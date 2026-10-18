@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `client_ip` text;

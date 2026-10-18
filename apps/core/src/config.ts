@@ -18,6 +18,16 @@ export interface CoreConfig {
   /** Honour X-Forwarded-* headers from a reverse proxy. */
   trustProxy: boolean;
   sessionTtlMs: number;
+  /**
+   * A session is valid only from the client address that signed in (`request.ip`, which follows
+   * `trustProxy`). Default true; `EMBERLINE_SESSION_BIND_IP=false` turns it off.
+   */
+  sessionBindIp?: boolean;
+  /**
+   * Host names of Emberline's own containers (compose services `runner`, `docker`): a session cookie
+   * that arrives from their addresses is refused. `EMBERLINE_CONTAINER_HOSTS`, comma list; unset: none.
+   */
+  containerHosts?: string[];
   logLevel: string;
   /** Core base URL as reachable from the runner (hooks post here). */
   hookUrl: string;
@@ -93,6 +103,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     secureCookies: env.EMBERLINE_SECURE_COOKIES === 'true',
     trustProxy: env.EMBERLINE_TRUST_PROXY === 'true',
     sessionTtlMs: Number(env.EMBERLINE_SESSION_TTL_DAYS ?? 30) * 86_400_000,
+    sessionBindIp: env.EMBERLINE_SESSION_BIND_IP?.trim().toLowerCase() !== 'false',
+    containerHosts: (env.EMBERLINE_CONTAINER_HOSTS ?? 'runner,docker')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean),
     logLevel: env.EMBERLINE_LOG_LEVEL ?? 'info',
     hookUrl: env.EMBERLINE_HOOK_URL ?? `http://127.0.0.1:${port}`,
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',

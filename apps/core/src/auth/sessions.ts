@@ -6,6 +6,15 @@ import { sessions } from '../db/schema.js';
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
+/** `ok`; `none`: no valid session; `address_changed`: the session belongs to another client address. */
+export type SessionCheck = 'ok' | 'none' | 'address_changed';
+
+/** `::ffff:1.2.3.4` and `1.2.3.4` are the same client. */
+export function normalizeIp(ip: string | undefined): string {
+  const value = (ip ?? '').trim().toLowerCase();
+  return value.startsWith('::ffff:') && value.includes('.') ? value.slice(7) : value;
+}
+
 /** Opaque random session tokens; only their SHA-256 is persisted. */
 export class SessionStore {
   /** Upgraded (WebSocket) connections per session, closed when that session ends (S18). */
@@ -16,27 +25,43 @@ export class SessionStore {
     private readonly ttlMs: number,
   ) {}
 
-  create(userAgent?: string): { token: string; expiresAt: Date } {
+  create(userAgent: string | undefined, clientIp: string): { token: string; expiresAt: Date } {
     const token = randomBytes(32).toString('base64url');
     const now = Date.now();
     const expiresAt = new Date(now + this.ttlMs);
     this.db
       .insert(sessions)
-      .values({ id: hashToken(token), createdAt: new Date(now), expiresAt, userAgent: userAgent?.slice(0, 512) })
+      .values({
+        id: hashToken(token),
+        createdAt: new Date(now),
+        expiresAt,
+        userAgent: userAgent?.slice(0, 512),
+        clientIp: normalizeIp(clientIp),
+      })
       .run();
     return { token, expiresAt };
   }
 
-  validate(token: string | undefined): boolean {
-    if (!token) return false;
+  /**
+   * Whether `token` is a live session for a request from `clientIp`. With `bindIp`, it must come
+   * from the address that signed in; a session from before addresses were recorded is ended (the
+   * person signs in once). A mismatch leaves the session alone: its owner keeps it.
+   */
+  check(token: string | undefined, clientIp: string, bindIp = true): SessionCheck {
+    if (!token) return 'none';
     const id = hashToken(token);
     const row = this.db.select().from(sessions).where(eq(sessions.id, id)).get();
-    if (!row) return false;
+    if (!row) return 'none';
     if (row.expiresAt.getTime() <= Date.now()) {
       this.db.delete(sessions).where(eq(sessions.id, id)).run();
-      return false;
+      return 'none';
     }
-    return true;
+    if (!bindIp) return 'ok';
+    if (row.clientIp === null) {
+      this.db.delete(sessions).where(eq(sessions.id, id)).run();
+      return 'none';
+    }
+    return row.clientIp === normalizeIp(clientIp) ? 'ok' : 'address_changed';
   }
 
   revoke(token: string | undefined): void {

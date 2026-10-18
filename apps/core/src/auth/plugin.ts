@@ -6,6 +6,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { type CoreConfig, normalizeHostName } from '../config.js';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { conflict, HttpError } from '../errors.js';
+import { ContainerAddresses } from './container-addresses.js';
 import { SessionStore } from './sessions.js';
 
 export const SESSION_COOKIE = 'emberline_session';
@@ -35,6 +36,13 @@ const FAILURE_WINDOW_MS = 15 * 60_000;
 const MAX_GLOBAL_FAILURES = 50;
 const MAX_TRACKED_CLIENTS = 10_000;
 
+/** Why a session cookie that exists is not accepted here; the login screen shows it. */
+export const ADDRESS_CHANGED_MESSAGE = 'signed out: your network address changed';
+export const FROM_CONTAINER_MESSAGE =
+  "session cookies are not accepted from Emberline's own containers (an agent's preview could have replayed it)";
+
+type SessionState = 'ok' | 'none' | 'address_changed' | 'from_container';
+
 /**
  * Single-user auth (PROJECT.md §3.13).
  *
@@ -59,10 +67,23 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
 
   const sessionToken = (request: FastifyRequest) =>
     request.cookies[SECURE_SESSION_COOKIE] ?? request.cookies[SESSION_COOKIE];
-  const isAuthenticated = (request: FastifyRequest) => store.validate(sessionToken(request));
+
+  // Cookies ignore ports: a browser sends the session cookie to every preview server on Emberline's
+  // host, where agent-written code runs and could replay it to core (from the runner over
+  // http://core:7420, or from the engine). The direct peer decides, whatever a proxy header says.
+  const containers = new ContainerAddresses(config.containerHosts ?? []);
+  app.addHook('onClose', async () => containers.stop());
+  const bindIp = config.sessionBindIp ?? true;
+
+  const sessionState = async (request: FastifyRequest): Promise<SessionState> => {
+    const token = sessionToken(request);
+    if (!token) return 'none';
+    if (await containers.has(request.raw.socket.remoteAddress)) return 'from_container';
+    return store.check(token, request.ip, bindIp);
+  };
 
   const issueSession = (request: FastifyRequest, reply: FastifyReply) => {
-    const { token, expiresAt } = store.create(request.headers['user-agent']);
+    const { token, expiresAt } = store.create(request.headers['user-agent'], request.ip);
     // HTTPS is detected per request (X-Forwarded-Proto counts with EMBERLINE_TRUST_PROXY), so a TLS
     // proxy gets Secure cookies without extra configuration; plain-HTTP LAN access keeps working.
     const secure = config.secureCookies || request.protocol === 'https';
@@ -110,7 +131,14 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
       return reply.code(403).send({ error: 'csrf', message: `missing ${CSRF_HEADER} header` });
     }
     if (PUBLIC_ROUTES.has(route)) return;
-    if (!isAuthenticated(request)) {
+    const session = await sessionState(request);
+    if (session === 'from_container') {
+      return reply.code(403).send({ error: 'session_from_container', message: FROM_CONTAINER_MESSAGE });
+    }
+    if (session === 'address_changed') {
+      return reply.code(401).send({ error: 'session_address_changed', message: ADDRESS_CHANGED_MESSAGE });
+    }
+    if (session !== 'ok') {
       return reply.code(401).send({ error: 'unauthorized', message: 'login required' });
     }
     // Terminals and the event stream stay open for hours: logout or a password change closes them.
@@ -119,10 +147,14 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     }
   });
 
-  app.get('/api/auth/state', async (request): Promise<AuthState> => ({
-    setupRequired: getSetting<string>(db, PASSWORD_KEY) === undefined,
-    authenticated: isAuthenticated(request),
-  }));
+  app.get('/api/auth/state', async (request): Promise<AuthState> => {
+    const session = await sessionState(request);
+    return {
+      setupRequired: getSetting<string>(db, PASSWORD_KEY) === undefined,
+      authenticated: session === 'ok',
+      ...(session === 'address_changed' ? { signedOut: ADDRESS_CHANGED_MESSAGE } : {}),
+    };
+  });
 
   app.post('/api/auth/setup', async (request, reply) => {
     if (getSetting<string>(db, PASSWORD_KEY) !== undefined) throw conflict('setup already completed');
