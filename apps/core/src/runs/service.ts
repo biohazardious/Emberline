@@ -228,6 +228,9 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'preview_stopped',
   // launch reads the setup a fresh worktree still needs.
   'worktree_setup_pending',
+  // The first prompt's note on copied secrets (launch can come long after enqueue), and what a copy skipped.
+  'worktree_copied',
+  'worktree_copy_skipped',
 ];
 /** Events that never become a run's `lastEvent`. */
 const BOOKKEEPING_EVENT_TYPES = new Set([

@@ -110,6 +110,17 @@ describe('run event pruning', () => {
     expect(typesOf(other.id).filter((x) => x === 'PreToolUse')).toHaveLength(10);
   });
 
+  it('keeps the worktree copy notes the first prompt reads', async () => {
+    const project = await createProject('Prune Copy', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    t.db.delete(runEvents).where(eq(runEvents.runId, run.id)).run();
+    seed(run.id, 'worktree_copied', 1);
+    seed(run.id, 'worktree_copy_skipped', 1);
+    seed(run.id, 'PreToolUse', 5100);
+    t.runs.pruneRunEvents();
+    expect(typesOf(run.id)).toEqual(expect.arrayContaining(['worktree_copied', 'worktree_copy_skipped']));
+  });
+
   it('keeps preview status and the fact that a long run worked', async () => {
     const project = await createProject('Prune3', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
