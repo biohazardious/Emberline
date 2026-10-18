@@ -26,6 +26,8 @@ import type { Scheduler } from '../scheduler/service.js';
 
 /** Hook payloads can carry large tool inputs; core keeps only a summary. */
 const HOOK_BODY_LIMIT = 8 * 1024 * 1024;
+/** The `preview` tool sends `{}` or `{"restart":true}`. */
+const PREVIEW_TOOL_BODY_LIMIT = 1024;
 
 export function registerRunRoutes(app: FastifyInstance, runs: RunService, scheduler: Scheduler): void {
   app.get('/api/runs', async (): Promise<Run[]> => runs.list());
@@ -196,7 +198,7 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
    * The agent's `preview` tool (`emberline-mcp`): starts this run's own preview if needed and answers
    * its runner-side URL. Same per-run bearer token; the run is the token's, never one from the body.
    */
-  app.post<{ Params: { id: string } }>('/api/internal/runs/:id/preview', async (request): Promise<AgentPreviewResponse> => {
+  app.post<{ Params: { id: string } }>('/api/internal/runs/:id/preview', { bodyLimit: PREVIEW_TOOL_BODY_LIMIT }, async (request): Promise<AgentPreviewResponse> => {
     const header = request.headers.authorization;
     const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
     return runs.agentPreview(request.params.id, token, request.body);

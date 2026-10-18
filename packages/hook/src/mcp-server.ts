@@ -54,7 +54,11 @@ export function describePreview(answer: PreviewAnswer): string {
     : ' Build the project and open $EMBERLINE_DEMO_URL instead.';
   let lead: string;
   if (answer.status === 'running' && answer.url && answer.kind !== 'static') {
-    lead = `The preview is running (${answer.kind}). Open ${answer.url} in the browser; it serves this run's own work.`;
+    lead = `The preview is running (${answer.kind}). Open ${answer.url} in the browser; it serves this run's own work.${
+      answer.kind === 'command'
+        ? ' The dev server may take a few seconds to listen: retry the navigation if the connection is refused.'
+        : ''
+    }`;
   } else if (answer.status === 'starting') {
     lead = `The preview is still starting (a container build can take minutes); call \`preview\` again in a minute.${
       answer.url ? ` Meanwhile ${answer.url} serves this run's static build.` : ''
@@ -163,7 +167,9 @@ export function createEmberlineMcpServer(env: Record<string, string | undefined>
         restart: z
           .boolean()
           .optional()
-          .describe('Start it again even when it runs, e.g. after changing the code a container preview was built from.'),
+          .describe(
+            'Start it again even when it runs, e.g. after changing the code a container preview was built from. Ignored while a start is still going; at most one start every 30 s.',
+          ),
       },
     },
     async (args, extra) => {
@@ -177,6 +183,7 @@ export function createEmberlineMcpServer(env: Record<string, string | undefined>
         progressToken === undefined
           ? undefined
           : setInterval(() => {
+              if (extra.signal.aborted) return;
               ticks += 1;
               void extra
                 .sendNotification({
@@ -191,7 +198,8 @@ export function createEmberlineMcpServer(env: Record<string, string | undefined>
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
           body: JSON.stringify(args.restart ? { restart: true } : {}),
-          signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
+          // A cancelled tool call stops waiting (and its progress stops with it).
+          signal: AbortSignal.any([extra.signal, AbortSignal.timeout(PREVIEW_TIMEOUT_MS)]),
         });
       } catch (err) {
         return toolError(`Could not reach Emberline: ${err instanceof Error ? err.message : String(err)}`);

@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { AgentPreviewResponse, type Run } from '@emberline/protocol';
+import { AgentPreviewResponse, type Run, type RunDetail } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -256,7 +256,7 @@ describe('the preview tool endpoint: compose', () => {
     expect(ups.some((c) => c.cwd === p.path || c.args[2] === mainPreviewComposeProjectName(p.id))).toBe(false);
   });
 
-  it('a running preview is reused; restart starts it again', async () => {
+  it('a running preview is reused; restart starts it again, at most once per cooldown', async () => {
     await start();
     const p = await createProject();
     const run = await runWithToken(p.id);
@@ -264,8 +264,61 @@ describe('the preview tool endpoint: compose', () => {
     expect(first.status).toBe('running');
     expect(await previewOk(run.id)).toEqual(first);
     expect(engine.ups()).toHaveLength(1);
+    // Right after the start: the current preview, with a note, and no second `up`.
+    const soon = await previewOk(run.id, { restart: true });
+    expect(soon).toMatchObject({ status: 'running', kind: 'compose', url: first.url });
+    expect(soon.note).toContain('started less than 30 s ago');
+    expect(engine.ups()).toHaveLength(1);
+    t.runs.agentPreviewCooldownMs = 0;
     expect((await previewOk(run.id, { restart: true })).status).toBe('running');
     expect(engine.ups()).toHaveLength(2);
+  });
+
+  it('restart is ignored while a start is still going: the call waits for that start', async () => {
+    await start();
+    const p = await createProject();
+    const run = await runWithToken(p.id);
+    t.runs.agentPreviewCooldownMs = 0;
+    t.runs.agentPreviewWaitMs = 200;
+    engine.upGate = new Promise(() => undefined);
+    expect((await previewOk(run.id)).status).toBe('starting');
+    expect((await previewOk(run.id, { restart: true })).status).toBe('starting');
+    expect(engine.ups()).toHaveLength(1);
+    expect(engine.pendingUps.size).toBe(1);
+    await t.runs.stopPreview(run.id);
+  });
+
+  it('a failed preview is started again on the next call, but not within the cooldown', async () => {
+    await start();
+    const p = await createProject();
+    const run = await runWithToken(p.id);
+    engine.upFails = 'failed to solve: npm ci exited 1\n';
+    expect((await previewOk(run.id)).status).toBe('failed');
+    const again = await previewOk(run.id);
+    expect(again.status).toBe('failed');
+    expect(again.note).toContain('started less than 30 s ago');
+    expect(engine.ups()).toHaveLength(1);
+    t.runs.agentPreviewCooldownMs = 0;
+    expect((await previewOk(run.id)).status).toBe('failed');
+    expect(engine.ups()).toHaveLength(2);
+  });
+
+  it("the agent's start is recorded as the hook's in the timeline, a person's as the user's", async () => {
+    await start();
+    const p = await createProject();
+    const run = await runWithToken(p.id);
+    await previewOk(run.id);
+    expect((await api('POST', `/api/runs/${run.id}/preview/start`)).statusCode).toBe(200);
+    const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter((e) => e.type === 'preview_started');
+    expect(started.map((e) => e.source).sort()).toEqual(['hook', 'user']);
+  });
+
+  it('the body is small: over 1 KB is refused', async () => {
+    await start();
+    const p = await createProject();
+    const run = await runWithToken(p.id);
+    expect((await preview(run.id, 'tok', { restart: false, pad: 'x'.repeat(2048) })).statusCode).toBe(413);
+    expect(engine.ups()).toEqual([]);
   });
 
   it("a failed start gives the error and the logs tail; the URL falls back to the run's static build", async () => {
@@ -333,6 +386,8 @@ describe('the preview tool endpoint: command', () => {
     expect(answer.status).toBe('running');
     expect(answer.kind).toBe('command');
     expect(answer.url).toMatch(/^http:\/\/localhost:43(0\d|1\d|2[0-4])\/$/);
+    const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find((e) => e.type === 'preview_started');
+    expect(started?.source).toBe('hook');
     await t.runs.stopPreview(run.id);
   });
 });

@@ -152,7 +152,7 @@ export const COMPLETION_TOOL = 'mcp__emberline__ticket_complete';
 /** The tool with which a Claude run starts its own preview and gets the URL to open (served by `emberline-mcp`). */
 export const PREVIEW_TOOL = 'mcp__emberline__preview';
 
-/** The `emberline` server's tools, allowed in every permission mode. */
+/** The `emberline` server's tools (the Claude fallback of a secondary CLI has neither). */
 const EMBERLINE_TOOLS = [COMPLETION_TOOL, PREVIEW_TOOL];
 
 /** Appended to the prompt of a run that works on a ticket. */
@@ -258,9 +258,10 @@ export function buildHookSettings(
       },
     };
   }
-  // Emberline's own tools are allowed in every mode: signalling "done" or starting the run's own
-  // preview must never wait for an approval.
-  return { ...base, permissions: { defaultMode: permissionMode, allow: [...EMBERLINE_TOOLS] } };
+  // The completion tool is allowed in every mode: signalling "done" must never wait for an approval.
+  // `preview` is not: it runs the worktree's dev script or `docker compose up --build`, files the
+  // agent can edit, so it asks like Bash does here (it is pre-allowed with Bash in the autonomous modes).
+  return { ...base, permissions: { defaultMode: permissionMode, allow: [COMPLETION_TOOL] } };
 }
 
 export interface ClaudeMcpServerSpec {

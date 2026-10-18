@@ -16,6 +16,12 @@ import { HttpError } from '../errors.js';
  */
 export const AGENT_PREVIEW_WAIT_MS = 5 * 60_000;
 
+/**
+ * At most one start per run in this long from the tool (a `restart`, or a failed or stopped preview
+ * started again): an agent calling it in a loop must not rebuild the container on every call.
+ */
+export const AGENT_PREVIEW_COOLDOWN_MS = 30_000;
+
 export interface AgentPreviewDeps {
   /** The run's preview now (RunService.previewStatus). */
   status(): Promise<RunPreviewStatus>;
@@ -28,23 +34,38 @@ export interface AgentPreviewDeps {
   /** The runner-side URL of the run (resolveBrowserUrl for the run's id). */
   browserUrl(): Promise<BrowserUrlResponse>;
   waitMs: number;
+  /** When the tool last started this run's preview (ms epoch), and recording a new start. */
+  lastStartAt(): number | undefined;
+  recordStart(at: number): void;
+  cooldownMs: number;
 }
 
 const needsStart = (status: RunPreviewStatus['status']) => status !== 'running' && status !== 'starting';
 
 export async function agentPreview(deps: AgentPreviewDeps, body: AgentPreviewBody): Promise<AgentPreviewResponse> {
   let current = await deps.status();
-  if (body.restart || needsStart(current.status)) {
+  let cooling: string | undefined;
+  // A restart while a start is still going waits for that start instead of cancelling it.
+  const restart = body.restart && !(current.status === 'starting' && deps.pendingStart());
+  if (restart || needsStart(current.status)) {
     const reason = deps.nothingToPreview();
     if (reason) return answer(deps, 'unavailable', { error: reason });
-    try {
-      current = await deps.start();
-    } catch (error) {
-      // No engine for the container preview, no compose file and nothing to fall back to, the
-      // worktree is gone, no free port: the agent falls back to the static build.
-      if (!(error instanceof HttpError)) throw error;
-      const hint = typeof error.details?.hint === 'string' ? ` (${error.details.hint})` : '';
-      return answer(deps, 'unavailable', { error: `${error.message}${hint}` });
+    const now = Date.now();
+    const last = deps.lastStartAt();
+    if (last !== undefined && now - last < deps.cooldownMs) {
+      cooling = `the preview was started less than ${Math.round(deps.cooldownMs / 1000)} s ago; this is its current state, call \`preview\` again after that to start it again`;
+    } else {
+      try {
+        current = await deps.start();
+      } catch (error) {
+        // No engine for the container preview, no compose file and nothing to fall back to, the
+        // worktree is gone, no free port: the agent falls back to the static build.
+        if (!(error instanceof HttpError)) throw error;
+        const hint = typeof error.details?.hint === 'string' ? ` (${error.details.hint})` : '';
+        return answer(deps, 'unavailable', { error: `${error.message}${hint}` });
+      }
+      // Only a start that happened counts: an unavailable answer stays unavailable on the next call.
+      deps.recordStart(now);
     }
   }
   const pending = deps.pendingStart();
@@ -54,10 +75,11 @@ export async function agentPreview(deps: AgentPreviewDeps, body: AgentPreviewBod
     clearTimeout(timer);
     current = await deps.status();
   }
+  const note = [cooling, current.note].filter(Boolean).join('; ');
   return answer(deps, current.status, {
     ...(current.error ? { error: current.error } : {}),
     ...(current.logs ? { logs: current.logs } : {}),
-    ...(current.note ? { note: current.note } : {}),
+    ...(note ? { note } : {}),
   });
 }
 

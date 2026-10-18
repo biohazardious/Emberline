@@ -133,11 +133,10 @@ describe('buildLaunchSpec', () => {
         extraSystemPrompt: '## ACTIVE SKILL: Modern UI Craft',
       });
       const settings = JSON.parse(spec.args[1] ?? '');
-      // The mode is always stated (it stops Claude Code's "make auto the default" nudge), with nothing pre-allowed.
-      expect(settings.permissions).toEqual({
-        defaultMode: permissionMode,
-        allow: ['mcp__emberline__ticket_complete', 'mcp__emberline__preview'],
-      });
+      // The mode is always stated (it stops Claude Code's "make auto the default" nudge). Only the
+      // completion signal is pre-allowed: `preview` runs the worktree's dev script or compose build,
+      // which the agent can edit, so it asks like Bash does.
+      expect(settings.permissions).toEqual({ defaultMode: permissionMode, allow: ['mcp__emberline__ticket_complete'] });
       expect(spec.args).not.toContain('auto');
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
@@ -375,8 +374,10 @@ describe('emberline completion tool', () => {
       });
       const settings = JSON.parse(spec.args[1] ?? '');
       expect(settings.permissions.allow).toContain('mcp__emberline__ticket_complete');
-      // Starting the run's own preview never waits for an approval either.
-      expect(settings.permissions.allow).toContain('mcp__emberline__preview');
+      // Starting the run's own preview runs worktree code: pre-allowed only where Bash is.
+      const autonomous = permissionMode === 'auto' || permissionMode === 'bypassPermissions';
+      expect(settings.permissions.allow.includes('mcp__emberline__preview')).toBe(autonomous);
+      expect(settings.permissions.allow.includes('Bash')).toBe(autonomous);
     },
   );
 

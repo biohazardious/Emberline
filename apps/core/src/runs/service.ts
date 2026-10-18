@@ -121,7 +121,7 @@ import {
 import { auditWorktreeSlop } from '../factory/slop-guard.js';
 import { DemoTokens } from '../demo-token.js';
 import { agentDemoUrl } from '../factory/demo-target.js';
-import { AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
+import { AGENT_PREVIEW_COOLDOWN_MS, AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
 import { resolveBrowserUrl } from './browser-url.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
@@ -541,6 +541,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   composePreviewTiming: ComposePreviewTiming = { ...DEFAULT_COMPOSE_PREVIEW_TIMING };
   /** How long the agent's `preview` tool waits for a container preview to come up (tests shorten it). */
   agentPreviewWaitMs = AGENT_PREVIEW_WAIT_MS;
+  /** At most one start per run from the `preview` tool in this long (tests shorten it). */
+  agentPreviewCooldownMs = AGENT_PREVIEW_COOLDOWN_MS;
+  /** When the `preview` tool last started each run's preview (ms epoch). */
+  private readonly agentPreviewStarts = new Map<string, number>();
   /** The container previews of projects' main workspaces; they share the preview port allocator. */
   readonly mainPreviews: MainPreviews;
   private dockerGcFirst?: NodeJS.Timeout;
@@ -1772,7 +1776,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return agentPreview(
       {
         status: () => this.previewStatus(row.id),
-        start: () => this.startPreview(row.id, {}),
+        start: () => this.startPreview(row.id, {}, undefined, 'hook'),
         pendingStart: () => this.composeJobs.get(row.id)?.done,
         nothingToPreview: () =>
           approvedPreviewService(this.db, row.projectId) || this.detectPreviewCommand(row.projectId, row.worktreePath)
@@ -1785,6 +1789,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             row.id,
           ),
         waitMs: this.agentPreviewWaitMs,
+        lastStartAt: () => this.agentPreviewStarts.get(row.id),
+        recordStart: (at) => this.agentPreviewStarts.set(row.id, at),
+        cooldownMs: this.agentPreviewCooldownMs,
       },
       parsed.data,
     );
@@ -2728,7 +2735,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { ...idle, kind: 'command', status, terminalId, command, port, url, ...(typeof p.note === 'string' ? { note: p.note } : {}) };
   }
 
-  async startPreview(id: string, rawBody: unknown, requestHost?: string): Promise<RunPreviewStatus> {
+  /** `source`: who started it, for the timeline (`hook`: the agent's `preview` tool). */
+  async startPreview(id: string, rawBody: unknown, requestHost?: string, source: EventSource = 'user'): Promise<RunPreviewStatus> {
     const row = this.row(id);
     if (!existsSync(row.worktreePath)) {
       throw conflict('worktree directory does not exist (was it pruned?)');
@@ -2748,7 +2756,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       let fallback: { command: string; note: string } | undefined;
       if (service && isComposeService(service)) {
         if (existsSync(path.join(row.worktreePath, service.compose.file))) {
-          return this.startComposePreview(row, service, generation, requestHost);
+          return this.startComposePreview(row, service, generation, requestHost, source);
         }
         // A wizard project before its Deploy ticket added the compose file: preview the dev command.
         const instead = loadApprovedWorktreeConfig(this.db, row.projectId)?.config.services.find((s) => s.command !== undefined);
@@ -2782,7 +2790,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           },
         });
         this.record(id, {
-          source: 'user',
+          source,
           type: 'preview_started',
           payload: { kind: 'command', terminalId: session.id, command, port, ...(fallback ? { note: fallback.note } : {}) },
         });
@@ -2816,6 +2824,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     service: WorktreeComposeService,
     generation: number,
     requestHost?: string,
+    source: EventSource = 'user',
   ): Promise<RunPreviewStatus> {
     await this.docker.ready();
     if (!this.docker.status.available || !this.config.dockerHost) {
@@ -2827,7 +2836,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const command = composePreviewLabel(service);
     const recordStart = (port: number) =>
       this.record(row.id, {
-        source: 'user',
+        source,
         type: 'preview_started',
         payload: {
           kind: 'compose',
@@ -2997,6 +3006,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /** Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose. */
   async remove(id: string): Promise<void> {
     const row = this.row(id);
+    this.agentPreviewStarts.delete(id);
     // B16: GC and project deletion go through here; a preview server must not outlive its run.
     if (this.ptyd.status === 'connected') {
       const { sessions } = await this.ptyd

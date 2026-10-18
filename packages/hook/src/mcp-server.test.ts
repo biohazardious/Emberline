@@ -18,6 +18,9 @@ let core: Server;
 let coreUrl: string;
 let seen: Seen;
 let reply: { status: number; body: unknown };
+/** When set, core never answers; `abandoned` records that the caller closed the request. */
+let hold: boolean;
+let abandoned: boolean;
 
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -28,8 +31,17 @@ async function readBody(req: IncomingMessage): Promise<string> {
 beforeEach(async () => {
   seen = {};
   reply = { status: 200, body: { ok: true } };
+  hold = false;
+  abandoned = false;
   core = createServer((req, res) => {
     void readBody(req).then((raw) => {
+      if (hold) {
+        seen = { url: req.url };
+        res.on('close', () => {
+          if (!res.writableEnded) abandoned = true;
+        });
+        return;
+      }
       seen = {
         url: req.url,
         method: req.method,
@@ -46,6 +58,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  core.closeAllConnections();
   await new Promise<void>((resolve) => core.close(() => resolve()));
 });
 
@@ -161,6 +174,27 @@ describe('emberline MCP server', () => {
       expect(text(r)).toContain("The preview is running (compose). Open http://docker:4325/ in the browser; it serves this run's own work.");
       // The whole answer is there for the agent too.
       expect(text(r)).toContain('"url":"http://docker:4325/"');
+    });
+
+    it('a command preview: the dev server may need a few seconds, so retry a refused connection', async () => {
+      reply = { status: 200, body: { status: 'running', url: 'http://localhost:4301/', kind: 'command' } };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(text(r)).toContain('Open http://localhost:4301/ in the browser');
+      expect(text(r)).toContain('may take a few seconds to listen');
+      expect(text(r)).toContain('retry the navigation if the connection is refused');
+    });
+
+    it('a cancelled call stops waiting for core', async () => {
+      hold = true;
+      const client = await connect(env());
+      const controller = new AbortController();
+      const call = client.callTool({ name: 'preview', arguments: {} }, undefined, { signal: controller.signal });
+      await expect.poll(() => seen.url).toBe('/api/internal/runs/run%201/preview');
+      controller.abort();
+      await expect(call).rejects.toThrow();
+      // The server's request to core is aborted too, not left waiting for its 6 min timeout.
+      await expect.poll(() => abandoned, { timeout: 3_000 }).toBe(true);
     });
 
     it('passes restart on', async () => {
