@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setSetting } from './db/index.js';
-import { settings } from './db/schema.js';
+import { runs, settings } from './db/schema.js';
 import type * as FactoryService from './factory/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { TicketService } from './tickets/service.js';
@@ -840,6 +840,29 @@ describe('one automatic merge-conflict resolution', () => {
     expect(await failedMerges()).toBe(before);
     expect(await statusOf(b.id)).toBe('review');
     await settle(project.id);
+  });
+
+  it('resumes a session that was idle-closed before the conflict showed up', async () => {
+    const { b, runB } = await conflictingPair();
+    // The idle sweep closes the finished session while the checks are still running.
+    const busy = t.runs.pipelineBusy.bind(t.runs);
+    t.runs.pipelineBusy = (id, on) => {
+      if (on && id === runB.id) t.db.update(runs).set({ endedAt: new Date(), ptydSessionId: null }).where(eq(runs.id, id)).run();
+      busy(id, on);
+    };
+    const svc = t.runs as unknown as { resume(id: string, text?: string): Promise<Run> };
+    const original = svc.resume.bind(t.runs);
+    const resumed: string[] = [];
+    svc.resume = async (id, text) => {
+      resumed.push(text ?? '');
+      return original(id, text);
+    };
+    await stopAgain(runB);
+    await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
+    expect(resumed[0]).toBe(FOLLOW_UP('app.js'));
+    await expect.poll(() => eventTypes(runB), { timeout: 10_000 }).toContain('conflict_resolution_requested');
+    expect(await eventTypes(runB)).not.toContain('conflict_resolution_failed');
+    expect(await statusOf(b.id)).not.toBe('done');
   });
 
   it('falls back to Review at once when the agent can no longer receive a prompt', async () => {

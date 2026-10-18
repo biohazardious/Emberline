@@ -435,6 +435,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * `starting` without a terminal on purpose, so the starting watchdog leaves them alone.
    */
   private readonly settingUp = new Set<string>();
+  /** Runs whose completion pipeline (settle wait, checks, merge) is going; counted, passes can overlap. */
+  private readonly pipelineBusyRuns = new Map<string, number>();
   /** Runs whose worktree auto-GC is tearing down in the background before it prunes it. */
   private readonly tearingDown = new Set<string>();
   /** How long a request waits for worktree.yml teardowns (overridable in tests). */
@@ -1698,6 +1700,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /**
+   * Marks a run's completion pipeline as going (true) or finished (false; calls are counted). The idle
+   * sweep leaves such a run open: the merge may still need the agent to resolve a conflict.
+   */
+  pipelineBusy(id: string, busy: boolean): void {
+    const left = (this.pipelineBusyRuns.get(id) ?? 0) + (busy ? 1 : -1);
+    if (left > 0) this.pipelineBusyRuns.set(id, left);
+    else this.pipelineBusyRuns.delete(id);
+  }
+
+  /**
    * Sends a follow-up prompt to a run: types into the live PTY when running, or respawns
    * `claude --resume` when the process has ended.
    */
@@ -2543,7 +2555,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // for over its idle TTL without any follow-up prompt, close & dispose its PTY
           // so it never lingers as a zombie process in Fleet Multiplexer.
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
-          if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl) {
+          if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl && !this.pipelineBusyRuns.has(row.id)) {
             await this.saveLastScreen(row.id, row.ptydSessionId);
             await this.ptyd
               .get()

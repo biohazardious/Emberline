@@ -905,6 +905,26 @@ describe('runs', () => {
     });
   });
 
+  describe('idle close and the completion pipeline', () => {
+    it('does not idle-close a run while its pipeline is busy, and closes it afterwards', async () => {
+      const project = await createProject('Idle busy', false);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const token = await tokenFor(run.id);
+      await hook(run.id, 'SessionStart', token, { session_id: 's-idle-busy' });
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+      await hook(run.id, 'Stop', token);
+      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) }).where(eq(runs.id, run.id)).run();
+      t.runs.pipelineBusy(run.id, true);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).endedAt).toBeNull();
+      expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('idle_session_closed');
+      t.runs.pipelineBusy(run.id, false);
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).endedAt).not.toBeNull();
+      expect(t.runs.get(run.id).events.map((e) => e.type)).toContain('idle_session_closed');
+    });
+  });
+
   describe('stall watchdog (R7)', () => {
     afterEach(() => {
       vi.useRealTimers();
