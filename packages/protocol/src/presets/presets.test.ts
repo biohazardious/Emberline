@@ -178,5 +178,7 @@ describe('CreateProjectBody back-compat', () => {
     }
     expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_folder' }).success).toBe(false);
     expect(CreateProjectBody.safeParse({ name: 'x', source: 'new' }).success).toBe(true);
+    expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_url' }).success).toBe(false);
+    expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_url', repoUrl: 'https://h/r.git' }).success).toBe(true);
   });
 });

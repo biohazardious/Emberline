@@ -3,7 +3,7 @@ import type { PresetDef } from './types.js';
 
 const COMMON = [
   'Set up the project skeleton for the stack chosen in PROJECT.md.',
-  'Make the `setup`, `build`, `test` and `services` commands in `.emberline/worktree.yml` real and passing.',
+  'The build gate runs the approved `checks` in `.emberline/worktree.yml`: make the project satisfy them (add the build, lint and test scripts) instead of editing them; an edited worktree.yml only applies after a person approves it in the project banner. Make `setup` and the preview service real as well.',
   'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
 ];
 

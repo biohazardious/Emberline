@@ -64,9 +64,9 @@ import {
   type ProjectUsageResponse,
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
-import type { FastifyInstance, FastifyReply } from 'fastify';
-import { writeProjectSettings } from '../db/project-settings.js';
-import { projects, projectWorktreeConfig, settings } from '../db/schema.js';
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
+import { execGitFile } from '../git-exec.js';
+import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { openBlockingCount } from '../review/blocking.js';
 import {
@@ -192,6 +192,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
   app.get('/api/factory/templates', async (): Promise<readonly TaskTemplate[]> => TASK_TEMPLATES);
 
+  /** Slugs a wizard create is writing right now. */
+  const creating = new Set<string>();
+
   /** What creating a new project would write and create. No side effects. */
   app.post('/api/projects/preview', async (request): Promise<ProjectPreviewResponse> => {
     const plan = planNewProject(ProjectPreviewBody.parse(request.body));
@@ -210,24 +213,13 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     body: ReturnType<typeof CreateProjectBody.parse>,
     slug: string,
     reply: FastifyReply,
+    log: FastifyBaseLogger,
   ): Promise<CreateProjectResponse> {
     const plan = planNewProject(body);
     const projectPath = path.join(config.workspacesDir, slug);
     if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
       throw conflict(`directory already exists and is not empty: ${projectPath}`);
     }
-    await mkdir(path.join(projectPath, '.emberline'), { recursive: true });
-    const files: Record<string, string> = {
-      'PROJECT.md': plan.projectMd,
-      'CLAUDE.md': plan.claudeMd,
-      '.emberline/worktree.yml': plan.worktreeYml,
-      ...plan.starter,
-    };
-    for (const [rel, content] of Object.entries(files)) {
-      await writeFile(path.join(projectPath, rel), content, 'utf8');
-    }
-    if (body.initGit ?? true) await initLocalGitRepository(projectPath, body.defaultBranch);
-
     const row: ProjectRow = {
       id: randomUUID(),
       name: body.name,
@@ -240,20 +232,44 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       techStack: plan.techStack,
       createdAt: new Date(),
     };
-    db.transaction((tx) => {
-      tx.insert(projects).values(row).run();
-      // The wizard's own file counts as approved: runs use this content until a person approves a change.
-      tx.insert(projectWorktreeConfig)
-        .values({
-          projectId: row.id,
-          content: plan.worktreeYml,
-          sha256: createHash('sha256').update(plan.worktreeYml).digest('hex'),
-          approvedAt: row.createdAt,
-          approvedBy: 'wizard',
-        })
-        .run();
-    });
-    if (Object.keys(plan.gates).length > 0) writeProjectSettings(db, row.id, { gates: plan.gates });
+    try {
+      await mkdir(path.join(projectPath, '.emberline'), { recursive: true });
+      const files: Record<string, string> = {
+        'PROJECT.md': plan.projectMd,
+        'CLAUDE.md': plan.claudeMd,
+        '.emberline/worktree.yml': plan.worktreeYml,
+        ...plan.starter,
+      };
+      for (const [rel, content] of Object.entries(files)) {
+        await writeFile(path.join(projectPath, rel), content, 'utf8');
+      }
+      if (body.initGit ?? true) {
+        await initLocalGitRepository(projectPath, body.defaultBranch);
+        // initLocalGitRepository swallows errors; runs need the commit, so a missing one fails the create.
+        await execGitFile(['rev-parse', '--verify', 'HEAD'], { cwd: projectPath }).catch(() => {
+          throw new Error('git init failed');
+        });
+      }
+      db.transaction((tx) => {
+        tx.insert(projects).values(row).run();
+        // The wizard's own file counts as approved: runs use this content until a person approves a change.
+        tx.insert(projectWorktreeConfig)
+          .values({
+            projectId: row.id,
+            content: plan.worktreeYml,
+            sha256: createHash('sha256').update(plan.worktreeYml).digest('hex'),
+            approvedAt: row.createdAt,
+            approvedBy: 'wizard',
+          })
+          .run();
+        if (Object.keys(plan.gates).length > 0) {
+          tx.insert(projectSettings).values({ projectId: row.id, settings: { gates: plan.gates } }).run();
+        }
+      });
+    } catch (err) {
+      await rm(projectPath, { recursive: true, force: true }).catch(() => undefined);
+      throw err;
+    }
     const project = toProject(row);
     saveActiveProjectId(project.id);
 
@@ -273,7 +289,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     if (plan.startFactory) {
       // Chaining starts Bootstrap now and carries on with the PO and Deploy once it is merged.
       tickets.setAutoChain(project.id, true);
-      void tickets.dispatchNextReadyTicket(project.id).catch(() => undefined);
+      void tickets.dispatchNextReadyTicket(project.id).catch((err: unknown) => {
+        log.warn({ err, projectId: project.id }, 'wizard: starting the factory failed');
+      });
     }
 
     reply.code(201);
@@ -290,7 +308,14 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     if (body.source === 'import_folder') throw badRequest('importing a workspace folder is not available yet');
     if (isWizardCreate(body)) {
       if (body.repoUrl) throw badRequest('a new project cannot have a repoUrl; use source "import_url"');
-      return createNewProject(body, slug, reply);
+      // A double submit must not write twice into the same directory.
+      if (creating.has(slug)) throw conflict(`a project with slug "${slug}" is being created`);
+      creating.add(slug);
+      try {
+        return await createNewProject(body, slug, reply, request.log);
+      } finally {
+        creating.delete(slug);
+      }
     }
 
     const id = randomUUID();

@@ -109,9 +109,12 @@ const CreateProjectFields = z.object({
   folder: FolderName.optional(),
 });
 
-export const CreateProjectBody = CreateProjectFields.refine((b) => b.source !== 'import_folder' || b.folder !== undefined, {
-  path: ['folder'],
-  message: 'folder is required for import_folder',
+export const CreateProjectBody = CreateProjectFields.refine(
+  (b) => b.source !== 'import_folder' || b.folder !== undefined,
+  { path: ['folder'], message: 'folder is required for import_folder' },
+).refine((b) => b.source !== 'import_url' || b.repoUrl !== undefined, {
+  path: ['repoUrl'],
+  message: 'repoUrl is required for import_url',
 });
 export type CreateProjectBody = z.input<typeof CreateProjectBody>;
 

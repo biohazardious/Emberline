@@ -5,16 +5,32 @@ import {
   type CreateProjectBody,
   type CreateProjectResponse,
   type ProjectPreviewResponse,
+  findOption,
+  PRESETS,
   PROJECT_TYPES,
   type Ticket,
 } from '@emberline/protocol';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as GitExec from './git-exec.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
 import { APP_TYPE_LABELS, generateProjectBlueprint, generateWorktreeYml } from './factory/blueprint.js';
 import { STARTERS } from './factory/starters.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+
+/** Makes `git init` fail while set (the rest of git keeps working). */
+const git = vi.hoisted(() => ({ failInit: false }));
+vi.mock('./git-exec.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof GitExec>();
+  return {
+    ...actual,
+    execGitFile: ((args, opts) =>
+      git.failInit && args[0] === 'init'
+        ? Promise.reject(new Error('git init failed'))
+        : actual.execGitFile(args, opts)) as typeof actual.execGitFile,
+  };
+});
 
 let t: TestApp;
 let headers: Record<string, string>;
@@ -26,6 +42,7 @@ beforeEach(async () => {
   headers = { ...CSRF, cookie };
 });
 afterEach(async () => {
+  git.failInit = false;
   vi.restoreAllMocks();
   await t.close();
 });
@@ -119,6 +136,83 @@ describe('generators', () => {
   });
 });
 
+describe('worktree.yml hints', () => {
+  const FRAMEWORK_DIMS = ['frontend', 'backend', 'database', 'testing'] as const;
+
+  it('embedded presets use the framework build, not the language build joined to it', () => {
+    const yml = (id: string) => {
+      const preset = PRESETS.find((p) => p.id === id)!;
+      return generateWorktreeYml({}, preset);
+    };
+    expect(yml('iot-platformio')).toContain('build: "pio run"');
+    expect(yml('iot-platformio')).toContain('test: "pio test -e native"');
+    expect(yml('iot-esp-idf')).toContain('build: "idf.py build"');
+    expect(yml('iot-esp-idf')).not.toContain('cmake');
+    expect(yml('iot-stm32')).toContain('build: "cmake --build build"');
+    expect(yml('iot-platformio')).not.toContain('&&');
+  });
+
+  it('language hints are only a per-key fallback; testing wins for test', () => {
+    const yml = generateWorktreeYml({ language: 'go', frontend: 'agent', backend: 'fastify', testing: 'pytest' }, undefined);
+    expect(yml).toContain('test: "pytest"');
+    expect(yml).toContain('build: "pnpm build"');
+    expect(yml).not.toContain('go build');
+    // nothing else supplies lint: the language fills in
+    expect(yml).toContain('lint: "pnpm lint"');
+    const fallback = generateWorktreeYml({ language: 'go', backend: 'agent' }, undefined);
+    expect(fallback).toContain('build: "go build ./..."');
+    expect(fallback).toContain('lint: "go vet ./..."');
+  });
+
+  it.each(PRESETS.map((p) => [p.id, p] as const))('no check of %s joins a language hint with a framework hint', (_id, preset) => {
+    const yml = generateWorktreeYml({}, preset);
+    const lang = typeof preset.choices.language === 'string' ? findOption('language', preset.choices.language)?.worktree : undefined;
+    for (const key of ['build', 'lint', 'test'] as const) {
+      const value = new RegExp(`^ {2}${key}: (.*)$`, 'm').exec(yml)?.[1];
+      if (!value) continue;
+      const parts = (JSON.parse(value) as string).split(' && ');
+      const frameworkParts = new Set(
+        FRAMEWORK_DIMS.flatMap((d) => {
+          const c = preset.choices[d];
+          const h = typeof c === 'string' ? findOption(d, c)?.worktree?.[key] : undefined;
+          return h ? [h] : [];
+        }),
+      );
+      const langHint = lang?.[key];
+      if (langHint && !frameworkParts.has(langHint)) {
+        expect(parts.length === 1 || !parts.includes(langHint), `${preset.id} ${key}: ${value}`).toBe(true);
+      }
+    }
+  });
+
+  it.each(PRESETS.map((p) => [p.id, p] as const))('setup of %s is manifest-guarded', (_id, preset) => {
+    const yml = generateWorktreeYml({}, preset);
+    for (const m of yml.matchAll(/^ {2}- (".*")$/gm)) {
+      const cmd = JSON.parse(m[1]!) as string;
+      if (!/install|restore|download|pub get|deps\.get/.test(cmd)) continue;
+      expect(cmd, cmd).toMatch(/^(\[ ! -f [\w.]+ \]|\[ -z ".*" \]) \|\| /);
+    }
+  });
+
+  it('guards setup commands on their manifest and leaves checks bare', () => {
+    const yml = generateWorktreeYml({ frontend: 'react-vite', backend: 'fastapi' }, undefined);
+    expect(yml).toContain('"[ ! -f package.json ] || pnpm install --frozen-lockfile"');
+    expect(yml).toContain('"[ ! -f requirements.txt ] || pip install -r requirements.txt"');
+    expect(yml).toContain('build: "pnpm build"');
+    const go = generateWorktreeYml({ backend: 'go-http' }, undefined);
+    expect(go).toContain('"[ ! -f go.mod ] || go mod download"');
+    expect(generateWorktreeYml({ frontend: 'flutter' }, undefined)).toContain('"[ ! -f pubspec.yaml ] || flutter pub get"');
+  });
+
+  it('the Bootstrap ticket tells the agent to satisfy, not edit, the checks', async () => {
+    const { project } = (await create({ ...WEB, startFactory: false })).json() as CreateProjectResponse;
+    const body = ticketsOf(project.id).find((x) => x.title.startsWith('Bootstrap'))?.body ?? '';
+    expect(body).toMatch(/build gate runs the approved/i);
+    expect(body).toMatch(/approves it in the project banner/i);
+    expect(body).toMatch(/build.*lint.*test.*scripts/is);
+  });
+});
+
 describe('POST /api/projects/preview', () => {
   it('has no side effects', async () => {
     const res = await preview(STATIC);
@@ -160,10 +254,20 @@ describe('POST /api/projects/preview', () => {
   });
 });
 
+const bodyFor = (preset: (typeof PRESETS)[number]): CreateProjectBody => ({
+  name: `Proj ${preset.id}`,
+  source: 'new',
+  appType: preset.type,
+  presetId: preset.id,
+  vision: 'A thing.',
+  startFactory: false,
+});
+
 describe.each([
   ['static plain', STATIC],
   ['web app', WEB],
   ['api', API],
+  ...PRESETS.map((p) => [`preset ${p.id}`, bodyFor(p)] as const),
 ] as const)('create v2 (%s)', (_label, body) => {
   it('writes exactly what the preview showed', async () => {
     const pv = (await preview(body)).json() as ProjectPreviewResponse;
@@ -280,5 +384,54 @@ describe('create v2 behaviour', () => {
     expect(existsSync(path.join(t.config.workspacesDir, 'bakery-site'))).toBe(false);
     expect((await create(STATIC)).statusCode).toBe(201);
     expect((await create(STATIC)).statusCode).toBe(409);
+  });
+
+  it('fails the create and removes the directory when git init fails', async () => {
+    git.failInit = true;
+    const res = await create(STATIC);
+    expect(res.statusCode).toBe(500);
+    expect(existsSync(path.join(t.config.workspacesDir, 'bakery-site'))).toBe(false);
+    expect(t.db.select().from(projects).all()).toHaveLength(0);
+    git.failInit = false;
+    expect((await create(STATIC)).statusCode).toBe(201);
+  });
+
+  it('writes the row, worktree config and gates together or not at all', async () => {
+    vi.spyOn(t.tickets, 'create').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    // tickets are created after the commit: the project stays, with its config and gates
+    const res = await create({ ...STATIC, gates: { antiSlopGate: true } });
+    expect(res.statusCode).toBe(500);
+    const row = t.db.select().from(projects).get();
+    expect(row).toBeDefined();
+    expect(t.db.select().from(projectWorktreeConfig).all()).toHaveLength(1);
+    expect(readProjectSettings(t.db, row!.id).gates).toEqual({ antiSlopGate: true });
+    expect(existsSync(row!.path)).toBe(true);
+  });
+
+  it('removes the directory when the database write fails', async () => {
+    t.db.run(sql`drop table project_worktree_config`);
+    const res = await create(STATIC);
+    expect(res.statusCode).toBe(500);
+    expect(existsSync(path.join(t.config.workspacesDir, 'bakery-site'))).toBe(false);
+    expect(t.db.select().from(projects).all()).toHaveLength(0);
+  });
+
+  it('a double submit creates once; the second gets 409', async () => {
+    const [a, b] = await Promise.all([create(STATIC), create(STATIC)]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([201, 409]);
+    expect(t.db.select().from(projects).all()).toHaveLength(1);
+  });
+
+  it('import_url needs a repoUrl', async () => {
+    expect((await create({ name: 'Imp', source: 'import_url' })).statusCode).toBe(400);
+  });
+
+  it('logs a failed post-create dispatch instead of swallowing it', async () => {
+    vi.spyOn(t.tickets, 'dispatchNextReadyTicket').mockRejectedValue(new Error('no runner'));
+    const warn = vi.spyOn(t.app.log, 'warn');
+    expect((await create({ ...WEB, startFactory: true })).statusCode).toBe(201);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
   });
 });
