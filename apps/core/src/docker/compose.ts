@@ -9,6 +9,7 @@
  * (ptyd `exec` has no stdin). The project name is always `-p emberline-<run8>-preview` from the run
  * id: a `name:` in the compose file or `COMPOSE_PROJECT_NAME` in the worktree's `.env` cannot pick it.
  */
+import { COMPOSE_SERVICE_NAME } from '@emberline/protocol';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
 /** Variable that carries the override YAML to the `sh -c` wrapper (see {@link composeShell}). */
@@ -96,7 +97,7 @@ export function parseComposeServices(stdout: string): string[] {
   return stdout
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(line));
+    .filter((line) => COMPOSE_SERVICE_NAME.test(line));
 }
 
 export interface ComposeContainer {

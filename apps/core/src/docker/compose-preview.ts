@@ -3,6 +3,7 @@
  * through command-exec, with the engine's client variables. RunService records the outcome.
  */
 import { execCommand, type ExecResult } from '../command-exec.js';
+import { clipText, stripControlChars } from '../text/control-chars.js';
 import {
   answeredHttp,
   COMPOSE_OVERRIDE_ENV,
@@ -159,10 +160,12 @@ export async function composeDown(
   return { ok: down.ok, output: down.output, exitCode: down.result && !down.result.timedOut ? down.result.exitCode : null };
 }
 
-/** Every compose project in the engine (`compose ls -a`); null when compose could not answer. */
-export async function composeProjects(env: Record<string, string>): Promise<string[] | null> {
+/** Every compose project in the engine (`compose ls -a`), or why compose could not answer (one line). */
+export async function composeProjects(env: Record<string, string>): Promise<{ ok: true; names: string[] } | { ok: false; error: string }> {
   const ls = await run(composeLsArgs(), NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
-  return ls.ok ? parseComposeLs(ls.result!.stdout) : null;
+  if (ls.ok) return { ok: true, names: parseComposeLs(ls.result!.stdout) };
+  const detail = stripControlChars(ls.output.replace(/\s+/g, ' '), '').trim();
+  return { ok: false, error: clipText(`docker compose ls failed (${ls.how})${detail ? `: ${detail}` : ''}`, 300) };
 }
 
 /** `image prune` and `builder prune`, each `-f --filter until=72h`. Never throws. */

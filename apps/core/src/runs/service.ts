@@ -25,6 +25,7 @@ import {
   type Credential,
   CreateRunBody as CreateRunBodySchema,
   type DiffScope,
+  COMPOSE_SERVICE_NAME,
   type DockerCleanupResponse,
   type DockerOverview,
   type DockerProjectActionResponse,
@@ -177,6 +178,12 @@ const DOCKER_IMAGE_PRUNE_INTERVAL_MS = 24 * 3_600_000;
 const COMPOSE_DOWN_CONCURRENCY = 4;
 /** Cleanup (prune, teardown, sweep, run delete) also removes volumes and the images a project built; a Stop does not. */
 const CLEANUP_DOWN = { volumes: true, images: true } as const;
+interface StopPreviewOptions {
+  /** Also remove the preview project's volumes and built images (CLEANUP_DOWN). */
+  volumes?: boolean;
+  /** Told about the preview project's `down` when the stop ran one. */
+  onDown?: (project: string, down: Awaited<ReturnType<typeof composeDown>>) => void;
+}
 /** Waits for `job` at most `ms`; resolves whether it settled in time (the job itself carries on). */
 function settlesWithin(job: Promise<unknown>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -2258,37 +2265,41 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * prunes dangling images and build cache older than 72 h (`forcePrune`: now, for "Clean up now"). A project
    * whose name Emberline did not make is never touched.
    */
-  async sweepDockerProjects(now = Date.now(), { forcePrune = false }: { forcePrune?: boolean } = {}): Promise<{ removed: string[] }> {
-    const removed: string[] = [];
-    if (!this.docker.host || this.dockerSweeping) return { removed };
+  async sweepDockerProjects(now = Date.now(), { forcePrune = false }: { forcePrune?: boolean } = {}): Promise<DockerCleanupResponse> {
+    const result: DockerCleanupResponse = { removed: [], listed: false, pruned: false };
+    if (!this.docker.host || this.dockerSweeping) return result;
     this.dockerSweeping = true;
     try {
       await this.docker.ready();
       const env = this.docker.cliEnv();
-      if (!env.DOCKER_HOST) return { removed };
+      if (!env.DOCKER_HOST) return result;
       const listed = await composeProjects(env);
-      if (listed === null) {
-        this.log?.warn({}, 'docker compose ls failed; the compose sweep tries again later');
-        return { removed };
+      if (listed.ok) {
+        result.listed = true;
+        // Read after the listing: a project listed there belongs to a run that existed before it.
+        const inUse = composeProjectsInUse(this.dockerOwnershipFacts());
+        const stale = listed.names.filter((name) => isEmberlineComposeProject(name) && !inUse.has(name)).slice(0, DOCKER_GC_MAX_DOWNS);
+        for (const name of stale) {
+          const down = await composeDown(name, env, CLEANUP_DOWN);
+          if (down.ok) result.removed.push(name);
+          else this.log?.warn({ project: name, output: down.output.slice(-500) }, 'compose sweep: down failed');
+        }
+        this.lastDockerSweep = { at: now, removed: [...result.removed] };
+      } else {
+        result.error = listed.error;
+        this.log?.warn({ error: listed.error }, 'docker compose ls failed; the compose sweep tries again later');
       }
-      // Read after the listing: a project listed there belongs to a run that existed before it.
-      const inUse = composeProjectsInUse(this.dockerOwnershipFacts());
-      const stale = listed.filter((name) => isEmberlineComposeProject(name) && !inUse.has(name)).slice(0, DOCKER_GC_MAX_DOWNS);
-      for (const name of stale) {
-        const down = await composeDown(name, env, CLEANUP_DOWN);
-        if (down.ok) removed.push(name);
-        else this.log?.warn({ project: name, output: down.output.slice(-500) }, 'compose sweep: down failed');
-      }
-      this.lastDockerSweep = { at: now, removed: [...removed] };
+      // The prune does not need the listing.
       if (forcePrune || now - this.lastImagePruneAt >= DOCKER_IMAGE_PRUNE_INTERVAL_MS) {
         this.lastImagePruneAt = now;
         const prune = await pruneImages(env);
+        result.pruned = prune.ok;
         if (!prune.ok) this.log?.warn({ output: prune.output.slice(-500) }, 'compose sweep: image prune failed');
       }
     } finally {
       this.dockerSweeping = false;
     }
-    return { removed };
+    return result;
   }
 
   /**
@@ -2380,9 +2391,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const down =
       owner.kind === 'preview'
         ? await this.previewRunLock.run(owner.runId, async () => {
-            // A command preview (a terminal) is not this project's: it keeps running.
-            const started = this.previewEvents(owner.runId).find((e) => e.type === 'preview_started');
-            if ((started?.payload as PreviewPayload | null)?.kind !== 'command') await this.stopPreviewHeld(this.row(owner.runId));
+            // Only a compose preview that is still started goes through the run's preview stop (which
+            // takes the project down itself); no preview, a stopped one or a command preview (a
+            // terminal; no `kind` is one too, as in previewStatus) is left alone.
+            const last = this.previewEvents(owner.runId).find((e) => e.type === 'preview_started' || e.type === 'preview_stopped');
+            if (last?.type === 'preview_started' && (last.payload as PreviewPayload | null)?.kind === 'compose') {
+              let taken: Awaited<ReturnType<typeof composeDown>> | undefined;
+              await this.stopPreviewHeld(this.row(owner.runId), undefined, {
+                volumes: action === 'remove',
+                onDown: (project, down) => {
+                  if (project === name) taken = down;
+                },
+              });
+              if (taken) return taken;
+            }
             return composeDown(name, env, opts);
           })
         : await composeDown(name, env, opts);
@@ -2396,8 +2418,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           type: action === 'stop' ? 'docker_project_stopped' : 'docker_project_removed',
           payload: { project: name, by: 'person' },
         });
-      } catch {
-        // The run was removed meanwhile.
+      } catch (error) {
+        // A run removed meanwhile is fine; anything else is worth a line in the log.
+        if (!(error instanceof HttpError && error.statusCode === 404)) {
+          this.log?.warn({ runId: owner.runId, project: name, error: (error as Error).message }, 'could not record a Docker page action on its run');
+        }
       }
     }
     const warning =
@@ -2409,7 +2434,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** The end of `docker compose logs` of a project (one service, or all), sanitised: untrusted output. */
   async dockerProjectLogs(name: string, service?: string): Promise<DockerProjectLogsResponse> {
-    if (service !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(service)) throw badRequest('not a compose service name');
+    if (service !== undefined && !COMPOSE_SERVICE_NAME.test(service)) throw badRequest('not a compose service name');
     const env = await this.dockerPageEnv(name);
     const logs = await dockerQuery(composeLogsArgs(name, service), env);
     if (!logs.ok) throw new HttpError(502, 'docker_failed', `docker compose logs failed (${logs.how})`, { output: logs.output });
@@ -2829,7 +2854,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Returns that preview's status. Callers hold `previewRunLock` for the run. `volumes` (the run is
    * being deleted) also removes the preview project's volumes and built images, whether or not it runs.
    */
-  private async stopRunningPreview(row: RunRow, { volumes = false }: { volumes?: boolean } = {}): Promise<RunPreviewStatus> {
+  private async stopRunningPreview(row: RunRow, { volumes = false, onDown }: StopPreviewOptions = {}): Promise<RunPreviewStatus> {
     const current = await this.previewStatus(row.id);
     if (current.terminalId) {
       await this.ptyd
@@ -2853,7 +2878,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (composeRunning || volumes) {
       const env = await this.dockerEnvFor(row);
       if (env.DOCKER_HOST) {
-        const down = await composeDown(this.previewProjectOf(row.id), env, volumes ? CLEANUP_DOWN : {});
+        const project = this.previewProjectOf(row.id);
+        const down = await composeDown(project, env, volumes ? CLEANUP_DOWN : {});
+        onDown?.(project, down);
         if (!down.ok) this.log?.warn({ runId: row.id, output: down.output.slice(-500) }, 'compose preview: down failed');
       }
     }
@@ -2876,8 +2903,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** A person's preview Stop (Review page or Docker page); callers hold `previewRunLock` for the run. */
-  private async stopPreviewHeld(row: RunRow, requestHost?: string): Promise<RunPreviewStatus> {
-    const current = await this.stopRunningPreview(row);
+  private async stopPreviewHeld(row: RunRow, requestHost?: string, opts: StopPreviewOptions = {}): Promise<RunPreviewStatus> {
+    const current = await this.stopRunningPreview(row, opts);
     this.record(row.id, {
       source: 'user',
       type: 'preview_stopped',

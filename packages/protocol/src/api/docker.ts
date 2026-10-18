@@ -142,6 +142,19 @@ export const DockerProjectLogsResponse = z.object({
 });
 export type DockerProjectLogsResponse = z.infer<typeof DockerProjectLogsResponse>;
 
-/** `POST /api/docker/cleanup`: the sweep ran now, with the image and build cache prune. */
-export const DockerCleanupResponse = z.object({ removed: z.array(z.string()) });
+/**
+ * `POST /api/docker/cleanup`: the sweep ran now, with the image and build cache prune. When the
+ * engine could not be listed (`listed` false) nothing was removed, the prune still ran, and `error`
+ * says why (still 200).
+ */
+export const DockerCleanupResponse = z.object({
+  /** The leftover projects taken down. */
+  removed: z.array(z.string()),
+  /** `docker compose ls` answered, so leftovers could be looked for. */
+  listed: z.boolean(),
+  /** The image and build cache prune ran and succeeded. */
+  pruned: z.boolean(),
+  /** Why the listing failed (Emberline's words plus the CLI output tail, one line). */
+  error: z.string().optional(),
+});
 export type DockerCleanupResponse = z.infer<typeof DockerCleanupResponse>;

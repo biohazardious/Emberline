@@ -30,6 +30,9 @@ export const WorktreeCopyEntry = z.union([
 ]);
 export type WorktreeCopyEntry = z.output<typeof WorktreeCopyEntry>;
 
+/** A compose service name: letters, digits, ".", "-" and "_", at most 63, not starting with a sign. */
+export const COMPOSE_SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
+
 /**
  * A version 2 service from the project's compose file: `file` (relative to the worktree, default
  * `compose.yaml`), the compose `service` and the container `port` its preview publishes.
@@ -39,7 +42,7 @@ export const WorktreeComposeRef = z
     file: CopyPath.refine((p) => !p.startsWith('-'), 'must not start with "-"').default('compose.yaml'),
     service: z
       .string()
-      .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/, 'a compose service name: letters, digits, ".", "-" and "_" (max 63)'),
+      .regex(COMPOSE_SERVICE_NAME, 'a compose service name: letters, digits, ".", "-" and "_" (max 63)'),
     port: z.number().int().min(1).max(65535),
   })
   .strict();

@@ -7,6 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  COMPOSE_SERVICE_NAME,
+  DockerCleanupResponse,
   DockerOverview,
   DockerProjectActionResponse,
   DockerProjectLogsResponse,
@@ -15,7 +17,7 @@ import {
 } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type ExecRequest,
   type ExecResult,
@@ -24,7 +26,7 @@ import {
   setCommandCanceller,
   setCommandExecutor,
 } from './command-exec.js';
-import { runs } from './db/schema.js';
+import { runEvents, runs } from './db/schema.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -83,6 +85,7 @@ class FakeEngine {
   psResult: ExecResult | null = null;
   dfResult: ExecResult | null = null;
   failDown = new Set<string>();
+  failLogs = false;
   logs = 'web-1  | \u001b[31mready\u001b[0m\n';
   /** While set, the next `compose ls` waits for it. */
   lsGate: Promise<void> | null = null;
@@ -185,7 +188,7 @@ class FakeEngine {
           .join('\n'),
       );
     }
-    if (verb === 'logs') return ok(this.logs);
+    if (verb === 'logs') return this.failLogs ? failed(`no such project: ${project}`) : ok(this.logs);
     if (verb === 'down') {
       if (this.failDown.has(project)) return failed(`Error response from daemon: ${project} is stuck`);
       this.projects.delete(project);
@@ -321,6 +324,13 @@ describe('auth and names (Review Focus 1)', () => {
       headers: { cookie },
     });
     expect(cleanupNoCsrf.statusCode).toBe(403);
+    const removeNoCsrf = await t.app.inject({
+      method: 'POST',
+      url: '/api/docker/projects/emberline-abcd1234/remove',
+      payload: {},
+      headers: { cookie },
+    });
+    expect(removeNoCsrf.statusCode).toBe(403);
     expect(engine.downs()).toEqual([]);
   });
 
@@ -578,6 +588,33 @@ describe('stop and remove', () => {
     expect(engine.downs()).toEqual([downArgs(main, false), downArgs('emberline-deadbeef', true)]);
   });
 
+  it('a run note that cannot be recorded for another reason than a removed run is logged; the action stands', async () => {
+    await start();
+    const warn = vi.fn();
+    t.runs.setLogger({ warn });
+    const p = await createProject();
+    const review = await endedRun(p.id);
+    const name = composeProjectName(review.id, review.worktreePath);
+    engine.add(name);
+    const internals = t.runs as unknown as { record: (...args: unknown[]) => unknown };
+    const original = internals.record.bind(t.runs);
+    vi.spyOn(internals, 'record').mockImplementation((id: unknown, event: unknown) => {
+      if ((event as { type: string }).type === 'docker_project_stopped')
+        throw new Error('SQLITE_FULL: database or disk is full');
+      return original(id, event);
+    });
+    const res = await api('POST', `/api/docker/projects/${name}/stop`);
+    expect(res.statusCode).toBe(200);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: review.id,
+        project: name,
+        error: expect.stringContaining('SQLITE_FULL'),
+      }),
+      expect.any(String),
+    );
+  });
+
   it('a failed down is 502 with the output tail', async () => {
     await start();
     engine.add('emberline-deadbeef');
@@ -609,7 +646,8 @@ describe("preview projects go through the run's preview stop (Review Focus 2)", 
     expect(await preview(run)).toMatchObject({ status: 'stopped', port: null, error: null });
     expect(engine.projects.has(name)).toBe(false);
     expect(engine.published.size).toBe(0);
-    for (const down of engine.downs()) expect(down).toEqual(downArgs(name, false));
+    // The run's preview stop took it down; no second down.
+    expect(engine.downs()).toEqual([downArgs(name, false)]);
   });
 
   it('Remove stops the preview through the run first, then CLEANUP_DOWN', async () => {
@@ -621,8 +659,35 @@ describe("preview projects go through the run's preview stop (Review Focus 2)", 
     expect(types).toContain('preview_stopped');
     expect(types).toContain('docker_project_removed');
     expect(types.indexOf('preview_stopped')).toBeLessThan(types.indexOf('docker_project_removed')); // oldest first
-    expect(engine.downs().at(-1)).toEqual(downArgs(name, true));
+    expect(engine.downs()).toEqual([downArgs(name, true)]);
     expect((await preview(run)).status).toBe('stopped');
+  });
+
+  it('a run that never started a preview, or whose last preview was a command (or a legacy one without a kind): no preview_stopped, one down', async () => {
+    await start();
+    const p = await createProject();
+    const none = await endedRun(p.id);
+    const command = await endedRun(p.id);
+    const legacy = await endedRun(p.id);
+    const started = (runId: string, payload: object) =>
+      t.db
+        .insert(runEvents)
+        .values({ runId, ts: new Date(), source: 'user', type: 'preview_started', payload })
+        .run();
+    started(command.id, { kind: 'command', terminalId: null, command: 'npm run dev', port: 4301 });
+    started(legacy.id, { terminalId: null, command: 'npm run dev', port: 4302 });
+    for (const run of [none, command, legacy]) {
+      const name = previewComposeProjectName(run.id);
+      engine.add(name);
+      const res = await api('POST', `/api/docker/projects/${name}/stop`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ owner: { kind: 'preview', runId: run.id } });
+      expect(typesOf(run.id)).not.toContain('preview_stopped');
+      expect(typesOf(run.id)).toContain('docker_project_stopped');
+    }
+    expect(engine.downs()).toEqual(
+      [none, command, legacy].map((r) => downArgs(previewComposeProjectName(r.id), false)),
+    );
   });
 
   it('a Stop while the preview is still starting cancels the start under the run lock; no "restarted" status', async () => {
@@ -690,8 +755,28 @@ describe('logs', () => {
     ]);
   });
 
-  it('a service that is not a service name is 400', async () => {
+  it('a failed `compose logs` is 502 with the output tail', async () => {
     await start();
+    engine.failLogs = true;
+    const res = await api('GET', '/api/docker/projects/emberline-deadbeef/logs');
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({
+      error: 'docker_failed',
+      output: expect.stringContaining('no such project: emberline-deadbeef'),
+    });
+  });
+
+  it('a repeated `service` is 400', async () => {
+    await start();
+    const res = await api('GET', '/api/docker/projects/emberline-deadbeef/logs?service=web&service=db');
+    expect(res.statusCode).toBe(400);
+    expect(engine.calls).toEqual([]);
+  });
+
+  it("a service that is not a service name is 400 (the protocol's compose service rule)", async () => {
+    await start();
+    expect(COMPOSE_SERVICE_NAME.test('web.1_a-b')).toBe(true);
+    expect(COMPOSE_SERVICE_NAME.test('-web')).toBe(false);
     for (const service of ['--rm', 'a b', '../x', '']) {
       const res = await api(
         'GET',
@@ -711,12 +796,28 @@ describe('Clean up now (Review Focus 5)', () => {
     engine.add('emberline-deadbeef');
     const res = await api('POST', '/api/docker/cleanup');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ removed: ['emberline-deadbeef'] });
+    expect(DockerCleanupResponse.parse(res.json())).toEqual({
+      removed: ['emberline-deadbeef'],
+      listed: true,
+      pruned: true,
+    });
     expect(prunes()).toBe(4);
     const { cleanup } = await overview();
     expect(cleanup).toMatchObject({ lastSweepRemoved: ['emberline-deadbeef'], sweeping: false });
     expect(cleanup.lastSweepAt).not.toBeNull();
     expect(cleanup.lastPruneAt).not.toBeNull();
+  });
+
+  it('a failed listing still runs the forced prune and says so: 200, listed false, with the error', async () => {
+    await start();
+    engine.lsResult = failed('compose: boom');
+    const res = await api('POST', '/api/docker/cleanup');
+    expect(res.statusCode).toBe(200);
+    const body = DockerCleanupResponse.parse(res.json());
+    expect(body).toMatchObject({ removed: [], listed: false, pruned: true });
+    expect(body.error).toContain('compose: boom');
+    expect(engine.count((a) => a[1] === 'prune')).toBe(2);
+    expect(engine.downs()).toEqual([]);
   });
 
   it('409 while a sweep runs; it never starts a second one', async () => {

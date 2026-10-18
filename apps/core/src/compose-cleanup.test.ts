@@ -352,7 +352,7 @@ describe('GC sweep of compose projects', () => {
   it('runs a minute after start (leftovers from before a restart), then every 30 minutes', async () => {
     await start();
     vi.spyOn(t.runs, 'reconcile').mockResolvedValue(undefined);
-    const sweep = vi.spyOn(t.runs, 'sweepDockerProjects').mockResolvedValue({ removed: [] });
+    const sweep = vi.spyOn(t.runs, 'sweepDockerProjects').mockResolvedValue({ removed: [], listed: true, pruned: false });
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
     try {
       t.runs.startReconciler();

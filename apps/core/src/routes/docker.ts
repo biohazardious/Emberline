@@ -5,6 +5,7 @@ import type {
   DockerProjectLogsResponse,
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
+import { badRequest } from '../errors.js';
 import type { RunService } from '../runs/service.js';
 
 /**
@@ -29,6 +30,7 @@ export function registerDockerRoutes(app: FastifyInstance, runs: RunService): vo
     '/api/docker/projects/:name/logs',
     async (request): Promise<DockerProjectLogsResponse> => {
       const service = request.query.service;
+      if (service !== undefined && typeof service !== 'string') throw badRequest('give `service` once');
       return runs.dockerProjectLogs(
         request.params.name,
         typeof service === 'string' && service !== '' ? service : undefined,
