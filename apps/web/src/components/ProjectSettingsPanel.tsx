@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
-import { gateChoices, gateUpdate, type GateChoice, type WorktreeBanner, worktreeBanner } from '../projectSettings';
+import { approveEnabled, gateChoices, gateUpdate, type GateChoice, type WorktreeBanner, worktreeBanner } from '../projectSettings';
 
 /** The unified diff, the schema errors and Approve for HEAD's .emberline/worktree.yml. */
 function WorktreeReviewBody({
@@ -17,6 +17,8 @@ function WorktreeReviewBody({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fullFileShown, setFullFileShown] = useState(false);
+  const canApproveNow = approveEnabled(banner, { busy, fullFileShown });
 
   const approve = async () => {
     if (!banner.approveBody) return;
@@ -45,8 +47,21 @@ function WorktreeReviewBody({
         <pre className="worktree-review-diff mono" tabIndex={0} aria-label="Changes to worktree.yml">
           {banner.diff}
         </pre>
-      ) : (
+      ) : banner.kind === 'unusable' ? null : (
         <p className="muted">No textual changes to show.</p>
+      )}
+      {banner.truncated && banner.fullFile !== null && (
+        <>
+          <p className="muted small">The diff is too long to show whole. Review HEAD&apos;s full file before you approve it.</p>
+          <button type="button" className="btn btn-sm" aria-expanded={fullFileShown} onClick={() => setFullFileShown((v) => !v)}>
+            {fullFileShown ? 'Hide full file' : 'Show full file'}
+          </button>
+          {fullFileShown && (
+            <pre className="worktree-review-diff mono" tabIndex={0} aria-label="HEAD's worktree.yml">
+              {banner.fullFile}
+            </pre>
+          )}
+        </>
       )}
       {error && (
         <p className="banner banner-error" role="alert">
@@ -57,7 +72,7 @@ function WorktreeReviewBody({
         <button
           type="button"
           className="btn btn-primary btn-sm"
-          disabled={!banner.canApprove || busy}
+          disabled={!canApproveNow}
           onClick={() => void approve()}
         >
           {busy ? 'Approving…' : banner.kind === 'removed' ? 'Approve removal' : 'Approve'}
@@ -65,6 +80,7 @@ function WorktreeReviewBody({
         {!banner.canApprove && banner.errors.length > 0 && (
           <span className="muted">Fix the errors in the repository, then review again.</span>
         )}
+        {banner.canApprove && banner.truncated && !fullFileShown && <span className="muted">Open the full file to approve.</span>}
       </div>
     </div>
   );

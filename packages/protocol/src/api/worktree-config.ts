@@ -89,6 +89,11 @@ export const WorktreeConfigStatusResponse = z.object({
   diff: z.string(),
   /** Why HEAD's file cannot be approved (read or schema errors); empty when it can. */
   errors: z.array(z.string()),
+  /**
+   * HEAD has a file that cannot be used (a symbolic link, over the size cap, or invalid): `errors`
+   * says why. With an approval this counts as `changed`; runs keep the approved content.
+   */
+  unusable: z.boolean(),
 });
 export type WorktreeConfigStatusResponse = z.infer<typeof WorktreeConfigStatusResponse>;
 

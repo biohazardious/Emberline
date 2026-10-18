@@ -1,6 +1,6 @@
 import type { ProjectSettingsResponse, WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { gateChoice, gateChoices, gateUpdate, worktreeBanner } from './projectSettings';
+import { approveEnabled, gateChoice, gateChoices, gateUpdate, worktreeBanner } from './projectSettings';
 
 const status = (o: Partial<WorktreeConfigStatusResponse> = {}): WorktreeConfigStatusResponse => ({
   approved: null,
@@ -10,6 +10,7 @@ const status = (o: Partial<WorktreeConfigStatusResponse> = {}): WorktreeConfigSt
   removed: false,
   diff: '',
   errors: [],
+  unusable: false,
   ...o,
 });
 
@@ -41,6 +42,26 @@ describe('worktreeBanner', () => {
     const b = worktreeBanner(status({ changed: true, removed: true }));
     expect(b).toMatchObject({ kind: 'removed', title: 'worktree.yml was removed — approve removal', canApprove: true });
     expect(b?.approveBody).toEqual({ removal: true });
+  });
+
+  it('a HEAD file that cannot be used shows its errors and cannot be approved', () => {
+    const b = worktreeBanner(status({ changed: true, unusable: true, errors: ['.emberline/worktree.yml is a symbolic link in HEAD'] }));
+    expect(b).toMatchObject({ kind: 'unusable', canApprove: false, approveBody: null });
+    expect(b?.title).toBe("worktree.yml in the repository can't be used — runs keep the approved version");
+    expect(b?.errors).toEqual(['.emberline/worktree.yml is a symbolic link in HEAD']);
+  });
+
+  it('a truncated diff offers the full file, and Approve waits until it is shown', () => {
+    const head = { content: 'version: 1\nsetup:\n  - big\n', sha256: 'c'.repeat(64) };
+    const b = worktreeBanner(status({ changed: true, head, diff: '--- approved\n+++ HEAD\n+x\n… diff truncated\n' }));
+    expect(b).toMatchObject({ truncated: true, fullFile: head.content, canApprove: true });
+    expect(approveEnabled(b!, { busy: false, fullFileShown: false })).toBe(false);
+    expect(approveEnabled(b!, { busy: false, fullFileShown: true })).toBe(true);
+    expect(approveEnabled(b!, { busy: true, fullFileShown: true })).toBe(false);
+
+    const whole = worktreeBanner(status({ changed: true, head, diff: '+x\n' }))!;
+    expect(whole.truncated).toBe(false);
+    expect(approveEnabled(whole, { busy: false, fullFileShown: false })).toBe(true);
   });
 
   it('a git read failure is a quiet note, not a review', () => {

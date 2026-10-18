@@ -23,17 +23,22 @@ export async function worktreeConfigStatus(db: Db, project: { id: string; path: 
   const read = await readHeadWorktreeYml(project.path);
   const yml = read.kind === 'present' ? read.yml : null;
   const head = yml?.content != null && yml.sha256 ? { content: yml.content, sha256: yml.sha256 } : null;
+  const errors = yml?.errors ?? [];
   // HEAD was read and has no entry at all (not one that cannot be used, not a git failure): deleted.
   const removed = read.kind === 'absent' && approved !== null;
-  const changed = removed || (head !== null && head.sha256 !== approved?.sha256);
+  // HEAD has a file, but a link, an oversized or an invalid one: the review shows why it cannot be approved.
+  const unusable = read.kind === 'present' && (head === null || errors.length > 0);
+  const changed = removed || (head !== null && head.sha256 !== approved?.sha256) || (unusable && approved !== null);
   return {
     approved,
     head,
     headError: read.kind === 'unknown' ? read.error : null,
     changed,
     removed,
-    diff: changed ? unifiedDiff(approved?.content ?? '', head?.content ?? '') : '',
-    errors: yml?.errors ?? [],
+    // Without HEAD content there is nothing to compare: the errors say what is wrong.
+    diff: changed && (head !== null || removed) ? unifiedDiff(approved?.content ?? '', head?.content ?? '') : '',
+    errors,
+    unusable,
   };
 }
 

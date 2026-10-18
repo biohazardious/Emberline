@@ -259,6 +259,34 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
   });
 
+  it('a HEAD file that cannot be used while an approval exists is reported as changed and unusable', async () => {
+    const project = await createProject(setupYml('echo ok > setup-ran'));
+    await approveHead(project.id);
+    const commit = (msg: string) => {
+      execFileSync('git', ['-C', project.path, 'add', '-A']);
+      execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', msg]);
+    };
+    rmSync(path.join(project.path, YML));
+    execFileSync('ln', ['-s', '/etc/passwd', path.join(project.path, YML)]);
+    commit('link');
+    const linked = await status(project.id);
+    expect(linked).toMatchObject({ head: null, changed: true, removed: false, unusable: true, diff: '' });
+    expect(linked.errors.join()).toContain('symbolic link');
+    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+
+    rmSync(path.join(project.path, YML));
+    writeFileSync(path.join(project.path, YML), `version: 1\n# ${'x'.repeat(70 * 1024)}\n`);
+    commit('big');
+    const big = await status(project.id);
+    expect(big).toMatchObject({ head: null, changed: true, unusable: true });
+    expect(big.errors.length).toBeGreaterThan(0);
+
+    commitYml(project, 'version: 1\nnope: true\n');
+    expect(await status(project.id)).toMatchObject({ changed: true, unusable: true });
+    // Runs keep the approved content meanwhile.
+    expect((await status(project.id)).approved?.sha256).toBe(sha(setupYml('echo ok > setup-ran')));
+  });
+
   it('answers 404 for an unknown project and 400 for a bad body', async () => {
     expect((await api('GET', '/api/projects/nope/worktree-config')).statusCode).toBe(404);
     const project = await createProject(setupYml('true'));

@@ -51,13 +51,22 @@ export function gateUpdate(key: ProjectGateKey, choice: GateChoice): UpdateProje
 }
 
 export interface WorktreeBanner {
-  kind: 'changed' | 'removed' | 'unreadable';
+  kind: 'changed' | 'removed' | 'unreadable' | 'unusable';
   title: string;
   canApprove: boolean;
   approveBody: ApproveWorktreeConfigBody | null;
   errors: string[];
   diff: string;
+  /** The diff was cut at its size cap: the person reviews HEAD's whole file instead. */
+  truncated: boolean;
+  /** HEAD's whole file, for a truncated diff. */
+  fullFile: string | null;
 }
+
+/** The core's marker at the end of a diff cut at its size cap (worktree-config/diff.ts). */
+const DIFF_TRUNCATED = '… diff truncated\n';
+
+const quiet = { truncated: false, fullFile: null } as const;
 
 /** What the worktree.yml review shows for a status response; null when nothing needs attention. */
 export function worktreeBanner(s: WorktreeConfigStatusResponse | undefined): WorktreeBanner | null {
@@ -70,6 +79,7 @@ export function worktreeBanner(s: WorktreeConfigStatusResponse | undefined): Wor
       approveBody: null,
       errors: [],
       diff: '',
+      ...quiet,
     };
   }
   if (s.removed) {
@@ -80,10 +90,23 @@ export function worktreeBanner(s: WorktreeConfigStatusResponse | undefined): Wor
       approveBody: { removal: true },
       errors: [],
       diff: s.diff,
+      ...quiet,
     };
   }
   if (!s.changed) return null;
+  if (s.unusable) {
+    return {
+      kind: 'unusable',
+      title: "worktree.yml in the repository can't be used — runs keep the approved version",
+      canApprove: false,
+      approveBody: null,
+      errors: s.errors,
+      diff: s.diff,
+      ...quiet,
+    };
+  }
   const canApprove = s.head !== null && s.errors.length === 0;
+  const truncated = s.diff.endsWith(DIFF_TRUNCATED);
   return {
     kind: 'changed',
     title: 'worktree.yml changed — review',
@@ -91,5 +114,12 @@ export function worktreeBanner(s: WorktreeConfigStatusResponse | undefined): Wor
     approveBody: canApprove && s.head ? { sha256: s.head.sha256 } : null,
     errors: s.errors,
     diff: s.diff,
+    truncated,
+    fullFile: truncated ? (s.head?.content ?? null) : null,
   };
+}
+
+/** Approve is offered once the person can see everything they approve: a truncated diff needs the full file open. */
+export function approveEnabled(banner: WorktreeBanner, view: { busy: boolean; fullFileShown: boolean }): boolean {
+  return banner.canApprove && !view.busy && (!banner.truncated || view.fullFileShown);
 }
