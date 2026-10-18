@@ -2,7 +2,7 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], summary, button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Where Tab (or Shift+Tab) should move focus among `count` elements from `current` (-1: focus is
@@ -19,7 +19,8 @@ export function nextFocusIndex(current: number, count: number, shift: boolean): 
 /** Handles a Tab keydown inside `container` so focus never leaves it. */
 export function trapTab(container: HTMLElement | null, event: KeyboardEvent | ReactKeyboardEvent): void {
   if (!container || event.key !== 'Tab') return;
-  const items = [...container.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  // Hidden inputs (a display:none file input) cannot take focus, so they must not count as the last stop.
+  const items = [...container.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
   const next = nextFocusIndex(items.indexOf(document.activeElement as HTMLElement), items.length, event.shiftKey);
   if (next === null) return;
   event.preventDefault();
