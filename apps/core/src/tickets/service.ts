@@ -965,12 +965,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     //    verify it before syncing or moving to Done. If verification fails, resume the agent with the error log.
     //    An approved worktree.yml with `checks` replaces the detected steps (and is always verifiable).
     const checks = approvedChecks(this.db, run.projectId);
+    // Read before the check below, so checking and claiming `selfHealedRuns` stay in one tick.
+    const verifiable = Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
       (!run.endedAt || run.resumable) &&
-      run.worktreePath &&
-      hasVerifiableBuildTarget(run.worktreePath, checks)
+      verifiable
     ) {
       this.selfHealedRuns.add(run.id);
       const buildRes = await buildWorkspaceDemo({

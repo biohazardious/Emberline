@@ -5,9 +5,13 @@ import { builtLine, shouldAutoBuild, staleBadge } from './demoFreshness';
 const NOW = Date.parse('2026-10-18T12:00:00.000Z');
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
-type Fields = Pick<WorkspaceDemoTarget, 'kind' | 'exists' | 'demoBuild' | 'demoStale' | 'rebuilding'>;
+type Fields = Pick<
+  WorkspaceDemoTarget,
+  'kind' | 'runStatus' | 'exists' | 'demoBuild' | 'demoStale' | 'rebuilding'
+>;
 const target = (over: Partial<Fields> = {}): Fields => ({
   kind: 'main',
+  runStatus: null,
   exists: true,
   demoBuild: { commit: SHA, builtAt: '2026-10-18T11:55:00.000Z', ok: true },
   demoStale: false,
@@ -36,12 +40,23 @@ describe('built line', () => {
     expect(builtLine(target({ demoBuild: null }), NOW)).toBe('Not built yet');
     expect(builtLine(target({ rebuilding: true }), NOW)).toBe('Rebuilding…');
   });
+
+  it('a demo on disk without a recorded build says so instead of "Not built yet"', () => {
+    expect(builtLine(target({ demoBuild: null, demoStale: true }), NOW)).toBe('Build not recorded');
+  });
 });
 
 describe('stale badge', () => {
   it('names main for the main workspace and stays generic for runs', () => {
     expect(staleBadge(target({ demoStale: true }))).toBe('main changed since this build');
     expect(staleBadge(target({ kind: 'worktree', demoStale: true }))).toBe('changed since this build');
+  });
+
+  it('is softer when no build was recorded: the demo may be out of date', () => {
+    expect(staleBadge(target({ demoBuild: null, demoStale: true }))).toBe('may be out of date');
+    expect(staleBadge(target({ kind: 'worktree', demoBuild: null, demoStale: true }))).toBe(
+      'may be out of date',
+    );
   });
 
   it('is absent while fresh or rebuilding', () => {
@@ -63,5 +78,14 @@ describe('auto-build on open', () => {
     expect(shouldAutoBuild(target({ demoStale: true, rebuilding: true }), idle)).toBe(false);
     expect(shouldAutoBuild(target(), idle)).toBe(false);
     expect(shouldAutoBuild(target({ demoStale: true, exists: false }), idle)).toBe(false);
+  });
+
+  it('builds only main or a finished run, never a run whose agent may still be working', () => {
+    const run = (runStatus: Fields['runStatus']) => target({ kind: 'worktree', runStatus, demoStale: true });
+    expect(shouldAutoBuild(run('done'), idle)).toBe(true);
+    expect(shouldAutoBuild(run('failed'), idle)).toBe(true);
+    for (const busy of ['queued', 'starting', 'working', 'waiting_input', 'rate_limited'] as const) {
+      expect(shouldAutoBuild(run(busy), idle)).toBe(false);
+    }
   });
 });

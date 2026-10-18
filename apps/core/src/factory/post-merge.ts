@@ -12,6 +12,9 @@ import type { RunService } from '../runs/service.js';
 import { approvedChecks } from '../worktree-config/load.js';
 import { buildDemoTarget, hasVerifiableBuildTarget } from './demo.js';
 
+/** How long stop() waits for a running job (a rebuild can take many minutes). */
+export const POST_MERGE_STOP_TIMEOUT_MS = 5_000;
+
 /** Run notes of work merged into main: by the pipeline, or by a person (sync-worktree). */
 export const MERGE_NOTES: readonly string[] = ['merged_to_main', 'merged_by_person'];
 
@@ -34,7 +37,11 @@ export interface PostMergeOptions {
   /** The built-in steps; defaults to rebuilding main's demo ({@link rebuildMainDemoStep}). */
   steps?: NamedPostMergeStep[];
   log?: (message: string, err?: unknown) => void;
+  /** See {@link POST_MERGE_STOP_TIMEOUT_MS}. */
+  stopTimeoutMs?: number;
 }
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 interface JobState {
   /** Another merge landed after the running job started: run once more when it ends. */
@@ -54,7 +61,12 @@ export function rebuildMainDemoStep(
   return {
     name: 'rebuild main demo',
     run: async ({ projectId, mainPath }) => {
-      if (!hasVerifiableBuildTarget(mainPath, approvedChecks(db, projectId))) return;
+      if (!(await hasVerifiableBuildTarget(mainPath, approvedChecks(db, projectId)))) return;
+      // Deliberately not under the main-workspace merge lock (factory/merge.ts): holding it would
+      // keep the next merge waiting for the whole build. A merge that lands meanwhile makes the
+      // target stale and queues the next rebuild; and since a merge first commits edits to tracked
+      // files in main ("snapshot workspace edits"), tracked files a build rewrites can end up in
+      // that snapshot commit, as with a person's Run Build & Verify on main.
       const res = await buildDemoTarget({ db, runs }, { id: projectId, path: mainPath }, 'main');
       log(
         res.ok
@@ -69,6 +81,7 @@ export class PostMergeJobs {
   private readonly steps: NamedPostMergeStep[];
   private readonly jobs = new Map<string, JobState>();
   private readonly log: (message: string, err?: unknown) => void;
+  private readonly stopTimeoutMs: number;
   private started = false;
   private stopped = false;
 
@@ -78,6 +91,7 @@ export class PostMergeJobs {
     options: PostMergeOptions = {},
   ) {
     this.log = options.log ?? (() => undefined);
+    this.stopTimeoutMs = options.stopTimeoutMs ?? POST_MERGE_STOP_TIMEOUT_MS;
     this.steps = [...(options.steps ?? [rebuildMainDemoStep(db, runs, this.log)])];
   }
 
@@ -93,11 +107,22 @@ export class PostMergeJobs {
     this.runs.on('note', this.onNote);
   }
 
-  /** Stops listening and waits for running jobs; pending ones are dropped. */
+  /**
+   * Stops listening and waits for running jobs, at most `stopTimeoutMs` (a build keeps running in
+   * the runner; its result is then not recorded if the database is gone). Pending ones are dropped.
+   */
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.started) this.runs.off('note', this.onNote);
-    await this.idle();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.idle(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, this.stopTimeoutMs);
+        timeout.unref();
+      }),
+    ]);
+    clearTimeout(timeout);
   }
 
   /** Queues a job for the project; returns at once. */
@@ -137,6 +162,9 @@ export class PostMergeJobs {
         state.pending = false;
         await this.runJob(projectId);
       } while (state.pending && !this.stopped);
+    } catch (error) {
+      // runJob catches each step; this is the project lookup (e.g. the database closed at shutdown).
+      this.log(`post-merge: job failed for project ${projectId}: ${messageOf(error)}`, error);
     } finally {
       this.jobs.delete(projectId);
     }
@@ -154,10 +182,7 @@ export class PostMergeJobs {
       try {
         await step.run(ctx);
       } catch (error) {
-        this.log(
-          `post-merge: ${step.name} failed for project ${projectId}: ${(error as Error)?.message ?? String(error)}`,
-          error,
-        );
+        this.log(`post-merge: ${step.name} failed for project ${projectId}: ${messageOf(error)}`, error);
       }
     }
   }

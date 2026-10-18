@@ -453,7 +453,7 @@ export async function computeProjectStatusSummary(params: {
   /** Build record, staleness (HEAD read from git's files: a few small reads) and build state. */
   const freshness = async (targetId: string, workspacePath: string, demoEntry: string | null) => {
     const demoBuild = demoBuilds[targetId] ?? null;
-    const head = await workspaceHeadSha(workspacePath);
+    const head = await workspaceHeadSha(workspacePath, project.path);
     return {
       demoBuild,
       demoStale: isDemoStale({ head, build: demoBuild, hasDemoEntry: Boolean(demoEntry) }),

@@ -540,7 +540,7 @@ describe('runs', () => {
         return t.runs.list().map((r) => r.id);
       };
       // HEAD is read from git's files, without spawning git.
-      expect(await worktreeHeadSha(stale.worktreePath)).toBe(
+      expect(await worktreeHeadSha(stale.worktreePath, project.path)).toBe(
         execFileSync('git', ['-C', stale.worktreePath, 'rev-parse', 'HEAD']).toString().trim(),
       );
       vi.useFakeTimers({ toFake: ['Date'] });

@@ -3502,7 +3502,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (!opts.cached) {
         return (await this.worktreeWorkReason(row.worktreePath, project, opts.branch))?.reason ?? null;
       }
-      const head = await worktreeHeadSha(row.worktreePath);
+      const head = await worktreeHeadSha(row.worktreePath, project.path);
       const last = this.keptWorktreeChecks.get(row.id);
       if (last && last.head === head && Date.now() - last.checkedAt < KEPT_WORKTREE_RECHECK_MS) {
         return last.reason;

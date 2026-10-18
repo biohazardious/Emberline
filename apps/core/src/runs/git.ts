@@ -214,7 +214,7 @@ async function readOpened({ handle, size }: OpenedFile, onChunk: (chunk: Buffer)
 }
 
 /** The whole content of a regular worktree file of at most `max` bytes (null when larger). */
-async function readWorktreeBytes(worktreePath: string, rel: string, max: number): Promise<Buffer | null> {
+export async function readWorktreeBytes(worktreePath: string, rel: string, max: number): Promise<Buffer | null> {
   const opened = await openWorktreeFile(worktreePath, rel);
   try {
     if (opened.size > max) return null;
@@ -897,49 +897,91 @@ export async function worktreeHasUnmergedCommits(worktreePath: string, defaultBr
   }
 }
 
-/** The commit `HEAD` of a git directory points at, read from git's files; null when it cannot be read. */
-async function headShaIn(dir: string): Promise<string | null> {
-  const head = (await readFile(path.join(dir, 'HEAD'), 'utf8')).trim();
-  if (!head.startsWith('ref: ')) return head || null;
-  const ref = head.slice('ref: '.length);
-  const common = path.resolve(
-    dir,
-    (await readFile(path.join(dir, 'commondir'), 'utf8').catch(() => '.')).trim(),
-  );
-  const loose = await readFile(path.join(common, ref), 'utf8').catch(() => null);
-  if (loose !== null) return loose.trim() || null;
-  const packed = await readFile(path.join(common, 'packed-refs'), 'utf8').catch(() => '');
-  const line = packed.split('\n').find((l) => l.endsWith(` ${ref}`));
-  return line?.split(' ')[0] ?? null;
+/** Caps for git's own files read from an agent-writable repository. */
+const GIT_SMALL_FILE_MAX = 4 * 1024;
+const PACKED_REFS_MAX = 1024 * 1024;
+const GIT_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const GIT_REF = /^refs\/[A-Za-z0-9._/-]+$/;
+
+/**
+ * A file of git's under `dir`, read through one verified descriptor (no link, FIFO or device, no
+ * symlinked parent; see {@link readWorktreeBytes}). Undefined when missing; null when refused,
+ * over `max` bytes or unreadable.
+ */
+async function readGitFile(dir: string, rel: string, max: number): Promise<string | null | undefined> {
+  try {
+    const buf = await readWorktreeBytes(dir, rel, max);
+    return buf ? buf.toString('utf8') : null;
+  } catch (error) {
+    return isMissing(error) && !(error instanceof UnsafePathError) ? undefined : null;
+  }
+}
+
+/** The commit HEAD in `gitDir` names, refs read from `commonDir`; null for anything unexpected. */
+async function headShaIn(gitDir: string, commonDir: string): Promise<string | null> {
+  const head = (await readGitFile(gitDir, 'HEAD', GIT_SMALL_FILE_MAX))?.trim();
+  if (!head) return null;
+  if (!head.startsWith('ref: ')) return GIT_SHA.test(head) ? head : null;
+  const ref = head.slice('ref: '.length).trim();
+  if (!GIT_REF.test(ref) || ref.split('/').includes('..')) return null;
+  const loose = await readGitFile(commonDir, ref, GIT_SMALL_FILE_MAX);
+  if (loose === null) return null;
+  if (loose !== undefined) {
+    const sha = loose.trim();
+    return GIT_SHA.test(sha) ? sha : null;
+  }
+  const packed = await readGitFile(commonDir, 'packed-refs', PACKED_REFS_MAX);
+  if (!packed) return null;
+  const sha = packed.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
+  return sha && GIT_SHA.test(sha) ? sha : null;
 }
 
 /**
- * The commit a linked worktree has checked out, read from git's files without spawning git (cheap
- * enough for a check every minute). Null when it cannot be read.
+ * The commit a workspace has checked out, read from git's files without spawning git: the
+ * project's main checkout (its `.git` directory) or, unless `linkedOnly`, also a linked worktree
+ * whose gitdir lies under `<project>/.git/worktrees/`. The repository is agent-writable, so every
+ * file goes through a verified, capped read and any other layout (a gitdir or commondir elsewhere,
+ * odd ref names or shas, links, FIFOs) gives null.
  */
-export async function worktreeHeadSha(worktreePath: string): Promise<string | null> {
+async function checkedOutSha(workspacePath: string, projectPath: string, linkedOnly: boolean): Promise<string | null> {
   try {
-    const dotGit = await readFile(path.join(worktreePath, '.git'), 'utf8');
-    const gitDir = /^gitdir: (.+)$/m.exec(dotGit)?.[1]?.trim();
-    if (!gitDir) return null;
-    return await headShaIn(path.resolve(worktreePath, gitDir));
+    const projectGit = path.join(await realpath(projectPath), '.git');
+    if ((await realpath(projectGit)) !== projectGit) return null;
+    const workspace = await realpath(workspacePath);
+    const dotGit = await lstat(path.join(workspace, '.git'));
+    if (dotGit.isDirectory()) {
+      if (linkedOnly || path.join(workspace, '.git') !== projectGit) return null;
+      return await headShaIn(projectGit, projectGit);
+    }
+    if (!dotGit.isFile()) return null;
+    const pointer = await readGitFile(workspace, '.git', GIT_SMALL_FILE_MAX);
+    const gitDirRel = pointer ? /^gitdir: (.+)$/m.exec(pointer)?.[1]?.trim() : undefined;
+    if (!gitDirRel) return null;
+    const gitDir = await realpath(path.resolve(workspace, gitDirRel));
+    if (!gitDir.startsWith(path.join(projectGit, 'worktrees') + path.sep)) return null;
+    const commonRel = (await readGitFile(gitDir, 'commondir', GIT_SMALL_FILE_MAX))?.trim();
+    if (!commonRel) return null;
+    if ((await realpath(path.resolve(gitDir, commonRel))) !== projectGit) return null;
+    return await headShaIn(gitDir, projectGit);
   } catch {
     return null;
   }
 }
 
 /**
- * Like {@link worktreeHeadSha}, for a main checkout (`.git` directory) as well as a linked
- * worktree: cheap enough for every status poll. Null outside a git repository.
+ * The commit a linked worktree of the project has checked out, read from git's files without
+ * spawning git (cheap enough for a check every minute). Null when it cannot be read safely.
  */
-export async function workspaceHeadSha(workspacePath: string): Promise<string | null> {
-  try {
-    const dotGit = path.join(workspacePath, '.git');
-    if ((await stat(dotGit)).isDirectory()) return await headShaIn(dotGit);
-    return await worktreeHeadSha(workspacePath);
-  } catch {
-    return null;
-  }
+export async function worktreeHeadSha(worktreePath: string, projectPath: string): Promise<string | null> {
+  return checkedOutSha(worktreePath, projectPath, true);
+}
+
+/**
+ * Like {@link worktreeHeadSha}, for the project's main checkout as well as a linked worktree:
+ * cheap enough for every status poll. Null outside a git repository or when unsafe to read.
+ */
+export async function workspaceHeadSha(workspacePath: string, projectPath: string): Promise<string | null> {
+  return checkedOutSha(workspacePath, projectPath, false);
 }
 
 export async function pruneWorktree(projectPath: string, worktreePath: string): Promise<boolean> {

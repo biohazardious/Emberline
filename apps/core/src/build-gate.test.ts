@@ -157,10 +157,10 @@ describe('approved worktree.yml checks', () => {
     expect(seen).toEqual(['sh -c pytest']);
   });
 
-  it('make a workspace without a detected target verifiable', () => {
-    expect(hasVerifiableBuildTarget(ws)).toBe(false);
-    expect(hasVerifiableBuildTarget(ws, {})).toBe(false);
-    expect(hasVerifiableBuildTarget(ws, { lint: 'true' })).toBe(true);
+  it('make a workspace without a detected target verifiable', async () => {
+    expect(await hasVerifiableBuildTarget(ws)).toBe(false);
+    expect(await hasVerifiableBuildTarget(ws, {})).toBe(false);
+    expect(await hasVerifiableBuildTarget(ws, { lint: 'true' })).toBe(true);
   });
 });
 

@@ -1,5 +1,5 @@
 /** Build/lint/test gate, demo asset serving and viewport snapshots; commands run in the runner. */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { type BrowserViewportSnapshot, type BuildDemoResponse, type WorktreeChecks } from '@emberline/protocol';
@@ -7,6 +7,7 @@ import { CommandFailedError, execCommand } from '../command-exec.js';
 import type { Db } from '../db/index.js';
 import { notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { readWorktreeBytes } from '../runs/git.js';
 import { approvedChecks, approvedSetup } from '../worktree-config/load.js';
 import { inlineCode, runWorktreeCommand, SETUP_TIMEOUT_MS, SETUP_TOTAL_MS } from '../worktree-config/lifecycle.js';
 import { buildStartCommit, recordDemoBuild } from './demo-builds.js';
@@ -158,13 +159,20 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   return [];
 }
 
-/** Whether the build gate has something to verify: approved worktree.yml checks, or a detected target. */
-export function hasVerifiableBuildTarget(workspacePath: string, checks?: WorktreeChecks | null): boolean {
+/** package.json files larger than this are not read for the build-target check. */
+const PACKAGE_JSON_MAX = 1024 * 1024;
+
+/**
+ * Whether the build gate has something to verify: approved worktree.yml checks, or a detected
+ * target. package.json is read through a verified, capped descriptor (the workspace is
+ * agent-writable: a FIFO or link there must not block or redirect core).
+ */
+export async function hasVerifiableBuildTarget(workspacePath: string, checks?: WorktreeChecks | null): Promise<boolean> {
   if (checks && (checks.build || checks.lint || checks.test)) return true;
-  const pkgPath = path.join(workspacePath, 'package.json');
-  if (existsSync(pkgPath)) {
+  const raw = await readWorktreeBytes(workspacePath, 'package.json', PACKAGE_JSON_MAX).catch(() => null);
+  if (raw) {
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
+      const pkg = JSON.parse(raw.toString('utf8')) as { scripts?: Record<string, string> };
       const hasValidTest =
         typeof pkg.scripts?.test === 'string' && !pkg.scripts.test.includes('no test specified');
       if (

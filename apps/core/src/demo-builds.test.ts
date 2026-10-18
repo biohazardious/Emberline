@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ProjectStatusSummary, WorkspaceDemoTarget } from '@emberline/protocol';
@@ -13,8 +13,8 @@ import {
   readDemoBuilds,
   recordDemoBuild,
 } from './factory/demo-builds.js';
-import { buildWorkspaceDemo } from './factory/demo.js';
-import { workspaceHeadSha } from './runs/git.js';
+import { buildWorkspaceDemo, hasVerifiableBuildTarget } from './factory/demo.js';
+import { workspaceHeadSha, worktreeHeadSha } from './runs/git.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const git = (cwd: string, ...args: string[]) =>
@@ -39,23 +39,107 @@ describe('workspace HEAD without spawning git', () => {
   it('reads a main checkout, a linked worktree, packed refs and a detached HEAD', async () => {
     const main = path.join(dir, 'main');
     const first = repo(main);
-    expect(await workspaceHeadSha(main)).toBe(first);
+    expect(await workspaceHeadSha(main, main)).toBe(first);
 
     const wt = path.join(dir, 'wt');
     git(main, 'worktree', 'add', '-q', '-b', 'run', wt);
     git(wt, 'commit', '-q', '--allow-empty', '-m', 'run work');
-    expect(await workspaceHeadSha(wt)).toBe(git(wt, 'rev-parse', 'HEAD'));
+    expect(await workspaceHeadSha(wt, main)).toBe(git(wt, 'rev-parse', 'HEAD'));
+    expect(await worktreeHeadSha(wt, main)).toBe(git(wt, 'rev-parse', 'HEAD'));
 
     git(main, 'pack-refs', '--all');
-    expect(await workspaceHeadSha(main)).toBe(first);
+    expect(await workspaceHeadSha(main, main)).toBe(first);
+    expect(await workspaceHeadSha(wt, main)).toBe(git(wt, 'rev-parse', 'HEAD'));
 
     git(main, 'checkout', '-q', '--detach', 'HEAD');
-    expect(await workspaceHeadSha(main)).toBe(first);
+    expect(await workspaceHeadSha(main, main)).toBe(first);
   });
 
   it('is null outside a git repository', async () => {
-    expect(await workspaceHeadSha(dir)).toBeNull();
-    expect(await workspaceHeadSha(path.join(dir, 'missing'))).toBeNull();
+    expect(await workspaceHeadSha(dir, dir)).toBeNull();
+    expect(await workspaceHeadSha(path.join(dir, 'missing'), dir)).toBeNull();
+  });
+
+  /** Resolves within `ms`, or fails: a read that blocks would hang every status poll. */
+  const quickly = <T>(p: Promise<T>, ms = 2_000) =>
+    Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('blocked')), ms))]);
+
+  it('is null, at once, for a FIFO as HEAD', async () => {
+    const main = path.join(dir, 'main');
+    repo(main);
+    unlinkSync(path.join(main, '.git', 'HEAD'));
+    execFileSync('mkfifo', [path.join(main, '.git', 'HEAD')]);
+    expect(await quickly(workspaceHeadSha(main, main))).toBeNull();
+  });
+
+  it('is null for a symlinked HEAD or ref, even when they point at valid content', async () => {
+    const main = path.join(dir, 'main');
+    const sha = repo(main);
+    const elsewhere = path.join(dir, 'elsewhere');
+    writeFileSync(elsewhere, `${sha}\n`);
+    const ref = path.join(main, '.git', 'refs', 'heads', 'main');
+    unlinkSync(ref);
+    symlinkSync(elsewhere, ref);
+    expect(await quickly(workspaceHeadSha(main, main))).toBeNull();
+
+    writeFileSync(path.join(dir, 'head-elsewhere'), `${sha}\n`);
+    unlinkSync(path.join(main, '.git', 'HEAD'));
+    symlinkSync(path.join(dir, 'head-elsewhere'), path.join(main, '.git', 'HEAD'));
+    expect(await quickly(workspaceHeadSha(main, main))).toBeNull();
+    unlinkSync(path.join(main, '.git', 'HEAD'));
+    symlinkSync('/dev/zero', path.join(main, '.git', 'HEAD'));
+    expect(await quickly(workspaceHeadSha(main, main))).toBeNull();
+  });
+
+  it("is null when a worktree's gitdir points outside the project's .git/worktrees", async () => {
+    const main = path.join(dir, 'main');
+    repo(main);
+    const wt = path.join(dir, 'wt');
+    git(main, 'worktree', 'add', '-q', '-b', 'run', wt);
+    const outside = path.join(dir, 'fake-gitdir');
+    cpSync(path.join(main, '.git', 'worktrees', 'wt'), outside, { recursive: true });
+    writeFileSync(path.join(wt, '.git'), `gitdir: ${outside}\n`);
+    expect(await quickly(workspaceHeadSha(wt, main))).toBeNull();
+    expect(await quickly(worktreeHeadSha(wt, main))).toBeNull();
+    // A worktree of another project is not this project's either.
+    const other = path.join(dir, 'other');
+    repo(other);
+    const otherWt = path.join(dir, 'other-wt');
+    git(other, 'worktree', 'add', '-q', '-b', 'run', otherWt);
+    expect(await workspaceHeadSha(otherWt, main)).toBeNull();
+  });
+
+  it("is null for a ref name or sha that does not look like git's", async () => {
+    const main = path.join(dir, 'main');
+    const sha = repo(main);
+    const head = path.join(main, '.git', 'HEAD');
+    writeFileSync(head, 'ref: refs/heads/../../../../etc/hostname\n');
+    expect(await workspaceHeadSha(main, main)).toBeNull();
+    writeFileSync(head, 'ref: HEAD\n');
+    expect(await workspaceHeadSha(main, main)).toBeNull();
+    writeFileSync(head, `${sha.slice(0, 39)}\n`);
+    expect(await workspaceHeadSha(main, main)).toBeNull();
+    writeFileSync(head, 'ref: refs/heads/main\n');
+    writeFileSync(path.join(main, '.git', 'refs', 'heads', 'main'), 'not-a-sha\n');
+    expect(await workspaceHeadSha(main, main)).toBeNull();
+    writeFileSync(path.join(main, '.git', 'refs', 'heads', 'main'), `${sha}\n`);
+    expect(await workspaceHeadSha(main, main)).toBe(sha);
+  });
+
+  it("reads main's package.json with a cap and never blocks on a FIFO in the build-target check", async () => {
+    const ws = path.join(dir, 'ws');
+    mkdirSync(ws);
+    writeFileSync(path.join(ws, 'package.json'), JSON.stringify({ scripts: { build: 'vite build' } }));
+    expect(await hasVerifiableBuildTarget(ws)).toBe(true);
+    unlinkSync(path.join(ws, 'package.json'));
+    execFileSync('mkfifo', [path.join(ws, 'package.json')]);
+    expect(await quickly(hasVerifiableBuildTarget(ws))).toBe(false);
+    unlinkSync(path.join(ws, 'package.json'));
+    writeFileSync(
+      path.join(ws, 'package.json'),
+      `{"scripts":{"build":"x"},"pad":"${'x'.repeat(1024 * 1024)}"}`,
+    );
+    expect(await hasVerifiableBuildTarget(ws)).toBe(false);
   });
 
   it('the commit recorded at build start is the HEAD git reports, null outside git', async () => {

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { projects, projectWorktreeConfig, runs } from './db/schema.js';
 import { readDemoBuilds } from './factory/demo-builds.js';
+import { isDemoBuildRunning } from './factory/demo.js';
 import { MERGE_NOTES, PostMergeJobs, type PostMergeContext } from './factory/post-merge.js';
 import type { RunService } from './runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -243,6 +244,68 @@ describe('post-merge jobs', () => {
     await jobs.idle();
     expect(readDemoBuilds(t.db, projectId).main).toMatchObject({ ok: false });
     expect(logs.some((l) => /failed/i.test(l))).toBe(true);
+  });
+
+  it('stop gives up waiting for a held step after stopTimeoutMs', async () => {
+    const gate = deferred();
+    let started = false;
+    jobs = new PostMergeJobs(t.db, fake as unknown as RunService, {
+      steps: [{ name: 'held', run: async () => ((started = true), gate.promise) }],
+      stopTimeoutMs: 50,
+    });
+    jobs.start();
+    jobs.enqueue(projectId);
+    await expect.poll(() => started).toBe(true);
+    const t0 = Date.now();
+    await jobs.stop();
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    gate.resolve();
+  });
+
+  it('a failing project lookup is logged; idle and stop never reject', async () => {
+    const brokenDb = {
+      select: () => {
+        throw new Error('database is closed');
+      },
+    } as unknown as typeof t.db;
+    jobs = new PostMergeJobs(brokenDb, fake as unknown as RunService, {
+      steps: [],
+      log: (m) => logs.push(m),
+    });
+    jobs.start();
+    fake.emit('note', runNote(projectId), 'merged_to_main', {});
+    await expect(jobs.idle()).resolves.toBeUndefined();
+    await expect(jobs.stop()).resolves.toBeUndefined();
+    expect(logs.some((l) => l.includes('database is closed'))).toBe(true);
+    expect(jobs.isRebuilding(projectId)).toBe(false);
+  });
+
+  it("a person's build of main waits for a running post-merge build of main", async () => {
+    const project = projectRow(projectId);
+    const log = path.join(project.path, 'build-log.txt');
+    writeFileSync(path.join(project.path, '.gitignore'), 'build-log.txt\nrelease\n');
+    approve(
+      project.id,
+      [
+        'version: 1',
+        'checks:',
+        `  build: "echo start >> build-log.txt; while [ ! -f release ]; do sleep 0.05; done; echo end >> build-log.txt"`,
+        '',
+      ].join('\n'),
+    );
+    jobs = new PostMergeJobs(t.db, fake as unknown as RunService, { log: (m) => logs.push(m) });
+    jobs.start();
+    jobs.enqueue(project.id);
+    await expect.poll(() => (existsSync(log) ? readFileSync(log, 'utf8') : '')).toBe('start\n');
+    expect(isDemoBuildRunning(project.path)).toBe(true);
+    const person = api('POST', `/api/projects/${project.id}/build-demo`, { targetId: 'main' });
+    await new Promise((r) => setTimeout(r, 400));
+    // Without the lock the person's build would have started next to the running one.
+    expect(readFileSync(log, 'utf8')).toBe('start\n');
+    writeFileSync(path.join(project.path, 'release'), '');
+    expect((await person).statusCode).toBe(200);
+    await jobs.idle();
+    expect(readFileSync(log, 'utf8')).toBe('start\nend\nstart\nend\n');
   });
 });
 

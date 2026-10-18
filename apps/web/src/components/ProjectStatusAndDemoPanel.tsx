@@ -154,7 +154,7 @@ function DemoFreshness({ target }: { target: WorkspaceDemoTarget }) {
   return (
     <span className="demo-freshness small">
       <span className={target.rebuilding ? 'demo-freshness-busy' : 'muted'}>{builtLine(target)}</span>
-      {badge && <span className="badge badge-warn">{badge}</span>}
+      {badge && <span className={target.demoBuild ? 'badge badge-warn' : 'badge badge-soft'}>{badge}</span>}
     </span>
   );
 }

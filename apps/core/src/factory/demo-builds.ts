@@ -10,7 +10,6 @@ import type { Db } from '../db/index.js';
 import { readProjectSettings, writeProjectSettings } from '../db/project-settings.js';
 import { runs } from '../db/schema.js';
 import { execGitFile } from '../git-exec.js';
-import { workspaceHeadSha } from '../runs/git.js';
 
 /** The project settings key: a map from target id ('main' or a run id) to its last build. */
 export const DEMO_BUILDS_KEY = 'demoBuilds';
@@ -66,17 +65,17 @@ export function isDemoStale(params: {
 }
 
 /**
- * The workspace HEAD a build starts from, as git reports it (in the runner); git's files are the
- * fallback. Null outside a git repository.
+ * The workspace HEAD a build starts from, as git reports it (in the runner). Null outside a git
+ * repository of its own, or when git does not answer with a commit id.
  */
 export async function buildStartCommit(workspacePath: string): Promise<string | null> {
   // Not a repository of its own: git would answer for an enclosing one.
   if (!existsSync(path.join(workspacePath, '.git'))) return null;
-  const viaGit = await execGitFile(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], {
+  const sha = await execGitFile(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], {
     cwd: workspacePath,
   }).then(
-    (res) => res.stdout.trim() || null,
-    () => null,
+    (res) => res.stdout.trim(),
+    () => '',
   );
-  return viaGit ?? (await workspaceHeadSha(workspacePath));
+  return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null;
 }
