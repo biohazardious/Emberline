@@ -152,7 +152,8 @@ export function StepRepo({
           onChange={(e) => dispatch({ type: 'field', field: 'defaultBranch', value: e.target.value })}
         />
         <p id="wizard-repo-branch-hint" className={branch ? 'form-error' : 'muted small'}>
-          {branch ?? 'Finished runs are merged into this branch.'}
+          {branch ??
+            'Finished runs are merged into the branch the clone checks out (the repository’s default branch); Emberline records it once the clone is done.'}
         </p>
       </div>
       {runnerDown && (

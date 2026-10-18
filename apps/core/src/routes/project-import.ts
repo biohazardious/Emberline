@@ -5,6 +5,7 @@ import {
   AdoptProjectBody,
   type AdoptProjectResponse,
   type ImportStatusResponse,
+  type Project,
   type ProjectDetectResponse,
   type WorkspaceFoldersResponse,
 } from '@emberline/protocol';
@@ -14,6 +15,7 @@ import { writeProjectSettings } from '../db/project-settings.js';
 import { projects, projectWorktreeConfig } from '../db/schema.js';
 import { notFound } from '../errors.js';
 import { detectProject } from '../factory/detect.js';
+import { mainWorkspaceBranch } from '../factory/merge.js';
 import { techStackFromChoices } from '../factory/project-plan.js';
 import { assertNotCloning, executeAdopt, importStatus, listWorkspaceFolders, planAdopt } from '../factory/project-import.js';
 import type { CoreDeps } from '../server.js';
@@ -31,9 +33,26 @@ export function registerProjectImportRoutes(app: FastifyInstance, { db, config, 
     return { folders: await listWorkspaceFolders(config.workspacesDir, paths) };
   });
 
+  /**
+   * A clone checks out the remote's default branch, which may not be the one the person typed:
+   * runs are merged into the checked-out branch, so the project records that one (as import_folder does).
+   */
+  const reconcileClonedBranch = async (project: Project): Promise<void> => {
+    if (!project.repoUrl) return;
+    const branch = await mainWorkspaceBranch(project.path);
+    if (branch && branch !== project.defaultBranch) {
+      db.update(projects).set({ defaultBranch: branch }).where(eq(projects.id, project.id)).run();
+    }
+  };
+
   app.get<{ Params: { id: string } }>(
     '/api/projects/:id/import-status',
-    async (request): Promise<ImportStatusResponse> => importStatus(ptyd, projectOr404(request.params.id)),
+    async (request): Promise<ImportStatusResponse> => {
+      const project = projectOr404(request.params.id);
+      const status = await importStatus(ptyd, project);
+      if (status.status === 'ready') await reconcileClonedBranch(project);
+      return status;
+    },
   );
 
   /** Reads the repository only: no install, no script, no build. */
@@ -57,6 +76,7 @@ export function registerProjectImportRoutes(app: FastifyInstance, { db, config, 
     const project = projectOr404(request.params.id);
     const body = AdoptProjectBody.parse(request.body ?? {});
     await assertNotCloning(ptyd, project.id);
+    await reconcileClonedBranch(project);
     const result = await executeAdopt(config.workspacesDir, project, body);
 
     const approvedAt = new Date();

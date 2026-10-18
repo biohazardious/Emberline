@@ -744,6 +744,15 @@ describe('GET /api/projects/:id/import-status', () => {
     expect(s.tail).toContain('Cloning');
   });
 
+  it("once cloned, the default branch is the clone's checked-out branch (runs merge into it)", async () => {
+    const source = fixture('source', STATIC_SITE, { branch: 'trunk' });
+    const { project } = await importUrl('Cloned Trunk', (dest) => ({ file: 'git', args: ['clone', '--progress', '--', source, dest] }));
+    expect(project.defaultBranch).toBe('main');
+    expect(readProjectSettings(t.db, project.id).importSource).toBe('url');
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('ready'), { timeout: 10_000 });
+    expect(t.db.select().from(projects).where(eq(projects.id, project.id)).get()?.defaultBranch).toBe('trunk');
+  });
+
   it('failed with the exit code and the tail when the clone fails', async () => {
     const { project } = await importUrl('Broken', (dest) => ({
       file: 'git',
