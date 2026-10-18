@@ -17,6 +17,8 @@ export const DiffFile = z.object({
   status: DiffFileStatus,
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
+  /** Content hash: sha1 of the worktree file, `deleted:<old blob id>` for a deleted file ('' if unreadable). */
+  hash: z.string(),
   staged: z.boolean(),
   unstaged: z.boolean(),
 });
@@ -120,17 +122,38 @@ export type PruneWorktreeResponse = z.infer<typeof PruneWorktreeResponse>;
 
 // --- persistent code review (Phase 4) ---------------------------------------
 
-export const ReviewCommentStatus = z.enum(['open', 'sent', 'resolved']);
+export const ReviewCommentStatus = z.enum(['open', 'sent', 'addressed', 'resolved']);
 export type ReviewCommentStatus = z.infer<typeof ReviewCommentStatus>;
+
+export const ReviewCommentIntent = z.enum(['fix', 'change', 'question', 'approve']);
+export type ReviewCommentIntent = z.infer<typeof ReviewCommentIntent>;
+
+export const ReviewCommentPriority = z.enum(['blocking', 'important', 'suggestion']);
+export type ReviewCommentPriority = z.infer<typeof ReviewCommentPriority>;
 
 export const ReviewComment = z.object({
   id: z.string(),
   runId: z.string(),
   filePath: z.string(),
-  line: z.number().int(),
+  /** Null for a file-level comment. */
+  line: z.number().int().nullable(),
   side: z.enum(['modified', 'original']),
   body: z.string(),
-  /** open: not sent yet · sent: included in a "request changes" prompt · resolved: done. */
+  intent: ReviewCommentIntent,
+  priority: ReviewCommentPriority,
+  /** The commented line's text at creation (trimmed, <= 500 chars); null for file-level comments. */
+  anchorText: z.string().nullable(),
+  /** The file's `hash` at creation. */
+  anchorHash: z.string().nullable(),
+  /** Incremented each time the comment is sent. */
+  round: z.number().int().nonnegative(),
+  verifiedAt: z.string().nullable(),
+  /** Run the comment was carried to when feedback went to a new run. */
+  carriedTo: z.string().nullable(),
+  /** Computed on read, never stored: where the anchor text is now (null when outdated or file-level). */
+  currentLine: z.number().int().nullable(),
+  outdated: z.boolean(),
+  /** open: not sent · sent: agent has it · addressed: agent's turn ended, awaiting verification · resolved: accepted. */
   status: ReviewCommentStatus,
   createdAt: z.string(),
   sentAt: z.string().nullable(),
@@ -154,9 +177,12 @@ export type RunReviewState = z.infer<typeof RunReviewState>;
 
 export const CreateReviewCommentBody = z.object({
   filePath: z.string().trim().min(1).max(1024),
-  line: z.number().int().min(1),
+  /** Omitted or null makes a file-level comment. */
+  line: z.number().int().min(1).nullish(),
   side: z.enum(['modified', 'original']).default('modified'),
   body: z.string().trim().min(1).max(10_000),
+  intent: ReviewCommentIntent.default('fix'),
+  priority: ReviewCommentPriority.default('important'),
 });
 export type CreateReviewCommentBody = z.input<typeof CreateReviewCommentBody>;
 
@@ -164,6 +190,8 @@ export const UpdateReviewCommentBody = z
   .object({
     body: z.string().trim().min(1).max(10_000),
     status: z.enum(['open', 'resolved']),
+    intent: ReviewCommentIntent,
+    priority: ReviewCommentPriority,
   })
   .partial();
 export type UpdateReviewCommentBody = z.input<typeof UpdateReviewCommentBody>;

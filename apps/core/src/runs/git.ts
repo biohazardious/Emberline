@@ -163,6 +163,85 @@ function statusFromCode(code: string): DiffFileStatus {
   return 'modified';
 }
 
+const HASH_CHUNK = 200;
+
+/** Old blob ids of deleted files from `git diff --raw --no-abbrev` output. */
+function deletedBlobs(rawOut: string): Map<string, string> {
+  const blobs = new Map<string, string>();
+  for (const line of rawOut.split('\n')) {
+    // :<old mode> <new mode> <old blob> <new blob> <status>\t<path>
+    const m = /^:\d+ \d+ ([0-9a-f]+) [0-9a-f]+ D\t(.+)$/.exec(line);
+    if (m) blobs.set(m[2]!, m[1]!);
+  }
+  return blobs;
+}
+
+/**
+ * Fills `DiffFile.hash`: `git hash-object` over the files present in the worktree (batched; core's
+ * exec path has no stdin, so paths go as arguments in chunks rather than via --stdin-paths), and
+ * `deleted:<old blob>` for deleted files. An unhashable file keeps '' (reads never fail the diff).
+ */
+async function assignHashes(worktreePath: string, files: DiffFile[], rawOut: string): Promise<void> {
+  const blobs = deletedBlobs(rawOut);
+  const present: DiffFile[] = [];
+  for (const f of files) {
+    const blob = f.status === 'deleted' ? blobs.get(f.path) : undefined;
+    if (blob) f.hash = `deleted:${blob}`;
+    else if (f.status !== 'deleted') present.push(f);
+  }
+  for (let i = 0; i < present.length; i += HASH_CHUNK) {
+    const chunk = present.slice(i, i + HASH_CHUNK);
+    const out = await gitRaw(worktreePath, ['hash-object', '--', ...chunk.map((f) => f.path)]).catch(() => null);
+    const ids = out?.split('\n').filter(Boolean);
+    if (ids && ids.length === chunk.length) {
+      chunk.forEach((f, n) => (f.hash = ids[n]!));
+      continue;
+    }
+    // One bad path (e.g. a submodule directory) must not blank the whole chunk.
+    for (const f of chunk) f.hash = (await gitRaw(worktreePath, ['hash-object', '--', f.path]).catch(() => '')).trim();
+  }
+}
+
+/** Largest file side read when re-anchoring review comments. */
+export const MAX_ANCHOR_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Text of one side of a file for re-anchoring (`modified` = worktree, `original` = base branch).
+ * Returns null when the side does not exist; throws when it is unreadable or over the 2 MB cap.
+ */
+export async function readReviewSide(
+  worktreePath: string,
+  baseBranch: string,
+  relPath: string,
+  side: 'modified' | 'original',
+): Promise<string | null> {
+  const { abs, rel } = resolveSafeWorktreePath(worktreePath, relPath);
+  if (side === 'modified') {
+    let info;
+    try {
+      info = await stat(abs);
+    } catch {
+      return null;
+    }
+    if (!info.isFile()) return null;
+    if (info.size > MAX_ANCHOR_BYTES) throw new Error(`${rel} is larger than ${MAX_ANCHOR_BYTES} bytes`);
+    const buf = await readFile(abs);
+    if (isBinaryBuffer(buf)) throw new Error(`${rel} is binary`);
+    return buf.toString('utf8');
+  }
+  const baseRef = await resolveBaseRef(worktreePath, baseBranch);
+  const exists = await gitRaw(worktreePath, ['cat-file', '-e', `${baseRef}:${rel}`]).then(() => true, () => false);
+  if (!exists) return null;
+  const { stdout } = await execGitFile(['-C', worktreePath, 'show', `${baseRef}:${rel}`], {
+    timeout: 15_000,
+    maxBuffer: MAX_ANCHOR_BYTES + 1024,
+    encoding: 'buffer',
+  });
+  if (stdout.length > MAX_ANCHOR_BYTES) throw new Error(`${rel} is larger than ${MAX_ANCHOR_BYTES} bytes`);
+  if (isBinaryBuffer(stdout)) throw new Error(`${rel} is binary`);
+  return stdout.toString('utf8');
+}
+
 /**
  * Returns the per-file diff summary for a run's worktree (`branch`, `unstaged`, or `staged`).
  */
@@ -203,9 +282,10 @@ export async function inspectDiff(
   const diffArgs =
     scope === 'staged' ? ['diff', '--cached'] : scope === 'unstaged' ? ['diff'] : ['diff', baseRef];
 
-  const [numstatOut, nameStatusOut] = await Promise.all([
+  const [numstatOut, nameStatusOut, rawOut] = await Promise.all([
     gitRaw(worktreePath, [...diffArgs, '--numstat']),
     gitRaw(worktreePath, [...diffArgs, '--name-status']),
+    gitRaw(worktreePath, [...diffArgs, '--raw', '--no-abbrev']).catch(() => ''),
   ]);
 
   const statusByPath = new Map<string, { status: DiffFileStatus; oldPath: string | null }>();
@@ -238,6 +318,7 @@ export async function inspectDiff(
       status: ns?.status ?? 'modified',
       additions,
       deletions,
+      hash: '',
       staged: porc ? porc.indexStatus !== ' ' && porc.indexStatus !== '?' : false,
       unstaged: porc ? porc.worktreeStatus !== ' ' : false,
     });
@@ -264,6 +345,7 @@ export async function inspectDiff(
           status: 'untracked',
           additions,
           deletions: 0,
+          hash: '',
           staged: false,
           unstaged: true,
         });
@@ -272,6 +354,7 @@ export async function inspectDiff(
   }
 
   const files = [...filesByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+  await assignHashes(worktreePath, files, rawOut);
   let totalAdditions = 0;
   let totalDeletions = 0;
   for (const f of files) {

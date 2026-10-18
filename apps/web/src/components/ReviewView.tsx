@@ -106,7 +106,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   const annotations = useMemo<DiffAnnotation[]>(
     () =>
       (reviewQuery.data?.comments ?? [])
-        .filter((c) => c.status !== 'resolved')
+        .flatMap((c) => (c.status !== 'resolved' && c.line !== null ? [{ ...c, line: c.currentLine ?? c.line }] : []))
         .map((c) => ({
           id: c.id,
           filePath: c.filePath,

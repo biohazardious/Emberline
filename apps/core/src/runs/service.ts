@@ -83,6 +83,7 @@ import {
   git,
   inspectDiff,
   inspectFileDiff,
+  readReviewSide,
   listBuildOutputs,
   listWorktreeArtifacts,
   prepareWorkspace,
@@ -1458,6 +1459,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async fileDiff(id: string, relPath: string, scope: DiffScope = 'branch'): Promise<RunFileDiff> {
     const row = this.row(id);
     return inspectFileDiff(row.worktreePath, this.defaultBranch(row.projectId), scope, relPath);
+  }
+
+  /** One side of a file (worktree or base branch) for re-anchoring review comments; null when absent, throws when unreadable or over 2 MB. */
+  async reviewSide(id: string, relPath: string, side: 'modified' | 'original'): Promise<string | null> {
+    const row = this.row(id);
+    return readReviewSide(row.worktreePath, this.defaultBranch(row.projectId), relPath, side);
   }
 
   async stage(id: string, body: GitStageBody): Promise<RunDiffSummary> {

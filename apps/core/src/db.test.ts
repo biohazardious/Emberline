@@ -148,4 +148,32 @@ describe('openDb', () => {
     openDb(file).close();
     expect(backups()).toHaveLength(1);
   });
+
+  it('0022: review comments keep their rows, gain typed defaults and accept file-level (null line) comments', () => {
+    const file = path.join(dir, 'emberline.db');
+    createOutdatedDb(file);
+    const old = new Database(file);
+    old.pragma('foreign_keys = OFF');
+    old.exec(`insert into projects (id, name, slug, path, created_at) values ('p', 'P', 'p', '/p', 0)`);
+    const cols = (old.prepare(`pragma table_info(runs)`).all() as { name: string; notnull: number; dflt_value: unknown }[])
+      .filter((c) => c.notnull && c.dflt_value === null && c.name !== 'id')
+      .map((c) => c.name);
+    old.prepare(`insert into runs (id, ${cols.join(', ')}) values ('r', ${cols.map((c) => (/_at$/.test(c) ? '0' : "'x'")).join(', ')})`).run();
+    old.exec(
+      `insert into review_comments (id, run_id, file_path, line, side, body, status, created_at) values ('c1', 'r', 'a.ts', 4, 'modified', 'old', 'sent', 5)`,
+    );
+    old.close();
+
+    const db = openDb(file);
+    const row = db.db.all(sql.raw(`select * from review_comments where id = 'c1'`))[0] as Record<string, unknown>;
+    expect(row).toMatchObject({
+      line: 4, body: 'old', status: 'sent', created_at: 5,
+      intent: 'fix', priority: 'important', round: 0, anchor_text: null, anchor_hash: null, verified_at: null, carried_to: null,
+    });
+    db.db.run(
+      sql.raw(`insert into review_comments (id, run_id, file_path, line, side, body, created_at) values ('c2', 'r', 'a.ts', null, 'modified', 'file', 6)`),
+    );
+    expect(db.db.all(sql.raw(`select line from review_comments where id = 'c2'`))).toEqual([{ line: null }]);
+    db.close();
+  });
 });

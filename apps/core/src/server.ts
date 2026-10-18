@@ -105,7 +105,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
-  registerReviewRoutes(app, new ReviewService(deps.db, deps.runs));
+  registerReviewRoutes(app, new ReviewService(deps.db, deps.runs, (message, err) => app.log.warn({ err }, message)));
   registerTicketRoutes(app, deps.tickets);
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);

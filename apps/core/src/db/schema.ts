@@ -240,12 +240,26 @@ export const reviewComments = sqliteTable(
       .notNull()
       .references(() => runs.id, { onDelete: 'cascade' }),
     filePath: text('file_path').notNull(),
-    line: integer('line').notNull(),
+    /** Null for a file-level comment. */
+    line: integer('line'),
     /** `modified` (new code) or `original` (removed code). */
     side: text('side').notNull(),
     body: text('body').notNull(),
-    /** open -> sent (included in a "request changes" prompt) -> resolved. */
+    /** open -> sent (in a "request changes" prompt) -> addressed (agent's turn ended) -> resolved. */
     status: text('status').notNull().default('open'),
+    /** fix | change | question | approve */
+    intent: text('intent').notNull().default('fix'),
+    /** blocking | important | suggestion */
+    priority: text('priority').notNull().default('important'),
+    /** The commented line's text at creation (trimmed, <= 500); null for file-level comments. */
+    anchorText: text('anchor_text'),
+    /** The file's content hash at creation. */
+    anchorHash: text('anchor_hash'),
+    /** Incremented each time the comment is sent. */
+    round: integer('round').notNull().default(0),
+    verifiedAt: integer('verified_at', { mode: 'timestamp_ms' }),
+    /** Run the comment was carried to by a "new run" send. */
+    carriedTo: text('carried_to'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     sentAt: integer('sent_at', { mode: 'timestamp_ms' }),
     resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
