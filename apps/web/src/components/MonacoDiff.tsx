@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReviewComment } from '@emberline/protocol';
 import { useThemeMode } from '../hooks/useThemeMode';
+import { glyphHoverText } from '../reviewComments';
 import { loadMonaco, monacoTheme } from '../monaco';
 import type * as Monaco from 'monaco-editor';
 
@@ -175,7 +176,8 @@ export function MonacoDiff({
                   range: { startLineNumber: c.currentLine, startColumn: 1, endLineNumber: c.currentLine, endColumn: 1 },
                   options: {
                     glyphMarginClassName: `comment-glyph comment-glyph-${c.priority}`,
-                    glyphMarginHoverMessage: { value: `${c.priority}: ${c.body.slice(0, 160)}` },
+                    // Plain text: the body is escaped, and neither HTML nor commands are allowed.
+                    glyphMarginHoverMessage: { value: glyphHoverText(c), isTrusted: false, supportHtml: false },
                   },
                 },
               ]

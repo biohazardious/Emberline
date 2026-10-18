@@ -11,7 +11,7 @@ import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import { blockingMessage, reviewBlockedCount } from '../reviewComments';
+import { blockingMessage, reviewBlockedCount, worktreeMissing } from '../reviewComments';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { IssueImportDialog } from '../components/IssueImportDialog';
 import { issueHref } from '../issueImport';
@@ -131,6 +131,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string>();
   // A drag to Done the merge gate refused: the ticket stays put until the person overrides or cancels.
   const [blockedDrop, setBlockedDrop] = useState<{ ticket: Ticket; target: DropTarget; count: number }>();
+  // A drag to Done whose run worktree is gone with work that is not in main: moved only if the person says so.
+  const [missingDrop, setMissingDrop] = useState<{ ticket: Ticket; target: DropTarget }>();
 
   /** Newest run per ticket (runs arrive newest-first). */
   const latestRun = useMemo(() => {
@@ -150,7 +152,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
     return grouped;
   }, [tickets]);
 
-  const move = async (ticket: Ticket, target: DropTarget, force = false) => {
+  /** `force` merges past open blocking feedback; `skipMerge` moves to Done without a merge. */
+  const move = async (ticket: Ticket, target: DropTarget, { force = false, skipMerge = false } = {}) => {
     const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
@@ -159,6 +162,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
     const dropAction = target.status === 'in_progress' ? dropIntoInProgress(ticket, { autoStart, hasLiveRun }) : 'move';
     setError(undefined);
     setBlockedDrop(undefined);
+    setMissingDrop(undefined);
 
     // A blocked ticket stays where it is: its drawer opens asking "Start anyway". Moving it first would
     // leave it in In progress without a run when the drawer is closed.
@@ -170,7 +174,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
 
     // Accepting a ticket brings its run's branch into the main workspace first; a conflict keeps the
     // ticket where it is so nothing is marked done that is not actually in main.
-    if (target.status === 'done' && ticket.status !== 'done' && currentRun?.branch) {
+    if (target.status === 'done' && ticket.status !== 'done' && currentRun?.branch && !skipMerge) {
       try {
         const sync = await api<SyncWorktreeResponse>(`/api/projects/${ticket.projectId}/sync-worktree`, 'POST', {
           runId: currentRun.id,
@@ -186,6 +190,10 @@ export function BoardPage({ projectId }: { projectId: string }) {
         const blocking = reviewBlockedCount(e);
         if (blocking !== null) {
           setBlockedDrop({ ticket, target, count: blocking });
+          return;
+        }
+        if (worktreeMissing(e)) {
+          setMissingDrop({ ticket, target });
           return;
         }
         setError(`Not merged: ${errorMessage(e)}`);
@@ -325,11 +333,29 @@ export function BoardPage({ projectId }: { projectId: string }) {
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => void move(blockedDrop.ticket, blockedDrop.target, true)}
+            onClick={() => void move(blockedDrop.ticket, blockedDrop.target, { force: true })}
           >
             Merge anyway
           </button>
           <button type="button" className="btn btn-sm btn-ghost" onClick={() => setBlockedDrop(undefined)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {missingDrop && (
+        <div className="banner banner-warn board-blocked-drop" role="alert">
+          <span>
+            The worktree of {missingDrop.ticket.key}&apos;s run is gone and its work isn&apos;t in main. Nothing was
+            merged.
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={() => void move(missingDrop.ticket, missingDrop.target, { skipMerge: true })}
+          >
+            Move to Done without merging
+          </button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setMissingDrop(undefined)}>
             Cancel
           </button>
         </div>

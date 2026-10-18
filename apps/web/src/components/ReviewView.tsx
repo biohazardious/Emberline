@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   CrossCriticResult,
+  ReviewComment,
   DiffFile,
   DiffScope,
   GitCommitResponse,
@@ -30,10 +31,13 @@ import type {
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import {
-  blockingCount,
+  blockingBanner,
   blockingMessage,
+  carriedMessage,
+  commentsOffDiff,
   fileCommentCounts,
   requestableComments,
+  requestTargets,
   viewedState,
 } from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
@@ -114,7 +118,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   });
   const refreshReview = () => queryClient.invalidateQueries({ queryKey: reviewKey });
   const comments = useMemo(() => reviewQuery.data?.comments ?? [], [reviewQuery.data]);
-  const blocking = blockingCount(comments);
+  // The merge gate's own count (core, chain-aware), not a count of what this page shows.
+  const blocking = blockingBanner(reviewQuery.data);
   const requestable = requestableComments(comments);
   const [, navigate] = useLocation();
   const [draft, setDraft] = useState<{ line: number; side: 'modified' | 'original' } | 'file' | null>(null);
@@ -290,6 +295,76 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     void reviewCall(api(`/api/runs/${run.id}/review/comments/${id}`, 'PATCH', { status }));
   const handleDeleteComment = (id: string) =>
     void reviewCall(api(`/api/runs/${run.id}/review/comments/${id}`, 'DELETE'));
+  const handleVerifyCarried = () => void reviewCall(api(`/api/runs/${run.id}/review/verify-carried`, 'POST'));
+
+  const chip = (c: ReviewComment) => (
+    <CommentChip
+      key={c.id}
+      comment={c}
+      focused={c.id === focusedId}
+      busy={commentBusy}
+      onDelete={handleDeleteComment}
+      onResolve={(id) => patchComment(id, 'resolved')}
+      onVerify={(id) => patchComment(id, 'resolved')}
+      onNotDone={(id) => patchComment(id, 'open')}
+    />
+  );
+
+  // Branch-scope comments whose file left the diff (or every one when the worktree is gone) stay
+  // reachable here; an open blocking one would otherwise hold the merge gate with no way to resolve it.
+  const offDiff = useMemo(() => {
+    if (!summary) return [];
+    if (!summary.isGitRepo) return commentsOffDiff(comments, []);
+    return scope === 'branch' ? commentsOffDiff(comments, summary.files.map((f) => f.path)) : [];
+  }, [comments, summary, scope]);
+  const offDiffSection =
+    offDiff.length > 0 ? (
+      <section className="review-off-diff" aria-labelledby="review-off-diff-title">
+        <h3 id="review-off-diff-title" className="eyebrow">
+          Comments on files no longer in the diff ({offDiff.length})
+        </h3>
+        {offDiff.map((c, i) => (
+          <div key={c.id} className="review-off-diff-item">
+            {(i === 0 || offDiff[i - 1]?.filePath !== c.filePath) && (
+              <span className="mono review-off-diff-path" title={c.filePath}>
+                {c.filePath}
+              </span>
+            )}
+            {chip(c)}
+          </div>
+        ))}
+      </section>
+    ) : null;
+  const blockingBanners = (
+    <>
+      {blocking.comments > 0 && (
+        <div className="banner banner-warn review-blocking-banner" role="alert">
+          {blockingMessage(blocking.comments)}. The merge gate stays closed until they are resolved.
+        </div>
+      )}
+      {blocking.carried && (
+        <div className="banner banner-warn review-blocking-banner" role="alert">
+          <span>
+            {carriedMessage(blocking.carried.count)}
+            {blocking.carried.fromRun && (
+              <>
+                {' '}
+                (
+                <Link href={`/runs/${blocking.carried.fromRun}/review`} className="mono">
+                  {blocking.carried.fromRun.slice(0, 8)}
+                </Link>
+                )
+              </>
+            )}
+            .
+          </span>{' '}
+          <button type="button" className="btn btn-sm btn-primary" disabled={commentBusy} onClick={handleVerifyCarried}>
+            Verified
+          </button>
+        </div>
+      )}
+    </>
+  );
 
   // Clicking a glyph in the margin scrolls to and focuses its chip.
   useEffect(() => {
@@ -1025,13 +1100,17 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       )}
 
       {subTab === 'diff' && summary && !summary.isGitRepo ? (
-        <div className="review-split-pane">
-          <div className="muted small" style={{ padding: '1rem' }}>
-            This workspace is not a git repository, so the agent's changes cannot be listed, reviewed,
-            committed or merged. Run <code>git init</code> in the project&apos;s shell (or create the
-            project with a repository URL) to enable review.
+        <>
+          {blockingBanners}
+          {offDiffSection}
+          <div className="review-split-pane">
+            <div className="muted small" style={{ padding: '1rem' }}>
+              This workspace is not a git repository, so the agent's changes cannot be listed, reviewed,
+              committed or merged. Run <code>git init</code> in the project&apos;s shell (or create the
+              project with a repository URL) to enable review.
+            </div>
           </div>
-        </div>
+        </>
       ) : subTab === 'diff' ? (
         <>
           {/* Commit & Push bar + Inline Review Dispatch */}
@@ -1077,11 +1156,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               </button>
             </div>
           </div>
-          {blocking > 0 && (
-            <div className="banner banner-warn review-blocking-banner" role="status">
-              {blockingMessage(blocking)}. The merge gate stays closed until they are resolved.
-            </div>
-          )}
+          {blockingBanners}
+          {offDiffSection}
 
           <div className="review-split-pane">
             {/* Left file tree */}
@@ -1195,22 +1271,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       onCancel={() => setDraft(null)}
                     />
                   )}
-                  {fileChips.length > 0 && (
-                    <div className="diff-file-annotations">
-                      {fileChips.map((c) => (
-                        <CommentChip
-                          key={c.id}
-                          comment={c}
-                          focused={c.id === focusedId}
-                          busy={commentBusy}
-                          onDelete={handleDeleteComment}
-                          onResolve={(id) => patchComment(id, 'resolved')}
-                          onVerify={(id) => patchComment(id, 'resolved')}
-                          onNotDone={(id) => patchComment(id, 'open')}
-                        />
-                      ))}
-                    </div>
-                  )}
+                  {fileChips.length > 0 && <div className="diff-file-annotations">{fileChips.map(chip)}</div>}
                   {fileDiff.binary ? (
                     <div className="empty review-empty">
                       Binary file (`{fileDiff.path}`) — comment on the file above, or switch to the Artifacts tab to
@@ -1336,6 +1397,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       {requestOpen && (
         <RequestChangesDialog
           comments={requestable}
+          targets={requestTargets(run)}
           onSend={handleRequestChanges}
           onClose={() => setRequestOpen(false)}
         />

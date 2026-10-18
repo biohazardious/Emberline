@@ -1,6 +1,6 @@
 import type { ReviewCommentIntent, ReviewCommentPriority } from '@emberline/protocol';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { INTENT_OPTIONS, PRIORITY_OPTIONS } from '../../reviewComments';
+import { composerEscape, INTENT_OPTIONS, PRIORITY_OPTIONS } from '../../reviewComments';
 
 export interface CommentDraft {
   body: string;
@@ -54,6 +54,8 @@ export function CommentComposer({ target, busy, onSubmit, onCancel }: Props) {
   const [body, setBody] = useState('');
   const [intent, setIntent] = useState<ReviewCommentIntent>('fix');
   const [priority, setPriority] = useState<ReviewCommentPriority>('important');
+  // Escape on a written draft asks first instead of dropping it.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const canSubmit = body.trim().length > 0 && !busy;
 
@@ -66,15 +68,27 @@ export function CommentComposer({ target, busy, onSubmit, onCancel }: Props) {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       submit();
-    } else if (e.key === 'Escape') {
-      onCancel();
     }
+  };
+  const keepDraft = () => {
+    setConfirmDiscard(false);
+    areaRef.current?.focus();
+  };
+  // Anywhere in the composer: an empty one closes; a written draft asks, and Escape again keeps it.
+  const onFormKeyDown = (e: KeyboardEvent<HTMLFormElement>) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (confirmDiscard) keepDraft();
+    else if (composerEscape(body) === 'cancel') onCancel();
+    else setConfirmDiscard(true);
   };
 
   return (
     <form
       className="comment-composer"
       aria-label={`Comment on ${target}`}
+      onKeyDown={onFormKeyDown}
       onSubmit={(e) => {
         e.preventDefault();
         submit();
@@ -92,6 +106,17 @@ export function CommentComposer({ target, busy, onSubmit, onCancel }: Props) {
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={onKeyDown}
       />
+      {confirmDiscard && (
+        <div className="comment-composer-discard" role="alert">
+          <span className="small">Discard draft?</span>
+          <button type="button" className="btn btn-sm" onClick={onCancel}>
+            Discard
+          </button>
+          <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={keepDraft}>
+            Keep
+          </button>
+        </div>
+      )}
       <div className="comment-composer-controls">
         <Segmented label="Intent" value={intent} options={INTENT_OPTIONS} onChange={setIntent} />
         <Segmented label="Priority" value={priority} options={PRIORITY_OPTIONS} onChange={setPriority} />

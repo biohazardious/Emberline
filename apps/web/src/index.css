@@ -4281,9 +4281,45 @@ dialog.cmd-dialog::backdrop {
   gap: 8px;
 }
 
+.review-blocking-banner > span,
 .board-blocked-drop > span,
 .panel-blocked-sync > span {
   flex: 1 1 220px;
+}
+
+.review-off-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-elev);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.review-off-diff h3 {
+  margin: 0 0 2px;
+}
+
+.review-off-diff-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.review-off-diff-path {
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.comment-composer-discard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .comment-composer {

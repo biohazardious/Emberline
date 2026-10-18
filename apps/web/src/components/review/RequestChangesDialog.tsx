@@ -1,7 +1,8 @@
 import type { ReviewComment } from '@emberline/protocol';
 import { X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiRequestError, errorMessage } from '../../api';
+import { trapTab } from '../../focusTrap';
 import { requestSummary } from '../../reviewComments';
 
 type Target = 'same' | 'new';
@@ -9,21 +10,33 @@ type Target = 'same' | 'new';
 interface Props {
   /** The comments this send would carry (open plus addressed). */
   comments: ReviewComment[];
+  /** Where it can send (`new` only for a ticket run). */
+  targets: Target[];
   /** Resolves when the send worked; a rejection keeps the dialog open with the message. */
   onSend: (note: string, target: Target) => Promise<void>;
   onClose: () => void;
 }
 
-export function RequestChangesDialog({ comments, onSend, onClose }: Props) {
+export function RequestChangesDialog({ comments, targets, onSend, onClose }: Props) {
   const [note, setNote] = useState('');
   const [target, setTarget] = useState<Target>('same');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [canStartNew, setCanStartNew] = useState(false);
+  const dialogRef = useRef<HTMLElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus starts in the note and stays in the dialog; it goes back where it was on close.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    noteRef.current?.focus();
+    return () => opener?.focus();
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
+      else trapTab(dialogRef.current, e);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -47,6 +60,7 @@ export function RequestChangesDialog({ comments, onSend, onClose }: Props) {
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside
+        ref={dialogRef}
         className="drawer request-dialog"
         role="dialog"
         aria-modal="true"
@@ -67,6 +81,7 @@ export function RequestChangesDialog({ comments, onSend, onClose }: Props) {
         <label className="request-dialog-field">
           <span className="muted small">Note for the agent (optional)</span>
           <textarea
+            ref={noteRef}
             className="input"
             rows={4}
             maxLength={20_000}
@@ -79,10 +94,12 @@ export function RequestChangesDialog({ comments, onSend, onClose }: Props) {
           <label>
             <input type="radio" name="target" checked={target === 'same'} onChange={() => setTarget('same')} /> This run
           </label>
-          <label>
-            <input type="radio" name="target" checked={target === 'new'} onChange={() => setTarget('new')} /> New run
-            from main
-          </label>
+          {targets.includes('new') && (
+            <label>
+              <input type="radio" name="target" checked={target === 'new'} onChange={() => setTarget('new')} /> New run
+              from main
+            </label>
+          )}
           {target === 'new' && (
             <p className="muted small">
               The new run starts from main, so the earlier attempt is not in its worktree. These comments are carried

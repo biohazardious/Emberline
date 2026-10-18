@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
-import { blockingMessage, reviewBlockedCount } from '../reviewComments';
+import { blockingMessage, reviewBlockedCount, worktreeMissing } from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { useApi } from '../hooks/useApi';
 import { startableCount } from '../ticketDeps';
@@ -168,6 +168,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [startingPipeline, setStartingPipeline] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
   const [blockedSync, setBlockedSync] = useState<{ runId: string; count: number }>();
+  // The run's worktree is gone and its work is not in main: its ticket may still move to Done unmerged.
+  const [missingSync, setMissingSync] = useState<{ ticketId: string }>();
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -450,6 +452,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     setSyncingRunId(runId);
     setBanner(undefined);
     setBlockedSync(undefined);
+    setMissingSync(undefined);
     try {
       const res = await api<SyncWorktreeResponse>(
         `/api/projects/${project.id}/sync-worktree`,
@@ -462,10 +465,24 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       setBanner({ kind: res.ok ? 'ok' : 'err', text: res.summary });
     } catch (e) {
       const blocking = reviewBlockedCount(e);
+      const missing = worktreeMissing(e);
       if (blocking !== null) setBlockedSync({ runId, count: blocking });
+      else if (missing?.ticketId) setMissingSync({ ticketId: missing.ticketId });
       else setBanner({ kind: 'err', text: errorMessage(e) });
     } finally {
       setSyncingRunId(undefined);
+    }
+  };
+
+  /** Moves the ticket of a run whose worktree is gone to Done; nothing is merged. */
+  const handleMoveToDoneUnmerged = async (ticketId: string) => {
+    setMissingSync(undefined);
+    try {
+      await api(`/api/tickets/${ticketId}`, 'PATCH', { status: 'done' });
+      await statusPoll.refresh();
+      setBanner({ kind: 'ok', text: 'Moved to Done without merging.' });
+    } catch (e) {
+      setBanner({ kind: 'err', text: errorMessage(e) });
     }
   };
 
@@ -791,6 +808,22 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             Merge anyway
           </button>
           <button type="button" className="btn btn-sm btn-ghost" onClick={() => setBlockedSync(undefined)}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {missingSync && (
+        <div className="banner banner-warn panel-blocked-sync" role="alert">
+          <span>The run&apos;s worktree is gone and its work isn&apos;t in main. Nothing was merged.</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={() => void handleMoveToDoneUnmerged(missingSync.ticketId)}
+          >
+            Move to Done without merging
+          </button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setMissingSync(undefined)}>
             Cancel
           </button>
         </div>

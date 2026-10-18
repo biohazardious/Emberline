@@ -1,4 +1,4 @@
-import type { ReviewComment, ReviewCommentPriority } from '@emberline/protocol';
+import type { ReviewComment, ReviewCommentPriority, Run, RunReviewState } from '@emberline/protocol';
 import { ApiRequestError } from './api';
 
 export const PRIORITY_ORDER: readonly ReviewCommentPriority[] = ['blocking', 'important', 'suggestion'];
@@ -68,9 +68,34 @@ export function commentActions(c: Pick<ReviewComment, 'status'>): CommentAction[
   }
 }
 
-/** Unresolved blocking comments, outdated ones included (the same rule core's merge gate uses). */
-export function blockingCount(comments: readonly ReviewComment[]): number {
-  return comments.filter((c) => c.priority === 'blocking' && c.status !== 'resolved').length;
+/**
+ * What the blocking banners show, from core's own count (`blockingOpen`, chain-aware): the blocking
+ * comments, and apart from them what a new run carried from the previous attempt.
+ */
+export function blockingBanner(
+  state: Pick<RunReviewState, 'blockingOpen' | 'carriedBlocking'> | undefined,
+): { comments: number; carried: RunReviewState['carriedBlocking'] } {
+  if (!state) return { comments: 0, carried: null };
+  const carried = state.carriedBlocking;
+  return { comments: Math.max(0, state.blockingOpen - (carried?.count ?? 0)), carried };
+}
+
+export function carriedMessage(count: number): string {
+  return count === 1
+    ? "This run carries 1 blocking item from the previous attempt — check it's done"
+    : `This run carries ${count} blocking items from the previous attempt — check they're done`;
+}
+
+/**
+ * Unresolved comments whose file is not in the diff any more (it was reverted, or the worktree is
+ * gone), by file: they are listed apart so they can still be resolved. None until the diff loaded.
+ */
+export function commentsOffDiff(comments: readonly ReviewComment[], diffPaths: readonly string[] | null): ReviewComment[] {
+  if (diffPaths === null) return [];
+  const inDiff = new Set(diffPaths);
+  return comments
+    .filter((c) => c.status !== 'resolved' && !inDiff.has(c.filePath))
+    .sort((a, b) => a.filePath.localeCompare(b.filePath) || (a.line ?? 0) - (b.line ?? 0));
 }
 
 export function fileCommentCounts(
@@ -96,8 +121,12 @@ export function requestSummary(comments: readonly ReviewComment[]): string {
 
 export type ViewedState = 'unviewed' | 'viewed' | 'changed';
 
+/** A content hash as DiffFile.hash has it; older marks stored `status:adds:dels` instead. */
+const HASH_SIGNATURE = /^(?:(?:link:|deleted:)?[0-9a-f]{40,64}|unhashed:.*)$/;
+
 export function viewedState(storedSignature: string | undefined, hash: string): ViewedState {
-  if (storedSignature === undefined) return 'unviewed';
+  // A mark from before content hashes says nothing about the content: look again.
+  if (storedSignature === undefined || !HASH_SIGNATURE.test(storedSignature)) return 'unviewed';
   return storedSignature === hash ? 'viewed' : 'changed';
 }
 
@@ -111,4 +140,30 @@ export function reviewBlockedCount(error: unknown): number | null {
 
 export function blockingMessage(count: number): string {
   return `${count} blocking comment${count === 1 ? ' is' : 's are'} open`;
+}
+
+/** The run's ticket when `error` is sync-worktree's 409 for a run whose worktree is gone, else null. */
+export function worktreeMissing(error: unknown): { ticketId: string | null } | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status !== 409 || error.code !== 'worktree_missing') return null;
+  return { ticketId: typeof error.data.ticketId === 'string' ? error.data.ticketId : null };
+}
+
+/** Markdown characters a hover would render; escaped so a comment body shows as typed. */
+const MARKDOWN_SPECIAL = /[\\`*_{}[\]()#+\-.!|<>~&]/g;
+
+/** The glyph's hover text: priority and the start of the body, as plain text (Markdown escaped). */
+export function glyphHoverText(c: Pick<ReviewComment, 'priority' | 'body'>): string {
+  const body = c.body.replace(/\s+/g, ' ').trim().slice(0, 160);
+  return `${c.priority}: ${body.replace(MARKDOWN_SPECIAL, '\\$&')}`;
+}
+
+/** Escape in the comment composer: an empty one closes, a written draft is never dropped silently. */
+export function composerEscape(body: string): 'cancel' | 'confirm' {
+  return body.trim() === '' ? 'cancel' : 'confirm';
+}
+
+/** Where Request changes can send: a new run from main needs the run's ticket. */
+export function requestTargets(run: Pick<Run, 'ticketId'>): ('same' | 'new')[] {
+  return run.ticketId ? ['same', 'new'] : ['same'];
 }
