@@ -71,7 +71,7 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
 import { execGitFile } from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { writeProjectSettings } from '../db/project-settings.js';
+import { readImportSource, writeProjectSettings } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import {
   getRunnerBrowserState,
@@ -172,7 +172,12 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   };
 
   app.get('/api/projects', async (): Promise<Project[]> =>
-    db.select().from(projects).orderBy(asc(projects.createdAt)).all().map(toProject),
+    db
+      .select()
+      .from(projects)
+      .orderBy(asc(projects.createdAt))
+      .all()
+      .map((row) => ({ ...toProject(row), importSource: readImportSource(db, row.id) })),
   );
 
   app.get('/api/projects/active', async (): Promise<ActiveProjectPreference> => {
@@ -270,15 +275,18 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
             approvedBy: 'wizard',
           })
           .run();
-        if (Object.keys(plan.gates).length > 0) {
-          tx.insert(projectSettings).values({ projectId: row.id, settings: { gates: plan.gates } }).run();
-        }
+        tx.insert(projectSettings)
+          .values({
+            projectId: row.id,
+            settings: { importSource: 'new', ...(Object.keys(plan.gates).length > 0 ? { gates: plan.gates } : {}) },
+          })
+          .run();
       });
     } catch (err) {
       await rm(projectPath, { recursive: true, force: true }).catch(() => undefined);
       throw err;
     }
-    const project = toProject(row);
+    const project: Project = { ...toProject(row), importSource: 'new' };
     saveActiveProjectId(project.id);
 
     reply.code(201);
@@ -355,8 +363,12 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       techStack: null,
       createdAt: new Date(),
     };
-    db.insert(projects).values(row).run();
-    const project = toProject(row);
+    db.transaction((tx) => {
+      tx.insert(projects).values(row).run();
+      // The folder is the user's own repository: removing the project keeps it (see the delete route).
+      tx.insert(projectSettings).values({ projectId: row.id, settings: { importSource: 'folder' } }).run();
+    });
+    const project: Project = { ...toProject(row), importSource: 'folder' };
     saveActiveProjectId(project.id);
     reply.code(201);
     return { project, terminalId: null };
@@ -442,8 +454,12 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       techStack: body.techStack ?? null,
       createdAt: new Date(),
     };
-    db.insert(projects).values(row).run();
-    const project = toProject(row);
+    const importSource = body.repoUrl ? 'url' : 'new';
+    db.transaction((tx) => {
+      tx.insert(projects).values(row).run();
+      tx.insert(projectSettings).values({ projectId: id, settings: { importSource } }).run();
+    });
+    const project: Project = { ...toProject(row), importSource };
 
     saveActiveProjectId(project.id);
 
@@ -1206,7 +1222,10 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
       await rm(worktreeSlugDir, { recursive: true, force: true }).catch(() => {});
 
-      const shouldDeleteFiles = request.query.deleteFiles !== '0';
+      // A folder registered in place is the user's own repository: only an explicit request deletes it.
+      const flag = request.query.deleteFiles;
+      const shouldDeleteFiles =
+        readImportSource(db, projectId) === 'folder' ? flag === '1' || flag === 'true' : flag !== '0' && flag !== 'false';
       const resolvedWorkspace = path.resolve(row.path);
       const resolvedRoot = path.resolve(config.workspacesDir);
       if (

@@ -214,6 +214,38 @@ describe('create source import_folder', () => {
     expect(execs.every((e) => e.file === 'git')).toBe(true);
   });
 
+  it("records where the project came from, and removing a folder import keeps the user's repository", async () => {
+    const dir = fixture('shop', PNPM_APP);
+    const project = await imported('shop');
+    expect(readProjectSettings(t.db, project.id).importSource).toBe('folder');
+    const listed = (await api('GET', '/api/projects')).json() as Array<{ id: string; importSource?: string | null }>;
+    expect(listed.find((p) => p.id === project.id)?.importSource).toBe('folder');
+
+    const del = await t.app.inject({ method: 'DELETE', url: `/api/projects/${project.id}`, headers });
+    expect(del.statusCode, del.body).toBe(200);
+    expect(existsSync(path.join(dir, 'package.json'))).toBe(true);
+    expect(existsSync(path.join(dir, '.git'))).toBe(true);
+    expect(t.db.select().from(projects).all()).toEqual([]);
+
+    // Only an explicit deleteFiles deletes the folder.
+    const again = await imported('shop');
+    const purge = await t.app.inject({ method: 'DELETE', url: `/api/projects/${again.id}?deleteFiles=1`, headers });
+    expect(purge.statusCode).toBe(200);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('a project Emberline created is "new" and its folder goes by default', async () => {
+    const res = await api('POST', '/api/projects', { name: 'Fresh', source: 'new', appType: 'static_site', presetId: 'static-plain', vision: 'A page.', startFactory: false });
+    expect(res.statusCode, res.body).toBe(201);
+    const { project } = res.json() as CreateProjectResponse;
+    expect(readProjectSettings(t.db, project.id).importSource).toBe('new');
+    expect((await t.app.inject({ method: 'DELETE', url: `/api/projects/${project.id}`, headers })).statusCode).toBe(200);
+    expect(existsSync(project.path)).toBe(false);
+
+    const legacy = await api('POST', '/api/projects', { name: 'Legacy Blank', initGit: false });
+    expect(readProjectSettings(t.db, (legacy.json() as CreateProjectResponse).project.id).importSource).toBe('new');
+  });
+
   it('409 when the folder is already a project', async () => {
     fixture('shop', PNPM_APP);
     await imported('shop');

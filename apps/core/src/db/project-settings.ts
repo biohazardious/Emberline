@@ -1,4 +1,4 @@
-import { IssueSyncSettings } from '@emberline/protocol';
+import { IssueSyncSettings, ProjectImportSource } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from './index.js';
 import { projectSettings } from './schema.js';
@@ -32,4 +32,10 @@ export function readIssueSync(db: Db, projectId: string): IssueSyncSettings {
 
 export function writeIssueSync(db: Db, projectId: string, value: IssueSyncSettings): void {
   writeProjectSettings(db, projectId, { issueSync: value });
+}
+
+/** Where the project's folder came from; null for projects created before it was recorded. */
+export function readImportSource(db: Db, projectId: string): ProjectImportSource | null {
+  const parsed = ProjectImportSource.safeParse(readProjectSettings(db, projectId).importSource);
+  return parsed.success ? parsed.data : null;
 }

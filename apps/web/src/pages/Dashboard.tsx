@@ -21,6 +21,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectAdvisorPanel } from '../components/ProjectAdvisorPanel';
+import { ProjectDeleteConfirm } from '../components/ProjectDeleteConfirm';
 import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
@@ -70,6 +71,7 @@ export function Dashboard({
   const [cleanupNotice, setCleanupNotice] = useState<string>();
   const [pruneBlocked, setPruneBlocked] = useState<{ id: string; message: string }>();
   const [runFormFor, setRunFormFor] = useState<string>();
+  const [deleteConfirmFor, setDeleteConfirmFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
   const [runFormPrompt, setRunFormPrompt] = useState<string>('');
   const [blueprintFor, setBlueprintFor] = useState<Project>();
@@ -471,25 +473,11 @@ export function Dashboard({
                         type="button"
                         className="btn btn-sm btn-ghost"
                         style={{ color: 'var(--danger)' }}
-                        title="Delete project, stop runs, and remove its workspace directory"
-                        onClick={async () => {
-                          if (
-                            !window.confirm(
-                              `Delete project "${p.name}" (${p.slug}) and remove its workspace directory (${p.path})?\n\nIts archived build outputs are deleted too, pinned ones included.`,
-                            )
-                          ) {
-                            return;
-                          }
-                          const res = await api<{
-                            ok: boolean;
-                            deletedProjectId: string;
-                            nextActiveProjectId: string | null;
-                          }>(`/api/projects/${p.id}`, 'DELETE');
-                          await projects.refresh();
-                          onSelectProject?.(res.nextActiveProjectId);
-                        }}
+                        title="Remove the project from Emberline, keeping or deleting its files"
+                        aria-expanded={deleteConfirmFor === p.id}
+                        onClick={() => setDeleteConfirmFor(deleteConfirmFor === p.id ? undefined : p.id)}
                       >
-                        <Trash className="icon" aria-hidden /> Delete
+                        <Trash className="icon" aria-hidden /> Remove
                       </button>
                       <button
                         id={`start-run-${p.slug}`}
@@ -505,6 +493,17 @@ export function Dashboard({
                         Start run
                       </button>
                     </div>
+                    {deleteConfirmFor === p.id && (
+                      <ProjectDeleteConfirm
+                        project={p}
+                        onCancel={() => setDeleteConfirmFor(undefined)}
+                        onDeleted={async (res) => {
+                          setDeleteConfirmFor(undefined);
+                          await projects.refresh();
+                          onSelectProject?.(res.nextActiveProjectId);
+                        }}
+                      />
+                    )}
                     {runFormFor === p.id && (
                       <StartRunForm
                         key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}

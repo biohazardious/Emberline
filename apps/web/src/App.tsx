@@ -38,6 +38,7 @@ import { AuthGate, useAuth } from './auth';
 import { BrandLogo } from './components/BrandLogo';
 import { CommandPalette } from './components/CommandPalette';
 import { PersonaBadge } from './components/PersonaBadge';
+import { ProjectDeleteConfirm, type ProjectDeleted } from './components/ProjectDeleteConfirm';
 import { ProjectWizard } from './components/wizard/WizardShell';
 import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
 import { ProviderMark } from './components/ProviderMark';
@@ -327,23 +328,12 @@ function Shell() {
     }
   };
 
-  const handleDeleteActiveProject = async () => {
-    if (!activeProject) return;
-    const confirmed = window.confirm(
-      `Delete project "${activeProject.name}" (${activeProject.slug})?\n\nThis will stop all runs, remove its tickets & worktrees, and delete the workspace folder (${activeProject.path}). Its archived build outputs are deleted too, pinned ones included.`,
-    );
-    if (!confirmed) return;
-    try {
-      const res = await api<{ ok: boolean; deletedProjectId: string; nextActiveProjectId: string | null }>(
-        `/api/projects/${activeProject.id}`,
-        'DELETE',
-      );
-      await projects.refresh();
-      handleSwitchProject(res.nextActiveProjectId ?? '');
-      if (!res.nextActiveProjectId) navigate('/');
-    } catch (e) {
-      toastError(`Could not delete the project: ${errorMessage(e)}`);
-    }
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const handleProjectDeleted = async (res: ProjectDeleted) => {
+    setDeleteConfirmOpen(false);
+    await projects.refresh();
+    handleSwitchProject(res.nextActiveProjectId ?? '');
+    if (!res.nextActiveProjectId) navigate('/');
   };
 
   return (
@@ -404,8 +394,9 @@ function Shell() {
                       type="button"
                       className="btn btn-sm btn-ghost"
                       style={{ padding: '2px 5px', fontSize: '0.72rem', color: 'var(--danger)' }}
-                      onClick={() => void handleDeleteActiveProject()}
-                      title={`Delete project ${activeProject.name} and its workspace files`}
+                      aria-expanded={deleteConfirmOpen}
+                      onClick={() => setDeleteConfirmOpen((v) => !v)}
+                      title={`Remove project ${activeProject.name}`}
                     >
                       <Trash className="icon" aria-hidden />
                     </button>
@@ -439,6 +430,14 @@ function Shell() {
               ))}
               <option value="__new__">+ Create New Project…</option>
             </select>
+            {activeProject && deleteConfirmOpen && (
+              <ProjectDeleteConfirm
+                key={activeProject.id}
+                project={activeProject}
+                onCancel={() => setDeleteConfirmOpen(false)}
+                onDeleted={handleProjectDeleted}
+              />
+            )}
           </div>
         )}
 

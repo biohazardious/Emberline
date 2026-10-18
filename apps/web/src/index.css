@@ -1473,6 +1473,17 @@ a {
   align-items: center;
 }
 
+.project-delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.project-delete-confirm p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .list {
   list-style: none;
   margin: 0;

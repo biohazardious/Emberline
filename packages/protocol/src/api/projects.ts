@@ -48,6 +48,14 @@ const RepoUrl = z
   .max(2048)
   .regex(/^(https?:\/\/|ssh:\/\/|git@)[^\s]+$/, 'must be an https://, ssh:// or git@ URL');
 
+/**
+ * Where a project's folder came from: Emberline created it (`new`), cloned it (`url`), or
+ * registered the user's existing folder in place (`folder`). Removing a `folder` project keeps
+ * its files unless the delete asks for them explicitly.
+ */
+export const ProjectImportSource = z.enum(['folder', 'url', 'new']);
+export type ProjectImportSource = z.infer<typeof ProjectImportSource>;
+
 export const Project = z.object({
   id: z.string(),
   name: z.string(),
@@ -59,6 +67,8 @@ export const Project = z.object({
   description: z.string(),
   techStack: ProjectTechStack.nullable(),
   createdAt: z.string(),
+  /** Unknown (null or absent) for projects created before it was recorded. */
+  importSource: ProjectImportSource.nullable().optional(),
 });
 export type Project = z.infer<typeof Project>;
 
