@@ -3968,6 +3968,214 @@ dialog.cmd-dialog::backdrop {
   }
 }
 
+/* --- Docker page (/docker) --------------------------------------------------- */
+
+.docker-page {
+  overflow-y: auto;
+}
+
+.docker-engine-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.docker-engine-line,
+.docker-engine p,
+.docker-alert p,
+.docker-owner,
+.docker-group-hint,
+.docker-confirm p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.docker-engine-line {
+  font-weight: 600;
+}
+
+.docker-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.docker-output {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.docker-disk {
+  width: 100%;
+  max-width: 520px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.docker-disk th,
+.docker-disk td {
+  text-align: left;
+  padding: 5px 10px 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.docker-disk thead th {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.docker-disk tbody th {
+  font-weight: 500;
+}
+
+.docker-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.docker-empty p {
+  margin: 0;
+  max-width: 56ch;
+}
+
+.docker-empty code {
+  overflow-wrap: anywhere;
+}
+
+.docker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.docker-projects,
+.docker-containers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.docker-projects {
+  gap: 8px;
+}
+
+.docker-project {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.docker-project-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.docker-project-name {
+  overflow-wrap: anywhere;
+}
+
+.docker-containers {
+  gap: 4px;
+}
+
+.docker-container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.docker-container-service {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.docker-image {
+  overflow-wrap: anywhere;
+}
+
+.docker-port {
+  font-size: 0.78rem;
+}
+
+.docker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.docker-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in hsl, var(--warn) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.82rem;
+}
+
+.docker-confirm-warning {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.docker-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.docker-logs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.docker-logs-service {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.docker-logs-service .input {
+  max-width: 200px;
+}
+
 .copy-fallback {
   display: flex;
   flex-wrap: wrap;

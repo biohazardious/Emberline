@@ -14,6 +14,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   ChevronsLeft,
   ChevronsRight,
+  Container,
   Eraser,
   FileCode,
   Globe,
@@ -74,6 +75,7 @@ const ProjectSettingsPage = lazy(() =>
   import('./pages/ProjectSettingsPage').then((m) => ({ default: m.ProjectSettingsPage })),
 );
 const InboxPage = lazy(() => import('./pages/InboxPage').then((m) => ({ default: m.InboxPage })));
+const DockerPage = lazy(() => import('./pages/DockerPage').then((m) => ({ default: m.DockerPage })));
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
@@ -554,6 +556,19 @@ function Shell() {
               </span>
             )}
           </Link>
+          {system.data?.docker?.enabled && (
+            <Link
+              id="nav-docker"
+              href="/docker"
+              className={`nav-item${location === '/docker' ? ' active' : ''}`}
+              title="Docker: Emberline's compose projects in the Docker engine"
+            >
+              <span className="nav-icon mono">
+                <Container className="icon" aria-hidden />
+              </span>
+              <span className="nav-label">Docker</span>
+            </Link>
+          )}
           <Link
             id="nav-settings"
             href="/settings"
@@ -969,6 +984,11 @@ function Shell() {
                     onOpenRun={(id) => setInspectRunId(id)}
                     onDismiss={attention.dismiss}
                   />
+                </Suspense>
+              </Route>
+              <Route path="/docker">
+                <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                  <DockerPage />
                 </Suspense>
               </Route>
               <Route path="/fleet">
