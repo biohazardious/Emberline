@@ -6,7 +6,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Added
 
-- Rebuilt project wizard: a dialog on desktop and a full-screen flow on phones. Pick a type (including static sites), then choose frontend, backend, database, auth and deploy independently, each with None, Let the agent decide or Other. The summary shows the exact `PROJECT.md`, `CLAUDE.md` and `.emberline/worktree.yml` that will be written. A Bootstrap ticket builds the skeleton, a Deploy ticket is added when you choose a target, and you finish with **Create and start factory** or **Create only**.
+- Rebuilt project wizard: a dialog on desktop and a full-screen flow on phones. Pick a type (including static sites), then choose frontend, backend, database, auth and deploy independently, each with None, Let the agent decide or Other. The summary shows the exact `PROJECT.md`, `CLAUDE.md` and `.emberline/worktree.yml` that will be written. A Bootstrap ticket builds the skeleton, a Deploy ticket is added when you choose a target, and you finish with **Create and start** (the factory starts at once) or **Create project**.
 - Import a project from a Git URL or from a folder in the workspaces volume. Detection reads files only and runs nothing. Adopt writes only the files you tick, makes one local commit and pushes nothing.
 - `.emberline/worktree.yml`: copy or symlink files into each run worktree, `setup` and `teardown` commands, `services` for Preview and `checks` for the build gate. Runs always use the approved version. A changed or removed file shows "worktree.yml changed — review" on the Board and on Project settings until you approve it.
 - Per-project gate overrides on the new Project settings page (Inherit / On / Off).
