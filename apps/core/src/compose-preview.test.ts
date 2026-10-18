@@ -80,6 +80,9 @@ class FakeEngine {
   cancels: string[] = [];
   ignoreCancels = 0;
   curlArgs: string[][] = [];
+  /** While set, `down` waits for it; `heldDowns` counts the ones waiting. */
+  downGate: Promise<void> | null = null;
+  heldDowns = 0;
 
   readonly cancel = async (execId: string): Promise<boolean> => {
     this.cancels.push(execId);
@@ -144,6 +147,10 @@ class FakeEngine {
     }
     if (verb === 'logs') return ok('web-1  | \u001b[31mnginx: [emerg] bind failed\u001b[0m\n');
     if (verb === 'down') {
+      if (this.downGate) {
+        this.heldDowns += 1;
+        await this.downGate;
+      }
       this.projects.delete(project);
       for (const [port, owner] of this.published) if (owner === project) this.published.delete(port);
       return ok();
@@ -515,7 +522,52 @@ describe('compose previews (worktree.yml v2)', () => {
       await waitStatus(run, 'running');
       await t.runs.stop(run.id).catch(() => undefined);
       expect((await api('DELETE', `/api/runs/${run.id}`)).statusCode).toBeLessThan(300);
-      expect(engine.composeCalls('down').map((c) => c.args[2])).toEqual([previewComposeProjectName(run.id)]);
+      expect(engine.composeCalls('down').map((c) => c.args)).toEqual([
+        ['compose', '-p', previewComposeProjectName(run.id), 'down', '-v', '--remove-orphans'],
+      ]);
+      // Nothing per run is left behind in the service.
+      expect((t.runs as unknown as { previewGenerations: Map<string, number> }).previewGenerations.has(run.id)).toBe(false);
+    });
+
+    it('while a stop waits for the start to settle, the status still reads starting', async () => {
+      await start('tcp://docker:2376');
+      engine.upGate = new Promise(() => undefined);
+      engine.ignoreCancels = 10;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      const stopping = api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await preview(run)).toMatchObject({ status: 'starting', error: null });
+      expect((await stopping).json()).toMatchObject({ status: 'stopped' });
+    });
+
+    it('the late down of a start the stop gave up on holds the run lock: a newer start waits for it', async () => {
+      await start('tcp://docker:2376');
+      let openUp!: () => void;
+      engine.upGate = new Promise((resolve) => (openUp = resolve));
+      engine.ignoreCancels = 10;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      let openDown!: () => void;
+      engine.downGate = new Promise((resolve) => (openDown = resolve));
+      engine.upGate = null;
+      // The given-up `up` finishes late; its settle-time `down` is still going...
+      openUp();
+      await expect.poll(() => engine.heldDowns).toBe(1);
+      // ...when a new start comes in. It must not start its containers before that down ended.
+      const second = startPreview(run);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(engine.composeCalls('config')).toHaveLength(1);
+      engine.downGate = null;
+      openDown();
+      expect((await second).statusCode).toBe(200);
+      await waitStatus(run, 'running');
+      expect(engine.projects.has(previewComposeProjectName(run.id))).toBe(true);
     });
   });
 

@@ -167,6 +167,8 @@ export const ProjectPreviewResponse = z.object({
     }),
   ),
   gates: ProjectGateOverrides,
+  /** Notes for the summary, e.g. that the Docker engine would preview the container. */
+  notes: z.array(z.string()),
 });
 export type ProjectPreviewResponse = z.infer<typeof ProjectPreviewResponse>;
 

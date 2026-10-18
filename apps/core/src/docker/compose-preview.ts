@@ -8,6 +8,7 @@ import {
   COMPOSE_OVERRIDE_ENV,
   composeDownArgs,
   composeLogsArgs,
+  composeLsArgs,
   composeOutputTail,
   composeOverrideYaml,
   composePsArgs,
@@ -15,9 +16,12 @@ import {
   composeServicesArgs,
   composeShell,
   composeUpArgs,
+  imagePruneArgs,
   isPortConflict,
+  parseComposeLs,
   parseComposePs,
   parseComposeServices,
+  reclaimArgs,
 } from './compose.js';
 
 export interface ComposePreviewTiming {
@@ -149,6 +153,33 @@ export async function composeDown(
 ): Promise<{ ok: boolean; output: string }> {
   const down = await run(composeDownArgs(project, opts), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
   return { ok: down.ok, output: down.output };
+}
+
+/** Every compose project in the engine (`compose ls -a`); null when compose could not answer. */
+export async function composeProjects(env: Record<string, string>): Promise<string[] | null> {
+  const ls = await run(composeLsArgs(), NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
+  return ls.ok ? parseComposeLs(ls.result!.stdout) : null;
+}
+
+/** `image prune -f --filter until=72h`. Never throws. */
+export async function pruneImages(env: Record<string, string>): Promise<{ ok: boolean; output: string }> {
+  const prune = await run(imagePruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
+  return { ok: prune.ok, output: prune.output };
+}
+
+/**
+ * Gives the files under `dir` back to the runner user through a throwaway container in the engine
+ * (see {@link reclaimArgs}). Never throws.
+ */
+export async function reclaimFiles(dir: string, env: Record<string, string>): Promise<{ ok: boolean; output: string }> {
+  let args: string[];
+  try {
+    args = reclaimArgs(dir);
+  } catch (error) {
+    return { ok: false, output: (error as Error).message };
+  }
+  const reclaim = await run(args, NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
+  return { ok: reclaim.ok, output: reclaim.output };
 }
 
 async function composeLogsTail(target: ComposePreviewTarget): Promise<string | null> {

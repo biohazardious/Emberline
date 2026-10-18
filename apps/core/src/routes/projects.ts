@@ -208,9 +208,15 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   /** Slugs a wizard create is writing right now. */
   const creating = new Set<string>();
 
+  /** Whether the Docker engine answers (bounded wait right after boot): the wizard previews compose then. */
+  const dockerEngine = async (): Promise<boolean> => {
+    await runs.docker.ready();
+    return runs.docker.status.available;
+  };
+
   /** What creating a new project would write and create. No side effects. */
   app.post('/api/projects/preview', async (request): Promise<ProjectPreviewResponse> => {
-    const plan = planNewProject(ProjectPreviewBody.parse(request.body));
+    const plan = planNewProject(ProjectPreviewBody.parse(request.body), { dockerEngine: await dockerEngine() });
     return {
       projectMd: plan.projectMd,
       claudeMd: plan.claudeMd,
@@ -218,6 +224,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       starterFiles: Object.keys(plan.starter).sort(),
       tickets: plannedTickets(plan),
       gates: plan.gates,
+      notes: plan.notes,
     };
   });
 
@@ -228,7 +235,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     reply: FastifyReply,
     log: FastifyBaseLogger,
   ): Promise<CreateProjectResponse> {
-    const plan = planNewProject(body);
+    const plan = planNewProject(body, { dockerEngine: await dockerEngine() });
     const projectPath = path.join(config.workspacesDir, slug);
     if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
       throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
@@ -1236,7 +1243,8 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
 
       // Never pull the worktrees out from under a teardown that still runs: they go once it ended.
       const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
-      const removeWorktrees = () => rm(worktreeSlugDir, { recursive: true, force: true }).catch(() => {});
+      // Files the Docker engine's containers left may need handing back first (runs.removeTree).
+      const removeWorktrees = () => runs.removeTree(worktreeSlugDir);
       if (teardown.finished) await removeWorktrees();
       else void teardown.settled.then(removeWorktrees);
 
@@ -1251,7 +1259,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         resolvedWorkspace.startsWith(resolvedRoot + path.sep) &&
         resolvedWorkspace !== resolvedRoot
       ) {
-        await rm(resolvedWorkspace, { recursive: true, force: true }).catch(() => {});
+        await runs.removeTree(resolvedWorkspace);
       }
 
       // Archived build outputs go with the project (rows and files).

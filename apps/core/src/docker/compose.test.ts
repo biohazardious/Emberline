@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isEmberlineComposeProject,
+  parseComposeLs,
+  reclaimArgs,
   answeredHttp,
   COMPOSE_LOGS_MAX_CHARS,
   COMPOSE_OVERRIDE_ENV,
@@ -120,5 +123,26 @@ describe('parsing compose output', () => {
     expect(engineHostName('tcp://docker:2376')).toBe('docker');
     expect(engineHostName('tcp://10.0.0.5:2376')).toBe('10.0.0.5');
     expect(engineHostName('garbage')).toBe('docker');
+  });
+});
+
+describe('cleanup builders', () => {
+  it('only the names Emberline makes count as its compose projects', () => {
+    for (const name of ['emberline-deadbeef', 'emberline-0a1b2c3d-preview', 'emberline-main-12345678']) expect(isEmberlineComposeProject(name), name).toBe(true);
+    for (const name of ['emberline', 'emberline-verify-docker', 'emberline-e2e', 'emberline-DEADBEEF', 'emberline-deadbeef-extra', 'emberline-deadbeef0', 'shop', 'x-emberline-deadbeef']) {
+      expect(isEmberlineComposeProject(name), name).toBe(false);
+    }
+  });
+
+  it('reads project names from `compose ls --format json`', () => {
+    expect(parseComposeLs('[{"Name":"emberline-deadbeef","Status":"exited(1)","ConfigFiles":"/w/compose.yaml"},{"Name":3},{}]\n')).toEqual(['emberline-deadbeef']);
+    expect(parseComposeLs('')).toEqual([]);
+    expect(parseComposeLs('not json')).toEqual([]);
+  });
+
+  it('the reclaim container mounts only an absolute path without commas', () => {
+    expect(reclaimArgs('/workspaces/.worktrees/shop/deadbeef')).toContain('type=bind,source=/workspaces/.worktrees/shop/deadbeef,target=/w');
+    expect(() => reclaimArgs('/workspaces/a,b')).toThrow();
+    expect(() => reclaimArgs('relative')).toThrow();
   });
 });

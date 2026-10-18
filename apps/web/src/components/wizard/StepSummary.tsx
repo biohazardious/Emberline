@@ -407,6 +407,11 @@ export function StepSummary({
             , committed as the first commit on <span className="mono">{state.defaultBranch.trim()}</span>. The
             worktree.yml counts as approved.
           </p>
+          {data.data.notes.map((note) => (
+            <p key={note} className="notice-box">
+              {note}
+            </p>
+          ))}
         </section>
       )}
 

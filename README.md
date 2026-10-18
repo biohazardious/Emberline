@@ -79,14 +79,18 @@ make down
 
 Set these in `.env` (read by `compose.yaml`):
 
-| Variable                        | Default        | Purpose                                                                                                                                                                                                                           |
-| ------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EMBERLINE_BIND`                | `127.0.0.1`    | Host interface the web UI binds to. `0.0.0.0` exposes it to your network; see [Security](#security).                                                                                                                              |
-| `EMBERLINE_PORT`                | `7420`         | Host port.                                                                                                                                                                                                                        |
-| `TZ`                            | `UTC`          | Your IANA time zone (for example `Europe/Berlin`). CLIs print reset times as wall-clock times ("resets 2pm"), and the scheduler reads them in this zone.                                                                          |
-| `EMBERLINE_WORKSPACES_HOST_DIR` | `./workspaces` | Host directory that holds the project workspaces.                                                                                                                                                                                 |
-| `EMBERLINE_ALLOWED_HOSTS`       | unset          | Comma-separated host names you open Emberline by, such as `emberline.example.com` or `truenas.local` (through a reverse proxy, say). IP addresses and `localhost` always work; other names get HTTP 421. `*` turns the check off. |
-| `EMBERLINE_METRICS_TOKEN`       | unset          | Enables `GET /metrics` for scrapers sending `Authorization: Bearer <token>`.                                                                                                                                                      |
+| Variable                         | Default        | Purpose                                                                                                                                                                                                                           |
+| -------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMBERLINE_BIND`                 | `127.0.0.1`    | Host interface the web UI binds to. `0.0.0.0` exposes it to your network; see [Security](#security).                                                                                                                              |
+| `EMBERLINE_PORT`                 | `7420`         | Host port.                                                                                                                                                                                                                        |
+| `TZ`                             | `UTC`          | Your IANA time zone (for example `Europe/Berlin`). CLIs print reset times as wall-clock times ("resets 2pm"), and the scheduler reads them in this zone.                                                                          |
+| `EMBERLINE_WORKSPACES_HOST_DIR`  | `./workspaces` | Host directory that holds the project workspaces.                                                                                                                                                                                 |
+| `EMBERLINE_ALLOWED_HOSTS`        | unset          | Comma-separated host names you open Emberline by, such as `emberline.example.com` or `truenas.local` (through a reverse proxy, say). IP addresses and `localhost` always work; other names get HTTP 421. `*` turns the check off. |
+| `EMBERLINE_METRICS_TOKEN`        | unset          | Enables `GET /metrics` for scrapers sending `Authorization: Bearer <token>`.                                                                                                                                                      |
+| `EMBERLINE_PREVIEW_PORTS_RUNNER` | `4300-4324`    | Host ports for command previews (dev servers), published by the runner on `EMBERLINE_BIND`.                                                                                                                                       |
+| `EMBERLINE_PREVIEW_PORTS_DOCKER` | `4325-4349`    | Host ports for compose previews, published by the Docker engine. Keep the two ranges apart.                                                                                                                                       |
+| `COMPOSE_PROFILES`               | unset          | `docker` starts the optional [Docker engine](#docker-engine-optional).                                                                                                                                                            |
+| `EMBERLINE_DOCKER_HOST`          | unset          | `tcp://docker:2376` with the Docker engine on; unset means agents get no Docker.                                                                                                                                                  |
 
 Core also understands the following variables. They are not passed through by `compose.yaml`; add them to the `core` service's `environment` if you need them:
 
@@ -123,6 +127,20 @@ checks:               # override the build gate's detected steps (in order)
   test: pnpm test
 ```
 
+**Containers (version 2).** With the [Docker engine](#docker-engine-optional) on, a `version: 2` file can preview a service of the project's own compose file instead of a command:
+
+```yaml
+version: 2
+services:
+  - name: dev
+    command: pnpm dev --port $PORT --host 0.0.0.0   # still available, no longer the preview
+  - name: container
+    compose: { file: compose.yaml, service: web, port: 8080 }   # file defaults to compose.yaml; port is the container's
+    preview: true
+```
+
+Preview then runs `docker compose up -d --build web` in the engine under its own compose project and publishes the container port on a free port of `EMBERLINE_PREVIEW_PORTS_DOCKER`. Host ports fixed in the compose file are dropped for the preview, so parallel runs never collide. The preview shows "starting" while it builds, and a failed build or a container that exits shows the end of its output. Without the engine, Preview answers "enable the Docker engine (COMPOSE_PROFILES=docker)". The wizard writes such a file for the Docker Compose deploy target while the engine is on.
+
 **Trust.** Every command runs in the runner, and agents can edit this file. Emberline therefore runs only the version you approved on **Project settings**, and only the version committed in the main workspace (HEAD of its checked-out branch) can be approved, so commit it there first. If the file changes (an agent's edit is merged with its run like any other file) or is removed, the Board and Project settings show "worktree.yml changed — review" with a diff, and the old approved version keeps applying until you approve the new one. A file that cannot be used (a symbolic link, over 64 KB, invalid) shows its errors instead and cannot be approved.
 
 **Limits.** Each setup command may take 10 minutes and the whole setup 30 minutes; a failed or cut-short setup still starts the agent, which is told what failed. A `copy` entry over 200 MB or 5000 files and directories is skipped. Teardown commands get 2 minutes each; a prune or clean-up waits up to 60 seconds for them, then they finish in the background.
@@ -130,6 +148,29 @@ checks:               # override the build gate's detected steps (in order)
 **Copy and symlink.** Copied files are not committed for you: copied `.env*` files that git does not ignore are flagged to the agent, so keep `.env` in `.gitignore`. Symlink mode lets a run modify the main workspace's file.
 
 **Removing a project.** **Remove from Emberline** keeps the project's folder; **Remove and delete files** deletes it. A project imported from a workspaces folder keeps its files unless you choose the second.
+
+## Docker engine (optional)
+
+Some projects only run in containers: their own compose file, a database, system packages. Emberline can run an isolated Docker engine next to the runner, so agents can build and run containers and Preview can show a compose service. It is off by default.
+
+**Turning it on.** Add these two lines to `.env` and run `make up` (with the published images, `docker compose up -d`):
+
+```sh
+COMPOSE_PROFILES=docker
+EMBERLINE_DOCKER_HOST=tcp://docker:2376
+```
+
+`make up-docker` starts it once without editing `.env`; the next plain `make up` turns it off again. The Dashboard shows "Docker engine: on (version)", "off", or "unreachable" with the reason.
+
+**What agents get.** While the engine answers, every run gets `DOCKER_HOST` and the client certificate variables, plus `EMBERLINE_COMPOSE_PROJECT` (`emberline-` and the first 8 characters of the run id). Its first prompt asks the agent to use that compose project, not to publish fixed host ports, and to stop what it started. A run that takes over another run's worktree keeps that compose project. `worktree.yml` setup and teardown commands and Run Build & Verify's setup get the same variables. All agents share this one engine.
+
+**Preview ports.** Command previews use `EMBERLINE_PREVIEW_PORTS_RUNNER` (default 4300-4324), published by the runner; compose previews use `EMBERLINE_PREVIEW_PORTS_DOCKER` (default 4325-4349), published by the engine. Both are published on `EMBERLINE_BIND`, and the preview link uses the host name you opened Emberline by (`EMBERLINE_PREVIEW_HOST` overrides it). With the default bind `127.0.0.1` the links open only on the Docker host itself; from other devices, reach those ports the way you reach Emberline (a VPN, or a bind address on a private interface).
+
+**Cleanup.** When a worktree is pruned (by hand, by **Clean up worktrees**, by the automatic clean-up, or with its project), Emberline runs its teardown commands and then `docker compose down -v --remove-orphans` for the worktree's compose project and for the preview project of every run in it, with up to 2 minutes for that. Every 30 minutes it also removes compose projects named `emberline-…` whose run is gone or ended without a worktree (up to 10 at a time), and once a day it deletes unused image layers older than 72 hours. It never touches a compose project with another name. Files that a container wrote into the worktree as a user other than root belong to a user the runner cannot delete; Emberline hands them back through a throwaway `busybox` container before it removes the worktree.
+
+**Privileged, but rootless.** Docker inside a container needs the `privileged` flag, also in rootless mode. In plain words: the engine container can reach much more of the host's kernel than an ordinary container (devices, mounts, kernel settings). Emberline uses the rootless engine, so the Docker daemon and every container it starts run as an unprivileged user (uid 1000 and its sub-uids), never as root on the host. The host's Docker socket is never mounted, so agents cannot see or control the host's own containers. Turn the engine on only if you accept that trade; [SECURITY.md](SECURITY.md#the-optional-docker-engine) has the details.
+
+**Storage.** Images, containers and volumes live in the `docker-data` volume. `make down` keeps it; `docker compose down -v` deletes it, along with the engine's certificates (a new set is made at the next start). The engine stores layers with overlayfs, which works on ext4, xfs and btrfs; on ZFS (TrueNAS, for example) it needs OpenZFS 2.2 or later.
 
 ## Desktop, mobile and embedded projects
 
@@ -155,6 +196,7 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 - **Host names are checked.** Requests whose `Host` is not an IP address, `localhost` or a name in `EMBERLINE_ALLOWED_HOSTS` get HTTP 421, which stops DNS-rebinding pages from reaching Emberline through your browser. WebSocket connections must also carry an `Origin` header.
 - **Single admin account.** The first visitor needs the setup token from the server log, so nobody else on the network can claim a fresh instance.
 - **Two containers, two roles.** `core` (API and UI) runs no workspace processes and ships without git, ssh or build tools. Everything that runs in a workspace (agents, git, installs, builds, tests) runs in `runner`. Git commands ignore repository hooks and command-running config.
+- **The optional Docker engine is privileged.** It runs rootless and never gets the host's Docker socket, and its API takes only Emberline's client certificate, but the container itself is privileged. See [Docker engine](#docker-engine-optional).
 - **The runner is one trust domain.** All agents and terminals run as the same user and can read each other's workspaces and the provider logins in the runner's home. Don't run agents for projects you don't trust next to ones you do.
 - **Secrets are stored in plaintext** in the SQLite database in core's data volume. They are never sent back to the browser, but anyone with access to that volume or a backup can read them.
 

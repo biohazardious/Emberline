@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
@@ -59,12 +60,15 @@ import {
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
-import { engineHostName } from '../docker/compose.js';
+import { composeDownArgs, engineHostName, isEmberlineComposeProject } from '../docker/compose.js';
 import {
   type ComposePreviewTiming,
   composeDown,
+  composeProjects,
   composeServiceStatus,
   DEFAULT_COMPOSE_PREVIEW_TIMING,
+  pruneImages,
+  reclaimFiles,
   runComposePreview,
 } from '../docker/compose-preview.js';
 import {
@@ -148,6 +152,16 @@ export interface RunServiceLogger {
 export const PROJECT_DELETE_TEARDOWN_BUDGET_MS = 30_000;
 /** A per-run prune or a manual GC waits this long in all for teardowns; the rest finish in the background. */
 export const REQUEST_TEARDOWN_BUDGET_MS = 60_000;
+/** The GC sweep of the Docker engine's compose projects runs this often. */
+export const DOCKER_GC_INTERVAL_MS = 30 * 60_000;
+/** The first sweep runs this long after start (leftovers from before a restart), then every 30 min. */
+export const DOCKER_GC_FIRST_DELAY_MS = 60_000;
+/** A sweep takes down at most this many leftover compose projects; the next sweep takes the rest. */
+export const DOCKER_GC_MAX_DOWNS = 10;
+/** Dangling images (older than 72 h) are pruned at most this often. */
+const DOCKER_IMAGE_PRUNE_INTERVAL_MS = 24 * 3_600_000;
+/** A cleanup runs this many `compose down` at a time (each is capped at 2 min). */
+const COMPOSE_DOWN_CONCURRENCY = 4;
 /** Waits for `job` at most `ms`; resolves whether it settled in time (the job itself carries on). */
 function settlesWithin(job: Promise<unknown>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -513,6 +527,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly previewPortLock = new KeyedMutex();
   /** How long compose previews may build and take to answer (shortened in tests). */
   composePreviewTiming: ComposePreviewTiming = { ...DEFAULT_COMPOSE_PREVIEW_TIMING };
+  private dockerGcFirst?: NodeJS.Timeout;
+  private dockerGcTimer?: NodeJS.Timeout;
+  private dockerSweeping = false;
+  private lastImagePruneAt = 0;
 
   constructor(
     private readonly db: Db,
@@ -541,10 +559,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.cancelOrphanedSetups(this.failOrphanedSpawns());
     this.timer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
     this.timer.unref();
+    if (this.docker.host) {
+      this.dockerGcFirst = setTimeout(() => void this.sweepDockerProjects(), DOCKER_GC_FIRST_DELAY_MS);
+      this.dockerGcFirst.unref();
+      this.dockerGcTimer = setInterval(() => void this.sweepDockerProjects(), DOCKER_GC_INTERVAL_MS);
+      this.dockerGcTimer.unref();
+    }
   }
 
   dispose(): void {
     clearInterval(this.timer);
+    clearTimeout(this.dockerGcFirst);
+    clearInterval(this.dockerGcTimer);
   }
 
   /**
@@ -2011,8 +2037,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
       }
     };
-    if (this.hasTeardown(project.id) && row.worktreePath !== project.path && existsSync(row.worktreePath)) {
-      // Teardown commands may take minutes: the request waits a bounded time, the rest is background.
+    if (row.worktreePath !== project.path && this.needsTeardown(project.id, row.worktreePath)) {
+      // Teardown commands and compose downs may take minutes: the request waits a bounded time, the rest is background.
       let removed = false;
       const job = this.teardownThenPrune(row, project, (r) => {
         removed = r;
@@ -2021,15 +2047,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const done = await settlesWithin(job, this.teardownBudgets.request);
       return { runId: id, worktreePath: row.worktreePath, removed, ...(done ? {} : { pending: true }) };
     }
-    const removed = await pruneWorktree(project.path, row.worktreePath);
+    const removed = await this.pruneRunWorktree(project.path, row.worktreePath);
     recordPruned(removed);
     return { runId: id, worktreePath: row.worktreePath, removed };
   }
 
   /**
-   * Teardown, then prune, then `after`, as one background job: guarded by `tearingDown` so no
-   * other path starts it again, and listed in `teardownJobs` so a project delete can wait for it.
-   * Never rejects.
+   * Teardown, then the worktree's compose projects, then prune, then `after`, as one background job:
+   * guarded by `tearingDown` so no other path starts it again, and listed in `teardownJobs` so a
+   * project delete can wait for it. Never rejects.
    */
   private teardownThenPrune(
     row: RunRow,
@@ -2040,7 +2066,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const job: Promise<void> = this.teardownWorktree(row, project)
       // Best effort: a teardown that throws must not leave the worktree behind.
       .catch(() => undefined)
-      .then(() => pruneWorktree(project.path, row.worktreePath))
+      .then(() => this.downWorktreeComposeProjects(row))
+      .catch(() => undefined)
+      .then(() => this.pruneRunWorktree(project.path, row.worktreePath))
       .catch(() => false)
       .then(async (removed) => {
         await after(removed);
@@ -2094,6 +2122,152 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return (loadApprovedWorktreeConfig(this.db, projectId)?.config.teardown.length ?? 0) > 0;
   }
 
+  /** A prune of this worktree has work before the removal: teardown commands, or the Docker cleanup. */
+  private needsTeardown(projectId: string, worktreePath: string): boolean {
+    return (this.hasTeardown(projectId) && existsSync(worktreePath)) || Boolean(this.docker.host);
+  }
+
+  /**
+   * `down -v --remove-orphans` for each compose project in `names`, a few at a time, each capped at
+   * 2 min. Best effort: a failure is logged, and a `worktree_teardown_failed` note on `noteRunId`.
+   */
+  private async downComposeProjects(names: Iterable<string>, noteRunId: string | null): Promise<void> {
+    const env = this.docker.cliEnv();
+    if (!env.DOCKER_HOST) return;
+    const queue = [...new Set(names)];
+    const worker = async () => {
+      for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+        const down = await composeDown(name, env, { volumes: true });
+        if (down.ok) continue;
+        const command = `docker ${composeDownArgs(name, { volumes: true }).join(' ')}`;
+        if (noteRunId) this.note(noteRunId, 'worktree_teardown_failed', { command, exitCode: null, tail: down.output });
+        this.log?.warn(
+          { runId: noteRunId, project: name, output: down.output.slice(-500) },
+          'docker compose down failed; the worktree is pruned anyway',
+        );
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(COMPOSE_DOWN_CONCURRENCY, queue.length) }, worker));
+  }
+
+  /**
+   * Before a run worktree is pruned (after its teardown commands): the worktree's compose project
+   * (the agent's) and the preview project of every run that works in it, with their volumes. A
+   * preview still starting is cancelled first, so it cannot bring containers back.
+   */
+  private async downWorktreeComposeProjects(row: RunRow): Promise<void> {
+    if (!this.docker.host) return;
+    await this.docker.ready();
+    if (!this.docker.status.available) return;
+    const sharing = this.db.select().from(runs).where(eq(runs.worktreePath, row.worktreePath)).all();
+    if (!sharing.some((r) => r.id === row.id)) sharing.push(row);
+    for (const r of sharing) {
+      if (this.composeJobs.has(r.id)) await this.previewRunLock.run(r.id, () => this.stopRunningPreview(r)).catch(() => undefined);
+    }
+    await this.downComposeProjects(
+      [composeProjectName(row.id, row.worktreePath), ...sharing.map((r) => this.previewProjectOf(r.id))],
+      row.id,
+    );
+  }
+
+  /**
+   * Removes a run worktree. The engine is rootless: files its containers wrote as a user other than
+   * root belong to a sub-uid the runner user cannot delete; when the removal fails on such files they
+   * are handed back through the engine and the removal runs once more.
+   */
+  private async pruneRunWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
+    try {
+      return await pruneWorktree(projectPath, worktreePath);
+    } catch (error) {
+      const inWorktrees = path.resolve(worktreePath).includes(`${path.sep}.worktrees${path.sep}`);
+      if (!inWorktrees || path.resolve(worktreePath) === path.resolve(projectPath)) throw error;
+      if (!(await this.reclaimEngineFiles(worktreePath))) throw error;
+      return pruneWorktree(projectPath, worktreePath);
+    }
+  }
+
+  /** Hands the files under `dir` back to the runner user through the engine; false when Docker is off or that failed. */
+  private async reclaimEngineFiles(dir: string): Promise<boolean> {
+    if (!this.docker.host || !existsSync(dir)) return false;
+    await this.docker.ready();
+    const env = this.docker.cliEnv();
+    if (!env.DOCKER_HOST) return false;
+    const result = await reclaimFiles(dir, env);
+    if (!result.ok) this.log?.warn({ dir, output: result.output.slice(-500) }, 'could not hand the files back through the Docker engine');
+    return result.ok;
+  }
+
+  /**
+   * `rm -rf dir` for a project delete; when files the engine's containers left block it, they are
+   * handed back through the engine first. Never throws.
+   */
+  async removeTree(dir: string): Promise<void> {
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      if (await this.reclaimEngineFiles(dir)) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * The GC sweep of the engine (every 30 min): takes down, with their volumes, Emberline's compose
+   * projects whose run no longer exists or has ended without a worktree, and the main-workspace
+   * projects of deleted projects; at most {@link DOCKER_GC_MAX_DOWNS} per sweep. Once a day it
+   * prunes dangling images older than 72 h. A project whose name Emberline did not make is never
+   * touched.
+   */
+  async sweepDockerProjects(now = Date.now()): Promise<{ removed: string[] }> {
+    const removed: string[] = [];
+    if (!this.docker.host || this.dockerSweeping) return { removed };
+    this.dockerSweeping = true;
+    try {
+      await this.docker.ready();
+      const env = this.docker.cliEnv();
+      if (!env.DOCKER_HOST) return { removed };
+      const listed = await composeProjects(env);
+      if (listed === null) {
+        this.log?.warn({}, 'docker compose ls failed; the compose sweep tries again later');
+        return { removed };
+      }
+      // Read after the listing: a project listed there belongs to a run that existed before it.
+      const inUse = this.composeProjectsInUse();
+      const stale = listed.filter((name) => isEmberlineComposeProject(name) && !inUse.has(name)).slice(0, DOCKER_GC_MAX_DOWNS);
+      for (const name of stale) {
+        const down = await composeDown(name, env, { volumes: true });
+        if (down.ok) removed.push(name);
+        else this.log?.warn({ project: name, output: down.output.slice(-500) }, 'compose sweep: down failed');
+      }
+      if (now - this.lastImagePruneAt >= DOCKER_IMAGE_PRUNE_INTERVAL_MS) {
+        this.lastImagePruneAt = now;
+        const prune = await pruneImages(env);
+        if (!prune.ok) this.log?.warn({ output: prune.output.slice(-500) }, 'compose sweep: image prune failed');
+      }
+    } finally {
+      this.dockerSweeping = false;
+    }
+    return { removed };
+  }
+
+  /**
+   * Compose projects still in use: those of every run that is live or still has its worktree (a run
+   * in Review keeps its worktree, so its preview stays), and every project's main workspace.
+   */
+  private composeProjectsInUse(): Set<string> {
+    const inUse = new Set<string>();
+    for (const p of this.db.select({ id: projects.id }).from(projects).all()) inUse.add(mainComposeProjectName(p.id));
+    const rows = this.db
+      .select({ id: runs.id, worktreePath: runs.worktreePath, endedAt: runs.endedAt, state: runs.state, cancelledAt: runs.cancelledAt })
+      .from(runs)
+      .all();
+    for (const r of rows) {
+      const live = !r.endedAt || (r.state === 'rate_limited' && !r.cancelledAt);
+      if (!live && !(r.worktreePath && existsSync(r.worktreePath))) continue;
+      inUse.add(composeProjectName(r.id, r.worktreePath));
+      inUse.add(previewComposeProjectName(r.id));
+    }
+    return inUse;
+  }
+
   /**
    * Before a project and its `.worktrees/<slug>` go: best-effort teardown in each run worktree that
    * still exists (each once, also when runs share it), next to the background teardowns already
@@ -2108,20 +2282,31 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!project) return { finished: true, settled: Promise.resolve() };
     const rows = this.db.select().from(runs).where(eq(runs.projectId, projectId)).orderBy(desc(runs.createdAt)).all();
     const inFlight = [...new Set(rows.flatMap((row) => this.teardownJobs.get(row.worktreePath) ?? []))];
-    const own = this.hasTeardown(projectId)
-      ? (async () => {
-          const seen = new Set<string>();
-          for (const row of rows) {
-            // A background job is tearing that one down already.
-            if (seen.has(row.worktreePath) || this.tearingDown.has(row.id)) continue;
-            seen.add(row.worktreePath);
-            this.tearingDown.add(row.id);
-            await this.teardownWorktree(row, project)
-              .catch(() => undefined)
-              .finally(() => this.tearingDown.delete(row.id));
-          }
-        })()
-      : Promise.resolve();
+    const own = (async () => {
+      if (this.hasTeardown(projectId)) {
+        const seen = new Set<string>();
+        for (const row of rows) {
+          // A background job is tearing that one down already.
+          if (seen.has(row.worktreePath) || this.tearingDown.has(row.id)) continue;
+          seen.add(row.worktreePath);
+          this.tearingDown.add(row.id);
+          await this.teardownWorktree(row, project)
+            .catch(() => undefined)
+            .finally(() => this.tearingDown.delete(row.id));
+        }
+      }
+      // Then every compose project the project's runs and its main workspace had.
+      if (!this.docker.host) return;
+      await this.docker.ready();
+      if (!this.docker.status.available) return;
+      for (const row of rows) {
+        if (this.composeJobs.has(row.id)) await this.previewRunLock.run(row.id, () => this.stopRunningPreview(row)).catch(() => undefined);
+      }
+      await this.downComposeProjects(
+        [...rows.flatMap((row) => [composeProjectName(row.id, row.worktreePath), this.previewProjectOf(row.id)]), mainComposeProjectName(projectId)],
+        null,
+      );
+    })().catch(() => undefined);
     const settled = Promise.allSettled([own, ...inFlight]).then(() => undefined);
     return { finished: await settlesWithin(settled, budgetMs), settled };
   }
@@ -2407,14 +2592,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       })
       .catch(() => undefined)
       .finally(() => {
-        if (this.composeJobs.get(row.id) === job) this.composeJobs.delete(row.id);
+        // A cancelled job's entry is the stop's to remove (stopRunningPreview), once its down ran.
+        if (this.composeJobs.get(row.id) === job && !job.cancelled) this.composeJobs.delete(row.id);
       });
     this.composeJobs.set(row.id, job);
     // A start a stop gave up waiting for may still have created containers: take them down when it
-    // settles, unless the run started another preview meanwhile.
-    void job.done.then(async () => {
-      if (job.abandoned && this.previewGenerations.get(row.id) === job.generation) await composeDown(project, env);
-    });
+    // settles, unless the run started another preview meanwhile. Under the run's lock, so a newer
+    // start cannot begin between that check and the down (a removed run never starts one).
+    void job.done
+      .then(async () => {
+        if (!job.abandoned) return;
+        await this.previewRunLock.run(row.id, async () => {
+          if (this.hasRun(row.id) && this.previewGenerations.get(row.id) !== job.generation) return;
+          await composeDown(project, env);
+        });
+      })
+      .catch(() => undefined);
 
     return {
       runId: row.id,
@@ -2438,9 +2631,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Ends what the run's last preview started: its terminal, or (compose) the background start and
    * the preview project's containers (`down --remove-orphans`, volumes kept). A start still going
    * is cancelled and awaited (bounded, cancelled once more after a short delay) before the `down`.
-   * Returns that preview's status. Callers hold `previewRunLock` for the run.
+   * Returns that preview's status. Callers hold `previewRunLock` for the run. `volumes` (the run is
+   * being deleted) also removes the preview project's volumes, whether or not it runs.
    */
-  private async stopRunningPreview(row: RunRow): Promise<RunPreviewStatus> {
+  private async stopRunningPreview(row: RunRow, { volumes = false }: { volumes?: boolean } = {}): Promise<RunPreviewStatus> {
     const current = await this.previewStatus(row.id);
     if (current.terminalId) {
       await this.ptyd
@@ -2448,26 +2642,29 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .remove(current.terminalId)
         .catch(() => undefined);
     }
-    if (current.kind === 'compose' && current.status !== 'stopped') {
-      const job = this.composeJobs.get(row.id);
-      if (job) {
-        job.cancelled = true;
-        this.composeJobs.delete(row.id);
-        const { stopSettleMs, cancelRetryMs } = this.composePreviewTiming;
+    const composeRunning = current.kind === 'compose' && current.status !== 'stopped';
+    const job = composeRunning ? this.composeJobs.get(row.id) : undefined;
+    if (job) {
+      job.cancelled = true;
+      const { stopSettleMs, cancelRetryMs } = this.composePreviewTiming;
+      await cancelCommand(job.execId);
+      let settled = await settlesWithin(job.done, cancelRetryMs);
+      if (!settled) {
         await cancelCommand(job.execId);
-        let settled = await settlesWithin(job.done, cancelRetryMs);
-        if (!settled) {
-          await cancelCommand(job.execId);
-          settled = await settlesWithin(job.done, Math.max(0, stopSettleMs - cancelRetryMs));
-        }
-        if (!settled) job.abandoned = true;
+        settled = await settlesWithin(job.done, Math.max(0, stopSettleMs - cancelRetryMs));
       }
+      if (!settled) job.abandoned = true;
+    }
+    if (composeRunning || volumes) {
       const env = await this.dockerEnvFor(row);
       if (env.DOCKER_HOST) {
-        const down = await composeDown(this.previewProjectOf(row.id), env);
+        const down = await composeDown(this.previewProjectOf(row.id), env, { volumes });
         if (!down.ok) this.log?.warn({ runId: row.id, output: down.output.slice(-500) }, 'compose preview: down failed');
       }
     }
+    // Only now, with the containers down: until then the status of a start being stopped reads
+    // `starting`, not "Emberline restarted before the preview was ready".
+    if (job && this.composeJobs.get(row.id) === job) this.composeJobs.delete(row.id);
     return current;
   }
 
@@ -2515,8 +2712,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (error.code !== 'not_found') throw error;
         });
     }
-    // ...nor a compose preview's containers (prune and GC also remove its volumes).
-    await this.previewRunLock.run(id, () => this.stopRunningPreview(row)).catch(() => undefined);
+    // ...nor a compose preview's containers, and with the run its preview project's volumes go too.
+    const hadComposePreview = this.previewEvents(id).some(
+      (e) => e.type === 'preview_started' && (e.payload as PreviewPayload | null)?.kind === 'compose',
+    );
+    await this.previewRunLock.run(id, () => this.stopRunningPreview(row, { volumes: hadComposePreview })).catch(() => undefined);
+    this.previewGenerations.delete(id);
     this.db.delete(runs).where(eq(runs.id, id)).run();
     this.emit('removed', id);
   }
@@ -2642,7 +2843,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           }
         }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
-          if (this.hasTeardown(proj.id) && existsSync(row.worktreePath)) {
+          if (this.needsTeardown(proj.id, row.worktreePath)) {
             // Teardowns share one time budget per request; one still running prunes (and removes
             // its run) in the background when it ends.
             let removedWt = false;
@@ -2658,7 +2859,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             }
             continue;
           }
-          const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
+          const removedWt = await this.pruneRunWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
         await this.remove(row.id).catch(() => undefined);
@@ -2990,14 +3191,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 const firstFailure = this.outputs.firstFailureAt(stale.id);
                 if (firstFailure && Date.now() - firstFailure.getTime() < AUTO_GC_ARCHIVE_RETRY_MS) continue;
               }
-              if (this.hasTeardown(proj.id)) {
-                // Teardown commands may take minutes: they run beside reconcile, and this worktree is
+              if (this.needsTeardown(proj.id, stale.worktreePath)) {
+                // Teardown commands (and compose downs) may take minutes: they run beside reconcile, and this worktree is
                 // pruned (and its run removed) only once they finished. The guard keeps a later
                 // pass from starting them again meanwhile.
                 void this.teardownThenPrune(stale, proj, () => this.remove(stale.id));
                 continue;
               }
-              await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
+              await this.pruneRunWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);
           }

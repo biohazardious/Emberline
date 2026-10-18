@@ -4,6 +4,17 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- An optional Docker engine for agents and previews (compose profile `docker`: set `COMPOSE_PROFILES=docker` and `EMBERLINE_DOCKER_HOST=tcp://docker:2376` in `.env`, or run `make up-docker`). It is a rootless Docker-in-Docker container of its own; it runs privileged, never gets the host's Docker socket, and its API takes only the runner's client certificate. Agents get `DOCKER_HOST` and a compose project of their own, and the Dashboard shows whether the engine is on. See the README and SECURITY.md before you turn it on.
+- Compose previews: a `version: 2` `.emberline/worktree.yml` can preview a service of the project's own compose file (`compose: { file, service, port }`). Preview builds and starts it in the engine on a free published port, ignores the file's fixed host ports, shows "starting" while it builds, and shows the end of the output when the build or the container fails.
+- The wizard writes a compose preview for the Docker Compose deploy target while the engine is on, and keeps the dev command as a service without preview. With the engine off it writes the command preview as before, and the summary says to enable the Docker engine to preview the container.
+- Pruning a worktree (per run, **Clean up worktrees**, automatic clean-up, project delete) also takes down its compose project and the preview projects of its runs, volumes included. Every 30 minutes Emberline removes leftover `emberline-…` compose projects of runs that are gone, and once a day it deletes unused image layers older than 72 hours. Files that containers left in a worktree under another user no longer stop the worktree from being removed.
+
+### Changed
+
+- Previews now use published host ports: command previews 4300-4324 (published by the runner), compose previews 4325-4349 (published by the engine), both on `EMBERLINE_BIND` and set by `EMBERLINE_PREVIEW_PORTS_RUNNER` and `EMBERLINE_PREVIEW_PORTS_DOCKER`. They used to be 3100-3899 and were not published, so a stock install could not open them. The preview link now uses the host name you opened Emberline by (`EMBERLINE_PREVIEW_HOST` still overrides it). **Upgrade note:** the runner now publishes 4300-4324 on every install; if another program on the host uses those ports, the runner does not start until you set `EMBERLINE_PREVIEW_PORTS_RUNNER` to a free range.
+
 ### Fixed
 
 - Run Build & Verify (and the build gate) runs the project's approved `setup` commands from `.emberline/worktree.yml` before its `checks`, so a fresh main workspace no longer fails with errors like `astro: not found`.

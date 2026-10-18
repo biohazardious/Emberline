@@ -26,6 +26,7 @@ import {
   generateClaudeInstructions,
   generateProjectBlueprint,
   generateWorktreeYml,
+  previewsComposeService,
   type WizardTicketSpec,
 } from './blueprint.js';
 import { factoryTicketTitle } from './orchestration.js';
@@ -51,6 +52,8 @@ export interface ProjectPlan {
   projectMd: string;
   claudeMd: string;
   worktreeYml: string;
+  /** Notes for the summary (what the generated files leave out and why). */
+  notes: string[];
   /** Starter file path -> content. */
   starter: Record<string, string>;
   /** Bootstrap and Deploy; the `[Factory]` ticket is built by the ticket service from `vision`. */
@@ -92,7 +95,15 @@ export function techStackFromChoices(choices: ProjectChoices, versionPolicy?: st
   };
 }
 
-export function planNewProject(body: ProjectCreateInput): ProjectPlan {
+/** The summary's note when a Docker Compose project gets a command preview because the engine is off. */
+export const ENABLE_DOCKER_NOTE =
+  'The deploy target is Docker Compose: enable the Docker engine to preview the container (COMPOSE_PROFILES=docker, see the README). Until then the preview runs the dev command.';
+
+/**
+ * `dockerEngine`: the Docker engine answers right now. A Docker Compose deploy target then previews
+ * its container (worktree.yml v2); otherwise the summary says how to get that.
+ */
+export function planNewProject(body: ProjectCreateInput, { dockerEngine = false }: { dockerEngine?: boolean } = {}): ProjectPlan {
   const preset = body.presetId === undefined ? undefined : getPreset(body.presetId);
   if (body.presetId !== undefined && !preset) throw badRequest(`unknown preset "${body.presetId}"`);
   if (preset && body.appType !== 'custom' && body.appType !== preset.type) {
@@ -125,7 +136,8 @@ export function planNewProject(body: ProjectCreateInput): ProjectPlan {
     referenceDocs: body.referenceDocs,
   });
   const starter = preset?.starter ? STARTERS[preset.starter]({ name: body.name, description: vision }) : {};
-  const ctx = { name: body.name, appType, choices, preset, vision };
+  const composePreview = previewsComposeService(choices, preset, { dockerEngine });
+  const ctx = { name: body.name, appType, choices, preset, vision, composePreview };
   const tickets = [bootstrapTicket(ctx), deployTicket(ctx)].filter((x): x is WizardTicketSpec => x !== null);
 
   return {
@@ -138,7 +150,8 @@ export function planNewProject(body: ProjectCreateInput): ProjectPlan {
     startFactory: body.startFactory ?? true,
     projectMd,
     claudeMd: generateClaudeInstructions(body.name),
-    worktreeYml: generateWorktreeYml(choices, preset),
+    worktreeYml: generateWorktreeYml(choices, preset, { dockerEngine }),
+    notes: !composePreview && choices.deploy === 'docker-compose' ? [ENABLE_DOCKER_NOTE] : [],
     starter,
     tickets,
   };

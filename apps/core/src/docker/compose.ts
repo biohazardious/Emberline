@@ -175,3 +175,60 @@ export function engineHostName(dockerHost: string): string {
     return 'docker';
   }
 }
+
+/** Every compose project the engine knows, running or not (the GC sweep). */
+export function composeLsArgs(): string[] {
+  return ['compose', 'ls', '-a', '--format', 'json'];
+}
+
+/** Project names from `compose ls --format json` (one array); anything else gives none. */
+export function parseComposeLs(stdout: string): string[] {
+  try {
+    const rows: unknown = JSON.parse(stdout.trim() || '[]');
+    if (!Array.isArray(rows)) return [];
+    return rows.flatMap((row) => {
+      const name = row && typeof row === 'object' ? (row as Record<string, unknown>).Name : undefined;
+      return typeof name === 'string' ? [name] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The compose projects Emberline names (engine.ts): `emberline-<id8>` (a run's or its worktree's),
+ * `emberline-<id8>-preview` and `emberline-main-<project id8>`. The GC sweep never touches any other.
+ */
+export function isEmberlineComposeProject(name: string): boolean {
+  return /^emberline-(?:[0-9a-f]{8}(?:-preview)?|main-[0-9a-f]{8})$/.test(name);
+}
+
+/** Dangling images older than 72 h (daily, from the GC sweep). */
+export function imagePruneArgs(): string[] {
+  return ['image', 'prune', '-f', '--filter', 'until=72h'];
+}
+
+/** Pinned image of the throwaway container that hands a worktree's files back (present or pulled once). */
+export const RECLAIM_IMAGE = 'busybox:1.37.0';
+
+/**
+ * Hands every file under `dir` back to the runner user so the worktree can be removed. The engine is
+ * rootless: its containers' root is the runner's uid, every other container user a sub-uid that the
+ * runner cannot delete (a database directory, say). In a throwaway container, root can chown them.
+ * No network. `dir` must be absolute and free of `,` (it goes into `--mount`).
+ */
+export function reclaimArgs(dir: string): string[] {
+  if (!dir.startsWith('/') || dir.includes(',')) throw new Error(`not a path the engine can mount: ${dir}`);
+  return [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '--mount',
+    `type=bind,source=${dir},target=/w`,
+    RECLAIM_IMAGE,
+    'sh',
+    '-c',
+    'chown -R 0:0 /w && chmod -R u+rwX /w',
+  ];
+}

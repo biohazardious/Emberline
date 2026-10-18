@@ -133,6 +133,12 @@ export class DockerEngine {
     return { ...this.clientEnv(this.host), EMBERLINE_COMPOSE_PROJECT: composeProject };
   }
 
+  /** The client variables alone (no compose project) while the engine is available; nothing otherwise. */
+  cliEnv(): Record<string, string> {
+    if (!this.host || !this.current.available) return {};
+    return this.clientEnv(this.host);
+  }
+
   /** What the Docker CLI needs to reach the engine: its address and the client certificate. */
   private clientEnv(host: string): Record<string, string> {
     return { DOCKER_HOST: host, DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: this.options.certPath ?? DEFAULT_DOCKER_CERT_PATH };

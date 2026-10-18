@@ -111,6 +111,11 @@ export interface PresetDef {
    * the final choices (open or decided), so they are not part of the preset.
    */
   bootstrap: readonly string[];
+  /**
+   * Container port of the compose service `web` that the wizard's compose preview publishes (deploy
+   * target Docker Compose with the Docker engine on). Default 8080.
+   */
+  composePort?: number;
 }
 
 export interface VersionPolicy {

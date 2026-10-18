@@ -13,6 +13,7 @@ import {
 } from '@emberline/protocol';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import type * as GitExec from './git-exec.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
@@ -565,5 +566,97 @@ describe('create v2 behaviour', () => {
     const warn = vi.spyOn(t.app.log, 'warn');
     expect((await create({ ...WEB, startFactory: true })).statusCode).toBe(201);
     await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+  });
+});
+
+describe('wizard: compose preview for the Docker Compose deploy target (spec §7)', () => {
+  const COMPOSE_WEB: CreateProjectBody = { ...WEB, choices: { auth: 'none', database: 'agent' } };
+
+  it('with the engine: worktree.yml v2 with a compose preview service, the dev command kept as a non-preview service', () => {
+    const preset = getPreset('web-react-fastify')!;
+    expect(preset.choices.deploy).toBe('docker-compose');
+    const yml = generateWorktreeYml({}, preset, { dockerEngine: true });
+    const parsed = parseWorktreeYml(yml);
+    expect(parsed.ok, yml).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.config.version).toBe(2);
+    expect(parsed.config.services).toEqual([
+      { name: 'web', command: 'pnpm dev --port $PORT --host 0.0.0.0' },
+      { name: 'container', compose: { file: 'compose.yaml', service: 'web', port: 8080 }, preview: true },
+    ]);
+    // Setup and checks are the same as in the v1 file.
+    const v1 = parseWorktreeYml(generateWorktreeYml({}, preset));
+    expect(v1.ok && v1.config.setup).toEqual(parsed.config.setup);
+    expect(v1.ok && v1.config.checks).toEqual(parsed.config.checks);
+  });
+
+  it('without the engine, or with another deploy target, it stays v1 with the command preview', () => {
+    const preset = getPreset('web-react-fastify')!;
+    for (const yml of [
+      generateWorktreeYml({}, preset),
+      generateWorktreeYml({}, preset, { dockerEngine: false }),
+      generateWorktreeYml({ deploy: 'vercel' }, preset, { dockerEngine: true }),
+    ]) {
+      expect(yml).toContain('version: 1');
+      expect(yml).not.toContain('compose');
+      expect(yml).toContain('preview: true');
+    }
+  });
+
+  it('every Docker Compose preset gives a valid v2 file with the engine', () => {
+    for (const preset of PRESETS.filter((p) => p.choices.deploy === 'docker-compose')) {
+      const parsed = parseWorktreeYml(generateWorktreeYml({}, preset, { dockerEngine: true }));
+      expect(parsed.ok, preset.id).toBe(true);
+      if (parsed.ok) expect(parsed.config.services.filter((s) => s.preview).map((s) => s.name), preset.id).toEqual(['container']);
+    }
+  });
+
+  describe('through the API', () => {
+    const engine = { up: true };
+    beforeEach(async () => {
+      engine.up = true;
+      await t.close();
+      t = await createTestApp({ dockerHost: 'tcp://docker:2376' });
+      cookie = await setupAndLogin(t.app);
+      headers = { ...CSRF, cookie };
+      setCommandExecutor(async (request) =>
+        request.file === 'docker' && request.args[0] === 'version'
+          ? { exitCode: engine.up ? 0 : 1, signal: null, stdout: engine.up ? '"29.8.2"\n' : '', stderr: engine.up ? '' : 'Cannot connect', timedOut: false, truncated: false }
+          : localCommandExecutor(request),
+      );
+    });
+    afterEach(() => setCommandExecutor(localCommandExecutor));
+
+    it('the summary and the created project use v2 while the engine answers; no note', async () => {
+      const body = (await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse;
+      expect(body.worktreeYml).toContain('version: 2');
+      expect(body.notes).toEqual([]);
+      const res = await create(COMPOSE_WEB);
+      expect(res.statusCode).toBe(201);
+      const { project } = res.json() as CreateProjectResponse;
+      const onDisk = read(project.path, '.emberline/worktree.yml');
+      expect(onDisk).toBe(body.worktreeYml);
+      const approved = t.db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+      expect(approved?.content).toBe(onDisk);
+      // The Deploy ticket tells the agent what the preview expects from compose.yaml.
+      const deploy = ticketsOf(project.id).find((x) => x.title.startsWith('Deploy'))?.body ?? '';
+      expect(deploy).toContain('service `web` of `compose.yaml`');
+      expect(deploy).toContain('container port 8080');
+    });
+
+    it('an unreachable engine gives v1 and the summary says to enable the engine', async () => {
+      engine.up = false;
+      await t.runs.docker.probe();
+      const body = (await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse;
+      expect(body.worktreeYml).toContain('version: 1');
+      expect(body.notes.join(' ')).toContain('enable the Docker engine to preview the container');
+    });
+  });
+
+  it('with Docker off the summary notes it only for the Docker Compose deploy target', async () => {
+    expect(((await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse).notes.join(' ')).toContain(
+      'enable the Docker engine to preview the container',
+    );
+    expect(((await preview(STATIC)).json() as ProjectPreviewResponse).notes).toEqual([]);
   });
 });
