@@ -5257,3 +5257,8 @@ dialog.cmd-dialog::backdrop {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* Status lines that take focus while their buttons are busy: no ring on a non-control. */
+.wizard-step p[tabindex='-1']:focus {
+  outline: none;
+}

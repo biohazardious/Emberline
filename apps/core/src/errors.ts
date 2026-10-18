@@ -19,7 +19,7 @@ export class HttpError extends Error {
 
 export const badRequest = (message: string) => new HttpError(400, 'bad_request', message);
 export const notFound = (message: string) => new HttpError(404, 'not_found', message);
-export const conflict = (message: string) => new HttpError(409, 'conflict', message);
+export const conflict = (message: string, code = 'conflict') => new HttpError(409, code, message);
 export const unavailable = (code: string, message: string) => new HttpError(503, code, message);
 
 export function installErrorHandler(app: FastifyInstance): void {

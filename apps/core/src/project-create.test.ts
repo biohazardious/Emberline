@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type CreateProjectBody,
@@ -383,7 +383,17 @@ describe('create v2 behaviour', () => {
     expect(bad.json().message).toContain('backend');
     expect(existsSync(path.join(t.config.workspacesDir, 'bakery-site'))).toBe(false);
     expect((await create(STATIC)).statusCode).toBe(201);
-    expect((await create(STATIC)).statusCode).toBe(409);
+    const dup = await create(STATIC);
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().error).toBe('name_taken');
+  });
+
+  it('names a leftover folder with the slug directory_exists', async () => {
+    mkdirSync(path.join(t.config.workspacesDir, 'bakery-site'), { recursive: true });
+    writeFileSync(path.join(t.config.workspacesDir, 'bakery-site', 'stray.txt'), 'x');
+    const res = await create(STATIC);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('directory_exists');
   });
 
   it('fails the create and removes the directory when git init fails', async () => {

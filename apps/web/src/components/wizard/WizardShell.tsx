@@ -8,8 +8,9 @@ import type {
   WorkspaceFoldersResponse,
 } from '@emberline/protocol';
 import { Check, X } from 'lucide-react';
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiRequestError, errorMessage } from '../../api';
+import { type MouseEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'wouter';
+import { api, errorMessage } from '../../api';
 import { trapTab } from '../../focusTrap';
 import { useApi } from '../../hooks/useApi';
 import { ImportProgress } from './ImportProgress';
@@ -23,8 +24,10 @@ import {
   buildAdoptBody,
   buildCreateBody,
   canVisit,
+  hasImportableFolders,
   isDirty,
   isImport,
+  isNameConflict,
   isStepValid,
   nextStep,
   previousStep,
@@ -68,10 +71,6 @@ function useWorkspaceFolders(): WorkspaceFolder[] {
   return folders;
 }
 
-/** A 409 about the name (its slug or the folder it would get), shown on the name field. */
-const isNameConflict = (err: unknown) =>
-  err instanceof ApiRequestError && err.status === 409 && /slug|directory already exists/i.test(err.message);
-
 function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Props) {
   const { state, dispatch, savedDraft, restore, dismissDraft, finish } = useWizardState();
   const folders = useWorkspaceFolders();
@@ -85,6 +84,15 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const bodyRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const focusNext = useRef<string | null>(null);
+  /** Bumped to re-run the initial-focus pass when the step stays but its controls change. */
+  const [focusTick, setFocusTick] = useState(0);
+  const refocus = (id?: string) => {
+    focusNext.current = id ?? null;
+    setFocusTick((t) => t + 1);
+  };
+  /** Where to go after a confirmed close (the Settings link). */
+  const leaveTo = useRef<string | null>(null);
+  const [, navigate] = useLocation();
 
   const steps = stepsFor(state.source);
   const index = steps.indexOf(state.step);
@@ -106,7 +114,16 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
       .map((el) => (el.matches(FOCUSABLE) ? el : el.querySelector<HTMLElement>(FOCUSABLE)))
       .find((el): el is HTMLElement => el !== null);
     (requested ?? marked ?? headingRef.current)?.focus();
-  }, [state.step, done]);
+  }, [state.step, done, state.importProjectId, focusTick]);
+
+  // Focus never rests outside the dialog: a removed or disabled control drops it to the body.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const active = document.activeElement;
+    if (dialog && (!active || active === document.body || !dialog.contains(active))) {
+      (headingRef.current ?? dialog).focus();
+    }
+  });
 
   const go = useCallback(
     (step: StepId, focusId?: string) => {
@@ -119,25 +136,50 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
 
   const close = () => {
     if (state.importProjectId !== null) onProjectsChanged();
+    const to = leaveTo.current;
+    leaveTo.current = null;
     onClose();
+    if (to) navigate(to);
   };
 
-  /** Escape, the backdrop and the close button: a dirty wizard asks first. */
+  /** Escape, the backdrop, the close button and the Settings link: a dirty wizard asks first. */
   const requestClose = () => {
-    if (busy) return;
+    if (busy) {
+      leaveTo.current = null;
+      return;
+    }
     if (done || !isDirty(state)) close();
     else setConfirmClose(true);
   };
 
-  const onKeyDown = (e: KeyboardEvent) => {
+  const keepEditing = () => {
+    leaveTo.current = null;
+    setConfirmClose(false);
+    refocus('wizard-close');
+  };
+
+  const leaveForSettings = (e: MouseEvent) => {
+    e.preventDefault();
+    leaveTo.current = '/settings';
+    requestClose();
+  };
+
+  // Escape and the Tab trap listen on the document, so they work even when focus has slipped out.
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  keyHandler.current = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (confirmClose) setConfirmClose(false);
+      if (confirmClose) keepEditing();
       else requestClose();
     } else {
       trapTab(dialogRef.current, e);
     }
   };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyHandler.current(e);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   const registerImport = async () => {
     setBusy(state.source === 'import_url' ? 'Starting the clone…' : 'Registering the folder…');
@@ -164,9 +206,10 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
         ? await api<AdoptProjectResponse>(`/api/projects/${state.importProjectId}/adopt`, 'POST', buildAdoptBody(state))
         : await api<CreateProjectResponse>('/api/projects', 'POST', buildCreateBody(state));
       const name = state.name.trim();
-      finish();
       // The project exists now: a failing refresh must not look like a failed create.
       await Promise.resolve(onCreated(res.project)).catch(() => undefined);
+      // Reset only now, together with the close or the warning view: no flash of the Start step.
+      finish();
       if (res.warning) setDone({ name, warning: res.warning });
       else onClose();
     } catch (err) {
@@ -199,10 +242,16 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     },
     [dispatch, onProjectsChanged],
   );
-  const onCancelled = useCallback(() => {
-    onProjectsChanged();
-    dispatch({ type: 'importCancelled' });
-  }, [dispatch, onProjectsChanged]);
+  const onCancelled = useCallback(
+    (failure?: { message: string; onName: boolean }) => {
+      onProjectsChanged();
+      focusNext.current = failure?.onName ? 'wizard-name' : null;
+      dispatch({ type: 'importCancelled' });
+      if (failure?.onName) dispatch({ type: 'nameError', message: failure.message });
+      else if (failure) setActionError(failure.message);
+    },
+    [dispatch, onProjectsChanged],
+  );
 
   const problem = stepProblem(state, state.step);
   const cloneBlocked = state.step === 'repo' && state.source === 'import_url' && runnerDown;
@@ -247,7 +296,6 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
         role="dialog"
         aria-modal="true"
         aria-labelledby="wizard-title"
-        onKeyDown={onKeyDown}
       >
         <header className="wizard-top">
           <div className="wizard-top-title">
@@ -258,7 +306,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
               </span>
             )}
           </div>
-          <button type="button" className="icon-btn" aria-label="Close" onClick={requestClose}>
+          <button id="wizard-close" type="button" className="icon-btn" aria-label="Close" onClick={requestClose}>
             <X className="icon" aria-hidden />
           </button>
         </header>
@@ -315,10 +363,16 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                 <StepStart
                   state={state}
                   dispatch={dispatch}
-                  hasFolders={folders.length > 0}
+                  hasFolders={hasImportableFolders(folders)}
                   savedDraft={savedDraft}
-                  onRestore={restore}
-                  onDismissDraft={dismissDraft}
+                  onRestore={() => {
+                    restore();
+                    refocus();
+                  }}
+                  onDismissDraft={() => {
+                    dismissDraft();
+                    refocus();
+                  }}
                 />
               )}
               {state.step === 'type' && <StepType state={state} dispatch={dispatch} />}
@@ -342,7 +396,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                   factory={factory.data}
                   factoryError={factory.error !== undefined && !factory.data ? errorMessage(factory.error) : null}
                   onEditDeploy={() => go('stack', 'wizard-dim-deploy')}
-                  onLeave={close}
+                  onSettings={leaveForSettings}
                 />
               )}
               {state.step === 'summary' && <StepSummary state={state} dispatch={dispatch} preview={preview} onEdit={go} />}
@@ -363,7 +417,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                   <button type="button" className="btn btn-sm" onClick={close}>
                     {state.importProjectId !== null ? 'Close' : 'Discard'}
                   </button>
-                  <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={() => setConfirmClose(false)}>
+                  <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={keepEditing}>
                     Keep editing
                   </button>
                 </div>

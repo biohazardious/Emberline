@@ -1,6 +1,13 @@
-import type { CreateProjectBody, CreateProjectResponse, ImportStatusResponse, ProjectDetectResponse } from '@emberline/protocol';
+import {
+  type CreateProjectBody,
+  type CreateProjectResponse,
+  type ImportStatusResponse,
+  PROJECT_CONFLICT,
+  type ProjectDetectResponse,
+} from '@emberline/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, errorMessage } from '../../api';
+import { api, ApiRequestError, errorMessage } from '../../api';
+import { isNameConflict } from './wizardLogic';
 
 type Phase =
   | { kind: 'cloning'; tail: string; note: string | null }
@@ -30,7 +37,8 @@ export function ImportProgress({
   createBody: CreateProjectBody;
   onDetected: (detect: ProjectDetectResponse) => void;
   onRecreated: (projectId: string) => void;
-  onCancelled: () => void;
+  /** The project is gone; `failure` when a Try again could not register it again. */
+  onCancelled: (failure?: { message: string; onName: boolean }) => void;
 }) {
   const [phase, setPhase] = useState<Phase>(source === 'import_url' ? { kind: 'cloning', tail: '', note: null } : { kind: 'detecting' });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -114,15 +122,30 @@ export function ImportProgress({
       void detect();
       return;
     }
+    const before = phase;
     setPhase({ kind: 'busy', label: 'Removing the failed clone…' });
     try {
       await remove();
+    } catch (err) {
+      if (!alive.current) return;
+      setActionError(errorMessage(err));
+      setPhase(before);
+      return;
+    }
+    setPhase({ kind: 'busy', label: 'Cloning again…' });
+    try {
       const res = await api<CreateProjectResponse>('/api/projects', 'POST', createBody);
       if (alive.current) onRecreated(res.project.id);
     } catch (err) {
       if (!alive.current) return;
-      setActionError(errorMessage(err));
-      setPhase({ kind: 'cloneFailed', exitCode: null, tail: '' });
+      // The failed project is already removed: back to the repository step with the reason.
+      const leftover = err instanceof ApiRequestError && err.code === PROJECT_CONFLICT.directoryExists;
+      onCancelled({
+        message: leftover
+          ? `The failed clone's folder could not be removed (${err.message}). Pick another name, or remove the folder and try again.`
+          : errorMessage(err),
+        onName: isNameConflict(err),
+      });
     }
   };
 
@@ -141,6 +164,20 @@ export function ImportProgress({
   };
 
   const failed = phase.kind === 'cloneFailed' || phase.kind === 'detectFailed';
+
+  // The buttons swap with the phase: keep focus on what replaced the one that was pressed.
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const lastKind = useRef(phase.kind);
+  useEffect(() => {
+    const was = lastKind.current;
+    lastKind.current = phase.kind;
+    if (was === phase.kind) return;
+    if (phase.kind === 'busy') statusRef.current?.focus();
+    else if (failed) retryRef.current?.focus();
+    else if (was === 'busy') cancelRef.current?.focus();
+  }, [phase.kind, failed]);
   const tail = phase.kind === 'cloning' || phase.kind === 'cloneFailed' ? phase.tail : '';
   const status =
     phase.kind === 'cloning'
@@ -155,7 +192,7 @@ export function ImportProgress({
 
   return (
     <div className="wizard-step">
-      <p className={failed ? 'form-error' : 'wizard-status'} role={failed ? 'alert' : 'status'}>
+      <p ref={statusRef} tabIndex={-1} className={failed ? 'form-error' : 'wizard-status'} role={failed ? 'alert' : 'status'}>
         {status}
       </p>
       {phase.kind === 'cloning' && phase.note && <p className="muted small">{phase.note}</p>}
@@ -172,11 +209,11 @@ export function ImportProgress({
       {(failed || phase.kind === 'cloning') && (
         <div className="actions">
           {failed && (
-            <button type="button" className="btn btn-sm btn-primary" data-autofocus="" onClick={() => void retry()}>
+            <button ref={retryRef} type="button" className="btn btn-sm btn-primary" data-autofocus="" onClick={() => void retry()}>
               Try again
             </button>
           )}
-          <button type="button" className="btn btn-sm" onClick={() => void cancel()}>
+          <button ref={cancelRef} type="button" className="btn btn-sm" onClick={() => void cancel()}>
             {source === 'import_folder' ? 'Cancel (keeps the folder)' : 'Cancel and remove the clone'}
           </button>
         </div>

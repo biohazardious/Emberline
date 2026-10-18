@@ -254,6 +254,7 @@ describe('create source import_folder', () => {
     const res = await importFolder('bakery-site', 'Grab It');
     expect(res.statusCode).toBe(409);
     expect(res.json().message).toMatch(/being created/);
+    expect(res.json().error).toBe('being_created');
     gitGate.hold = null;
     release();
     expect((await pending).statusCode).toBe(201);

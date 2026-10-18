@@ -42,7 +42,9 @@ describe('projects', () => {
     expect(existsSync(project.path)).toBe(true);
 
     expect((await api('GET', '/api/projects')).json()).toHaveLength(1);
-    expect((await api('POST', '/api/projects', { name: 'demo app' })).statusCode).toBe(409);
+    const dup = await api('POST', '/api/projects', { name: 'demo app' });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().error).toBe('name_taken');
   });
 
   it('rejects repo URLs that could inject git options', async () => {

@@ -5,7 +5,9 @@ import {
   buildCreateBody,
   canVisit,
   draftOf,
+  hasImportableFolders,
   initialWizardState,
+  isNameConflict,
   isDirty,
   isStepLocked,
   isStepValid,
@@ -17,6 +19,7 @@ import {
   repoNameFromUrl,
   stepProblem,
   stepsFor,
+  stripUrlCredentials,
   type WizardAction,
   type WizardState,
   wizardReducer,
@@ -432,5 +435,47 @@ describe('drafts', () => {
     expect(restored.gates).toEqual({});
     expect(restored.dirty).toEqual(['auth']);
     expect(restored.step).toBe('type');
+  });
+});
+
+describe('credentials never reach the draft', () => {
+  it('strips userinfo from scheme URLs and keeps an ssh user name', () => {
+    expect(stripUrlCredentials('https://user:ghp_secret@github.com/acme/shop.git')).toBe('https://github.com/acme/shop.git');
+    expect(stripUrlCredentials('https://ghp_secret@github.com/acme/shop.git')).toBe('https://github.com/acme/shop.git');
+    expect(stripUrlCredentials('ssh://git:pw@host.example/acme/shop.git')).toBe('ssh://git@host.example/acme/shop.git');
+    expect(stripUrlCredentials('ssh://git@host.example/acme/shop.git')).toBe('ssh://git@host.example/acme/shop.git');
+    expect(stripUrlCredentials('git@github.com:acme/shop.git')).toBe('git@github.com:acme/shop.git');
+    expect(stripUrlCredentials('https://github.com/a/b?x=a@b')).toBe('https://github.com/a/b?x=a@b');
+  });
+
+  it('saves and restores the repository URL without its token', () => {
+    const s = run([
+      { type: 'source', source: 'import_url' },
+      { type: 'field', field: 'repoUrl', value: 'https://me:tok@github.com/acme/shop.git' },
+    ]);
+    expect(s.repoUrl).toContain('tok');
+    const raw = JSON.stringify(draftOf(s));
+    expect(raw).not.toContain('tok');
+    expect(draftOf(s)?.repoUrl).toBe('https://github.com/acme/shop.git');
+    const planted = JSON.stringify({ v: 1, source: 'import_url', repoUrl: 'https://me:tok@github.com/x.git' });
+    expect(parseDraft(planted)?.repoUrl).toBe('https://github.com/x.git');
+  });
+});
+
+describe('import helpers', () => {
+  it('offers the folder source only when a folder is a git repository', () => {
+    const f = (isGitRepo: boolean) => ({ name: 'a', path: '/w/a', isGitRepo, hasRemote: false });
+    expect(hasImportableFolders([])).toBe(false);
+    expect(hasImportableFolders([f(false)])).toBe(false);
+    expect(hasImportableFolders([f(false), f(true)])).toBe(true);
+  });
+
+  it('puts a 409 on the name field only for a taken name or an existing directory', () => {
+    expect(isNameConflict({ status: 409, code: 'name_taken' })).toBe(true);
+    expect(isNameConflict({ status: 409, code: 'directory_exists' })).toBe(true);
+    expect(isNameConflict({ status: 409, code: 'being_created' })).toBe(false);
+    expect(isNameConflict({ status: 409, code: 'conflict' })).toBe(false);
+    expect(isNameConflict({ status: 400, code: 'name_taken' })).toBe(false);
+    expect(isNameConflict(new Error('a project with slug "x" already exists'))).toBe(false);
   });
 });

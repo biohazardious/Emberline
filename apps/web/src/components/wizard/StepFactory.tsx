@@ -6,7 +6,7 @@ import {
   PROVIDER_REGISTRY,
   type Route,
 } from '@emberline/protocol';
-import type { Dispatch } from 'react';
+import type { Dispatch, MouseEvent } from 'react';
 import { Link } from 'wouter';
 import { gateChoice, GATE_LABELS } from '../../projectSettings';
 import { GateRadios } from '../ProjectSettingsPanel';
@@ -28,7 +28,7 @@ export function StepFactory({
   factory,
   factoryError,
   onEditDeploy,
-  onLeave,
+  onSettings,
 }: {
   state: WizardState;
   dispatch: Dispatch<WizardAction>;
@@ -36,8 +36,8 @@ export function StepFactory({
   factoryError: string | null;
   /** Jumps to the Stack step with the deploy row focused. */
   onEditDeploy: () => void;
-  /** Leaving for Settings closes the wizard; the draft stays to restore. */
-  onLeave: () => void;
+  /** Leaving for Settings closes the wizard, after the same confirm as Close; the draft stays to restore. */
+  onSettings: (e: MouseEvent) => void;
 }) {
   const imported = isImport(state.source);
   const verb = imported ? 'Import' : 'Create';
@@ -49,7 +49,7 @@ export function StepFactory({
         ? 'Adds a [Factory] ticket from the vision and starts it.'
         : 'Starts the Bootstrap ticket now; the product owner takes the vision once it is merged.',
     },
-    { value: false, label: `${verb} only`, hint: 'Creates the tickets and starts nothing.' },
+    { value: false, label: `${verb} only`, hint: imported ? 'Adopts the project and starts nothing.' : 'Creates the tickets and starts nothing.' },
   ];
 
   return (
@@ -171,10 +171,10 @@ export function StepFactory({
         )}
         <p className="muted small">
           Routes are global.{' '}
-          <Link href="/settings" onClick={onLeave}>
+          <Link href="/settings" onClick={onSettings}>
             Change them in Settings
           </Link>{' '}
-          (closes the wizard; you can restore it).
+          (closes the wizard; you can restore it later).
         </p>
       </section>
     </div>

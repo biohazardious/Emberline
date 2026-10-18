@@ -118,6 +118,16 @@ export const CreateProjectBody = CreateProjectFields.refine(
 });
 export type CreateProjectBody = z.input<typeof CreateProjectBody>;
 
+/** `error` codes of a 409 from `POST /api/projects` that the wizard tells apart. */
+export const PROJECT_CONFLICT = {
+  /** A project already has this name's slug. */
+  nameTaken: 'name_taken',
+  /** A create for this slug (or this folder) is running right now. */
+  beingCreated: 'being_created',
+  /** The slug's directory exists in the workspaces directory (e.g. a leftover folder). */
+  directoryExists: 'directory_exists',
+} as const;
+
 export const CreateProjectResponse = z.object({
   project: Project,
   /** Terminal running `git clone`, when a repo URL was given. */

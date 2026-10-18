@@ -4,6 +4,7 @@ import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActiveProjectPreference,
+  PROJECT_CONFLICT,
   AgentCreateTicketsPayload,
   AgentId,
   AutoGenerateRoadmapBody,
@@ -225,7 +226,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     const plan = planNewProject(body);
     const projectPath = path.join(config.workspacesDir, slug);
     if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
-      throw conflict(`directory already exists and is not empty: ${projectPath}`);
+      throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
     }
     const row: ProjectRow = {
       id: randomUUID(),
@@ -323,7 +324,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   ): Promise<CreateProjectResponse> {
     // A wizard create is writing into this folder right now: it is not an existing repository.
     const beingCreated = () => {
-      if (creating.has(folder)) throw conflict(`"${folder}" is being created by the wizard`);
+      if (creating.has(folder)) throw conflict(`"${folder}" is being created by the wizard`, PROJECT_CONFLICT.beingCreated);
     };
     beingCreated();
     const projectPath = await resolveWorkspaceFolder(config.workspacesDir, folder);
@@ -339,7 +340,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     beingCreated();
     if (isProject()) throw conflict(`"${folder}" is already a project`);
     if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
-      throw conflict(`a project with slug "${slug}" already exists`);
+      throw conflict(`a project with slug "${slug}" already exists`, PROJECT_CONFLICT.nameTaken);
     }
     const row: ProjectRow = {
       id: randomUUID(),
@@ -366,7 +367,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     const slug = slugify(body.name);
     if (!slug) throw badRequest('name must contain at least one letter or digit');
     if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
-      throw conflict(`a project with slug "${slug}" already exists`);
+      throw conflict(`a project with slug "${slug}" already exists`, PROJECT_CONFLICT.nameTaken);
     }
     if (body.source === 'import_folder' && body.folder !== undefined) {
       return importFolderProject(body, body.folder, slug, reply);
@@ -374,7 +375,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     if (isWizardCreate(body)) {
       if (body.repoUrl) throw badRequest('a new project cannot have a repoUrl; use source "import_url"');
       // A double submit must not write twice into the same directory.
-      if (creating.has(slug)) throw conflict(`a project with slug "${slug}" is being created`);
+      if (creating.has(slug)) throw conflict(`a project with slug "${slug}" is being created`, PROJECT_CONFLICT.beingCreated);
       creating.add(slug);
       try {
         return await createNewProject(body, slug, reply, request.log);
@@ -388,7 +389,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     let terminalId: string | null = null;
 
     if (body.repoUrl) {
-      if (existsSync(projectPath)) throw conflict(`directory already exists: ${projectPath}`);
+      if (existsSync(projectPath)) throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
       // Clone inside the runner so it uses the runner's git credentials; the UI can watch it live.
       const session = await ptyd.get().spawn({
         file: 'git',
@@ -400,7 +401,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     } else {
       // Never write blueprint files or `git init` into someone's existing folder.
       if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
-        throw conflict(`directory already exists and is not empty: ${projectPath}`);
+        throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
       }
       await mkdir(projectPath, { recursive: true });
       const shouldWriteBlueprint =

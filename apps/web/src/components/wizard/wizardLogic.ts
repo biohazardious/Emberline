@@ -16,10 +16,12 @@ import {
   ProjectGateOverrides,
   type ProjectTypeId,
   presetsForType,
+  PROJECT_CONFLICT,
   STACK_DIMENSION_IDS,
   StackChoice,
   type StackDimensionId,
   VERSION_POLICIES,
+  type WorkspaceFolder,
 } from '@emberline/protocol';
 import type { GateChoice } from '../../projectSettings';
 
@@ -304,6 +306,29 @@ export function repoNameFromUrl(url: string): string {
   return last.replace(/\.git$/i, '');
 }
 
+/**
+ * A URL without credentials: userinfo goes from https URLs, an ssh URL keeps only its user name.
+ * scp-style `git@host:path` has no secret and stays as it is.
+ */
+export function stripUrlCredentials(url: string): string {
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i.exec(url);
+  if (!m) return url;
+  const [whole, scheme, userinfo] = m as unknown as [string, string, string];
+  const rest = url.slice(whole.length);
+  if (/^ssh:/i.test(scheme)) return `${scheme}${userinfo.split(':')[0]}@${rest}`;
+  return `${scheme}${rest}`;
+}
+
+/** "Use a folder" is offered only when at least one folder can be imported (a git repository). */
+export const hasImportableFolders = (folders: readonly WorkspaceFolder[]) => folders.some((f) => f.isGitRepo);
+
+/** A 409 that belongs on the name field: the name's slug is taken or its directory already exists. */
+export function isNameConflict(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const { status, code } = err as { status?: unknown; code?: unknown };
+  return status === 409 && (code === PROJECT_CONFLICT.nameTaken || code === PROJECT_CONFLICT.directoryExists);
+}
+
 /** The name follows the URL or folder until the person types their own. */
 function followName(name: string, before: string, after: string): string {
   return name.trim() === '' || name === before ? after : name;
@@ -522,7 +547,8 @@ export function draftOf(s: WizardState): WizardDraft | null {
     versionPolicy: s.versionPolicy,
     gates: s.gates,
     startFactory: s.startFactory,
-    repoUrl: s.repoUrl,
+    // sessionStorage is readable by any script on the origin: never keep a token from the URL.
+    repoUrl: stripUrlCredentials(s.repoUrl),
     folder: s.folder,
   };
 }
@@ -579,7 +605,7 @@ export function parseDraft(raw: string | null): WizardDraft | null {
     versionPolicy: VERSION_POLICIES.some((p) => p.id === d.versionPolicy) ? (d.versionPolicy as string) : base.versionPolicy,
     gates: gates.success ? gates.data : {},
     startFactory: typeof d.startFactory === 'boolean' ? d.startFactory : !isImport(d.source as WizardSource),
-    repoUrl: str('repoUrl'),
+    repoUrl: stripUrlCredentials(str('repoUrl')),
     folder: str('folder'),
   };
 }
