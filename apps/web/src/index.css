@@ -4121,3 +4121,130 @@ dialog.cmd-dialog::backdrop {
     width: 100%;
   }
 }
+
+/* Issue import dialog */
+.issue-dialog-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.issue-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.issue-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.issue-filters .input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.issue-list-head,
+.issue-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+.issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.issue-linked {
+  opacity: 0.65;
+}
+
+.issue-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.issue-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.issue-title {
+  display: block;
+  overflow-wrap: anywhere;
+  color: inherit;
+}
+
+.issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.issue-label,
+.card-issue-label {
+  font-size: 0.72rem;
+}
+
+.card-issue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.issue-chip {
+  color: inherit;
+  text-decoration: none;
+}
+
+.issue-chip:hover {
+  text-decoration: underline;
+}
+
+.issue-status {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.issue-status dd {
+  margin: 0;
+}
+
+.issue-sync {
+  overflow-y: auto;
+}
+
+@media (max-width: 640px) {
+  .issue-dialog {
+    width: 100%;
+    max-width: 100%;
+    border-left: 0;
+  }
+}

@@ -12,6 +12,7 @@ import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, use
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
+import { IssueImportDialog } from '../components/IssueImportDialog';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PERSONA_LIST, PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
@@ -122,6 +123,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
     setArmedStart((prev) => (prev && prev.id !== openId ? undefined : prev));
   }, [openId]);
   const [blueprintOpen, setBlueprintOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [demoPanelOpen, setDemoPanelOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [error, setError] = useState<string>();
@@ -280,6 +282,16 @@ export function BoardPage({ projectId }: { projectId: string }) {
             <span className="dot" />
             Auto-dispatch on In progress
           </button>
+          {project && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setImportOpen(true)}
+              title="Import issues from the project's GitHub, GitLab or Gitea remote"
+            >
+              Import issues
+            </button>
+          )}
           <QuickAdd projectId={projectId} onCreated={patchLocal} onError={setError} />
         </div>
       </header>
@@ -381,6 +393,15 @@ export function BoardPage({ projectId }: { projectId: string }) {
         />
       )}
 
+      {project && importOpen && (
+        <IssueImportDialog
+          projectId={project.id}
+          projectName={project.name}
+          onClose={() => setImportOpen(false)}
+          onImported={(created) => created.forEach(patchLocal)}
+        />
+      )}
+
       {project && (
         <BlueprintModal
           project={project}
@@ -451,6 +472,32 @@ function QuickAdd({
   );
 }
 
+/** The issue a ticket was imported from: `#123` linking to it, its labels, and whether it is closed. */
+function IssueChips({ external }: { external: Ticket['external'] }) {
+  if (!external) return null;
+  return (
+    <div className="card-issue">
+      <a
+        className="badge badge-soft mono issue-chip"
+        href={external.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open the issue"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        #{external.number}
+      </a>
+      {external.state === 'closed' && <span className="badge badge-soft">closed</span>}
+      {external.labels.map((l) => (
+        <span key={l} className="badge badge-soft card-issue-label">
+          {l}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function TicketCard({
   ticket,
   run,
@@ -496,6 +543,7 @@ function TicketCard({
           <span className="prio-dot" title={`${PRIORITIES[ticket.priority]} priority`} />
         </div>
         <p className="card-title">{ticket.title}</p>
+        <IssueChips external={ticket.external} />
         {waitingLabel(ticket.blockedBy) && (
           <span className="card-waiting mono" title={waitingTitle(ticket.blockedBy)}>
             {waitingLabel(ticket.blockedBy)}
@@ -776,6 +824,7 @@ function TicketDrawer({
               maxLength={200}
               onChange={(e) => setTitle(e.target.value)}
             />
+            <IssueChips external={ticket.external} />
             <textarea
               id="drawer-body"
               className="input drawer-body"
