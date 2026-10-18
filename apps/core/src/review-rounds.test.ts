@@ -5,7 +5,7 @@ import type { ReviewComment, Run, RunReviewState, Ticket } from '@emberline/prot
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runs } from './db/schema.js';
+import { runEvents, runs } from './db/schema.js';
 import { conflict } from './errors.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -263,5 +263,188 @@ describe('review rounds (send target)', () => {
     expect(run.prompt.length).toBeLessThanOrEqual(20_000);
     expect(run.prompt).toContain('## Feedback\nfff');
     expect(run.prompt.startsWith(`${ticket.key}: Big\n\n${'b'.repeat(15_000)}\n\n## Feedback`)).toBe(true);
+  });
+});
+
+/** Records a run event the way core's own bookkeeping does (process exits are not reachable from a hook). */
+const record = (runId: string, event: { source: 'system'; type: string; state?: Run['state']; patch?: object }) =>
+  (t.runs as unknown as { record(id: string, e: typeof event): Run }).record(runId, event);
+
+describe('review rounds (fix round 1)', () => {
+  async function ticketWithBody(body: string, title = 'Big'): Promise<Ticket> {
+    const p = await project(`Room ${Math.random().toString(36).slice(2, 7)}`);
+    return (await api('POST', `/api/projects/${p.id}/tickets`, { title, body })).json();
+  }
+
+  async function idleTicketRun(body = 'Parse it.'): Promise<{ ticket: Ticket; run: Run }> {
+    const ticket = await ticketWithBody(body);
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    await hook(run, 'SessionStart', { session_id: 's' });
+    return { ticket, run };
+  }
+
+  it('carries only the comments that fit the room the ticket leaves, blocking first', async () => {
+    const { run } = await idleTicketRun('b'.repeat(19_200));
+    await comment(run, { line: 1, body: 'Validate input', priority: 'blocking' });
+    await comment(run, { line: 2, body: 'i'.repeat(2_000) });
+    const res = await requestChanges(run, { target: 'new' });
+    expect(res.statusCode).toBe(200);
+    const { run: fresh, sent } = res.json() as { run: Run; sent: number };
+    expect(sent).toBe(1);
+    expect(fresh.prompt.length).toBeLessThanOrEqual(20_000);
+    expect(fresh.prompt).toContain('- `src/a.ts:1` (fix) Validate input');
+    expect(fresh.prompt).not.toContain('iiii');
+    expect(fresh.prompt.endsWith('(1 more comment not included)')).toBe(true);
+    const all = await byBody(run);
+    expect(all['Validate input']).toMatchObject({ status: 'resolved', carriedTo: fresh.id });
+    expect(all['i'.repeat(2_000)]).toMatchObject({ status: 'open', carriedTo: null });
+  });
+
+  it('refuses a new run when the ticket text leaves no room for any feedback', async () => {
+    const { ticket, run } = await idleTicketRun('b'.repeat(19_900));
+    await comment(run, { line: 1, body: 'Validate input' });
+    const res = await requestChanges(run, { target: 'new' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toBe('the ticket text leaves no room for review feedback');
+    expect((await byBody(run))['Validate input']!.status).toBe('open');
+    // The reviewed run was not stopped for nothing.
+    expect(t.runs.getRun(run.id).cancelled).toBe(false);
+    expect(t.runs.activeRunForTicket(ticket.id)?.id).toBe(run.id);
+  });
+
+  it('stops the idle reviewed run before starting the new one', async () => {
+    const { run } = await idleTicketRun();
+    await comment(run, { line: 1, body: 'Again' });
+    const res = await requestChanges(run, { target: 'new' });
+    expect(res.statusCode).toBe(200);
+    const fresh = res.json().run as Run;
+    expect(fresh.id).not.toBe(run.id);
+    expect(t.runs.getRun(run.id).cancelled).toBe(true);
+    const stop = t.db.select().from(runEvents).where(eq(runEvents.runId, run.id)).all().find((e) => e.type === 'stop_requested');
+    expect(stop).toMatchObject({ source: 'system', payload: { reason: 'review_new_run' } });
+  });
+
+  it('refuses a new run while the reviewed run is working, and a failed start changes no status', async () => {
+    const { ticket, run } = await idleTicketRun();
+    await comment(run, { line: 1, body: 'Later' });
+    await hook(run, 'UserPromptSubmit');
+    const res = await requestChanges(run, { target: 'new' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toBe('the run is still working — stop it or wait');
+    expect(t.runs.getRun(run.id).cancelled).toBe(false);
+    expect((await byBody(run))['Later']).toMatchObject({ status: 'open', round: 0 });
+
+    await hook(run, 'Stop');
+    vi.spyOn(t.tickets, 'start').mockRejectedValue(new Error('scheduler down'));
+    expect((await requestChanges(run, { target: 'new' })).statusCode).toBe(500);
+    expect((await byBody(run))['Later']).toMatchObject({ status: 'open', round: 0, carriedTo: null, resolvedAt: null });
+    expect(t.runs.activeRunForTicket(ticket.id)?.id).toBe(run.id);
+  });
+
+  it('settles comments sent before a quota handoff on the successor’s done, not on the handoff', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    await comment(run, { line: 1, body: 'Carry on' });
+    await requestChanges(run);
+    await hook(run, 'UserPromptSubmit');
+    t.db.update(runs).set({ state: 'rate_limited' }).where(eq(runs.id, run.id)).run();
+    const successor = await t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, {
+      reason: 'Individual quota reached',
+      source: 'system',
+      automatic: true,
+    });
+    expect(t.runs.getRun(run.id)).toMatchObject({ state: 'done', handedOffTo: successor.id });
+    expect((await byBody(run))['Carry on']!.status).toBe('sent');
+    await t.scheduler.tick();
+    await hook(successor, 'SessionStart', { session_id: 's2' });
+    await hook(successor, 'UserPromptSubmit');
+    expect((await byBody(run))['Carry on']!.status).toBe('sent');
+    await hook(successor, 'Stop');
+    expect((await byBody(run))['Carry on']!.status).toBe('addressed');
+  });
+
+  it('does not settle a prompt queued mid-turn on that turn’s Stop, only on the next turn', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    await hook(run, 'UserPromptSubmit');
+    await comment(run, { line: 1, body: 'Queued' });
+    await requestChanges(run);
+    await hook(run, 'Stop');
+    expect((await byBody(run))['Queued']!.status).toBe('sent');
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'Stop');
+    expect((await byBody(run))['Queued']!.status).toBe('addressed');
+  });
+
+  it('does not count a done that came from the process exiting', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    await comment(run, { line: 1, body: 'Exit' });
+    await requestChanges(run);
+    await hook(run, 'UserPromptSubmit');
+    record(run.id, { source: 'system', type: 'process_exited', state: 'done', patch: { endedAt: new Date(), ptydSessionId: null } });
+    expect((await byBody(run))['Exit']!.status).toBe('sent');
+  });
+
+  it('sends one batch when two requests race, counting the round once', async () => {
+    const run = await adHocRun();
+    let calls = 0;
+    vi.spyOn(t.runs, 'prompt').mockImplementation(async (id: string) => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return t.runs.getRun(id);
+    });
+    await comment(run, { line: 1, body: 'Once' });
+    const [a, b] = await Promise.all([requestChanges(run), requestChanges(run)]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 400]);
+    expect(calls).toBe(1);
+    expect((await byBody(run))['Once']).toMatchObject({ status: 'sent', round: 1 });
+  });
+
+  it('does not overwrite a comment resolved while its batch was being sent', async () => {
+    const run = await adHocRun();
+    let id = '';
+    vi.spyOn(t.runs, 'prompt').mockImplementation(async (runId: string) => {
+      await api('PATCH', `/api/runs/${runId}/review/comments/${id}`, { status: 'resolved' });
+      return t.runs.getRun(runId);
+    });
+    id = (await comment(run, { line: 1, body: 'Resolved meanwhile' })).id;
+    expect((await requestChanges(run)).statusCode).toBe(200);
+    expect((await byBody(run))['Resolved meanwhile']).toMatchObject({ status: 'resolved', round: 0 });
+  });
+
+  it('refuses a same-run batch over the prompt limit, counting pinned comments', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    await comment(run, { line: 1, body: 'a'.repeat(9_000) });
+    await requestChanges(run);
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'Stop');
+    await comment(run, { line: 2, body: 'b'.repeat(9_000) });
+    await comment(run, { line: 3, body: 'c'.repeat(9_000) });
+    const res = await requestChanges(run);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toBe('too much feedback in one round — resolve or split');
+    expect((await comments(run)).map((c) => c.status).sort()).toEqual(['addressed', 'open', 'open']);
+  });
+
+  it('reopens only addressed or resolved comments', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    const open = await comment(run, { line: 1, body: 'o' });
+    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).statusCode).toBe(409);
+    await requestChanges(run);
+    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).statusCode).toBe(409);
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'Stop');
+    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).json().status).toBe('open');
+  });
+
+  it('clips an extra section without splitting a character', async () => {
+    const ticket = await ticketWithBody('b'.repeat(15_001));
+    const { run } = await t.tickets.start(ticket.id, {}, { extraPromptSection: `## Feedback\n${'😀'.repeat(10_000)}` });
+    expect(run.prompt.length).toBeLessThanOrEqual(20_000);
+    expect(run.prompt.endsWith('…')).toBe(true);
+    expect(run.prompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 });

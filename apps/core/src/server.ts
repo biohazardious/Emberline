@@ -75,8 +75,14 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     deps.db,
     deps.runs,
     (message, err) => app.log.warn({ err }, message),
-    async ({ ticketId, permissionMode, persona, extraPromptSection }) =>
-      (await deps.tickets.start(ticketId, { permissionMode, persona }, { byPerson: true, extraPromptSection })).run,
+    async ({ ticketId, permissionMode, persona, section, replaceIdleRuns }) =>
+      (
+        await deps.tickets.start(
+          ticketId,
+          { permissionMode, persona },
+          { byPerson: true, extraPromptSection: section, replaceIdleRun: { ids: replaceIdleRuns, reason: 'review_new_run' } },
+        )
+      ).run,
   );
   cron.start();
   notifications.start();

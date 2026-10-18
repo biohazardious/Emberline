@@ -61,6 +61,7 @@ import { type AttentionFacts, attachAttention, loadAttentionFacts } from './atte
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { stripControlChars } from '../text/control-chars.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
@@ -1439,8 +1440,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.resume(id, text);
   }
 
-  private async typePrompt(sessionId: string, text: string): Promise<void> {
+  /**
+   * Types `text` into the agent's terminal. Controls are stripped first (newline and tab stay): an
+   * ESC or C1 control from the content (agent-controlled build output, paths, code) could otherwise
+   * end the bracketed paste and inject keystrokes.
+   */
+  private async typePrompt(sessionId: string, raw: string): Promise<void> {
     const ptyd = this.ptyd.get();
+    const text = stripControlChars(raw.replace(/\r\n?/g, '\n'));
     const input = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
     await ptyd.write(sessionId, input);
     await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS));

@@ -9,15 +9,18 @@ import {
   type RunReviewState,
   UpdateReviewCommentBody,
 } from '@emberline/protocol';
-import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { reviewComments, reviewFileViews } from '../db/schema.js';
+import { reviewComments, reviewFileViews, runEvents, runs as runsTable } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
 import { anchorTextOf, type Anchored, reanchor } from './anchor.js';
 import { type BatchComment, type BatchKind, newRunFeedbackSection, sameRunPrompt } from './batch.js';
 
 type CommentRow = typeof reviewComments.$inferSelect;
+/** A comment as it goes out, with the status it had when the batch was built. */
+type Batched = BatchComment & Pick<ReviewComment, 'status'>;
 
 const toComment = (row: CommentRow, anchored: Anchored = { currentLine: row.line, outdated: false }): ReviewComment => ({
   id: row.id,
@@ -48,17 +51,29 @@ function parse<T>(schema: { safeParse(v: unknown): { success: true; data: T } | 
 }
 
 /**
- * Line comments and per-file "viewed" marks on a run's diff, stored in SQLite so a review survives
- * reloads and can be continued after the agent has addressed part of it.
+ * Starts a fresh run of a ticket (TicketService.start, injected to avoid a cycle). `section` builds
+ * the extra prompt section for the room the ticket prompt leaves; an idle active run among
+ * `replaceIdleRuns` is stopped first.
  */
-/** Starts a fresh run of a ticket with an extra prompt section (TicketService.start, injected to avoid a cycle). */
 export type StartTicketRun = (input: {
   ticketId: string;
   permissionMode: Run['permissionMode'];
   persona: Run['persona'];
-  extraPromptSection: string;
+  section: (room: number) => string;
+  replaceIdleRuns: string[];
 }) => Promise<Run>;
 
+/** The prompt limit of a run (CreateRunBody / TicketPromptBody). */
+const PROMPT_MAX = 20_000;
+/** Longest handoff chain followed when settling comments. */
+const CHAIN_MAX = 20;
+/** A `done` from these is not the agent finishing a turn: it never addresses comments. */
+const NOT_A_TURN = new Set(['handed_off', 'process_exited', 'session_lost', 'cancelled']);
+
+/**
+ * Line comments and per-file "viewed" marks on a run's diff, stored in SQLite so a review survives
+ * reloads and can be continued after the agent has addressed part of it.
+ */
 export class ReviewService {
   constructor(
     private readonly db: Db,
@@ -67,16 +82,24 @@ export class ReviewService {
     private readonly startTicketRun?: StartTicketRun,
   ) {}
 
+  /** One request-changes per run at a time: two racing sends would send (and count) a batch twice. */
+  private readonly sending = new KeyedMutex();
+
   private readonly onRun = (run: Run, stateChanged: boolean): void => {
     if (!stateChanged || run.state !== 'done') return;
     try {
-      this.settle(run.id, new Date(run.stateChangedAt));
+      // The done of a handoff successor settles what its predecessors were sent.
+      let id: string | null = run.id;
+      for (let i = 0; id && i < CHAIN_MAX; i += 1) {
+        this.settle(id);
+        id = this.db.select({ p: runsTable.predecessorRunId }).from(runsTable).where(eq(runsTable.id, id)).get()?.p ?? null;
+      }
     } catch (error) {
       this.log(`review: marking the comments of run ${run.id} addressed failed`, error);
     }
   };
 
-  /** Follows the runs: a run that reaches `done` after comments were sent to it has addressed them. */
+  /** Follows the runs: a run that finishes a turn after comments were sent to it has addressed them. */
   start(): void {
     this.runs.on('run', this.onRun);
   }
@@ -85,21 +108,53 @@ export class ReviewService {
     this.runs.off('run', this.onRun);
   }
 
+  /** The run and the runs that took over from it by handoff, in order. */
+  private chain(runId: string): string[] {
+    const ids = [runId];
+    let next = this.db.select({ to: runsTable.handedOffTo }).from(runsTable).where(eq(runsTable.id, runId)).get()?.to ?? null;
+    while (next && ids.length < CHAIN_MAX && !ids.includes(next)) {
+      ids.push(next);
+      next = this.db.select({ to: runsTable.handedOffTo }).from(runsTable).where(eq(runsTable.id, next)).get()?.to ?? null;
+    }
+    return ids;
+  }
+
   /**
-   * `sent` -> `addressed` for comments sent to the run before `doneAt`, the moment it last reached
-   * `done`. Also run lazily before reads and sends, so a done missed by the listener (core restart)
-   * still counts.
+   * `sent` -> `addressed` once the agent has taken the prompt and finished that turn: a transition to
+   * `working` after the comment's sentAt, followed by a `done` that ends a turn. A done from a
+   * handoff, a process exit or a stop is not one, and a prompt queued mid-turn does not count on
+   * that turn's Stop. A handed-off run's comments settle on its successors' turns. Run on every
+   * done by the listener, and lazily before reads and sends (a done missed across a restart).
    */
-  private settle(runId: string, doneAt: Date): void {
+  private settle(runId: string): void {
+    const pending = this.db
+      .select({ sentAt: reviewComments.sentAt })
+      .from(reviewComments)
+      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'sent'), isNotNull(reviewComments.sentAt)))
+      .all();
+    if (pending.length === 0) return;
+    const since = new Date(Math.min(...pending.map((p) => p.sentAt!.getTime())));
+    const events = this.db
+      .select({ runId: runEvents.runId, ts: runEvents.ts, type: runEvents.type, state: runEvents.state })
+      .from(runEvents)
+      .where(and(inArray(runEvents.runId, this.chain(runId)), isNotNull(runEvents.state), gte(runEvents.ts, since)))
+      .orderBy(asc(runEvents.ts), asc(runEvents.id))
+      .all();
+    const handedOff = new Set<string>();
+    let working: Date | null = null;
+    let addressedBefore: Date | null = null;
+    for (const e of events) {
+      if (e.type === 'handed_off') handedOff.add(e.runId);
+      if (handedOff.has(e.runId)) continue;
+      if (e.state === 'working') working = e.ts;
+      else if (e.state === 'done' && working && !NOT_A_TURN.has(e.type)) addressedBefore = working;
+    }
+    if (!addressedBefore) return;
     this.db
       .update(reviewComments)
       .set({ status: 'addressed' })
-      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'sent'), lt(reviewComments.sentAt, doneAt)))
+      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'sent'), lt(reviewComments.sentAt, addressedBefore)))
       .run();
-  }
-
-  private settleFor(run: Run): void {
-    if (run.state === 'done') this.settle(run.id, new Date(run.stateChangedAt));
   }
 
   private readonly warned = new Set<string>();
@@ -171,7 +226,8 @@ export class ReviewService {
   }
 
   async state(runId: string): Promise<RunReviewState> {
-    this.settleFor(this.runs.getRun(runId));
+    this.runs.getRun(runId);
+    this.settle(runId);
     const rows = this.db
       .select()
       .from(reviewComments)
@@ -257,9 +313,13 @@ export class ReviewService {
         verifiedAt: existing.status === 'addressed' ? new Date() : existing.verifiedAt,
       });
     }
-    // Reopening ("Not done") makes it open again, so it goes out with the next batch; its round and
-    // sentAt stay as history. A carried comment reopened here belongs to this run again.
-    if (body.status === 'open' && existing.status !== 'open') {
+    // Reopening ("Not done") is for feedback the agent turned in or a person accepted: it becomes
+    // open again, so the next batch sends it; round and sentAt stay as history. A carried comment
+    // reopened here belongs to this run again.
+    if (body.status === 'open') {
+      if (existing.status !== 'addressed' && existing.status !== 'resolved') {
+        throw conflict(`a ${existing.status} comment cannot be reopened`);
+      }
       Object.assign(patch, { status: 'open', resolvedAt: null, verifiedAt: null, carriedTo: null });
     }
     if (Object.keys(patch).length === 0) return (await this.anchor(runId, [existing]))[0]!;
@@ -282,8 +342,8 @@ export class ReviewService {
    * person resolves it); and sent ones only once the run has ended without addressing them (while
    * it is still at work they are with the agent already).
    */
-  private async batch(run: Run): Promise<{ rows: CommentRow[]; comments: BatchComment[] }> {
-    this.settleFor(run);
+  private async batch(run: Run): Promise<Batched[]> {
+    this.settle(run.id);
     const ended = run.state === 'failed' || run.endedAt !== null || run.cancelled;
     const statuses = ended ? ['open', 'addressed', 'sent'] : ['open', 'addressed'];
     const rows = this.db
@@ -294,41 +354,61 @@ export class ReviewService {
       .all();
     const kindOf: Record<string, BatchKind> = { open: 'new', sent: 'reminder', addressed: 'pinned' };
     const anchored = await this.anchor(run.id, rows);
-    return { rows, comments: anchored.map((c) => ({ ...c, kind: kindOf[c.status] ?? 'new' })) };
+    return anchored.map((c) => ({ ...c, kind: kindOf[c.status] ?? 'new' }));
   }
 
   /**
    * Sends the batch (plus an optional note) as one prompt. `same` types into or resumes the run and
-   * marks the comments sent (round + 1); `new` starts a fresh run of the ticket carrying the
-   * feedback and resolves the comments here with `carriedTo`. A failed send changes no status.
+   * marks the comments sent (round + 1); `new` starts a fresh run of the ticket carrying as much of
+   * the feedback as fits and resolves those comments here with `carriedTo`. A failed send changes no
+   * status. One send per run at a time.
    */
   async requestChanges(runId: string, raw: unknown): Promise<RequestChangesResponse> {
     const { note, target } = parse(RequestChangesBody, raw);
+    this.runs.getRun(runId);
+    return this.sending.run(runId, () => (target === 'new' ? this.sendToNewRun(runId, note) : this.sendToSameRun(runId, note)));
+  }
+
+  private async sendToSameRun(runId: string, note: string): Promise<RequestChangesResponse> {
     const run = this.runs.getRun(runId);
-    const { rows, comments } = await this.batch(run);
-    if (rows.length === 0 && !note) throw badRequest('nothing to send: add a comment or a note');
-    // Taken before the send: the agent's next done must come after it to count as addressing these.
+    const comments = await this.batch(run);
+    if (comments.length === 0 && !note) throw badRequest('nothing to send: add a comment or a note');
+    const text = sameRunPrompt(note, comments);
+    if (text.length > PROMPT_MAX) throw badRequest('too much feedback in one round — resolve or split');
+    // Taken before the send: the agent's next turn must start after it to count as addressing these.
     const sentAt = new Date();
-    const ids = rows.map((r) => r.id);
-    if (target === 'new') {
-      if (!run.ticketId || !this.startTicketRun) throw conflict('only a ticket run can start a new run');
-      const fresh = await this.startTicketRun({
-        ticketId: run.ticketId,
-        permissionMode: run.permissionMode,
-        persona: run.persona,
-        extraPromptSection: newRunFeedbackSection(run.id, note, comments),
-      });
-      this.markAll(ids, { status: 'resolved', sentAt, resolvedAt: sentAt, carriedTo: fresh.id });
-      return { run: fresh, sent: rows.length };
-    }
     let prompted: Run;
     try {
-      prompted = await this.runs.prompt(runId, sameRunPrompt(note, comments));
+      prompted = await this.runs.prompt(runId, text);
     } catch (error) {
       throw this.cannotPrompt(runId, error);
     }
-    this.markAll(ids, { status: 'sent', sentAt });
-    return { run: prompted, sent: rows.length };
+    this.markAll(comments, { status: 'sent', sentAt });
+    return { run: prompted, sent: comments.length };
+  }
+
+  private async sendToNewRun(runId: string, note: string): Promise<RequestChangesResponse> {
+    const run = this.runs.getRun(runId);
+    if (!run.ticketId || !this.startTicketRun) throw conflict('only a ticket run can start a new run');
+    const comments = await this.batch(run);
+    if (comments.length === 0 && !note) throw badRequest('nothing to send: add a comment or a note');
+    let included: Batched[] = [];
+    const sentAt = new Date();
+    const fresh = await this.startTicketRun({
+      ticketId: run.ticketId,
+      permissionMode: run.permissionMode,
+      persona: run.persona,
+      section: (room) => {
+        const built = newRunFeedbackSection(run.id, note, comments, room);
+        if (!built) throw conflict('the ticket text leaves no room for review feedback');
+        included = built.included as Batched[];
+        return built.text;
+      },
+      // The reviewed run, or the run that took it over, may still sit idle at its prompt.
+      replaceIdleRuns: this.chain(run.id),
+    });
+    this.markAll(included, { status: 'resolved', sentAt, resolvedAt: sentAt, carriedTo: fresh.id });
+    return { run: fresh, sent: included.length };
   }
 
   /** A run that can no longer take a prompt (stopped, handed off, no session) offers a new run of its ticket. */
@@ -341,14 +421,22 @@ export class ReviewService {
     return new HttpError(409, error.code, error.message, { ...error.details, canStartNew: true });
   }
 
-  /** Applies a status change to the batch's comments in one statement; every send counts a round. */
-  private markAll(ids: string[], set: Partial<CommentRow>): void {
-    if (ids.length === 0) return;
-    this.db
-      .update(reviewComments)
-      .set({ ...set, round: sql`${reviewComments.round} + 1` })
-      .where(inArray(reviewComments.id, ids))
-      .run();
+  /**
+   * Applies a status change to the batch's comments; every send counts a round. Each comment is
+   * changed only if it still has the status it was sent with, so one resolved or deleted while the
+   * prompt was on its way keeps what the person did.
+   */
+  private markAll(comments: Batched[], set: Partial<CommentRow>): void {
+    const byStatus = new Map<string, string[]>();
+    for (const c of comments) byStatus.set(c.status, [...(byStatus.get(c.status) ?? []), c.id]);
+    this.db.transaction((tx) => {
+      for (const [status, ids] of byStatus) {
+        tx.update(reviewComments)
+          .set({ ...set, round: sql`${reviewComments.round} + 1` })
+          .where(and(inArray(reviewComments.id, ids), eq(reviewComments.status, status)))
+          .run();
+      }
+    });
   }
 
   async markViewed(runId: string, raw: unknown): Promise<RunReviewState> {

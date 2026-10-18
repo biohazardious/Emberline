@@ -43,6 +43,7 @@ import {
 } from '../factory/service.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
+import { clipText } from '../text/control-chars.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
@@ -242,9 +243,6 @@ export const COMPLETION_NUDGE =
 
 /** CreateRunBody's prompt limit: a ticket prompt plus its dependency context must stay within it. */
 const RUN_PROMPT_MAX = 20_000;
-
-/** `text` cut to at most `max` characters, marked with an ellipsis when cut. */
-const clipText = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`);
 
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
@@ -1608,21 +1606,35 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     input: StartTicketBody,
     opts: {
       unattended?: boolean;
-      /** Appended after the dependency context (e.g. review feedback on an earlier run), clipped to fit the prompt limit. */
-      extraPromptSection?: string;
+      /**
+       * Appended after the dependency context (e.g. review feedback on an earlier run). A string is
+       * clipped to fit the prompt limit; a function gets the room left and builds a section that
+       * fits (it may throw to refuse the start).
+       */
+      extraPromptSection?: string | ((room: number) => string);
+      /** The ticket's active run may be one of these when it is idle: it is stopped (system, `reason`) and replaced. */
+      replaceIdleRun?: { ids: string[]; reason: string };
     } & ByPerson = {},
   ): Promise<{ ticket: Ticket; run: Run }> {
     const ticket = this.get(id);
-    if (this.runs.activeRunForTicket(id) || this.startingTickets.has(id)) {
-      throw conflict('this ticket already has a running agent');
+    if (this.startingTickets.has(id)) throw conflict('this ticket already has a running agent');
+    const active = this.runs.activeRunForTicket(id);
+    if (active) {
+      if (!opts.replaceIdleRun?.ids.includes(active.id)) throw conflict('this ticket already has a running agent');
+      if (active.state !== 'done' && active.state !== 'waiting_input') {
+        throw conflict('the run is still working — stop it or wait');
+      }
     }
+    // Built before anything changes: a section that cannot be built refuses the start cleanly.
+    const prompt = this.startPrompt(ticket, opts.extraPromptSection ?? '');
     // A person starting it is its triage; an unattended start never is.
     if (opts.byPerson && !opts.unattended && ticket.external?.triage) {
       this.db.update(tickets).set({ externalTriage: false }).where(eq(tickets.id, id)).run();
     }
     this.startingTickets.add(id);
     try {
-      return await this.startUnguarded(ticket, input, opts.unattended, opts.extraPromptSection);
+      if (active && opts.replaceIdleRun) await this.runs.stop(active.id, { source: 'system', reason: opts.replaceIdleRun.reason });
+      return await this.startUnguarded(ticket, input, opts.unattended, prompt);
     } finally {
       this.startingTickets.delete(id);
     }
@@ -1632,7 +1644,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     ticket: Ticket,
     input: StartTicketBody,
     unattended = false,
-    extraPromptSection = '',
+    prompt = this.startPrompt(ticket, ''),
   ): Promise<{ ticket: Ticket; run: Run }> {
     const id = ticket.id;
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
@@ -1642,7 +1654,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const run = await this.scheduler.submit(
       {
         projectId: ticket.projectId,
-        prompt: this.startPrompt(ticket, extraPromptSection),
+        prompt,
         permissionMode,
         persona: effectivePersona,
         ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
@@ -1664,12 +1676,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /**
    * The ticket prompt, what its finished direct dependencies handed over, then `extra` (review
    * feedback for a fresh attempt). Kept within the run prompt limit: `extra` is a person's direct
-   * feedback, so it gets its room before the dependency context and is clipped, never refused.
+   * feedback, so it gets its room before the dependency context. A string is clipped (never
+   * refused); a function builds its section for the room it is given.
    */
-  private startPrompt(ticket: Ticket, extra: string): string {
+  private startPrompt(ticket: Ticket, extra: string | ((room: number) => string)): string {
     const base = ticketPrompt(ticket);
-    const extraRoom = RUN_PROMPT_MAX - base.length - 2;
-    const section = extra.trim() && extraRoom > 1 ? clipText(extra.trim(), extraRoom) : '';
+    const extraRoom = Math.max(0, RUN_PROMPT_MAX - base.length - 2);
+    const built = (typeof extra === 'function' ? extra(extraRoom) : extra).trim();
+    const section = built && extraRoom > 1 ? clipText(built, extraRoom) : '';
     const reserved = section ? section.length + 2 : 0;
     const withDeps = this.promptWithDependencyContext(ticket, base, RUN_PROMPT_MAX - reserved);
     return section ? `${withDeps}\n\n${section}` : withDeps;
