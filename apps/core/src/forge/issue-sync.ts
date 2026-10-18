@@ -17,7 +17,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { readIssueSync } from '../db/project-settings.js';
 import { projects, projectSettings, runEvents, runs, tickets } from '../db/schema.js';
-import { conflict } from '../errors.js';
+import { conflict, HttpError, notFound } from '../errors.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
@@ -31,6 +31,8 @@ export const SYNC_PAGES = 2;
 export const SYNC_PAGE_SIZE = 100;
 /** Forge requests one tick may make across all projects. */
 export const SYNC_TICK_REQUEST_CAP = 20;
+/** How long stop() waits for a running tick and write-backs. */
+export const STOP_TIMEOUT_MS = 5_000;
 
 /**
  * One write-back per ticket at a time, process-wide: the check for an earlier record and the
@@ -51,6 +53,8 @@ interface ProjectSyncState {
 export interface IssueSyncOptions {
   now?: () => number;
   log?: (message: string, err?: unknown) => void;
+  /** See {@link STOP_TIMEOUT_MS}. */
+  stopTimeoutMs?: number;
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -81,8 +85,12 @@ function issueInRepo(issueUrl: string, repoPath: string): boolean {
 export class IssueSyncService {
   private readonly now: () => number;
   private readonly log: (message: string, err?: unknown) => void;
+  private readonly stopTimeoutMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private ticking = false;
+  /** The running tick, if any. */
+  private ticking: Promise<void> | null = null;
+  /** Each project's running sync pass (a tick's or a "Sync now"); a second caller joins it. */
+  private readonly inflight = new Map<string, Promise<boolean>>();
   /** All forge sync waits until then (epoch ms); in memory, logged once per pause. */
   private pausedUntil: number | null = null;
   /** The project the next tick starts with, after a tick stopped early (cap or pause). */
@@ -99,6 +107,7 @@ export class IssueSyncService {
   ) {
     this.now = options.now ?? Date.now;
     this.log = options.log ?? (() => undefined);
+    this.stopTimeoutMs = options.stopTimeoutMs ?? STOP_TIMEOUT_MS;
   }
 
   start(intervalMs = ISSUE_SYNC_INTERVAL_MS): void {
@@ -112,13 +121,26 @@ export class IssueSyncService {
     this.timer.unref();
   }
 
-  stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = undefined;
-    this.runs.off('note', this.onNote);
-    this.forge.off('pullRequest', this.onPullRequest);
-    this.tickets.off('ticket', this.onTicket);
+  /** Stops the poller and the listeners, then waits (bounded) for a running tick and write-backs. */
+  async stop(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+      this.runs.off('note', this.onNote);
+      this.forge.off('pullRequest', this.onPullRequest);
+      this.tickets.off('ticket', this.onTicket);
+    }
+    const running = [...(this.ticking ? [this.ticking] : []), ...this.inflight.values(), ...this.pending];
+    if (running.length === 0) return;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(running),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, this.stopTimeoutMs);
+        timeout.unref();
+      }),
+    ]);
+    clearTimeout(timeout);
   }
 
   /** Resolves when every write-back started so far has finished. */
@@ -138,17 +160,39 @@ export class IssueSyncService {
 
   // --- Label sync ---------------------------------------------------------------------------
 
-  /** One poll over the enabled projects. Never throws; never overlaps itself. */
-  async tick(): Promise<void> {
-    if (this.ticking) return;
-    this.ticking = true;
-    try {
-      await this.runTick();
-    } catch (err) {
-      this.log('issue sync failed', err);
-    } finally {
-      this.ticking = false;
+  /** One poll over the enabled projects. Never throws; a call during a running tick joins it. */
+  tick(): Promise<void> {
+    if (this.ticking) return this.ticking;
+    const run = (async () => {
+      try {
+        await this.runTick();
+      } catch (err) {
+        this.log('issue sync failed', err);
+      } finally {
+        this.ticking = null;
+      }
+    })();
+    this.ticking = run;
+    return run;
+  }
+
+  /**
+   * "Sync now": one pass for this project (at most {@link SYNC_PAGES} requests, within the tick
+   * cap). Joins a pass already running for it. 409 when sync is off or the forge sync is paused
+   * (the body names `pausedUntil`).
+   */
+  async syncNow(projectId: string): Promise<IssueSyncStatus> {
+    if (!this.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get()) {
+      throw notFound('no such project');
     }
+    const settings = readIssueSync(this.db, projectId);
+    if (!settings.enabled || !settings.label) throw conflict('issue sync is not enabled for this project');
+    if (this.isPaused()) {
+      const pausedUntil = new Date(this.pausedUntil!).toISOString();
+      throw new HttpError(409, 'sync_paused', `forge sync is paused until ${pausedUntil}`, { pausedUntil });
+    }
+    await this.syncProject(projectId, settings, { left: SYNC_TICK_REQUEST_CAP });
+    return this.status(projectId);
   }
 
   private async runTick(): Promise<void> {
@@ -210,8 +254,16 @@ export class IssueSyncService {
     return state;
   }
 
-  /** Syncs one project within the tick's budget; true when the forge asked to pause. */
-  private async syncProject(projectId: string, settings: IssueSyncSettings, budget: { left: number }): Promise<boolean> {
+  /** Syncs one project within the budget, or joins its running pass; true when the forge asked to pause. */
+  private syncProject(projectId: string, settings: IssueSyncSettings, budget: { left: number }): Promise<boolean> {
+    const running = this.inflight.get(projectId);
+    if (running) return running;
+    const pass = this.syncProjectPass(projectId, settings, budget).finally(() => this.inflight.delete(projectId));
+    this.inflight.set(projectId, pass);
+    return pass;
+  }
+
+  private async syncProjectPass(projectId: string, settings: IssueSyncSettings, budget: { left: number }): Promise<boolean> {
     const state = this.stateOf(projectId);
     try {
       const target = await this.forge.projectRemote(projectId);
@@ -280,7 +332,13 @@ export class IssueSyncService {
     );
     const trusted = new Set(settings.trustedAuthors.map((a) => a.toLowerCase()));
     const isTrusted = (issue: ForgeIssue) => issue.author !== null && trusted.has(issue.author.toLowerCase());
-    const fresh = items.filter((i) => i.state === 'open' && !linked.has(i.externalId));
+    // A person deleted the ticket of a tombstoned issue: only a manual import brings it back.
+    const dismissed = this.tickets.tombstonedIssues(
+      projectId,
+      source,
+      items.map((i) => i.externalId),
+    );
+    const fresh = items.filter((i) => i.state === 'open' && !linked.has(i.externalId) && !dismissed.has(i.externalId));
     const promoted = settings.status === 'backlog' ? [] : fresh.filter(isTrusted);
     const backlog = fresh.filter((i) => !promoted.includes(i));
     if (promoted.length > 0) this.tickets.importIssues(projectId, source, promoted, settings.status);
@@ -346,10 +404,21 @@ export class IssueSyncService {
     });
   }
 
-  /** Posts one comment for (ticket, kind, ref) unless an earlier one was recorded. */
+  private commentedOnRun(runId: string, kind: string): boolean {
+    return this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'issue_commented')))
+      .all()
+      .some((r) => (r.payload as { kind?: unknown } | null)?.kind === kind);
+  }
+
+  /** Posts one comment for (ticket, kind, ref), and a merge comment once per run, unless recorded earlier. */
   private async postOnce(runId: string, row: LinkedRow, kind: 'pr' | 'merge', ref: string, text: string): Promise<void> {
     await writeBackLock.run(row.id, async () => {
       if (this.recorded(row.id, ['issue_commented'], ref, kind)) return;
+      // One merge comment per run: a re-merge (the "already merged" path names main's HEAD) is no news.
+      if (kind === 'merge' && this.commentedOnRun(runId, kind)) return;
       const info = { kind, ticketKey: row.key, ref };
       try {
         await this.forge.issues.comment(await this.targetFor(row), row.externalNumber, text);

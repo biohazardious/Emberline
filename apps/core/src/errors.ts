@@ -1,12 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-/** Errors thrown from route handlers; rendered as `{ error, message }` with the given status. */
+/**
+ * Errors thrown from route handlers; rendered as `{ error, message }` with the given status, plus
+ * any `details` fields.
+ */
 export class HttpError extends Error {
   constructor(
     readonly statusCode: number,
     readonly code: string,
     message: string,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'HttpError';
@@ -24,7 +28,7 @@ export function installErrorHandler(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'bad_request', message: z.prettifyError(error) });
     }
     if (error instanceof HttpError) {
-      return reply.code(error.statusCode).send({ error: error.code, message: error.message });
+      return reply.code(error.statusCode).send({ ...error.details, error: error.code, message: error.message });
     }
     const status = (error as { statusCode?: number }).statusCode;
     if (status && status < 500) {

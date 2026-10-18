@@ -27,7 +27,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
-import { projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
+import { issueTombstones, projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
@@ -1376,6 +1376,23 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return out;
   }
 
+  /** The issues among these whose imported ticket was deleted (label sync skips them). */
+  tombstonedIssues(projectId: string, source: ForgeProvider, externalIds: string[]): Set<string> {
+    if (externalIds.length === 0) return new Set();
+    const rows = this.db
+      .select({ externalId: issueTombstones.externalId })
+      .from(issueTombstones)
+      .where(
+        and(
+          eq(issueTombstones.projectId, projectId),
+          eq(issueTombstones.externalSource, source),
+          inArray(issueTombstones.externalId, externalIds),
+        ),
+      )
+      .all();
+    return new Set(rows.map((r) => r.externalId));
+  }
+
   /**
    * One ticket per issue. An issue that already has a ticket (also one created a moment ago by a
    * concurrent import) yields that ticket in `existing`; a second one is never created. The lookup
@@ -1400,6 +1417,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         continue;
       }
       try {
+        // Importing an issue again (a person chose it) lifts its tombstone.
+        this.db
+          .delete(issueTombstones)
+          .where(
+            and(
+              eq(issueTombstones.projectId, projectId),
+              eq(issueTombstones.externalSource, source),
+              eq(issueTombstones.externalId, issue.externalId),
+            ),
+          )
+          .run();
         created.push(
           this.create(projectId, input, 0, {
             source,
@@ -1436,10 +1464,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       const ticket = linked.get(issue.externalId);
       if (!ticket) continue;
       const before = ticket.external;
-      const same =
-        before?.state === issue.state &&
-        before.labels.length === issue.labels.length &&
-        before.labels.every((l, i) => l === issue.labels[i]);
+      // Labels are a set: the forge's order is no change.
+      const sorted = (labels: string[]) => [...labels].sort().join('\n');
+      const same = before?.state === issue.state && sorted(before.labels) === sorted(issue.labels);
       this.db
         .update(tickets)
         .set({ externalState: issue.state, externalLabels: issue.labels, externalSyncedAt: at })
@@ -1529,7 +1556,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const row = this.row(id);
     const waiting = this.dependentIds(id);
     const blockedBefore = this.dependenciesOf(waiting);
-    this.db.delete(tickets).where(eq(tickets.id, id)).run();
+    this.db.transaction((tx) => {
+      tx.delete(tickets).where(eq(tickets.id, id)).run();
+      // A person removed an imported ticket: label sync must not bring the issue back.
+      if (row.externalSource && row.externalId) {
+        tx.insert(issueTombstones)
+          .values({ projectId: row.projectId, externalSource: row.externalSource, externalId: row.externalId, createdAt: new Date() })
+          .onConflictDoNothing()
+          .run();
+      }
+    });
     this.emit('removed', { id, projectId: row.projectId });
     // Their edge to it went with it (ON DELETE CASCADE).
     this.publishTickets(waiting);

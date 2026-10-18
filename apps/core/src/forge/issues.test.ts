@@ -374,6 +374,14 @@ describe('ForgeService.projectRemote', () => {
     await expect(forge.projectRemote('p12')).rejects.toMatchObject({ statusCode: 409 });
   });
 
+  it('trusts the host of an ssh repoUrl on a custom port without an API URL', async () => {
+    addProject('p13', 'ssh://git@git.example.com:2222/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
+    const forge = new ForgeService(t.db, t.runs);
+    configure(forge, 'secret');
+    const target = await forge.projectRemote('p13');
+    expect(target.remote.apiBaseUrl).toBe('https://git.example.com/api/v3');
+  });
+
   it('accepts origin matching repoUrl across URL styles and case', async () => {
     addProject('p7', 'https://github.com/Acme/Widget', 'git@github.com:acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);

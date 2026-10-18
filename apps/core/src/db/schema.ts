@@ -50,6 +50,23 @@ export const projectSettings = sqliteTable('project_settings', {
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
 });
 
+/**
+ * Issues whose imported ticket a person deleted: label sync does not import them again. A manual
+ * import of the issue removes its tombstone.
+ */
+export const issueTombstones = sqliteTable(
+  'issue_tombstones',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    externalSource: text('external_source', { enum: ['github', 'gitlab', 'gitea'] }).notNull(),
+    externalId: text('external_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.externalSource, t.externalId] })],
+);
+
 /** Board tickets (PROJECT.md §5.4). The column mirrors the latest run while one is active. */
 export const tickets = sqliteTable(
   'tickets',

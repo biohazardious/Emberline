@@ -78,7 +78,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     cron.stop();
     notifications.stop();
     updates.stop();
-    issueSync.stop();
+    await issueSync.stop();
   });
 
   installErrorHandler(app);
@@ -110,7 +110,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
-  registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync));
+  registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);
   registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler, presence);

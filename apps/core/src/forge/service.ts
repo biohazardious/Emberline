@@ -132,7 +132,11 @@ function hostOf(url: string | null | undefined): string | null {
   if (!url?.trim()) return null;
   const trimmed = url.trim();
   try {
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return new URL(trimmed).host.toLowerCase();
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+      const parsed = new URL(trimmed);
+      // An ssh port never serves the API: `ssh://git@host:2222/…` trusts `host`.
+      return (parsed.protocol === 'ssh:' ? parsed.hostname : parsed.host).toLowerCase();
+    }
   } catch {
     return null;
   }

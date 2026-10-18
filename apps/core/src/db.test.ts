@@ -96,6 +96,22 @@ describe('openDb', () => {
     db.close();
   });
 
+  it('0020: an issue tombstone is unique per project, source and id, and goes with its project', () => {
+    const db = openDb(':memory:');
+    const run = (query: string) => db.db.run(sql.raw(query));
+    run(`insert into projects (id, name, slug, path, created_at) values ('p', 'p', 'p', '/p', 0)`);
+    const tomb = (source: string, id: string) =>
+      run(`insert into issue_tombstones (project_id, external_source, external_id, created_at) values ('p', '${source}', '${id}', 0)`);
+    tomb('github', '1');
+    tomb('gitlab', '1');
+    expect(() => tomb('github', '1')).toThrow();
+    const count = () => (db.db.all(sql.raw('select count(*) as n from issue_tombstones')) as { n: number }[])[0]?.n;
+    expect(count()).toBe(2);
+    run(`delete from projects where id = 'p'`);
+    expect(count()).toBe(0);
+    db.close();
+  });
+
   it('does not back up a fresh or up-to-date database', () => {
     const file = path.join(dir, 'emberline.db');
     openDb(file).close();

@@ -3,7 +3,7 @@ import { IssueSyncSettings, type Ticket } from '@emberline/protocol';
 import { and, eq, like } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeIssueSync } from '../db/project-settings.js';
-import { projects, runEvents, runs, tickets } from '../db/schema.js';
+import { issueTombstones, projects, runEvents, runs, tickets } from '../db/schema.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from '../runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from '../test-utils.js';
 import { ISSUE_SYNC_INTERVAL_MS, IssueSyncService, SYNC_TICK_REQUEST_CAP } from './issue-sync.js';
@@ -23,6 +23,16 @@ interface FakeRepo {
   headers?: Record<string, string>;
   /** Replaces the list answer, e.g. a 429. */
   respond?: () => Response;
+  /** List calls wait for this first. */
+  gate?: Promise<void>;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 let t: TestApp;
@@ -62,6 +72,7 @@ function installForge() {
     if (list && call.method === 'GET') {
       const repo = repos.get(list[1]!);
       if (!repo) return reply({ message: 'Not Found' }, 404);
+      if (repo.gate) await repo.gate;
       if (repo.respond) return repo.respond();
       const etag = `W/"${list[1]}-${repo.version}"`;
       const extra = { etag, ...repo.headers };
@@ -71,6 +82,11 @@ function installForge() {
       const rows = repo.issues.slice((page - 1) * per, page * per);
       const more = repo.issues.length > page * per;
       return reply(rows, 200, more ? { ...extra, link: `<https://api.github.com/repos/acme/${list[1]}/issues?page=${page + 1}>; rel="next"` } : extra);
+    }
+    const one = /^\/repos\/acme\/([^/]+)\/issues\/(\d+)$/.exec(url.pathname);
+    if (one && call.method === 'GET') {
+      const issue = repos.get(one[1]!)?.issues.find((i) => i.number === Number(one[2]));
+      return issue ? reply(issue) : reply({ message: 'Not Found' }, 404);
     }
     if (/\/issues\/\d+\/comments$/.test(url.pathname) && call.method === 'POST') {
       return failComments ? reply({ message: 'boom' }, 500) : reply({ id: 1 }, 201);
@@ -109,7 +125,7 @@ const newSync = () => {
 beforeEach(async () => {
   t = await createTestApp();
   // The server's own instance would answer the same notes; the tests drive their own.
-  t.issueSync.stop();
+  await t.issueSync.stop();
   calls = [];
   repos = new Map();
   failComments = false;
@@ -122,7 +138,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  sync.stop();
+  await sync.stop();
   vi.useRealTimers();
   await t.close();
 });
@@ -292,7 +308,7 @@ describe('budget', () => {
 
 describe('poller lifecycle and status', () => {
   it('ticks every 10 minutes on an unref’d interval until stopped', async () => {
-    sync.stop();
+    await sync.stop();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const s = new IssueSyncService(t.db, t.tickets, t.runs, t.forge, { now: () => clock });
     const tick = vi.spyOn(s, 'tick').mockResolvedValue();
@@ -304,7 +320,7 @@ describe('poller lifecycle and status', () => {
     expect(tick).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(ISSUE_SYNC_INTERVAL_MS);
     expect(tick).toHaveBeenCalledTimes(2);
-    s.stop();
+    await s.stop();
     vi.advanceTimersByTime(ISSUE_SYNC_INTERVAL_MS * 3);
     expect(tick).toHaveBeenCalledTimes(2);
   });
@@ -365,7 +381,7 @@ describe('write-back', () => {
     await t.forge.createPullRequest('run-1', {});
     await sync.settled();
     expect(comments()).toHaveLength(1);
-    sync.stop();
+    await sync.stop();
     sync = newSync();
     await t.forge.createPullRequest('run-1', {});
     await sync.settled();
@@ -380,12 +396,29 @@ describe('write-back', () => {
     expect(comments().map((c) => c.body)).toEqual([
       { body: `Emberline merged ${ticket.key} into \`main\` locally (abc1234). It reaches the remote when the branch is pushed.` },
     ]);
-    sync.stop();
+    await sync.stop();
     sync = newSync();
     t.runs.note('run-1', 'merged_to_main', { summary: 's', commitSha: 'abc1234', branch: 'main' });
     await sync.settled();
     expect(comments()).toHaveLength(1);
+    // A re-merge of the same run (the "already merged" path names main's HEAD) does not post again.
     t.runs.note('run-1', 'merged_to_main', { summary: 's', commitSha: 'def5678', branch: 'main' });
+    await sync.settled();
+    expect(comments()).toHaveLength(1);
+    // A later run of the ticket that merges new work does.
+    t.db
+      .insert(runs)
+      .values({ id: 'run-2', projectId: 'p1', ticketId: ticket.id, agent: 'claude', state: 'done', worktreePath: '/x', hookTokenHash: 'h', stateChangedAt: now, createdAt: now, title: 'Five' })
+      .run();
+    t.runs.note('run-2', 'merged_to_main', { summary: 's', commitSha: 'def5678', branch: 'main' });
+    await sync.settled();
+    expect(comments()).toHaveLength(2);
+    // ...but not for a sha already commented on.
+    t.db
+      .insert(runs)
+      .values({ id: 'run-3', projectId: 'p1', ticketId: ticket.id, agent: 'claude', state: 'done', worktreePath: '/x', hookTokenHash: 'h', stateChangedAt: now, createdAt: now, title: 'Five' })
+      .run();
+    t.runs.note('run-3', 'merged_to_main', { summary: 's', commitSha: 'abc1234', branch: 'main' });
     await sync.settled();
     expect(comments()).toHaveLength(2);
   });
@@ -456,7 +489,7 @@ describe('write-back', () => {
     await sync.settled();
     t.tickets.update(ticket.id, { priority: 2 });
     await sync.settled();
-    sync.stop();
+    await sync.stop();
     sync = newSync();
     t.tickets.update(ticket.id, { priority: 3 });
     await sync.settled();
@@ -481,5 +514,133 @@ describe('write-back', () => {
     t.runs.note('run-1', 'merged_to_main', { commitSha: 'abc1234', branch: 'main' });
     await sync.settled();
     expect(t.db.select().from(runs).where(and(eq(runs.id, 'run-1'))).get()!.lastEvent).toBe('merged_to_main');
+  });
+});
+
+describe('tombstones', () => {
+  it('a deleted imported ticket is not imported again by label sync; a manual import brings it back', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const repo = addProject('p1', 'widget');
+    repo.issues = [ghIssue('widget', 1), ghIssue('widget', 2)];
+    await sync.tick();
+    const one = ticketsOf('p1').find((tk) => tk.external?.number === 1)!;
+    t.tickets.remove(one.id);
+    expect(t.db.select().from(issueTombstones).all()).toEqual([
+      { projectId: 'p1', externalSource: 'github', externalId: '9001', createdAt: expect.any(Date) },
+    ]);
+    repo.version++;
+    await sync.tick();
+    expect(ticketsOf('p1').map((tk) => tk.external?.number)).toEqual([2]);
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/projects/p1/issues/import',
+      headers: { ...CSRF, cookie },
+      payload: { issues: [{ externalId: '9001', number: 1 }] },
+    });
+    expect(res.json().created.map((tk: Ticket) => tk.external?.number)).toEqual([1]);
+    expect(t.db.select().from(issueTombstones).all()).toEqual([]);
+    repo.version++;
+    await sync.tick();
+    expect(ticketsOf('p1').map((tk) => tk.external?.number).sort()).toEqual([1, 2]);
+  });
+
+  it('deleting a board ticket leaves no tombstone', () => {
+    addProject('p1', 'widget');
+    const plain = t.tickets.create('p1', { title: 'Board ticket' });
+    t.tickets.remove(plain.id);
+    expect(t.db.select().from(issueTombstones).all()).toEqual([]);
+  });
+});
+
+describe('sync now', () => {
+  let cookie: string;
+  const run = (id = 'p1') => t.app.inject({ method: 'POST', url: `/api/projects/${id}/issue-sync/run`, headers: { ...CSRF, cookie } });
+
+  beforeEach(async () => {
+    cookie = await setupAndLogin(t.app);
+  });
+
+  it('runs one pass for the project and returns its sync status', async () => {
+    const repo = addProject('p1', 'widget');
+    repo.issues = Array.from({ length: 250 }, (_, i) => ghIssue('widget', i + 1));
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ lastSyncAt: expect.any(String), lastError: null, pausedUntil: null });
+    expect(listCalls()).toHaveLength(2);
+    expect(ticketsOf('p1')).toHaveLength(200);
+  });
+
+  it('409 when sync is off, 404 for an unknown project', async () => {
+    addProject('p1', 'widget', { enabled: false });
+    expect((await run()).statusCode).toBe(409);
+    expect((await run('nope')).statusCode).toBe(404);
+    expect(listCalls()).toEqual([]);
+  });
+
+  it('409 with pausedUntil while the forge sync is paused', async () => {
+    const reset = Math.ceil((Date.now() + 30 * 60_000) / 1000);
+    const repo = addProject('p1', 'widget');
+    repo.headers = { 'x-ratelimit-remaining': '3', 'x-ratelimit-reset': String(reset) };
+    expect((await run()).json().pausedUntil).toBe(new Date(reset * 1000).toISOString());
+    const paused = await run();
+    expect(paused.statusCode).toBe(409);
+    expect(paused.json()).toMatchObject({ error: 'sync_paused', pausedUntil: new Date(reset * 1000).toISOString() });
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  it('concurrent calls share one running pass', async () => {
+    const repo = addProject('p1', 'widget');
+    repo.issues = [ghIssue('widget', 1)];
+    const gate = deferred();
+    repo.gate = gate.promise;
+    const first = run();
+    const second = run();
+    const tick = t.issueSync.tick();
+    await expect.poll(() => listCalls().length).toBe(1);
+    gate.resolve();
+    const [a, b] = await Promise.all([first, second, tick]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(listCalls()).toHaveLength(1);
+    expect(ticketsOf('p1')).toHaveLength(1);
+  });
+});
+
+describe('details', () => {
+  it('labels in another order are no change', () => {
+    addProject('p1', 'widget');
+    const issue = { externalId: '9001', number: 1, title: 'One', body: 'b', labels: ['a', 'b'], url: 'https://github.com/acme/widget/issues/1', author: 'x', updatedAt: '', state: 'open' as const };
+    t.tickets.importIssues('p1', 'github', [issue], 'backlog');
+    const published: Ticket[] = [];
+    t.tickets.on('ticket', (tk) => published.push(tk));
+    expect(t.tickets.syncIssueLinks('p1', 'github', [{ externalId: '9001', state: 'open', labels: ['b', 'a'] }])).toEqual([]);
+    expect(published).toEqual([]);
+    expect(t.tickets.syncIssueLinks('p1', 'github', [{ externalId: '9001', state: 'open', labels: ['b'] }])).toHaveLength(1);
+  });
+
+  it('stop() waits for a running tick, at most for its timeout', async () => {
+    const repo = addProject('p1', 'widget');
+    const gate = deferred();
+    repo.gate = gate.promise;
+    const tick = sync.tick();
+    await expect.poll(() => listCalls().length).toBe(1);
+    let stopped = false;
+    const stopping = sync.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(false);
+    gate.resolve();
+    await stopping;
+    await tick;
+    expect(stopped).toBe(true);
+
+    const hung = new IssueSyncService(t.db, t.tickets, t.runs, t.forge, { now: () => clock, stopTimeoutMs: 50 });
+    hung.start();
+    repo.gate = new Promise(() => undefined);
+    void hung.tick();
+    await expect.poll(() => listCalls().length).toBe(2);
+    const started = Date.now();
+    await hung.stop();
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
