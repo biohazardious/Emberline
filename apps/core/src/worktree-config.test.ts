@@ -799,7 +799,8 @@ describe('services and checks', () => {
     expect(res.statusCode).toBe(200);
     const preview = res.json() as { command: string; port: number };
     expect(preview.command).toBe(cmd);
-    expect(preview.port).toBeGreaterThanOrEqual(3100);
+    expect(preview.port).toBeGreaterThanOrEqual(t.config.previewPorts.runner.first);
+    expect(preview.port).toBeLessThanOrEqual(t.config.previewPorts.runner.last);
     expect((await waitFile(out)).trim()).toBe(`port=${preview.port}`);
     await api('POST', `/api/runs/${run.id}/preview/stop`, {});
   });

@@ -22,9 +22,9 @@ describe('WorktreeConfig v1', () => {
     const out = WorktreeConfig.parse({ version: 1 });
     expect(out).toMatchObject({ copy: [], setup: [], teardown: [], services: [], checks: {} });
   });
-  it('requires version 1', () => {
+  it('requires version 1 or 2', () => {
     expect(WorktreeConfig.safeParse({}).success).toBe(false);
-    expect(WorktreeConfig.safeParse({ version: 2 }).success).toBe(false);
+    expect(WorktreeConfig.safeParse({ version: 2 }).success).toBe(true);
   });
   it('rejects unknown keys', () => {
     expect(bad({ extra: 1 }).success).toBe(false);
@@ -74,5 +74,59 @@ describe('WorktreeConfig v1', () => {
     expect(bad({ setup: ['   '] }).success).toBe(false);
     expect(bad({ services: [{ name: 'w', command: ' \t' }] }).success).toBe(false);
     expect(bad({ checks: { test: '  ' } }).success).toBe(false);
+  });
+});
+
+describe('WorktreeConfig v2: compose services', () => {
+  const v2 = (services: unknown[]) => WorktreeConfig.safeParse({ version: 2, services });
+  it('accepts version 2 with command and compose entries, defaulting the file to compose.yaml', () => {
+    const r = v2([
+      { name: 'dev', command: 'pnpm dev' },
+      { name: 'web', compose: { service: 'web', port: 8080 }, preview: true },
+      { name: 'api', compose: { file: 'deploy/compose.dev.yml', service: 'api.v2', port: 3000 } },
+    ]);
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.version).toBe(2);
+    expect(r.data.services[1]).toEqual({ name: 'web', compose: { file: 'compose.yaml', service: 'web', port: 8080 }, preview: true });
+    expect(r.data.services[2]?.compose?.file).toBe('deploy/compose.dev.yml');
+  });
+  it('v1 files stay valid and unchanged', () => {
+    expect(WorktreeConfig.parse(SPEC_EXAMPLE)).toMatchObject({ version: 1, services: SPEC_EXAMPLE.services });
+  });
+  it('rejects a compose entry in a version 1 file', () => {
+    const r = WorktreeConfig.safeParse({ version: 1, services: [{ name: 'web', compose: { service: 'web', port: 80 } }] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.map((i) => i.message).join()).toMatch(/version: 2/);
+  });
+  it('needs exactly one of command and compose', () => {
+    expect(v2([{ name: 'web' }]).success).toBe(false);
+    expect(v2([{ name: 'web', command: 'x', compose: { service: 'web', port: 80 } }]).success).toBe(false);
+  });
+  it('keeps keys strict in compose entries', () => {
+    expect(v2([{ name: 'web', compose: { service: 'web', port: 80, ports: ['80:80'] } }]).success).toBe(false);
+    expect(v2([{ name: 'web', compose: { service: 'web', port: 80 }, extra: true }]).success).toBe(false);
+    expect(WorktreeConfig.safeParse({ version: 2, extra: 1 }).success).toBe(false);
+  });
+  it('validates the compose file, service and port', () => {
+    const entry = (compose: Record<string, unknown>) => v2([{ name: 'web', compose: { service: 'web', port: 80, ...compose } }]).success;
+    for (const file of ['/etc/compose.yaml', '../compose.yaml', 'a/../../c.yml', '-', '-f', '~/c.yml', 'C:\\c.yml', '', 'a\0b'])
+      expect(entry({ file }), file).toBe(false);
+    for (const service of ['', '-web', 'a b', 'web;rm', 'x'.repeat(64)]) expect(entry({ service }), service).toBe(false);
+    for (const port of [0, 65536, 80.5, '80', -1]) expect(entry({ port }), String(port)).toBe(false);
+    expect(entry({ port: 1 })).toBe(true);
+    expect(entry({ port: 65535 })).toBe(true);
+    expect(entry({ file: 'docker/compose.yml', service: 'web_1.a-b' })).toBe(true);
+  });
+  it('still allows at most one preview service across both kinds', () => {
+    expect(
+      v2([
+        { name: 'a', command: 'x', preview: true },
+        { name: 'b', compose: { service: 'b', port: 80 }, preview: true },
+      ]).success,
+    ).toBe(false);
+  });
+  it('rejects other versions', () => {
+    expect(WorktreeConfig.safeParse({ version: 3 }).success).toBe(false);
   });
 });

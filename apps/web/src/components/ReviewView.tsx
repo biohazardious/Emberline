@@ -258,6 +258,13 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   }, [run.id]);
 
+  // A compose preview builds and starts in the background: follow it until it runs or fails.
+  useEffect(() => {
+    if (previewStatus?.status !== 'starting') return;
+    const timer = setInterval(() => void loadPreview(), 2000);
+    return () => clearInterval(timer);
+  }, [previewStatus?.status, loadPreview]);
+
   useEffect(() => {
     void loadSummary(scope, false);
     void loadArtifacts();
@@ -543,7 +550,11 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       });
       setPreviewStatus(res);
       setPreviewDrawerOpen(false);
-      setGitNotice(`Preview dev server running on ${res.url ?? `port ${res.port}`}`);
+      setGitNotice(
+        res.status === 'starting'
+          ? `Preview starting in the Docker engine; it will answer on ${res.url ?? `port ${res.port}`}`
+          : `Preview dev server running on ${res.url ?? `port ${res.port}`}`,
+      );
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -735,9 +746,14 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 : 'Cross-Provider Critic'}
           </button>
 
-          {previewStatus?.status === 'running' ? (
+          {previewStatus?.status === 'running' || previewStatus?.status === 'starting' ? (
             <>
-              {previewStatus.url && (
+              {previewStatus.status === 'starting' && (
+                <span className="badge badge-soft mono" title={previewStatus.command ?? undefined}>
+                  Preview starting :{previewStatus.port}…
+                </span>
+              )}
+              {previewStatus.status === 'running' && previewStatus.url && (
                 <a
                   href={previewStatus.url}
                   target="_blank"
@@ -1013,7 +1029,34 @@ export function ReviewView({ run, onRunUpdated }: Props) {
         </div>
       )}
 
-      {previewDrawerOpen && (
+      {previewStatus?.error && (previewStatus.status === 'failed' || previewStatus.status === 'exited') && (
+        <div className="review-actions-bar" role="status" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+          <span>Preview {previewStatus.status}: {previewStatus.error}</span>
+          {previewStatus.logs && (
+            <details>
+              <summary>Container output (untrusted)</summary>
+              <pre className="mono" style={{ whiteSpace: 'pre-wrap', maxHeight: '16rem', overflow: 'auto' }}>
+                {previewStatus.logs}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+
+      {previewDrawerOpen && previewStatus?.kind === 'compose' && (
+        <form className="review-actions-bar" onSubmit={(e) => void handleStartPreview(e)}>
+          <div className="review-commit-form" style={{ flex: 1 }}>
+            <span className="mono" style={{ flex: 1 }}>
+              {previewStatus.detectedCommand} in the Docker engine
+            </span>
+            <button type="submit" className="btn btn-sm btn-primary" disabled={previewBusy}>
+              {previewBusy ? 'Starting…' : 'Start Preview'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {previewDrawerOpen && previewStatus?.kind !== 'compose' && (
         <form className="review-actions-bar" onSubmit={(e) => void handleStartPreview(e)}>
           <div className="review-commit-form" style={{ flex: 1 }}>
             <input
@@ -1029,7 +1072,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               className="input mono"
               value={previewPort}
               onChange={(e) => setPreviewPort(e.target.value)}
-              placeholder="Port (auto 3100–3899)"
+              placeholder="Port (auto)"
               style={{ maxWidth: '170px' }}
             />
             <button

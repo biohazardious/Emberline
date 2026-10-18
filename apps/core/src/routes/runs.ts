@@ -149,17 +149,17 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
 
   app.get<{ Params: { id: string } }>(
     '/api/runs/:id/preview',
-    async (request) => runs.previewStatus(request.params.id),
+    async (request) => runs.previewStatus(request.params.id, request.host),
   );
 
   app.post<{ Params: { id: string } }>(
     '/api/runs/:id/preview/start',
-    async (request) => runs.startPreview(request.params.id, request.body ?? {}),
+    async (request) => runs.startPreview(request.params.id, request.body ?? {}, request.host),
   );
 
   app.post<{ Params: { id: string } }>(
     '/api/runs/:id/preview/stop',
-    async (request) => runs.stopPreview(request.params.id),
+    async (request) => runs.stopPreview(request.params.id, request.host),
   );
 
   app.post('/api/runs/gc', async (request) => {

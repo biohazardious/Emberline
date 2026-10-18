@@ -126,14 +126,17 @@ describe('run event pruning', () => {
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     t.db.delete(runEvents).where(eq(runEvents.runId, run.id)).run();
     const row = (type: string, state?: string) => ({ runId: run.id, ts: new Date(), source: 'hook', type, ...(state ? { state } : {}) });
-    t.db.insert(runEvents).values([row('UserPromptSubmit', 'working'), row('preview_stopped'), row('preview_started')]).run();
+    t.db
+      .insert(runEvents)
+      .values([row('UserPromptSubmit', 'working'), row('preview_stopped'), row('preview_started'), row('preview_ready'), row('preview_failed')])
+      .run();
     seed(run.id, 'PreToolUse', 5100);
     t.db.insert(runEvents).values(row('Failed', 'failed')).run();
 
     t.runs.pruneRunEvents();
 
     const kept = t.db.select().from(runEvents).where(eq(runEvents.runId, run.id)).orderBy(runEvents.id).all();
-    expect(kept.map((e) => e.type).slice(0, 3)).toEqual(['UserPromptSubmit', 'preview_stopped', 'preview_started']);
+    expect(kept.map((e) => e.type).slice(0, 5)).toEqual(['UserPromptSubmit', 'preview_stopped', 'preview_started', 'preview_ready', 'preview_failed']);
     expect(kept.some((e) => e.state === 'working')).toBe(true);
   });
 
@@ -626,7 +629,8 @@ describe('runs', () => {
     // Occupy exactly the port b hashes to, so the allocator has to move b.
     let hash = 0;
     for (const ch of b.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-    const pa = await start(a, 3100 + (hash % 800));
+    const { first, last } = t.config.previewPorts.runner;
+    const pa = await start(a, first + (hash % (last - first + 1)));
     const pb = await start(b);
     expect(pb.port).not.toBe(pa.port);
     expect((await api('GET', '/api/terminals')).json().some((x: { id: string }) => x.id === pa.terminalId)).toBe(true);

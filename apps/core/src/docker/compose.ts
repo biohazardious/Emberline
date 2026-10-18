@@ -1,0 +1,169 @@
+/**
+ * Compose previews (worktree.yml v2): the `docker compose` command lines Emberline runs in the
+ * runner against the Docker engine sidecar, the port override, and parsing of what compose prints.
+ *
+ * Where the override lives: nowhere on disk. The project's compose file sits in the worktree, which
+ * the agent edits; anything Emberline wrote next to it (or anywhere the runner user can write, which
+ * is also the agent's user) could be changed between writing and `up`. So the override goes to
+ * compose on stdin (`-f -`) from an environment variable of the one `sh` process that runs compose
+ * (ptyd `exec` has no stdin). The project name is always `-p <name>` from the run id: a `name:` in
+ * the compose file or `COMPOSE_PROJECT_NAME` in the worktree's `.env` cannot pick it.
+ */
+import { clipText, stripControlChars } from '../text/control-chars.js';
+
+/** Variable that carries the override YAML to the `sh -c` wrapper (see {@link composeShell}). */
+export const COMPOSE_OVERRIDE_ENV = 'EMBERLINE_COMPOSE_OVERRIDE';
+/** At most this much of `docker compose logs` reaches the API. */
+export const COMPOSE_LOGS_MAX_CHARS = 2000;
+export const COMPOSE_LOGS_TAIL_LINES = 200;
+
+/** `docker compose -p <project> -f <file>`: the project's own file, relative to the worktree. */
+function base(project: string, file: string): string[] {
+  return ['compose', '-p', project, '-f', file];
+}
+
+/** Lists the services of the project's compose file (to reset the host ports of every one). */
+export function composeServicesArgs(project: string, file: string): string[] {
+  return [...base(project, file), 'config', '--services'];
+}
+
+/** Builds and starts `service` (and what it depends on) with the override from stdin. */
+export function composeUpArgs(project: string, file: string, service: string): string[] {
+  return [...base(project, file), '-f', '-', 'up', '-d', '--build', '--', service];
+}
+
+/**
+ * Every container of the project, one JSON object per line (compose ≥ 2.21) or one array (older).
+ * By project name only, like `logs` and `down`: status keeps working when the file changed.
+ */
+export function composePsArgs(project: string): string[] {
+  return ['compose', '-p', project, 'ps', '--all', '--format', 'json'];
+}
+
+export function composeLogsArgs(project: string, service: string): string[] {
+  return ['compose', '-p', project, 'logs', '--no-color', '--tail', String(COMPOSE_LOGS_TAIL_LINES), '--', service];
+}
+
+/**
+ * Stops the project's containers. Only the project name, no file: it works when the agent deleted or
+ * broke the compose file. `volumes` (teardown and prune) also removes its named volumes.
+ */
+export function composeDownArgs(project: string, { volumes = false }: { volumes?: boolean } = {}): string[] {
+  return ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), '--remove-orphans'];
+}
+
+/**
+ * Runs `docker <args>` with the override on stdin. The override never appears in the command line,
+ * only in {@link COMPOSE_OVERRIDE_ENV}.
+ */
+export function composeShell(args: string[]): { file: string; args: string[] } {
+  return { file: 'sh', args: ['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`, 'sh', ...args] };
+}
+
+/**
+ * The override: the preview service publishes exactly `<hostPort>:<port>` (`!override` drops the
+ * project's own fixed host ports), and every other service publishes none (`!reset`), so two runs'
+ * projects never claim the same port in the engine. Names are JSON-quoted (valid YAML keys).
+ */
+export function composeOverrideYaml(opts: { service: string; port: number; hostPort: number; services: readonly string[] }): string {
+  const lines = ['services:'];
+  for (const name of new Set([...opts.services, opts.service])) {
+    lines.push(`  ${JSON.stringify(name)}:`);
+    lines.push(
+      name === opts.service
+        ? `    ports: !override [${JSON.stringify(`${opts.hostPort}:${opts.port}`)}]`
+        : '    ports: !reset []',
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** Service names from `config --services`, one per line; anything that is not a name is dropped. */
+export function parseComposeServices(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(line));
+}
+
+export interface ComposeContainer {
+  service: string;
+  state: string;
+  health: string;
+  exitCode: number | null;
+}
+
+/** `ps --format json`: NDJSON (compose ≥ 2.21, v5 included) or one JSON array (older); bad lines skipped. */
+export function parseComposePs(stdout: string): ComposeContainer[] {
+  const text = stdout.trim();
+  if (text === '') return [];
+  const rows: unknown[] = [];
+  const take = (value: unknown) => (Array.isArray(value) ? rows.push(...value) : rows.push(value));
+  try {
+    take(JSON.parse(text));
+  } catch {
+    for (const line of text.split('\n')) {
+      try {
+        take(JSON.parse(line));
+      } catch {
+        // not JSON: compose warnings go to stderr, but be lenient
+      }
+    }
+  }
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== 'object') return [];
+    const r = row as Record<string, unknown>;
+    if (typeof r.Service !== 'string') return [];
+    return [
+      {
+        service: r.Service,
+        state: typeof r.State === 'string' ? r.State.toLowerCase() : '',
+        health: typeof r.Health === 'string' ? r.Health.toLowerCase() : '',
+        exitCode: typeof r.ExitCode === 'number' ? r.ExitCode : null,
+      },
+    ];
+  });
+}
+
+/**
+ * The preview service's state: `running` (a container runs and is not unhealthy), `starting`
+ * (created or restarting, or health still `starting`), `stopped` (exited or dead), `missing`.
+ */
+export function composeServiceState(containers: readonly ComposeContainer[], service: string): 'running' | 'starting' | 'stopped' | 'missing' {
+  const own = containers.filter((c) => c.service === service);
+  if (own.length === 0) return 'missing';
+  if (own.some((c) => c.state === 'running' && c.health !== 'starting' && c.health !== 'unhealthy')) return 'running';
+  if (own.some((c) => ['created', 'restarting', 'running'].includes(c.state))) return 'starting';
+  return 'stopped';
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-_]/g;
+
+/**
+ * The end of what the project's containers or build printed, fit for the API: no colour or control
+ * sequences, at most {@link COMPOSE_LOGS_MAX_CHARS}. It is untrusted output; callers label it so.
+ */
+export function composeOutputTail(text: string, max = COMPOSE_LOGS_MAX_CHARS): string {
+  const clean = stripControlChars(text.replace(ANSI, '').replace(/\r\n?/g, '\n')).trimEnd();
+  if (clean.length <= max) return clean;
+  return `…${clipText(clean.slice(clean.length - (max - 1)), max - 1)}`;
+}
+
+/** An HTTP status from `curl -w %{http_code}`: any real status means the server answers. */
+export function answeredHttp(stdout: string): boolean {
+  const code = Number(stdout.trim());
+  return Number.isInteger(code) && code >= 100 && code <= 599;
+}
+
+/**
+ * The engine's name on the compose network (`docker` from `tcp://docker:2376`): a published preview
+ * port answers there from the runner, the same port the host publishes.
+ */
+export function engineHostName(dockerHost: string): string {
+  try {
+    return new URL(dockerHost.replace(/^tcp:/i, 'http:')).hostname || 'docker';
+  } catch {
+    return 'docker';
+  }
+}

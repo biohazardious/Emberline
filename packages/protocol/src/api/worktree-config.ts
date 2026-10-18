@@ -1,4 +1,8 @@
-/** `.emberline/worktree.yml` schema v1: how each run worktree sets up, runs services and verifies itself. */
+/**
+ * `.emberline/worktree.yml`: how each run worktree sets up, runs services and verifies itself.
+ * Version 1 services are commands; version 2 adds services from the project's compose file (they
+ * need the Docker engine). A v1 file stays valid unchanged.
+ */
 import { z } from 'zod';
 
 export const WORKTREE_CONFIG_LIMITS = {
@@ -26,14 +30,41 @@ export const WorktreeCopyEntry = z.union([
 ]);
 export type WorktreeCopyEntry = z.output<typeof WorktreeCopyEntry>;
 
+/**
+ * A version 2 service from the project's compose file: `file` (relative to the worktree, default
+ * `compose.yaml`), the compose `service` and the container `port` its preview publishes.
+ */
+export const WorktreeComposeRef = z
+  .object({
+    file: CopyPath.refine((p) => !p.startsWith('-'), 'must not start with "-"').default('compose.yaml'),
+    service: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/, 'a compose service name: letters, digits, ".", "-" and "_" (max 63)'),
+    port: z.number().int().min(1).max(65535),
+  })
+  .strict();
+export type WorktreeComposeRef = z.output<typeof WorktreeComposeRef>;
+
+/** Exactly one of `command` (v1 and v2) and `compose` (v2 only, checked on the whole file). */
 export const WorktreeService = z
   .object({
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/, 'letters, digits, "-" and "_" only (max 40)'),
-    command: Command,
+    command: Command.optional(),
+    compose: WorktreeComposeRef.optional(),
     preview: z.boolean().optional(),
   })
-  .strict();
-export type WorktreeService = z.infer<typeof WorktreeService>;
+  .strict()
+  .superRefine((s, ctx) => {
+    if ((s.command === undefined) === (s.compose === undefined)) {
+      ctx.addIssue({ code: 'custom', path: [], message: 'needs exactly one of "command" and "compose"' });
+    }
+  });
+export type WorktreeService = z.output<typeof WorktreeService>;
+export type WorktreeComposeService = WorktreeService & { compose: WorktreeComposeRef };
+
+export function isComposeService(service: WorktreeService): service is WorktreeComposeService {
+  return service.compose !== undefined;
+}
 
 const List = <T extends z.ZodType>(item: T) => z.array(item).max(WORKTREE_CONFIG_LIMITS.maxEntries).default([]);
 
@@ -44,7 +75,7 @@ export type WorktreeChecks = z.infer<typeof WorktreeChecks>;
 
 export const WorktreeConfig = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
     copy: List(WorktreeCopyEntry),
     setup: List(Command),
     teardown: List(Command),
@@ -55,6 +86,9 @@ export const WorktreeConfig = z
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();
     cfg.services.forEach((s, i) => {
+      if (s.compose && cfg.version < 2) {
+        ctx.addIssue({ code: 'custom', path: ['services', i, 'compose'], message: 'compose services need version: 2' });
+      }
       if (seen.has(s.name)) ctx.addIssue({ code: 'custom', path: ['services', i, 'name'], message: 'duplicate service name' });
       seen.add(s.name);
     });

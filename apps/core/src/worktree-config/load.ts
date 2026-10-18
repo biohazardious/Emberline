@@ -1,4 +1,4 @@
-/** Parsing `.emberline/worktree.yml` (schema v1): YAML first, then the protocol's zod schema. */
+/** Parsing `.emberline/worktree.yml` (schema v1 or v2): YAML first, then the protocol's zod schema. */
 import { type WorktreeChecks, WorktreeConfig, type WorktreeService } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { parseDocument } from 'yaml';
@@ -7,7 +7,7 @@ import { projectWorktreeConfig } from '../db/schema.js';
 
 export type WorktreeYmlParse = { ok: true; config: WorktreeConfig } | { ok: false; errors: string[] };
 
-/** Never throws: a file that is not valid YAML or not schema v1 comes back with readable errors. */
+/** Never throws: a file that is not valid YAML or not a valid schema comes back with readable errors. */
 export function parseWorktreeYml(text: string): WorktreeYmlParse {
   // Aliases expand data; a hostile file could nest them to blow up memory (billion laughs).
   const doc = parseDocument(text, { prettyErrors: false });
