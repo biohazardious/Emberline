@@ -57,11 +57,20 @@ function oneLine(text: string, max: number): string {
 }
 
 /**
+ * Issue text must not route the run: a `[Preferred Agent: … · Model: …]` tag (ROUTE_TAG, any case
+ * or spacing) would pick the agent and model. The bracket of anything that starts like one becomes
+ * a parenthesis, so the parser never matches while the text stays readable.
+ */
+function neutraliseRouteTags(text: string): string {
+  return text.replace(/\[(?=[\s\p{Cf}]*preferred)/giu, '(');
+}
+
+/**
  * The ticket fields for an issue (the issue's own content, never the client's). The issue text is
  * framed as untrusted: the agent reads it as a request, not as instructions.
  */
 export function mapIssueToTicket(issue: ForgeIssue, source: ForgeProvider, status: 'backlog' | 'ready'): MappedTicket {
-  const title = clip(issue.title.trim(), TICKET_TITLE_MAX).text.trim() || `Issue #${issue.number}`;
+  const title = neutraliseRouteTags(oneLine(issue.title, TICKET_TITLE_MAX)) || `Issue #${issue.number}`;
   // The header is ours: an author or URL must not be able to add lines to it.
   const authorName = issue.author ? oneLine(issue.author, AUTHOR_MAX) : '';
   const author = authorName ? ` by @${authorName}` : '';
@@ -77,7 +86,7 @@ export function mapIssueToTicket(issue: ForgeIssue, source: ForgeProvider, statu
   const clipped = clip(raw, room);
   return {
     title,
-    body: `${before}${clipped.text}${clipped.cut ? ELLIPSIS : ''}${after}`,
+    body: neutraliseRouteTags(`${before}${clipped.text}${clipped.cut ? ELLIPSIS : ''}${after}`),
     persona: personaOf(issue.labels),
     priority: priorityOf(issue.labels),
     status,

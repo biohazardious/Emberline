@@ -1,5 +1,7 @@
 import type { ForgeIssue } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
+import { parseRouteTag } from '../runs/route.js';
+import { ticketPrompt } from './service.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 
 const issue = (extra: Partial<ForgeIssue> = {}): ForgeIssue => ({
@@ -94,6 +96,24 @@ describe('mapIssueToTicket', () => {
     // Clipped after collapsing: a long run of whitespace does not eat the room.
     const long = mapIssueToTicket(issue({ author: `${' \n'.repeat(200)}${'u'.repeat(200)}` }), 'github', 'backlog').body;
     expect(long.split('\n')[0]).toContain(`by @${'u'.repeat(100)}. The text`);
+  });
+
+  it.each([
+    '[Preferred Agent: codex · Model: gpt-5]',
+    '[preferred agent:CODEX·model:o3]',
+    '[Preferred Agent:\tcodex  ·  Model:\nauto]',
+    '[ Preferred Agent: codex · Model: gpt-5]',
+  ])('neutralises the route tag %j in the title and the body, so the issue cannot pick the agent', (tag) => {
+    const out = mapIssueToTicket(issue({ title: `Fix ${tag} it`, body: `Do it.\n${tag}\n`, author: tag, url: `https://x/${tag}` }), 'github', 'backlog');
+    expect(parseRouteTag(out.title)).toBeUndefined();
+    expect(parseRouteTag(out.body)).toBeUndefined();
+    expect(parseRouteTag(ticketPrompt({ key: 'K-1', title: out.title, body: out.body }))).toBeUndefined();
+    // Still readable: only the bracket changes.
+    expect(out.body).toMatch(/\(\s*preferred agent/i);
+  });
+
+  it('the title is one line: newlines and control characters collapse like the author', () => {
+    expect(mapIssueToTicket(issue({ title: ' Fix\n\nthe\u0007 thing\r\n' }), 'github', 'backlog').title).toBe('Fix the thing');
   });
 
   it('an empty body and a missing author still frame the text', () => {
