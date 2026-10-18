@@ -11,6 +11,7 @@ import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { blockingMessage, reviewBlockedCount } from '../reviewComments';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { IssueImportDialog } from '../components/IssueImportDialog';
 import { issueHref } from '../issueImport';
@@ -128,6 +129,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [demoPanelOpen, setDemoPanelOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [error, setError] = useState<string>();
+  // A drag to Done the merge gate refused: the ticket stays put until the person overrides or cancels.
+  const [blockedDrop, setBlockedDrop] = useState<{ ticket: Ticket; target: DropTarget; count: number }>();
 
   /** Newest run per ticket (runs arrive newest-first). */
   const latestRun = useMemo(() => {
@@ -147,7 +150,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
     return grouped;
   }, [tickets]);
 
-  const move = async (ticket: Ticket, target: DropTarget) => {
+  const move = async (ticket: Ticket, target: DropTarget, force = false) => {
     const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
@@ -155,6 +158,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
     const hasLiveRun = Boolean(currentRun && !currentRun.endedAt);
     const dropAction = target.status === 'in_progress' ? dropIntoInProgress(ticket, { autoStart, hasLiveRun }) : 'move';
     setError(undefined);
+    setBlockedDrop(undefined);
 
     // A blocked ticket stays where it is: its drawer opens asking "Start anyway". Moving it first would
     // leave it in In progress without a run when the drawer is closed.
@@ -170,6 +174,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
       try {
         const sync = await api<SyncWorktreeResponse>(`/api/projects/${ticket.projectId}/sync-worktree`, 'POST', {
           runId: currentRun.id,
+          ...(force ? { force: true } : {}),
         });
         if (!sync.ok) {
           setError(sync.summary);
@@ -177,8 +182,14 @@ export function BoardPage({ projectId }: { projectId: string }) {
         }
         toastInfo(sync.summary);
       } catch (e) {
-        // The worktree is gone (pruned): there is nothing left to merge.
-        toastInfo(`Not merged: ${errorMessage(e)}`);
+        // Never mark a ticket done after a merge that did not happen.
+        const blocking = reviewBlockedCount(e);
+        if (blocking !== null) {
+          setBlockedDrop({ ticket, target, count: blocking });
+          return;
+        }
+        setError(`Not merged: ${errorMessage(e)}`);
+        return;
       }
     }
 
@@ -304,6 +315,23 @@ export function BoardPage({ projectId }: { projectId: string }) {
       {error && (
         <div className="banner banner-error" role="alert">
           {error}
+        </div>
+      )}
+      {blockedDrop && (
+        <div className="banner banner-warn board-blocked-drop" role="alert">
+          <span>
+            {blockingMessage(blockedDrop.count)} on {blockedDrop.ticket.key}. It was not moved to Done.
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={() => void move(blockedDrop.ticket, blockedDrop.target, true)}
+          >
+            Merge anyway
+          </button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setBlockedDrop(undefined)}>
+            Cancel
+          </button>
         </div>
       )}
 

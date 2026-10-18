@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { blockingMessage, reviewBlockedCount } from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { useApi } from '../hooks/useApi';
 import { startableCount } from '../ticketDeps';
@@ -166,6 +167,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [submittingFactory, setSubmittingFactory] = useState(false);
   const [startingPipeline, setStartingPipeline] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
+  const [blockedSync, setBlockedSync] = useState<{ runId: string; count: number }>();
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -444,21 +446,24 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     }
   };
 
-  const handleSyncToMain = async (runId: string) => {
+  const handleSyncToMain = async (runId: string, force = false) => {
     setSyncingRunId(runId);
     setBanner(undefined);
+    setBlockedSync(undefined);
     try {
       const res = await api<SyncWorktreeResponse>(
         `/api/projects/${project.id}/sync-worktree`,
         'POST',
-        { runId },
+        force ? { runId, force: true } : { runId },
       );
       await statusPoll.refresh();
       await checkpointsPoll.refresh();
       if (res.ok) setSelectedTargetId('main');
       setBanner({ kind: res.ok ? 'ok' : 'err', text: res.summary });
     } catch (e) {
-      setBanner({ kind: 'err', text: errorMessage(e) });
+      const blocking = reviewBlockedCount(e);
+      if (blocking !== null) setBlockedSync({ runId, count: blocking });
+      else setBanner({ kind: 'err', text: errorMessage(e) });
     } finally {
       setSyncingRunId(undefined);
     }
@@ -774,6 +779,22 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           {summary.workspaceRoot}
         </span>
       </div>
+
+      {blockedSync && (
+        <div className="banner banner-warn panel-blocked-sync" role="alert">
+          <span>{blockingMessage(blockedSync.count)}. Nothing was merged.</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={() => void handleSyncToMain(blockedSync.runId, true)}
+          >
+            Merge anyway
+          </button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setBlockedSync(undefined)}>
+            Cancel
+          </button>
+        </div>
+      )}
 
       {banner && (
         <div

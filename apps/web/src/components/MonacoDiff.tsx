@@ -1,18 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import type { ReviewComment } from '@emberline/protocol';
 import { useThemeMode } from '../hooks/useThemeMode';
 import { loadMonaco, monacoTheme } from '../monaco';
 import type * as Monaco from 'monaco-editor';
-
-export interface DiffAnnotation {
-  id: string;
-  filePath: string;
-  line: number;
-  side: 'modified' | 'original';
-  comment: string;
-  /** `sent` once it went to the agent in a "request changes" prompt. */
-  status?: 'open' | 'sent';
-}
 
 interface Props {
   filePath: string;
@@ -20,11 +10,15 @@ interface Props {
   original: string;
   modified: string;
   renderSideBySide: boolean;
-  annotations: DiffAnnotation[];
-  onAddAnnotation: (line: number, side: 'modified' | 'original', comment: string) => void;
-  onRemoveAnnotation: (id: string) => void;
+  /** Unresolved comments on this file; line comments get a glyph in the margin (coloured by priority). */
+  comments: ReviewComment[];
+  /** A click on a line that has no comment glyph starts a line comment there. */
+  onLineClick: (line: number, side: 'modified' | 'original') => void;
+  /** A click on a comment glyph focuses that comment's chip. */
+  onFocusComment: (id: string) => void;
+  /** The line a comment is being written for, shown in the hint bar. */
+  draftLine: { line: number; side: 'modified' | 'original' } | null;
 }
-
 
 export function MonacoDiff({
   filePath,
@@ -32,9 +26,10 @@ export function MonacoDiff({
   original,
   modified,
   renderSideBySide,
-  annotations,
-  onAddAnnotation,
-  onRemoveAnnotation,
+  comments,
+  onLineClick,
+  onFocusComment,
+  draftLine,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const diffEditorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
@@ -44,11 +39,14 @@ export function MonacoDiff({
   } | null>(null);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [draftLine, setDraftLine] = useState<{
-    line: number;
-    side: 'modified' | 'original';
+  const commentsRef = useRef(comments);
+  commentsRef.current = comments;
+  const handlersRef = useRef({ onLineClick, onFocusComment });
+  handlersRef.current = { onLineClick, onFocusComment };
+  const decorationsRef = useRef<{
+    original: Monaco.editor.IEditorDecorationsCollection;
+    modified: Monaco.editor.IEditorDecorationsCollection;
   } | null>(null);
-  const [draftComment, setDraftComment] = useState('');
   const themeMode = useThemeMode();
   const themeRef = useRef(themeMode);
   themeRef.current = themeMode;
@@ -89,16 +87,24 @@ export function MonacoDiff({
         const modEditor = diffEditor.getModifiedEditor();
         const origEditor = diffEditor.getOriginalEditor();
 
-        const subMod = modEditor.onMouseDown((e) => {
-          if (e.target.position?.lineNumber) {
-            setDraftLine({ line: e.target.position.lineNumber, side: 'modified' });
+        const onDown = (side: 'modified' | 'original') => (e: Monaco.editor.IEditorMouseEvent) => {
+          const line = e.target.position?.lineNumber;
+          if (!line) return;
+          if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+            const hit = commentsRef.current.find((c) => c.side === side && (c.currentLine ?? null) === line);
+            if (hit) {
+              handlersRef.current.onFocusComment(hit.id);
+              return;
+            }
           }
-        });
-        const subOrig = origEditor.onMouseDown((e) => {
-          if (e.target.position?.lineNumber) {
-            setDraftLine({ line: e.target.position.lineNumber, side: 'original' });
-          }
-        });
+          handlersRef.current.onLineClick(line, side);
+        };
+        const subMod = modEditor.onMouseDown(onDown('modified'));
+        const subOrig = origEditor.onMouseDown(onDown('original'));
+        decorationsRef.current = {
+          original: origEditor.createDecorationsCollection([]),
+          modified: modEditor.createDecorationsCollection([]),
+        };
 
         diffEditorRef.current = diffEditor;
         modelsRef.current = { original: origModel, modified: modModel };
@@ -121,6 +127,7 @@ export function MonacoDiff({
         diffEditorRef.current.dispose();
         diffEditorRef.current = null;
       }
+      decorationsRef.current = null;
       if (modelsRef.current) {
         modelsRef.current.original.dispose();
         modelsRef.current.modified.dispose();
@@ -150,23 +157,40 @@ export function MonacoDiff({
       }
       monaco.editor.setModelLanguage(origModel, language);
       monaco.editor.setModelLanguage(modModel, language);
+      applyDecorations.current();
     });
-    setDraftLine(null);
   }, [ready, filePath, language, original, modified]);
 
-  const fileAnnotations = annotations.filter((a) => a.filePath === filePath);
-
-  const handleSaveAnnotation = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draftLine || !draftComment.trim()) return;
-    onAddAnnotation(draftLine.line, draftLine.side, draftComment.trim());
-    setDraftComment('');
-    setDraftLine(null);
+  // Glyph-margin markers on commented lines, coloured by priority. Outdated comments have no line.
+  // A model's setValue drops decorations, so the content effect applies them again afterwards.
+  const applyDecorations = useRef(() => {});
+  applyDecorations.current = () => {
+    if (!decorationsRef.current) return;
+    for (const side of ['original', 'modified'] as const) {
+      decorationsRef.current[side].set(
+        commentsRef.current.flatMap((c) =>
+          c.side === side && c.currentLine !== null && c.currentLine !== undefined
+            ? [
+                {
+                  range: { startLineNumber: c.currentLine, startColumn: 1, endLineNumber: c.currentLine, endColumn: 1 },
+                  options: {
+                    glyphMarginClassName: `comment-glyph comment-glyph-${c.priority}`,
+                    glyphMarginHoverMessage: { value: `${c.priority}: ${c.body.slice(0, 160)}` },
+                  },
+                },
+              ]
+            : [],
+        ),
+      );
+    }
   };
+  useEffect(() => {
+    if (ready) applyDecorations.current();
+  }, [ready, comments, original, modified]);
 
   if (loadError) {
     return (
-      <div className="empty" style={{ margin: '1rem' }}>
+      <div className="empty review-empty">
         Monaco failed to load ({loadError}).
       </div>
     );
@@ -175,73 +199,13 @@ export function MonacoDiff({
   return (
     <div className="monaco-diff-shell">
       <div className="monaco-diff-hint-bar">
-        <span className="muted small">
-          Click any line in the diff to attach an inline review comment for Claude
-        </span>
+        <span className="muted small">Click any line in the diff to comment on it for the agent</span>
         {draftLine && (
           <span className="badge badge-soft mono">
             Commenting on {filePath}:{draftLine.line} ({draftLine.side})
           </span>
         )}
       </div>
-
-      {draftLine && (
-        <form className="diff-annotation-composer" onSubmit={handleSaveAnnotation}>
-          <span className="mono" style={{ fontSize: '0.74rem', color: 'var(--accent)' }}>
-            {filePath}:{draftLine.line}
-          </span>
-          <input
-            type="text"
-            className="input"
-            value={draftComment}
-            onChange={(e) => setDraftComment(e.target.value)}
-            placeholder="Write line review feedback (e.g. 'Handle null check here' or 'Extract helper')…"
-            autoFocus
-            style={{ flex: 1 }}
-          />
-          <button type="submit" className="btn btn-sm btn-primary" disabled={!draftComment.trim()}>
-            Add Note
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={() => {
-              setDraftLine(null);
-              setDraftComment('');
-            }}
-          >
-            Cancel
-          </button>
-        </form>
-      )}
-
-      {fileAnnotations.length > 0 && (
-        <div className="diff-file-annotations">
-          {fileAnnotations.map((a) => (
-            <div key={a.id} className={`diff-annotation-chip${a.status === 'sent' ? ' diff-annotation-sent' : ''}`}>
-              <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                L{a.line} ({a.side})
-              </span>
-              <span style={{ flex: 1 }}>{a.comment}</span>
-              {a.status === 'sent' && (
-                <span className="badge badge-soft" title="Sent to the agent; resolve it once addressed">
-                  sent
-                </span>
-              )}
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => onRemoveAnnotation(a.id)}
-                title={a.status === 'sent' ? 'Mark resolved' : 'Delete comment'}
-                aria-label={a.status === 'sent' ? 'Mark resolved' : 'Delete comment'}
-              >
-                {a.status === 'sent' ? <Check className="icon" aria-hidden /> : <X className="icon" aria-hidden />}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div ref={containerRef} className="monaco-diff-canvas" />
     </div>
   );

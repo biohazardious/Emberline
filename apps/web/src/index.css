@@ -4248,3 +4248,218 @@ dialog.cmd-dialog::backdrop {
     border-left: 0;
   }
 }
+
+/* --- review loop: typed comments, rounds, request-changes dialog ------------ */
+
+.review-empty {
+  margin: 1rem;
+}
+
+.review-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.review-file-head-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+}
+
+.review-blocking-banner,
+.board-blocked-drop,
+.panel-blocked-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.board-blocked-drop > span,
+.panel-blocked-sync > span {
+  flex: 1 1 220px;
+}
+
+.comment-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-elev);
+}
+
+.comment-composer-target {
+  font-size: 0.74rem;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.comment-composer-body {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.comment-composer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 14px;
+}
+
+.comment-composer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.comment-composer-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.comment-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  padding: 6px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  background: var(--panel);
+}
+
+.comment-chip:focus,
+.comment-chip-focused {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.comment-chip-blocking {
+  border-left-color: var(--danger);
+}
+
+.comment-chip-important {
+  border-left-color: var(--warn);
+}
+
+.comment-chip-suggestion {
+  border-left-color: var(--muted);
+}
+
+.comment-chip-head,
+.comment-chip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.comment-chip-loc {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.comment-chip-body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-chip-anchor {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.comment-badge-blocking {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.comment-badge-important {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+
+.comment-badge-suggestion {
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.diff-file-annotations {
+  max-height: 240px;
+}
+
+.comment-glyph {
+  margin-left: 4px;
+  width: 8px !important;
+  height: 8px !important;
+  margin-top: 6px;
+  border-radius: 50%;
+}
+
+.comment-glyph-blocking {
+  background: var(--danger);
+}
+
+.comment-glyph-important {
+  background: var(--warn);
+}
+
+.comment-glyph-suggestion {
+  background: var(--muted);
+}
+
+.request-dialog {
+  width: min(480px, 100%);
+}
+
+.request-dialog-field,
+.request-dialog-targets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.request-dialog-field .input {
+  width: 100%;
+  resize: vertical;
+}
+
+.request-dialog-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 820px) {
+  .comment-composer-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .comment-composer-actions {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .request-dialog {
+    width: 100%;
+    max-width: 100%;
+    border-left: 0;
+  }
+}

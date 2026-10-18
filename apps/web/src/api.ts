@@ -5,6 +5,8 @@ export class ApiRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The rest of the error body (core spreads `details` into it), e.g. `blocking` or `canStartNew`. */
+    readonly data: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = 'ApiRequestError';
@@ -28,9 +30,12 @@ export async function api<T>(path: string, method: Method = 'GET', body?: unknow
   const text = await res.text();
   const json = text ? (JSON.parse(text) as unknown) : undefined;
   if (!res.ok) {
-    const err = (json ?? {}) as { error?: string; message?: string };
+    const err = (json && typeof json === 'object' ? json : {}) as Record<string, unknown> & {
+      error?: string;
+      message?: string;
+    };
     if (res.status === 401) window.dispatchEvent(new Event('emberline:unauthorized'));
-    throw new ApiRequestError(res.status, err.error ?? 'http_error', err.message ?? res.statusText);
+    throw new ApiRequestError(res.status, err.error ?? 'http_error', err.message ?? res.statusText, err);
   }
   return json as T;
 }

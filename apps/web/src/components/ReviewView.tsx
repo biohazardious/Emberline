@@ -27,10 +27,20 @@ import type {
   RunReviewState,
   SlopAuditReport,
 } from '@emberline/protocol';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import {
+  blockingCount,
+  blockingMessage,
+  fileCommentCounts,
+  requestableComments,
+  viewedState,
+} from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
-import { MonacoDiff, type DiffAnnotation } from './MonacoDiff';
+import { MonacoDiff } from './MonacoDiff';
+import { CommentChip, commentChipId } from './review/CommentChip';
+import { CommentComposer, type CommentDraft } from './review/CommentComposer';
+import { RequestChangesDialog } from './review/RequestChangesDialog';
 import { formatAgentDisplayName } from './RunInspector';
 import { BuildOutputsList } from './RunOutcome';
 
@@ -103,28 +113,18 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     queryFn: () => api<RunReviewState>(`/api/runs/${run.id}/review`),
   });
   const refreshReview = () => queryClient.invalidateQueries({ queryKey: reviewKey });
-  const annotations = useMemo<DiffAnnotation[]>(
-    () =>
-      (reviewQuery.data?.comments ?? [])
-        .flatMap((c) => (c.status !== 'resolved' && c.line !== null ? [{ ...c, line: c.currentLine ?? c.line }] : []))
-        .map((c) => ({
-          id: c.id,
-          filePath: c.filePath,
-          line: c.line,
-          side: c.side,
-          comment: c.body,
-          status: c.status === 'sent' ? 'sent' : 'open',
-        })),
-    [reviewQuery.data],
-  );
-  const openCount = annotations.filter((a) => a.status === 'open').length;
-  const viewedSignature = (f: DiffFile) => `${f.status}:${f.additions}:${f.deletions}`;
+  const comments = useMemo(() => reviewQuery.data?.comments ?? [], [reviewQuery.data]);
+  const blocking = blockingCount(comments);
+  const requestable = requestableComments(comments);
+  const [, navigate] = useLocation();
+  const [draft, setDraft] = useState<{ line: number; side: 'modified' | 'original' } | 'file' | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [requestOpen, setRequestOpen] = useState(false);
   const viewedByPath = useMemo(
     () => new Map((reviewQuery.data?.viewed ?? []).map((v) => [v.filePath, v.signature])),
     [reviewQuery.data],
   );
-  const [generalNote, setGeneralNote] = useState('');
-  const [sendingReview, setSendingReview] = useState(false);
 
   // Git commit & push state
   const [commitMessage, setCommitMessage] = useState('');
@@ -269,46 +269,72 @@ export function ReviewView({ run, onRunUpdated }: Props) {
     }
   }, [selectedFile, scope, loadFile]);
 
-  const handleAddAnnotation = (line: number, side: 'modified' | 'original', comment: string) => {
-    if (!selectedFile) return;
-    api(`/api/runs/${run.id}/review/comments`, 'POST', { filePath: selectedFile, line, side, body: comment })
+  const reviewCall = (request: Promise<unknown>) => {
+    setCommentBusy(true);
+    return request
       .then(refreshReview)
-      .catch((e: unknown) => setError(errorMessage(e)));
+      .catch((e: unknown) => setError(errorMessage(e)))
+      .finally(() => setCommentBusy(false));
   };
 
-  /** Deletes an unsent comment; a sent one is marked resolved instead (it is part of the history). */
-  const handleRemoveAnnotation = (id: string) => {
-    const sent = annotations.find((a) => a.id === id)?.status === 'sent';
-    const request = sent
-      ? api(`/api/runs/${run.id}/review/comments/${id}`, 'PATCH', { status: 'resolved' })
-      : api(`/api/runs/${run.id}/review/comments/${id}`, 'DELETE');
-    request.then(refreshReview).catch((e: unknown) => setError(errorMessage(e)));
+  const handleAddComment = (input: CommentDraft) => {
+    if (!selectedFile || !draft) return;
+    const where = draft === 'file' ? {} : { line: draft.line, side: draft.side };
+    setDraft(null);
+    void reviewCall(
+      api(`/api/runs/${run.id}/review/comments`, 'POST', { filePath: selectedFile, ...where, ...input }),
+    );
   };
+
+  const patchComment = (id: string, status: 'open' | 'resolved') =>
+    void reviewCall(api(`/api/runs/${run.id}/review/comments/${id}`, 'PATCH', { status }));
+  const handleDeleteComment = (id: string) =>
+    void reviewCall(api(`/api/runs/${run.id}/review/comments/${id}`, 'DELETE'));
+
+  // Clicking a glyph in the margin scrolls to and focuses its chip.
+  useEffect(() => {
+    if (!focusedId) return;
+    const el = document.getElementById(commentChipId(focusedId));
+    el?.scrollIntoView({ block: 'nearest' });
+    el?.focus({ preventScroll: true });
+  }, [focusedId]);
+
+  // A different file starts with a clean draft and no focused chip.
+  useEffect(() => {
+    setDraft(null);
+    setFocusedId(null);
+  }, [selectedFile]);
 
   const handleToggleViewed = (f: DiffFile, viewed: boolean) => {
-    api(`/api/runs/${run.id}/review/viewed`, 'PUT', { filePath: f.path, signature: viewedSignature(f), viewed })
+    api(`/api/runs/${run.id}/review/viewed`, 'PUT', { filePath: f.path, signature: f.hash, viewed })
       .then(refreshReview)
       .catch((e: unknown) => setError(errorMessage(e)));
   };
 
-  const handleSendReviewToClaude = async () => {
-    if (openCount === 0 && !generalNote.trim()) return;
-    setSendingReview(true);
-    setError(null);
-    try {
-      const res = await api<{ run: Run; sent: number }>(`/api/runs/${run.id}/review/request-changes`, 'POST', {
-        note: generalNote.trim(),
-      });
-      setGeneralNote('');
-      await refreshReview();
-      setGitNotice(`Sent ${res.sent} review comment(s) to ${formatAgentDisplayName(run.agent)}.`);
-      onRunUpdated?.(res.run);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setSendingReview(false);
+  const handleRequestChanges = async (note: string, target: 'same' | 'new') => {
+    const res = await api<{ run: Run; sent: number }>(`/api/runs/${run.id}/review/request-changes`, 'POST', {
+      note,
+      target,
+    });
+    setRequestOpen(false);
+    await refreshReview();
+    if (target === 'new') {
+      navigate(`/runs/${res.run.id}/review`);
+      return;
     }
+    setGitNotice(`Sent ${res.sent} review comment(s) to ${formatAgentDisplayName(run.agent)}.`);
+    onRunUpdated?.(res.run);
   };
+
+  const fileComments = useMemo(
+    () => comments.filter((c) => c.filePath === selectedFile && c.status !== 'resolved'),
+    [comments, selectedFile],
+  );
+  // Carried comments are resolved here but still shown, with where they went.
+  const fileChips = useMemo(
+    () => comments.filter((c) => c.filePath === selectedFile && (c.status !== 'resolved' || c.carriedTo)),
+    [comments, selectedFile],
+  );
 
   const handleAutoCleanSlop = async (customPrompt?: string | null) => {
     const promptToSend = customPrompt ?? slopAudit?.autoFixPrompt;
@@ -1046,29 +1072,16 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             </form>
 
             <div className="review-annotations-dispatch">
-              <input
-                type="text"
-                className="input"
-                value={generalNote}
-                onChange={(e) => setGeneralNote(e.target.value)}
-                placeholder={
-                  openCount > 0
-                    ? `${openCount} line comment(s) ready to send — optional summary…`
-                    : 'Quick review note or click lines in diff…'
-                }
-              />
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={sendingReview || (openCount === 0 && !generalNote.trim())}
-                onClick={handleSendReviewToClaude}
-              >
-                {sendingReview
-                  ? 'Sending…'
-                  : `Request Changes (${openCount})`}
+              <button type="button" className="btn btn-sm btn-primary" onClick={() => setRequestOpen(true)}>
+                Request changes ({requestable.length})
               </button>
             </div>
           </div>
+          {blocking > 0 && (
+            <div className="banner banner-warn review-blocking-banner" role="status">
+              {blockingMessage(blocking)}. The merge gate stays closed until they are resolved.
+            </div>
+          )}
 
           <div className="review-split-pane">
             {/* Left file tree */}
@@ -1087,7 +1100,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               ) : (
                 summary.files.map((f) => {
                   const active = f.path === selectedFile;
-                  const fileNoteCount = annotations.filter((a) => a.filePath === f.path).length;
+                  const counts = fileCommentCounts(comments, f.path);
+                  const viewed = viewedState(viewedByPath.get(f.path), f.hash);
                   return (
                     <div
                       key={f.path}
@@ -1100,24 +1114,27 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       <span className="review-file-path mono" title={f.path}>
                         {f.path}
                       </span>
-                      {fileNoteCount > 0 && (
-                        <span className="badge badge-soft mono">{fileNoteCount}</span>
+                      {counts.open > 0 && (
+                        <span className="badge badge-soft mono" title={`${counts.open} unresolved comment(s)`}>
+                          {counts.open}
+                        </span>
+                      )}
+                      {counts.blocking > 0 && (
+                        <span className="badge comment-badge-blocking mono" title={`${counts.blocking} blocking`}>
+                          {counts.blocking}!
+                        </span>
                       )}
                       <label
-                        className={`review-viewed${viewedByPath.has(f.path) && viewedByPath.get(f.path) !== viewedSignature(f) ? ' review-viewed-stale' : ''}`}
-                        title={
-                          viewedByPath.has(f.path) && viewedByPath.get(f.path) !== viewedSignature(f)
-                            ? 'Changed since you marked it viewed'
-                            : 'Mark as viewed'
-                        }
+                        className={`review-viewed${viewed === 'changed' ? ' review-viewed-stale' : ''}`}
+                        title={viewed === 'changed' ? 'Changed since you marked it viewed' : 'Mark as viewed'}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
                           type="checkbox"
-                          checked={viewedByPath.get(f.path) === viewedSignature(f)}
+                          checked={viewed === 'viewed'}
                           onChange={(e) => handleToggleViewed(f, e.target.checked)}
                         />
-                        {viewedByPath.has(f.path) && viewedByPath.get(f.path) !== viewedSignature(f) ? 'changed' : 'viewed'}
+                        {viewed === 'changed' ? 'changed' : 'viewed'}
                       </label>
                       <span className="review-file-stats mono">
                         <span style={{ color: 'var(--ok)' }}>+{f.additions}</span>{' '}
@@ -1146,28 +1163,73 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             {/* Right Monaco diff editor */}
             <div className="review-diff-pane">
               {loadingFile && !fileDiff ? (
-                <div className="empty" style={{ margin: '1rem' }}>
-                  Loading file diff…
-                </div>
+                <div className="empty review-empty">Loading file diff…</div>
               ) : !fileDiff ? (
-                <div className="empty" style={{ margin: '1rem' }}>
-                  Select a changed file to inspect its diff and attach inline review annotations.
-                </div>
-              ) : fileDiff.binary ? (
-                <div className="empty" style={{ margin: '1rem' }}>
-                  Binary file (`{fileDiff.path}`) — switch to the Artifacts tab to preview or download.
+                <div className="empty review-empty">
+                  Select a changed file to inspect its diff and attach inline review comments.
                 </div>
               ) : (
-                <MonacoDiff
-                  filePath={fileDiff.path}
-                  language={detectLanguage(fileDiff.path)}
-                  original={fileDiff.original}
-                  modified={fileDiff.modified}
-                  renderSideBySide={renderSideBySide}
-                  annotations={annotations}
-                  onAddAnnotation={handleAddAnnotation}
-                  onRemoveAnnotation={handleRemoveAnnotation}
-                />
+                <>
+                  <div className="review-file-head">
+                    <span className="mono review-file-head-path" title={fileDiff.path}>
+                      {fileDiff.path}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => setDraft('file')}
+                      disabled={draft === 'file'}
+                    >
+                      Add file comment
+                    </button>
+                  </div>
+                  {draft && (
+                    <CommentComposer
+                      target={
+                        draft === 'file'
+                          ? `${fileDiff.path} (whole file)`
+                          : `${fileDiff.path}:${draft.line} (${draft.side})`
+                      }
+                      busy={commentBusy}
+                      onSubmit={handleAddComment}
+                      onCancel={() => setDraft(null)}
+                    />
+                  )}
+                  {fileChips.length > 0 && (
+                    <div className="diff-file-annotations">
+                      {fileChips.map((c) => (
+                        <CommentChip
+                          key={c.id}
+                          comment={c}
+                          focused={c.id === focusedId}
+                          busy={commentBusy}
+                          onDelete={handleDeleteComment}
+                          onResolve={(id) => patchComment(id, 'resolved')}
+                          onVerify={(id) => patchComment(id, 'resolved')}
+                          onNotDone={(id) => patchComment(id, 'open')}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {fileDiff.binary ? (
+                    <div className="empty review-empty">
+                      Binary file (`{fileDiff.path}`) — comment on the file above, or switch to the Artifacts tab to
+                      preview or download it.
+                    </div>
+                  ) : (
+                    <MonacoDiff
+                      filePath={fileDiff.path}
+                      language={detectLanguage(fileDiff.path)}
+                      original={fileDiff.original}
+                      modified={fileDiff.modified}
+                      renderSideBySide={renderSideBySide}
+                      comments={fileComments}
+                      draftLine={draft && draft !== 'file' ? draft : null}
+                      onLineClick={(line, side) => setDraft({ line, side })}
+                      onFocusComment={setFocusedId}
+                    />
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1270,6 +1332,13 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             )}
           </div>
         </div>
+      )}
+      {requestOpen && (
+        <RequestChangesDialog
+          comments={requestable}
+          onSend={handleRequestChanges}
+          onClose={() => setRequestOpen(false)}
+        />
       )}
     </div>
   );
