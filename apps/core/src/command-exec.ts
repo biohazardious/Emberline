@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { MAX_EXEC_OUTPUT_BYTES, PTYD_PROTOCOL_VERSION, type PtydResult } from '@emberline/protocol';
+import { MAX_EXEC_OUTPUT_BYTES, PTYD_MIN_PROTOCOL_VERSION, type PtydResult } from '@emberline/protocol';
 import { unavailable } from './errors.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 
@@ -71,7 +71,7 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
     if ((ptyd.protocolVersion ?? 0) < EXEC_PROTOCOL_VERSION) {
       throw unavailable(
         'runner_outdated',
-        `the runner image is older than core (ptyd protocol ${ptyd.protocolVersion} < ${PTYD_PROTOCOL_VERSION}); rebuild it with \`make up\``,
+        `the runner image is older than core (ptyd protocol ${ptyd.protocolVersion} < ${PTYD_MIN_PROTOCOL_VERSION}); rebuild it with \`make up\``,
       );
     }
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;

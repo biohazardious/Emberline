@@ -79,6 +79,8 @@ export const WorktreeConfigStatusResponse = z.object({
   approved: ApprovedWorktreeConfig.nullable(),
   /** HEAD's committed `.emberline/worktree.yml`; null when there is none or it cannot be read safely. */
   head: z.object({ content: z.string(), sha256: z.string() }).nullable(),
+  /** git could not read HEAD (no repository or commit, a broken HEAD): `head` is unknown, not absent. */
+  headError: z.string().nullable(),
   /** HEAD differs from the approved content: another file, or none (`removed`). The "changed — review" banner. */
   changed: z.boolean(),
   /** HEAD no longer has the file while an approval exists; approving `{ removal: true }` clears it. */

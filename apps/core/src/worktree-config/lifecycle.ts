@@ -37,6 +37,8 @@ export interface CopyOutcome {
   reason?: string;
   /** Links, sockets and the like inside a copied directory that were left out. */
   leftOut?: number;
+  /** `.env*` files inside a copied directory (paths like the entry's), for the not-ignored check. */
+  secrets?: string[];
 }
 
 /** Path components of a relative entry, or null when it is absolute or climbs out with "..". */
@@ -100,16 +102,17 @@ async function verifiedDir(dir: string, expectedReal: string): Promise<string> {
 }
 
 /**
- * Why a source is over the copy caps, or null. Counts regular files and their sizes without
- * following links (they are left out of a copy anyway), stopping as soon as a cap is passed.
+ * Why a source is over the copy caps, or null. Counts regular files and directories (the entry
+ * itself excluded) and the files' sizes without following links (they are left out of a copy
+ * anyway), stopping as soon as a cap is passed.
  */
 async function overCaps(srcReal: string, isDir: boolean): Promise<string | null> {
-  let files = 0;
+  let entries = 0;
   let bytes = 0;
   const add = (size: number) => {
-    files++;
+    entries++;
     bytes += size;
-    if (files > COPY_MAX_FILES) return `more than ${COPY_MAX_FILES} files`;
+    if (entries > COPY_MAX_FILES) return `more than ${COPY_MAX_FILES} files and directories`;
     if (bytes > COPY_MAX_BYTES) return `larger than ${COPY_MAX_BYTES / 1024 / 1024} MB`;
     return null;
   };
@@ -118,7 +121,7 @@ async function overCaps(srcReal: string, isDir: boolean): Promise<string | null>
     for await (const entry of await opendir(dir)) {
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const over = await walk(abs);
+        const over = add(0) ?? (await walk(abs));
         if (over) return over;
       } else if (entry.isFile()) {
         const over = add((await lstat(abs)).size);
@@ -146,19 +149,23 @@ async function copyVerifiedFile(srcReal: string, destDirReal: string, name: stri
   }
 }
 
-/** Copies a directory tree: directories and regular files only; returns how many entries were left out. */
-async function copyVerifiedDir(srcReal: string, destReal: string): Promise<number> {
+/**
+ * Copies a directory tree: directories and regular files only. Counts the entries left out and
+ * collects the `.env*` files copied (as `rel/...` paths).
+ */
+async function copyVerifiedDir(srcReal: string, destReal: string, rel: string, found: { leftOut: number; secrets: string[] }): Promise<void> {
   await mkdir(destReal);
   await verifiedDir(destReal, destReal);
-  let leftOut = 0;
   const dir = await opendir(await verifiedDir(srcReal, srcReal));
   for await (const entry of dir) {
     const from = path.join(srcReal, entry.name);
-    if (entry.isDirectory()) leftOut += await copyVerifiedDir(from, path.join(destReal, entry.name));
-    else if (entry.isFile()) await copyVerifiedFile(from, destReal, entry.name);
-    else leftOut++;
+    const childRel = `${rel}/${entry.name}`;
+    if (entry.isDirectory()) await copyVerifiedDir(from, path.join(destReal, entry.name), childRel, found);
+    else if (entry.isFile()) {
+      await copyVerifiedFile(from, destReal, entry.name);
+      if (entry.name.startsWith('.env')) found.secrets.push(childRel);
+    } else found.leftOut++;
   }
-  return leftOut;
 }
 
 /**
@@ -212,8 +219,15 @@ export async function copyIntoWorktree(
         await symlink(srcReal, path.join(destParent, name));
         outcomes.push({ path: entry.path, mode: entry.mode, status: 'linked' });
       } else if (source.isDir) {
-        const leftOut = await copyVerifiedDir(srcReal, path.join(destParent, name));
-        outcomes.push({ path: entry.path, mode: entry.mode, status: 'copied', ...(leftOut > 0 ? { leftOut } : {}) });
+        const found = { leftOut: 0, secrets: [] as string[] };
+        await copyVerifiedDir(srcReal, path.join(destParent, name), parts.join('/'), found);
+        outcomes.push({
+          path: entry.path,
+          mode: entry.mode,
+          status: 'copied',
+          ...(found.leftOut > 0 ? { leftOut: found.leftOut } : {}),
+          ...(found.secrets.length > 0 ? { secrets: found.secrets } : {}),
+        });
       } else {
         await copyVerifiedFile(srcReal, destParent, name);
         outcomes.push({ path: entry.path, mode: entry.mode, status: 'copied' });
@@ -249,7 +263,7 @@ export async function notIgnoredPaths(worktreePath: string, paths: readonly stri
 export function unignoredSecretsNote(notIgnored: readonly string[]): string | null {
   const secrets = notIgnored.filter((p) => path.basename(p).startsWith('.env'));
   if (secrets.length === 0) return null;
-  const list = secrets.map((p) => `\`${p}\``).join(', ');
+  const list = secrets.map(inlineCode).join(', ');
   return secrets.length === 1
     ? `Note: the copied ${list} is not in .gitignore — don't commit it.`
     : `Note: the copied ${list} are not in .gitignore — don't commit them.`;
@@ -319,6 +333,14 @@ export async function runWorktreeCommand(
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)} min`;
 
+/** `text` as Markdown inline code whose delimiter no backtick run inside it can close. */
+export function inlineCode(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  if (longest === 0) return `\`${text}\``;
+  const delimiter = '`'.repeat(longest + 1);
+  return `${delimiter} ${text} ${delimiter}`;
+}
+
 /** A code fence longer than any run of backticks in `text`, so the text cannot close it. */
 function fenceFor(text: string): string {
   const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
@@ -336,10 +358,10 @@ export function setupFailurePrefix(
       : `exit ${failure.exitCode}`;
   const tail = cleanOutput(failure.tail).slice(-SETUP_TAIL_CHARS);
   const fence = fenceFor(tail);
-  return `Worktree setup failed: \`${failure.command}\` (${how})\n${fence}\n${tail}\n${fence}\nFix it as part of this ticket.`;
+  return `Worktree setup failed: ${inlineCode(failure.command)} (${how})\n${fence}\n${tail}\n${fence}\nFix it as part of this ticket.`;
 }
 
 /** Put in front of the first prompt when the whole setup ran out of time before these commands. */
 export function setupSkippedPrefix(commands: readonly string[]): string {
-  return `Worktree setup stopped after ${minutes(SETUP_TOTAL_MS)}; not run: ${commands.map((c) => `\`${c}\``).join(', ')}. Run them as part of this ticket.`;
+  return `Worktree setup stopped after ${minutes(SETUP_TOTAL_MS)}; not run: ${commands.map(inlineCode).join(', ')}. Run them as part of this ticket.`;
 }

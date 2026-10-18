@@ -24,8 +24,10 @@ export const SystemStatus = z.object({
   version: z.string(),
   apiVersion: z.number().int(),
   ptyd: z.enum(['connecting', 'connected', 'disconnected']),
-  /** True when the connected runner speaks an older ptyd protocol than this core needs. */
+  /** True when the connected runner speaks an older ptyd protocol than this core needs (PTYD_MIN_PROTOCOL_VERSION). */
   runnerOutdated: z.boolean(),
+  /** The runner works but is older than PTYD_PROTOCOL_VERSION: an update brings extras, nothing breaks. */
+  runnerUpdateAvailable: z.boolean(),
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;
 

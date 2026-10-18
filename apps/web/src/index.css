@@ -1425,6 +1425,12 @@ a {
   background: hsl(355 60% 20% / 0.2);
 }
 
+.banner-info {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+
 .banner-ok {
   border: 1px solid color-mix(in hsl, var(--ok) 45%, var(--border));
   background: color-mix(in hsl, var(--ok) 12%, var(--surface));

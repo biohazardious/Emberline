@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { backupDatabase } from './backup.js';
 import { openDb } from './db/index.js';
 import { quotaWindows } from './db/schema.js';
-import { createTestApp, type TestApp } from './test-utils.js';
+import { PtydServer } from '@emberline/ptyd/server';
+import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
+import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -27,6 +29,52 @@ describe('ops endpoints', () => {
     expect(Object.keys(body.checks)).toEqual(
       expect.arrayContaining(['database', 'runner', 'runnerProtocol', 'workspaces', 'diskData', 'diskWorkspaces']),
     );
+  });
+
+  describe('runner protocol skew', () => {
+    let server: PtydServer | undefined;
+    afterEach(async () => {
+      await server?.close();
+      server = undefined;
+    });
+
+    /** Core connected to a runner that answers `hello` with `version`. */
+    async function withRunner(version: number) {
+      t = await createTestApp();
+      server = new PtydServer({ socketPath: t.config.ptydSocket });
+      await server.listen();
+      t.ptyd.start();
+      await t.ptyd.waitUntilConnected();
+      Object.defineProperty(t.ptyd, 'protocolVersion', { get: () => version });
+      const cookie = await setupAndLogin(t.app);
+      const deep = await t.app.inject({ url: '/api/health/deep' });
+      const system = (await t.app.inject({ url: '/api/system', headers: { ...CSRF, cookie } })).json();
+      return { deep, system };
+    }
+
+    it('a current runner is ok, with nothing to update', async () => {
+      expect(PTYD_PROTOCOL_VERSION).toBe(3);
+      expect(PTYD_MIN_PROTOCOL_VERSION).toBe(2);
+      const { deep, system } = await withRunner(3);
+      expect(deep.statusCode).toBe(200);
+      expect(deep.json().checks.runnerProtocol).toMatchObject({ ok: true });
+      expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: false });
+    });
+
+    it('a protocol-2 runner still works: ok, with an update available', async () => {
+      const { deep, system } = await withRunner(2);
+      expect(deep.statusCode).toBe(200);
+      expect(deep.json().checks.runnerProtocol.ok).toBe(true);
+      expect(deep.json().checks.runnerProtocol.detail).toContain('update available');
+      expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: true });
+    });
+
+    it('a runner below the minimum is outdated', async () => {
+      const { deep, system } = await withRunner(1);
+      expect(deep.statusCode).toBe(503);
+      expect(deep.json().checks.runnerProtocol.ok).toBe(false);
+      expect(system).toMatchObject({ runnerOutdated: true, runnerUpdateAvailable: false });
+    });
   });
 
   it('serves Prometheus metrics only with the configured bearer token', async () => {

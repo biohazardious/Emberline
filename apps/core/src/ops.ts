@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, stat, statfs } from 'node:fs/promises';
 import path from 'node:path';
-import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
+import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { runs, tickets } from './db/schema.js';
@@ -48,9 +48,14 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
     const connected = deps.ptyd.status === 'connected';
     result.runner = { ok: connected, detail: `ptyd ${deps.ptyd.status}` };
     const version = deps.ptyd.protocolVersion;
+    const current = (version ?? 0) >= PTYD_PROTOCOL_VERSION;
     result.runnerProtocol = {
-      ok: connected && (version ?? 0) >= PTYD_PROTOCOL_VERSION,
-      detail: `runner ${version ?? 'unknown'}, core needs ${PTYD_PROTOCOL_VERSION}`,
+      ok: connected && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION,
+      detail: `runner ${version ?? 'unknown'}, core needs ${PTYD_MIN_PROTOCOL_VERSION}${
+        connected && !current && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION
+          ? ` (update available: ${PTYD_PROTOCOL_VERSION} cancels worktree setup on stop)`
+          : ''
+      }`,
     };
     result.workspaces = await access(deps.config.workspacesDir, fsConstants.W_OK).then(
       () => ({ ok: true, detail: 'writable' }),

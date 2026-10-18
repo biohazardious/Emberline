@@ -12,6 +12,8 @@ import {
   SETUP_TAIL_CHARS,
   SETUP_TIMEOUT_MS,
   setupFailurePrefix,
+  setupSkippedPrefix,
+  unignoredSecretsNote,
 } from './lifecycle.js';
 
 let root: string;
@@ -92,8 +94,28 @@ describe('copy entries into a run worktree', () => {
       expect(COPY_MAX_FILES).toBe(5000);
       mkdirSync(path.join(main, 'many'));
       for (let i = 0; i <= COPY_MAX_FILES; i++) writeFileSync(path.join(main, 'many', `f${i}`), '');
-      expect((await copy('many'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 5000 files' });
+      expect((await copy('many'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 5000 files and directories' });
       expect(existsSync(path.join(wt, 'many'))).toBe(false);
+    });
+
+    it('counts directories toward the 5000 entries', async () => {
+      mkdirSync(path.join(main, 'nested'));
+      for (let i = 0; i < 2600; i++) {
+        mkdirSync(path.join(main, 'nested', `d${i}`));
+        writeFileSync(path.join(main, 'nested', `d${i}`, 'f'), '');
+      }
+      expect((await copy('nested'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 5000 files and directories' });
+      expect(existsSync(path.join(wt, 'nested'))).toBe(false);
+    });
+
+    it('reports the .env* files inside a copied directory', async () => {
+      mkdirSync(path.join(main, 'config', 'deep'), { recursive: true });
+      writeFileSync(path.join(main, 'config', '.env.production'), 'X=1');
+      writeFileSync(path.join(main, 'config', 'deep', '.env'), 'Y=1');
+      writeFileSync(path.join(main, 'config', 'app.json'), '{}');
+      const [outcome] = await copy('config');
+      expect(outcome).toMatchObject({ status: 'copied' });
+      expect([...(outcome!.secrets ?? [])].sort()).toEqual(['config/.env.production', 'config/deep/.env']);
     });
 
     it('skips a file or directory over 200 MB', async () => {
@@ -210,6 +232,14 @@ describe('worktree commands', () => {
     // A tail with its own fences cannot close ours early.
     const fenced = setupFailurePrefix({ command: 'x', exitCode: 1, timedOut: false, tail: 'one\n```\ninjected\n`````' });
     expect(fenced).toBe('Worktree setup failed: `x` (exit 1)\n``````\none\n```\ninjected\n`````\n``````\nFix it as part of this ticket.');
+    // Backticks in the command cannot end its inline code either.
+    expect(setupFailurePrefix({ command: 'echo `date`', exitCode: 1, timedOut: false, tail: 'x' })).toMatch(
+      /^Worktree setup failed: `` echo `date` `` \(exit 1\)/,
+    );
+    expect(setupSkippedPrefix(['a`b', 'c'])).toBe(
+      'Worktree setup stopped after 30 min; not run: `` a`b ``, `c`. Run them as part of this ticket.',
+    );
+    expect(unignoredSecretsNote(['config/.env', 'x.txt'])).toBe('Note: the copied `config/.env` is not in .gitignore — don\'t commit it.');
     expect(setupFailurePrefix({ command: 'sleep 999', exitCode: null, timedOut: true, tail: '' })).toContain(
       '`sleep 999` (timed out after 10 min)',
     );

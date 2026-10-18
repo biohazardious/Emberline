@@ -167,6 +167,12 @@ export function Dashboard({
           <code>make up</code>).
         </div>
       )}
+      {system?.runnerUpdateAvailable && !system.runnerOutdated && (
+        <div className="banner banner-info" role="status">
+          Runner update available: stopping a run during setup waits for its current command. <code>make up</code> when
+          convenient (restarts agents).
+        </div>
+      )}
       {system && system.apiVersion !== API_VERSION && (
         <div className="banner banner-warn" role="status">
           Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the new version.

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, Ticket, WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -195,7 +195,7 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     execFileSync('git', ['-C', project.path, 'rm', '-q', YML]);
     execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'drop']);
     const s = await status(project.id);
-    expect(s).toMatchObject({ head: null, changed: true, removed: true, errors: [] });
+    expect(s).toMatchObject({ head: null, headError: null, changed: true, removed: true, errors: [] });
     expect(s.diff).toContain('-setup:');
     // Until approved, runs keep the approved content.
     const before = await startRun(project.id);
@@ -206,6 +206,22 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     const after = await startRun(project.id);
     expect(existsSync(path.join(after.worktreePath, 'setup-ran'))).toBe(false);
     expect((await typesOf(after.id)).filter((x) => x.startsWith('worktree_'))).toEqual([]);
+  });
+
+  it('when git cannot read HEAD, nothing counts as removed and no removal can be approved', async () => {
+    const project = await createProject(setupYml('echo ok > setup-ran'));
+    await approveHead(project.id);
+    writeFileSync(path.join(project.path, '.git', 'HEAD'), 'garbage\n');
+    const broken = await status(project.id);
+    expect(broken).toMatchObject({ head: null, changed: false, removed: false });
+    expect(broken.headError).toBeTruthy();
+    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    rmSync(path.join(project.path, '.git'), { recursive: true, force: true });
+    const noGit = await status(project.id);
+    expect(noGit).toMatchObject({ head: null, changed: false, removed: false });
+    expect(noGit.headError).toBeTruthy();
+    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    expect((await status(project.id)).approved).not.toBeNull();
   });
 
   it('a HEAD file that is a symbolic link is refused', async () => {
@@ -266,6 +282,16 @@ describe('run worktree lifecycle', () => {
     const run = await startRun(project.id, 'work');
     expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({ notIgnored: ['.env', 'notes.txt'] });
     expect(await promptOf(run.id)).toBe('Note: the copied `.env` is not in .gitignore — don\'t commit it.\n\nwork');
+  });
+
+  it('warns about a .env inside a copied directory that git does not ignore', async () => {
+    const project = await createProject('version: 1\ncopy:\n  - config\n');
+    mkdirSync(path.join(project.path, 'config'));
+    writeFileSync(path.join(project.path, 'config', '.env.production'), 'X=1');
+    await approveHead(project.id);
+    const run = await startRun(project.id, 'work');
+    expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({ notIgnored: ['config', 'config/.env.production'] });
+    expect(await promptOf(run.id)).toBe('Note: the copied `config/.env.production` is not in .gitignore — don\'t commit it.\n\nwork');
   });
 
   it('runs setup in order in the worktree, with started and finished events', async () => {
@@ -521,6 +547,8 @@ describe('teardown before prune', () => {
     for (let i = 0; i < 11; i++) ended.push(await endedRun(project.id));
     await t.runs.enqueue({ projectId: project.id, prompt: 'open' });
     const oldest = ended[0]!;
+    const archive = vi.spyOn(t.runs.outputs, 'archiveBeforePrune');
+    const archivedOldest = () => archive.mock.calls.filter(([id]) => id === oldest.id).length;
 
     await t.runs.reconcile(); // returns although the teardown is still held
     await expect.poll(() => teardowns).toBe(1);
@@ -531,6 +559,7 @@ describe('teardown before prune', () => {
     vi.setSystemTime(Date.now() + 2 * 60_000);
     await t.runs.reconcile();
     expect(teardowns).toBe(1);
+    expect(archivedOldest()).toBe(1); // not archived again while its teardown runs
     expect(existsSync(oldest.worktreePath)).toBe(true);
     vi.useRealTimers();
 
@@ -538,6 +567,42 @@ describe('teardown before prune', () => {
     await expect.poll(() => existsSync(oldest.worktreePath), { timeout: 8_000 }).toBe(false);
     await expect.poll(() => t.runs.list().some((r) => r.id === oldest.id)).toBe(false);
     expect(teardowns).toBe(1);
+  });
+
+  it('an auto-GC teardown that throws still lets the prune go ahead', async () => {
+    const project = await createProject('version: 1\nteardown:\n  - echo td\n');
+    await approveHead(project.id);
+    const ended: Run[] = [];
+    for (let i = 0; i < 11; i++) ended.push(await endedRun(project.id));
+    await t.runs.enqueue({ projectId: project.id, prompt: 'open' });
+    vi.spyOn(t.runs as unknown as { teardownWorktree: () => Promise<void> }, 'teardownWorktree').mockRejectedValue(new Error('boom'));
+    await t.runs.reconcile();
+    await expect.poll(() => existsSync(ended[0]!.worktreePath), { timeout: 8_000 }).toBe(false);
+  });
+
+  it('a project delete waits a bounded time for teardowns and skips those auto-GC runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started: string[] = [];
+    setCommandExecutor(async (request) => {
+      if (request.file === 'sh' && request.args[1]?.includes('slow-teardown')) {
+        started.push(request.cwd);
+        await gate;
+      }
+      return localCommandExecutor(request);
+    });
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    (t.runs as unknown as { tearingDown: Set<string> }).tearingDown.add(a.id);
+    const startedAt = Date.now();
+    await t.runs.teardownProjectWorktrees(project.id, 300);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(started).toEqual([b.worktreePath]);
+    release();
   });
 
   it('logs a failed teardown too', async () => {

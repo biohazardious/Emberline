@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { API_VERSION, type HealthResponse, PTYD_PROTOCOL_VERSION, type SystemStatus } from '@emberline/protocol';
+import { API_VERSION, type HealthResponse, PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION, type SystemStatus } from '@emberline/protocol';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
@@ -118,7 +118,11 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     version: VERSION,
     apiVersion: API_VERSION,
     ptyd: deps.ptyd.status,
-    runnerOutdated: deps.ptyd.status === 'connected' && (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
+    runnerOutdated: deps.ptyd.status === 'connected' && (deps.ptyd.protocolVersion ?? 0) < PTYD_MIN_PROTOCOL_VERSION,
+    runnerUpdateAvailable:
+      deps.ptyd.status === 'connected' &&
+      (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&
+      (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
   }));
   registerProjectRoutes(app, deps);
   registerProjectImportRoutes(app, deps);

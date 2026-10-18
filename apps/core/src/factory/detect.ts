@@ -151,15 +151,33 @@ async function headWorktreeYml(
   };
 }
 
+export type HeadWorktreeYml =
+  | { kind: 'present'; yml: ExistingWorktreeYml }
+  /** HEAD was read and has no `.emberline/worktree.yml`. */
+  | { kind: 'absent' }
+  /** git could not tell (no repository, no commit, a broken HEAD, unsafe config). */
+  | { kind: 'unknown'; error: string };
+
 /**
  * `.emberline/worktree.yml` as committed in `dir`'s HEAD (the main workspace's), read the hardened
- * way above; null when HEAD has no such entry (or there is no git or commit).
+ * way above. Unlike detection, a git failure is reported as such, never as "no file".
  */
-export async function readHeadWorktreeYml(dir: string): Promise<ExistingWorktreeYml | null> {
+export async function readHeadWorktreeYml(dir: string): Promise<HeadWorktreeYml> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
-  const entry = (await headEntries(dir, [rel])).get(rel);
-  if (!entry) return null;
-  return headWorktreeYml(dir, entry, { kind: 'missing' });
+  if (!(await entryExists(path.join(dir, '.git')))) return { kind: 'unknown', error: 'the main workspace is not a git repository' };
+  let stdout: string;
+  try {
+    stdout = (await execGitFile(['ls-tree', '-l', '-z', 'HEAD', '--', rel], { cwd: dir })).stdout;
+  } catch (error) {
+    const message = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
+    return { kind: 'unknown', error: `git could not read HEAD: ${message.slice(0, 300)}` };
+  }
+  const record = stdout.split('\0').find((r) => r.endsWith(`\t${rel}`));
+  if (!record) return { kind: 'absent' };
+  const [mode = '', type = '', oid = '', size = ''] = record.slice(0, record.indexOf('\t')).split(/\s+/);
+  const entry: HeadEntry = { mode, type, oid, size: /^\d+$/.test(size) ? Number(size) : null };
+  const yml = await headWorktreeYml(dir, entry, { kind: 'missing' });
+  return yml ? { kind: 'present', yml } : { kind: 'absent' };
 }
 
 interface Signals {

@@ -50,6 +50,11 @@ export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
  * 1: sessions only · 2: `exec` + `hello` · 3: `exec` with `execId` + `execCancel`.
  */
 export const PTYD_PROTOCOL_VERSION = 3;
+/**
+ * The oldest runner protocol core works with. Between this and PTYD_PROTOCOL_VERSION the runner
+ * is not outdated, only missing extras (3: a stop during worktree setup waits for the command).
+ */
+export const PTYD_MIN_PROTOCOL_VERSION = 2;
 
 /** Per stream; keeps a base64 stdout plus stderr inside one 16 MiB frame. */
 export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;

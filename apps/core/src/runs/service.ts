@@ -125,11 +125,13 @@ type RunRow = typeof runs.$inferSelect;
 export interface RunServiceLogger {
   warn(obj: object, msg: string): void;
 }
+/** A project delete waits this long at most for worktree.yml teardowns. */
+export const PROJECT_DELETE_TEARDOWN_BUDGET_MS = 30_000;
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
 const setupExecId = (runId: string) => `setup-${runId}`;
 /** A copy entry left out whole because it is over the copy caps. */
 const overCopyCap = (entry: CopyOutcome) =>
-  entry.status === 'skipped' && /^(more than \d+ files|larger than \d+ MB)$/.test(entry.reason ?? '');
+  entry.status === 'skipped' && /^(more than \d+ files and directories|larger than \d+ MB)$/.test(entry.reason ?? '');
 type EventSource = RunEvent['source'];
 
 interface RunServiceEvents {
@@ -729,7 +731,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         ? await copyIntoWorktree(
             { trustedBase: this.config.workspacesDir, mainPath: project.path, worktreePath: workspace.path },
             lifecycle.config.copy,
-          ).catch((error: unknown) =>
+          ).catch((error: unknown): CopyOutcome[] =>
             lifecycle.config.copy.map((entry) => ({
               path: entry.path,
               mode: entry.mode,
@@ -742,7 +744,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const notIgnored = copied
       ? await notIgnoredPaths(
           workspace.path,
-          copied.filter((c) => c.status !== 'skipped').map((c) => c.path),
+          copied.filter((c) => c.status !== 'skipped').flatMap((c) => [c.path, ...(c.secrets ?? [])]),
         ).catch(() => null)
       : null;
 
@@ -1882,15 +1884,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Before a project and its `.worktrees/<slug>` go: best-effort teardown in each run worktree that
    * still exists (each once, also when runs share it).
    */
-  async teardownProjectWorktrees(projectId: string): Promise<void> {
+  async teardownProjectWorktrees(projectId: string, budgetMs = PROJECT_DELETE_TEARDOWN_BUDGET_MS): Promise<void> {
     const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
     if (!project || !this.hasTeardown(projectId)) return;
-    const seen = new Set<string>();
-    for (const row of this.db.select().from(runs).where(eq(runs.projectId, projectId)).orderBy(desc(runs.createdAt)).all()) {
-      if (seen.has(row.worktreePath)) continue;
-      seen.add(row.worktreePath);
-      await this.teardownWorktree(row, project);
-    }
+    const all = (async () => {
+      const seen = new Set<string>();
+      for (const row of this.db.select().from(runs).where(eq(runs.projectId, projectId)).orderBy(desc(runs.createdAt)).all()) {
+        // Auto-GC is tearing that one down already.
+        if (seen.has(row.worktreePath) || this.tearingDown.has(row.id)) continue;
+        seen.add(row.worktreePath);
+        await this.teardownWorktree(row, project).catch(() => undefined);
+      }
+    })();
+    // The delete waits this long at most; the rest carries on in the background, best effort.
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([all, new Promise<void>((resolve) => (timer = setTimeout(resolve, budgetMs)))]);
+    clearTimeout(timer);
   }
 
   /** The approved worktree.yml's preview service, else what the workspace's package.json offers. */
@@ -2525,6 +2534,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           const branch = proj ? await this.mergeTarget(proj) : undefined;
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
             seen.add(stale.id);
+            // Archived already; its teardown runs, and the prune follows it.
+            if (this.tearingDown.has(stale.id)) continue;
             if (await this.mustKeepForReview(stale, proj, { branch, cached: true })) continue;
             if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
               const budgetLeft = archiveDeadline - Date.now();
@@ -2538,7 +2549,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 const firstFailure = this.outputs.firstFailureAt(stale.id);
                 if (firstFailure && Date.now() - firstFailure.getTime() < AUTO_GC_ARCHIVE_RETRY_MS) continue;
               }
-              if (this.tearingDown.has(stale.id)) continue;
               if (this.hasTeardown(proj.id)) {
                 // Teardown commands may take minutes: they run beside reconcile, and this worktree is
                 // pruned (and its run removed) only once they finished. The guard keeps a later
@@ -2546,6 +2556,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 this.tearingDown.add(stale.id);
                 const worktreeProject = proj;
                 void this.teardownWorktree(stale, worktreeProject)
+                  // Best effort: a teardown that throws must not leave the worktree behind.
+                  .catch(() => undefined)
                   .then(() => pruneWorktree(worktreeProject.path, stale.worktreePath))
                   .catch(() => undefined)
                   .then(() => this.remove(stale.id))

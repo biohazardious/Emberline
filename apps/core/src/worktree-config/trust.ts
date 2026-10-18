@@ -21,17 +21,19 @@ export async function worktreeConfigStatus(db: Db, project: { id: string; path: 
     ? { content: row.content, sha256: row.sha256, approvedAt: row.approvedAt.toISOString(), approvedBy: row.approvedBy }
     : null;
   const read = await readHeadWorktreeYml(project.path);
-  const head = read?.content != null && read.sha256 ? { content: read.content, sha256: read.sha256 } : null;
-  // No entry at all in HEAD (not one that cannot be read): the file was deleted.
-  const removed = read === null && approved !== null;
+  const yml = read.kind === 'present' ? read.yml : null;
+  const head = yml?.content != null && yml.sha256 ? { content: yml.content, sha256: yml.sha256 } : null;
+  // HEAD was read and has no entry at all (not one that cannot be used, not a git failure): deleted.
+  const removed = read.kind === 'absent' && approved !== null;
   const changed = removed || (head !== null && head.sha256 !== approved?.sha256);
   return {
     approved,
     head,
+    headError: read.kind === 'unknown' ? read.error : null,
     changed,
     removed,
     diff: changed ? unifiedDiff(approved?.content ?? '', head?.content ?? '') : '',
-    errors: read?.errors ?? [],
+    errors: yml?.errors ?? [],
   };
 }
 
@@ -40,7 +42,11 @@ export async function approveWorktreeConfigRemoval(db: Db, project: { id: string
   const current = await worktreeConfigStatus(db, project);
   if (!current.removed) {
     throw conflict(
-      current.approved ? 'HEAD still has .emberline/worktree.yml (or one that cannot be read); there is no removal to approve' : 'nothing is approved',
+      current.headError
+        ? `cannot tell whether HEAD removed .emberline/worktree.yml: ${current.headError}`
+        : current.approved
+          ? 'HEAD still has .emberline/worktree.yml (or one that cannot be read); there is no removal to approve'
+          : 'nothing is approved',
     );
   }
   db.delete(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).run();
@@ -58,7 +64,7 @@ export async function approveWorktreeConfig(
 ): Promise<WorktreeConfigStatusResponse> {
   const current = await worktreeConfigStatus(db, project);
   if (!current.head) {
-    throw conflict(current.errors[0] ?? 'the main workspace has no committed .emberline/worktree.yml');
+    throw conflict(current.errors[0] ?? current.headError ?? 'the main workspace has no committed .emberline/worktree.yml');
   }
   if (current.head.sha256 !== sha) {
     throw conflict('.emberline/worktree.yml changed in HEAD since it was reviewed; review it again');
