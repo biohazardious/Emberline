@@ -6,7 +6,7 @@ import type { Run, Ticket, WorktreeConfigStatusResponse } from '@emberline/proto
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type CommandExecutor, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { type CommandExecutor, localCommandCanceller, localCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
 import { projectWorktreeConfig, runs } from './db/schema.js';
 import { syncWorktreeToMainWorkspace } from './factory/merge.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -53,6 +53,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers();
   setCommandExecutor(localCommandExecutor);
+  setCommandCanceller(localCommandCanceller);
   await t.close();
   await ptydServer.close();
 });
@@ -466,6 +467,31 @@ describe('run worktree lifecycle', () => {
       await new Promise((r) => setTimeout(r, 300));
       expect(t.runs.getRun(run.id)).toMatchObject({ state: 'failed', terminalId: null });
       expect(existsSync(path.join(t.dir, `token-${run.id}`))).toBe(false);
+    });
+
+    it('at boot, a run left in setup is failed and its setup command in the runner is cancelled', async () => {
+      const held = holdSetup();
+      const project = await createProject(setupYml('echo slow-setup > setup-ran'));
+      await approveHead(project.id);
+      const inSetup: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'x' })).json();
+      await expect.poll(() => held.started()).toBe(1);
+      // A plain orphan (no setup) next to it.
+      const plain = await t.runs.enqueue({ projectId: project.id, prompt: 'y' });
+      t.db.update(runs).set({ state: 'starting' }).where(eq(runs.id, plain.id)).run();
+
+      // A new core process: it knows nothing of the setup the old one started.
+      (t.runs as unknown as { settingUp: Set<string> }).settingUp.clear();
+      const cancelled: string[] = [];
+      setCommandCanceller(async (execId) => {
+        cancelled.push(execId);
+        return true;
+      });
+      t.runs.startReconciler();
+      t.runs.dispose();
+      expect(await typesOf(inSetup.id)).toContain('spawn_lost');
+      expect(await typesOf(plain.id)).toContain('spawn_lost');
+      await expect.poll(() => cancelled).toEqual([`setup-${inSetup.id}`]);
+      held.release();
     });
 
     it('a stop during setup kills the running setup command', async () => {

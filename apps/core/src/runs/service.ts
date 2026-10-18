@@ -465,7 +465,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** Starts periodic reconciliation with ptyd. */
   startReconciler(): void {
-    this.failOrphanedSpawns();
+    this.cancelOrphanedSetups(this.failOrphanedSpawns());
     this.timer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
     this.timer.unref();
   }
@@ -479,7 +479,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * reconciliation. At boot no spawn can be in flight, so all of them are orphans; later only the
    * ones older than {@link STARTING_WATCHDOG_MS}.
    */
-  private failOrphanedSpawns(olderThanMs = 0): void {
+  private failOrphanedSpawns(olderThanMs = 0): RunRow[] {
     const cutoff = Date.now() - olderThanMs;
     const stuck = this.db
       .select()
@@ -496,6 +496,40 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         patch: { endedAt: new Date() },
       });
     }
+    return stuck;
+  }
+
+  /**
+   * At boot: a worktree setup the previous core process started may still run in the runner. Its
+   * command is killed once the runner is connected (ptyd protocol 3+; an older runner lets it run
+   * until it ends or times out).
+   */
+  private cancelOrphanedSetups(lost: RunRow[]): void {
+    const execIds = lost
+      .filter(
+        (row) =>
+          this.db
+            .select({ id: runEvents.id })
+            .from(runEvents)
+            .where(and(eq(runEvents.runId, row.id), eq(runEvents.type, 'worktree_setup_started')))
+            .limit(1)
+            .get() !== undefined,
+      )
+      .map((row) => setupExecId(row.id));
+    if (execIds.length === 0) return;
+    const cancel = () => {
+      for (const execId of execIds) void cancelCommand(execId);
+    };
+    if (this.ptyd.status === 'connected') {
+      cancel();
+      return;
+    }
+    const onStatus = (status: string) => {
+      if (status !== 'connected') return;
+      this.ptyd.off('status', onStatus);
+      cancel();
+    };
+    this.ptyd.on('status', onStatus);
   }
 
   list(): Run[] {
