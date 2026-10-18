@@ -41,6 +41,15 @@ export function composeProjectName(runId: string, worktreePath?: string): string
 }
 
 /**
+ * The compose project of a run's preview: `emberline-<first 8 of the run's own id>-preview`. Apart
+ * from the agent's project, so stopping a preview never removes what the agent runs, and keyed by
+ * the run itself, so a handoff successor sharing the worktree has a preview of its own.
+ */
+export function previewComposeProjectName(runId: string): string {
+  return `emberline-${runId.slice(0, 8).toLowerCase()}-preview`;
+}
+
+/**
  * The compose project of Build & Verify on a project's main workspace:
  * `emberline-main-<first 8 of the project id>`, apart from every run's project.
  */

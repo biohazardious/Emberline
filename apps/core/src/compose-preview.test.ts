@@ -8,9 +8,17 @@ import path from 'node:path';
 import type { Run, RunPreviewStatus } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type ExecRequest, type ExecResult, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import {
+  type ExecRequest,
+  type ExecResult,
+  localCommandCanceller,
+  localCommandExecutor,
+  setCommandCanceller,
+  setCommandExecutor,
+} from './command-exec.js';
+import type { CoreConfig } from './config.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
-import { composeProjectName } from './docker/engine.js';
+import { composeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
@@ -62,11 +70,34 @@ class FakeEngine {
   upResult: ExecResult = ok(' Container web-1 Started\n');
   stateAfterUp = 'running';
   answersHttp = true;
+  /** Host ports something else in the engine already holds (`up` fails with compose's message). */
+  busyPorts = new Set<number>();
+  /** While set, `up` waits for it (or for a cancel that the canceller honours). */
+  upGate: Promise<void> | null = null;
+  /** Pending `up` calls by execId: resolving one with `cancelled` is what a working cancel does. */
+  pendingUps = new Map<string, (result: ExecResult) => void>();
+  /** Each `cancelCommand` execId, in order; `honourCancels` says how many to honour (Infinity = all). */
+  cancels: string[] = [];
+  ignoreCancels = 0;
+  curlArgs: string[][] = [];
+
+  readonly cancel = async (execId: string): Promise<boolean> => {
+    this.cancels.push(execId);
+    if (this.ignoreCancels > 0) {
+      this.ignoreCancels -= 1;
+      return false;
+    }
+    const pending = this.pendingUps.get(execId);
+    if (!pending) return false;
+    pending({ ...failed('', 137), exitCode: null, cancelled: true });
+    return true;
+  };
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
     if (request.file === 'curl') {
       const url = request.args.at(-1) ?? '';
       this.curls.push(url);
+      this.curlArgs.push(request.args);
       const port = Number(new URL(url).port);
       return ok(this.answersHttp && this.published.has(port) ? '200' : '000');
     }
@@ -86,9 +117,21 @@ class FakeEngine {
     const verb = args.find((a) => ['config', 'up', 'ps', 'logs', 'down'].includes(a));
     if (verb === 'config') return ok(`${this.services.join('\n')}\n`);
     if (verb === 'up') {
+      if (this.upGate) {
+        const gate = this.upGate;
+        const cancelled = await new Promise<ExecResult | null>((resolve) => {
+          if (request.execId) this.pendingUps.set(request.execId, resolve);
+          void gate.then(() => resolve(null));
+        });
+        if (request.execId) this.pendingUps.delete(request.execId);
+        if (cancelled) return cancelled;
+      }
       if (this.upResult.exitCode !== 0) return this.upResult;
       const service = args.at(-1)!;
       const port = Number(/"(\d+):\d+"/.exec(stdin ?? '')?.[1]);
+      if (this.busyPorts.has(port)) {
+        return failed(`Error response from daemon: driver failed programming external connectivity: Bind for 0.0.0.0:${port} failed: port is already allocated\n`);
+      }
       const states = this.projects.get(project) ?? new Map<string, string>();
       states.set(service, this.stateAfterUp);
       this.projects.set(project, states);
@@ -122,15 +165,17 @@ describe('compose previews (worktree.yml v2)', () => {
   afterEach(async () => {
     delete process.env.EMBERLINE_PREVIEW_HOST;
     setCommandExecutor(localCommandExecutor);
+    setCommandCanceller(localCommandCanceller);
     await t.close();
     await ptydServer.close();
   });
 
-  async function start(dockerHost: string | undefined) {
-    t = await createTestApp(dockerHost ? { dockerHost } : {});
-    t.runs.composePreviewTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20 };
+  async function start(dockerHost: string | undefined, overrides: Partial<CoreConfig> = {}) {
+    t = await createTestApp({ ...(dockerHost ? { dockerHost } : {}), ...overrides });
+    t.runs.composePreviewTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20, stopSettleMs: 300, cancelRetryMs: 50 };
     engine = new FakeEngine();
     setCommandExecutor(engine.exec);
+    setCommandCanceller(engine.cancel);
     ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
     await ptydServer.listen();
     t.ptyd.start();
@@ -228,7 +273,7 @@ describe('compose previews (worktree.yml v2)', () => {
       const running = await waitStatus(run, 'running');
       expect(running).toMatchObject({ kind: 'compose', port, url: `http://localhost:${port}`, error: null });
 
-      const composeProject = composeProjectName(run.id, run.worktreePath);
+      const composeProject = previewComposeProjectName(run.id);
       const [up] = engine.composeCalls('up');
       expect(up!.args).toEqual(composeUpArgs(composeProject, 'compose.yaml', 'web'));
       expect(up!.cwd).toBe(run.worktreePath);
@@ -246,6 +291,11 @@ describe('compose previews (worktree.yml v2)', () => {
       }
       // The readiness probe went to the engine's name on the compose network, on the published port.
       expect(engine.curls.at(-1)).toBe(`http://docker:${port}/`);
+      // A proxy in the runner's environment must not catch the probe.
+      expect(engine.curlArgs.at(-1)).toEqual(expect.arrayContaining(['--noproxy', '*']));
+      // Its own project, apart from the one the agent uses for its own containers.
+      expect(composeProject).not.toBe(composeProjectName(run.id, run.worktreePath));
+      expect(composeProject).toBe(`emberline-${run.id.slice(0, 8)}-preview`);
     });
 
     it('two runs\' previews coexist on distinct ports (Focus 1)', async () => {
@@ -259,7 +309,7 @@ describe('compose previews (worktree.yml v2)', () => {
       await waitStatus(a, 'running');
       await waitStatus(b, 'running');
       const ups = engine.composeCalls('up');
-      expect(ups.map((c) => c.args[2])).toEqual([composeProjectName(a.id, a.worktreePath), composeProjectName(b.id, b.worktreePath)]);
+      expect(ups.map((c) => c.args[2])).toEqual([previewComposeProjectName(a.id), previewComposeProjectName(b.id)]);
       expect(ups[0]!.stdin).toContain(`"${pa}:80"`);
       expect(ups[1]!.stdin).toContain(`"${pb}:80"`);
     });
@@ -273,9 +323,134 @@ describe('compose previews (worktree.yml v2)', () => {
       const res = await api('POST', `/api/runs/${run.id}/preview/stop`, {});
       expect(res.json()).toMatchObject({ status: 'stopped', port: null, url: null });
       expect(engine.composeCalls('down').map((c) => c.args)).toEqual([
-        ['compose', '-p', composeProjectName(run.id, run.worktreePath), 'down', '--remove-orphans'],
+        ['compose', '-p', previewComposeProjectName(run.id), 'down', '--remove-orphans'],
       ]);
       expect(engine.projects.size).toBe(0);
+    });
+
+    it('a port something else holds in the engine is retried on the next free one, re-recorded', async () => {
+      await start('tcp://docker:2376');
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      // Find out which port this run gets first, then make it busy for the real start.
+      const first = ((await startPreview(run)).json() as RunPreviewStatus).port!;
+      await waitStatus(run, 'running');
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      engine.calls = [];
+      engine.busyPorts.add(first);
+      expect(((await startPreview(run)).json() as RunPreviewStatus).port).toBe(first);
+      const running = await waitStatus(run, 'running');
+      expect(running.port).not.toBe(first);
+      expect(running.port).toBeGreaterThanOrEqual(4325);
+      const ups = engine.composeCalls('up');
+      expect(ups).toHaveLength(2);
+      expect(ups[0]!.stdin).toContain(`"${first}:80"`);
+      expect(ups[1]!.stdin).toContain(`"${running.port}:80"`);
+      const started = t.runs.get(run.id).events.filter((e) => e.type === 'preview_started').map((e) => (e.payload as { port: number }).port);
+      expect(started.slice(-2).sort()).toEqual([first, running.port].sort());
+    });
+
+    it('gives up after 3 attempts when every port is taken', async () => {
+      await start('tcp://docker:2376');
+      for (let port = 4325; port <= 4349; port++) engine.busyPorts.add(port);
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      const status = await waitStatus(run, 'failed');
+      expect(engine.composeCalls('up')).toHaveLength(3);
+      expect(status.logs).toContain('port is already allocated');
+    });
+
+    it('a stop while it starts cancels the start, waits for it, then takes the project down', async () => {
+      await start('tcp://docker:2376');
+      let open!: () => void;
+      engine.upGate = new Promise((resolve) => (open = resolve));
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      const res = await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      expect(res.json()).toMatchObject({ status: 'stopped' });
+      expect(engine.cancels).toHaveLength(1);
+      expect(engine.pendingUps.size).toBe(0);
+      expect(engine.composeCalls('down').map((c) => c.args[2])).toContain(previewComposeProjectName(run.id));
+      open();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(t.runs.get(run.id).events.some((e) => e.type === 'preview_ready' || e.type === 'preview_failed')).toBe(false);
+      expect((await preview(run)).status).toBe('stopped');
+    });
+
+    it('a cancel that misses the command is retried once', async () => {
+      await start('tcp://docker:2376');
+      engine.upGate = new Promise(() => undefined);
+      engine.ignoreCancels = 1;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      expect(engine.cancels).toHaveLength(2);
+      expect(engine.pendingUps.size).toBe(0);
+    });
+
+    it('a start that could not be cancelled and finishes after the stop is taken down when it settles', async () => {
+      await start('tcp://docker:2376');
+      let open!: () => void;
+      engine.upGate = new Promise((resolve) => (open = resolve));
+      engine.ignoreCancels = 10;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      const downsAtStop = engine.composeCalls('down').length;
+      // The late `up` creates the containers after the stop's `down`...
+      open();
+      await expect.poll(() => engine.composeCalls('down').length).toBe(downsAtStop + 1);
+      // ...and the settle-time `down` removes them again.
+      expect(engine.projects.has(previewComposeProjectName(run.id))).toBe(false);
+      expect((await preview(run)).status).toBe('stopped');
+    });
+
+    it('a second start while one is starting cancels the first; only the second reports', async () => {
+      await start('tcp://docker:2376');
+      let open!: () => void;
+      engine.upGate = new Promise((resolve) => (open = resolve));
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const [r1, r2] = await Promise.all([startPreview(run), (async () => {
+        await expect.poll(() => engine.pendingUps.size).toBe(1);
+        engine.upGate = null;
+        return startPreview(run);
+      })()]);
+      expect(r1.statusCode).toBe(200);
+      expect(r2.statusCode).toBe(200);
+      open();
+      await waitStatus(run, 'running');
+      expect(engine.cancels).toHaveLength(1);
+      expect(t.runs.get(run.id).events.filter((e) => e.type === 'preview_ready')).toHaveLength(1);
+      expect(engine.projects.has(previewComposeProjectName(run.id))).toBe(true);
+    });
+
+    it('a failed preview is taken down and frees its port for another run', async () => {
+      await start('tcp://docker:2376', { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } } });
+      const p = await project();
+      const a = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const b = await t.runs.enqueue({ projectId: p.id, prompt: 'y' });
+      await startPreview(a);
+      await waitStatus(a, 'running');
+      // The only port is held by a's running preview.
+      expect((await startPreview(b)).statusCode).toBe(409);
+      await api('POST', `/api/runs/${a.id}/preview/stop`, {});
+      engine.stateAfterUp = 'exited';
+      await startPreview(a);
+      await waitStatus(a, 'failed');
+      expect(engine.composeCalls('down').at(-1)?.args[2]).toBe(previewComposeProjectName(a.id));
+      engine.stateAfterUp = 'running';
+      const res = await startPreview(b);
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as RunPreviewStatus).port).toBe(4325);
+      await waitStatus(b, 'running');
     });
 
     it('a failed build reports failed with the output tail, sanitised', async () => {
@@ -328,7 +503,7 @@ describe('compose previews (worktree.yml v2)', () => {
       const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
       await startPreview(run);
       await waitStatus(run, 'running');
-      engine.projects.get(composeProjectName(run.id, run.worktreePath))!.set('web', 'exited');
+      engine.projects.get(previewComposeProjectName(run.id))!.set('web', 'exited');
       expect((await preview(run)).status).toBe('exited');
     });
 
@@ -340,7 +515,7 @@ describe('compose previews (worktree.yml v2)', () => {
       await waitStatus(run, 'running');
       await t.runs.stop(run.id).catch(() => undefined);
       expect((await api('DELETE', `/api/runs/${run.id}`)).statusCode).toBeLessThan(300);
-      expect(engine.composeCalls('down').map((c) => c.args[2])).toEqual([composeProjectName(run.id, run.worktreePath)]);
+      expect(engine.composeCalls('down').map((c) => c.args[2])).toEqual([previewComposeProjectName(run.id)]);
     });
   });
 

@@ -6,8 +6,8 @@
  * the agent edits; anything Emberline wrote next to it (or anywhere the runner user can write, which
  * is also the agent's user) could be changed between writing and `up`. So the override goes to
  * compose on stdin (`-f -`) from an environment variable of the one `sh` process that runs compose
- * (ptyd `exec` has no stdin). The project name is always `-p <name>` from the run id: a `name:` in
- * the compose file or `COMPOSE_PROJECT_NAME` in the worktree's `.env` cannot pick it.
+ * (ptyd `exec` has no stdin). The project name is always `-p emberline-<run8>-preview` from the run
+ * id: a `name:` in the compose file or `COMPOSE_PROJECT_NAME` in the worktree's `.env` cannot pick it.
  */
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
@@ -22,9 +22,17 @@ function base(project: string, file: string): string[] {
   return ['compose', '-p', project, '-f', file];
 }
 
-/** Lists the services of the project's compose file (to reset the host ports of every one). */
+/**
+ * Lists the services of the project's compose file, in every profile (to reset the host ports of
+ * every one, whichever profiles the preview service's dependencies are in).
+ */
 export function composeServicesArgs(project: string, file: string): string[] {
-  return [...base(project, file), 'config', '--services'];
+  return [...base(project, file), '--profile', '*', 'config', '--services'];
+}
+
+/** What compose prints when a published host port is taken in the engine. */
+export function isPortConflict(output: string): boolean {
+  return /port is already allocated|address already in use/i.test(output);
 }
 
 /** Builds and starts `service` (and what it depends on) with the override from stdin. */

@@ -23,9 +23,9 @@ describe('compose command lines', () => {
       'compose', '-p', 'emberline-abcd1234', '-f', 'compose.yaml', '-f', '-', 'up', '-d', '--build', '--', 'web',
     ]);
   });
-  it('config --services reads only the project file', () => {
+  it('config --services reads only the project file, with every profile', () => {
     expect(composeServicesArgs('emberline-abcd1234', 'deploy/compose.yml')).toEqual([
-      'compose', '-p', 'emberline-abcd1234', '-f', 'deploy/compose.yml', 'config', '--services',
+      'compose', '-p', 'emberline-abcd1234', '-f', 'deploy/compose.yml', '--profile', '*', 'config', '--services',
     ]);
   });
   it('ps, logs and down go by project name only (they work when the file changed or is gone)', () => {

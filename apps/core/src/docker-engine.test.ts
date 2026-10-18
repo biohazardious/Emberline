@@ -20,6 +20,7 @@ import {
   DOCKER_PROMPT_PARAGRAPH,
   DockerEngine,
   mainComposeProjectName,
+  previewComposeProjectName,
 } from './docker/engine.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -80,6 +81,14 @@ describe('composeProjectName', () => {
     expect(composeProjectName('99999999-0000-4000-8000-000000000000', '/workspaces/.worktrees/shop/1a2b3c4d')).toBe('emberline-1a2b3c4d');
     // In place (no worktree of its own): the run's id.
     expect(composeProjectName('99999999-0000-4000-8000-000000000000', '/workspaces/shop')).toBe('emberline-99999999');
+  });
+
+  it('a preview has emberline-<first 8 of its own run id>-preview, also for a handoff successor in a shared worktree', () => {
+    const successor = '99999999-0000-4000-8000-000000000000';
+    expect(previewComposeProjectName(successor)).toBe('emberline-99999999-preview');
+    expect(previewComposeProjectName('1A2B3C4D-0000-4000-8000-000000000000')).toBe('emberline-1a2b3c4d-preview');
+    // The successor shares its predecessor's agent project, but not its preview project.
+    expect(composeProjectName(successor, '/workspaces/.worktrees/shop/1a2b3c4d')).toBe('emberline-1a2b3c4d');
   });
 
   it('the main workspace (Build & Verify) has emberline-main-<first 8 of the project id>', () => {

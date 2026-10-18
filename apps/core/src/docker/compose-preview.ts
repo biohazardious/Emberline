@@ -15,6 +15,7 @@ import {
   composeServicesArgs,
   composeShell,
   composeUpArgs,
+  isPortConflict,
   parseComposePs,
   parseComposeServices,
 } from './compose.js';
@@ -25,13 +26,22 @@ export interface ComposePreviewTiming {
   /** After `up`: how long the service has to run and answer HTTP. */
   readyTimeoutMs: number;
   pollMs: number;
+  /** A stop waits this long for a cancelled start to settle before its `down`. */
+  stopSettleMs: number;
+  /** ...and cancels once more after this long (a cancel can miss a command that was just starting). */
+  cancelRetryMs: number;
 }
 
 export const DEFAULT_COMPOSE_PREVIEW_TIMING: ComposePreviewTiming = {
   upTimeoutMs: 15 * 60_000,
   readyTimeoutMs: 120_000,
   pollMs: 2_000,
+  stopSettleMs: 10_000,
+  cancelRetryMs: 1_000,
 };
+
+/** `up` attempts when the host port turns out to be taken in the engine (each on another port). */
+export const COMPOSE_UP_ATTEMPTS = 3;
 
 const SHORT_TIMEOUT_MS = 60_000;
 export const COMPOSE_DOWN_TIMEOUT_MS = 2 * 60_000;
@@ -45,6 +55,7 @@ export interface ComposePreviewTarget {
   file: string;
   service: string;
   containerPort: number;
+  /** Changes when a taken port is retried on another one. */
   hostPort: number;
   /** The engine's name on the compose network, where the published port answers. */
   engineHost: string;
@@ -64,7 +75,12 @@ export type ComposePreviewOutcome =
 export async function runComposePreview(
   target: ComposePreviewTarget,
   timing: ComposePreviewTiming,
-  control: { execId: string; cancelled: () => boolean },
+  control: {
+    execId: string;
+    cancelled: () => boolean;
+    /** Another free port for the preview (never `taken`), recorded as the preview's port. */
+    reallocate: (taken: ReadonlySet<number>) => Promise<number>;
+  },
 ): Promise<ComposePreviewOutcome> {
   const { project, file, service } = target;
   const listed = await run(composeServicesArgs(project, file), target.worktreePath, target.env, SHORT_TIMEOUT_MS);
@@ -73,14 +89,29 @@ export async function runComposePreview(
   const services = parseComposeServices(listed.result!.stdout);
   if (!services.includes(service)) return { ok: false, error: `"${service}" is not a service in ${file}`, logs: null };
 
-  const override = composeOverrideYaml({ service, port: target.containerPort, hostPort: target.hostPort, services });
   const shell = composeShell(composeUpArgs(project, file, service));
-  const up = await run(shell.args, target.worktreePath, { ...target.env, [COMPOSE_OVERRIDE_ENV]: override }, timing.upTimeoutMs, {
-    file: shell.file,
-    execId: control.execId,
-  });
-  if (control.cancelled() || up.result?.cancelled) return { ok: false, cancelled: true };
-  if (!up.ok) return { ok: false, error: `docker compose up failed (${up.how})`, logs: up.output };
+  const tried = new Set<number>();
+  for (let attempt = 1; ; attempt++) {
+    const override = composeOverrideYaml({ service, port: target.containerPort, hostPort: target.hostPort, services });
+    const up = await run(shell.args, target.worktreePath, { ...target.env, [COMPOSE_OVERRIDE_ENV]: override }, timing.upTimeoutMs, {
+      file: shell.file,
+      execId: control.execId,
+    });
+    if (control.cancelled() || up.result?.cancelled) return { ok: false, cancelled: true };
+    if (up.ok) break;
+    // Something else in the engine (an agent's container) holds the port: take the next free one.
+    if (attempt < COMPOSE_UP_ATTEMPTS && isPortConflict(up.output)) {
+      tried.add(target.hostPort);
+      try {
+        target.hostPort = await control.reallocate(tried);
+      } catch {
+        return { ok: false, error: `docker compose up failed (${up.how}) and no other preview port is free`, logs: up.output };
+      }
+      if (control.cancelled()) return { ok: false, cancelled: true };
+      continue;
+    }
+    return { ok: false, error: `docker compose up failed (${up.how})`, logs: up.output };
+  }
 
   const deadline = Date.now() + timing.readyTimeoutMs;
   for (;;) {
@@ -131,7 +162,8 @@ async function answersHttp(target: ComposePreviewTarget): Promise<boolean> {
   try {
     const result = await execCommand({
       file: 'curl',
-      args: ['-s', '-o', '/dev/null', '-m', '5', '-w', '%{http_code}', url],
+      // A proxy in the runner's environment would answer for the engine.
+      args: ['-s', '--noproxy', '*', '-o', '/dev/null', '-m', '5', '-w', '%{http_code}', url],
       cwd: NEUTRAL_CWD,
       timeoutMs: 10_000,
     });

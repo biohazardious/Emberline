@@ -67,7 +67,13 @@ import {
   DEFAULT_COMPOSE_PREVIEW_TIMING,
   runComposePreview,
 } from '../docker/compose-preview.js';
-import { composeProjectName, DOCKER_PROMPT_PARAGRAPH, DockerEngine, mainComposeProjectName } from '../docker/engine.js';
+import {
+  composeProjectName,
+  DOCKER_PROMPT_PARAGRAPH,
+  DockerEngine,
+  mainComposeProjectName,
+  previewComposeProjectName,
+} from '../docker/engine.js';
 import { previewUrl } from './preview-url.js';
 import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
@@ -260,6 +266,19 @@ interface PreviewPayload {
   file?: string;
   service?: string;
   containerPort?: number;
+}
+
+/** A compose preview's background start (`up` and the readiness checks). */
+interface ComposeJob {
+  execId: string;
+  /** Set by a stop or a newer start: the job records nothing more. */
+  cancelled: boolean;
+  /** The stop stopped waiting for it: when it settles, its project is taken down once more. */
+  abandoned: boolean;
+  generation: number;
+  project: string;
+  /** Settles when the job ended (never rejects). */
+  done: Promise<void>;
 }
 
 /** How a compose preview shows where the command box is: what Emberline runs for it. */
@@ -485,7 +504,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /** The opt-in Docker engine sidecar; runs and worktree.yml commands use it while it answers. */
   readonly docker: DockerEngine;
   /** Compose previews' background starts by run id (cancelled by a stop or a new start). */
-  private readonly composeJobs = new Map<string, { execId: string; cancelled: boolean }>();
+  private readonly composeJobs = new Map<string, ComposeJob>();
+  /** One preview start or stop per run at a time. */
+  private readonly previewRunLock = new KeyedMutex();
+  /** Counts each run's preview starts, so a late cleanup never touches a newer start. */
+  private readonly previewGenerations = new Map<string, number>();
   /** Port allocation and the `preview_started` record happen together, so two starts never share a port. */
   private readonly previewPortLock = new KeyedMutex();
   /** How long compose previews may build and take to answer (shortened in tests). */
@@ -2113,14 +2136,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /**
    * A stable port per run in the kind's published range (`EMBERLINE_PREVIEW_PORTS_RUNNER` for
    * command previews, `_DOCKER` for compose previews), moved to the next free one when another
-   * run's preview already holds it (B16). Callers hold `previewPortLock` until they recorded it.
+   * run's preview already holds it (B16), skipping `exclude`. Callers hold `previewPortLock` until
+   * they recorded it.
    */
-  private async allocatePreviewPort(runId: string, kind: PreviewKind): Promise<number> {
+  private async allocatePreviewPort(runId: string, kind: PreviewKind, exclude: ReadonlySet<number> = new Set()): Promise<number> {
     let hash = 0;
     for (let i = 0; i < runId.length; i++) {
       hash = (hash * 31 + runId.charCodeAt(i)) >>> 0;
     }
     const taken = this.activeComposePreviewPorts(runId);
+    for (const port of exclude) taken.add(port);
     if (kind === 'command') {
       const { sessions } = await this.ptyd.get().list();
       for (const s of sessions) {
@@ -2136,12 +2161,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     throw conflict(`no free preview port in ${first}-${last}; stop another preview`);
   }
 
-  /** Host ports of other runs' compose previews that were started and not stopped since. */
+  /**
+   * Host ports of other runs' compose previews that were started and neither stopped nor failed
+   * since (a failed preview's project is taken down before `preview_failed` is recorded).
+   */
   private activeComposePreviewPorts(exceptRunId: string): Set<number> {
     const rows = this.db
       .select({ runId: runEvents.runId, type: runEvents.type, payload: runEvents.payload })
       .from(runEvents)
-      .where(inArray(runEvents.type, ['preview_started', 'preview_stopped']))
+      .where(inArray(runEvents.type, ['preview_started', 'preview_stopped', 'preview_failed']))
       .orderBy(desc(runEvents.id))
       .all();
     const seen = new Set<string>();
@@ -2241,56 +2269,67 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     const body: StartPreviewBody = parsed.data;
 
-    const service = approvedPreviewService(this.db, row.projectId);
-    if (service && isComposeService(service)) return this.startComposePreview(row, service, requestHost);
+    // One start or stop per run at a time: a second start waits, then cancels the first one's job.
+    return this.previewRunLock.run(id, async () => {
+      const generation = (this.previewGenerations.get(id) ?? 0) + 1;
+      this.previewGenerations.set(id, generation);
+      const service = approvedPreviewService(this.db, row.projectId);
+      if (service && isComposeService(service)) return this.startComposePreview(row, service, generation, requestHost);
 
-    // Stop any existing preview first (a terminal, or a compose project from an earlier approval).
-    await this.stopRunningPreview(row);
+      // Stop any existing preview first (a terminal, or a compose project from an earlier approval).
+      await this.stopRunningPreview(row);
 
-    const detectedCommand = this.detectPreviewCommand(row.projectId, row.worktreePath);
-    const command = body.command?.trim() || detectedCommand || 'npm run dev';
-    const { session, port } = await this.previewPortLock.run('ports', async () => {
-      const port = body.port ?? (await this.allocatePreviewPort(id, 'command'));
-      const session = await this.ptyd.get().spawn({
-        file: 'sh',
-        args: ['-c', command],
-        cwd: row.worktreePath,
-        env: {
-          PORT: String(port),
-          HOST: '0.0.0.0',
-        },
-        meta: {
-          kind: 'shell',
-          runId: row.id,
-          projectId: row.projectId,
-          previewPort: String(port),
-          title: `Preview :${port} · ${row.branch ?? row.id.slice(0, 8)}`,
-        },
+      const detectedCommand = this.detectPreviewCommand(row.projectId, row.worktreePath);
+      const command = body.command?.trim() || detectedCommand || 'npm run dev';
+      const { session, port } = await this.previewPortLock.run('ports', async () => {
+        const port = body.port ?? (await this.allocatePreviewPort(id, 'command'));
+        const session = await this.ptyd.get().spawn({
+          file: 'sh',
+          args: ['-c', command],
+          cwd: row.worktreePath,
+          env: {
+            PORT: String(port),
+            HOST: '0.0.0.0',
+          },
+          meta: {
+            kind: 'shell',
+            runId: row.id,
+            projectId: row.projectId,
+            previewPort: String(port),
+            title: `Preview :${port} · ${row.branch ?? row.id.slice(0, 8)}`,
+          },
+        });
+        this.record(id, { source: 'user', type: 'preview_started', payload: { kind: 'command', terminalId: session.id, command, port } });
+        return { session, port };
       });
-      this.record(id, { source: 'user', type: 'preview_started', payload: { kind: 'command', terminalId: session.id, command, port } });
-      return { session, port };
-    });
 
-    return {
-      runId: id,
-      status: 'running',
-      kind: 'command',
-      terminalId: session.id,
-      command,
-      port,
-      url: previewUrl(port, requestHost),
-      detectedCommand,
-      error: null,
-      logs: null,
-    };
+      return {
+        runId: id,
+        status: 'running',
+        kind: 'command',
+        terminalId: session.id,
+        command,
+        port,
+        url: previewUrl(port, requestHost),
+        detectedCommand,
+        error: null,
+        logs: null,
+      } satisfies RunPreviewStatus;
+    });
   }
 
   /**
    * A compose preview (worktree.yml v2): needs the engine. Allocates a port from the docker range,
-   * records the start and runs `up` and the readiness checks in the background; the status says
-   * `starting` until they end. A `command` or `port` in the body does not apply.
+   * records the start and runs `up` and the readiness checks in the background under the run's
+   * preview project (`emberline-<run8>-preview`); the status says `starting` until they end. A
+   * `command` or `port` in the body does not apply.
    */
-  private async startComposePreview(row: RunRow, service: WorktreeComposeService, requestHost?: string): Promise<RunPreviewStatus> {
+  private async startComposePreview(
+    row: RunRow,
+    service: WorktreeComposeService,
+    generation: number,
+    requestHost?: string,
+  ): Promise<RunPreviewStatus> {
     await this.docker.ready();
     if (!this.docker.status.available || !this.config.dockerHost) {
       throw conflict(
@@ -2300,10 +2339,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     await this.stopRunningPreview(row);
     const env = await this.dockerEnvFor(row);
-    const project = composeProjectName(row.id, row.worktreePath);
+    const project = previewComposeProjectName(row.id);
     const command = composePreviewLabel(service);
-    const hostPort = await this.previewPortLock.run('ports', async () => {
-      const port = await this.allocatePreviewPort(row.id, 'compose');
+    const recordStart = (port: number) =>
       this.record(row.id, {
         source: 'user',
         type: 'preview_started',
@@ -2317,11 +2355,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           containerPort: service.compose.port,
         } satisfies PreviewPayload,
       });
+    const hostPort = await this.previewPortLock.run('ports', async () => {
+      const port = await this.allocatePreviewPort(row.id, 'compose');
+      recordStart(port);
       return port;
     });
 
-    const job = { execId: `preview-${row.id}-${randomUUID()}`, cancelled: false };
-    this.composeJobs.set(row.id, job);
+    const job: ComposeJob = {
+      execId: `preview-${row.id}-${randomUUID()}`,
+      cancelled: false,
+      abandoned: false,
+      generation,
+      project,
+      done: Promise.resolve(),
+    };
     const target = {
       worktreePath: row.worktreePath,
       project,
@@ -2332,20 +2379,42 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       engineHost: engineHostName(this.config.dockerHost),
       env,
     };
-    void runComposePreview(target, this.composePreviewTiming, { execId: job.execId, cancelled: () => job.cancelled })
-      .then((outcome) => {
-        if (job.cancelled || this.composeJobs.get(row.id) !== job || !this.db.select().from(runs).where(eq(runs.id, row.id)).get()) return;
+    const current = () => !job.cancelled && this.composeJobs.get(row.id) === job && this.hasRun(row.id);
+    const reallocate = (taken: ReadonlySet<number>) =>
+      this.previewPortLock.run('ports', async () => {
+        if (!current()) throw new Error('the preview was stopped');
+        const port = await this.allocatePreviewPort(row.id, 'compose', taken);
+        recordStart(port);
+        return port;
+      });
+    job.done = runComposePreview(target, this.composePreviewTiming, { execId: job.execId, cancelled: () => job.cancelled, reallocate })
+      .then(async (outcome) => {
+        if (!current()) return;
         if (outcome.ok) {
-          this.record(row.id, { source: 'system', type: 'preview_ready', payload: { port: hostPort } });
-        } else if (!outcome.cancelled) {
-          this.record(row.id, { source: 'system', type: 'preview_failed', payload: { error: outcome.error, logs: outcome.logs } });
-          this.log?.warn({ runId: row.id, project, error: outcome.error }, 'compose preview failed');
+          this.record(row.id, { source: 'system', type: 'preview_ready', payload: { port: target.hostPort } });
+          return;
         }
+        if (outcome.cancelled) return;
+        // Take down what it left (a container that exited, a half-started project) and free its port.
+        const down = await composeDown(project, env);
+        if (!current()) return;
+        this.record(row.id, {
+          source: 'system',
+          type: 'preview_failed',
+          payload: { error: outcome.error, logs: outcome.logs, downOk: down.ok },
+        });
+        this.log?.warn({ runId: row.id, project, error: outcome.error }, 'compose preview failed');
       })
       .catch(() => undefined)
       .finally(() => {
         if (this.composeJobs.get(row.id) === job) this.composeJobs.delete(row.id);
       });
+    this.composeJobs.set(row.id, job);
+    // A start a stop gave up waiting for may still have created containers: take them down when it
+    // settles, unless the run started another preview meanwhile.
+    void job.done.then(async () => {
+      if (job.abandoned && this.previewGenerations.get(row.id) === job.generation) await composeDown(project, env);
+    });
 
     return {
       runId: row.id,
@@ -2361,9 +2430,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     };
   }
 
+  private hasRun(id: string): boolean {
+    return Boolean(this.db.select({ id: runs.id }).from(runs).where(eq(runs.id, id)).get());
+  }
+
   /**
    * Ends what the run's last preview started: its terminal, or (compose) the background start and
-   * the project's containers (`down --remove-orphans`, volumes kept). Returns that preview's status.
+   * the preview project's containers (`down --remove-orphans`, volumes kept). A start still going
+   * is cancelled and awaited (bounded, cancelled once more after a short delay) before the `down`.
+   * Returns that preview's status. Callers hold `previewRunLock` for the run.
    */
   private async stopRunningPreview(row: RunRow): Promise<RunPreviewStatus> {
     const current = await this.previewStatus(row.id);
@@ -2378,26 +2453,42 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (job) {
         job.cancelled = true;
         this.composeJobs.delete(row.id);
+        const { stopSettleMs, cancelRetryMs } = this.composePreviewTiming;
         await cancelCommand(job.execId);
+        let settled = await settlesWithin(job.done, cancelRetryMs);
+        if (!settled) {
+          await cancelCommand(job.execId);
+          settled = await settlesWithin(job.done, Math.max(0, stopSettleMs - cancelRetryMs));
+        }
+        if (!settled) job.abandoned = true;
       }
       const env = await this.dockerEnvFor(row);
       if (env.DOCKER_HOST) {
-        const down = await composeDown(composeProjectName(row.id, row.worktreePath), env);
+        const down = await composeDown(this.previewProjectOf(row.id), env);
         if (!down.ok) this.log?.warn({ runId: row.id, output: down.output.slice(-500) }, 'compose preview: down failed');
       }
     }
     return current;
   }
 
+  /** The compose project the run's last compose preview used (recorded with it). */
+  private previewProjectOf(runId: string): string {
+    const started = this.previewEvents(runId).find((e) => e.type === 'preview_started');
+    const project = (started?.payload as PreviewPayload | null)?.project;
+    return typeof project === 'string' && project.startsWith('emberline-') ? project : previewComposeProjectName(runId);
+  }
+
   async stopPreview(id: string, requestHost?: string): Promise<RunPreviewStatus> {
     const row = this.row(id);
-    const current = await this.stopRunningPreview(row);
-    this.record(id, {
-      source: 'user',
-      type: 'preview_stopped',
-      payload: { terminalId: current.terminalId },
+    return this.previewRunLock.run(id, async () => {
+      const current = await this.stopRunningPreview(row);
+      this.record(id, {
+        source: 'user',
+        type: 'preview_stopped',
+        payload: { terminalId: current.terminalId },
+      });
+      return { ...(await this.previewStatus(id, requestHost)), detectedCommand: current.detectedCommand };
     });
-    return { ...(await this.previewStatus(id, requestHost)), detectedCommand: current.detectedCommand };
   }
 
   /** Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose. */
@@ -2425,7 +2516,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
     }
     // ...nor a compose preview's containers (prune and GC also remove its volumes).
-    await this.stopRunningPreview(row).catch(() => undefined);
+    await this.previewRunLock.run(id, () => this.stopRunningPreview(row)).catch(() => undefined);
     this.db.delete(runs).where(eq(runs.id, id)).run();
     this.emit('removed', id);
   }
