@@ -173,6 +173,14 @@ export async function pruneImages(env: Record<string, string>): Promise<{ ok: bo
 }
 
 /**
+ * A short read-only `docker <args>` in the runner (the Docker page's listings and logs): stdout in
+ * `result`, the sanitised tail of the output in `output`. Never throws.
+ */
+export function dockerQuery(args: string[], env: Record<string, string>): Promise<Ran> {
+  return run(args, NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
+}
+
+/**
  * Gives the files under `dir` back to the runner user through a throwaway container in the engine
  * (see {@link reclaimArgs}). Never throws.
  */
@@ -209,7 +217,7 @@ async function answersHttp(target: ComposePreviewTarget): Promise<boolean> {
   }
 }
 
-interface Ran {
+export interface Ran {
   ok: boolean;
   result?: ExecResult;
   /** exit code, timeout or error, for messages. */

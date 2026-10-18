@@ -48,8 +48,9 @@ export function composePsArgs(project: string): string[] {
   return ['compose', '-p', project, 'ps', '--all', '--format', 'json'];
 }
 
-export function composeLogsArgs(project: string, service: string): string[] {
-  return ['compose', '-p', project, 'logs', '--no-color', '--tail', String(COMPOSE_LOGS_TAIL_LINES), '--', service];
+/** The last lines of one service's output, or (no `service`) of every service in the project. */
+export function composeLogsArgs(project: string, service?: string): string[] {
+  return ['compose', '-p', project, 'logs', '--no-color', '--tail', String(COMPOSE_LOGS_TAIL_LINES), ...(service ? ['--', service] : [])];
 }
 
 /**
@@ -183,6 +184,19 @@ export function engineHostName(dockerHost: string): string {
 /** Every compose project the engine knows, running or not (the GC sweep). */
 export function composeLsArgs(): string[] {
   return ['compose', 'ls', '-a', '--format', 'json'];
+}
+
+/**
+ * Every container of every compose project in the engine, one JSON object per line (the Docker
+ * page groups them by their `com.docker.compose.project` label).
+ */
+export function dockerPsArgs(): string[] {
+  return ['ps', '-a', '--filter', 'label=com.docker.compose.project', '--format', '{{json .}}'];
+}
+
+/** The engine's disk use (images, containers, volumes, build cache), one JSON object per line. */
+export function systemDfArgs(): string[] {
+  return ['system', 'df', '--format', '{{json .}}'];
 }
 
 /** Project names from `compose ls --format json` (one array); anything else gives none. */

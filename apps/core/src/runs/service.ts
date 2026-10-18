@@ -25,6 +25,10 @@ import {
   type Credential,
   CreateRunBody as CreateRunBodySchema,
   type DiffScope,
+  type DockerCleanupResponse,
+  type DockerOverview,
+  type DockerProjectActionResponse,
+  type DockerProjectLogsResponse,
   type GarbageCollectRunsBody,
   GarbageCollectRunsBody as GarbageCollectRunsBodySchema,
   type GarbageCollectRunsResponse,
@@ -60,13 +64,14 @@ import {
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
-import { composeDownArgs, engineHostName, isEmberlineComposeProject } from '../docker/compose.js';
+import { composeDownArgs, composeLogsArgs, engineHostName, isEmberlineComposeProject } from '../docker/compose.js';
 import {
   type ComposePreviewTiming,
   composeDown,
   composeProjects,
   composeServiceStatus,
   DEFAULT_COMPOSE_PREVIEW_TIMING,
+  dockerQuery,
   pruneImages,
   reclaimFiles,
   runComposePreview,
@@ -78,6 +83,14 @@ import {
   mainComposeProjectName,
   previewComposeProjectName,
 } from '../docker/engine.js';
+import {
+  buildDockerProjects,
+  composeProjectsInUse,
+  gatherDockerInventory,
+  type OwnershipFacts,
+  type OwnershipRun,
+  resolveDockerOwner,
+} from '../docker/inventory.js';
 import { previewUrl } from './preview-url.js';
 import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
@@ -316,6 +329,9 @@ const BOOKKEEPING_EVENT_TYPES = new Set([
   // A compose preview's background start ended; the run did nothing.
   'preview_ready',
   'preview_failed',
+  // A person stopped or removed the run's compose project on the Docker page.
+  'docker_project_stopped',
+  'docker_project_removed',
 ]);
 /** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
 const PRUNE_RUNS_PER_PASS = 10;
@@ -535,6 +551,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private dockerGcTimer?: NodeJS.Timeout;
   private dockerSweeping = false;
   private lastImagePruneAt = 0;
+  /** The last sweep that listed the engine, and what it removed (the Docker page shows them). */
+  private lastDockerSweep: { at: number; removed: string[] } | null = null;
 
   constructor(
     private readonly db: Db,
@@ -2237,10 +2255,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * The GC sweep of the engine (every 30 min): takes down, with their volumes, Emberline's compose
    * projects whose run no longer exists or has ended without a worktree, and the main-workspace
    * projects of deleted projects; at most {@link DOCKER_GC_MAX_DOWNS} per sweep. Once a day it
-   * prunes dangling images and build cache older than 72 h. A project whose name Emberline did not make is never
-   * touched.
+   * prunes dangling images and build cache older than 72 h (`forcePrune`: now, for "Clean up now"). A project
+   * whose name Emberline did not make is never touched.
    */
-  async sweepDockerProjects(now = Date.now()): Promise<{ removed: string[] }> {
+  async sweepDockerProjects(now = Date.now(), { forcePrune = false }: { forcePrune?: boolean } = {}): Promise<{ removed: string[] }> {
     const removed: string[] = [];
     if (!this.docker.host || this.dockerSweeping) return { removed };
     this.dockerSweeping = true;
@@ -2254,14 +2272,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         return { removed };
       }
       // Read after the listing: a project listed there belongs to a run that existed before it.
-      const inUse = this.composeProjectsInUse();
+      const inUse = composeProjectsInUse(this.dockerOwnershipFacts());
       const stale = listed.filter((name) => isEmberlineComposeProject(name) && !inUse.has(name)).slice(0, DOCKER_GC_MAX_DOWNS);
       for (const name of stale) {
         const down = await composeDown(name, env, CLEANUP_DOWN);
         if (down.ok) removed.push(name);
         else this.log?.warn({ project: name, output: down.output.slice(-500) }, 'compose sweep: down failed');
       }
-      if (now - this.lastImagePruneAt >= DOCKER_IMAGE_PRUNE_INTERVAL_MS) {
+      this.lastDockerSweep = { at: now, removed: [...removed] };
+      if (forcePrune || now - this.lastImagePruneAt >= DOCKER_IMAGE_PRUNE_INTERVAL_MS) {
         this.lastImagePruneAt = now;
         const prune = await pruneImages(env);
         if (!prune.ok) this.log?.warn({ output: prune.output.slice(-500) }, 'compose sweep: image prune failed');
@@ -2273,23 +2292,152 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /**
-   * Compose projects still in use: those of every run that is live or still has its worktree (a run
-   * in Review keeps its worktree, so its preview stays), and every project's main workspace.
+   * What compose project ownership is decided from (docker/inventory.ts): every run with its ticket
+   * and whether its worktree still exists, and every project. The sweep's in-use rule reads it too.
    */
-  private composeProjectsInUse(): Set<string> {
-    const inUse = new Set<string>();
-    for (const p of this.db.select({ id: projects.id }).from(projects).all()) inUse.add(mainComposeProjectName(p.id));
+  private dockerOwnershipFacts(): OwnershipFacts {
     const rows = this.db
-      .select({ id: runs.id, worktreePath: runs.worktreePath, endedAt: runs.endedAt, state: runs.state, cancelledAt: runs.cancelledAt })
+      .select({
+        id: runs.id,
+        projectId: runs.projectId,
+        ticketId: runs.ticketId,
+        ticketKey: tickets.key,
+        ticketTitle: tickets.title,
+        title: runs.title,
+        state: runs.state,
+        worktreePath: runs.worktreePath,
+        createdAt: runs.createdAt,
+        endedAt: runs.endedAt,
+        cancelledAt: runs.cancelledAt,
+      })
       .from(runs)
+      .leftJoin(tickets, eq(tickets.id, runs.ticketId))
       .all();
-    for (const r of rows) {
-      const live = !r.endedAt || (r.state === 'rate_limited' && !r.cancelledAt);
-      if (!live && !(r.worktreePath && existsSync(r.worktreePath))) continue;
-      inUse.add(composeProjectName(r.id, r.worktreePath));
-      inUse.add(previewComposeProjectName(r.id));
+    return {
+      projects: this.db.select({ id: projects.id, name: projects.name }).from(projects).all(),
+      runs: rows.map((r) => ({
+        ...r,
+        state: r.state as OwnershipRun['state'],
+        createdAt: r.createdAt.getTime(),
+        endedAt: r.endedAt?.getTime() ?? null,
+        cancelledAt: r.cancelledAt?.getTime() ?? null,
+        worktreeExists: Boolean(r.worktreePath && existsSync(r.worktreePath)),
+      })),
+    };
+  }
+
+  /**
+   * The Docker page: Emberline's compose projects in the engine with their owners and containers,
+   * the engine's disk use and the cleanup state. Never throws on a docker failure: each listing
+   * carries its own error.
+   */
+  async dockerOverview(): Promise<DockerOverview> {
+    const cleanup = {
+      lastSweepAt: this.lastDockerSweep ? new Date(this.lastDockerSweep.at).toISOString() : null,
+      lastSweepRemoved: this.lastDockerSweep?.removed ?? [],
+      lastPruneAt: this.lastImagePruneAt ? new Date(this.lastImagePruneAt).toISOString() : null,
+      sweeping: this.dockerSweeping,
+    };
+    const empty = { disk: { rows: [] }, cleanup, projects: [] };
+    if (!this.docker.host) return { engine: this.docker.status, ...empty };
+    await this.docker.ready();
+    const env = this.docker.cliEnv();
+    if (!env.DOCKER_HOST) {
+      const why = this.docker.status.error;
+      return { engine: this.docker.status, ...empty, error: `the Docker engine is not reachable${why ? `: ${why}` : ''}` };
     }
-    return inUse;
+    const inventory = await gatherDockerInventory(env);
+    // Read after the listing, like the sweep: a listed project belongs to a run that existed before it.
+    const listed = buildDockerProjects({ ls: inventory.ls, ps: inventory.ps, facts: this.dockerOwnershipFacts() });
+    return {
+      engine: this.docker.status,
+      disk: inventory.df.ok ? { rows: inventory.df.value } : { rows: [], error: inventory.df.error },
+      cleanup,
+      ...listed,
+    };
+  }
+
+  /** `down --remove-orphans` (volumes kept) of one of Emberline's compose projects, by a person. */
+  stopDockerProject(name: string): Promise<DockerProjectActionResponse> {
+    return this.downDockerProject(name, 'stop');
+  }
+
+  /** `down -v --rmi local --remove-orphans` (CLEANUP_DOWN) of one of Emberline's compose projects, by a person. */
+  removeDockerProject(name: string): Promise<DockerProjectActionResponse> {
+    return this.downDockerProject(name, 'remove');
+  }
+
+  /**
+   * A run's preview project goes through the run's preview stop (`preview_stopped`, the port, the
+   * preview lock) and is then taken down under the same lock; any other project is taken down
+   * directly. A live agent's project may be stopped too (a runaway container): the answer warns.
+   * The owning run gets a `docker_project_stopped`/`_removed` note; its state never changes.
+   */
+  private async downDockerProject(name: string, action: 'stop' | 'remove'): Promise<DockerProjectActionResponse> {
+    const env = await this.dockerPageEnv(name);
+    const owner = resolveDockerOwner(name, this.dockerOwnershipFacts());
+    const opts = action === 'remove' ? CLEANUP_DOWN : {};
+    const down =
+      owner.kind === 'preview'
+        ? await this.previewRunLock.run(owner.runId, async () => {
+            // A command preview (a terminal) is not this project's: it keeps running.
+            const started = this.previewEvents(owner.runId).find((e) => e.type === 'preview_started');
+            if ((started?.payload as PreviewPayload | null)?.kind !== 'command') await this.stopPreviewHeld(this.row(owner.runId));
+            return composeDown(name, env, opts);
+          })
+        : await composeDown(name, env, opts);
+    if (!down.ok) {
+      throw new HttpError(502, 'docker_failed', `docker compose down failed for ${name}`, { output: down.output });
+    }
+    if (owner.kind === 'agent' || owner.kind === 'preview') {
+      try {
+        this.record(owner.runId, {
+          source: 'user',
+          type: action === 'stop' ? 'docker_project_stopped' : 'docker_project_removed',
+          payload: { project: name, by: 'person' },
+        });
+      } catch {
+        // The run was removed meanwhile.
+      }
+    }
+    const warning =
+      owner.kind === 'agent' && owner.live
+        ? `The agent of ${owner.ticketKey ?? owner.runTitle ?? owner.runId.slice(0, 8)} is running and may be using it.`
+        : null;
+    return { project: name, action, owner, warning };
+  }
+
+  /** The end of `docker compose logs` of a project (one service, or all), sanitised: untrusted output. */
+  async dockerProjectLogs(name: string, service?: string): Promise<DockerProjectLogsResponse> {
+    if (service !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(service)) throw badRequest('not a compose service name');
+    const env = await this.dockerPageEnv(name);
+    const logs = await dockerQuery(composeLogsArgs(name, service), env);
+    if (!logs.ok) throw new HttpError(502, 'docker_failed', `docker compose logs failed (${logs.how})`, { output: logs.output });
+    return { project: name, service: service ?? null, logs: logs.output };
+  }
+
+  /** "Clean up now": the sweep at once, with the image and build cache prune; 409 while one runs. */
+  async dockerCleanupNow(): Promise<DockerCleanupResponse> {
+    await this.dockerPageEnv(null);
+    if (this.dockerSweeping) throw conflict('a cleanup is running; try again when it finished', 'docker_sweeping');
+    return this.sweepDockerProjects(Date.now(), { forcePrune: true });
+  }
+
+  /**
+   * The engine's client variables for a Docker page action: 400 for a name Emberline did not make,
+   * 409 while the engine is off or does not answer.
+   */
+  private async dockerPageEnv(name: string | null): Promise<Record<string, string>> {
+    if (name !== null && !isEmberlineComposeProject(name)) throw badRequest('not a compose project Emberline made');
+    const off = () =>
+      new HttpError(409, 'docker_off', `the Docker engine is ${this.docker.host ? 'not reachable' : 'off'}`, {
+        hint: 'enable the Docker engine (COMPOSE_PROFILES=docker)',
+      });
+    if (!this.docker.host) throw off();
+    await this.docker.ready();
+    const env = this.docker.cliEnv();
+    if (!env.DOCKER_HOST) throw off();
+    return env;
   }
 
   /**
@@ -2724,15 +2872,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async stopPreview(id: string, requestHost?: string): Promise<RunPreviewStatus> {
     const row = this.row(id);
-    return this.previewRunLock.run(id, async () => {
-      const current = await this.stopRunningPreview(row);
-      this.record(id, {
-        source: 'user',
-        type: 'preview_stopped',
-        payload: { terminalId: current.terminalId },
-      });
-      return { ...(await this.previewStatus(id, requestHost)), detectedCommand: current.detectedCommand };
+    return this.previewRunLock.run(id, () => this.stopPreviewHeld(row, requestHost));
+  }
+
+  /** A person's preview Stop (Review page or Docker page); callers hold `previewRunLock` for the run. */
+  private async stopPreviewHeld(row: RunRow, requestHost?: string): Promise<RunPreviewStatus> {
+    const current = await this.stopRunningPreview(row);
+    this.record(row.id, {
+      source: 'user',
+      type: 'preview_stopped',
+      payload: { terminalId: current.terminalId },
     });
+    return { ...(await this.previewStatus(row.id, requestHost)), detectedCommand: current.detectedCommand };
   }
 
   /** Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose. */

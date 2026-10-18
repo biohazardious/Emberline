@@ -16,6 +16,7 @@ import { NotificationService } from './notifications/service.js';
 import { registerOpsRoutes } from './ops.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 import { registerCronRoutes } from './routes/cron.js';
+import { registerDockerRoutes } from './routes/docker.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerForgeRoutes } from './routes/forge.js';
 import { registerIssueRoutes } from './routes/issues.js';
@@ -131,6 +132,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
+  registerDockerRoutes(app, deps.runs);
   registerReviewRoutes(app, review);
   registerTicketRoutes(app, deps.tickets);
   registerSchedulerRoutes(app, deps.scheduler);

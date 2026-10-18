@@ -24,3 +24,4 @@ export * from './api/toolchain.js';
 export * from './api/updates.js';
 export * from './api/build-outputs.js';
 export * from './api/worktree-config.js';
+export * from './api/docker.js';
