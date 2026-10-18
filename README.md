@@ -110,7 +110,7 @@ copy:                 # from the main workspace into each new run worktree
   - .env
   - { path: .env.local, mode: symlink }   # copy (default) | symlink
 setup:                # run in a fresh run worktree before the agent starts
-  - pnpm install --frozen-lockfile
+  - "[ ! -f package.json ] || pnpm install --frozen-lockfile"   # skipped until the skeleton exists
 teardown:             # run before the worktree is pruned
   - docker compose down
 services:             # long-running processes; $PORT is assigned by Emberline
@@ -123,9 +123,13 @@ checks:               # override the build gate's detected steps (in order)
   test: pnpm test
 ```
 
-**Trust.** Every command runs in the runner, and agents can edit this file. Emberline therefore runs only the version you approved on **Project settings**. If the file changes (or is removed), the Board and Project settings show "worktree.yml changed — review" with a diff, and the old approved version keeps applying until you approve the new one.
+**Trust.** Every command runs in the runner, and agents can edit this file. Emberline therefore runs only the version you approved on **Project settings**, and only the version committed in the main workspace (HEAD of its checked-out branch) can be approved, so commit it there first. If the file changes (an agent's edit is merged with its run like any other file) or is removed, the Board and Project settings show "worktree.yml changed — review" with a diff, and the old approved version keeps applying until you approve the new one. A file that cannot be used (a symbolic link, over 64 KB, invalid) shows its errors instead and cannot be approved.
 
-**Copy and symlink.** `copy` and `symlink` entries are not committed for you: files that git does not ignore are flagged to the agent, so keep `.env` in `.gitignore`. Symlink mode lets a run modify the main workspace's file.
+**Limits.** Each setup command may take 10 minutes and the whole setup 30 minutes; a failed or cut-short setup still starts the agent, which is told what failed. A `copy` entry over 200 MB or 5000 files and directories is skipped. Teardown commands get 2 minutes each; a prune or clean-up waits up to 60 seconds for them, then they finish in the background.
+
+**Copy and symlink.** Copied files are not committed for you: copied `.env*` files that git does not ignore are flagged to the agent, so keep `.env` in `.gitignore`. Symlink mode lets a run modify the main workspace's file.
+
+**Removing a project.** **Remove from Emberline** keeps the project's folder; **Remove and delete files** deletes it. A project imported from a workspaces folder keeps its files unless you choose the second.
 
 ## Desktop, mobile and embedded projects
 
