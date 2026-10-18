@@ -278,17 +278,36 @@ const settingsOf = (res: { json(): IssueSyncResponse }): IssueSyncSettings => {
 describe('issue-sync settings', () => {
   it('defaults, round trip and partial updates', async () => {
     const def = settingsOf(await get('/api/projects/p1/issue-sync'));
-    expect(def).toEqual({ enabled: false, label: '', status: 'backlog', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
+    expect(def).toEqual({ enabled: false, label: '', status: 'backlog', closeOnDone: false, commentOnProgress: true, trustedAuthors: [], repo: null });
     const set = await patch('/api/projects/p1/issue-sync', { enabled: true, label: ' emberline ', status: 'ready' });
     expect(set.statusCode).toBe(200);
-    expect(settingsOf(set)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
+    const pinned = { provider: 'github', repoPath: 'acme/widget' };
+    expect(settingsOf(set)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true, trustedAuthors: [], repo: pinned });
     const more = await patch('/api/projects/p1/issue-sync', { closeOnDone: true });
-    expect(settingsOf(more)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true, trustedAuthors: [] });
+    expect(settingsOf(more)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true, trustedAuthors: [], repo: pinned });
     const trusted = await patch('/api/projects/p1/issue-sync', { trustedAuthors: ['octo'] });
     expect(trusted.json().trustedAuthors).toEqual(['octo']);
     expect((await patch('/api/projects/p1/issue-sync', { trustedAuthors: Array.from({ length: 51 }, (_, i) => `u${i}`) })).statusCode).toBe(400);
     await patch('/api/projects/p1/issue-sync', { trustedAuthors: [] });
     expect(settingsOf(await get('/api/projects/p1/issue-sync'))).toEqual(settingsOf(more));
+  });
+
+  it('enabling pins the repository of origin; the pin is not writable, and enabling again pins anew', async () => {
+    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x', repo: { provider: 'gitlab', repoPath: 'evil/x' } })).repo).toEqual({
+      provider: 'github',
+      repoPath: 'acme/widget',
+    });
+    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/renamed.git' }).where(eq(projects.id, 'p1')).run();
+    // Still enabled: the pin stays (label sync refuses the other repository).
+    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { label: 'y' })).repo).toEqual({ provider: 'github', repoPath: 'acme/widget' });
+    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: false })).repo).toBeNull();
+    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: true })).repo).toEqual({ provider: 'github', repoPath: 'acme/renamed' });
+    // No forge configured: enabling still works, and the first sync pins it.
+    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: null });
+    await patch('/api/projects/p1/issue-sync', { enabled: false });
+    const res = await patch('/api/projects/p1/issue-sync', { enabled: true });
+    expect(res.statusCode).toBe(200);
+    expect(settingsOf(res).repo).toBeNull();
   });
 
   it('400 when enabling without a label, and the stored settings stay untouched', async () => {

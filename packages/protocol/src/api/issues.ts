@@ -56,6 +56,10 @@ export const ImportIssuesResponse = z.object({
 });
 export type ImportIssuesResponse = z.infer<typeof ImportIssuesResponse>;
 
+/** The repository label sync works on: pinned when sync is enabled (or on its first sync). */
+export const IssueSyncRepo = z.object({ provider: ForgeProvider, repoPath: z.string().min(1).max(500) });
+export type IssueSyncRepo = z.infer<typeof IssueSyncRepo>;
+
 const IssueSyncSettingsObject = z.object({
   enabled: z.boolean().default(false),
   /** The issue label that pulls an issue in; required when sync is enabled. */
@@ -69,6 +73,11 @@ const IssueSyncSettingsObject = z.object({
    * person chose.
    */
   trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+  /**
+   * Set by core, never by the PATCH body: the repository origin named when sync was enabled. Label
+   * sync refuses to run (lastError) once origin names another one; disabling and enabling re-pins.
+   */
+  repo: IssueSyncRepo.nullable().default(null),
 });
 
 export const IssueSyncSettings = IssueSyncSettingsObject.superRefine((v, ctx) => {

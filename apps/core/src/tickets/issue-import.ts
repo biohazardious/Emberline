@@ -4,6 +4,7 @@ import {
   type ForgeIssueListResponse,
   ImportIssuesBody,
   type ImportIssuesResponse,
+  type IssueSyncRepo,
   type IssueSyncResponse,
   IssueSyncSettings,
   type IssueSyncStatus,
@@ -101,12 +102,29 @@ export class IssueImportService {
     return this.withStatus(projectId, readIssueSync(this.db, projectId));
   }
 
-  updateSync(projectId: string, rawBody: unknown): IssueSyncResponse {
+  /**
+   * Turning sync on pins the repository origin names now (`repo`); turning it off drops the pin. A
+   * remote that cannot be resolved yet leaves it empty, and the first good sync pins it.
+   */
+  async updateSync(projectId: string, rawBody: unknown): Promise<IssueSyncResponse> {
     this.assertProject(projectId);
     const patch = UpdateIssueSyncBody.parse(rawBody ?? {});
-    const merged = IssueSyncSettings.safeParse({ ...readIssueSync(this.db, projectId), ...patch });
+    const current = readIssueSync(this.db, projectId);
+    const merged = IssueSyncSettings.safeParse({ ...current, ...patch });
     if (!merged.success) throw badRequest(merged.error.issues.map((i) => i.message).join('; '));
-    writeIssueSync(this.db, projectId, merged.data);
-    return this.withStatus(projectId, merged.data);
+    const next = merged.data;
+    if (!next.enabled) next.repo = null;
+    else if (!current.enabled || !current.repo) next.repo = await this.originRepo(projectId);
+    writeIssueSync(this.db, projectId, next);
+    return this.withStatus(projectId, next);
+  }
+
+  private async originRepo(projectId: string): Promise<IssueSyncRepo | null> {
+    try {
+      const { remote } = await this.forge.projectRemote(projectId);
+      return { provider: remote.provider, repoPath: remote.repoPath };
+    } catch {
+      return null;
+    }
   }
 }

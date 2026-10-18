@@ -16,7 +16,7 @@ import {
 } from '@emberline/protocol';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { readIssueSync } from '../db/project-settings.js';
+import { readIssueSync, writeIssueSync } from '../db/project-settings.js';
 import { projects, projectSettings, runEvents, runs, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
@@ -271,6 +271,7 @@ export class IssueSyncService {
     try {
       const target = await this.forge.projectRemote(projectId);
       const source = target.remote.provider;
+      this.checkPinned(projectId, settings, target);
       const key = `${source}|${target.remote.apiBaseUrl}|${target.remote.repoPath}|${settings.label}`;
       const known = state.etag?.key === key ? state.etag.value : null;
       const items: ForgeIssue[] = [];
@@ -318,6 +319,25 @@ export class IssueSyncService {
         return true;
       }
       return false;
+    }
+  }
+
+  /**
+   * Label sync works on the repository it was enabled for: an origin that names another one (an
+   * agent can rewrite it) is refused. A project without a pin yet gets this one.
+   */
+  private checkPinned(projectId: string, settings: IssueSyncSettings, target: ForgeTarget): void {
+    const { provider, repoPath } = target.remote;
+    const pinned = settings.repo;
+    if (!pinned) {
+      const fresh = readIssueSync(this.db, projectId);
+      if (fresh.enabled && !fresh.repo) writeIssueSync(this.db, projectId, { ...fresh, repo: { provider, repoPath } });
+      return;
+    }
+    if (pinned.provider !== provider || pinned.repoPath.toLowerCase() !== repoPath.toLowerCase()) {
+      throw conflict(
+        `origin now names ${provider} ${repoPath}, but issue sync was enabled for ${pinned.provider} ${pinned.repoPath}; turn issue sync off and on again to sync the new repository`,
+      );
     }
   }
 

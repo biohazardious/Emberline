@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { IssueSyncSettings, type Ticket } from '@emberline/protocol';
 import { and, eq, like } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeIssueSync } from '../db/project-settings.js';
+import { readIssueSync, writeIssueSync } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, tickets } from '../db/schema.js';
 import { HOLD_ENDING_EVENTS } from '../runs/hold-events.js';
 import { stillHeld } from '../runs/hold-outcome.js';
@@ -256,6 +256,23 @@ describe('label sync', () => {
     expect(after[0]).toMatchObject({ id: ticket!.id, status: 'in_progress', external: { state: 'closed', labels: ['emberline', 'wontfix'] } });
     const row = t.db.select().from(tickets).where(eq(tickets.id, ticket!.id)).get()!;
     expect(row.externalSyncedAt?.getTime()).toBe(clock);
+  });
+
+  it('pins the repository on its first sync and refuses one that origin moved to', async () => {
+    const repo = addProject('p1', 'widget');
+    repo.issues = [ghIssue('widget', 1)];
+    await sync.tick();
+    expect(readIssueSync(t.db, 'p1').repo).toEqual({ provider: 'github', repoPath: 'acme/widget' });
+    const other = addProject('p2', 'other', null);
+    other.issues = [ghIssue('other', 7)];
+    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/other.git' }).where(eq(projects.id, 'p1')).run();
+    clock += ISSUE_SYNC_INTERVAL_MS;
+    const before = listCalls().length;
+    await sync.tick();
+    expect(listCalls()).toHaveLength(before);
+    expect(ticketsOf('p1').map((tk) => tk.external?.number)).toEqual([1]);
+    expect(sync.status('p1').lastError).toMatch(/acme\/other.*acme\/widget|acme\/widget.*acme\/other/);
+    expect(sync.status('p1').lastError).toMatch(/turn issue sync off and on/);
   });
 
   it('skips disabled projects and records errors per project without stopping the others', async () => {
