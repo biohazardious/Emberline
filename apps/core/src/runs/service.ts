@@ -582,6 +582,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.cancelOrphanedSetups(this.failOrphanedSpawns());
     this.timer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
     this.timer.unref();
+    // Main previews whose start a restart cut short: running if the engine has them, else down and failed.
+    void this.mainPreviews.reconcileInterrupted().catch(() => undefined);
     if (this.docker.host) {
       this.dockerGcFirst = setTimeout(() => void this.sweepDockerProjects(), DOCKER_GC_FIRST_DELAY_MS);
       this.dockerGcFirst.unref();

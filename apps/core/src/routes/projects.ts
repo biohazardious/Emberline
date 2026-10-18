@@ -126,11 +126,12 @@ import {
 } from '../factory/service.js';
 import { inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
 import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
-import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
+import { DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
 import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
+import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
 import { ToolchainService } from '../toolchain/service.js';
 
@@ -669,22 +670,13 @@ export function registerProjectRoutes(
       ),
   );
 
-  const resolveDemoWorkspace = (projectId: string, targetId: string): string | null => {
-    const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
-    if (!row) return null;
-    if (targetId === 'main') return row.path;
-    const run = runs.get(targetId);
-    return run && run.projectId === row.id ? run.worktreePath : null;
-  };
-
   /** URL agents and the runner browser use to reach the demo (no session cookie there). */
-  const agentDemoUrl = (projectId: string, targetId: string) =>
-    `${config.hookUrl}${demoBasePath(demoTokens.mint({ projectId, targetId }, AGENT_DEMO_TOKEN_TTL_MS))}`;
+  const agentDemoUrl = (projectId: string, targetId: string) => sharedAgentDemoUrl(config, demoTokens, projectId, targetId);
 
   // Authenticated entry point: hands the browser a short-lived capability URL. Demo documents run
   // sandboxed with an opaque origin, so they cannot reuse the session to call the API.
   const redirectToDemo = (projectId: string, targetId: string, subPath: string, rawUrl: string, reply: FastifyReply) => {
-    if (!resolveDemoWorkspace(projectId, targetId)) throw notFound('no such demo target');
+    if (!demoWorkspacePath(db, projectId, targetId)) throw notFound('no such demo target');
     const token = demoTokens.mint({ projectId, targetId }, UI_DEMO_TOKEN_TTL_MS);
     const query = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
     return reply.redirect(`${demoBasePath(token)}${subPath.replace(/^\/+/, '')}${query}`);
@@ -703,7 +695,7 @@ export function registerProjectRoutes(
 
   const serveDemo = async (token: string, subPath: string, reply: FastifyReply) => {
     const target = demoTokens.verify(token);
-    const workspacePath = target ? resolveDemoWorkspace(target.projectId, target.targetId) : null;
+    const workspacePath = target ? demoWorkspacePath(db, target.projectId, target.targetId) : null;
     if (!workspacePath) throw notFound('demo link expired or unknown');
     const result = await serveWorkspaceDemoAsset({ workspacePath, demoBaseHref: demoBasePath(token), subPath });
     return reply

@@ -50,6 +50,9 @@ const MainPreviewState = z.object({
 });
 type MainPreviewState = z.infer<typeof MainPreviewState>;
 
+/** A start core did not see end (it restarted meanwhile) whose service never came up. */
+const RESTARTED = 'Emberline restarted before the preview was ready; start it again';
+
 /** Why main has no container preview service; the start's 409 says the same. */
 const NO_COMPOSE_SERVICE = 'the approved worktree.yml has no compose preview service, so main has no container preview';
 
@@ -101,12 +104,18 @@ export class MainPreviews {
   private readonly lock = new KeyedMutex();
   private readonly jobs = new Map<string, Job>();
   private readonly generations = new Map<string, number>();
+  /** Projects being deleted: a start abandoned meanwhile is taken down with its volumes when it settles. */
+  private readonly deleting = new Set<string>();
 
   constructor(private readonly deps: MainPreviewDeps) {}
 
-  /** The status as the engine reports it; never changes the stored state. */
+  /**
+   * The status as the engine reports it. A start that core did not see end (it restarted) is
+   * reconciled first, under the project's lock; nothing else changes the stored state.
+   */
   async status(projectId: string, requestHost?: string): Promise<MainPreviewStatus> {
     const project = this.project(projectId);
+    if (this.interrupted(projectId)) await this.lock.run(projectId, () => this.reconcileHeld(projectId));
     const service = this.composeService(projectId);
     const label = service ? composePreviewLabel(service) : null;
     const unavailable = await this.unavailableReason(project.path, service);
@@ -135,20 +144,29 @@ export class MainPreviews {
     };
     if (state.status === 'failed') return { ...base, status: 'failed', error: state.error ?? 'the preview failed', logs: state.logs ?? null };
     if (state.status === 'starting' && this.jobs.has(projectId)) return { ...base, status: 'starting' };
+    await this.deps.docker.ready();
     if (!this.deps.docker.status.available) return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
     const engine = await composeServiceStatus({
       project: mainPreviewComposeProjectName(projectId),
       service: state.service ?? service?.compose.service ?? '',
       env: this.deps.docker.cliEnv(),
     });
-    const runs = engine === 'running' || engine === 'starting' || engine === 'unknown';
-    if (state.status === 'starting') {
-      // Core restarted before the start ended: the engine says whether it came up.
-      if (engine === 'running') return { ...base, status: 'running' };
-      return { ...base, status: 'failed', error: 'Emberline restarted before the preview was ready; start it again' };
+    if (engineRuns(engine)) return { ...base, status: 'running' };
+    // `starting` without a job here: a restart left it and the engine could not be asked yet.
+    if (state.status === 'starting') return { ...base, status: 'failed', error: RESTARTED };
+    const name = state.service ?? service?.compose.service;
+    return { ...base, status: 'exited', error: name ? `the "${name}" container is not running` : 'the preview container is not running' };
+  }
+
+  /**
+   * At boot: reconciles every project's start that core did not see end. Each runs under its
+   * project's lock and is idempotent, like the lazy one in {@link status} and {@link refresh}.
+   */
+  async reconcileInterrupted(): Promise<void> {
+    for (const row of this.deps.db.select({ projectId: projectSettings.projectId }).from(projectSettings).all()) {
+      if (!this.interrupted(row.projectId)) continue;
+      await this.lock.run(row.projectId, () => this.reconcileHeld(row.projectId)).catch(() => undefined);
     }
-    if (runs) return { ...base, status: 'running' };
-    return { ...base, status: 'exited', error: `the "${state.service ?? service?.compose.service}" container is not running` };
   }
 
   /**
@@ -219,6 +237,7 @@ export class MainPreviews {
   async refresh(projectId: string): Promise<void> {
     const job = await this.lock
       .run(projectId, async () => {
+        await this.reconcileHeld(projectId);
         const state = this.read(projectId);
         if (state?.status !== 'running' || !state.port || this.jobs.has(projectId)) return null;
         if ((await this.status(projectId)).status !== 'running') return null;
@@ -266,11 +285,13 @@ export class MainPreviews {
 
   /** Before a project is deleted: ends a start still going and takes the preview down with its volumes and images. */
   async removeForProject(projectId: string): Promise<void> {
+    // Kept for good (project ids are never reused): a start abandoned by the stop below is taken
+    // down with CLEANUP_DOWN when it settles, even while the project row still exists.
+    this.deleting.add(projectId);
     await this.lock.run(projectId, async () => {
       this.nextGeneration(projectId);
       await this.stopHeld(projectId, { volumes: true });
     });
-    this.generations.delete(projectId);
   }
 
   /** Ports main previews hold (`starting` or `running`), except `exceptProjectId`'s. */
@@ -349,7 +370,7 @@ export class MainPreviews {
       .then(async () => {
         if (!job.abandoned) return;
         await this.lock.run(projectId, async () => {
-          const gone = !this.hasProject(projectId);
+          const gone = !this.hasProject(projectId) || this.deleting.has(projectId);
           if (!gone && this.generations.get(projectId) !== job.generation) return;
           await composeDown(project, env, gone ? CLEANUP_DOWN : {});
         });
@@ -394,6 +415,43 @@ export class MainPreviews {
     if (started && state) this.write(projectId, { status: 'stopped', port: null, startedAt: null });
   }
 
+  /** A stored `starting` with no job in this process: core restarted before that start ended. */
+  private interrupted(projectId: string): boolean {
+    return this.read(projectId)?.status === 'starting' && !this.jobs.has(projectId);
+  }
+
+  /**
+   * Settles an interrupted start (callers hold the project's lock; a no-op otherwise): `running`
+   * when the engine runs the service (or says starting, or cannot tell), else its project is taken
+   * down and it is `failed` with the restart hint, which frees the port. While the engine does not
+   * answer it stays as it is, to be settled on a later touch.
+   */
+  private async reconcileHeld(projectId: string): Promise<void> {
+    if (!this.interrupted(projectId)) return;
+    const state = this.read(projectId)!;
+    const project = mainPreviewComposeProjectName(projectId);
+    if (!this.deps.docker.host) {
+      // No engine at all now: nothing of it can run.
+      this.write(projectId, { ...state, status: 'failed', error: RESTARTED, logs: null });
+      return;
+    }
+    await this.deps.docker.ready();
+    const env = this.deps.docker.cliEnv();
+    if (!env.DOCKER_HOST) return;
+    const engine = await composeServiceStatus({
+      project,
+      service: state.service ?? this.composeService(projectId)?.compose.service ?? '',
+      env,
+    });
+    if (engineRuns(engine)) {
+      this.write(projectId, { ...state, status: 'running' });
+      return;
+    }
+    const down = await composeDown(project, env);
+    if (!down.ok) this.deps.log?.()?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down after a restart failed');
+    this.write(projectId, { ...state, status: 'failed', error: RESTARTED, logs: null });
+  }
+
   private async unavailableReason(mainPath: string, service: WorktreeComposeService | null): Promise<string | null> {
     if (!service) return NO_COMPOSE_SERVICE;
     if (this.deps.config.dockerHost) await this.deps.docker.ready();
@@ -435,6 +493,11 @@ export class MainPreviews {
     if (!this.hasProject(projectId)) return;
     writeProjectSettings(this.deps.db, projectId, { [MAIN_PREVIEW_KEY]: state });
   }
+}
+
+/** What `compose ps` says counts as running: running, starting, or it could not tell. */
+function engineRuns(state: Awaited<ReturnType<typeof composeServiceStatus>>): boolean {
+  return state === 'running' || state === 'starting' || state === 'unknown';
 }
 
 function labelOf(state: MainPreviewState): string {

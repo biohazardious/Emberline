@@ -21,6 +21,8 @@ import type { CoreConfig } from './config.js';
 import { readProjectSettings, writeProjectSettings } from './db/project-settings.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
 import { mainComposeProjectName, mainPreviewComposeProjectName } from './docker/engine.js';
+import { DemoTokens } from './demo-token.js';
+import { agentDemoUrl, demoWorkspacePath } from './factory/demo-target.js';
 import { RunService } from './runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -60,6 +62,8 @@ class FakeEngine {
   upGate: Promise<void> | null = null;
   pendingUps = new Map<string, (result: ExecResult) => void>();
   cancels: string[] = [];
+  /** A cancel that does not reach the command (it keeps running). */
+  ignoreCancels = false;
 
   add(project: string, services: Record<string, string> = { web: 'running' }): void {
     this.projects.set(project, new Map(Object.entries(services)));
@@ -68,7 +72,7 @@ class FakeEngine {
   readonly cancel = async (execId: string): Promise<boolean> => {
     this.cancels.push(execId);
     const pending = this.pendingUps.get(execId);
-    if (!pending) return false;
+    if (!pending || this.ignoreCancels) return false;
     pending({ ...failed('', 137), exitCode: null, cancelled: true });
     return true;
   };
@@ -441,17 +445,73 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     expect((await runningRunPreview(run)).port).not.toBe(port);
   });
 
-  it('a start that had not finished: failed with a hint, unless the engine runs it', async () => {
+  const fastTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20, stopSettleMs: 300, cancelRetryMs: 50 };
+  const restartedService = () => {
+    const restarted = new RunService(t.db, t.config, t.ptyd);
+    restarted.composePreviewTiming = fastTiming;
+    return restarted;
+  };
+
+  it('a start that never came up is reconciled at boot: taken down, failed with a hint, and its port is free again', async () => {
+    await start('tcp://docker:2376', { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } } });
+    const p = await createProject();
+    engine.upGate = new Promise(() => undefined);
+    expect((await startMain(p.id)).statusCode).toBe(200);
+    expect(stored(p.id)).toMatchObject({ status: 'starting', port: 4325 });
+    engine.upGate = null;
+
+    const restarted = restartedService();
+    await restarted.mainPreviews.reconcileInterrupted();
+    expect(stored(p.id)).toMatchObject({ status: 'failed', error: 'Emberline restarted before the preview was ready; start it again' });
+    expect(engine.downs()).toEqual([downArgs(mainPreviewComposeProjectName(p.id), false)]);
+    expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'failed' });
+    // The only port of the range is free for the next preview.
+    const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+    expect((await restarted.startPreview(run.id, {})).port).toBe(4325);
+  });
+
+  it('a start that came up meanwhile (the engine says running or starting) reads running, is recorded so, and a merge refreshes it', async () => {
     await start();
     const p = await createProject();
     engine.upGate = new Promise(() => undefined);
     expect((await startMain(p.id)).statusCode).toBe(200);
-    expect(await restartedStatus(p.id)).toMatchObject({
-      status: 'failed',
-      error: 'Emberline restarted before the preview was ready; start it again',
-    });
-    engine.add(mainPreviewComposeProjectName(p.id));
-    expect((await restartedStatus(p.id)).status).toBe('running');
+    const port = (stored(p.id)?.port as number) ?? 0;
+    engine.upGate = null;
+    // A restarting container is compose's `starting`.
+    engine.add(mainPreviewComposeProjectName(p.id), { web: 'restarting' });
+
+    const restarted = restartedService();
+    // Lazily, on the first status read.
+    expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'running', port });
+    expect(stored(p.id)).toMatchObject({ status: 'running', port });
+    expect(engine.downs()).toEqual([]);
+    await restarted.mainPreviews.refresh(p.id);
+    const ups = engine.composeCalls('up', mainPreviewComposeProjectName(p.id));
+    expect(ups).toHaveLength(2);
+    expect(ups[1]!.stdin).toContain(`ports: !override ["${port}:80"]`);
+    expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'running', port, error: null });
+  });
+
+  it('a reconcile is idempotent: a second pass changes nothing and takes nothing down again', async () => {
+    await start();
+    const p = await createProject();
+    engine.upGate = new Promise(() => undefined);
+    expect((await startMain(p.id)).statusCode).toBe(200);
+    engine.upGate = null;
+    const restarted = restartedService();
+    await Promise.all([restarted.mainPreviews.reconcileInterrupted(), restarted.mainPreviews.status(p.id)]);
+    await restarted.mainPreviews.reconcileInterrupted();
+    expect(engine.downs()).toHaveLength(1);
+    expect(stored(p.id)).toMatchObject({ status: 'failed' });
+  });
+
+  it("a stored preview whose service is not known any more says so without printing 'undefined'", async () => {
+    await start();
+    const p = await createProject('Bare', { yml: null });
+    writeProjectSettings(t.db, p.id, { mainPreview: { status: 'running', port: 4330, startedAt: new Date().toISOString() } });
+    const status = await mainPreview(p.id);
+    expect(status).toMatchObject({ status: 'exited', error: 'the preview container is not running' });
+    expect(status.error).not.toContain('undefined');
   });
 });
 
@@ -517,6 +577,24 @@ describe('cleanup', () => {
     expect((await api('DELETE', `/api/projects/${p.id}`)).statusCode).toBe(200);
     expect(engine.cancels.length).toBeGreaterThan(0);
     expect(engine.downs()).toContainEqual(downArgs(mainPreviewComposeProjectName(p.id), true));
+  });
+
+  it('a start the delete gave up waiting for is taken down with its volumes once it settles', async () => {
+    await start();
+    const p = await createProject();
+    let open!: () => void;
+    engine.upGate = new Promise((resolve) => (open = resolve));
+    engine.ignoreCancels = true;
+    expect((await startMain(p.id)).statusCode).toBe(200);
+    await expect.poll(() => engine.pendingUps.size).toBe(1);
+    const name = mainPreviewComposeProjectName(p.id);
+    await t.runs.mainPreviews.removeForProject(p.id);
+    expect(engine.downs()).toEqual([downArgs(name, true)]);
+    // The project row is still there (the route deletes it last); the abandoned `up` now brings containers up.
+    open();
+    await expect.poll(() => engine.downs().length, { timeout: 5_000 }).toBe(2);
+    expect(engine.downs()[1]).toEqual(downArgs(name, true));
+    expect(engine.projects.has(name)).toBe(false);
   });
 
   it("the sweep keeps a project's main preview, and removes a deleted project's", async () => {
@@ -638,5 +716,26 @@ describe('browser-url: the preview as the runner sees it (Review Focus 3)', () =
     expect((await api('GET', `/api/projects/${p.id}/browser-url?target=${other.id}`)).statusCode).toBe(404);
     expect((await api('GET', `/api/projects/missing/browser-url?target=main`)).statusCode).toBe(404);
     expect(JSON.stringify(await browserUrl(p.id, 'main'))).not.toContain('localhost:7420');
+  });
+});
+
+describe('the demo target helpers shared by the demo routes and browser-url', () => {
+  it("resolve main and the project's own runs only, and mint agent URLs on hookUrl that the demo route serves", async () => {
+    await start(null, { hookUrl: 'http://core:7420' });
+    const p = await createProject();
+    const q = await createProject('Other');
+    const own = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+    const other = await t.runs.enqueue({ projectId: q.id, prompt: 'x' });
+    expect(demoWorkspacePath(t.db, p.id, 'main')).toBe(p.path);
+    expect(demoWorkspacePath(t.db, p.id, own.id)).toBe(own.worktreePath);
+    expect(demoWorkspacePath(t.db, p.id, other.id)).toBeNull();
+    expect(demoWorkspacePath(t.db, p.id, 'nope')).toBeNull();
+    expect(demoWorkspacePath(t.db, 'missing', 'main')).toBeNull();
+    const url = agentDemoUrl({ hookUrl: t.config.hookUrl }, new DemoTokens(t.db), p.id, 'main');
+    expect(url).toMatch(/^http:\/\/core:7420\/api\/demo\/[^/]+\/$/);
+    mkdirSync(path.join(p.path, 'dist'), { recursive: true });
+    writeFileSync(path.join(p.path, 'dist/index.html'), '<!doctype html><title>shared</title>');
+    const served = await t.app.inject({ method: 'GET', url: url.slice('http://core:7420'.length) });
+    expect(served.body).toContain('<title>shared</title>');
   });
 });

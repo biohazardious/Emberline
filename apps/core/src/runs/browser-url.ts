@@ -8,10 +8,11 @@ import type { BrowserUrlResponse, RunPreviewStatus } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import type { Db } from '../db/index.js';
-import { projects, runs } from '../db/schema.js';
-import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath } from '../demo-token.js';
+import { projects } from '../db/schema.js';
+import { DemoTokens } from '../demo-token.js';
 import { engineHostName } from '../docker/compose.js';
 import { badRequest, notFound } from '../errors.js';
+import { agentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { detectDemoEntryRelPath } from '../factory/workspace-status.js';
 import type { MainPreviews } from './main-preview.js';
 
@@ -34,18 +35,12 @@ export interface BrowserUrlDeps {
  */
 export async function resolveBrowserUrl(deps: BrowserUrlDeps, projectId: string, target: string | undefined): Promise<BrowserUrlResponse> {
   if (!target) throw badRequest('target is required: main or a run id of this project');
-  const project = deps.db.select({ id: projects.id, path: projects.path }).from(projects).where(eq(projects.id, projectId)).get();
+  const project = deps.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get();
   if (!project) throw notFound('no such project');
-  let workspacePath = project.path;
-  let preview: Pick<RunPreviewStatus, 'status' | 'kind' | 'port'>;
-  if (target === 'main') {
-    preview = await deps.mainPreviews.status(project.id);
-  } else {
-    const run = deps.db.select({ projectId: runs.projectId, worktreePath: runs.worktreePath }).from(runs).where(eq(runs.id, target)).get();
-    if (!run || run.projectId !== project.id) throw notFound('no such run in this project');
-    workspacePath = run.worktreePath;
-    preview = await deps.runPreviewStatus(target);
-  }
+  const workspacePath = demoWorkspacePath(deps.db, project.id, target);
+  if (workspacePath === null) throw notFound('no such run in this project');
+  const preview: Pick<RunPreviewStatus, 'status' | 'kind' | 'port'> =
+    target === 'main' ? await deps.mainPreviews.status(project.id) : await deps.runPreviewStatus(target);
 
   if (preview.status === 'running' && preview.port) {
     if (preview.kind === 'compose') return { url: `http://${engineHostName(deps.config.dockerHost ?? '')}:${preview.port}/`, kind: 'compose' };
@@ -59,7 +54,6 @@ export async function resolveBrowserUrl(deps: BrowserUrlDeps, projectId: string,
   if (!(await detectDemoEntryRelPath(workspacePath))) {
     return { url: null, kind: 'static', note: note ?? 'no preview is running and there is no demo build yet: run Build & Verify' };
   }
-  const tokens = deps.demoTokens ?? new DemoTokens(deps.db);
-  const url = `${deps.config.hookUrl}${demoBasePath(tokens.mint({ projectId: project.id, targetId: target }, AGENT_DEMO_TOKEN_TTL_MS))}`;
+  const url = agentDemoUrl(deps.config, deps.demoTokens ?? new DemoTokens(deps.db), project.id, target);
   return { url, kind: 'static', ...(note ? { note } : {}) };
 }
