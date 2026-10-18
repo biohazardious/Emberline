@@ -6,6 +6,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Added
 
+- Rebuilt project wizard: a dialog on desktop and a full-screen flow on phones. Pick a type (including static sites), then choose frontend, backend, database, auth and deploy independently, each with None, Let the agent decide or Other. The summary shows the exact `PROJECT.md`, `CLAUDE.md` and `.emberline/worktree.yml` that will be written. A Bootstrap ticket builds the skeleton, a Deploy ticket is added when you choose a target, and you finish with **Create and start factory** or **Create only**.
+- Import a project from a Git URL or from a folder in the workspaces volume. Detection reads files only and runs nothing. Adopt writes only the files you tick, makes one local commit and pushes nothing.
+- `.emberline/worktree.yml`: copy or symlink files into each run worktree, `setup` and `teardown` commands, `services` for Preview and `checks` for the build gate. Runs always use the approved version. A changed or removed file shows "worktree.yml changed — review" on the Board and on Project settings until you approve it.
+- Per-project gate overrides on the new Project settings page (Inherit / On / Off).
 - Inbox: all runs that need you across your projects, grouped by what they need (permission, question, held, failed and so on). Reply to a question right in the list and Dismiss a failure you have seen. Alt+N opens the oldest one. The Fleet Active view is now grouped into Needs you, Ready for review, Working and Recently finished.
 - Claude runs now confirm that a ticket is finished. They get an `emberline` tool, `ticket_complete`, with a summary, an optional handoff note for dependent tickets and an optional list of blockers. In the factory, a Claude ticket advances to merge and Done only after that signal; other agents still finish by their exit code. If a Claude run ends its turn without the signal, the agent is asked once to confirm; if it still does not, the ticket stays in Review for you. A signal that lists blockers also holds the ticket. You get a page for a held ticket when notifications are on with **Agent waiting on you / factory paused** (Settings → Forge & Webhooks). The handoff note and any blockers go into the prompts of the tickets that depend on it, for every agent; a new run of the ticket clears its old completion. The ticket drawer shows the completion (summary, handoff, blockers, run and time), the run timeline shows each step, and a Fleet card shows a "blocked" badge when the agent raised blockers. **Settings → Auto-Pilot & Theme → Require agents to confirm completion** turns this off (on by default). A Claude run whose agent never got the tool (a runner that was not updated, or a session started before the upgrade) keeps the old behaviour and advances when its turn ends. **Upgrade note:** update the runner too, not only core: with the published images `docker compose pull && docker compose up -d`, from source `make up`. After `make upgrade-core` alone, new Claude runs have no `ticket_complete` tool and advance the old way until the runner is updated. Restarting the runner stops running agents, so update it when they are idle. Review tickets left over from runs before the upgrade had no tool either, so they finish the old way.
 - Import GitHub, GitLab and Gitea issues from the Board (**Import issues**): one ticket per issue, with already-imported issues shown as linked. The persona and priority come from labels `persona:<id>`, `priority:high|critical|low` and `P0`-`P3`. Tickets show an `#123` chip that opens the issue, its labels, and a "closed" chip. The issue text is marked in the ticket as the author's request, not as instructions. The forge token needs issue read/write scope.
@@ -17,6 +21,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Changed
 
+- The Dashboard's separate new-project form is gone; the wizard replaces it. Starter tickets are replaced by the Bootstrap ticket. The build gate runs the approved `checks` when present, and Preview uses the approved `preview` service.
 - Phone and webhook pages are sent once per thing that needs you: a permission prompt and Claude's later reminder about it are one page. They are never repeated after a restart, and are not sent while you have that run open in a visible tab. Every kind of hold (merge failed, build checks failed, guard blocks, no completion signal, blocked) now pages when **Agent waiting on you** is on. Waits from before the update do not page. Failure pages still follow **Run finished**.
 - One count everywhere: the sidebar Inbox, the header and the Fleet badge show the same number of things that need you, across all projects. The Fleet badge used to show the number of active runs.
 - The sidebar's "N need you" button is replaced by the Inbox entry, and **Enable desktop alerts** moved to the top of the Inbox page. The header's "need you" pill now opens the Inbox.
@@ -29,6 +34,15 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - A factory ticket that was held is now re-checked on the agent's next turn, even after the factory chain has stopped.
 - Dragging a ticket to Done no longer moves it there when its merge into main failed. If the run's worktree is gone, the ticket moves when the run's work is already in main; otherwise the Board (and **Sync to Main** in the status panel) asks whether to move it to Done without merging.
 - Security: text an agent wrote and that is typed into a session (review feedback, prompts) can no longer break out of the paste and send keystrokes.
+
+### Security
+
+- Files copied into a worktree that git does not ignore are flagged to the agent (do not commit `.env`). Symlink mode lets a run modify the main workspace's file. Setup output is cleaned before it reaches the agent.
+
+### Upgrade notes
+
+- Existing projects have no `worktree.yml`: add one (example in the README) and approve it on Project settings.
+- The runner protocol is now 3. An older runner keeps working (stopping a run during setup then waits for the current command). `make up` updates it, which restarts running agents.
 
 ## [0.2.2] - 2026-10-17
 

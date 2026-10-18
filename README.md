@@ -21,10 +21,10 @@ Think of it as an issue tracker, an editor and a git client in one browser tab, 
 - **Issue import.** Pull GitHub, GitLab or Gitea issues into the board as tickets, by hand or with an opt-in label sync, and get progress comments (and optionally a close) on the issue. The forge token needs issue read/write scope; issue text is shown to the agent as the author's request, not as instructions.
 - **Cross-provider review.** Optionally, a different CLI reviews a run's diff read-only before it is merged (for example, Codex reviewing Claude's work).
 - **Completion signal.** Claude agents confirm a ticket is finished with an `emberline` tool, with a handoff note for dependent tickets; the factory waits for it and holds blocked tickets for you.
-- **Quality gates.** A build/lint/test gate, and a pre-merge check for leftover secrets and debug code.
+- **Quality gates.** A build/lint/test gate, and a pre-merge check for leftover secrets and debug code. Each project can override the gates (Inherit / On / Off) on its Project settings page.
 - **Inbox.** Every run that needs you, across all projects, in one list: answer a question inline, and dismiss failures. You get one page per thing that needs you, and none while you have that run open.
 - **Fleet view.** Watch up to four agent terminals side by side, grouped into Needs you, Ready for review, Working and Recently finished, and steer them inline. The Inbox lists what needs you across all projects.
-- **Project tooling.** A new-project wizard that writes a `PROJECT.md` blueprint and starter tickets, a roadmap and brainstorming page, a code explorer and editor, a live view of the agent's headless browser, checkpoints with rollback, scheduled jobs and project export.
+- **Project tooling.** A project wizard (new idea or import from a Git URL or workspaces folder) that previews and writes `PROJECT.md`, `CLAUDE.md` and `.emberline/worktree.yml` and creates a Bootstrap ticket, per-project `worktree.yml` setup/services/checks, a roadmap and brainstorming page, a code explorer and editor, a live view of the agent's headless browser, checkpoints with rollback, scheduled jobs and project export.
 - **Build outputs.** APKs, installers and firmware are archived per project when a run finishes, so they outlive worktree cleanup. A Build Outputs page lists, downloads, pins and prunes them within a per-project quota.
 - **Personas.** Route roles (architect, coder, DBA, QA, security) to the agent and model you prefer.
 - **Notifications.** ntfy or a webhook (generic, Discord, Slack) for usage limits, resumes, agents waiting for input and finished runs.
@@ -99,6 +99,33 @@ Core also understands the following variables. They are not passed through by `c
 | `EMBERLINE_NOTIFY_URL`       | unset   | Default ntfy topic or webhook URL. It can also be set in the UI.                                                                                                                                                                         |
 | `EMBERLINE_BACKUP_KEEP`      | `10`    | Number of `make backup` snapshots to keep.                                                                                                                                                                                               |
 | `EMBERLINE_LOG_LEVEL`        | `info`  | pino log level.                                                                                                                                                                                                                          |
+
+## Project worktree setup: `.emberline/worktree.yml`
+
+Each run gets a fresh git worktree. A `.emberline/worktree.yml` in the project tells Emberline how to prepare it, run it and verify it (the wizard writes one for you):
+
+```yaml
+version: 1
+copy:                 # from the main workspace into each new run worktree
+  - .env
+  - { path: .env.local, mode: symlink }   # copy (default) | symlink
+setup:                # run in a fresh run worktree before the agent starts
+  - pnpm install --frozen-lockfile
+teardown:             # run before the worktree is pruned
+  - docker compose down
+services:             # long-running processes; $PORT is assigned by Emberline
+  - name: web
+    command: pnpm dev --port $PORT --host 0.0.0.0
+    preview: true     # the run's Preview button starts this one
+checks:               # override the build gate's detected steps (in order)
+  build: pnpm build
+  lint: pnpm lint
+  test: pnpm test
+```
+
+**Trust.** Every command runs in the runner, and agents can edit this file. Emberline therefore runs only the version you approved on **Project settings**. If the file changes (or is removed), the Board and Project settings show "worktree.yml changed — review" with a diff, and the old approved version keeps applying until you approve the new one.
+
+**Copy and symlink.** `copy` and `symlink` entries are not committed for you: files that git does not ignore are flagged to the agent, so keep `.env` in `.gitignore`. Symlink mode lets a run modify the main workspace's file.
 
 ## Desktop, mobile and embedded projects
 
