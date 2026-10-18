@@ -5,6 +5,7 @@ import {
   choosePrimaryView,
   previewBadge,
   previewEmptyText,
+  previewFrameMode,
   previewProblem,
   qaRequestPrompt,
   resolveRunnerBrowserUrl,
@@ -47,8 +48,10 @@ describe('primary view', () => {
     expect(choosePrimaryView({ kind: 'worktree', exists: false }, preview(), true)).toBe('static');
   });
 
-  it('never makes a running command preview the container view', () => {
-    expect(choosePrimaryView(run, preview({ kind: 'command', status: 'running', port: 4300 }), true)).toBe('static');
+  it('keeps a started command preview (the fallback) visible with its Stop, but never offers to start one', () => {
+    expect(choosePrimaryView(run, preview({ kind: 'command', status: 'running', port: 4300 }), true)).toBe('container');
+    expect(choosePrimaryView(run, preview({ kind: 'command', status: 'exited' }), false)).toBe('container');
+    expect(choosePrimaryView(run, preview({ kind: 'command' }), true)).toBe('static');
   });
 
   it('keeps a started run preview visible while the engine is away', () => {
@@ -136,6 +139,23 @@ describe('empty preview text', () => {
     expect(previewEmptyText(preview({ detectedCommand: 'web (compose.yaml, port 80)' }), 'main')).toBe(
       'Start runs web (compose.yaml, port 80) from main in the Docker engine.',
     );
+  });
+});
+
+describe('preview frame', () => {
+  it('frames an http preview in an http page', () => {
+    expect(previewFrameMode('http:', 'http://192.168.1.16:4325')).toEqual({ frame: true, note: null });
+  });
+
+  it('opens a plain-http preview in a new tab from an https page (the browser would block it as mixed content)', () => {
+    expect(previewFrameMode('https:', 'http://emberline.lan:4325')).toEqual({
+      frame: false,
+      note: 'The preview is plain HTTP and this page is HTTPS, so it opens in a new tab.',
+    });
+  });
+
+  it('frames an https preview anywhere', () => {
+    expect(previewFrameMode('https:', 'https://previews.lan:4325')).toEqual({ frame: true, note: null });
   });
 });
 

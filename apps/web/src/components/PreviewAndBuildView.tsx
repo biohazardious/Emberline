@@ -2,7 +2,7 @@ import type { MainPreviewStatus, Project, RunPreviewStatus, WorkspaceDemoTarget 
 import { type ReactNode, useState } from 'react';
 import { Box, ExternalLink, Package, Play, RotateCw, Square } from 'lucide-react';
 import { api, errorMessage } from '../api';
-import { choosePrimaryView, previewBadge, previewEmptyText, previewProblem } from '../containerPreview';
+import { choosePrimaryView, previewBadge, previewEmptyText, previewFrameMode, previewProblem } from '../containerPreview';
 import { useApi } from '../hooks/useApi';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 
@@ -76,12 +76,14 @@ export function PreviewAndBuildView({
             <Package className="icon" aria-hidden /> Static build
           </button>
         </div>
-        {freshness}
+        {/* The static view shows its own freshness line in its header. */}
+        {!showStatic && freshness}
       </div>
       {showStatic ? (
         children
       ) : (
         <ContainerPreview
+          key={path}
           status={poll.data}
           label={target.label}
           path={path}
@@ -113,6 +115,7 @@ function ContainerPreview({
   const problem = previewProblem(status);
   const active = status.status === 'running' || status.status === 'starting';
   const unavailable = 'unavailable' in status ? status.unavailable : undefined;
+  const frameMode = status.url ? previewFrameMode(window.location.protocol, status.url) : null;
 
   const act = async (action: 'start' | 'stop') => {
     setBusy(true);
@@ -131,7 +134,7 @@ function ContainerPreview({
     <div className="container-preview">
       <div className="container-preview-head">
         <div className="container-preview-title">
-          <strong>Container preview</strong>
+          <strong>{status.kind === 'compose' ? 'Container preview' : 'Dev server preview'}</strong>
           {targetSelect}
           <span className={badge.className}>{badge.text}</span>
           {(status.command ?? status.detectedCommand) && (
@@ -189,7 +192,14 @@ function ContainerPreview({
         <p className="muted small container-preview-note">{unavailable}</p>
       )}
 
-      {status.status === 'running' && status.url ? (
+      {status.status === 'running' && status.url && frameMode && !frameMode.frame ? (
+        <p className="muted small container-preview-empty" role="status">
+          {frameMode.note}{' '}
+          <a href={status.url} target="_blank" rel="noreferrer">
+            Open the preview
+          </a>
+        </p>
+      ) : status.status === 'running' && status.url ? (
         <iframe
           key={nonce}
           className="container-preview-frame"

@@ -40,14 +40,17 @@ export function previewFrameSource(hostHeader: string | undefined, override = pr
     try {
       const url = new URL(base);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-      const name = hostNameOf(url.hostname);
-      return name ? `${url.protocol}//${name}:*` : null;
+      return hostSource(url.protocol, hostNameOf(url.hostname));
     } catch {
       return null;
     }
   }
-  const name = hostNameOf(hostHeader);
-  return name ? `http://${name}:*` : null;
+  return hostSource('http:', hostNameOf(hostHeader));
+}
+
+/** `scheme//name:*`; null for no name or an IPv6 literal, which CSP host sources cannot express. */
+function hostSource(protocol: string, name: string | null): string | null {
+  return name && !name.startsWith('[') ? `${protocol}//${name}:*` : null;
 }
 
 /**
@@ -74,7 +77,8 @@ export function installSecurityHeaders(app: FastifyInstance): void {
     if (!reply.hasHeader('content-security-policy')) {
       const type = String(reply.getHeader('content-type') ?? '');
       if (type.startsWith('text/html')) {
-        reply.header('content-security-policy', appCsp(request.headers.host));
+        // request.host: allow-listed by the auth hook, and the forwarded host behind a trusted proxy.
+        reply.header('content-security-policy', appCsp(request.host));
         reply.header('x-frame-options', 'SAMEORIGIN');
       }
     }

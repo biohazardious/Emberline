@@ -252,7 +252,10 @@ export function LiveBrowserStudio({
       setSideTab('activity');
       setBanner({
         kind: 'ok',
-        text: `QA Agent (${res.ticket.key}) dispatched to inspect and verify the application in this Live Browser! Watch the viewport and Agent Activity feed.`,
+        text:
+          targetId === 'main'
+            ? `QA Agent (${res.ticket.key}) dispatched to inspect and verify the application in this Live Browser! Watch the viewport and Agent Activity feed.`
+            : `QA Agent (${res.ticket.key}) dispatched. Its run previews its own fresh worktree from main, not the selected run.`,
       });
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
@@ -432,7 +435,11 @@ export function LiveBrowserStudio({
             className="btn btn-sm"
             disabled={launchingQa}
             onClick={() => void handleRunQaBrowserCheck()}
-            title="Dispatch the QA Agent to open and interact with the app in this Live Browser while you watch"
+            title={
+              targetId === 'main'
+                ? 'Dispatch the QA Agent to open and interact with the app in this Live Browser while you watch'
+                : "Dispatch the QA Agent: its run previews its own fresh worktree from main, not the selected run"
+            }
           >
             {launchingQa ? (
               'Dispatching…'

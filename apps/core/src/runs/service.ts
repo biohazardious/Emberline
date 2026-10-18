@@ -1790,7 +1790,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           ),
         waitMs: this.agentPreviewWaitMs,
         lastStartAt: () => this.agentPreviewStarts.get(row.id),
-        recordStart: (at) => this.agentPreviewStarts.set(row.id, at),
+        recordStart: (at) => (at === undefined ? this.agentPreviewStarts.delete(row.id) : this.agentPreviewStarts.set(row.id, at)),
         cooldownMs: this.agentPreviewCooldownMs,
       },
       parsed.data,

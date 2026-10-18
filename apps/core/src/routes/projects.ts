@@ -621,6 +621,8 @@ export function registerProjectRoutes(
       // was already in main is no new merge (its sha would be main's HEAD, not this merge).
       if (result.ok && !result.alreadyMerged && blocking > 0) runs.note(run.id, 'review_blocking_overridden', { count: blocking });
       if (result.ok && !result.alreadyMerged && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
+      // Without a ticket there is no merge note, so main's rebuild and preview refresh are asked for here.
+      else if (result.ok && !result.alreadyMerged) postMerge.enqueue(project.id);
       return result;
     },
   );

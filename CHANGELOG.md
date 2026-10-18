@@ -10,7 +10,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Preview & Build says when and from which commit each target's static build was made ("Built 5m ago from 0123456"), shows "main changed since this build" (or "changed since this build" for a run) when the workspace moved on, and "Rebuilding…" while a build runs. Opening a stale target starts its build.
 - Main's demo is rebuilt after every merge into main, by the factory or by you, in the background with the approved setup and checks (the same as **Run Build & Verify**). It never holds the ticket; quick merges run one build at a time with at most one more queued, and a failed rebuild shows on main's target.
 - A container preview of main: when the approved `worktree.yml` previews a compose service and the Docker engine is on, main can run its own preview (compose project `emberline-main-<id>-preview`, on a port of `EMBERLINE_PREVIEW_PORTS_DOCKER` that no run preview takes). After a merge a running main preview is rebuilt with the new code. The Docker page lists it under Previews as "Preview of main", and deleting the project removes it.
-- Container previews in Preview & Build: for a project with a compose preview service and the engine on, main and every run open on their container preview, with its state, **Start** / **Stop**, the end of the output when it fails, the page itself and **Open** for a new tab. The static build stays one click away under **Static build**, with its freshness line. Projects without a compose preview service, or with the engine off, show the static build as before.
+- Container previews in Preview & Build: for a project with a compose preview service and the engine on, main and every run open on their container preview, with its state, **Start** / **Stop**, the end of the output when it fails, the page itself and **Open** for a new tab (from an HTTPS page, a plain-HTTP preview opens only in the new tab). The static build stays one click away under **Static build**, with its freshness line. Projects without a compose preview service, or with the engine off, show the static build as before.
 - QA runs open their own work. Claude runs get a second `emberline` tool, `preview`: it starts the run's preview when it is not running (container or dev server, as `worktree.yml` says), waits until it answers and returns the address the agent's browser can open. It is pre-allowed only in the `auto` and `bypassPermissions` modes; in the other modes it asks first, like Bash, because a preview runs the worktree's own dev script or compose build. The QA and UI/UX personas use it, and fall back to `$EMBERLINE_DEMO_URL` without it.
 
 ### Changed
@@ -20,7 +20,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
-- Live Browser no longer sends the shared browser to `http://localhost:7420/…`, which inside the runner is not Emberline, so **Open Project Demo**, **Auto-Interact** and the QA check load the page again.
+- Live Browser's **Open Project Demo**, **Auto-Interact** and the QA check load the page again. They sent the shared browser to the demo address of the web UI, which needs a login; the runner's browser has none, so it got HTTP 401. It now gets an address that works without a login: the running container or dev-server preview, or the demo's capability URL.
 
 ### Security
 
@@ -33,6 +33,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Everyone is signed out once: logins from before the upgrade have no address recorded. From then on a login ends when your network address changes, for example a laptop moving to another network; the login screen then says "signed out: your network address changed". Set `EMBERLINE_SESSION_BIND_IP=false` in `.env` if that happens often. Behind a reverse proxy, set `EMBERLINE_TRUST_PROXY=true`, or every login is bound to the proxy's address.
 - Update the runner too, not only core, so Claude runs get the `preview` tool: with the published images `docker compose pull && docker compose up -d`, from source `make up`. Restarting the runner stops running agents, so update it when they are idle. Until then agents fall back to `$EMBERLINE_DEMO_URL`, which now points at the run's own work.
 - The rebuild after a merge runs main's approved setup and checks after every merge (an `npm ci`, for example), so busy projects spend more build time. It runs outside the merge lock: if the build rewrites tracked files, those changes land in the next merge's "snapshot workspace edits" commit, as after a manual **Run Build & Verify** on main. Keep build output in `.gitignore`.
+- Demos built before the upgrade have no build record: Preview & Build shows "Build not recorded" with "may be out of date" until they are built again. Opening such a target in Preview & Build the first time builds it, which runs the project's approved setup and checks (for example an `npm ci`).
 - A refresh of the main preview after a merge that fails takes the main preview down. Preview & Build shows the error with "the refresh after the last merge failed — Start to retry".
 
 ## [0.3.2] - 2026-10-18

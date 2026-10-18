@@ -26,7 +26,8 @@ const REFRESH_FAILED = 'the refresh after a merge failed: ';
  * The view a target opens with: its container preview when the approved worktree.yml previews a
  * compose service and the Docker engine can run it (main: core reports no `unavailable` reason;
  * a run: a compose preview, the engine and its worktree), else the static build. A preview that was
- * started stays the primary view, so its state and Stop stay in reach. Null until the status answered.
+ * started (also a command preview, the fallback) stays the primary view, so its state and Stop stay
+ * in reach. Null until the status answered.
  */
 export function choosePrimaryView(
   target: Pick<WorkspaceDemoTarget, 'kind' | 'exists'>,
@@ -34,8 +35,9 @@ export function choosePrimaryView(
   engineAvailable: boolean,
 ): 'container' | 'static' | null {
   if (!preview) return null;
-  if (preview.kind !== 'compose') return 'static';
+  // A started preview (a command preview too: the fallback) stays in view with its state and Stop.
   if (preview.status !== 'stopped') return 'container';
+  if (preview.kind !== 'compose') return 'static';
   if (target.kind === 'main') return preview.unavailable ? 'static' : 'container';
   return engineAvailable && target.exists ? 'container' : 'static';
 }
@@ -86,6 +88,17 @@ export function previewEmptyText(p: PreviewLike, label: string): string {
       return `Start runs ${what} from ${label} in the Docker engine.`;
     }
   }
+}
+
+/**
+ * Whether the preview can show in a frame: an https page cannot frame a plain-http preview (mixed
+ * content), so it opens in a new tab instead.
+ */
+export function previewFrameMode(pageProtocol: string, url: string): { frame: boolean; note: string | null } {
+  if (pageProtocol === 'https:' && url.startsWith('http:')) {
+    return { frame: false, note: 'The preview is plain HTTP and this page is HTTPS, so it opens in a new tab.' };
+  }
+  return { frame: true, note: null };
 }
 
 /**

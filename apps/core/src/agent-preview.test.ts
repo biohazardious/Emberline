@@ -24,6 +24,7 @@ import { runs } from './db/schema.js';
 import { DemoTokens } from './demo-token.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { mainPreviewComposeProjectName, previewComposeProjectName } from './docker/engine.js';
+import { agentPreview } from './runs/agent-preview.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
@@ -274,6 +275,16 @@ describe('the preview tool endpoint: compose', () => {
     expect(engine.ups()).toHaveLength(2);
   });
 
+  it('a refused start leaves no cooldown: the next call tries again', async () => {
+    await start(null);
+    const p = await createProject();
+    const run = await runWithToken(p.id);
+    expect((await previewOk(run.id)).status).toBe('unavailable');
+    const again = await previewOk(run.id);
+    expect(again.status).toBe('unavailable');
+    expect(again.note ?? '').not.toContain('started less than');
+  });
+
   it('restart is ignored while a start is still going: the call waits for that start', async () => {
     await start();
     const p = await createProject();
@@ -389,5 +400,38 @@ describe('the preview tool endpoint: command', () => {
     const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find((e) => e.type === 'preview_started');
     expect(started?.source).toBe('hook');
     await t.runs.stopPreview(run.id);
+  });
+});
+
+describe('agentPreview (unit)', () => {
+  it('two calls at once start the preview once: the cooldown is taken before the start is awaited', async () => {
+    const stopped = { runId: 'r', status: 'stopped', kind: 'compose', terminalId: null, command: null, port: null, url: null, detectedCommand: null, error: null, logs: null } as const;
+    let last: number | undefined;
+    let starts = 0;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => (release = resolve));
+    const deps = {
+      status: async () => ({ ...stopped }),
+      start: async () => {
+        starts += 1;
+        await started;
+        return { ...stopped, status: 'starting' as const };
+      },
+      pendingStart: () => undefined,
+      nothingToPreview: () => null,
+      browserUrl: async () => ({ url: null, kind: 'static' as const }),
+      waitMs: 10,
+      lastStartAt: () => last,
+      recordStart: (at: number | undefined) => {
+        last = at;
+      },
+      cooldownMs: 30_000,
+    };
+    const both = Promise.all([agentPreview(deps, {}), agentPreview(deps, {})]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    const [a, b] = await both;
+    expect(starts).toBe(1);
+    expect([a.note ?? '', b.note ?? ''].some((n) => n.includes('started less than'))).toBe(true);
   });
 });

@@ -352,6 +352,53 @@ describe('post-merge jobs in the server', () => {
   });
 });
 
+describe('post-merge jobs after a person syncs a run without a ticket', () => {
+  beforeEach(async () => {
+    t = await createTestApp();
+    cookie = await setupAndLogin(t.app);
+  });
+  afterEach(async () => {
+    await t.close();
+  });
+
+  it('enqueue the job directly (no ticket, so no merged_by_person note)', async () => {
+    const project = await gitProject('No Ticket');
+    const worktree = `${project.path}-wt`;
+    git(project.path, 'worktree', 'add', '-q', '-b', 'emberline/run-loose', worktree);
+    writeFileSync(path.join(worktree, 'loose.txt'), 'loose\n');
+    git(worktree, 'add', '-A');
+    git(worktree, 'commit', '-q', '-m', 'loose work');
+    const now = new Date();
+    t.db
+      .insert(runs)
+      .values({
+        id: 'run-loose',
+        projectId: project.id,
+        agent: 'claude',
+        state: 'done',
+        branch: 'emberline/run-loose',
+        worktreePath: worktree,
+        hookTokenHash: 'h',
+        stateChangedAt: now,
+        createdAt: now,
+      })
+      .run();
+    const seen: string[] = [];
+    t.postMerge.registerPostMergeStep('seen', async (ctx) => void seen.push(ctx.projectId));
+    const res = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: 'run-loose' });
+    expect(res.json()).toMatchObject({ ok: true, alreadyMerged: false });
+    await expect.poll(() => seen).toEqual([project.id]);
+    await t.postMerge.idle();
+    // Nothing new to merge: no second job.
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: 'run-loose' })).json()).toMatchObject({
+      ok: true,
+      alreadyMerged: true,
+    });
+    await t.postMerge.idle();
+    expect(seen).toEqual([project.id]);
+  });
+});
+
 describe('post-merge jobs after a pipeline merge', () => {
   let ptydServer: PtydServer;
 

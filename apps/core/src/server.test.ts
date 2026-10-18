@@ -158,7 +158,8 @@ describe('hardening', () => {
       };
       expect(await frameSrc('192.168.1.16:7420')).toBe("'self' http://192.168.1.16:*");
       expect(await frameSrc('localhost:7497')).toBe("'self' http://localhost:*");
-      expect(await frameSrc('[::1]:7420')).toBe("'self' http://[::1]:*");
+      // CSP host sources cannot name an IPv6 literal: no preview source then.
+      expect(await frameSrc('[::1]:7420')).toBe("'self'");
       // A malformed Host never reaches the policy.
       expect(appCsp("evil; script-src 'unsafe-inline'")).toContain("frame-src 'self';");
       expect(appCsp(undefined)).toContain("frame-src 'self';");
@@ -166,6 +167,24 @@ describe('hardening', () => {
       expect(await frameSrc('192.168.1.16:7420')).toBe("'self' http://previews.lan:*");
       process.env.EMBERLINE_PREVIEW_HOST = 'javascript:alert(1)';
       expect(await frameSrc('192.168.1.16:7420')).toBe("'self'");
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
+      else process.env.EMBERLINE_PREVIEW_HOST = saved;
+      rmSync(webDir, { recursive: true, force: true });
+    }
+  });
+
+  it("frames previews on the host a trusted proxy forwarded, not the proxy's own Host", async () => {
+    const webDir = mkdtempSync(path.join(tmpdir(), 'web-'));
+    writeFileSync(path.join(webDir, 'index.html'), '<h1>ember</h1>');
+    const saved = process.env.EMBERLINE_PREVIEW_HOST;
+    try {
+      delete process.env.EMBERLINE_PREVIEW_HOST;
+      t = await createTestApp({ webDir, trustProxy: true, allowedHosts: ['emberline.lan'] });
+      const page = await t.app.inject({ url: '/', headers: { host: '127.0.0.1:7420', 'x-forwarded-host': 'emberline.lan' } });
+      expect(/frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1]).toBe(
+        "'self' http://emberline.lan:*",
+      );
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
