@@ -53,3 +53,14 @@ export function approvedChecks(db: Db, projectId: string): WorktreeChecks | null
 export function approvedPreviewService(db: Db, projectId: string): WorktreeService | null {
   return loadApprovedWorktreeConfig(db, projectId)?.config.services.find((s) => s.preview) ?? null;
 }
+
+/** The approved `setup` commands (empty when none). */
+export function approvedSetup(db: Db, projectId: string): string[] {
+  return [...(loadApprovedWorktreeConfig(db, projectId)?.config.setup ?? [])];
+}
+
+/** Whether a run worktree's setup finished: the newest setup outcome event is `worktree_setup_finished`. */
+export function setupFinishedIn(eventTypes: readonly string[]): boolean {
+  const last = [...eventTypes].reverse().find((t) => ['worktree_setup_finished', 'worktree_setup_failed', 'worktree_setup_skipped'].includes(t));
+  return last === 'worktree_setup_finished';
+}

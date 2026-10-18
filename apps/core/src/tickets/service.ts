@@ -58,7 +58,7 @@ import { openBlockingCount } from '../review/blocking.js';
 import { pipelineOutcome, reviewUnblockPending, stillHeld } from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
-import { approvedChecks } from '../worktree-config/load.js';
+import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -276,6 +276,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Finished runs waiting out the settle window before their pipeline (R8). */
   private readonly settlingRuns = new Map<string, NodeJS.Timeout>();
   private readonly pipelineSettleMs: number;
+
+  /** Event types of a run, oldest first (to tell whether its worktree setup finished). */
+  private runEventTypes(runId: string): string[] {
+    return this.db
+      .select({ type: runEvents.type })
+      .from(runEvents)
+      .where(eq(runEvents.runId, runId))
+      .orderBy(asc(runEvents.id))
+      .all()
+      .map((e) => e.type);
+  }
 
   constructor(
     private readonly db: Db,
@@ -987,6 +998,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         targetId: run.id,
         workspacePath: run.worktreePath,
         checks,
+        // A worktree whose own setup finished is not set up twice; a skipped or failed one is.
+        setup: setupFinishedIn(this.runEventTypes(run.id)) ? [] : approvedSetup(this.db, run.projectId),
       }).catch((error: unknown) => {
         this.runs.note(run.id, 'build_gate_error', { message: (error as Error).message?.slice(0, 500) });
         return null;

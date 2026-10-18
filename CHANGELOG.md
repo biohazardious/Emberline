@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Run Build & Verify (and the build gate) runs the project's approved `setup` commands from `.emberline/worktree.yml` before its `checks`, so a fresh main workspace no longer fails with errors like `astro: not found`.
+
 ## [0.3.1] - 2026-10-18
 
 ### Fixed

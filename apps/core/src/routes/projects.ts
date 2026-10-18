@@ -127,7 +127,7 @@ import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS
 import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
 import { ToolchainService } from '../toolchain/service.js';
-import { approvedChecks } from '../worktree-config/load.js';
+import { approvedChecks, approvedSetup } from '../worktree-config/load.js';
 
 type ProjectRow = typeof projects.$inferSelect;
 
@@ -624,6 +624,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         targetId: body.targetId,
         workspacePath,
         checks: approvedChecks(db, project.id),
+        setup: approvedSetup(db, project.id),
       });
     },
   );

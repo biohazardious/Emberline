@@ -6,6 +6,7 @@ import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './co
 import { buildWorkspaceDemo, planGateSteps } from './factory/demo.js';
 import { inspectWorkspaceProject } from './factory/workspace-status.js';
 import { hasVerifiableBuildTarget } from './tickets/service.js';
+import { setupFinishedIn } from './worktree-config/load.js';
 
 let ws: string;
 
@@ -161,5 +162,59 @@ describe('approved worktree.yml checks', () => {
     expect(hasVerifiableBuildTarget(ws)).toBe(false);
     expect(hasVerifiableBuildTarget(ws, {})).toBe(false);
     expect(hasVerifiableBuildTarget(ws, { lint: 'true' })).toBe(true);
+  });
+});
+
+describe('approved setup before the checks', () => {
+  const ok = { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
+  const cmdOf = (r: ExecRequest) => (r.args[1] ?? '').replace(/^exec 2>&1\n/, '');
+
+  it('runs the setup commands first, in order, in the workspace', async () => {
+    const seen: ExecRequest[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push(request);
+      return ok;
+    });
+    const res = await buildWorkspaceDemo({
+      projectId: 'p',
+      targetId: 'main',
+      workspacePath: ws,
+      checks: { build: 'npm run build', test: 'npm test' },
+      setup: ['npm ci', 'npx playwright install'],
+    });
+    expect(res.ok).toBe(true);
+    expect(seen.map(cmdOf)).toEqual(['npm ci', 'npx playwright install', 'npm run build', 'npm test']);
+    expect(seen.every((r) => r.cwd === ws)).toBe(true);
+  });
+
+  it('a failing setup command fails the build with its output and runs no check', async () => {
+    const seen: string[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push(cmdOf(request));
+      return cmdOf(request) === 'npm ci' ? { ...ok, exitCode: 1, stdout: 'ERR! lockfile out of date' } : ok;
+    });
+    const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { build: 'npm run build' }, setup: ['npm ci'] });
+    expect(res.ok).toBe(false);
+    expect(res.output).toContain('exit 1');
+    expect(res.output).toContain('lockfile out of date');
+    expect(seen).toEqual(['npm ci']);
+  });
+
+  it('does not run setup without approved checks', async () => {
+    const seen: string[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push(cmdOf(request));
+      return ok;
+    });
+    await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, setup: ['npm ci'] });
+    expect(seen).not.toContain('npm ci');
+  });
+
+  it('the gate skips setup only when the worktree setup finished and nothing failed after', () => {
+    expect(setupFinishedIn(['spawned', 'worktree_setup_started', 'worktree_setup_finished'])).toBe(true);
+    expect(setupFinishedIn(['worktree_setup_started', 'worktree_setup_failed'])).toBe(false);
+    expect(setupFinishedIn(['worktree_setup_finished', 'worktree_setup_failed'])).toBe(false);
+    expect(setupFinishedIn(['worktree_setup_skipped'])).toBe(false);
+    expect(setupFinishedIn([])).toBe(false);
   });
 });
