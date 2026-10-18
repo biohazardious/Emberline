@@ -1621,6 +1621,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const active = this.runs.activeRunForTicket(id);
     if (active) {
       if (!opts.replaceIdleRun?.ids.includes(active.id)) throw conflict('this ticket already has a running agent');
+      if (active.state === 'rate_limited') throw conflict('the run is waiting for its quota — stop it or wait');
       if (active.state !== 'done' && active.state !== 'waiting_input') {
         throw conflict('the run is still working — stop it or wait');
       }

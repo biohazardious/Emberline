@@ -102,4 +102,13 @@ describe('typed prompts', () => {
     expect(writes.slice(1)).toContain('one [Z line');
     expect(writes.slice(1).join('')).not.toContain('\x1b');
   });
+
+  it('types tabs as spaces outside a paste and keeps them inside one', async () => {
+    const run = await idleRun();
+    const writes = captureWrites();
+    await t.runs.sendPrompt(run.id, 'col\tcol');
+    expect(writes[0]).toBe('col col');
+    await t.runs.sendPrompt(run.id, 'a\tb\nc');
+    expect(writes).toContain('\x1b[200~a\tb\nc\x1b[201~');
+  });
 });

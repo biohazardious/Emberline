@@ -1448,7 +1448,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private async typePrompt(sessionId: string, raw: string): Promise<void> {
     const ptyd = this.ptyd.get();
     const text = stripControlChars(raw.replace(/\r\n?/g, '\n'));
-    const input = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
+    // Outside a paste a tab would be a keystroke (completion in the CLI): it is typed as a space.
+    const input = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text.replace(/\t/g, ' ');
     await ptyd.write(sessionId, input);
     await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS));
     await ptyd.write(sessionId, '\r');

@@ -386,6 +386,27 @@ describe('review rounds (fix round 1)', () => {
     expect((await byBody(run))['Exit']!.status).toBe('sent');
   });
 
+  it('does not count a clean CLI exit mid-turn (SessionEnd) as the agent finishing the turn', async () => {
+    const run = await adHocRun();
+    capturePrompts();
+    await comment(run, { line: 1, body: 'Session ended' });
+    await requestChanges(run);
+    await hook(run, 'UserPromptSubmit');
+    await hook(run, 'SessionEnd', { reason: 'exit' });
+    expect(t.runs.getRun(run.id).state).toBe('done');
+    expect((await byBody(run))['Session ended']!.status).toBe('sent');
+  });
+
+  it('refuses a new run while the reviewed run waits for its quota', async () => {
+    const { run } = await idleTicketRun();
+    await comment(run, { line: 1, body: 'Quota' });
+    t.db.update(runs).set({ state: 'rate_limited' }).where(eq(runs.id, run.id)).run();
+    const res = await requestChanges(run, { target: 'new' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toBe('the run is waiting for its quota — stop it or wait');
+    expect((await byBody(run))['Quota']!.status).toBe('open');
+  });
+
   it('sends one batch when two requests race, counting the round once', async () => {
     const run = await adHocRun();
     let calls = 0;

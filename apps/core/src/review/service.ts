@@ -67,8 +67,11 @@ export type StartTicketRun = (input: {
 const PROMPT_MAX = 20_000;
 /** Longest handoff chain followed when settling comments. */
 const CHAIN_MAX = 20;
-/** A `done` from these is not the agent finishing a turn: it never addresses comments. */
-const NOT_A_TURN = new Set(['handed_off', 'process_exited', 'session_lost', 'cancelled']);
+/**
+ * A `done` from these is not the agent finishing a turn: it never addresses comments. A CLI that
+ * exits cleanly mid-turn reports SessionEnd (working -> done) before its process exit is noticed.
+ */
+const NOT_A_TURN = new Set(['handed_off', 'process_exited', 'session_lost', 'cancelled', 'SessionEnd', 'idle_session_closed']);
 
 /**
  * Line comments and per-file "viewed" marks on a run's diff, stored in SQLite so a review survives

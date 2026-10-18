@@ -1,3 +1,5 @@
+import { clipText } from '../text/control-chars.js';
+
 /** A direct dependency of a starting ticket that carries the agent's completion signal. */
 export interface FinishedDependency {
   key: string;
@@ -14,7 +16,8 @@ const HEADING = '## Context from finished dependencies';
 const SEPARATOR = '\n\n';
 const ELLIPSIS = '…';
 
-const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}${ELLIPSIS}`);
+/** Cut to `max` with an ellipsis, never splitting a surrogate pair. */
+const clip = clipText;
 
 /**
  * The prompt section handing the finished dependencies' summary, handoff and any blockers they
