@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { isPlainHttpOnNetwork } from '../plainHttp';
 
 const DISMISSED_KEY = 'emberline.plainHttpBannerDismissed';
-const SECURITY_URL = 'https://github.com/biohazardious/emberline#security';
+const SECURITY_URL = 'https://github.com/biohazardious/Emberline#security';
 
 function dismissedBefore(): boolean {
   try {

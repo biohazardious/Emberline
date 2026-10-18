@@ -39,8 +39,8 @@ Requirements: **Docker** with Compose v2 on a Linux host. The images are `linux/
 [`deploy/compose.yaml`](deploy/compose.yaml) is a single file that runs the images from the GitHub Container Registry. It also works as a "custom app" on TrueNAS, Portainer or Dockge.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/biohazardious/emberline/main/deploy/compose.yaml
-EMBERLINE_VERSION=0.1.0 docker compose up -d
+curl -fsSLO https://raw.githubusercontent.com/biohazardious/Emberline/main/deploy/compose.yaml
+docker compose up -d         # the latest release; pin one with EMBERLINE_VERSION=<version>
 docker compose logs core     # the first start prints a one-time setup token
 ```
 
@@ -49,7 +49,7 @@ docker compose logs core     # the first start prints a one-time setup token
 Building from source additionally needs `make` and `git`; nothing else is installed on the host.
 
 ```bash
-git clone https://github.com/biohazardious/emberline.git
+git clone https://github.com/biohazardious/Emberline.git
 cd emberline
 cp .env.example .env     # optional: bind address, port, time zone
 make up                  # build and start core + runner -> http://127.0.0.1:7420

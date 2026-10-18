@@ -3,7 +3,8 @@
 # Building from source uses the compose.yaml in the repository root instead.
 #
 # Before the first start:
-#   - Pick the version: EMBERLINE_VERSION (a release such as 0.1.0, `latest`, or `edge` for main).
+#   - Pick the version: EMBERLINE_VERSION (`latest` by default, a release tag from the GitHub Releases page without
+#     the leading v, or `edge` for main).
 #   - Choose where the projects live: by default a named volume; set EMBERLINE_WORKSPACES to a host
 #     path (for example a TrueNAS dataset such as /mnt/tank/apps/emberline/workspaces) to see and
 #     back them up from the host. The runner works as uid 1000, so that path must be writable by it.
