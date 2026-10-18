@@ -38,7 +38,7 @@ import { IssueImportService } from './tickets/issue-import.js';
 import type { TicketService } from './tickets/service.js';
 import { UpdateService } from './updates/service.js';
 
-export const VERSION = '0.2.2';
+export const VERSION = '0.3.0';
 
 export interface CoreDeps {
   config: CoreConfig;

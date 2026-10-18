@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
 ### Added
 
 - Rebuilt project wizard: a dialog on desktop and a full-screen flow on phones. Pick a type (including static sites), then choose frontend, backend, database, auth and deploy independently, each with None, Let the agent decide or Other. The summary shows the exact `PROJECT.md`, `CLAUDE.md` and `.emberline/worktree.yml` that will be written. A Bootstrap ticket builds the skeleton, a Deploy ticket is added when you choose a target, and you finish with **Create and start** (the factory starts at once) or **Create project**.
@@ -213,7 +215,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/biohazardious/emberline/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/biohazardious/emberline/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/biohazardious/emberline/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/biohazardious/emberline/compare/v0.1.3...v0.2.0
