@@ -54,6 +54,8 @@ export type ProjectStatusSummary = z.infer<typeof ProjectStatusSummary>;
 
 export const SyncWorktreeBody = z.object({
   runId: z.string().min(1),
+  /** Merge although the run has open blocking review comments (noted as review_blocking_overridden). */
+  force: z.boolean().optional(),
 });
 export type SyncWorktreeBody = z.input<typeof SyncWorktreeBody>;
 

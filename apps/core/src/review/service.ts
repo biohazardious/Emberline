@@ -13,9 +13,11 @@ import { and, asc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { reviewComments, reviewFileViews, runEvents, runs as runsTable } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { reviewBlockedIsCurrent } from '../runs/hold-outcome.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
 import { anchorTextOf, type Anchored, reanchor } from './anchor.js';
+import { openBlockingCount } from './blocking.js';
 import { type BatchComment, type BatchKind, newRunFeedbackSection, sameRunPrompt } from './batch.js';
 
 type CommentRow = typeof reviewComments.$inferSelect;
@@ -332,12 +334,20 @@ export class ReviewService {
       .where(eq(reviewComments.id, commentId))
       .returning()
       .get();
+    this.noteUnblocked(runId);
     return (await this.anchor(runId, [updated!]))[0]!;
   }
 
   deleteComment(runId: string, commentId: string): void {
     this.comment(runId, commentId);
     this.db.delete(reviewComments).where(eq(reviewComments.id, commentId)).run();
+    this.noteUnblocked(runId);
+  }
+
+  /** The last open blocking comment is gone (resolved, deleted, downgraded): the merge gate opens. */
+  private noteUnblocked(runId: string): void {
+    if (openBlockingCount(this.db, runId) > 0 || !reviewBlockedIsCurrent(this.db, runId)) return;
+    this.runs.note(runId, 'review_unblocked', {});
   }
 
   /**

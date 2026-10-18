@@ -64,7 +64,8 @@ import {
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { projects, settings } from '../db/schema.js';
-import { badRequest, conflict, notFound } from '../errors.js';
+import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { openBlockingCount } from '../review/blocking.js';
 import {
   getRunnerBrowserState,
   getRunnerClaudeUsage,
@@ -367,6 +368,11 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const run = runs.get(body.runId);
       if (!run || run.projectId !== project.id) throw notFound('no such run for this project');
       const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
+      // Open blocking review comments keep the gate closed for a person too, unless they say otherwise.
+      const blocking = openBlockingCount(db, run.id);
+      if (blocking > 0 && !body.force) {
+        throw new HttpError(409, 'review_blocked', `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`, { blocking });
+      }
       const result = await syncWorktreeToMainWorkspace({
         worktreePath: run.worktreePath,
         mainWorkspacePath: project.path,
@@ -376,6 +382,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
       // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that
       // was already in main is no new merge (its sha would be main's HEAD, not this merge).
+      if (result.ok && !result.alreadyMerged && blocking > 0) runs.note(run.id, 'review_blocking_overridden', { count: blocking });
       if (result.ok && !result.alreadyMerged && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
       return result;
     },

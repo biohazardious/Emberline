@@ -3,6 +3,7 @@ import { HOLD_LABELS, type Run, type RunAttention } from '@emberline/protocol';
 import { inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runs, tickets } from '../db/schema.js';
+import { openBlockingCounts } from '../review/blocking.js';
 import { currentHold, decidePipelineOutcome, PIPELINE_OUTCOME_EVENTS } from './hold-outcome.js';
 
 /** A failure stays in front of a person this long after the run ended. */
@@ -244,6 +245,10 @@ export function attachAttention(
     for (const [ticketId, v] of best) latestRun.set(ticketId, v.id);
   }
 
+  // Blocking review feedback keeps a run from being review-ready: one grouped query for all candidates.
+  const candidates = list.filter((r) => r.state === 'done' && r.ticketId).map((r) => r.id);
+  const blocking = candidates.length > 0 ? openBlockingCounts(db, candidates) : new Map<string, number>();
+
   return list.map((run) => {
     const f = facts.get(run.id);
     const ticket: AttentionTicket | undefined = run.ticketId
@@ -252,7 +257,7 @@ export function attachAttention(
     return {
       ...run,
       attention: computeAttention(run, f, now, ticket),
-      reviewReady: run.state === 'done' && ticket !== undefined && ticket.inReview && ticket.latest && pipelineClear(f),
+      reviewReady: run.state === 'done' && ticket !== undefined && ticket.inReview && ticket.latest && pipelineClear(f) && !blocking.has(run.id),
     };
   });
 }

@@ -47,6 +47,7 @@ import { clipText } from '../text/control-chars.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
+import { openBlockingCount } from '../review/blocking.js';
 import { pipelineOutcome, stillHeld } from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
@@ -1010,6 +1011,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .catch(() => this.runs.note(run.id, 'critic_blocked', { autoFix: false }));
         return;
       }
+    }
+
+    // 2b. Open blocking review comments keep the merge gate closed: the ticket stays in Review and the
+    //     person decides (resolve them, or merge anyway); the agent is not prompted.
+    const blocking = openBlockingCount(this.db, run.id);
+    if (blocking > 0) {
+      this.runs.note(run.id, 'review_blocked', { count: blocking });
+      return;
     }
 
     // 3. Auto-merge the worktree into the main workspace so subsequent specialist personas branch off

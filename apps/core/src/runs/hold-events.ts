@@ -14,6 +14,8 @@ export const HOLD_EVENTS: readonly string[] = [
   'completion_nudged',
   'completion_missing',
   'completion_blocked',
+  // Open blocking review comments: the person decides (no prompt to the agent).
+  'review_blocked',
 ];
 /**
  * Run notes that end an earlier hold (TicketService.stillHeld): the work was merged (by the
@@ -21,4 +23,4 @@ export const HOLD_EVENTS: readonly string[] = [
  * accepted the agent's signal. Not holds, and not pipeline outcomes: only `merged_to_main` counts
  * as "merged" for a dispatch's Review finalization. Protected from pruning.
  */
-export const HOLD_ENDING_EVENTS: readonly string[] = ['merged_to_main', 'merged_by_person', 'completion_accepted'];
+export const HOLD_ENDING_EVENTS: readonly string[] = ['merged_to_main', 'merged_by_person', 'completion_accepted', 'review_unblocked'];

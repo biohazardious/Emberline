@@ -4,9 +4,22 @@ import { runEvents } from '../db/schema.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 
 /** Notes the completion pipeline writes after a run's switch to `done`; they decide its outcome. */
-export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [...HOLD_EVENTS, 'merged_to_main'];
+export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [...HOLD_EVENTS, 'merged_to_main', 'review_unblocked'];
 
 export type PipelineOutcome = 'held' | 'merged';
+
+/** `review_blocked` holds that a later `review_unblocked` lifted no longer count (the other notes stay). */
+function withoutUnblocked<T>(items: readonly T[], typeOf: (item: T) => string = (item) => item as string): readonly T[] {
+  let lifted = false;
+  const kept: T[] = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const type = typeOf(items[i] as T);
+    if (type === 'review_unblocked') lifted = true;
+    else if (type === 'review_blocked' && lifted) continue;
+    kept.unshift(items[i] as T);
+  }
+  return kept;
+}
 
 /**
  * What the pipeline notes recorded after a run's latest switch to `done` decided: `held` when any is
@@ -14,6 +27,7 @@ export type PipelineOutcome = 'held' | 'merged';
  * null when it never got that far.
  */
 export function decidePipelineOutcome(types: readonly string[]): PipelineOutcome | null {
+  types = withoutUnblocked(types);
   if (types.some((type) => HOLD_EVENTS.includes(type))) return 'held';
   return types.includes('merged_to_main') ? 'merged' : null;
 }
@@ -32,7 +46,8 @@ export function isAutoFixHold(payload: unknown): boolean {
  * with an automatic fix request). Null when the outcome is not a hold or nothing is left for a
  * person. Attention only: the pipeline outcome (and so dispatch and merge) still counts every hold.
  */
-export function currentHold<T extends { type: string; payload?: unknown }>(events: readonly T[]): T | null {
+export function currentHold<T extends { type: string; payload?: unknown }>(all: readonly T[]): T | null {
+  const events = withoutUnblocked(all, (e) => e.type);
   if (decidePipelineOutcome(events.map((e) => e.type)) !== 'held') return null;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i] as T;
@@ -97,4 +112,22 @@ export function stillHeld(db: Db, runId: string): boolean {
     .limit(1)
     .get();
   return isHoldType(newest?.type);
+}
+
+/** Whether the run's current pipeline pass (after its latest `done`) stands on a `review_blocked` hold. */
+export function reviewBlockedIsCurrent(db: Db, runId: string): boolean {
+  const newest = db
+    .select({ type: runEvents.type })
+    .from(runEvents)
+    .where(
+      and(
+        eq(runEvents.runId, runId),
+        gt(runEvents.id, latestDoneEventId(db, runId) ?? 0),
+        inArray(runEvents.type, ['review_blocked', 'review_unblocked']),
+      ),
+    )
+    .orderBy(desc(runEvents.id))
+    .limit(1)
+    .get();
+  return newest?.type === 'review_blocked';
 }

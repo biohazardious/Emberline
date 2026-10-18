@@ -565,6 +565,7 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   build_gate_failed: 'Build checks failed',
   completion_missing: 'No completion signal',
   completion_blocked: 'Blocked',
+  review_blocked: 'Blocking review comments',
 };
 
 export const Run = z.object({
