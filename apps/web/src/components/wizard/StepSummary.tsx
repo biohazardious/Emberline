@@ -23,6 +23,7 @@ import {
   type WizardAction,
   type WizardState,
   writableFiles,
+  worktreeYmlImportNote,
 } from './wizardLogic';
 
 export type SummaryPreview =
@@ -365,6 +366,13 @@ export function StepSummary({
                 <span>Approve these commands</span>
               </label>
             </div>
+          )}
+
+          {worktreeYmlImportNote(state) && (
+            <p className="notice-box">
+              <strong>worktree.yml</strong>
+              {worktreeYmlImportNote(state)}
+            </p>
           )}
 
           <p className="notice-box">

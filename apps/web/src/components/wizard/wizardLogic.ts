@@ -289,6 +289,23 @@ export function canApproveRepoWorktreeYml(detect: ProjectDetectResponse | null):
   return Boolean(own && own.content !== null && own.sha256 && own.errors.length === 0 && !own.notCommitted);
 }
 
+/**
+ * What the import summary says about the worktree.yml that becomes approved on import: its setup
+ * commands run in every new run worktree, and an install there may run the repository's own
+ * install scripts. Null when no worktree.yml gets approved.
+ */
+export function worktreeYmlImportNote(state: Pick<WizardState, 'detect' | 'write' | 'approveWorktreeYml'>): string | null {
+  const scripts =
+    "Its setup commands run in every new run worktree, and an install there may run the repository's own install scripts (package lifecycle scripts, setup.py and the like).";
+  if (state.write.includes('worktreeYml') && writableFiles(state.detect).includes('worktreeYml')) {
+    return `The generated .emberline/worktree.yml is approved when you import. ${scripts}`;
+  }
+  if (state.approveWorktreeYml && canApproveRepoWorktreeYml(state.detect)) {
+    return `The repository's .emberline/worktree.yml is approved when you import. ${scripts}`;
+  }
+  return null;
+}
+
 /** The label of a choice for the summary. */
 export function choiceLabel(dimension: StackDimensionId, choice: StackChoice | undefined): string {
   if (choice === undefined) return 'Not set';

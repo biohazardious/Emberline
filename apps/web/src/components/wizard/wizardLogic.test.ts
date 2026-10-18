@@ -23,6 +23,7 @@ import {
   type WizardAction,
   type WizardState,
   wizardReducer,
+  worktreeYmlImportNote,
 } from './wizardLogic';
 
 const run = (actions: WizardAction[], from: WizardState = initialWizardState()) => actions.reduce(wizardReducer, from);
@@ -477,5 +478,28 @@ describe('import helpers', () => {
     expect(isNameConflict({ status: 409, code: 'conflict' })).toBe(false);
     expect(isNameConflict({ status: 400, code: 'name_taken' })).toBe(false);
     expect(isNameConflict(new Error('a project with slug "x" already exists'))).toBe(false);
+  });
+});
+
+describe('worktreeYmlImportNote', () => {
+  const base = (o: Partial<WizardState>): WizardState => ({ ...initialWizardState(), source: 'import_folder', ...o });
+
+  it('says the generated worktree.yml is approved and its setup may run the repo install scripts', () => {
+    const note = worktreeYmlImportNote(base({ detect: detectResponse(), write: ['worktreeYml'] }));
+    expect(note).toContain('generated .emberline/worktree.yml is approved');
+    expect(note).toContain("may run the repository's own install scripts");
+  });
+
+  it("says the same of the repository's own file when it is approved", () => {
+    const own = { content: 'version: 1\n', sha256: 'a'.repeat(64), errors: [], notCommitted: false, workingTreeDiffers: false };
+    const detect = detectResponse({ files: { projectMd: false, claudeMd: true, agentsMd: false, worktreeYml: true }, worktreeYml: own });
+    const note = worktreeYmlImportNote(base({ detect, approveWorktreeYml: true }));
+    expect(note).toContain("repository's .emberline/worktree.yml is approved");
+    expect(note).toContain('install scripts');
+    expect(worktreeYmlImportNote(base({ detect, approveWorktreeYml: false }))).toBeNull();
+  });
+
+  it('nothing when no worktree.yml gets approved', () => {
+    expect(worktreeYmlImportNote(base({ detect: detectResponse(), write: [] }))).toBeNull();
   });
 });
