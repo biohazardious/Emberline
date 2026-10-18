@@ -54,6 +54,8 @@ import {
   type ToolchainActionResponse,
   type ToolchainStatusResponse,
   UpdateFactorySettingsBody,
+  UpdateProjectSettingsBody,
+  type ProjectSettingsResponse,
   UpdateProjectBlueprintBody,
   UpdateRoadmapItemBody,
   UploadWorkspaceFilesBody,
@@ -68,6 +70,7 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
 import { execGitFile } from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { writeProjectSettings } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import {
   getRunnerBrowserState,
@@ -96,7 +99,9 @@ import {
   exportProjectTarGz,
   generateClaudeInstructions,
   generateProjectBlueprint,
+  effectiveFactorySettings,
   getFactorySettings,
+  readProjectGates,
   getSavedCrossCriticResult,
   initLocalGitRepository,
   listProjectCheckpoints,
@@ -696,6 +701,40 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
   });
 
   app.get('/api/factory/settings', async (): Promise<FactorySettings> => getFactorySettings(db));
+
+  const gateValues = (s: FactorySettings) => ({
+    selfHealingBuildGate: s.selfHealingBuildGate,
+    antiSlopGate: s.antiSlopGate,
+    secretGuardGate: s.secretGuardGate,
+    crossProviderCritic: s.crossProviderCritic,
+    autoSyncToMain: s.autoSyncToMain,
+    requireCompletionSignal: s.requireCompletionSignal,
+  });
+  const projectSettingsResponse = (projectId: string): ProjectSettingsResponse => ({
+    gates: readProjectGates(db, projectId),
+    effective: gateValues(effectiveFactorySettings(db, projectId)),
+    global: gateValues(getFactorySettings(db)),
+  });
+
+  app.get<{ Params: { id: string } }>('/api/projects/:id/settings', async (request): Promise<ProjectSettingsResponse> => {
+    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+    if (!row) throw notFound('no such project');
+    return projectSettingsResponse(row.id);
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/projects/:id/settings', async (request): Promise<ProjectSettingsResponse> => {
+    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+    if (!row) throw notFound('no such project');
+    const body = UpdateProjectSettingsBody.safeParse(request.body ?? {});
+    if (!body.success) throw badRequest('send { gates: { <gate>: true | false | null } } with known gate names only');
+    const gates: Record<string, boolean> = { ...readProjectGates(db, row.id) };
+    for (const [key, value] of Object.entries(body.data.gates)) {
+      if (value === null) delete gates[key];
+      else if (value !== undefined) gates[key] = value;
+    }
+    writeProjectSettings(db, row.id, { gates });
+    return projectSettingsResponse(row.id);
+  });
 
   app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
     '/api/projects/:id/usage',

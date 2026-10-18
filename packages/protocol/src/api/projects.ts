@@ -284,8 +284,48 @@ export type WorkspaceFolder = z.infer<typeof WorkspaceFolder>;
 export const WorkspaceFoldersResponse = z.object({ folders: z.array(WorkspaceFolder) });
 export type WorkspaceFoldersResponse = z.infer<typeof WorkspaceFoldersResponse>;
 
-export const UpdateProjectSettingsBody = z.object({ gates: ProjectGateOverrides });
+/** The gates a project may override, in display order. */
+export const PROJECT_GATE_KEYS = [
+  'selfHealingBuildGate',
+  'antiSlopGate',
+  'secretGuardGate',
+  'crossProviderCritic',
+  'autoSyncToMain',
+  'requireCompletionSignal',
+] as const;
+export type ProjectGateKey = (typeof PROJECT_GATE_KEYS)[number];
+
+/** `true`/`false` sets an override; `null` removes it (inherit the global value). */
+export const ProjectGateUpdates = z
+  .object({
+    selfHealingBuildGate: z.boolean().nullable().optional(),
+    antiSlopGate: z.boolean().nullable().optional(),
+    secretGuardGate: z.boolean().nullable().optional(),
+    crossProviderCritic: z.boolean().nullable().optional(),
+    autoSyncToMain: z.boolean().nullable().optional(),
+    requireCompletionSignal: z.boolean().nullable().optional(),
+  })
+  .strict();
+
+export const UpdateProjectSettingsBody = z.object({ gates: ProjectGateUpdates }).strict();
 export type UpdateProjectSettingsBody = z.input<typeof UpdateProjectSettingsBody>;
+
+const GateValues = z.object({
+  selfHealingBuildGate: z.boolean(),
+  antiSlopGate: z.boolean(),
+  secretGuardGate: z.boolean(),
+  crossProviderCritic: z.boolean(),
+  autoSyncToMain: z.boolean(),
+  requireCompletionSignal: z.boolean(),
+});
+
+/** A project's gate overrides, the values its runs use, and the global values they inherit. */
+export const ProjectSettingsResponse = z.object({
+  gates: ProjectGateOverrides,
+  effective: GateValues,
+  global: GateValues,
+});
+export type ProjectSettingsResponse = z.infer<typeof ProjectSettingsResponse>;
 
 export const ProjectBlueprintResponse = z.object({
   projectId: z.string(),

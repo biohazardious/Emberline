@@ -68,6 +68,7 @@ import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-f
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
 import {
+  effectiveFactorySettings,
   getFactorySettings,
   defaultCredentialFor,
   getProviderEnvFromSettings,
@@ -1707,7 +1708,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async commit(id: string, body: GitCommitBody): Promise<GitCommitResponse> {
     const row = this.row(id);
-    const fSettings = getFactorySettings(this.db);
+    const fSettings = effectiveFactorySettings(this.db, row.projectId);
     if (fSettings.secretGuardGate && row.worktreePath) {
       const report = await auditWorktreeSlop({
         runId: id,

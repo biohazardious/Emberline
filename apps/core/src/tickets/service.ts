@@ -36,6 +36,7 @@ import {
   buildWorkspaceDemo,
   conflictResolutionPrompt,
   factoryTicketTitle,
+  effectiveFactorySettings,
   getFactorySettings,
   ingestAgentTicketsFile,
   mainWorkspaceBranch,
@@ -875,7 +876,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return;
     }
 
-    const fSettings = getFactorySettings(this.db);
+    const fSettings = effectiveFactorySettings(this.db, run.projectId);
     const projectTickets = this.db
       .select()
       .from(tickets)

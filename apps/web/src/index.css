@@ -4505,3 +4505,60 @@ dialog.cmd-dialog::backdrop {
     border-left: 0;
   }
 }
+
+/* --- project settings: gates and the worktree.yml review ----------------------- */
+.gate-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gate-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.gate-row p {
+  margin: 0;
+}
+
+.worktree-banner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.worktree-review {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.worktree-review-diff {
+  max-height: 320px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.75rem;
+  white-space: pre;
+}
+
+.worktree-review-errors {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--danger, inherit);
+}
+
+.worktree-note {
+  margin: 0;
+  font-size: 0.75rem;
+}

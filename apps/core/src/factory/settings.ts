@@ -12,7 +12,9 @@ import {
   FactorySettings,
   MAX_ROUTES,
   type McpServerEntry,
+  PROJECT_GATE_KEYS,
   PROVIDER_RUNTIME,
+  type ProjectGateOverrides,
   type QuotaPolicy,
   type Route,
   sameRoute,
@@ -23,6 +25,7 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { HttpError } from '../errors.js';
+import { readProjectSettings } from '../db/project-settings.js';
 import { settings } from '../db/schema.js';
 
 // --- F7 & F10: Unified Factory Settings & Multi-Provider Routing ------------
@@ -468,6 +471,23 @@ export function getFactorySettings(db: Db): FactorySettings {
     geminiKeyStored: Boolean(keys.geminiApiKey),
     providerAuth,
   });
+}
+
+/** The overrides a project stores under `gates`: booleans for known keys only, anything else ignored. */
+export function readProjectGates(db: Db, projectId: string): ProjectGateOverrides {
+  const raw = readProjectSettings(db, projectId).gates;
+  const out: ProjectGateOverrides = {};
+  if (typeof raw !== 'object' || raw === null) return out;
+  for (const key of PROJECT_GATE_KEYS) {
+    const value = (raw as Record<string, unknown>)[key];
+    if (typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
+/** The global settings with the project's gate overrides on top. An absent override follows the global value. */
+export function effectiveFactorySettings(db: Db, projectId: string): FactorySettings {
+  return { ...getFactorySettings(db), ...readProjectGates(db, projectId) };
 }
 
 export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody): FactorySettings {

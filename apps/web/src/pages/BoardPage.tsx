@@ -17,6 +17,7 @@ import { IssueImportDialog } from '../components/IssueImportDialog';
 import { issueHref } from '../issueImport';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PERSONA_LIST, PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
+import { WorktreeConfigBanner } from '../components/ProjectSettingsPanel';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import {
@@ -317,6 +318,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
       </header>
 
       <QuotaPanel compact />
+
+      {project && <WorktreeConfigBanner key={project.id} project={project} />}
 
       {demoPanelOpen && project && <ProjectStatusAndDemoPanel project={project} />}
 

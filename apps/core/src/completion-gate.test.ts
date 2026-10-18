@@ -416,6 +416,15 @@ describe('completion gate', () => {
       expect(followups(run)).toEqual([]);
     });
 
+    it('the project overriding the setting off (global still on): Stop alone advances the ticket', async () => {
+      const { project, ticket, run } = await factoryTicket();
+      await api('PATCH', `/api/projects/${project.id}/settings`, { gates: { requireCompletionSignal: false } });
+      await begin(run);
+      await stop(run);
+      await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+      expect((await eventTypes(run)).some(isGateNote)).toBe(false);
+    });
+
     it('a run whose agent never got the tool (no emberline-mcp check-in): Stop alone advances the ticket', async () => {
       const { ticket, run } = await factoryTicket();
       await begin(run, { tool: false });

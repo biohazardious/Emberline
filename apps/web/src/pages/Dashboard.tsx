@@ -22,6 +22,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectAdvisorPanel } from '../components/ProjectAdvisorPanel';
+import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RunStatePill } from '../components/RunStatePill';
@@ -670,6 +671,7 @@ export function Dashboard({
       {overviewTab === 'automation' && (
         <>
           {activeProject && <BudgetPanel key={`budget-${activeProject.id}`} project={activeProject} />}
+          {activeProject && <ProjectSettingsPanel key={`settings-${activeProject.id}`} project={activeProject} />}
           <ScheduledJobsPanel projects={visibleProjects} />
         </>
       )}
