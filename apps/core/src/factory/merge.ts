@@ -44,8 +44,10 @@ export async function syncWorktreeToMainWorkspace(params: {
   mainWorkspacePath: string;
   ticketKey: string | null;
   runId: string;
+  /** Called once there is something to merge (not for work already in main); may throw to refuse. */
+  beforeMerge?: () => void;
 }): Promise<SyncWorktreeResponse> {
-  const { worktreePath, mainWorkspacePath, ticketKey, runId } = params;
+  const { worktreePath, mainWorkspacePath, ticketKey, runId, beforeMerge } = params;
   if (!existsSync(worktreePath)) {
     throw new Error(`Worktree path does not exist: ${worktreePath}`);
   }
@@ -85,6 +87,8 @@ export async function syncWorktreeToMainWorkspace(params: {
     if (alreadyMerged) {
       return result(true, `${label} is already merged into the main workspace.`, { commitSha: await shortHead(), alreadyMerged: true });
     }
+
+    beforeMerge?.();
 
     // 2. Edits made directly in the main workspace (file explorer, blueprint) are committed first so
     //    the merge can never overwrite them. Untracked files stay untracked.

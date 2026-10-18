@@ -346,8 +346,11 @@ export class ReviewService {
 
   /** The last open blocking comment is gone (resolved, deleted, downgraded): the merge gate opens. */
   private noteUnblocked(runId: string): void {
-    if (openBlockingCount(this.db, runId) > 0 || !reviewBlockedIsCurrent(this.db, runId)) return;
-    this.runs.note(runId, 'review_unblocked', {});
+    // The hold sits on the run the pipeline last ran for: the comment's run or a handoff successor.
+    for (const id of this.chain(runId)) {
+      if (openBlockingCount(this.db, id) > 0 || !reviewBlockedIsCurrent(this.db, id)) continue;
+      this.runs.note(id, 'review_unblocked', {});
+    }
   }
 
   /**

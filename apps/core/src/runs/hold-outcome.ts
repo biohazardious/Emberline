@@ -9,7 +9,7 @@ export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [...HOLD_EVENTS, 'merg
 export type PipelineOutcome = 'held' | 'merged';
 
 /** `review_blocked` holds that a later `review_unblocked` lifted no longer count (the other notes stay). */
-function withoutUnblocked<T>(items: readonly T[], typeOf: (item: T) => string = (item) => item as string): readonly T[] {
+export function withoutUnblocked<T>(items: readonly T[], typeOf: (item: T) => string = (item) => item as string): readonly T[] {
   let lifted = false;
   const kept: T[] = [];
   for (let i = items.length - 1; i >= 0; i--) {
@@ -98,7 +98,7 @@ export function pipelineOutcome(db: Db, runId: string): PipelineOutcome | null {
 export function stillHeld(db: Db, runId: string): boolean {
   const lastDone = latestDoneEventId(db, runId);
   if (lastDone === undefined) return false;
-  const newest = db
+  const types = db
     .select({ type: runEvents.type })
     .from(runEvents)
     .where(
@@ -108,10 +108,12 @@ export function stillHeld(db: Db, runId: string): boolean {
         inArray(runEvents.type, [...HOLD_EVENTS, ...HOLD_ENDING_EVENTS]),
       ),
     )
-    .orderBy(desc(runEvents.id))
-    .limit(1)
-    .get();
-  return isHoldType(newest?.type);
+    .orderBy(runEvents.id)
+    .all()
+    .map((e) => e.type);
+  // An unblock only lifts a review_blocked hold; the newest of what is left decides.
+  const left = withoutUnblocked(types).filter((type) => type !== 'review_unblocked');
+  return isHoldType(left.at(-1));
 }
 
 /** Whether the run's current pipeline pass (after its latest `done`) stands on a `review_blocked` hold. */

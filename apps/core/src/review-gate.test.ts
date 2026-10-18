@@ -5,6 +5,9 @@ import type { ReviewComment, Run, RunDetail, Ticket } from '@emberline/protocol'
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attachAttention } from './runs/attention.js';
+import { eq } from 'drizzle-orm';
+import { runs } from './db/schema.js';
+import { stillHeld } from './runs/hold-outcome.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import type { TicketService } from './tickets/service.js';
 
@@ -247,5 +250,85 @@ describe('blocking review comments close the merge gate', () => {
     expect(reads).toBe(readsForOne);
     expect(one[0]?.reviewReady).toBe(false);
     expect(many.map((r) => r.reviewReady)).toHaveLength(6);
+  });
+
+  it('counts blocking feedback across a handoff: the successor is held, a person merge refused, unblocking notes it on the successor', async () => {
+    const { project, ticket, run: a } = await factoryTicket();
+    const c = await comment(a, 'blocking');
+    t.db.update(runs).set({ state: 'rate_limited' }).where(eq(runs.id, a.id)).run();
+    const b = await t.runs.handOff(a.id, { agent: 'claude', model: 'opus', credential: 'login' }, { reason: 'quota', source: 'system', automatic: true });
+    await t.scheduler.tick();
+    await waitFile(`ready-${b.id}`);
+    const tokenB = await waitFile(`token-${b.id}`);
+    await hook(b.id, 'SessionStart', tokenB, { session_id: `s-${b.id}` });
+    await t.app.inject({ method: 'POST', url: `/api/internal/runs/${b.id}/completion-tool`, headers: { authorization: `Bearer ${tokenB}` } });
+    await hook(b.id, 'UserPromptSubmit', tokenB);
+    const passes = trackPipelines();
+    await finishTurn(b, tokenB);
+    await settled(passes, 1);
+    expect(await eventPayload(b, 'review_blocked')).toEqual({ count: 1 });
+    expect(await eventTypes(b)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).toBe('review');
+    const rowB = await runRow(b);
+    expect(rowB.attention).toMatchObject({ reason: 'held', detail: 'Blocking review comments' });
+    expect(rowB.reviewReady).toBe(false);
+    const refused = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: b.id });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ blocking: 1 });
+
+    await api('PATCH', `/api/runs/${a.id}/review/comments/${c.id}`, { status: 'resolved' });
+    expect(await eventTypes(b)).toContain('review_unblocked');
+    await hook(b.id, 'UserPromptSubmit', tokenB);
+    await finishTurn(b, tokenB);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+  });
+
+  it('unblocking lets a dispatch finalization re-run the pipeline even when it ran before', async () => {
+    const { project, ticket, run, token } = await factoryTicket();
+    const c = await comment(run, 'blocking');
+    const passes = trackPipelines();
+    await finishTurn(run, token);
+    await settled(passes, 1);
+    (t.tickets as unknown as { resumedPipelines: Set<string> }).resumedPipelines.add(run.id);
+    await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { status: 'resolved' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).toContain('merged_to_main');
+  });
+
+  it('an unblock does not end another hold', async () => {
+    const { run } = await factoryTicket();
+    const c = await comment(run, 'blocking');
+    t.runs.note(run.id, 'merge_failed', {});
+    t.runs.note(run.id, 'review_blocked', { count: 1 });
+    await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { status: 'resolved' });
+    expect(await eventTypes(run)).toContain('review_unblocked');
+  });
+
+  it('a merge that is already in main is a no-op, not a 409', async () => {
+    const { project, run } = await factoryTicket();
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json()).toMatchObject({ ok: true });
+    await comment(run, 'blocking');
+    const again = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ ok: true, alreadyMerged: true });
+    expect(await eventTypes(run)).not.toContain('review_blocking_overridden');
+  });
+
+  it('stillHeld: an unblock ends only the review_blocked hold of an earlier pass', async () => {
+    const { run, token } = await factoryTicket();
+    t.runs.note(run.id, 'merge_failed', {});
+    t.runs.note(run.id, 'review_blocked', { count: 1 });
+    t.runs.note(run.id, 'review_unblocked', {});
+    await hook(run.id, 'Stop', token);
+    expect(stillHeld(t.db, run.id)).toBe(true);
+  });
+
+  it('stillHeld: an unblocked review_blocked is no hold', async () => {
+    const { run, token } = await factoryTicket();
+    t.runs.note(run.id, 'review_blocked', { count: 1 });
+    t.runs.note(run.id, 'review_unblocked', {});
+    await hook(run.id, 'Stop', token);
+    expect(stillHeld(t.db, run.id)).toBe(false);
   });
 });

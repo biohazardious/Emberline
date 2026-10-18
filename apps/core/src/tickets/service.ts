@@ -312,6 +312,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     });
     // RunService stored the agent's completion on the ticket: show it on the Board right away.
     runs.on('note', (run, type) => {
+      // The hold is over: a dispatch may run the pipeline of this run again.
+      if (type === 'review_unblocked') this.resumedPipelines.delete(run.id);
       if (type !== 'ticket_complete' || !run.ticketId) return;
       const row = this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get();
       if (row) this.publish(row);

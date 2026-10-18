@@ -370,14 +370,17 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
       // Open blocking review comments keep the gate closed for a person too, unless they say otherwise.
       const blocking = openBlockingCount(db, run.id);
-      if (blocking > 0 && !body.force) {
-        throw new HttpError(409, 'review_blocked', `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`, { blocking });
-      }
       const result = await syncWorktreeToMainWorkspace({
         worktreePath: run.worktreePath,
         mainWorkspacePath: project.path,
         ticketKey: ticket?.key ?? null,
         runId: run.id,
+        // Only work that is not in main yet is held back: a no-op merge needs no override.
+        beforeMerge: () => {
+          if (blocking > 0 && !body.force) {
+            throw new HttpError(409, 'review_blocked', `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`, { blocking });
+          }
+        },
       });
       // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
       // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that

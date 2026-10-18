@@ -162,6 +162,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'session_lost',
   ...HOLD_EVENTS,
   ...HOLD_ENDING_EVENTS,
+  // The person's merge past open blocking comments; kept like the merge note.
+  'review_blocking_overridden',
   'conflict_resolution_requested',
   'pr_created',
   // The issue write-back reads these back so a comment or a close never repeats.

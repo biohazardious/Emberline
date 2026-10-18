@@ -20,7 +20,8 @@ export const HOLD_EVENTS: readonly string[] = [
 /**
  * Run notes that end an earlier hold (TicketService.stillHeld): the work was merged (by the
  * pipeline, or by a person through sync-worktree: `merged_by_person`), or the completion gate
- * accepted the agent's signal. Not holds, and not pipeline outcomes: only `merged_to_main` counts
+ * accepted the agent's signal. `review_unblocked` is different: it only lifts an earlier
+ * `review_blocked` (hold-outcome's withoutUnblocked), never another hold. Not holds, and not pipeline outcomes: only `merged_to_main` counts
  * as "merged" for a dispatch's Review finalization. Protected from pruning.
  */
 export const HOLD_ENDING_EVENTS: readonly string[] = ['merged_to_main', 'merged_by_person', 'completion_accepted', 'review_unblocked'];
