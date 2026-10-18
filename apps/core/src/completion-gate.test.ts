@@ -55,8 +55,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await t.close();
+  // ptyd first: a fake agent still writing into the temp dir makes t.close fail to remove it (ENOTEMPTY).
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>

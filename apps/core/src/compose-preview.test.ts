@@ -173,8 +173,8 @@ describe('compose previews (worktree.yml v2)', () => {
     delete process.env.EMBERLINE_PREVIEW_HOST;
     setCommandExecutor(localCommandExecutor);
     setCommandCanceller(localCommandCanceller);
-    await t.close();
     await ptydServer.close();
+    await t.close();
   });
 
   async function start(dockerHost: string | undefined, overrides: Partial<CoreConfig> = {}) {

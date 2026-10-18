@@ -232,8 +232,8 @@ describe('Docker engine in core: /api/system, run env, first prompt, worktree.ym
 
   afterEach(async () => {
     setCommandExecutor(localCommandExecutor);
-    await t.close();
     await ptydServer.close();
+    await t.close();
   });
 
   /**

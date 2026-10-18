@@ -62,3 +62,28 @@ export const BrowserUrlResponse = z.object({
   note: z.string().optional(),
 });
 export type BrowserUrlResponse = z.infer<typeof BrowserUrlResponse>;
+
+/**
+ * The `preview` tool of a run's agent (`emberline-mcp`): `POST /api/internal/runs/:id/preview`
+ * with the run's hook token. `restart` starts the preview again even when it runs (it then serves
+ * the worktree as it is now).
+ */
+export const AgentPreviewBody = z.object({ restart: z.boolean().optional() });
+export type AgentPreviewBody = z.infer<typeof AgentPreviewBody>;
+
+/**
+ * What the tool answers: the run's preview `status` once it is running or failed (or still
+ * `starting` when the wait ran out), `unavailable` when this run cannot have one (no engine for its
+ * container preview, no preview service or dev script). `url` and `kind` are the runner-side URL
+ * (as in {@link BrowserUrlResponse}): the preview when it runs, else this run's static build or null.
+ */
+export const AgentPreviewResponse = z.object({
+  status: z.enum(['stopped', 'starting', 'running', 'exited', 'failed', 'unavailable']),
+  url: z.string().nullable(),
+  kind: BrowserUrlKind,
+  error: z.string().optional(),
+  /** The end of the build or container output (untrusted). */
+  logs: z.string().optional(),
+  note: z.string().optional(),
+});
+export type AgentPreviewResponse = z.infer<typeof AgentPreviewResponse>;

@@ -285,13 +285,19 @@ export class MainPreviews {
 
   /** Before a project is deleted: ends a start still going and takes the preview down with its volumes and images. */
   async removeForProject(projectId: string): Promise<void> {
-    // Kept for good (project ids are never reused): a start abandoned by the stop below is taken
-    // down with CLEANUP_DOWN when it settles, even while the project row still exists.
+    // Kept for good once the project is gone (ids are never reused), or until a failed delete calls
+    // cancelRemove: a start abandoned by the stop below is taken down with CLEANUP_DOWN when it
+    // settles, even while the project row still exists.
     this.deleting.add(projectId);
     await this.lock.run(projectId, async () => {
       this.nextGeneration(projectId);
       await this.stopHeld(projectId, { volumes: true });
     });
+  }
+
+  /** The project delete failed after {@link removeForProject}: the project stays, so its previews are ordinary again. */
+  cancelRemove(projectId: string): void {
+    this.deleting.delete(projectId);
   }
 
   /** Ports main previews hold (`starting` or `running`), except `exceptProjectId`'s. */

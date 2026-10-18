@@ -93,7 +93,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'UI/UX',
     roleTitle: 'Staff Design Systems & Frontend UX Engineer',
     systemPrompt:
-      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project\'s build after your changes. For a web UI with a `build` script, run it so the Live Demo preview updates, and if `$EMBERLINE_DEMO_URL` is set, open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.',
+      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project\'s build after your changes (for a web UI with a `build` script this also updates the Live Demo). For a web app, call the `preview` tool and open the URL it returns (it serves this run\'s own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.',
   },
   coder: {
     id: 'coder',
@@ -117,7 +117,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'QA',
     roleTitle: 'Staff Quality Assurance & Verification Engineer',
     systemPrompt:
-      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and the build for the project\'s stack. For a web app, then open `$EMBERLINE_DEMO_URL` using `mcp__playwright__browser_navigate`, interact with it via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. For a desktop app, run it and its UI tests under `xvfb-run -a`. For firmware, build it and, when no board is attached, run it in QEMU and check its serial output. Execute autonomously without asking whether to commit.',
+      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and the build for the project\'s stack. For a web app, call the `preview` tool and open the URL it returns (it serves this run\'s own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it using `mcp__playwright__browser_navigate`, interact with it via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. For a desktop app, run it and its UI tests under `xvfb-run -a`. For firmware, build it and, when no board is attached, run it in QEMU and check its serial output. Execute autonomously without asking whether to commit.',
   },
   security: {
     id: 'security',
@@ -148,6 +148,12 @@ export function decoratePromptWithPersona(prompt: string | undefined, persona: A
 
 /** The tool through which a Claude run tells Emberline its ticket is finished (served by `emberline-mcp`). */
 export const COMPLETION_TOOL = 'mcp__emberline__ticket_complete';
+
+/** The tool with which a Claude run starts its own preview and gets the URL to open (served by `emberline-mcp`). */
+export const PREVIEW_TOOL = 'mcp__emberline__preview';
+
+/** The `emberline` server's tools, allowed in every permission mode. */
+const EMBERLINE_TOOLS = [COMPLETION_TOOL, PREVIEW_TOOL];
 
 /** Appended to the prompt of a run that works on a ticket. */
 export const COMPLETION_INSTRUCTION =
@@ -248,12 +254,13 @@ export function buildHookSettings(
       askUserQuestionTimeout: '60s',
       permissions: {
         defaultMode: 'auto',
-        allow: [...AUTONOMOUS_ALLOWED_TOOLS, COMPLETION_TOOL],
+        allow: [...AUTONOMOUS_ALLOWED_TOOLS, ...EMBERLINE_TOOLS],
       },
     };
   }
-  // The completion tool is allowed in every mode: signalling "done" must never wait for an approval.
-  return { ...base, permissions: { defaultMode: permissionMode, allow: [COMPLETION_TOOL] } };
+  // Emberline's own tools are allowed in every mode: signalling "done" or starting the run's own
+  // preview must never wait for an approval.
+  return { ...base, permissions: { defaultMode: permissionMode, allow: [...EMBERLINE_TOOLS] } };
 }
 
 export interface ClaudeMcpServerSpec {
@@ -288,9 +295,9 @@ export function buildPlaywrightMcpConfig(
 }
 
 /**
- * The `emberline` stdio server (`emberline-mcp`, serving `ticket_complete`). The run's identity
- * reaches it through `${VAR}` expansion of the CLI process env, so the hook token never appears on
- * a command line.
+ * The `emberline` stdio server (`emberline-mcp`, serving `ticket_complete` and `preview`). The run's
+ * identity reaches it through `${VAR}` expansion of the CLI process env, so the hook token never
+ * appears on a command line.
  */
 export function buildEmberlineMcpConfig(): ClaudeMcpConfig {
   return {
@@ -477,7 +484,7 @@ function claudeFallbackSettings(autonomous: boolean): Omit<ClaudeHookSettings, '
   const { hooks: _hooks, ...dialogs } = buildHookSettings('emberline-hook', 5, autonomous);
   // Secondary CLIs have no `emberline` MCP server and signal completion by their exit code.
   const { allow, ...permissions } = dialogs.permissions ?? {};
-  const kept = (allow ?? []).filter((rule) => rule !== COMPLETION_TOOL);
+  const kept = (allow ?? []).filter((rule) => !EMBERLINE_TOOLS.includes(rule));
   return { ...dialogs, permissions: { ...permissions, ...(kept.length > 0 ? { allow: kept } : {}) } };
 }
 

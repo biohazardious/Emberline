@@ -67,8 +67,8 @@ beforeEach(async () => {
 afterEach(async () => {
   critic.result = null;
   build.result = null;
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>

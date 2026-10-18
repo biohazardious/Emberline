@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { BrowserUrlResponse, DockerOverview, MainPreviewStatus, type Run, type RunPreviewStatus } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type ExecRequest,
   type ExecResult,
@@ -20,7 +20,7 @@ import {
 import type { CoreConfig } from './config.js';
 import { readProjectSettings, writeProjectSettings } from './db/project-settings.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
-import { mainComposeProjectName, mainPreviewComposeProjectName } from './docker/engine.js';
+import { DockerEngine, mainComposeProjectName, mainPreviewComposeProjectName } from './docker/engine.js';
 import { DemoTokens } from './demo-token.js';
 import { agentDemoUrl, demoWorkspacePath } from './factory/demo-target.js';
 import { RunService } from './runs/service.js';
@@ -505,6 +505,33 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     expect(stored(p.id)).toMatchObject({ status: 'failed' });
   });
 
+  it('a boot pass the engine was down for runs once the engine answers again', async () => {
+    await start();
+    const p = await createProject();
+    engine.upGate = new Promise(() => undefined);
+    expect((await startMain(p.id)).statusCode).toBe(200);
+    engine.upGate = null;
+    engine.available = false;
+    const docker = new DockerEngine(t.config.dockerHost, { cwd: t.config.workspacesDir });
+    const restarted = new RunService(t.db, t.config, t.ptyd, docker);
+    restarted.composePreviewTiming = fastTiming;
+    try {
+      restarted.startReconciler();
+      await docker.probe();
+      // Settle the boot pass: the engine does not answer, so it leaves the start alone.
+      await restarted.mainPreviews.reconcileInterrupted();
+      expect(stored(p.id)).toMatchObject({ status: 'starting' });
+      expect(engine.downs()).toEqual([]);
+      engine.available = true;
+      await docker.probe();
+      await expect.poll(() => stored(p.id)?.status, { timeout: 5_000 }).toBe('failed');
+      expect(stored(p.id)).toMatchObject({ error: 'Emberline restarted before the preview was ready; start it again' });
+      expect(engine.downs()).toEqual([downArgs(mainPreviewComposeProjectName(p.id), false)]);
+    } finally {
+      restarted.dispose();
+    }
+  });
+
   it("a stored preview whose service is not known any more says so without printing 'undefined'", async () => {
     await start();
     const p = await createProject('Bare', { yml: null });
@@ -595,6 +622,28 @@ describe('cleanup', () => {
     await expect.poll(() => engine.downs().length, { timeout: 5_000 }).toBe(2);
     expect(engine.downs()[1]).toEqual(downArgs(name, true));
     expect(engine.projects.has(name)).toBe(false);
+  });
+
+  it('a project delete that fails after the preview went does not leave the project marked as deleted', async () => {
+    await start();
+    const p = await createProject();
+    await runningMain(p.id);
+    vi.spyOn(t.runs, 'removeTree').mockRejectedValueOnce(new Error('EBUSY: resource busy'));
+    expect((await api('DELETE', `/api/projects/${p.id}`)).statusCode).toBe(500);
+    const name = mainPreviewComposeProjectName(p.id);
+    expect(engine.downs()).toContainEqual(downArgs(name, true));
+    // The project stays. A start its Stop gives up on is taken down like any project's (volumes kept).
+    const before = engine.downs().length;
+    let open!: () => void;
+    engine.upGate = new Promise((resolve) => (open = resolve));
+    engine.ignoreCancels = true;
+    expect((await startMain(p.id)).statusCode).toBe(200);
+    await expect.poll(() => engine.pendingUps.size).toBe(1);
+    expect((await stopMain(p.id)).statusCode).toBe(200);
+    expect(engine.downs().slice(before)).toEqual([downArgs(name, false)]);
+    open();
+    await expect.poll(() => engine.downs().length - before, { timeout: 5_000 }).toBe(2);
+    expect(engine.downs().slice(before)).toEqual([downArgs(name, false), downArgs(name, false)]);
   });
 
   it("the sweep keeps a project's main preview, and removes a deleted project's", async () => {

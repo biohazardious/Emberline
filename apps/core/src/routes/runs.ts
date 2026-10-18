@@ -1,4 +1,5 @@
 import {
+  type AgentPreviewResponse,
   DiffScope,
   GitCommitBody,
   type GitCommitResponse,
@@ -189,6 +190,16 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
     runs.recordCompletion(request.params.id, token, request.body as TicketCompleteBody);
     return { ok: true };
+  });
+
+  /**
+   * The agent's `preview` tool (`emberline-mcp`): starts this run's own preview if needed and answers
+   * its runner-side URL. Same per-run bearer token; the run is the token's, never one from the body.
+   */
+  app.post<{ Params: { id: string } }>('/api/internal/runs/:id/preview', async (request): Promise<AgentPreviewResponse> => {
+    const header = request.headers.authorization;
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+    return runs.agentPreview(request.params.id, token, request.body);
   });
 
   /** `emberline-mcp` checks in on startup: this run's agent has the `ticket_complete` tool. No body. */

@@ -18,6 +18,8 @@ import {
 } from '@emberline/adapter-claude';
 import {
   type AgentId,
+  AgentPreviewBody,
+  type AgentPreviewResponse,
   type AgentModelId,
   type AgentPersona,
   type BrowserAgentAction,
@@ -117,7 +119,10 @@ import {
   resolveSkillPluginPromptForPersona,
 } from '../factory/service.js';
 import { auditWorktreeSlop } from '../factory/slop-guard.js';
-import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath } from '../demo-token.js';
+import { DemoTokens } from '../demo-token.js';
+import { agentDemoUrl } from '../factory/demo-target.js';
+import { AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
+import { resolveBrowserUrl } from './browser-url.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
@@ -534,10 +539,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly previewPortLock = new KeyedMutex();
   /** How long compose previews may build and take to answer (shortened in tests; main previews too). */
   composePreviewTiming: ComposePreviewTiming = { ...DEFAULT_COMPOSE_PREVIEW_TIMING };
+  /** How long the agent's `preview` tool waits for a container preview to come up (tests shorten it). */
+  agentPreviewWaitMs = AGENT_PREVIEW_WAIT_MS;
   /** The container previews of projects' main workspaces; they share the preview port allocator. */
   readonly mainPreviews: MainPreviews;
   private dockerGcFirst?: NodeJS.Timeout;
   private dockerGcTimer?: NodeJS.Timeout;
+  /** Unsubscribes the reconcile of interrupted main previews from the engine's changes (startReconciler). */
+  private offDockerChange?: () => void;
   private dockerSweeping = false;
   private lastImagePruneAt = 0;
   /** The last image prune that succeeded (0 = none yet). */
@@ -583,7 +592,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.timer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
     this.timer.unref();
     // Main previews whose start a restart cut short: running if the engine has them, else down and failed.
+    // A pass the engine was down for is left alone, so it runs again whenever the engine turns available.
     void this.mainPreviews.reconcileInterrupted().catch(() => undefined);
+    this.offDockerChange ??= this.docker.addChangeListener((status) => {
+      if (status.available) void this.mainPreviews.reconcileInterrupted().catch(() => undefined);
+    });
     if (this.docker.host) {
       this.dockerGcFirst = setTimeout(() => void this.sweepDockerProjects(), DOCKER_GC_FIRST_DELAY_MS);
       this.dockerGcFirst.unref();
@@ -593,6 +606,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   dispose(): void {
+    this.offDockerChange?.();
+    this.offDockerChange = undefined;
     clearInterval(this.timer);
     clearTimeout(this.dockerGcFirst);
     clearInterval(this.dockerGcTimer);
@@ -1439,9 +1454,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       );
     }
 
-    const demoToken = this.demoTokens.mint({ projectId: row.projectId, targetId: 'main' }, AGENT_DEMO_TOKEN_TTL_MS);
-    // hookUrl is how the runner reaches core (`http://core:7420` in compose); localhost is the runner itself.
-    const demoUrl = `${this.config.hookUrl}${demoBasePath(demoToken)}`;
+    // The run's own worktree, never main: a QA run checks its own work. hookUrl is how the runner
+    // reaches core (`http://core:7420` in compose); localhost is the runner itself.
+    const demoUrl = agentDemoUrl(this.config, this.demoTokens, row.projectId, row.id);
     const spec = provider.launch({
       runId: row.id,
       hookToken,
@@ -1743,6 +1758,36 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.liveRunForAgent(runId, token);
     if (this.hasEvent(runId, 'completion_tool_ready')) return;
     this.note(runId, 'completion_tool_ready');
+  }
+
+  /**
+   * The agent's `preview` tool: starts the run's own preview if it does not run, waits (bounded by
+   * {@link agentPreviewWaitMs}) for a container start to end, and answers the runner-side URL. Same
+   * credential as hooks, so a run only ever acts on its own preview.
+   */
+  async agentPreview(runId: string, token: string | undefined, rawBody: unknown): Promise<AgentPreviewResponse> {
+    const row = this.liveRunForAgent(runId, token);
+    const parsed = AgentPreviewBody.safeParse(rawBody ?? {});
+    if (!parsed.success) throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
+    return agentPreview(
+      {
+        status: () => this.previewStatus(row.id),
+        start: () => this.startPreview(row.id, {}),
+        pendingStart: () => this.composeJobs.get(row.id)?.done,
+        nothingToPreview: () =>
+          approvedPreviewService(this.db, row.projectId) || this.detectPreviewCommand(row.projectId, row.worktreePath)
+            ? null
+            : 'this run has no preview: the approved worktree.yml has no preview service and package.json no dev, start or preview script',
+        browserUrl: () =>
+          resolveBrowserUrl(
+            { db: this.db, config: this.config, runPreviewStatus: (id) => this.previewStatus(id), mainPreviews: this.mainPreviews, demoTokens: this.demoTokens },
+            row.projectId,
+            row.id,
+          ),
+        waitMs: this.agentPreviewWaitMs,
+      },
+      parsed.data,
+    );
   }
 
   /** The run an agent-side call (hook token) is for: 404 unknown, 401 wrong token, 409 ended. */

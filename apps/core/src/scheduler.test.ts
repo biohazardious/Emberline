@@ -53,8 +53,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
@@ -185,8 +185,8 @@ describe('scheduler', () => {
   });
 
   it('probes after the probe interval when no reset time is known, and re-opens on a repeat hit', async () => {
-    await t.close();
     await ptydServer.close();
+    await t.close();
     await start({ probeMs: 1_000 });
 
     const a = await submit();

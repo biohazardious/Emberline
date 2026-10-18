@@ -22,8 +22,8 @@ beforeEach(async () => {
   headers = { ...CSRF, cookie: await setupAndLogin(t.app) };
 });
 afterEach(async () => {
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const call = (method: 'POST' | 'PATCH', url: string, payload: Record<string, unknown>) =>

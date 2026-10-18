@@ -41,8 +41,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'POST', url: string, payload?: object) => t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });

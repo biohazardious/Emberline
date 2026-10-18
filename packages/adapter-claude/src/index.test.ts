@@ -10,6 +10,7 @@ import {
   buildPlaywrightMcpConfig,
   buildSecondaryCliLaunchSpec,
   nextStateFromHook,
+  PERSONA_CATALOG,
   RUNNER_ENVIRONMENT,
   stateAfterExit,
   WATCHED_HOOKS,
@@ -133,7 +134,10 @@ describe('buildLaunchSpec', () => {
       });
       const settings = JSON.parse(spec.args[1] ?? '');
       // The mode is always stated (it stops Claude Code's "make auto the default" nudge), with nothing pre-allowed.
-      expect(settings.permissions).toEqual({ defaultMode: permissionMode, allow: ['mcp__emberline__ticket_complete'] });
+      expect(settings.permissions).toEqual({
+        defaultMode: permissionMode,
+        allow: ['mcp__emberline__ticket_complete', 'mcp__emberline__preview'],
+      });
       expect(spec.args).not.toContain('auto');
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
@@ -371,6 +375,8 @@ describe('emberline completion tool', () => {
       });
       const settings = JSON.parse(spec.args[1] ?? '');
       expect(settings.permissions.allow).toContain('mcp__emberline__ticket_complete');
+      // Starting the run's own preview never waits for an approval either.
+      expect(settings.permissions.allow).toContain('mcp__emberline__preview');
     },
   );
 
@@ -409,6 +415,19 @@ describe('emberline completion tool', () => {
   it('leaves secondary CLIs alone', () => {
     const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'gemini', prompt: 'go' });
     expect(JSON.stringify(spec)).not.toContain('ticket_complete');
+    expect(JSON.stringify(spec)).not.toContain('mcp__emberline__preview');
     expect(JSON.stringify(spec)).not.toContain('emberline-mcp');
+  });
+});
+
+describe('persona preview instructions', () => {
+  const PREVIEW_SENTENCE =
+    "For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`.";
+
+  it.each(['qa', 'ui_ux'] as const)('%s opens its own preview through the preview tool, with $EMBERLINE_DEMO_URL as the fallback', (persona) => {
+    const text = PERSONA_CATALOG[persona].systemPrompt;
+    expect(text).toContain(PREVIEW_SENTENCE);
+    // The demo URL is only the fallback now: no sentence opens it first.
+    expect(text.indexOf('$EMBERLINE_DEMO_URL')).toBeGreaterThan(text.indexOf('`preview` tool'));
   });
 });

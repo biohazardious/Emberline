@@ -4,7 +4,7 @@
   "version": "0.3.2",
   "private": true,
   "type": "module",
-  "description": "emberline-hook: forwards Claude Code hook payloads to Emberline core; emberline-mcp serves the ticket_complete tool.",
+  "description": "emberline-hook: forwards Claude Code hook payloads to Emberline core; emberline-mcp serves the ticket_complete and preview tools.",
   "bin": {
     "emberline-hook": "./dist/main.js",
     "emberline-mcp": "./dist/mcp.js"

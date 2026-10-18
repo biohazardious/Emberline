@@ -42,8 +42,8 @@ afterEach(async () => {
   else process.env.EMBERLINE_TOOLS_DIR = previousToolsDir;
   if (previousSdkCommand === undefined) delete process.env.EMBERLINE_SDK_COMMAND;
   else process.env.EMBERLINE_SDK_COMMAND = previousSdkCommand;
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 describe('ToolchainService', () => {

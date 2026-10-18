@@ -24,8 +24,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, payload?: object) =>

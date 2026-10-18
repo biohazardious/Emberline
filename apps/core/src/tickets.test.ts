@@ -47,8 +47,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
@@ -443,8 +443,8 @@ describe('tickets', () => {
 
     beforeEach(async () => {
       // Rebuilt with a short settle window; the default for tests is no wait.
-      await t.close();
       await ptydServer.close();
+      await t.close();
       t = await createTestApp({}, {}, { pipelineSettleMs: SETTLE_MS });
       t.config.claudeCommand = writeFakeClaude(t.dir);
       ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });

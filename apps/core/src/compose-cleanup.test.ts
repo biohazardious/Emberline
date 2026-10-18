@@ -78,8 +78,8 @@ let engine: FakeEngine;
 
 afterEach(async () => {
   setCommandExecutor(localCommandExecutor);
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 async function start(dockerHost: string | null = 'tcp://docker:2376') {

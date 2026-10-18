@@ -47,8 +47,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await t.close();
   await ptydServer.close();
+  await t.close();
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>

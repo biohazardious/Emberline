@@ -63,10 +63,14 @@ const text = (r: unknown): string => ((r as { content: { text: string }[] }).con
 describe('emberline MCP server', () => {
   const env = () => ({ EMBERLINE_RUN_ID: 'run 1', EMBERLINE_HOOK_TOKEN: 'tok', EMBERLINE_CORE_URL: coreUrl });
 
-  it('lists the ticket_complete tool with its schema', async () => {
+  it('lists the ticket_complete and preview tools with their schemas', async () => {
     const client = await connect(env());
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(['ticket_complete']);
+    expect(tools.map((t) => t.name)).toEqual(['ticket_complete', 'preview']);
+    const preview = tools[1]?.inputSchema as { required?: string[]; properties: Record<string, unknown> };
+    // No run id or URL among the inputs: the tool only ever acts on its own run.
+    expect(Object.keys(preview.properties)).toEqual(['restart']);
+    expect(preview.required ?? []).toEqual([]);
     const schema = tools[0]?.inputSchema as { required?: string[]; properties: Record<string, unknown> };
     expect(Object.keys(schema.properties).sort()).toEqual(['blockers', 'handoff', 'summary']);
     expect(schema.required).toEqual(['summary']);
@@ -141,6 +145,105 @@ describe('emberline MCP server', () => {
     const r = await client.callTool({ name: 'ticket_complete', arguments: { summary: 'done' } });
     expect(r.isError).toBe(true);
     expect(text(r)).toBe('not running under Emberline');
+  });
+
+  describe('preview', () => {
+    it("starts this run's preview through core with the bearer token and returns its URL", async () => {
+      reply = { status: 200, body: { status: 'running', url: 'http://docker:4325/', kind: 'compose' } };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBeFalsy();
+      expect(seen.method).toBe('POST');
+      expect(seen.url).toBe('/api/internal/runs/run%201/preview');
+      expect(seen.auth).toBe('Bearer tok');
+      expect(seen.contentType).toContain('application/json');
+      expect(seen.body).toEqual({});
+      expect(text(r)).toContain("The preview is running (compose). Open http://docker:4325/ in the browser; it serves this run's own work.");
+      // The whole answer is there for the agent too.
+      expect(text(r)).toContain('"url":"http://docker:4325/"');
+    });
+
+    it('passes restart on', async () => {
+      reply = { status: 200, body: { status: 'running', url: 'http://localhost:4301/', kind: 'command' } };
+      const client = await connect(env());
+      await client.callTool({ name: 'preview', arguments: { restart: true } });
+      expect(seen.body).toEqual({ restart: true });
+    });
+
+    it('unavailable is an answer, not an error: it names the static build when there is one', async () => {
+      reply = {
+        status: 200,
+        body: {
+          status: 'unavailable',
+          url: 'http://core:7420/api/demo/tok/',
+          kind: 'static',
+          error: 'the preview service "site" runs in Docker: enable the Docker engine (COMPOSE_PROFILES=docker)',
+        },
+      };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBeFalsy();
+      expect(text(r)).toContain('No preview can run: the preview service "site" runs in Docker');
+      expect(text(r)).toContain("Open http://core:7420/api/demo/tok/ instead (this run's static build).");
+    });
+
+    it('without any URL it says to build the project and open $EMBERLINE_DEMO_URL', async () => {
+      reply = { status: 200, body: { status: 'unavailable', url: null, kind: 'static', error: 'this project has no preview' } };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBeFalsy();
+      expect(text(r)).toContain('Build the project and open $EMBERLINE_DEMO_URL instead.');
+    });
+
+    it('a failed preview gives its error and the logs tail', async () => {
+      reply = {
+        status: 200,
+        body: { status: 'failed', url: null, kind: 'static', error: 'docker compose up failed (exit 1)', logs: 'npm ci exited 1' },
+      };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBeFalsy();
+      expect(text(r)).toContain('The preview failed: docker compose up failed (exit 1)');
+      expect(text(r)).toContain('npm ci exited 1');
+    });
+
+    it('a preview still starting after the wait says to call again', async () => {
+      reply = { status: 200, body: { status: 'starting', url: null, kind: 'static', note: 'the container preview is still starting; this is the static build' } };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBeFalsy();
+      expect(text(r)).toContain('The preview is still starting');
+      expect(text(r)).toContain('call `preview` again');
+    });
+
+    it.each([
+      [401, 'rejected the token'],
+      [404, 'does not know this run'],
+      [409, 'already ended'],
+      [500, 'HTTP 500'],
+    ])('maps HTTP %i to a tool error', async (status, fragment) => {
+      reply = { status, body: { error: 'nope' } };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toContain(fragment);
+    });
+
+    it('an answer it does not understand is a tool error', async () => {
+      reply = { status: 200, body: { ok: true } };
+      const client = await connect(env());
+      const r = await client.callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toContain('unexpected');
+    });
+
+    it('refuses to run outside Emberline and reports an unreachable core', async () => {
+      expect(text(await (await connect({})).callTool({ name: 'preview', arguments: {} }))).toBe('not running under Emberline');
+      const r = await (await connect({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' })).callTool({ name: 'preview', arguments: {} });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toContain('Could not reach Emberline');
+      expect(seen.url).toBeUndefined();
+    });
   });
 
   describe('check-in (announceCompletionTool)', () => {

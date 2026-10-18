@@ -1253,39 +1253,48 @@ export function registerProjectRoutes(
         request.log.warn({ err, projectId }, 'worktree.yml teardown before deleting the project failed');
         return { finished: true, settled: Promise.resolve() };
       });
-      for (const run of runs.list()) {
-        if (run.projectId === projectId) {
-          await runs.remove(run.id).catch(() => {});
+      try {
+        for (const run of runs.list()) {
+          if (run.projectId === projectId) {
+            await runs.remove(run.id).catch(() => {});
+          }
         }
+
+        // Never pull the worktrees out from under a teardown that still runs: they go once it ended.
+        const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
+        // Files the Docker engine's containers left may need handing back first (runs.removeTree).
+        const removeWorktrees = () => runs.removeTree(worktreeSlugDir);
+        if (teardown.finished) await removeWorktrees();
+        else void teardown.settled.then(removeWorktrees);
+
+        // A folder registered in place is the user's own repository: only an explicit request deletes it.
+        const flag = request.query.deleteFiles;
+        const shouldDeleteFiles =
+          readImportSource(db, projectId) === 'folder' ? flag === '1' || flag === 'true' : flag !== '0' && flag !== 'false';
+        const resolvedWorkspace = path.resolve(row.path);
+        const resolvedRoot = path.resolve(config.workspacesDir);
+        if (
+          shouldDeleteFiles &&
+          resolvedWorkspace.startsWith(resolvedRoot + path.sep) &&
+          resolvedWorkspace !== resolvedRoot
+        ) {
+          await runs.removeTree(resolvedWorkspace);
+        }
+
+        // Archived build outputs go with the project (rows and files).
+        await runs.outputs.removeProject(projectId).catch((err: unknown) => {
+          request.log.warn({ err, projectId }, 'removing the archived build outputs of a deleted project failed');
+        });
+        db.delete(projects).where(eq(projects.id, projectId)).run();
+        tickets.forgetProject(projectId);
+      } catch (err) {
+        // The project stays: its main preview must not be treated as a deleted project's (now, or
+        // once a teardown still running gets to it).
+        const cancel = () => runs.mainPreviews.cancelRemove(projectId);
+        cancel();
+        void teardown.settled.then(cancel);
+        throw err;
       }
-
-      // Never pull the worktrees out from under a teardown that still runs: they go once it ended.
-      const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
-      // Files the Docker engine's containers left may need handing back first (runs.removeTree).
-      const removeWorktrees = () => runs.removeTree(worktreeSlugDir);
-      if (teardown.finished) await removeWorktrees();
-      else void teardown.settled.then(removeWorktrees);
-
-      // A folder registered in place is the user's own repository: only an explicit request deletes it.
-      const flag = request.query.deleteFiles;
-      const shouldDeleteFiles =
-        readImportSource(db, projectId) === 'folder' ? flag === '1' || flag === 'true' : flag !== '0' && flag !== 'false';
-      const resolvedWorkspace = path.resolve(row.path);
-      const resolvedRoot = path.resolve(config.workspacesDir);
-      if (
-        shouldDeleteFiles &&
-        resolvedWorkspace.startsWith(resolvedRoot + path.sep) &&
-        resolvedWorkspace !== resolvedRoot
-      ) {
-        await runs.removeTree(resolvedWorkspace);
-      }
-
-      // Archived build outputs go with the project (rows and files).
-      await runs.outputs.removeProject(projectId).catch((err: unknown) => {
-        request.log.warn({ err, projectId }, 'removing the archived build outputs of a deleted project failed');
-      });
-      db.delete(projects).where(eq(projects.id, projectId)).run();
-      tickets.forgetProject(projectId);
 
       const nextFirst = db.select().from(projects).orderBy(asc(projects.createdAt)).get();
       saveActiveProjectId(nextFirst?.id ?? null);

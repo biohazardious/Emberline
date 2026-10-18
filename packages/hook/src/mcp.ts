@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * emberline-mcp: stdio MCP server exposing the `ticket_complete` tool to Claude Code.
+ * emberline-mcp: stdio MCP server exposing the `ticket_complete` and `preview` tools to Claude Code.
  *
  * On startup it checks in with core (`POST /api/internal/runs/:id/completion-tool`), so the
  * completion gate only waits for the tool in runs whose agent actually has it.

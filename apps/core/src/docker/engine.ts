@@ -82,6 +82,7 @@ export class DockerEngine {
   private current: DockerEngineStatus;
   private inFlight?: Promise<DockerEngineStatus>;
   private timer?: NodeJS.Timeout;
+  private readonly listeners = new Set<(status: DockerEngineStatus) => void>();
 
   constructor(
     /** `EMBERLINE_DOCKER_HOST`; undefined = Docker is off. */
@@ -118,6 +119,12 @@ export class DockerEngine {
     void this.probe();
     this.timer = setInterval(() => void this.probe(), DOCKER_PROBE_INTERVAL_MS);
     this.timer.unref();
+  }
+
+  /** Also called when `available`, `version` or `error` changed after a probe; returns the unsubscribe. */
+  addChangeListener(listener: (status: DockerEngineStatus) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   stop(): void {
@@ -160,6 +167,7 @@ export class DockerEngine {
     this.current = next;
     if (before.available !== next.available || before.version !== next.version || before.error !== next.error) {
       this.options.onChange?.(this.status);
+      for (const listener of this.listeners) listener(this.status);
     }
     return this.status;
   }
