@@ -7,11 +7,15 @@ describe('dockerEngineLine', () => {
   });
 
   it('says off, on with the version, or unreachable with the reason', () => {
-    expect(dockerEngineLine({ enabled: false, available: false, version: null })).toBe('Docker engine: off');
-    expect(dockerEngineLine({ enabled: true, available: true, version: '29.8.2' })).toBe('Docker engine: on (29.8.2)');
-    expect(dockerEngineLine({ enabled: true, available: false, version: null, error: 'connection refused' })).toBe(
+    expect(dockerEngineLine({ enabled: false, checked: false, available: false, version: null })).toBe('Docker engine: off');
+    expect(dockerEngineLine({ enabled: true, checked: true, available: true, version: '29.8.2' })).toBe('Docker engine: on (29.8.2)');
+    expect(dockerEngineLine({ enabled: true, checked: true, available: false, version: null, error: 'connection refused' })).toBe(
       'Docker engine: unreachable — connection refused',
     );
-    expect(dockerEngineLine({ enabled: true, available: false, version: null })).toBe('Docker engine: unreachable');
+    expect(dockerEngineLine({ enabled: true, checked: true, available: false, version: null })).toBe('Docker engine: unreachable');
+  });
+
+  it('says checking until the first probe answered', () => {
+    expect(dockerEngineLine({ enabled: true, checked: false, available: false, version: null })).toBe('Docker engine: checking…');
   });
 });

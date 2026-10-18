@@ -24,6 +24,8 @@ export const API_VERSION = 1;
 export const DockerEngineStatus = z.object({
   /** `EMBERLINE_DOCKER_HOST` is set; false = Docker is off. */
   enabled: z.boolean(),
+  /** The first probe has answered; until then the engine's state is unknown ("checking"). */
+  checked: z.boolean(),
   /** The engine answered the last probe; runs get `DOCKER_HOST` only then. */
   available: z.boolean(),
   /** The engine's server version, while available. */

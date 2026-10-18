@@ -614,10 +614,14 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const project = toProject(row);
       const body = BuildDemoBody.parse(request.body ?? {});
       let workspacePath = project.path;
+      let env: Record<string, string>;
       if (body.targetId !== 'main') {
         const run = runs.get(body.targetId);
         if (!run || run.projectId !== project.id) throw notFound('no such run target for this project');
         workspacePath = run.worktreePath;
+        env = await runs.dockerEnvFor({ id: run.id, worktreePath: run.worktreePath });
+      } else {
+        env = await runs.dockerEnvForMain(project.id);
       }
       return buildWorkspaceDemo({
         projectId: project.id,
@@ -625,6 +629,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         workspacePath,
         checks: approvedChecks(db, project.id),
         setup: approvedSetup(db, project.id),
+        env,
       });
     },
   );

@@ -3,7 +3,7 @@
  */
 import path from 'node:path';
 import { ptydCommandCanceller, ptydCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
-import { invalidPreviewPortVars, loadConfig, parseAllowedHosts } from './config.js';
+import { invalidPreviewPortVars, loadConfig, parseAllowedHosts, previewPortRangesOverlap } from './config.js';
 import { DockerEngine } from './docker/engine.js';
 import { openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
@@ -20,7 +20,11 @@ setCommandExecutor(ptydCommandExecutor(ptyd));
 setCommandCanceller(ptydCommandCanceller(ptyd));
 // Probed through the runner (ptyd exec) like any other command; see docker/engine.ts.
 let logDocker: (status: DockerEngine['status']) => void = () => undefined;
-const docker = new DockerEngine(config.dockerHost, { cwd: config.workspacesDir, onChange: (status) => logDocker(status) });
+const docker = new DockerEngine(config.dockerHost, {
+  certPath: config.dockerCertPath,
+  cwd: config.workspacesDir,
+  onChange: (status) => logDocker(status),
+});
 const runs = new RunService(db, config, ptyd, docker);
 const scheduler = new Scheduler(db, runs, ptyd, config);
 const tickets = new TicketService(db, runs, scheduler);
@@ -39,6 +43,12 @@ if (ignoredHosts.length > 0) {
 const invalidPorts = invalidPreviewPortVars(process.env);
 if (invalidPorts.length > 0) {
   app.log.warn({ variables: invalidPorts }, 'preview ports: not a port range (like 4300-4324); using the default');
+}
+if (previewPortRangesOverlap(config.previewPorts)) {
+  app.log.warn(
+    { runner: config.previewPorts.runner, docker: config.previewPorts.docker },
+    'EMBERLINE_PREVIEW_PORTS_RUNNER and EMBERLINE_PREVIEW_PORTS_DOCKER overlap: the runner and the docker engine cannot both publish them',
+  );
 }
 logDocker = (status) => {
   if (status.available) app.log.info({ host: config.dockerHost, version: status.version }, 'Docker engine available');

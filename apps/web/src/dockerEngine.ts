@@ -4,6 +4,7 @@ import type { DockerEngineStatus } from '@emberline/protocol';
 export function dockerEngineLine(docker: DockerEngineStatus | undefined): string | null {
   if (!docker) return null;
   if (!docker.enabled) return 'Docker engine: off';
+  if (!docker.checked) return 'Docker engine: checking…';
   if (docker.available) return `Docker engine: on (${docker.version ?? 'unknown version'})`;
   return docker.error ? `Docker engine: unreachable — ${docker.error}` : 'Docker engine: unreachable';
 }

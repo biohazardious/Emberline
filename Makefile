@@ -61,7 +61,10 @@ up: ## Build and start core + runner
 	$(PROD) up -d --build
 
 up-docker: ## Same with the isolated Docker engine for agents and compose previews (profile docker)
-	COMPOSE_PROFILES=docker EMBERLINE_DOCKER_HOST=$${EMBERLINE_DOCKER_HOST:-tcp://docker:2375} $(PROD) up -d --build
+	COMPOSE_PROFILES=docker EMBERLINE_DOCKER_HOST=$${EMBERLINE_DOCKER_HOST:-tcp://docker:2376} $(PROD) up -d --build
+	@echo "Docker engine on for this start. To keep it on with 'make up', add to .env:"
+	@echo "  COMPOSE_PROFILES=docker"
+	@echo "  EMBERLINE_DOCKER_HOST=tcp://docker:2376"
 
 down: ## Stop core + runner
 	$(PROD) down

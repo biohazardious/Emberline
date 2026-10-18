@@ -1,16 +1,21 @@
 /**
- * The opt-in Docker engine sidecar (compose profile `docker`): a rootless dind reachable only on the
- * compose network at `EMBERLINE_DOCKER_HOST`. Core never talks to it directly: like every other
- * command, the probe runs the Docker CLI in the runner (command-exec.ts) with `DOCKER_HOST` set.
- * While the engine answers, runs and worktree.yml commands get `DOCKER_HOST` and a compose project
- * name of their own; when it does not (or is not configured), they get nothing and Docker is off.
+ * The opt-in Docker engine sidecar (compose profile `docker`): a rootless dind on the compose network
+ * at `EMBERLINE_DOCKER_HOST` whose API requires mutual TLS. Only the runner holds the client
+ * certificate (read-only mount at `dockerCertPath`). Core never talks to the engine directly: like
+ * every other command, the probe runs the Docker CLI in the runner (command-exec.ts). While the
+ * engine answers, runs and worktree.yml commands get the client variables (`DOCKER_HOST`,
+ * `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`) and a compose project name of their own; when it does
+ * not (or is not configured), they get nothing and Docker is off.
  */
 import path from 'node:path';
 import type { DockerEngineStatus } from '@emberline/protocol';
 import { type CommandExecutor, execCommand } from '../command-exec.js';
+import { DEFAULT_DOCKER_CERT_PATH } from '../config.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
 export const DOCKER_PROBE_INTERVAL_MS = 60_000;
+/** A spawn right after boot waits this long at most for the first probe. */
+export const DOCKER_READY_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 15_000;
 const ERROR_MAX_CHARS = 300;
 
@@ -35,7 +40,17 @@ export function composeProjectName(runId: string, worktreePath?: string): string
   return `emberline-${id8.toLowerCase()}`;
 }
 
+/**
+ * The compose project of Build & Verify on a project's main workspace:
+ * `emberline-main-<first 8 of the project id>`, apart from every run's project.
+ */
+export function mainComposeProjectName(projectId: string): string {
+  return `emberline-main-${projectId.slice(0, 8).toLowerCase()}`;
+}
+
 export interface DockerEngineOptions {
+  /** Client certificate directory in the runner (`DOCKER_CERT_PATH`). */
+  certPath?: string;
   /** How the CLI runs; the runner (ptyd exec) by default. */
   exec?: CommandExecutor;
   /** Working directory of the probe in the runner. */
@@ -54,7 +69,23 @@ export class DockerEngine {
     readonly host: string | undefined,
     private readonly options: DockerEngineOptions = {},
   ) {
-    this.current = { enabled: Boolean(host), available: false, version: null };
+    this.current = { enabled: Boolean(host), checked: false, available: false, version: null };
+  }
+
+  /**
+   * Resolves once the first probe answered, or after `timeoutMs`: a run spawned right after boot
+   * gets Docker if the engine is there instead of losing it to the race. Starts a probe if none ran.
+   */
+  async ready(timeoutMs = DOCKER_READY_TIMEOUT_MS): Promise<void> {
+    if (!this.host || this.current.checked) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      this.probe(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   /** The last probe's result (unavailable until the first probe answered). */
@@ -90,7 +121,12 @@ export class DockerEngine {
    */
   runEnv(composeProject: string): Record<string, string> {
     if (!this.host || !this.current.available) return {};
-    return { DOCKER_HOST: this.host, EMBERLINE_COMPOSE_PROJECT: composeProject };
+    return { ...this.clientEnv(this.host), EMBERLINE_COMPOSE_PROJECT: composeProject };
+  }
+
+  /** What the Docker CLI needs to reach the engine: its address and the client certificate. */
+  private clientEnv(host: string): Record<string, string> {
+    return { DOCKER_HOST: host, DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: this.options.certPath ?? DEFAULT_DOCKER_CERT_PATH };
   }
 
   private async runProbe(host: string): Promise<DockerEngineStatus> {
@@ -104,13 +140,13 @@ export class DockerEngine {
   }
 
   private async ask(host: string): Promise<DockerEngineStatus> {
-    const off = (error: string): DockerEngineStatus => ({ enabled: true, available: false, version: null, error: clean(error) });
+    const off = (error: string): DockerEngineStatus => ({ enabled: true, checked: true, available: false, version: null, error: clean(error) });
     try {
       const result = await (this.options.exec ?? execCommand)({
         file: 'docker',
         args: ['version', '--format', '{{json .Server.Version}}'],
         cwd: this.options.cwd ?? '/',
-        env: { DOCKER_HOST: host },
+        env: this.clientEnv(host),
         timeoutMs: PROBE_TIMEOUT_MS,
       });
       if (result.exitCode === 127 && /ENOENT|not found/.test(result.stderr)) {
@@ -125,7 +161,7 @@ export class DockerEngine {
         version = null;
       }
       if (typeof version !== 'string' || version === '') return off('unexpected `docker version` output');
-      return { enabled: true, available: true, version: clean(version) };
+      return { enabled: true, checked: true, available: true, version: clean(version) };
     } catch (error) {
       return off((error as Error).message);
     }

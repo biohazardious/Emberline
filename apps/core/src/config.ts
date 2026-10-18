@@ -41,10 +41,15 @@ export interface CoreConfig {
   /** Claude Code transcripts (runner home, mounted read-only); only paths under it are read. */
   transcriptsDir: string;
   /**
-   * The isolated Docker engine (compose profile `docker`, `tcp://docker:2375`) that runs and
-   * worktree.yml commands get as `DOCKER_HOST` while it answers. Unset: no Docker.
+   * The isolated Docker engine (compose profile `docker`, `tcp://docker:2376`, mutual TLS) that runs
+   * and worktree.yml commands get as `DOCKER_HOST` while it answers. Unset: no Docker.
    */
   dockerHost?: string;
+  /**
+   * Directory in the runner with the engine's client certificate (`ca.pem`, `cert.pem`, `key.pem`),
+   * mounted read-only from the engine's `docker-client-certs` volume; sent as `DOCKER_CERT_PATH`.
+   */
+  dockerCertPath: string;
   /**
    * Host ports published for previews (compose.yaml): the runner's for command previews, the
    * `docker` service's for compose previews. Disjoint, so the two never claim the same port.
@@ -57,6 +62,8 @@ export interface PortRange {
   first: number;
   last: number;
 }
+
+export const DEFAULT_DOCKER_CERT_PATH = '/run/emberline-docker-certs';
 
 export const DEFAULT_PREVIEW_PORTS: CoreConfig['previewPorts'] = {
   runner: { first: 4300, last: 4324 },
@@ -95,11 +102,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
     dockerHost: env.EMBERLINE_DOCKER_HOST?.trim() || undefined,
+    dockerCertPath: env.EMBERLINE_DOCKER_CERT_PATH?.trim() || DEFAULT_DOCKER_CERT_PATH,
     previewPorts: {
       runner: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_RUNNER ?? '') ?? DEFAULT_PREVIEW_PORTS.runner,
       docker: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_DOCKER ?? '') ?? DEFAULT_PREVIEW_PORTS.docker,
     },
   };
+}
+
+/** Whether the runner's and the docker service's preview ranges share a port (compose cannot publish both). */
+export function previewPortRangesOverlap({ runner, docker }: CoreConfig['previewPorts']): boolean {
+  return runner.first <= docker.last && docker.first <= runner.last;
 }
 
 /** Preview port variables that are set but not a port range; core logs them and uses the default. */

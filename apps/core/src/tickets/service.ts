@@ -1000,6 +1000,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         checks,
         // A worktree whose own setup finished is not set up twice; a skipped or failed one is.
         setup: setupFinishedIn(this.runEventTypes(run.id)) ? [] : approvedSetup(this.db, run.projectId),
+        env: await this.runs.dockerEnvFor(run),
       }).catch((error: unknown) => {
         this.runs.note(run.id, 'build_gate_error', { message: (error as Error).message?.slice(0, 500) });
         return null;

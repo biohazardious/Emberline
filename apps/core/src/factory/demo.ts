@@ -175,13 +175,19 @@ export function checkSteps(workspacePath: string, checks: WorktreeChecks | null 
  * worktree's setup). Throws with the exit code and output tail of the first one that fails, so the
  * checks never run on a workspace that is not set up.
  */
-export async function runApprovedSetup(workspacePath: string, setup: readonly string[], logs: string[]): Promise<void> {
+export async function runApprovedSetup(
+  workspacePath: string,
+  setup: readonly string[],
+  logs: string[],
+  /** Extra variables for the commands: the Docker engine's while it answers. */
+  env: Record<string, string> = {},
+): Promise<void> {
   const deadline = Date.now() + SETUP_TOTAL_MS;
   for (const command of setup) {
     const left = deadline - Date.now();
     if (left <= 0) throw new Error(`Setup stopped after ${SETUP_TOTAL_MS / 60_000} min; not run: ${inlineCode(command)}`);
     logs.push(`$ ${command}`);
-    const outcome = await runWorktreeCommand(command, workspacePath, Math.min(SETUP_TIMEOUT_MS, left));
+    const outcome = await runWorktreeCommand(command, workspacePath, Math.min(SETUP_TIMEOUT_MS, left), undefined, env);
     if (!outcome.ok) {
       const how = outcome.timedOut
         ? `timed out after ${Math.round(outcome.timeoutMs / 60_000)} min`
@@ -202,6 +208,11 @@ export async function buildWorkspaceDemo(params: {
   checks?: WorktreeChecks | null;
   /** The approved worktree.yml `setup` commands: run first, in this workspace, when checks are used. */
   setup?: readonly string[];
+  /**
+   * Extra variables for the setup commands: the Docker client variables and the target's compose
+   * project while the engine answers (RunService.dockerEnvFor / dockerEnvForMain).
+   */
+  env?: Record<string, string>;
 }): Promise<BuildDemoResponse> {
   const { projectId, targetId, workspacePath } = params;
   if (!existsSync(workspacePath)) {
@@ -216,7 +227,7 @@ export async function buildWorkspaceDemo(params: {
   try {
     const approved = checkSteps(workspacePath, params.checks);
     if (approved.length > 0 && params.setup && params.setup.length > 0) {
-      await runApprovedSetup(workspacePath, params.setup, logs);
+      await runApprovedSetup(workspacePath, params.setup, logs, params.env);
     }
     const steps = approved.length > 0 ? approved : await planGateSteps(workspacePath, filesInfo.topFiles);
     if (steps.length === 0) {

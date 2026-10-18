@@ -57,7 +57,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
-import { composeProjectName, DOCKER_PROMPT_PARAGRAPH, DockerEngine } from '../docker/engine.js';
+import { composeProjectName, DOCKER_PROMPT_PARAGRAPH, DockerEngine, mainComposeProjectName } from '../docker/engine.js';
 import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
@@ -453,7 +453,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     docker?: DockerEngine,
   ) {
     super();
-    this.docker = docker ?? new DockerEngine(config.dockerHost, { cwd: config.workspacesDir });
+    this.docker = docker ?? new DockerEngine(config.dockerHost, { certPath: config.dockerCertPath, cwd: config.workspacesDir });
     this.setMaxListeners(0); // one listener per open UI socket
     this.demoTokens = new DemoTokens(db);
     this.outputs = new BuildOutputArchive(db, config, { note: (runId, type, payload) => this.note(runId, type, payload) });
@@ -1224,6 +1224,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     try {
       let promptPrefix: string | undefined;
       this.note(row.id, 'worktree_setup_started', { commands: setup });
+      const dockerEnv = await this.dockerEnvFor(row);
       const startedAt = Date.now();
       const deadline = startedAt + SETUP_TOTAL_MS;
       for (const [index, command] of setup.entries()) {
@@ -1240,7 +1241,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           row.worktreePath,
           Math.min(SETUP_TIMEOUT_MS, left),
           setupExecId(row.id),
-          this.dockerEnv(row),
+          dockerEnv,
         );
         // Stopped meanwhile (its command was killed): nothing failed, and no agent starts.
         if (outcome.cancelled || !this.setupGoesOn(row.id)) return;
@@ -1285,7 +1286,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const resolvedModel = (runModel(row) ??
       resolveModelForPersona(this.db, persona, undefined, row.agent as AgentId)) as AgentModelId;
 
-    const dockerEnv = this.dockerEnv(row);
+    const dockerEnv = await this.dockerEnvFor(row);
     const personaPrompt = options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
     // A fresh start with a task learns about the Docker engine once; a resumed session already knows.
     const decorated =
@@ -1984,7 +1985,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!row.worktreePath || row.worktreePath === project.path || !existsSync(row.worktreePath)) return;
     const teardown = loadApprovedWorktreeConfig(this.db, project.id)?.config.teardown ?? [];
     for (const command of teardown) {
-      const outcome = await runWorktreeCommand(command, row.worktreePath, TEARDOWN_TIMEOUT_MS, undefined, this.dockerEnv(row));
+      const outcome = await runWorktreeCommand(command, row.worktreePath, TEARDOWN_TIMEOUT_MS, undefined, await this.dockerEnvFor(row));
       if (!outcome.ok) {
         this.note(row.id, 'worktree_teardown_failed', { command, exitCode: outcome.exitCode, tail: outcome.tail });
         this.log?.warn(
@@ -1995,9 +1996,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
   }
 
-  /** `DOCKER_HOST` and the run's compose project while the Docker engine answers; nothing otherwise. */
-  private dockerEnv(row: Pick<RunRow, 'id' | 'worktreePath'>): Record<string, string> {
-    return this.docker.runEnv(composeProjectName(row.id, row.worktreePath));
+  /**
+   * The Docker client variables and the run's compose project while the engine answers; nothing
+   * otherwise. Right after boot it waits (bounded) for the first probe.
+   */
+  async dockerEnvFor(run: { id: string; worktreePath: string }): Promise<Record<string, string>> {
+    await this.docker.ready();
+    return this.docker.runEnv(composeProjectName(run.id, run.worktreePath));
+  }
+
+  /** The same for Build & Verify on a project's main workspace (project `emberline-main-<id8>`). */
+  async dockerEnvForMain(projectId: string): Promise<Record<string, string>> {
+    await this.docker.ready();
+    return this.docker.runEnv(mainComposeProjectName(projectId));
   }
 
   /** Whether the approved worktree.yml has teardown commands for this project. */
