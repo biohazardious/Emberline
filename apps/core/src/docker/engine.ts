@@ -58,6 +58,15 @@ export function mainComposeProjectName(projectId: string): string {
   return `emberline-main-${projectId.slice(0, 8).toLowerCase()}`;
 }
 
+/**
+ * The compose project of a project's main workspace container preview:
+ * `emberline-main-<first 8 of the project id>-preview`, apart from Build & Verify's, so stopping the
+ * preview never removes what a Build & Verify started (and the other way round).
+ */
+export function mainPreviewComposeProjectName(projectId: string): string {
+  return `${mainComposeProjectName(projectId)}-preview`;
+}
+
 export interface DockerEngineOptions {
   /** Client certificate directory in the runner (`DOCKER_CERT_PATH`). */
   certPath?: string;

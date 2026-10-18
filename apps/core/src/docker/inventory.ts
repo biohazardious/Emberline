@@ -18,7 +18,7 @@ import type {
 import { clipText, stripControlChars } from '../text/control-chars.js';
 import { composeLsArgs, dockerPsArgs, isEmberlineComposeProject, systemDfArgs } from './compose.js';
 import { dockerQuery, type Ran } from './compose-preview.js';
-import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './engine.js';
+import { composeProjectName, mainComposeProjectName, mainPreviewComposeProjectName, previewComposeProjectName } from './engine.js';
 
 /** A parse or a docker call: its value, or why there is none (one line, Emberline's words plus CLI output). */
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -191,12 +191,15 @@ function holdsProjects(r: OwnershipRun): boolean {
 
 /**
  * Compose projects still in use: those of every run that is live or still has its worktree (a run
- * in Review keeps its worktree, so its preview stays), and every project's main workspace. The GC
- * sweep removes Emberline's other projects.
+ * in Review keeps its worktree, so its preview stays), and every project's main workspace (Build &
+ * Verify's and the main preview's). The GC sweep removes Emberline's other projects.
  */
 export function composeProjectsInUse(facts: OwnershipFacts): Set<string> {
   const inUse = new Set<string>();
-  for (const p of facts.projects) inUse.add(mainComposeProjectName(p.id));
+  for (const p of facts.projects) {
+    inUse.add(mainComposeProjectName(p.id));
+    inUse.add(mainPreviewComposeProjectName(p.id));
+  }
   for (const r of facts.runs) {
     if (!holdsProjects(r)) continue;
     inUse.add(composeProjectName(r.id, r.worktreePath));
@@ -212,8 +215,13 @@ export function composeProjectsInUse(facts: OwnershipFacts): Set<string> {
  */
 export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerProjectOwner {
   if (name.startsWith('emberline-main-')) {
-    const project = facts.projects.find((p) => mainComposeProjectName(p.id) === name);
-    return project ? { kind: 'main', projectId: project.id, projectName: project.name } : { kind: 'orphan' };
+    // Build & Verify's project, or (`-preview`) the main workspace's container preview.
+    const preview = name.endsWith('-preview');
+    const project = facts.projects.find(
+      (p) => (preview ? mainPreviewComposeProjectName(p.id) : mainComposeProjectName(p.id)) === name,
+    );
+    if (!project) return { kind: 'orphan' };
+    return { kind: 'main', projectId: project.id, projectName: project.name, ...(preview ? { preview: true } : {}) };
   }
   const preview = name.endsWith('-preview');
   const holders = facts.runs

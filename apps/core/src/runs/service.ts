@@ -67,6 +67,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray
 import type { CoreConfig } from '../config.js';
 import { composeDownArgs, composeLogsArgs, engineHostName, isEmberlineComposeProject } from '../docker/compose.js';
 import {
+  CLEANUP_DOWN,
   type ComposePreviewTiming,
   composeDown,
   composeProjects,
@@ -76,6 +77,7 @@ import {
   pruneImages,
   reclaimFiles,
   runComposePreview,
+  settlesWithin,
 } from '../docker/compose-preview.js';
 import {
   composeProjectName,
@@ -92,6 +94,7 @@ import {
   type OwnershipRun,
   resolveDockerOwner,
 } from '../docker/inventory.js';
+import { composeEngineOffMessage, composePreviewLabel, MainPreviews } from './main-preview.js';
 import { previewUrl } from './preview-url.js';
 import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
@@ -176,29 +179,11 @@ export const DOCKER_GC_MAX_DOWNS = 10;
 const DOCKER_IMAGE_PRUNE_INTERVAL_MS = 24 * 3_600_000;
 /** A cleanup runs this many `compose down` at a time (each is capped at 2 min). */
 const COMPOSE_DOWN_CONCURRENCY = 4;
-/** Cleanup (prune, teardown, sweep, run delete) also removes volumes and the images a project built; a Stop does not. */
-const CLEANUP_DOWN = { volumes: true, images: true } as const;
 interface StopPreviewOptions {
   /** Also remove the preview project's volumes and built images (CLEANUP_DOWN). */
   volumes?: boolean;
   /** Told about the preview project's `down` when the stop ran one. */
   onDown?: (project: string, down: Awaited<ReturnType<typeof composeDown>>) => void;
-}
-/** Waits for `job` at most `ms`; resolves whether it settled in time (the job itself carries on). */
-function settlesWithin(job: Promise<unknown>, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), Math.max(0, ms));
-    void job.then(
-      () => {
-        clearTimeout(timer);
-        resolve(true);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(true);
-      },
-    );
-  });
 }
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
 const setupExecId = (runId: string) => `setup-${runId}`;
@@ -317,11 +302,6 @@ interface ComposeJob {
   project: string;
   /** Settles when the job ended (never rejects). */
   done: Promise<void>;
-}
-
-/** How a compose preview shows where the command box is: what Emberline runs for it. */
-function composePreviewLabel(service: WorktreeComposeService): string {
-  return `docker compose up ${service.compose.service} (${service.compose.file}, port ${service.compose.port})`;
 }
 
 /** Events that never become a run's `lastEvent`. */
@@ -552,8 +532,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly previewGenerations = new Map<string, number>();
   /** Port allocation and the `preview_started` record happen together, so two starts never share a port. */
   private readonly previewPortLock = new KeyedMutex();
-  /** How long compose previews may build and take to answer (shortened in tests). */
+  /** How long compose previews may build and take to answer (shortened in tests; main previews too). */
   composePreviewTiming: ComposePreviewTiming = { ...DEFAULT_COMPOSE_PREVIEW_TIMING };
+  /** The container previews of projects' main workspaces; they share the preview port allocator. */
+  readonly mainPreviews: MainPreviews;
   private dockerGcFirst?: NodeJS.Timeout;
   private dockerGcTimer?: NodeJS.Timeout;
   private dockerSweeping = false;
@@ -573,6 +555,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.docker = docker ?? new DockerEngine(config.dockerHost, { certPath: config.dockerCertPath, cwd: config.workspacesDir });
     this.setMaxListeners(0); // one listener per open UI socket
     this.demoTokens = new DemoTokens(db);
+    this.mainPreviews = new MainPreviews({
+      db,
+      config,
+      docker: this.docker,
+      envForMain: (projectId) => this.dockerEnvForMain(projectId),
+      withPorts: (fn) => this.previewPortLock.run('ports', fn),
+      allocatePort: (projectId, exclude) => this.allocateMainPreviewPort(projectId, exclude),
+      timing: () => this.composePreviewTiming,
+      log: () => this.log,
+    });
     this.outputs = new BuildOutputArchive(db, config, { note: (runId, type, payload) => this.note(runId, type, payload) });
     // End of a turn (`done`) or of the run (`failed`): archive in the background; nothing waits for it.
     this.on('run', (run, stateChanged) => {
@@ -2411,7 +2403,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     const opts = action === 'remove' ? CLEANUP_DOWN : {};
     const down =
-      owner.kind === 'preview'
+      owner.kind === 'main' && owner.preview
+        ? await this.mainPreviews.takeDown(owner.projectId, name, env, action)
+        : owner.kind === 'preview'
         ? await this.previewRunLock.run(owner.runId, async () => {
             // Only a compose preview that is still started goes through the run's preview stop (which
             // takes the project down itself); no preview, a stopped one or a command preview (a
@@ -2525,6 +2519,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       for (const row of rows) {
         if (this.composeJobs.has(row.id)) await this.previewRunLock.run(row.id, () => this.stopRunningPreview(row)).catch(() => undefined);
       }
+      // Main's container preview: a start still going is cancelled, then it goes with its volumes (CLEANUP_DOWN).
+      await this.mainPreviews.removeForProject(projectId).catch(() => undefined);
       await this.downComposeProjects(
         [...rows.flatMap((row) => [composeProjectName(row.id, row.worktreePath), this.previewProjectOf(row.id)]), mainComposeProjectName(projectId)],
         null,
@@ -2549,17 +2545,32 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * they recorded it.
    */
   private async allocatePreviewPort(runId: string, kind: PreviewKind, exclude: ReadonlySet<number> = new Set()): Promise<number> {
-    let hash = 0;
-    for (let i = 0; i < runId.length; i++) {
-      hash = (hash * 31 + runId.charCodeAt(i)) >>> 0;
-    }
     const taken = this.activeComposePreviewPorts(runId);
+    // Main previews hold ports of the docker range too.
+    for (const port of this.mainPreviews.reservedPorts()) taken.add(port);
     for (const port of exclude) taken.add(port);
     if (kind === 'command') {
       const { sessions } = await this.ptyd.get().list();
       for (const s of sessions) {
         if (s.status === 'running' && s.meta.previewPort && s.meta.runId !== runId) taken.add(Number(s.meta.previewPort));
       }
+    }
+    return this.freePreviewPort(runId, kind, taken);
+  }
+
+  /** The same for a project's main preview (docker range), around every run's compose preview and the other main previews. */
+  private async allocateMainPreviewPort(projectId: string, exclude: ReadonlySet<number>): Promise<number> {
+    const taken = this.activeComposePreviewPorts(null);
+    for (const port of this.mainPreviews.reservedPorts(projectId)) taken.add(port);
+    for (const port of exclude) taken.add(port);
+    return this.freePreviewPort(`main:${projectId}`, 'compose', taken);
+  }
+
+  /** The first port of the kind's range from `key`'s stable start that is not `taken`; 409 when none is. */
+  private freePreviewPort(key: string, kind: PreviewKind, taken: ReadonlySet<number>): number {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
     }
     const { first, last } = this.config.previewPorts[kind === 'compose' ? 'docker' : 'runner'];
     const size = last - first + 1;
@@ -2575,7 +2586,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * since (a failed preview's project is taken down before `preview_failed` is recorded), of runs
    * whose worktree still exists (one that is gone cannot run a preview any more).
    */
-  private activeComposePreviewPorts(exceptRunId: string): Set<number> {
+  private activeComposePreviewPorts(exceptRunId: string | null): Set<number> {
     const rows = this.db
       .select({ runId: runEvents.runId, type: runEvents.type, payload: runEvents.payload })
       .from(runEvents)
@@ -2761,10 +2772,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   ): Promise<RunPreviewStatus> {
     await this.docker.ready();
     if (!this.docker.status.available || !this.config.dockerHost) {
-      throw conflict(
-        `the preview service "${service.name}" runs in Docker: enable the Docker engine (COMPOSE_PROFILES=docker)` +
-          (this.docker.status.error ? `; the engine is not reachable: ${this.docker.status.error}` : ''),
-      );
+      throw conflict(composeEngineOffMessage(service.name, this.docker.status.error));
     }
     await this.stopRunningPreview(row);
     const env = await this.dockerEnvFor(row);

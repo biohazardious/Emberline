@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,6 +76,35 @@ describe('build gate planning', () => {
     expect((await planGateSteps(ws, ['tool.py', 'Makefile'])).map((s) => s.display)).toEqual([
       'python3 -m compileall -q .',
     ]);
+  });
+
+  // The workspace is agent-writable: a FIFO, a link or a huge file must neither block core nor be followed.
+  const quickly = <T>(p: Promise<T>, ms = 2_000) =>
+    Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('blocked')), ms))]);
+
+  it('a FIFO package.json or platformio.ini does not block planning; their scripts and envs are not read', async () => {
+    files({ 'node_modules/.keep': '', 'test/test_main.cpp': '' });
+    execFileSync('mkfifo', [path.join(ws, 'package.json')]);
+    execFileSync('mkfifo', [path.join(ws, 'platformio.ini')]);
+    expect((await quickly(planGateSteps(ws, []))).map((s) => s.display)).toEqual(['pio run']);
+  });
+
+  it('a symlinked or oversized package.json is not read, so it adds no scripts', async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'gate-outside-'));
+    try {
+      writeFileSync(path.join(outside, 'package.json'), JSON.stringify({ scripts: { build: 'vite build' } }));
+      writeFileSync(path.join(outside, 'platformio.ini'), '[env:native]\nplatform = native\n');
+      files({ 'node_modules/.keep': '', 'test/test_main.cpp': '' });
+      symlinkSync(path.join(outside, 'package.json'), path.join(ws, 'package.json'));
+      symlinkSync(path.join(outside, 'platformio.ini'), path.join(ws, 'platformio.ini'));
+      expect(await plan()).toEqual(['.: pio run']);
+
+      rmSync(path.join(ws, 'package.json'));
+      files({ 'package.json': `{"scripts":{"build":"x"},"pad":"${'x'.repeat(1024 * 1024)}"}` });
+      expect(await plan()).toEqual(['.: pio run']);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

@@ -30,13 +30,20 @@ const DockerRunOwnerFields = {
 /**
  * Who a project belongs to. `agent`: a run's own project (`emberline-<id8>`, shared by handoff
  * successors in the same worktree; the newest live run, else the newest). `preview`: a run's preview
- * project. `main`: Build & Verify on a project's main workspace. `orphan`: nothing in Emberline uses
+ * project. `main`: Build & Verify on a project's main workspace, or with `preview` the main
+ * workspace's container preview (`emberline-main-<p8>-preview`). `orphan`: nothing in Emberline uses
  * it any more; the next cleanup removes it.
  */
 export const DockerProjectOwner = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('agent'), ...DockerRunOwnerFields }),
   z.object({ kind: z.literal('preview'), ...DockerRunOwnerFields }),
-  z.object({ kind: z.literal('main'), projectId: z.string(), projectName: z.string() }),
+  z.object({
+    kind: z.literal('main'),
+    projectId: z.string(),
+    projectName: z.string(),
+    /** True for the main workspace's container preview; absent for Build & Verify's project. */
+    preview: z.boolean().optional(),
+  }),
   z.object({ kind: z.literal('orphan') }),
 ]);
 export type DockerProjectOwner = z.infer<typeof DockerProjectOwner>;

@@ -216,10 +216,11 @@ export function parseComposeLs(stdout: string): string[] {
 
 /**
  * The compose projects Emberline names (engine.ts): `emberline-<id8>` (a run's or its worktree's),
- * `emberline-<id8>-preview` and `emberline-main-<project id8>`. The GC sweep never touches any other.
+ * `emberline-<id8>-preview`, `emberline-main-<project id8>` and `emberline-main-<project id8>-preview`.
+ * The GC sweep never touches any other.
  */
 export function isEmberlineComposeProject(name: string): boolean {
-  return /^emberline-(?:[0-9a-f]{8}(?:-preview)?|main-[0-9a-f]{8})$/.test(name);
+  return /^emberline-(?:[0-9a-f]{8}|main-[0-9a-f]{8})(?:-preview)?$/.test(name);
 }
 
 /** Dangling images older than 72 h (daily, from the GC sweep). */

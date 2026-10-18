@@ -175,9 +175,12 @@ describe('staleness', () => {
     expect(isDemoStale({ head: null, build: { ...build, commit: null }, hasDemoEntry: true })).toBe(false);
   });
 
-  it('a build recorded without a commit is stale once the workspace has one', () => {
+  it('a build recorded without a commit cannot tell either: not stale, also once the workspace has a HEAD', () => {
     expect(isDemoStale({ head: build.commit, build: { ...build, commit: null }, hasDemoEntry: true })).toBe(
-      true,
+      false,
+    );
+    expect(isDemoStale({ head: build.commit, build: { ...build, commit: null, ok: false }, hasDemoEntry: false })).toBe(
+      false,
     );
   });
 });

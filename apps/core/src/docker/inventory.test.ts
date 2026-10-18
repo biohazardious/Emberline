@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dockerPsArgs, systemDfArgs } from './compose.js';
-import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './engine.js';
+import { composeProjectName, mainComposeProjectName, mainPreviewComposeProjectName, previewComposeProjectName } from './engine.js';
 import {
   buildDockerProjects,
   composeProjectsInUse,
@@ -277,6 +277,19 @@ describe('ownership', () => {
     expect(resolveDockerOwner('emberline-main-12345678', facts)).toEqual({ kind: 'orphan' });
   });
 
+  it("main's container preview belongs to its project as a preview (kept while the project exists); a deleted project's is an orphan", () => {
+    const facts: OwnershipFacts = { runs: [], projects };
+    expect(resolveDockerOwner(mainPreviewComposeProjectName(projectId), facts)).toEqual({
+      kind: 'main',
+      projectId,
+      projectName: 'Shop',
+      preview: true,
+    });
+    expect(composeProjectsInUse(facts).has(mainPreviewComposeProjectName(projectId))).toBe(true);
+    expect(resolveDockerOwner('emberline-main-12345678-preview', facts)).toEqual({ kind: 'orphan' });
+    expect(composeProjectsInUse(facts).has('emberline-main-12345678-preview')).toBe(false);
+  });
+
   it('orphans are exactly the projects the sweep would remove', () => {
     const runs = [
       run({ id: 'aaaaaaaa-0000-0000-0000-000000000000' }),
@@ -292,7 +305,9 @@ describe('ownership', () => {
     const names = [
       ...runs.flatMap((r) => [composeProjectName(r.id, r.worktreePath), previewComposeProjectName(r.id)]),
       mainComposeProjectName(projectId),
+      mainPreviewComposeProjectName(projectId),
       'emberline-main-99999999',
+      'emberline-main-99999999-preview',
       'emberline-12345678',
       'emberline-12345678-preview',
     ];

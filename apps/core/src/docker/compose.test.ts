@@ -137,8 +137,14 @@ describe('parsing compose output', () => {
 
 describe('cleanup builders', () => {
   it('only the names Emberline makes count as its compose projects', () => {
-    for (const name of ['emberline-deadbeef', 'emberline-0a1b2c3d-preview', 'emberline-main-12345678']) expect(isEmberlineComposeProject(name), name).toBe(true);
-    for (const name of ['emberline', 'emberline-verify-docker', 'emberline-e2e', 'emberline-DEADBEEF', 'emberline-deadbeef-extra', 'emberline-deadbeef0', 'shop', 'x-emberline-deadbeef']) {
+    for (const name of ['emberline-deadbeef', 'emberline-0a1b2c3d-preview', 'emberline-main-12345678', 'emberline-main-12345678-preview']) {
+      expect(isEmberlineComposeProject(name), name).toBe(true);
+    }
+    for (const name of [
+      'emberline', 'emberline-verify-docker', 'emberline-e2e', 'emberline-DEADBEEF', 'emberline-deadbeef-extra', 'emberline-deadbeef0', 'shop', 'x-emberline-deadbeef',
+      'emberline-main-preview', 'emberline-main-1234567-preview', 'emberline-main-12345678-preview-x', 'emberline-main-12345678-previews',
+      'emberline-deadbeef-preview-preview', 'emberline-main-main-12345678',
+    ]) {
       expect(isEmberlineComposeProject(name), name).toBe(false);
     }
   });

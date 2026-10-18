@@ -44,6 +44,7 @@ const runFields: RunFields = {
 const agent = (over: Partial<RunFields> = {}): AgentOwner => ({ kind: 'agent', ...runFields, ...over });
 const preview = (over: Partial<RunFields> = {}): PreviewOwner => ({ kind: 'preview', ...runFields, ...over });
 const main: DockerProjectOwner = { kind: 'main', projectId: 'p1', projectName: 'Shop' };
+const mainPreview: DockerProjectOwner = { kind: 'main', projectId: 'p1', projectName: 'Shop', preview: true };
 const orphan: DockerProjectOwner = { kind: 'orphan' };
 
 function container(over: Partial<DockerContainer> = {}): DockerContainer {
@@ -76,6 +77,18 @@ describe('groupDockerProjects', () => {
     expect(groups.map((g) => g.kind)).toEqual(['agent', 'preview', 'orphan']);
     expect(groups[0]?.projects.map((p) => p.name)).toEqual(['emberline-abcd1234', 'emberline-ffff0000']);
     expect(groups[2]?.label).toBe('Leftovers — removed by the automatic cleanup');
+  });
+
+  it("lists main's container preview under Previews, Build & Verify's project under Build & Verify", () => {
+    const groups = groupDockerProjects([
+      project('emberline-main-11112222', main),
+      project('emberline-main-11112222-preview', mainPreview),
+      project('emberline-abcd1234-preview', preview()),
+    ]);
+    expect(groups.map((g) => [g.kind, g.projects.map((p) => p.name)])).toEqual([
+      ['preview', ['emberline-main-11112222-preview', 'emberline-abcd1234-preview']],
+      ['main', ['emberline-main-11112222']],
+    ]);
   });
 
   it('labels the four groups', () => {
@@ -114,6 +127,12 @@ describe('owner labels', () => {
     });
     expect(ownerSummary(main)).toEqual({
       prefix: 'Build & Verify of',
+      text: 'Shop',
+      detail: null,
+      href: '/projects/p1/board',
+    });
+    expect(ownerSummary(mainPreview)).toEqual({
+      prefix: 'Preview of main ·',
       text: 'Shop',
       detail: null,
       href: '/projects/p1/board',
@@ -159,6 +178,14 @@ describe('confirmText', () => {
       ).warning,
     ).toBe('The agent of run abcd1234 is running and may be using it.');
     expect(confirmText(project('emberline-abcd1234', agent({ live: false })), 'stop').warning).toBeNull();
+  });
+
+  it("says Stop on main's preview project ends main's container preview", () => {
+    expect(confirmText(project('emberline-main-11112222-preview', mainPreview), 'remove')).toEqual({
+      question:
+        "Remove emberline-main-11112222-preview? Its containers, volumes and the images it built are deleted. Main's container preview stops if it is running.",
+      warning: null,
+    });
   });
 
   it("says a preview project's Stop ends the run's compose preview", () => {

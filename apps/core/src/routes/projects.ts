@@ -11,6 +11,7 @@ import {
   type AutoGenerateRoadmapResponse,
   BrainstormRequestBody,
   type BrainstormResponse,
+  type BrowserUrlResponse,
   BrowserActionBody,
   type BrowserViewportSnapshot,
   BuildDemoBody,
@@ -27,6 +28,7 @@ import {
   FactoryRequestBody,
   type FactoryRequestResponse,
   type FactorySettings,
+  type MainPreviewStatus,
   type Project,
   type ProjectAppType,
   ProjectPreviewBody,
@@ -129,6 +131,7 @@ import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BO
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
+import { resolveBrowserUrl } from '../runs/browser-url.js';
 import { ToolchainService } from '../toolchain/service.js';
 
 type ProjectRow = typeof projects.$inferSelect;
@@ -631,7 +634,40 @@ export function registerProjectRoutes(
     },
   );
 
+  // The container preview of the project's main workspace (compose; same shape as a run's preview).
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/preview',
+    async (request): Promise<MainPreviewStatus> => runs.mainPreviews.status(request.params.id, request.host),
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/preview/start',
+    async (request): Promise<MainPreviewStatus> => runs.mainPreviews.start(request.params.id, request.host),
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/preview/stop',
+    async (request): Promise<MainPreviewStatus> => runs.mainPreviews.stop(request.params.id, request.host),
+  );
+
   const demoTokens = new DemoTokens(db);
+
+  // Where the runner's browser opens a target's preview, as the runner sees it (Live Browser).
+  app.get<{ Params: { id: string }; Querystring: { target?: string } }>(
+    '/api/projects/:id/browser-url',
+    async (request): Promise<BrowserUrlResponse> =>
+      resolveBrowserUrl(
+        {
+          db,
+          config,
+          runPreviewStatus: (runId) => runs.previewStatus(runId),
+          mainPreviews: runs.mainPreviews,
+          demoTokens,
+        },
+        request.params.id,
+        typeof request.query.target === 'string' ? request.query.target : undefined,
+      ),
+  );
 
   const resolveDemoWorkspace = (projectId: string, targetId: string): string | null => {
     const row = db.select().from(projects).where(eq(projects.id, projectId)).get();

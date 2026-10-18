@@ -101,6 +101,8 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   review.start();
   updates.start();
   issueSync.start();
+  // After a merge into main, a running main container preview is rebuilt on its port.
+  postMerge.registerPostMergeStep('refresh main preview', ({ projectId }) => deps.runs.mainPreviews.refresh(projectId));
   postMerge.start();
   app.addHook('onClose', async () => {
     cron.stop();

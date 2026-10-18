@@ -50,6 +50,8 @@ export const DEFAULT_COMPOSE_PREVIEW_TIMING: ComposePreviewTiming = {
 export const COMPOSE_UP_ATTEMPTS = 3;
 
 const SHORT_TIMEOUT_MS = 60_000;
+/** Cleanup (prune, teardown, sweep, run or project delete) also removes volumes and the images a project built; a Stop does not. */
+export const CLEANUP_DOWN = { volumes: true, images: true } as const;
 export const COMPOSE_DOWN_TIMEOUT_MS = 2 * 60_000;
 /** Status, logs and down go by project name; `/` has no compose file to pick up by accident. */
 const NEUTRAL_CWD = '/';
@@ -252,4 +254,21 @@ async function run(
   } catch (error) {
     return { ok: false, how: 'could not run', output: composeOutputTail((error as Error).message) };
   }
+}
+
+/** Waits for `job` at most `ms`; resolves whether it settled in time (the job itself carries on). */
+export function settlesWithin(job: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    void job.then(
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+    );
+  });
 }

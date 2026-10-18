@@ -70,6 +70,21 @@ const JAVA = { binary: 'java', hint: 'Install the JDK and Android SDK with `embe
 const CARGO = { binary: 'cargo', hint: 'Rust ships with the runner image; rebuild the runner.' };
 const GO = { binary: 'go', hint: 'Go ships with the runner image; rebuild the runner.' };
 
+/** package.json files larger than this are not read for the build-target check or the gate plan. */
+const PACKAGE_JSON_MAX = 1024 * 1024;
+/** platformio.ini files larger than this are not read for the gate plan. */
+const PLATFORMIO_INI_MAX = 256 * 1024;
+
+/**
+ * A small workspace file the gate plan reads, through a verified, capped descriptor (the workspace
+ * is agent-writable: a FIFO or a link there must not block or redirect core). Null when it is not a
+ * regular file of its own or is over `max`.
+ */
+async function readGateFile(workspacePath: string, rel: string, max: number): Promise<string | null> {
+  const raw = await readWorktreeBytes(workspacePath, rel, max).catch(() => null);
+  return raw ? raw.toString('utf8') : null;
+}
+
 /**
  * Plans the gate for every ecosystem the workspace contains, not just the first one found: a
  * firmware repo with a package.json for its web companion gets both `npm run build` and `pio run`.
@@ -91,8 +106,9 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
         timeout: 120_000,
       });
     }
-    const rawPkg = await readFile(path.join(workspacePath, 'package.json'), 'utf-8');
-    const scripts = (JSON.parse(rawPkg) as { scripts?: Record<string, string> }).scripts ?? {};
+    // Unreadable (a FIFO, a link, over the cap): no scripts to run.
+    const rawPkg = await readGateFile(workspacePath, 'package.json', PACKAGE_JSON_MAX);
+    const scripts = rawPkg === null ? {} : ((JSON.parse(rawPkg) as { scripts?: Record<string, string> }).scripts ?? {});
     const buildScriptName =
       typeof scripts.build === 'string'
         ? 'build'
@@ -126,7 +142,7 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   if (has('platformio.ini')) {
     // The first build downloads the board's toolchain and framework.
     steps.push(sh('pio run', workspacePath, 900_000, PLATFORMIO));
-    const ini = await readFile(path.join(workspacePath, 'platformio.ini'), 'utf-8');
+    const ini = (await readGateFile(workspacePath, 'platformio.ini', PLATFORMIO_INI_MAX)) ?? '';
     if (/^\[env:native\]/m.test(ini) && has('test')) {
       steps.push(sh('pio test -e native', workspacePath, 600_000, PLATFORMIO));
     }
@@ -158,9 +174,6 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   if (has('Makefile')) return [{ display: 'make', file: 'make', args: [], cwd: workspacePath, timeout: 120_000 }];
   return [];
 }
-
-/** package.json files larger than this are not read for the build-target check. */
-const PACKAGE_JSON_MAX = 1024 * 1024;
 
 /**
  * Whether the build gate has something to verify: approved worktree.yml checks, or a detected

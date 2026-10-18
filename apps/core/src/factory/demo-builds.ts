@@ -51,7 +51,7 @@ export function recordDemoBuild(db: Db, projectId: string, targetId: string, bui
 /**
  * Whether a target's demo is older than its workspace: the workspace HEAD differs from the commit
  * the build was made from, or a demo is on disk that no recorded build made. Without a HEAD (not a
- * git repository) it cannot tell and says no.
+ * git repository), or for a build recorded without its commit, it cannot tell and says no.
  */
 export function isDemoStale(params: {
   head: string | null;
@@ -60,7 +60,8 @@ export function isDemoStale(params: {
 }): boolean {
   const { head, build, hasDemoEntry } = params;
   if (!build) return hasDemoEntry;
-  if (head === null) return false;
+  // No HEAD, or a build recorded without its commit: it cannot tell.
+  if (head === null || build.commit === null) return false;
   return build.commit !== head;
 }
 

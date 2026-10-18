@@ -29,3 +29,36 @@ export const StartPreviewBody = z.object({
   port: z.number().int().min(1024).max(65535).optional(),
 });
 export type StartPreviewBody = z.input<typeof StartPreviewBody>;
+
+/**
+ * The container preview of a project's main workspace: always a compose preview (the approved
+ * worktree.yml's compose preview service, started from main in project `emberline-main-<p8>-preview`).
+ * The same shape as a run's, with `runId` null and `targetId` 'main'.
+ */
+export const MainPreviewStatus = RunPreviewStatus.extend({
+  runId: z.null(),
+  targetId: z.literal('main'),
+  /**
+   * Why main cannot have a container preview now (no compose preview service approved, the Docker
+   * engine is off or does not answer, the compose file is not in main yet); absent when it can.
+   */
+  unavailable: z.string().optional(),
+});
+export type MainPreviewStatus = z.infer<typeof MainPreviewStatus>;
+
+/**
+ * Where the runner's browser (Live Browser, agents' Playwright) opens a target's preview, as the
+ * runner sees it: `compose` a running container preview on the engine's host; `command` a running
+ * dev server in the runner (localhost there); `static` the token demo URL on core, or null when the
+ * target has no demo entry yet.
+ */
+export const BrowserUrlKind = z.enum(['compose', 'command', 'static']);
+export type BrowserUrlKind = z.infer<typeof BrowserUrlKind>;
+
+export const BrowserUrlResponse = z.object({
+  url: z.string().nullable(),
+  kind: BrowserUrlKind,
+  /** Why it is not the container preview, or why there is no URL (Emberline's words). */
+  note: z.string().optional(),
+});
+export type BrowserUrlResponse = z.infer<typeof BrowserUrlResponse>;

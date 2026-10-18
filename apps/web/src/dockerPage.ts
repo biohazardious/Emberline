@@ -12,7 +12,11 @@ import { ApiRequestError, errorMessage } from './api';
 /** The Docker page's groups, in display order. */
 export const DOCKER_GROUPS: { kind: DockerOwnerKind; label: string; hint: string }[] = [
   { kind: 'agent', label: 'Agents', hint: "Compose projects agents started for their run's worktree." },
-  { kind: 'preview', label: 'Previews', hint: 'Compose previews started from a run’s Review page.' },
+  {
+    kind: 'preview',
+    label: 'Previews',
+    hint: 'Compose previews of a run (from its Review page) or of a project’s main workspace.',
+  },
   { kind: 'main', label: 'Build & Verify', hint: "Run Build & Verify on a project's main workspace." },
   {
     kind: 'orphan',
@@ -28,11 +32,16 @@ export interface DockerGroup {
   projects: DockerProject[];
 }
 
+/** The group a project is listed in: its owner kind, but main's container preview is a preview. */
+function groupOf(owner: DockerProjectOwner): DockerOwnerKind {
+  return owner.kind === 'main' && owner.preview ? 'preview' : owner.kind;
+}
+
 /** The projects by owner kind, in `DOCKER_GROUPS` order; empty groups are left out. */
 export function groupDockerProjects(projects: DockerProject[]): DockerGroup[] {
   return DOCKER_GROUPS.map((g) => ({
     ...g,
-    projects: projects.filter((p) => p.owner.kind === g.kind),
+    projects: projects.filter((p) => groupOf(p.owner) === g.kind),
   })).filter((g) => g.projects.length > 0);
 }
 
@@ -68,7 +77,7 @@ export function ownerSummary(owner: DockerProjectOwner): OwnerSummary {
     }
     case 'main':
       return {
-        prefix: 'Build & Verify of',
+        prefix: owner.preview ? 'Preview of main ·' : 'Build & Verify of',
         text: owner.projectName,
         detail: null,
         href: `/projects/${owner.projectId}/board`,
@@ -119,6 +128,7 @@ export function confirmText(
       ? `Stop ${project.name}? Its containers are taken down; volumes and images stay.`
       : `Remove ${project.name}? Its containers, volumes and the images it built are deleted.`;
   if (owner.kind === 'preview') question += " The run's compose preview stops if it is running.";
+  if (owner.kind === 'main' && owner.preview) question += " Main's container preview stops if it is running.";
   const warning =
     owner.kind === 'agent' && owner.live
       ? `The agent of ${runOwnerName(owner)} is running and may be using it.`

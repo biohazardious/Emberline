@@ -20,6 +20,7 @@ import {
   DOCKER_PROMPT_PARAGRAPH,
   DockerEngine,
   mainComposeProjectName,
+  mainPreviewComposeProjectName,
   previewComposeProjectName,
 } from './docker/engine.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -93,6 +94,12 @@ describe('composeProjectName', () => {
 
   it('the main workspace (Build & Verify) has emberline-main-<first 8 of the project id>', () => {
     expect(mainComposeProjectName('C0FFEE12-0000-4000-8000-000000000000')).toBe('emberline-main-c0ffee12');
+  });
+
+  it("the main workspace's container preview has emberline-main-<first 8 of the project id>-preview, apart from Build & Verify's", () => {
+    const id = 'C0FFEE12-0000-4000-8000-000000000000';
+    expect(mainPreviewComposeProjectName(id)).toBe('emberline-main-c0ffee12-preview');
+    expect(mainPreviewComposeProjectName(id)).not.toBe(mainComposeProjectName(id));
   });
 });
 
