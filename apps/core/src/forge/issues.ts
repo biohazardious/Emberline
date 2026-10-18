@@ -34,7 +34,8 @@ export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestI
     res = await fetchFn(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS) });
   } catch (err) {
     if (isAbort(err)) throw timeoutError();
-    throw err;
+    const cause = err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : '';
+    throw new HttpError(502, 'forge_error', `could not reach the forge${cause}`.slice(0, 300));
   }
   if (res.status >= 300 && res.status < 400 && res.status !== 304) {
     throw new HttpError(502, 'forge_error', 'forge API redirected; set the API URL');

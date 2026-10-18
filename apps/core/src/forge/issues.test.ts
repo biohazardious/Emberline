@@ -423,6 +423,17 @@ describe('forge fetch hardening', () => {
     });
   });
 
+  it('maps a connection failure to a 502 forge_error', async () => {
+    const fn = (async () => {
+      throw new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND stub') });
+    }) as unknown as typeof fetch;
+    await expect(new IssuesClient({ fetch: fn }).list(target(gh), {})).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'forge_error',
+      message: expect.stringMatching(/could not reach the forge.*ENOTFOUND stub/),
+    });
+  });
+
   it('asks fetch for redirect: manual', async () => {
     let seen: RequestInit | undefined;
     const fn = (async (_url: string, init?: RequestInit) => {
