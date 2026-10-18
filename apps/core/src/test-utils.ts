@@ -5,6 +5,7 @@ import { CSRF_HEADER } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { type CoreConfig, DEFAULT_DOCKER_CERT_PATH, DEFAULT_PREVIEW_PORTS } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
+import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import type { FetchLike } from './forge/issues.js';
 import { ForgeService } from './forge/service.js';
@@ -30,6 +31,8 @@ export interface TestApp {
   forgeFetch: { current: FetchLike };
   /** The server's label sync and write-back (started with the server). */
   issueSync: IssueSyncService;
+  /** The server's post-merge jobs (rebuild main after a merge). */
+  postMerge: PostMergeJobs;
   close(): Promise<void>;
 }
 
@@ -78,7 +81,8 @@ export async function createTestApp(
   const forgeFetch: { current: FetchLike } = { current: (url, init) => globalThis.fetch(url, init) };
   const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
   const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
-  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync });
+  const postMerge = new PostMergeJobs(opened.db, runs);
+  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync, postMerge });
   return {
     app,
     config,
@@ -92,6 +96,7 @@ export async function createTestApp(
     forge,
     forgeFetch,
     issueSync,
+    postMerge,
     async close() {
       await app.close();
       // Background archive passes must not outlive the DB and temp dir they use.

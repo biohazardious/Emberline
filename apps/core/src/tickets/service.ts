@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -24,7 +24,6 @@ import {
   type TicketStatus,
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
-  type WorktreeChecks,
 } from '@emberline/protocol';
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
@@ -36,6 +35,7 @@ import {
   buildFactoryOrchestratorPrompt,
   buildWorkspaceDemo,
   conflictResolutionPrompt,
+  hasVerifiableBuildTarget,
   factoryTicketTitle,
   effectiveFactorySettings,
   getFactorySettings,
@@ -198,43 +198,6 @@ export function statusForRunState(state: Run['state']): TicketStatus | null {
     return 'in_progress';
   }
   return null; // failed: stays put and shows the failed run
-}
-
-/** Whether the build gate has something to verify: approved worktree.yml checks, or a detected target. */
-export function hasVerifiableBuildTarget(workspacePath: string, checks?: WorktreeChecks | null): boolean {
-  if (checks && (checks.build || checks.lint || checks.test)) return true;
-  const pkgPath = path.join(workspacePath, 'package.json');
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
-      const hasValidTest =
-        typeof pkg.scripts?.test === 'string' && !pkg.scripts.test.includes('no test specified');
-      if (
-        pkg.scripts?.build ||
-        pkg.scripts?.typecheck ||
-        pkg.scripts?.check ||
-        pkg.scripts?.lint ||
-        hasValidTest
-      ) {
-        return true;
-      }
-    } catch {
-      // ignore invalid package.json
-    }
-  }
-  return (
-    existsSync(path.join(workspacePath, 'Cargo.toml')) ||
-    existsSync(path.join(workspacePath, 'go.mod')) ||
-    existsSync(path.join(workspacePath, 'pyproject.toml')) ||
-    existsSync(path.join(workspacePath, 'requirements.txt')) ||
-    existsSync(path.join(workspacePath, 'setup.py')) ||
-    existsSync(path.join(workspacePath, 'platformio.ini')) ||
-    existsSync(path.join(workspacePath, 'src-tauri', 'Cargo.toml')) ||
-    existsSync(path.join(workspacePath, 'pubspec.yaml')) ||
-    existsSync(path.join(workspacePath, 'gradlew')) ||
-    existsSync(path.join(workspacePath, 'android', 'gradlew')) ||
-    existsSync(path.join(workspacePath, 'Makefile'))
-  );
 }
 
 /**
@@ -1011,6 +974,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     ) {
       this.selfHealedRuns.add(run.id);
       const buildRes = await buildWorkspaceDemo({
+        db: this.db,
         projectId: run.projectId,
         targetId: run.id,
         workspacePath: run.worktreePath,

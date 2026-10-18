@@ -3,6 +3,16 @@ import { z } from 'zod';
 import { AgentPersona } from './projects.js';
 import { RunState } from './runs.js';
 
+/** A recorded demo build of one target (project settings `demoBuilds`, by target id). */
+export const DemoBuildRecord = z.object({
+  /** The workspace's HEAD when the build started; null when it could not be read (not a git repository). */
+  commit: z.string().nullable(),
+  /** When the build finished (ISO). */
+  builtAt: z.string(),
+  ok: z.boolean(),
+});
+export type DemoBuildRecord = z.infer<typeof DemoBuildRecord>;
+
 export const WorkspaceDemoTarget = z.object({
   /** 'main' for /workspaces/<slug>, or the runId for a ticket run worktree. */
   id: z.string(),
@@ -30,6 +40,15 @@ export const WorkspaceDemoTarget = z.object({
   /** Ready-to-open URL served by core, e.g. `/api/projects/:id/demo/main/` or `/api/projects/:id/demo/:runId/`. */
   demoUrl: z.string().nullable(),
   updatedAt: z.string(),
+  /** The target's last recorded demo build; null when none was recorded. */
+  demoBuild: DemoBuildRecord.nullable().default(null),
+  /**
+   * The workspace moved past the recorded build (its HEAD differs from the recorded commit), or a
+   * demo is on disk that no recorded build made. False when it cannot tell (not a git repository).
+   */
+  demoStale: z.boolean().default(false),
+  /** A build of this target is running or queued (for main also the rebuild after a merge). */
+  rebuilding: z.boolean().default(false),
 });
 export type WorkspaceDemoTarget = z.infer<typeof WorkspaceDemoTarget>;
 

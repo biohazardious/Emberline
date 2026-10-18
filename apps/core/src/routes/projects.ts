@@ -92,7 +92,8 @@ import {
 } from '../factory/roadmap.js';
 import {
   auditWorktreeSlop,
-  buildWorkspaceDemo,
+  buildDemoTarget,
+  isDemoBuildRunning,
   captureBrowserViewportSnapshot,
   computeProjectRecommendations,
   computeProjectStatusSummary,
@@ -126,8 +127,9 @@ import { isWizardCreate, planNewProject, plannedTickets } from '../factory/proje
 import { AGENT_DEMO_TOKEN_TTL_MS, DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
 import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
+import { readDemoBuilds } from '../factory/demo-builds.js';
+import type { PostMergeJobs } from '../factory/post-merge.js';
 import { ToolchainService } from '../toolchain/service.js';
-import { approvedChecks, approvedSetup } from '../worktree-config/load.js';
 
 type ProjectRow = typeof projects.$inferSelect;
 
@@ -160,7 +162,10 @@ export function slugify(name: string): string {
     .slice(0, 48);
 }
 
-export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, tickets, runs, scheduler }: CoreDeps): void {
+export function registerProjectRoutes(
+  app: FastifyInstance,
+  { db, config, ptyd, tickets, runs, scheduler, postMerge }: CoreDeps & { postMerge: PostMergeJobs },
+): void {
   const saveActiveProjectId = (activeProjectId: string | null) => {
     db.insert(settings)
       .values({ key: ACTIVE_PROJECT_KEY, value: { activeProjectId } })
@@ -531,6 +536,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         tickets: projectTickets,
         runs: projectRuns,
         autoChainActive: tickets.isAutoChainActive(project.id),
+        demoBuilds: readDemoBuilds(db, project.id),
+        isBuilding: (targetId, workspacePath) =>
+          isDemoBuildRunning(workspacePath) || (targetId === 'main' && postMerge.isRebuilding(project.id)),
       });
     },
   );
@@ -618,26 +626,8 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     async (request): Promise<BuildDemoResponse> => {
       const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
       if (!row) throw notFound('no such project');
-      const project = toProject(row);
       const body = BuildDemoBody.parse(request.body ?? {});
-      let workspacePath = project.path;
-      let env: Record<string, string>;
-      if (body.targetId !== 'main') {
-        const run = runs.get(body.targetId);
-        if (!run || run.projectId !== project.id) throw notFound('no such run target for this project');
-        workspacePath = run.worktreePath;
-        env = await runs.dockerEnvFor({ id: run.id, worktreePath: run.worktreePath });
-      } else {
-        env = await runs.dockerEnvForMain(project.id);
-      }
-      return buildWorkspaceDemo({
-        projectId: project.id,
-        targetId: body.targetId,
-        workspacePath,
-        checks: approvedChecks(db, project.id),
-        setup: approvedSetup(db, project.id),
-        env,
-      });
+      return buildDemoTarget({ db, runs }, toProject(row), body.targetId);
     },
   );
 

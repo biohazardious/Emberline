@@ -1,10 +1,15 @@
 /** Build/lint/test gate, demo asset serving and viewport snapshots; commands run in the runner. */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { type BrowserViewportSnapshot, type BuildDemoResponse, type WorktreeChecks } from '@emberline/protocol';
 import { CommandFailedError, execCommand } from '../command-exec.js';
+import type { Db } from '../db/index.js';
+import { notFound } from '../errors.js';
+import { KeyedMutex } from '../keyed-mutex.js';
+import { approvedChecks, approvedSetup } from '../worktree-config/load.js';
 import { inlineCode, runWorktreeCommand, SETUP_TIMEOUT_MS, SETUP_TOTAL_MS } from '../worktree-config/lifecycle.js';
+import { buildStartCommit, recordDemoBuild } from './demo-builds.js';
 import {
   collectWorkspaceFiles,
   detectDemoEntryRelPath,
@@ -153,6 +158,43 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   return [];
 }
 
+/** Whether the build gate has something to verify: approved worktree.yml checks, or a detected target. */
+export function hasVerifiableBuildTarget(workspacePath: string, checks?: WorktreeChecks | null): boolean {
+  if (checks && (checks.build || checks.lint || checks.test)) return true;
+  const pkgPath = path.join(workspacePath, 'package.json');
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
+      const hasValidTest =
+        typeof pkg.scripts?.test === 'string' && !pkg.scripts.test.includes('no test specified');
+      if (
+        pkg.scripts?.build ||
+        pkg.scripts?.typecheck ||
+        pkg.scripts?.check ||
+        pkg.scripts?.lint ||
+        hasValidTest
+      ) {
+        return true;
+      }
+    } catch {
+      // ignore invalid package.json
+    }
+  }
+  return (
+    existsSync(path.join(workspacePath, 'Cargo.toml')) ||
+    existsSync(path.join(workspacePath, 'go.mod')) ||
+    existsSync(path.join(workspacePath, 'pyproject.toml')) ||
+    existsSync(path.join(workspacePath, 'requirements.txt')) ||
+    existsSync(path.join(workspacePath, 'setup.py')) ||
+    existsSync(path.join(workspacePath, 'platformio.ini')) ||
+    existsSync(path.join(workspacePath, 'src-tauri', 'Cargo.toml')) ||
+    existsSync(path.join(workspacePath, 'pubspec.yaml')) ||
+    existsSync(path.join(workspacePath, 'gradlew')) ||
+    existsSync(path.join(workspacePath, 'android', 'gradlew')) ||
+    existsSync(path.join(workspacePath, 'Makefile'))
+  );
+}
+
 /** A check of an approved worktree.yml may take this long. */
 export const CHECK_TIMEOUT_MS = 15 * 60_000;
 
@@ -205,7 +247,7 @@ export async function runApprovedSetup(
   }
 }
 
-export async function buildWorkspaceDemo(params: {
+export interface BuildWorkspaceDemoParams {
   projectId: string;
   targetId: string;
   workspacePath: string;
@@ -218,7 +260,80 @@ export async function buildWorkspaceDemo(params: {
    * the target's compose project while the engine answers (RunService.dockerEnvFor / dockerEnvForMain).
    */
   env?: Record<string, string>;
-}): Promise<BuildDemoResponse> {
+  /** Records the build (commit at start, outcome) under the project's `demoBuilds` when given. */
+  db?: Db;
+}
+
+/** One build per workspace at a time: a person's Build & Verify waits for the rebuild after a merge. */
+const demoBuildLock = new KeyedMutex();
+
+/** Whether a build of this workspace is running or waiting for one. */
+export function isDemoBuildRunning(workspacePath: string): boolean {
+  return demoBuildLock.isLocked(path.resolve(workspacePath));
+}
+
+/**
+ * Runs the build/lint/test gate in a workspace and reports its demo entry. With `db`, the build is
+ * recorded with the workspace HEAD it started from (also when it fails or cannot run).
+ */
+export async function buildWorkspaceDemo(params: BuildWorkspaceDemoParams): Promise<BuildDemoResponse> {
+  return demoBuildLock.run(path.resolve(params.workspacePath), async () => {
+    const { db } = params;
+    if (!db) return runWorkspaceBuild(params);
+    const commit = existsSync(params.workspacePath) ? await buildStartCommit(params.workspacePath) : null;
+    const record = (ok: boolean) =>
+      recordDemoBuild(db, params.projectId, params.targetId, { commit, builtAt: new Date().toISOString(), ok });
+    let res: BuildDemoResponse;
+    try {
+      res = await runWorkspaceBuild(params);
+    } catch (error) {
+      if (existsSync(params.workspacePath)) record(false);
+      throw error;
+    }
+    record(res.ok);
+    return res;
+  });
+}
+
+/** The services {@link buildDemoTarget} needs from RunService. */
+export interface DemoTargetRuns {
+  get(id: string): { id: string; projectId: string; worktreePath: string };
+  dockerEnvFor(run: { id: string; worktreePath: string }): Promise<Record<string, string>>;
+  dockerEnvForMain(projectId: string): Promise<Record<string, string>>;
+}
+
+/**
+ * Builds a project target ('main' or a run id) the way Run Build & Verify does: the approved setup
+ * and checks, the target's Docker variables, and a recorded result. 404 for a run of another project.
+ */
+export async function buildDemoTarget(
+  deps: { db: Db; runs: DemoTargetRuns },
+  project: { id: string; path: string },
+  targetId: string,
+): Promise<BuildDemoResponse> {
+  const { db, runs } = deps;
+  let workspacePath = project.path;
+  let env: Record<string, string>;
+  if (targetId !== 'main') {
+    const run = runs.get(targetId);
+    if (!run || run.projectId !== project.id) throw notFound('no such run target for this project');
+    workspacePath = run.worktreePath;
+    env = await runs.dockerEnvFor({ id: run.id, worktreePath: run.worktreePath });
+  } else {
+    env = await runs.dockerEnvForMain(project.id);
+  }
+  return buildWorkspaceDemo({
+    db,
+    projectId: project.id,
+    targetId,
+    workspacePath,
+    checks: approvedChecks(db, project.id),
+    setup: approvedSetup(db, project.id),
+    env,
+  });
+}
+
+async function runWorkspaceBuild(params: BuildWorkspaceDemoParams): Promise<BuildDemoResponse> {
   const { projectId, targetId, workspacePath } = params;
   if (!existsSync(workspacePath)) {
     throw new Error(`Workspace path not found: ${workspacePath}`);

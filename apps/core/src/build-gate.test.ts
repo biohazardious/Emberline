@@ -3,9 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
-import { buildWorkspaceDemo, planGateSteps } from './factory/demo.js';
+import { buildWorkspaceDemo, hasVerifiableBuildTarget, planGateSteps } from './factory/demo.js';
 import { inspectWorkspaceProject } from './factory/workspace-status.js';
-import { hasVerifiableBuildTarget } from './tickets/service.js';
 import { setupFinishedIn } from './worktree-config/load.js';
 
 let ws: string;

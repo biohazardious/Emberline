@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  type DemoBuildRecord,
   type Project,
   type ProjectBlueprintResponse,
   type ProjectRecommendation,
@@ -11,6 +12,8 @@ import {
   type Ticket,
   type WorkspaceDemoTarget,
 } from '@emberline/protocol';
+import { workspaceHeadSha } from '../runs/git.js';
+import { isDemoStale } from './demo-builds.js';
 
 export function computeProjectRecommendations(
   project: Project,
@@ -441,8 +444,22 @@ export async function computeProjectStatusSummary(params: {
   tickets: readonly Ticket[];
   runs: readonly Run[];
   autoChainActive?: boolean;
+  /** Recorded demo builds by target id (project settings `demoBuilds`). */
+  demoBuilds?: Readonly<Record<string, DemoBuildRecord>>;
+  /** Whether a build of the target is running or queued. */
+  isBuilding?: (targetId: string, workspacePath: string) => boolean;
 }): Promise<ProjectStatusSummary> {
-  const { project, tickets, runs, autoChainActive = false } = params;
+  const { project, tickets, runs, autoChainActive = false, demoBuilds = {}, isBuilding = () => false } = params;
+  /** Build record, staleness (HEAD read from git's files: a few small reads) and build state. */
+  const freshness = async (targetId: string, workspacePath: string, demoEntry: string | null) => {
+    const demoBuild = demoBuilds[targetId] ?? null;
+    const head = await workspaceHeadSha(workspacePath);
+    return {
+      demoBuild,
+      demoStale: isDemoStale({ head, build: demoBuild, hasDemoEntry: Boolean(demoEntry) }),
+      rebuilding: isBuilding(targetId, workspacePath),
+    };
+  };
   const projectTickets = tickets.filter((t) => t.projectId === project.id);
   const projectRuns = runs
     .filter((r) => r.projectId === project.id)
@@ -496,6 +513,7 @@ export async function computeProjectStatusSummary(params: {
     demoEntryRelPath: mainDemoEntry,
     demoUrl: mainDemoEntry ? `/api/projects/${project.id}/demo/main/` : null,
     updatedAt: project.createdAt,
+    ...(await freshness('main', project.path, mainDemoEntry)),
   });
 
   // 2. Run worktree targets
@@ -534,6 +552,7 @@ export async function computeProjectStatusSummary(params: {
       demoEntryRelPath: wtDemoEntry,
       demoUrl: wtDemoEntry ? `/api/projects/${project.id}/demo/${run.id}/` : null,
       updatedAt: run.endedAt ?? run.stateChangedAt ?? run.createdAt,
+      ...(await freshness(run.id, run.worktreePath, wtDemoEntry)),
     });
   }
 

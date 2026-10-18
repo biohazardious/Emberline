@@ -9,6 +9,7 @@ import type { CoreConfig } from './config.js';
 import { CronService } from './cron/service.js';
 import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
+import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
@@ -54,6 +55,8 @@ export interface CoreDeps {
   forge?: ForgeService;
   /** Issue label sync and write-back; built from the other services when omitted. */
   issueSync?: IssueSyncService;
+  /** Background work after merges into main (rebuild main's demo); built from `db` and `runs` when omitted. */
+  postMerge?: PostMergeJobs;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -74,6 +77,11 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const issueSync =
     deps.issueSync ??
     new IssueSyncService(deps.db, deps.tickets, deps.runs, forge, { log: (message, err) => app.log.warn({ err }, message) });
+  const postMerge =
+    deps.postMerge ??
+    new PostMergeJobs(deps.db, deps.runs, {
+      log: (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message)),
+    });
   // A person's review feedback for a fresh attempt starts the ticket like the Board's Start does.
   const review = new ReviewService(deps.db, deps.runs, {
     log: (message, err) => app.log.warn({ err }, message),
@@ -93,12 +101,14 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   review.start();
   updates.start();
   issueSync.start();
+  postMerge.start();
   app.addHook('onClose', async () => {
     cron.stop();
     notifications.stop();
     review.stop();
     updates.stop();
     await issueSync.stop();
+    await postMerge.stop();
   });
 
   installErrorHandler(app);
@@ -126,7 +136,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
     docker: deps.runs.docker.status,
   }));
-  registerProjectRoutes(app, deps);
+  registerProjectRoutes(app, { ...deps, postMerge });
   registerProjectImportRoutes(app, deps);
   registerWorktreeConfigRoutes(app, deps);
   registerTerminalRoutes(app, deps);

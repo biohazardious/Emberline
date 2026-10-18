@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { builtLine, shouldAutoBuild, staleBadge } from '../demoFreshness';
 import { blockingMessage, reviewBlockedCount, worktreeMissing } from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { useApi } from '../hooks/useApi';
@@ -147,6 +148,17 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 type StudioTab = 'factory' | 'demo' | 'browser' | 'worktrees' | 'checkpoints';
 
+/** When and from which commit the target's demo was built, and whether its workspace moved on since. */
+function DemoFreshness({ target }: { target: WorkspaceDemoTarget }) {
+  const badge = staleBadge(target);
+  return (
+    <span className="demo-freshness small">
+      <span className={target.rebuilding ? 'demo-freshness-busy' : 'muted'}>{builtLine(target)}</span>
+      {badge && <span className="badge badge-warn">{badge}</span>}
+    </span>
+  );
+}
+
 export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [, navigate] = useLocation();
   const statusPoll = useApi<ProjectStatusSummary>(`/api/projects/${project.id}/status`, 4_000);
@@ -255,6 +267,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [rollingBackSha, setRollingBackSha] = useState<string>();
   const [lastBuildOutput, setLastBuildOutput] = useState<string>('');
   const demoFrameRef = useRef<HTMLIFrameElement | null>(null);
+  /** Targets whose stale demo this opening of Preview & Build already started a build for. */
+  const autoBuiltTargets = useRef(new Set<string>());
 
   // Worktrees filter: hide completed worktrees by default to avoid clutter
   const [hideCompletedWorktrees, setHideCompletedWorktrees] = useState(true);
@@ -526,11 +540,26 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     }
   };
 
+  /** Opening a stale target starts its build, once per opening of the tab and target. */
+  const buildIfStale = (target: WorkspaceDemoTarget | undefined) => {
+    if (!target) return;
+    const state = { building: buildingTargetId !== undefined, alreadyStarted: autoBuiltTargets.current.has(target.id) };
+    if (!shouldAutoBuild(target, state)) return;
+    autoBuiltTargets.current.add(target.id);
+    void handleBuildAndPlay(target, false);
+  };
+
+  const openDemoTab = (target: WorkspaceDemoTarget) => {
+    if (activeTab !== 'demo') autoBuiltTargets.current.clear();
+    setActiveTab('demo');
+    buildIfStale(target);
+  };
+
   const handleOpenDemo = async (target: WorkspaceDemoTarget) => {
     setSelectedTargetId(target.id);
     setDemoErrors([]);
     if (target.demoUrl) {
-      setActiveTab('demo');
+      openDemoTab(target);
       setIframeNonce((n) => n + 1);
       return;
     }
@@ -755,7 +784,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             role="tab"
             aria-selected={activeTab === 'demo'}
             className={activeTab === 'demo' ? 'active' : ''}
-            onClick={() => setActiveTab('demo')}
+            onClick={() => openDemoTab(activeTarget)}
           >
             <Play className="icon" aria-hidden /> Preview &amp; Build
           </button>
@@ -1197,6 +1226,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     cmd: {mainTarget.buildCommand}
                   </span>
                 ) : null}
+                <DemoFreshness target={mainTarget} />
               </div>
               <div className="actions">
                 {bestPlayableTarget && (bestPlayableTarget.demoUrl || bestPlayableTarget.hasBuildScript) && (
@@ -1302,6 +1332,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       setSelectedTargetId(e.target.value);
                       setIframeNonce((n) => n + 1);
                       setDemoErrors([]);
+                      buildIfStale(targets.find((t) => t.id === e.target.value));
                     }}
                     style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
                   >
@@ -1312,6 +1343,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     ))}
                   </select>
                   <span className="mono muted small">{activeTarget.demoEntryRelPath}</span>
+                  <DemoFreshness target={activeTarget} />
                 </div>
                 <div className="actions">
                   <button
@@ -1489,7 +1521,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   <select
                     className="input"
                     value={activeTarget.id}
-                    onChange={(e) => setSelectedTargetId(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedTargetId(e.target.value);
+                      buildIfStale(targets.find((t) => t.id === e.target.value));
+                    }}
                     style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
                   >
                     {targets.map((t) => (
@@ -1498,6 +1533,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       </option>
                     ))}
                   </select>
+                  <DemoFreshness target={activeTarget} />
                 </div>
 
                 <div className="actions">
@@ -1758,6 +1794,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         ◐ Build / Check ready (<span className="mono">{target.buildCommand ?? 'build'}</span>)
                       </div>
                     ) : null}
+                    <div className="demo-freshness-row">
+                      <DemoFreshness target={target} />
+                    </div>
 
                     {target.topFiles.length > 0 && (
                       <div

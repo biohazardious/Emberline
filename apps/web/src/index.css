@@ -3455,6 +3455,22 @@ dialog.cmd-dialog::backdrop {
   border-color: color-mix(in hsl, var(--warn) 50%, var(--border));
 }
 
+/* Preview & Build: when a target's demo was built, and whether it is stale. */
+.demo-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.demo-freshness-busy {
+  color: var(--ember-1);
+}
+
+.demo-freshness-row {
+  margin-bottom: 6px;
+}
+
 .badge-ok {
   color: var(--ok);
   border-color: color-mix(in hsl, var(--ok) 50%, var(--border));
