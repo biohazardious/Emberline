@@ -230,6 +230,7 @@ const EVENT_LABEL: Record<string, string> = {
   dependency_dropped: 'dependency dropped',
   tickets_file_rejected: 'tickets file rejected',
   tickets_file_inherited: 'tickets file from main skipped',
+  ticket_removed: 'ticket deleted',
   tickets_file_duplicate: 'tickets file already imported',
   conflict_resolution_requested: 'resolving merge conflict',
   conflict_resolution_failed: 'conflict resolution failed',

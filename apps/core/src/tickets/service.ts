@@ -29,7 +29,7 @@ import {
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { readProjectSettings, writeProjectSettings } from '../db/project-settings.js';
-import { issueTombstones, projects, runEvents, settings, ticketDependencies, tickets } from '../db/schema.js';
+import { issueTombstones, projects, runEvents, runs, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
@@ -1667,6 +1667,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const row = this.row(id);
     const waiting = this.dependentIds(id);
     const blockedBefore = this.dependenciesOf(waiting);
+    // Its runs outlive it (ticketId goes null); a hold they had is nobody's to answer any more.
+    for (const run of this.db.select({ id: runs.id }).from(runs).where(eq(runs.ticketId, id)).all()) {
+      this.runs.note(run.id, 'ticket_removed', { key: row.key });
+    }
     this.db.transaction((tx) => {
       tx.delete(tickets).where(eq(tickets.id, id)).run();
       // A person removed an imported ticket: label sync must not bring the issue back.

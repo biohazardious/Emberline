@@ -304,6 +304,19 @@ describe('attention through RunService', () => {
     expect(find(id).attention).toBeNull();
   });
 
+  it('deleting a held ticket takes its runs out of the Inbox (they do not fall back to the ticketless 24 h rule)', () => {
+    const ticket = t.tickets.create(projectId, { title: 'Duplicate', status: 'review' });
+    const id = seedRun('done', { ticketId: ticket.id });
+    seedEvent(id, 'Stop', 'done');
+    seedEvent(id, 'merge_failed');
+    expect(find(id).attention).toMatchObject({ reason: 'held', detail: 'Merge failed' });
+    t.tickets.remove(ticket.id);
+    expect(find(id).attention).toBeNull();
+    expect(
+      t.db.select().from(runEvents).where(eq(runEvents.runId, id)).all().some((e) => e.type === 'ticket_removed'),
+    ).toBe(true);
+  });
+
   it('a hold of a run that a newer run of its ticket superseded is not attention', () => {
     const ticket = t.tickets.create(projectId, { title: 'Again', status: 'review' });
     const older = seedRun('done', { ticketId: ticket.id });

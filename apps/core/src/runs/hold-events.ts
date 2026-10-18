@@ -22,6 +22,13 @@ export const HOLD_EVENTS: readonly string[] = [
  * pipeline, or by a person through sync-worktree: `merged_by_person`), or the completion gate
  * accepted the agent's signal. `review_unblocked` is different: it only lifts an earlier
  * `review_blocked` (hold-outcome's withoutUnblocked), never another hold. Not holds, and not pipeline outcomes: only `merged_to_main` counts
- * as "merged" for a dispatch's Review finalization. Protected from pruning.
+ * as "merged" for a dispatch's Review finalization. `ticket_removed` (a person deleted the run's
+ * ticket) ends whatever hold the run had: nothing is left to review. Protected from pruning.
  */
-export const HOLD_ENDING_EVENTS: readonly string[] = ['merged_to_main', 'merged_by_person', 'completion_accepted', 'review_unblocked'];
+export const HOLD_ENDING_EVENTS: readonly string[] = [
+  'merged_to_main',
+  'merged_by_person',
+  'completion_accepted',
+  'review_unblocked',
+  'ticket_removed',
+];

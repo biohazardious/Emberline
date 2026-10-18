@@ -4,7 +4,7 @@ import { runEvents } from '../db/schema.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 
 /** Notes the completion pipeline writes after a run's switch to `done`; they decide its outcome. */
-export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [...HOLD_EVENTS, 'merged_to_main', 'review_unblocked'];
+export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [...HOLD_EVENTS, 'merged_to_main', 'review_unblocked', 'ticket_removed'];
 
 export type PipelineOutcome = 'held' | 'merged';
 
@@ -47,6 +47,8 @@ export function isAutoFixHold(payload: unknown): boolean {
  * person. Attention only: the pipeline outcome (and so dispatch and merge) still counts every hold.
  */
 export function currentHold<T extends { type: string; payload?: unknown }>(all: readonly T[]): T | null {
+  // The run's ticket was deleted: whatever was held there is no longer anyone's to answer.
+  if (all.some((e) => e.type === 'ticket_removed')) return null;
   const events = withoutUnblocked(all, (e) => e.type);
   if (decidePipelineOutcome(events.map((e) => e.type)) !== 'held') return null;
   for (let i = events.length - 1; i >= 0; i--) {
