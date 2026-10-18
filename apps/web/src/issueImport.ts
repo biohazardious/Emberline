@@ -1,4 +1,4 @@
-import type { ForgeIssueListItem, ImportIssuesBody, ImportIssuesResponse } from '@emberline/protocol';
+import type { ForgeIssueListItem, ImportIssuesBody, ImportIssuesResponse, IssueSyncStatus } from '@emberline/protocol';
 
 /** Core refuses more than this many issues in one import. */
 export const MAX_IMPORT = 50;
@@ -46,4 +46,23 @@ export function describeImportResult(r: ImportIssuesResponse): string {
   if (r.skipped.length) parts.push(`${r.skipped.length} skipped`);
   if (created === 0 && r.skipped.length === 0) return `Nothing new: ${parts.join(', ')}.`;
   return [`Imported ${plural(created, 'issue', 'issues')}`, ...parts].join(', ') + '.';
+}
+
+/** An issue URL to link to: http(s) only, so a forge cannot hand the page a `javascript:` link. Null otherwise. */
+export function issueHref(url: string): string | null {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What "Sync now" reports: the pass's error when it failed, else when it synced. */
+export function describeSyncNow(
+  status: IssueSyncStatus,
+  formatTime: (iso: string) => string = (iso) => new Date(iso).toLocaleTimeString(),
+): { error: boolean; text: string } {
+  if (status.lastError) return { error: true, text: `Sync failed: ${status.lastError}` };
+  return { error: false, text: status.lastSyncAt ? `Synced at ${formatTime(status.lastSyncAt)}.` : 'Sync finished.' };
 }

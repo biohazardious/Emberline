@@ -13,6 +13,7 @@ import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { IssueImportDialog } from '../components/IssueImportDialog';
+import { issueHref } from '../issueImport';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PERSONA_LIST, PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
@@ -475,19 +476,24 @@ function QuickAdd({
 /** The issue a ticket was imported from: `#123` linking to it, its labels, whether it is closed or needs triage. */
 function IssueChips({ external }: { external: Ticket['external'] }) {
   if (!external) return null;
+  const href = issueHref(external.url);
   return (
     <div className="card-issue">
-      <a
-        className="badge badge-soft mono issue-chip"
-        href={external.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Open the issue"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        #{external.number}
-      </a>
+      {href ? (
+        <a
+          className="badge badge-soft mono issue-chip"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open the issue"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          #{external.number}
+        </a>
+      ) : (
+        <span className="badge badge-soft mono">#{external.number}</span>
+      )}
       {external.triage && (
         <span
           className="badge badge-warn"

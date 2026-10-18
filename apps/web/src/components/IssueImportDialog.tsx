@@ -4,6 +4,7 @@ import type {
   ForgeIssueListResponse,
   ImportIssuesResponse,
   IssueSyncResponse,
+  IssueSyncStatus,
   Ticket,
 } from '@emberline/protocol';
 import { X } from 'lucide-react';
@@ -12,6 +13,8 @@ import { api, errorMessage } from '../api';
 import {
   buildImportBody,
   describeImportResult,
+  describeSyncNow,
+  issueHref,
   issueListQuery,
   MAX_IMPORT,
   parseTrustedAuthors,
@@ -220,9 +223,15 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
                         />
                       </label>
                       <div className="issue-main">
-                        <a href={item.url} target="_blank" rel="noopener noreferrer" className="issue-title">
-                          <span className="mono">#{item.number}</span> {item.title}
-                        </a>
+                        {issueHref(item.url) ? (
+                          <a href={issueHref(item.url)!} target="_blank" rel="noopener noreferrer" className="issue-title">
+                            <span className="mono">#{item.number}</span> {item.title}
+                          </a>
+                        ) : (
+                          <span className="issue-title">
+                            <span className="mono">#{item.number}</span> {item.title}
+                          </span>
+                        )}
                         <div className="issue-meta">
                           {item.state === 'closed' && <span className="badge badge-soft">closed</span>}
                           {item.labels.map((l) => (
@@ -364,8 +373,13 @@ function SyncTab({ projectId }: { projectId: string }) {
     },
   });
   const syncNow = useMutation({
-    mutationFn: () => api<unknown>(`${url}/run`, 'POST'),
-    onSuccess: () => setNotice('Sync finished.'),
+    mutationFn: () => api<IssueSyncStatus>(`${url}/run`, 'POST'),
+    onSuccess: (status) => {
+      // The pass's own status: a failure shows at once in the "Last sync failed" banner below.
+      client.setQueryData<IssueSyncResponse>(['issue-sync', projectId], (old) => (old ? { ...old, syncStatus: status } : old));
+      const result = describeSyncNow(status);
+      setNotice(result.error ? undefined : result.text);
+    },
     onSettled: () => void client.invalidateQueries({ queryKey: ['issue-sync', projectId] }),
   });
 
