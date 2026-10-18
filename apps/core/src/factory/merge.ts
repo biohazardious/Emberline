@@ -6,7 +6,16 @@ import { HttpError } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 
-export const FACTORY_GIT_IDENTITY = ['-c', 'user.name=Emberline AI Factory', '-c', 'user.email=factory@emberline.local'];
+/**
+ * Command-line config beats repo config, and `author.*` / `committer.*` beat `user.*`: setting all
+ * of them keeps a repo's own config from forging who made Emberline's commits.
+ */
+export const FACTORY_GIT_IDENTITY = (['user', 'author', 'committer'] as const).flatMap((who) => [
+  '-c',
+  `${who}.name=Emberline AI Factory`,
+  '-c',
+  `${who}.email=factory@emberline.local`,
+]);
 
 /** Never committed from a run's worktree even when the project forgot to ignore them. */
 const RUN_OUTPUT_EXCLUDES = [':(exclude,glob)**/node_modules/**', ':(exclude,glob)**/.emberline/**'];

@@ -315,6 +315,11 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     slug: string,
     reply: FastifyReply,
   ): Promise<CreateProjectResponse> {
+    // A wizard create is writing into this folder right now: it is not an existing repository.
+    const beingCreated = () => {
+      if (creating.has(folder)) throw conflict(`"${folder}" is being created by the wizard`);
+    };
+    beingCreated();
     const projectPath = await resolveWorkspaceFolder(config.workspacesDir, folder);
     const isProject = () =>
       db
@@ -325,6 +330,7 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
     if (isProject()) throw conflict(`"${folder}" is already a project`);
     const { branch } = await inspectImportFolder(projectPath);
     // Checked again after the awaits, right before the insert (no await in between).
+    beingCreated();
     if (isProject()) throw conflict(`"${folder}" is already a project`);
     if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
       throw conflict(`a project with slug "${slug}" already exists`);
@@ -386,6 +392,10 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       });
       terminalId = session.id;
     } else {
+      // Never write blueprint files or `git init` into someone's existing folder.
+      if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
+        throw conflict(`directory already exists and is not empty: ${projectPath}`);
+      }
       await mkdir(projectPath, { recursive: true });
       const shouldWriteBlueprint =
         body.mode === 'wizard' ||

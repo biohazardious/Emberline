@@ -4,7 +4,8 @@
  * (no install, no script, no build) and starts no process at all.
  *
  * Everything is read without following links: manifests go through the no-follow descriptor reads
- * of outputs/safe-fs.ts, and the existing helpers that read by name (`inspectWorkspaceProject`,
+ * of outputs/safe-fs.ts, the Emberline files are also looked up in HEAD (hardened `git ls-tree` /
+ * `cat-file`, the only processes detection starts), and the existing helpers that read by name (`inspectWorkspaceProject`,
  * `planGateSteps`, `detectPreviewCommand`) only run when the manifests they read are plain files.
  */
 import { createHash } from 'node:crypto';
@@ -25,6 +26,7 @@ import {
   type StackDimensionId,
 } from '@emberline/protocol';
 import { conflict } from '../errors.js';
+import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
 import { isMissing, openFileUnder, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
 import { detectPreviewCommand } from '../runs/preview-command.js';
 import { parseWorktreeYml } from '../worktree-config/load.js';
@@ -69,6 +71,84 @@ async function entryExists(abs: string): Promise<boolean> {
     if (isMissing(error)) return false;
     throw error;
   }
+}
+
+/** One entry of HEAD's tree (`git ls-tree -l`). */
+interface HeadEntry {
+  mode: string;
+  type: string;
+  oid: string;
+  size: number | null;
+}
+
+/** Files of interest as committed in HEAD; empty when there is no git or no commit yet. */
+async function headEntries(dir: string, paths: readonly string[]): Promise<Map<string, HeadEntry>> {
+  const entries = new Map<string, HeadEntry>();
+  if (!(await entryExists(path.join(dir, '.git')))) return entries;
+  let stdout: string;
+  try {
+    // Hardened git (git-exec.ts): reads the tree only; no filter, textconv or hook can run.
+    stdout = (await execGitFile(['ls-tree', '-l', '-z', 'HEAD', '--', ...paths], { cwd: dir })).stdout;
+  } catch (error) {
+    if (error instanceof UnsafeGitConfigError) throw conflict(error.message);
+    return entries; // no commit yet
+  }
+  for (const record of stdout.split('\0')) {
+    const tab = record.indexOf('\t');
+    if (tab < 0) continue;
+    const [mode = '', type = '', oid = '', size = ''] = record.slice(0, tab).split(/\s+/);
+    entries.set(record.slice(tab + 1), { mode, type, oid, size: /^\d+$/.test(size) ? Number(size) : null });
+  }
+  return entries;
+}
+
+/**
+ * The repo's worktree.yml as committed in HEAD: the only version that can be approved (runs branch
+ * from HEAD, and an uncommitted edit is nobody's reviewed content). The 64 KB cap is checked on the
+ * tree's size before the blob is read; `cat-file blob` applies no textconv or filter.
+ */
+async function headWorktreeYml(
+  dir: string,
+  entry: HeadEntry | undefined,
+  workingTree: SafeRead,
+): Promise<ExistingWorktreeYml | null> {
+  const rel = ADOPT_FILE_PATHS.worktreeYml;
+  if (!entry) {
+    if (workingTree.kind === 'missing') return null;
+    return {
+      content: null,
+      sha256: null,
+      errors: [`${rel} is not committed: commit it, then review it again`],
+      notCommitted: true,
+      workingTreeDiffers: true,
+    };
+  }
+  const fail = (message: string): ExistingWorktreeYml => ({
+    content: null,
+    sha256: null,
+    errors: [message],
+    notCommitted: false,
+    workingTreeDiffers: true,
+  });
+  if (entry.mode === '120000') return fail(`${rel} is a symbolic link in HEAD`);
+  if (entry.type !== 'blob' || !/^[0-9a-f]{40,64}$/.test(entry.oid)) return fail(`${rel} is not a file in HEAD`);
+  if (entry.size === null || entry.size > MAX_WORKTREE_YML_BYTES) {
+    return fail(`${rel} is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`);
+  }
+  const blob = await execGitFile(['cat-file', 'blob', entry.oid], {
+    cwd: dir,
+    encoding: 'buffer',
+    maxBuffer: MAX_WORKTREE_YML_BYTES + 1,
+  });
+  const content = blob.stdout.toString('utf8');
+  const parsed = parseWorktreeYml(content);
+  return {
+    content,
+    sha256: createHash('sha256').update(content).digest('hex'),
+    errors: parsed.ok ? [] : parsed.errors,
+    notCommitted: false,
+    workingTreeDiffers: workingTree.kind !== 'ok' || workingTree.text !== content,
+  };
 }
 
 interface Signals {
@@ -408,20 +488,15 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
     services,
   };
 
-  let worktreeYml: ExistingWorktreeYml | null = null;
-  if (has(ADOPT_FILE_PATHS.worktreeYml)) {
-    const file = await read(ADOPT_FILE_PATHS.worktreeYml, MAX_WORKTREE_YML_BYTES);
-    if (file.kind === 'ok') {
-      const parsed = parseWorktreeYml(file.text);
-      worktreeYml = {
-        content: file.text,
-        sha256: createHash('sha256').update(file.text).digest('hex'),
-        errors: parsed.ok ? [] : parsed.errors,
-      };
-    } else {
-      worktreeYml = { content: null, sha256: null, errors: [file.kind === 'unsafe' ? file.reason : 'the file disappeared'] };
-    }
-  }
+  const tracked = [...Object.values(ADOPT_FILE_PATHS), 'AGENTS.md'];
+  const head = await headEntries(dir, tracked);
+  // "Present" means in HEAD or in the working tree: a committed file deleted locally is not missing.
+  const exists = (rel: string) => has(rel) || head.has(rel);
+  const worktreeYml = await headWorktreeYml(
+    dir,
+    head.get(ADOPT_FILE_PATHS.worktreeYml),
+    has(ADOPT_FILE_PATHS.worktreeYml) ? await read(ADOPT_FILE_PATHS.worktreeYml, MAX_WORKTREE_YML_BYTES) : { kind: 'missing' },
+  );
 
   return {
     root: dir,
@@ -429,10 +504,10 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
     choices: toChoices(stack, appType),
     commands,
     files: {
-      projectMd: has(ADOPT_FILE_PATHS.projectMd),
-      claudeMd: has(ADOPT_FILE_PATHS.claudeMd),
-      agentsMd: has('AGENTS.md'),
-      worktreeYml: has(ADOPT_FILE_PATHS.worktreeYml),
+      projectMd: exists(ADOPT_FILE_PATHS.projectMd),
+      claudeMd: exists(ADOPT_FILE_PATHS.claudeMd),
+      agentsMd: exists('AGENTS.md'),
+      worktreeYml: exists(ADOPT_FILE_PATHS.worktreeYml),
     },
     worktreeYml,
   };

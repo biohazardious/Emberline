@@ -60,35 +60,42 @@ export function registerProjectImportRoutes(app: FastifyInstance, { db, config, 
     const result = await executeAdopt(config.workspacesDir, project, body);
 
     const approvedAt = new Date();
-    db.transaction(() => {
-      // Gates live in the DB, never in the repo (an agent could switch a gate off and merge that).
-      writeProjectSettings(db, project.id, { gates: body.gates, choices: result.choices });
-      db.update(projects)
-        .set({
-          appType: result.appType,
-          techStack: techStackFromChoices(result.choices),
-          ...(body.vision ? { description: body.vision } : {}),
-        })
-        .where(eq(projects.id, project.id))
-        .run();
-      if (result.approvedWorktreeYml !== null) {
-        const approval = {
-          content: result.approvedWorktreeYml,
-          sha256: createHash('sha256').update(result.approvedWorktreeYml).digest('hex'),
-          approvedAt,
-          // Emberline's own file counts as approved; the repo's file was ticked by the person.
-          approvedBy: result.worktreeConfig === 'generated' ? 'wizard' : 'import',
-        };
-        db.insert(projectWorktreeConfig)
-          .values({ projectId: project.id, ...approval })
-          .onConflictDoUpdate({ target: projectWorktreeConfig.projectId, set: approval })
+    let warning: string | undefined;
+    try {
+      db.transaction(() => {
+        // Gates live in the DB, never in the repo (an agent could switch a gate off and merge that).
+        writeProjectSettings(db, project.id, { gates: body.gates, choices: result.choices });
+        db.update(projects)
+          .set({
+            appType: result.appType,
+            techStack: techStackFromChoices(result.choices),
+            ...(body.vision ? { description: body.vision } : {}),
+          })
+          .where(eq(projects.id, project.id))
           .run();
-      }
-    });
+        if (result.approvedWorktreeYml !== null) {
+          const approval = {
+            content: result.approvedWorktreeYml,
+            sha256: createHash('sha256').update(result.approvedWorktreeYml).digest('hex'),
+            approvedAt,
+            // Emberline's own file counts as approved; the repo's file was ticked by the person.
+            approvedBy: result.worktreeConfig === 'generated' ? 'wizard' : 'import',
+          };
+          db.insert(projectWorktreeConfig)
+            .values({ projectId: project.id, ...approval })
+            .onConflictDoUpdate({ target: projectWorktreeConfig.projectId, set: approval })
+            .run();
+        }
+      });
+    } catch (err) {
+      // The commit landed: report it instead of failing an adopt whose files are in the repository.
+      request.log.error({ err, projectId: project.id }, 'adopt: storing choices, gates or the approved worktree.yml failed');
+      warning =
+        'The project files were committed, but the choices, gates and worktree approval could not be saved. Adopt again with nothing ticked, or set them in the project settings.';
+    }
 
     let factoryTicketId: string | null = null;
-    let warning: string | undefined;
-    if (body.startFactory) {
+    if (body.startFactory && !warning) {
       try {
         // Imports get no Bootstrap ticket: the repo already has its skeleton.
         factoryTicketId = tickets.createFactoryTicket(project.id, body.vision, { autoDispatch: true }).id;

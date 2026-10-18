@@ -165,14 +165,18 @@ const DetectedService = z.object({ name: z.string(), command: z.string(), previe
 /** Largest `.emberline/worktree.yml` detection reads and an import may approve. */
 export const MAX_WORKTREE_YML_BYTES = 64 * 1024;
 
-/** A repo's own `.emberline/worktree.yml`, as found on disk. */
+/** A repo's own `.emberline/worktree.yml`: `content` is the blob committed in HEAD. */
 export const ExistingWorktreeYml = z.object({
-  /** Null when the file could not be read safely (symlink, not a regular file, too large). */
+  /** HEAD's blob; null when it is not committed or cannot be used (link, not a file, too large). */
   content: z.string().nullable(),
   /** sha256 of `content`; adopt's `worktreeYmlSha256` must match it to approve the file. */
   sha256: z.string().nullable(),
   /** Read or schema errors; a file with errors can never be approved. */
   errors: z.array(z.string()),
+  /** The file exists only in the working tree; only HEAD's committed version can be approved. */
+  notCommitted: z.boolean(),
+  /** The working tree's copy is not HEAD's (edited, deleted or unreadable); `content` is HEAD's. */
+  workingTreeDiffers: z.boolean(),
 });
 export type ExistingWorktreeYml = z.infer<typeof ExistingWorktreeYml>;
 

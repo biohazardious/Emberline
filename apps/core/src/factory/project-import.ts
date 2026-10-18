@@ -18,7 +18,7 @@ import {
   type ProjectChoices,
   type WorkspaceFolder,
 } from '@emberline/protocol';
-import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { badRequest, conflict, HttpError, notFound, unavailable } from '../errors.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
 import { createExclusiveFile, isMissing, openFileUnder, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
@@ -171,7 +171,9 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
     sessions = (await ptyd.get().list()).sessions;
   } catch (error) {
     if (await hasHeadCommit(project.path)) return { status: 'ready', exitCode: null, terminalId: null, tail: '' };
-    throw error;
+    if (error instanceof HttpError) throw error;
+    // A connected client that times out or drops mid-request: same answer as an unreachable runner.
+    throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable, so the clone status is unknown');
   }
   const clone = latestClone(sessions, project.id);
   if (!clone) {
@@ -223,18 +225,27 @@ export async function planAdopt(workspacesDir: string, project: Project, body: A
   let worktreeConfig: AdoptPlan['worktreeConfig'] = null;
   let approvedWorktreeYml: string | null = null;
   if (write.includes('worktreeYml')) {
+    // Emberline's own file counts as approved, so it has to pass the same schema as any other.
+    const generated = parseWorktreeYml(contents.worktreeYml);
+    if (!generated.ok) {
+      throw new HttpError(400, 'invalid_worktree_yml', `the generated .emberline/worktree.yml is not valid: ${generated.errors.join('; ')}`, {
+        errors: generated.errors,
+      });
+    }
     worktreeConfig = 'generated';
     approvedWorktreeYml = contents.worktreeYml;
   } else if (body.approveWorktreeYml) {
     const own = detected.worktreeYml;
     if (!own) throw badRequest('the repository has no .emberline/worktree.yml to approve');
+    // Only HEAD's committed blob is approvable: runs branch from HEAD.
+    if (own.notCommitted) throw conflict('.emberline/worktree.yml is not committed in HEAD; commit it, then review it again');
     if (own.content === null) {
       throw new HttpError(400, 'invalid_worktree_yml', `.emberline/worktree.yml cannot be approved: ${own.errors.join('; ')}`, { errors: own.errors });
     }
     if (own.sha256 !== body.worktreeYmlSha256) {
       throw conflict('.emberline/worktree.yml changed since you reviewed it; review it again');
     }
-    // Detection parsed this very content; re-check so a stale schema result can never slip through.
+    // Detection parsed this very blob; re-check so a stale schema result can never slip through.
     const parsed = parseWorktreeYml(own.content);
     if (!parsed.ok) {
       throw new HttpError(400, 'invalid_worktree_yml', `.emberline/worktree.yml is not valid: ${parsed.errors.join('; ')}`, { errors: parsed.errors });
