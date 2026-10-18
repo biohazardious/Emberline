@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-19
+
 ### Added
 
 - A Docker page (sidebar **Docker**, shown while the Docker engine is on) lists Emberline's own compose projects in the engine, grouped as Agents, Previews, Build & Verify and Leftovers, with their containers, state and published ports (ports of the compose preview range are links). You can read a project's logs, stop or remove it after a confirmation (leftovers can only be removed) (for a running agent's project it warns that the agent may be using it, but does not block), see the engine's disk use and when the cleanup last ran, and start the cleanup now. Projects with other names are never listed or touched.
@@ -272,7 +274,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/biohazardious/emberline/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/biohazardious/emberline/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/biohazardious/emberline/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/biohazardious/emberline/compare/v0.2.2...v0.3.0
