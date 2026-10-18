@@ -71,11 +71,9 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     deps.issueSync ??
     new IssueSyncService(deps.db, deps.tickets, deps.runs, forge, { log: (message, err) => app.log.warn({ err }, message) });
   // A person's review feedback for a fresh attempt starts the ticket like the Board's Start does.
-  const review = new ReviewService(
-    deps.db,
-    deps.runs,
-    (message, err) => app.log.warn({ err }, message),
-    async ({ ticketId, permissionMode, persona, section, replaceIdleRuns }) =>
+  const review = new ReviewService(deps.db, deps.runs, {
+    log: (message, err) => app.log.warn({ err }, message),
+    startTicketRun: async ({ ticketId, permissionMode, persona, section, replaceIdleRuns }) =>
       (
         await deps.tickets.start(
           ticketId,
@@ -83,7 +81,9 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
           { byPerson: true, extraPromptSection: section, replaceIdleRun: { ids: replaceIdleRuns, reason: 'review_new_run' } },
         )
       ).run,
-  );
+    // Review feedback asks for more work: a run with the completion tool must signal again.
+    completionHint: (run) => deps.tickets.completeAgain(run, '\n\n'),
+  });
   cron.start();
   notifications.start();
   review.start();

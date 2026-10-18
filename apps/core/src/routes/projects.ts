@@ -375,12 +375,19 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         mainWorkspacePath: project.path,
         ticketKey: ticket?.key ?? null,
         runId: run.id,
+        branch: run.branch,
         // Only work that is not in main yet is held back: a no-op merge needs no override.
         beforeMerge: () => {
           if (blocking > 0 && !body.force) {
             throw new HttpError(409, 'review_blocked', `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`, { blocking });
           }
         },
+      }).catch((error: unknown) => {
+        // The person may still move the ticket on without a merge: say which ticket.
+        if (error instanceof HttpError && error.code === 'worktree_missing') {
+          throw new HttpError(409, error.code, error.message, { ticketId: ticket?.id ?? null });
+        }
+        throw error;
       });
       // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
       // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that

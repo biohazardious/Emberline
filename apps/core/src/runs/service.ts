@@ -85,6 +85,7 @@ import {
   inspectDiff,
   inspectFileDiff,
   hashWorktreeFile,
+  reviewFileHashes,
   readReviewSide,
   listBuildOutputs,
   listWorktreeArtifacts,
@@ -164,6 +165,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   ...HOLD_ENDING_EVENTS,
   // The person's merge past open blocking comments; kept like the merge note.
   'review_blocking_overridden',
+  // Blocking feedback a fresh run carried: the merge gate counts it until a person verifies.
+  'review_carried_blocking',
   'conflict_resolution_requested',
   'pr_created',
   // The issue write-back reads these back so a comment or a close never repeats.
@@ -1476,6 +1479,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async fileHash(id: string, relPath: string): Promise<string | null> {
     const row = this.row(id);
     return hashWorktreeFile(row.worktreePath, this.defaultBranch(row.projectId), relPath);
+  }
+
+  /** Branch-diff hashes of the given files that are in the diff (others absent); null when the worktree is gone. */
+  async reviewHashes(id: string, relPaths: readonly string[]): Promise<Map<string, string> | null> {
+    const row = this.row(id);
+    return reviewFileHashes(row.worktreePath, this.defaultBranch(row.projectId), relPaths);
   }
 
   /** One side of a file (worktree or base branch) for re-anchoring review comments; null when absent, throws when unreadable or over 2 MB. */

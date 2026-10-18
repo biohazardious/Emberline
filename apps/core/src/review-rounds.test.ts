@@ -115,6 +115,8 @@ describe('review rounds (target same)', () => {
     expect(first.json().sent).toBe(2);
     expect(sent[0]).toContain('Blocking — Must be fixed before this can merge:');
     expect(sent[0]).toContain('- `src/a.ts:3` (fix) Null deref');
+    // A run without the completion tool gets no ticket_complete hint.
+    expect(sent[0]).not.toContain('ticket_complete');
     let all = await byBody(run);
     expect(all['Null deref']).toMatchObject({ status: 'sent', round: 1 });
     expect(all['Null deref']!.sentAt).toBeTruthy();

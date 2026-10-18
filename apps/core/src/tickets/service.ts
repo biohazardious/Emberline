@@ -870,13 +870,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // A run an earlier pass left held stays a factory run: its next stop lifts the hold even when
     // the chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
+    // So does one held for blocking review feedback that a person lifted since (review_unblocked).
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
       Boolean(ingested) ||
       isFactoryOrchestratorTicket ||
       hasFactoryPipeline ||
-      (ticketRow?.status !== 'done' && this.stillHeld(run.id));
+      (ticketRow?.status !== 'done' && (this.stillHeld(run.id) || this.runs.hasEvent(run.id, 'review_blocked')));
     if (!isFactoryRun) return;
 
     // The gates, the merge and Done apply to every factory-looking run, but only the factory itself
@@ -1015,19 +1016,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
 
-    // 2b. Open blocking review comments keep the merge gate closed: the ticket stays in Review and the
-    //     person decides (resolve them, or merge anyway); the agent is not prompted.
+    // 2d. Open blocking review feedback keeps the merge gate closed: the ticket stays in Review and the
+    //     person decides (resolve it, or merge anyway); the agent is not prompted. Like the secret
+    //     guard, the rest of the queue goes on.
     const blocking = openBlockingCount(this.db, run.id);
-    if (blocking > 0) {
-      this.runs.note(run.id, 'review_blocked', { count: blocking });
-      return;
-    }
+    const reviewBlocked = blocking > 0;
+    if (reviewBlocked) this.runs.note(run.id, 'review_blocked', { count: blocking });
 
     // 3. Auto-merge the worktree into the main workspace so subsequent specialist personas branch off
     //    the updated codebase and Live Demo stays current — UNLESS Secret Guard blocked a credential leak!
-    let mergeBlocked = secretGuardBlockedMerge;
+    let mergeBlocked = secretGuardBlockedMerge || reviewBlocked;
     if (
-      !secretGuardBlockedMerge &&
+      !mergeBlocked &&
       fSettings.autoSyncToMain &&
       run.worktreePath &&
       run.worktreePath !== projectRow.path
@@ -1056,8 +1056,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // 5. Close the idle interactive CLI process for this completed factory step so it does not
-    //    linger at the `>` prompt or fire idle notifications.
-    if (!run.endedAt) {
+    //    linger at the `>` prompt or fire idle notifications. A run held for review feedback keeps
+    //    its session: the person's next step is usually a request for changes to it.
+    if (!run.endedAt && !reviewBlocked) {
       await this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' }).catch(() => undefined);
     }
 
@@ -1078,8 +1079,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return providerAdapter(run.agent).claudeNative && this.runs.hasEvent(run.id, 'completion_tool_ready');
   }
 
-  /** {@link COMPLETE_AGAIN} after `separator`, for a run whose agent has the tool; empty otherwise. */
-  private completeAgain(run: Run, separator: string): string {
+  /**
+   * {@link COMPLETE_AGAIN} after `separator`, for a run whose agent has the tool; empty otherwise.
+   * Every prompt that asks for more work ends with it (the gates here, a person's review feedback).
+   */
+  completeAgain(run: Run, separator: string): string {
     return this.hasCompletionTool(run) ? `${separator}${COMPLETE_AGAIN}` : '';
   }
 
@@ -1130,6 +1134,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       mainWorkspacePath,
       ticketKey,
       runId: run.id,
+      branch: run.branch,
     }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[], commitSha: null }));
     const autoFix = !res.ok && res.conflicts.length > 0 && !run.endedAt && !this.conflictResolutionRequested(run.id);
     this.runs.note(run.id, res.ok ? 'merged_to_main' : 'merge_failed', {

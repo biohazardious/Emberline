@@ -17,7 +17,7 @@ import { reviewBlockedIsCurrent } from '../runs/hold-outcome.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
 import { anchorTextOf, type Anchored, reanchor } from './anchor.js';
-import { openBlockingCount } from './blocking.js';
+import { CARRIED_BLOCKING_EVENT, openBlockingCount, openCarriedBlocking } from './blocking.js';
 import { type BatchComment, type BatchKind, newRunFeedbackSection, sameRunPrompt } from './batch.js';
 
 type CommentRow = typeof reviewComments.$inferSelect;
@@ -65,6 +65,16 @@ export type StartTicketRun = (input: {
   replaceIdleRuns: string[];
 }) => Promise<Run>;
 
+export interface ReviewServiceOptions {
+  log?: (message: string, error?: unknown) => void;
+  startTicketRun?: StartTicketRun;
+  /**
+   * What closes a prompt that asks the run for more work (TicketService.completeAgain, injected to
+   * avoid a cycle): the completion signal hint for a run whose agent has the tool, else empty.
+   */
+  completionHint?: (run: Run) => string;
+}
+
 /** The prompt limit of a run (CreateRunBody / TicketPromptBody). */
 const PROMPT_MAX = 20_000;
 /** Longest handoff chain followed when settling comments. */
@@ -80,12 +90,19 @@ const NOT_A_TURN = new Set(['handed_off', 'process_exited', 'session_lost', 'can
  * reloads and can be continued after the agent has addressed part of it.
  */
 export class ReviewService {
+  private readonly log: (message: string, error?: unknown) => void;
+  private readonly startTicketRun?: StartTicketRun;
+  private readonly completionHint: (run: Run) => string;
+
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
-    private readonly log: (message: string, error?: unknown) => void = (message, error) => console.warn(message, error),
-    private readonly startTicketRun?: StartTicketRun,
-  ) {}
+    options: ReviewServiceOptions = {},
+  ) {
+    this.log = options.log ?? ((message, error) => console.warn(message, error));
+    this.startTicketRun = options.startTicketRun;
+    this.completionHint = options.completionHint ?? (() => '');
+  }
 
   /** One request-changes per run at a time: two racing sends would send (and count) a batch twice. */
   private readonly sending = new KeyedMutex();
@@ -172,13 +189,13 @@ export class ReviewService {
     this.log(message, error);
   }
 
-  /** The file hashes of the run's branch diff; null when the diff cannot be read. */
-  private async fileHashes(runId: string): Promise<Map<string, string> | null> {
+  /**
+   * The branch-diff hashes of the commented files that are still in the diff (absent: not in it);
+   * null when the diff cannot be read, or the worktree is gone (the stored lines stay).
+   */
+  private async fileHashes(runId: string, filePaths: string[]): Promise<Map<string, string> | null> {
     try {
-      const summary = await this.runs.diff(runId, 'branch');
-      // A worktree that is gone says nothing about the files: keep the stored lines.
-      if (!summary.isGitRepo) return null;
-      return new Map(summary.files.map((f) => [f.path, f.hash]));
+      return await this.runs.reviewHashes(runId, filePaths);
     } catch (error) {
       this.warnOnce(runId, `review: reading the diff of run ${runId} failed`, error);
       return null;
@@ -186,13 +203,15 @@ export class ReviewService {
   }
 
   /**
-   * Where each comment's code is now. Computed on read, never stored. Only comments whose file hash
-   * differs from the one at creation read the file (once per file side, capped at 2 MB); any
-   * failure keeps the stored line and is logged.
+   * Where each comment's code is now. Computed on read, never stored, and only for unresolved
+   * comments (a resolved one keeps its line). Only comments whose file hash differs from the one at
+   * creation read the file (once per file side, capped at 2 MB); any failure keeps the stored line
+   * and is logged.
    */
   private async anchor(runId: string, rows: CommentRow[]): Promise<ReviewComment[]> {
-    const lineRows = rows.filter((r) => r.line !== null && r.anchorText !== null && r.anchorHash !== null);
-    const hashes = lineRows.length > 0 ? await this.fileHashes(runId) : null;
+    const anchorable = (r: CommentRow) => r.status !== 'resolved' && r.line !== null && r.anchorText !== null && r.anchorHash !== null;
+    const lineRows = rows.filter(anchorable);
+    const hashes = lineRows.length > 0 ? await this.fileHashes(runId, [...new Set(lineRows.map((r) => r.filePath))]) : null;
     const sides = new Map<string, Promise<string[] | null>>();
     const lines = (filePath: string, side: 'modified' | 'original') => {
       const key = `${side}:${filePath}`;
@@ -213,7 +232,7 @@ export class ReviewService {
     const out: ReviewComment[] = [];
     for (const row of rows) {
       let anchored: Anchored = { currentLine: row.line, outdated: false };
-      if (row.line !== null && row.anchorText !== null && row.anchorHash !== null && hashes) {
+      if (row.status !== 'resolved' && row.line !== null && row.anchorText !== null && row.anchorHash !== null && hashes) {
         const hash = hashes.get(row.filePath);
         if (hash === undefined) anchored = { currentLine: null, outdated: true };
         else if (hash !== row.anchorHash) {
@@ -246,7 +265,25 @@ export class ReviewService {
       .where(eq(reviewFileViews.runId, runId))
       .all()
       .map((row) => ({ filePath: row.filePath, signature: row.signature, viewedAt: row.viewedAt.toISOString() }));
-    return { comments, viewed };
+    return {
+      comments,
+      viewed,
+      blockingOpen: openBlockingCount(this.db, runId),
+      carriedBlocking: openCarriedBlocking(this.db, runId),
+    };
+  }
+
+  /**
+   * A person checked that the new attempt did what the blocking feedback it carried asked for: the
+   * carried marker no longer holds the merge gate (`review_unblocked`, which also lifts a current
+   * `review_blocked` hold of the run). 409 when nothing carried is waiting.
+   */
+  verifyCarried(runId: string): void {
+    this.runs.getRun(runId);
+    if (!openCarriedBlocking(this.db, runId)) throw conflict('this run carries no blocking feedback to verify');
+    this.runs.note(runId, 'review_unblocked', {});
+    // A handoff successor the pipeline held meanwhile: its hold is lifted once nothing blocks it.
+    this.noteUnblocked(runId);
   }
 
   async addComment(runId: string, raw: unknown): Promise<ReviewComment> {
@@ -389,7 +426,7 @@ export class ReviewService {
     const run = this.runs.getRun(runId);
     const comments = await this.batch(run);
     if (comments.length === 0 && !note) throw badRequest('nothing to send: add a comment or a note');
-    const text = sameRunPrompt(note, comments);
+    const text = `${sameRunPrompt(note, comments)}${this.completionHint(run)}`;
     if (text.length > PROMPT_MAX) throw badRequest('too much feedback in one round — resolve or split');
     // Taken before the send: the agent's next turn must start after it to count as addressing these.
     const sentAt = new Date();
@@ -424,6 +461,9 @@ export class ReviewService {
       replaceIdleRuns: this.chain(run.id),
     });
     this.markAll(included, { status: 'resolved', sentAt, resolvedAt: sentAt, carriedTo: fresh.id });
+    // Resolved here, the blocking ones still hold the new run's merge gate until a person checks it.
+    const carriedBlocking = included.filter((c) => c.priority === 'blocking').length;
+    if (carriedBlocking > 0) this.runs.note(fresh.id, CARRIED_BLOCKING_EVENT, { count: carriedBlocking, fromRun: run.id });
     return { run: fresh, sent: included.length };
   }
 

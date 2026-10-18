@@ -3,7 +3,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReviewComment, Run, RunDiffSummary, RunReviewState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -23,11 +23,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await t.close();
   await ptydServer.close();
 });
 
-const api = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
+const api = (method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, payload?: object) =>
   t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
 
 const SRC = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
@@ -155,5 +156,38 @@ describe('re-anchoring on read', () => {
     writeFileSync(path.join(wt, 'a.txt'), 'new\nfirst\n\nthird\n');
     const patched = (await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { priority: 'blocking' })).json();
     expect(patched).toMatchObject({ priority: 'blocking', currentLine: 4, outdated: false });
+  });
+
+  it('re-anchors only unresolved comments, hashing only the commented files instead of the whole diff', async () => {
+    const { run, wt } = await setup();
+    writeFileSync(path.join(wt, 'a.txt'), SRC.replace('line 3', 'line three'));
+    writeFileSync(path.join(wt, 'other.txt'), 'other\n');
+    writeFileSync(path.join(wt, 'new.txt'), 'alpha\nbeta\n');
+    const open = await comment(run, { filePath: 'a.txt', line: 3, body: 'open' });
+    const done = await comment(run, { filePath: 'a.txt', line: 5, body: 'done' });
+    const fresh = await comment(run, { filePath: 'new.txt', line: 2, body: 'untracked' });
+    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${done.id}`, { status: 'resolved' })).statusCode).toBe(200);
+    writeFileSync(path.join(wt, 'a.txt'), 'new 1\nnew 2\n' + SRC.replace('line 3', 'line three'));
+    writeFileSync(path.join(wt, 'new.txt'), 'zero\nalpha\nbeta\n');
+
+    const fullDiff = vi.spyOn(t.runs, 'diff');
+    const hashed = vi.spyOn(t.runs, 'reviewHashes');
+    let s = await state(run);
+    const by = (id: string) => s.comments.find((x) => x.id === id)!;
+    expect(by(open.id)).toMatchObject({ currentLine: 5, outdated: false });
+    expect(by(fresh.id)).toMatchObject({ currentLine: 3, outdated: false });
+    // A resolved comment keeps its stored line.
+    expect(by(done.id)).toMatchObject({ currentLine: 5, outdated: false });
+    expect(hashed).toHaveBeenCalledTimes(1);
+    expect([...(hashed.mock.calls[0]?.[1] ?? [])].sort()).toEqual(['a.txt', 'new.txt']);
+
+    // Marking a file viewed reads the state the same way.
+    expect((await api('PUT', `/api/runs/${run.id}/review/viewed`, { filePath: 'other.txt', signature: 'x', viewed: true })).statusCode).toBe(200);
+    expect(fullDiff).not.toHaveBeenCalled();
+
+    // A commented file that left the diff is outdated.
+    writeFileSync(path.join(wt, 'a.txt'), SRC);
+    s = await state(run);
+    expect(by(open.id)).toMatchObject({ currentLine: null, outdated: true });
   });
 });

@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { type SyncWorktreeResponse } from '@emberline/protocol';
+import { HttpError } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 
@@ -44,13 +45,12 @@ export async function syncWorktreeToMainWorkspace(params: {
   mainWorkspacePath: string;
   ticketKey: string | null;
   runId: string;
+  /** The run's branch: with the worktree gone, whether its tip is in main decides. */
+  branch?: string | null;
   /** Called once there is something to merge (not for work already in main); may throw to refuse. */
   beforeMerge?: () => void;
 }): Promise<SyncWorktreeResponse> {
-  const { worktreePath, mainWorkspacePath, ticketKey, runId, beforeMerge } = params;
-  if (!existsSync(worktreePath)) {
-    throw new Error(`Worktree path does not exist: ${worktreePath}`);
-  }
+  const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
   const label = ticketKey ?? runId.slice(0, 8);
   const result = (ok: boolean, summary: string, extra: Partial<SyncWorktreeResponse> = {}): SyncWorktreeResponse => ({
     ok,
@@ -62,6 +62,19 @@ export async function syncWorktreeToMainWorkspace(params: {
     summary,
     ...extra,
   });
+  if (!existsSync(worktreePath)) {
+    // A pruned worktree: its branch may still be in main (merged earlier), then there is nothing to do.
+    const inMain =
+      Boolean(branch) &&
+      existsSync(path.join(mainWorkspacePath, '.git')) &&
+      (await execGitFile(['merge-base', '--is-ancestor', `refs/heads/${branch}`, 'HEAD'], { cwd: mainWorkspacePath }).then(
+        () => true,
+        () => false,
+      ));
+    if (!inMain) throw new HttpError(409, 'worktree_missing', "the run's worktree is gone and its work isn't in main");
+    const head = (await execGitFile(['rev-parse', '--short', 'HEAD'], { cwd: mainWorkspacePath })).stdout.trim() || null;
+    return result(true, `${label} is already merged into the main workspace (its worktree is gone).`, { commitSha: head, alreadyMerged: true });
+  }
   if (!existsSync(path.join(worktreePath, '.git')) || !existsSync(path.join(mainWorkspacePath, '.git'))) {
     return result(false, `Cannot merge ${label}: the project is not a git repository.`);
   }

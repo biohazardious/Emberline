@@ -1,13 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { ReviewComment, Run, RunDetail, Ticket } from '@emberline/protocol';
+import type { ReviewComment, Run, RunDetail, RunReviewState, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attachAttention } from './runs/attention.js';
 import { eq } from 'drizzle-orm';
 import { runs } from './db/schema.js';
 import { stillHeld } from './runs/hold-outcome.js';
+import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import type { TicketService } from './tickets/service.js';
 
@@ -44,6 +45,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await t.close();
   await ptydServer.close();
 });
@@ -330,5 +332,160 @@ describe('blocking review comments close the merge gate', () => {
     t.runs.note(run.id, 'review_unblocked', {});
     await hook(run.id, 'Stop', token);
     expect(stillHeld(t.db, run.id)).toBe(false);
+  });
+});
+
+/** Starts the agent session of a run the scheduler launched (token, session, completion tool, a turn). */
+async function startSession(run: Run): Promise<string> {
+  await t.scheduler.tick();
+  await waitFile(`ready-${run.id}`);
+  const tok = await waitFile(`token-${run.id}`);
+  await hook(run.id, 'SessionStart', tok, { session_id: `s-${run.id}` });
+  await t.app.inject({ method: 'POST', url: `/api/internal/runs/${run.id}/completion-tool`, headers: { authorization: `Bearer ${tok}` } });
+  await hook(run.id, 'UserPromptSubmit', tok);
+  return tok;
+}
+
+const reviewState = async (run: Run) => (await api('GET', `/api/runs/${run.id}/review`)).json() as RunReviewState;
+
+describe('a missing worktree on a person merge', () => {
+  it('is no merge to make when the run branch is already in main', async () => {
+    const { project, run } = await factoryTicket();
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json()).toMatchObject({ ok: true });
+    rmSync(run.worktreePath, { recursive: true, force: true });
+    const again = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ ok: true, alreadyMerged: true });
+    // Only the first, real merge is a person's merge.
+    expect((await eventTypes(run)).filter((x) => x === 'merged_by_person')).toHaveLength(1);
+  });
+
+  it('answers 409 worktree_missing when its work is not in main', async () => {
+    const { project, ticket, run } = await factoryTicket();
+    rmSync(run.worktreePath, { recursive: true, force: true });
+    const res = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'worktree_missing', ticketId: ticket.id });
+    expect(res.json().message).toBe("the run's worktree is gone and its work isn't in main");
+    expect(existsSync(path.join(project.path, 'A.txt'))).toBe(false);
+  });
+});
+
+describe('a new run that carried blocking feedback', () => {
+  async function carried() {
+    const { project, ticket, run: a, token } = await factoryTicket();
+    await comment(a, 'blocking');
+    await comment(a, 'important', 2);
+    const passes = trackPipelines();
+    await finishTurn(a, token);
+    await settled(passes, 1);
+    const res = await api('POST', `/api/runs/${a.id}/review/request-changes`, { target: 'new' });
+    expect(res.statusCode).toBe(200);
+    const b = (res.json() as { run: Run }).run;
+    const tokenB = await startSession(b);
+    writeFileSync(path.join(b.worktreePath, 'B.txt'), 'B\n');
+    wgit(b.worktreePath, 'add', '-A');
+    wgit(b.worktreePath, 'commit', '-q', '-m', 'B');
+    return { project, ticket, a, b, tokenB, passes };
+  }
+
+  it('notes the carried blocking count on the new run and keeps its gate closed until a person verifies', async () => {
+    const { project, ticket, a, b, tokenB, passes } = await carried();
+    expect(await eventPayload(b, 'review_carried_blocking')).toEqual({ count: 1, fromRun: a.id });
+    expect(await reviewState(b)).toMatchObject({ blockingOpen: 1, carriedBlocking: { count: 1, fromRun: a.id } });
+
+    const refused = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: b.id });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'review_blocked', blocking: 1 });
+
+    // The person started B; a running chain makes its completion a factory pass.
+    t.tickets.setAutoChain(project.id, true);
+    await finishTurn(b, tokenB);
+    await settled(passes, 2);
+    expect(await eventPayload(b, 'review_blocked')).toEqual({ count: 1 });
+    expect(await eventTypes(b)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect((await runRow(b)).reviewReady).toBe(false);
+
+    const verified = await api('POST', `/api/runs/${b.id}/review/verify-carried`);
+    expect(verified.statusCode).toBe(200);
+    expect((await eventTypes(b)).filter((x) => x === 'review_unblocked')).toHaveLength(1);
+    expect(await reviewState(b)).toMatchObject({ blockingOpen: 0, carriedBlocking: null });
+    expect((await runRow(b)).reviewReady).toBe(true);
+    expect((await api('POST', `/api/runs/${b.id}/review/verify-carried`)).statusCode).toBe(409);
+
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(existsSync(path.join(project.path, 'B.txt'))).toBe(true);
+  });
+
+  it('verify-carried is a 409 for a run that carried no blocking feedback', async () => {
+    const { run } = await factoryTicket();
+    expect((await api('POST', `/api/runs/${run.id}/review/verify-carried`)).statusCode).toBe(409);
+    expect(await eventTypes(run)).not.toContain('review_unblocked');
+  });
+
+  it('keeps the carried marker through event pruning', () => {
+    expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('review_carried_blocking');
+  });
+});
+
+describe('review prompts and the completion signal', () => {
+  it('a second review round holds as review_blocked, not completion_missing, and passes after signal and resolve', async () => {
+    const { ticket, run, token } = await factoryTicket();
+    const c = await comment(run, 'blocking');
+    const passes = trackPipelines();
+    await finishTurn(run, token);
+    await settled(passes, 1);
+
+    const sent: string[] = [];
+    vi.spyOn(t.runs, 'prompt').mockImplementation(async (id: string, text: string) => {
+      sent.push(text);
+      return t.runs.getRun(id);
+    });
+    expect((await api('POST', `/api/runs/${run.id}/review/request-changes`, {})).statusCode).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/\n\nWhen finished, call `ticket_complete` again\.$/);
+
+    await hook(run.id, 'UserPromptSubmit', token);
+    await finishTurn(run, token);
+    await settled(passes, 2);
+    const types = await eventTypes(run);
+    expect(types.filter((x) => x === 'review_blocked')).toHaveLength(2);
+    expect(types).not.toContain('completion_missing');
+    expect(types).not.toContain('completion_nudged');
+
+    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { status: 'resolved' })).statusCode).toBe(200);
+    await hook(run.id, 'UserPromptSubmit', token);
+    await finishTurn(run, token);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+  });
+});
+
+describe('a review_blocked pass', () => {
+  it('skips merge and Done for its ticket but still dispatches the next ready ticket', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    const { project } = (await api('POST', '/api/projects', { name: 'Chain', initGit: false })).json();
+    wgit(project.path, 'init', '-q', '-b', 'main');
+    wgit(project.path, 'commit', '-q', '--allow-empty', '-m', 'init');
+    const a = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'A', status: 'ready', priority: 3 })).json() as Ticket;
+    const b = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'B', status: 'ready', priority: 1 })).json() as Ticket;
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const runA = t.runs.list().find((r) => r.ticketId === a.id) as Run;
+    expect(t.runs.list().some((r) => r.ticketId === b.id)).toBe(false);
+    mkdirSync(runA.worktreePath, { recursive: true });
+    writeFileSync(path.join(runA.worktreePath, 'A.txt'), 'A\n');
+    wgit(runA.worktreePath, 'add', '-A');
+    wgit(runA.worktreePath, 'commit', '-q', '-m', 'A');
+    const tokenA = await startSession(runA);
+    await comment(runA, 'blocking');
+    const passes = trackPipelines();
+    await finishTurn(runA, tokenA);
+    await settled(passes, 1);
+    expect(await eventTypes(runA)).toContain('review_blocked');
+    expect(await eventTypes(runA)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).toBe('review');
+    expect(existsSync(path.join(project.path, 'A.txt'))).toBe(false);
+    await expect.poll(() => t.runs.list().some((r) => r.ticketId === b.id), { timeout: 10_000 }).toBe(true);
   });
 });

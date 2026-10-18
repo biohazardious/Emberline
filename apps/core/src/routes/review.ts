@@ -31,6 +31,13 @@ export function registerReviewRoutes(app: FastifyInstance, review: ReviewService
     '/api/runs/:id/review/request-changes',
     async (request): Promise<RequestChangesResponse> => review.requestChanges(request.params.id, request.body),
   );
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/review/verify-carried',
+    async (request): Promise<RunReviewState> => {
+      review.verifyCarried(request.params.id);
+      return await review.state(request.params.id);
+    },
+  );
   app.put<{ Params: { id: string } }>(
     '/api/runs/:id/review/viewed',
     async (request): Promise<RunReviewState> => await review.markViewed(request.params.id, request.body),

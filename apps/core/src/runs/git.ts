@@ -305,6 +305,34 @@ export async function hashWorktreeFile(worktreePath: string, baseBranch: string,
   return blob ? `deleted:${blob}` : null;
 }
 
+/**
+ * The branch-diff hashes of `relPaths` (as `inspectDiff` reports them) for the paths that are in the
+ * diff; a path that is not is absent. Lists only names (diff `--name-only`, untracked files) and
+ * hashes only the given files, instead of the whole hashed diff. Null when the worktree is gone.
+ * An unhashable file maps to `unhashed:` (never equal to a stored hash).
+ */
+export async function reviewFileHashes(
+  worktreePath: string,
+  baseBranch: string,
+  relPaths: readonly string[],
+): Promise<Map<string, string> | null> {
+  if (!existsSync(worktreePath) || !existsSync(path.join(worktreePath, '.git'))) return null;
+  const result = new Map<string, string>();
+  if (relPaths.length === 0) return result;
+  const baseRef = await resolveBaseRef(worktreePath, baseBranch);
+  const [changed, untracked] = await Promise.all([
+    gitRaw(worktreePath, ['diff', baseRef, '--name-only', '-z']),
+    gitRaw(worktreePath, ['ls-files', '--others', '--exclude-standard', '-z']),
+  ]);
+  const inDiff = new Set([...changed.split('\0'), ...untracked.split('\0')].filter(Boolean));
+  for (const rel of new Set(relPaths)) {
+    if (!inDiff.has(rel)) continue;
+    const hash = await hashWorktreeFile(worktreePath, baseBranch, rel).catch(() => null);
+    result.set(rel, hash ?? 'unhashed:');
+  }
+  return result;
+}
+
 /** Largest file side read when re-anchoring review comments. */
 export const MAX_ANCHOR_BYTES = 2 * 1024 * 1024;
 

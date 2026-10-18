@@ -176,6 +176,16 @@ export type ReviewFileView = z.infer<typeof ReviewFileView>;
 export const RunReviewState = z.object({
   comments: z.array(ReviewComment),
   viewed: z.array(ReviewFileView),
+  /**
+   * What holds the merge gate, as core counts it: unresolved blocking comments on the run and the
+   * runs it took over from by handoff, plus `carriedBlocking.count`.
+   */
+  blockingOpen: z.number().int().nonnegative(),
+  /**
+   * Blocking feedback on an earlier attempt that this run carried in its prompt, waiting for a
+   * person to check it was done (POST /api/runs/:id/review/verify-carried); null when none.
+   */
+  carriedBlocking: z.object({ count: z.number().int().positive(), fromRun: z.string().nullable() }).nullable(),
 });
 export type RunReviewState = z.infer<typeof RunReviewState>;
 
