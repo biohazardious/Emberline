@@ -13,7 +13,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Progress comments on the issue when a pull request is opened or the work is merged locally (by the factory, or by you when you drag the ticket to Done), and an optional close of the issue when the ticket moves into Done. An issue that was already closed by then is left alone, also if someone reopens it later, and turning the option on does not close tickets that are already Done.
 - Review comments are typed: each has an intent (Fix, Change, Question, Approve) and a priority (Blocking, Important, Suggestion), and the composer takes several lines (Ctrl/Cmd+Enter adds it). **Add file comment** comments on a whole file, including deleted and binary files. Comments follow their code when lines move, and show as outdated, with the old line's text, when it is gone. A file you marked viewed shows "changed" when its content changes, even with the same line counts.
 - Review rounds: feedback that was not resolved comes back with the next request. When the agent finishes its turn a comment turns to addressed, and you choose Verify (resolved) or Not done (reopened). Request changes (n) lets you send to this run or to a new run from main; a new run does not contain the earlier attempt's worktree, and the comments are carried into its prompt. If a run can no longer take a prompt, the dialog offers "Start a new run instead".
-- Open blocking comments keep the merge gate closed: the factory holds the ticket ("Blocking review comments"), and dragging a ticket to Done on the Board, or syncing a run to main, asks first. **Merge anyway** goes ahead and the override is recorded in the run's timeline.
+- Open blocking comments keep the merge gate closed: the factory holds the ticket ("Blocking review comments"), and dragging a ticket to Done on the Board, or syncing a run to main, asks first. **Merge anyway** goes ahead and the override is recorded in the run's timeline. Blocking feedback sent to a new run from main keeps that run's gate closed until you check the new attempt and press **Verified** in its review. Comments on files that are no longer in the diff are listed apart, so you can still resolve them.
 
 ### Changed
 
@@ -27,9 +27,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Fixed
 
 - A factory ticket that was held is now re-checked on the agent's next turn, even after the factory chain has stopped.
-- Dragging a ticket to Done after a merge that failed no longer moves it to Done.
+- Dragging a ticket to Done no longer moves it there when its merge into main failed. If the run's worktree is gone, the ticket moves when the run's work is already in main; otherwise the Board (and **Sync to Main** in the status panel) asks whether to move it to Done without merging.
 - Security: text an agent wrote and that is typed into a session (review feedback, prompts) can no longer break out of the paste and send keystrokes.
-- A clean CLI exit, or a quota handoff, no longer counts as the agent having addressed review comments.
 
 ## [0.2.2] - 2026-10-17
 

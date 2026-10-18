@@ -1,3 +1,6 @@
+-- drizzle runs each migration inside a transaction, where PRAGMA foreign_keys is a no-op: the two
+-- PRAGMA lines change nothing and foreign keys stay on. The table copy is safe with them on: no table
+-- references review_comments, and every copied row references a run that exists.
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
 CREATE TABLE `__new_review_comments` (
 	`id` text PRIMARY KEY NOT NULL,
