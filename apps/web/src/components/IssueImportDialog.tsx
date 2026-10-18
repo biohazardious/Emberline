@@ -413,7 +413,7 @@ function SyncTab({ projectId }: { projectId: string }) {
       }}
     >
       <p className="muted small">
-        Every 10 minutes label sync looks at the most recently updated issues with the label, up to 200 (100 on Gitea's default limits). Use the Import tab for older ones.
+        Every 10 minutes label sync looks at the most recently updated labelled issues, up to 200 (on Gitea: the 100 most recently created). Use the Import tab for older ones.
       </p>
       <label className="issue-check">
         <input type="checkbox" checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} />

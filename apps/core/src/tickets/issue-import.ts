@@ -15,7 +15,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { readIssueSync, writeIssueSync } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
-import { badRequest, HttpError, notFound } from '../errors.js';
+import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import type { ForgeService } from '../forge/service.js';
 import type { TicketService } from './service.js';
 
@@ -103,8 +103,8 @@ export class IssueImportService {
   }
 
   /**
-   * Turning sync on pins the repository origin names now (`repo`); turning it off drops the pin. A
-   * remote that cannot be resolved yet leaves it empty, and the first good sync pins it.
+   * Turning sync on pins the repository origin names now (`repo`), so the pin always comes from a
+   * person's enable; turning it off drops the pin. Enabling needs a usable remote: 409 otherwise.
    */
   async updateSync(projectId: string, rawBody: unknown): Promise<IssueSyncResponse> {
     this.assertProject(projectId);
@@ -119,12 +119,13 @@ export class IssueImportService {
     return this.withStatus(projectId, next);
   }
 
-  private async originRepo(projectId: string): Promise<IssueSyncRepo | null> {
+  private async originRepo(projectId: string): Promise<IssueSyncRepo> {
     try {
       const { remote } = await this.forge.projectRemote(projectId);
       return { provider: remote.provider, repoPath: remote.repoPath };
-    } catch {
-      return null;
+    } catch (err) {
+      if (err instanceof HttpError && err.statusCode < 500) throw conflict(`connect the forge first: ${err.message}`);
+      throw err;
     }
   }
 }

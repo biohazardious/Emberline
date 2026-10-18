@@ -56,6 +56,7 @@ export async function syncWorktreeToMainWorkspace(params: {
     filesSynced: 0,
     commitSha: null,
     conflicts: [],
+    alreadyMerged: false,
     summary,
     ...extra,
   });
@@ -82,7 +83,7 @@ export async function syncWorktreeToMainWorkspace(params: {
       () => false,
     );
     if (alreadyMerged) {
-      return result(true, `${label} is already merged into the main workspace.`, { commitSha: await shortHead() });
+      return result(true, `${label} is already merged into the main workspace.`, { commitSha: await shortHead(), alreadyMerged: true });
     }
 
     // 2. Edits made directly in the main workspace (file explorer, blueprint) are committed first so

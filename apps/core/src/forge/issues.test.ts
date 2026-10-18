@@ -273,8 +273,8 @@ describe('IssuesClient Gitea', () => {
     expect(url.searchParams.get('type')).toBe('issues');
     expect(url.searchParams.get('q')).toBe('x');
     expect(url.searchParams.get('limit')).toBe('50');
-    // Most recently updated first, like the other providers (older Gitea versions ignore it).
-    expect(url.searchParams.get('sort')).toBe('recentupdate');
+    // Gitea's issue list has no sort (always newest created first): no parameter that pretends otherwise.
+    expect(url.searchParams.get('sort')).toBeNull();
     expect(calls[0]!.headers.Authorization).toBe('token tok');
   });
 
@@ -437,7 +437,7 @@ describe('ForgeService fetch plumbing', () => {
 });
 
 describe('ForgeService pull requests through a redirect', () => {
-  it('creates the PR of a renamed repository through a same-origin 301; a cross-origin one is a 502 naming it', async () => {
+  it('creates the PR of a renamed repository through a same-origin 307; a cross-origin one is a 502 naming it', async () => {
     const t = await createTestApp();
     try {
       const calls: Call[] = [];
@@ -445,7 +445,8 @@ describe('ForgeService pull requests through a redirect', () => {
       const fn = (async (url: string | URL | Request, init?: RequestInit) => {
         const u = new URL(String(url));
         calls.push({ url: String(url), method: init?.method ?? 'GET', headers: {}, body: init?.body as string, signal: init?.signal });
-        if (u.pathname === '/repos/acme/old/pulls') return new Response(null, { status: 301, headers: { location: renamedTo } });
+        // GitHub answers a non-GET request to a renamed repository with a 307.
+        if (u.pathname === '/repos/acme/old/pulls') return new Response(null, { status: 307, headers: { location: renamedTo } });
         return json({ number: 7, title: 'T', html_url: 'https://github.com/acme/new/pull/7', state: 'open', head: { sha: 'abc' } }, { status: 201 });
       }) as typeof fetch;
       const forge = new ForgeService(t.db, t.runs, { fetch: fn });
@@ -497,6 +498,17 @@ describe('forge fetch hardening', () => {
       ['POST', '/repos/acme/widget/issues/3/comments', JSON.stringify({ body: 'hello' }), 'Bearer tok'],
       ['POST', '/repositories/42/issues/3/comments', JSON.stringify({ body: 'hello' }), 'Bearer tok'],
     ]);
+  });
+
+  it('a 301/302/303 for a request with a body is a 502: the body is never re-sent on those', async () => {
+    for (const status of [301, 302, 303]) {
+      const { fn, calls } = fakeFetch(() => new Response(null, { status, headers: { location: '/repositories/42/issues/3/comments' } }));
+      await expect(new IssuesClient({ fetch: fn }).comment(target(gh), 3, 'hello')).rejects.toMatchObject({
+        statusCode: 502,
+        message: expect.stringContaining('the forge redirected to https://api.github.com/repositories/42/issues/3/comments — has the repository moved?'),
+      });
+      expect(calls).toHaveLength(1);
+    }
   });
 
   it('a cross-origin redirect is a 502 naming the Location, and the token is not sent there', async () => {

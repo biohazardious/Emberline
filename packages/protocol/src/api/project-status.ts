@@ -64,6 +64,8 @@ export const SyncWorktreeResponse = z.object({
   commitSha: z.string().nullable(),
   /** Files that conflicted when the merge was refused (the main workspace is left unchanged). */
   conflicts: z.array(z.string()).default([]),
+  /** The run's work was already in the main workspace: nothing was merged this time. */
+  alreadyMerged: z.boolean().default(false),
   summary: z.string(),
 });
 export type SyncWorktreeResponse = z.infer<typeof SyncWorktreeResponse>;

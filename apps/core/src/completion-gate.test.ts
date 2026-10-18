@@ -808,7 +808,11 @@ describe('issue triage', () => {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
-    writeIssueSync(t.db, project.id, IssueSyncSettings.parse({ enabled: true, label: 'emberline', status: 'ready', trustedAuthors: ['octo'] }));
+    writeIssueSync(
+      t.db,
+      project.id,
+      IssueSyncSettings.parse({ enabled: true, label: 'emberline', status: 'ready', trustedAuthors: ['octo'], repo: { provider: 'github', repoPath: 'acme/widget' } }),
+    );
     await api('PATCH', '/api/factory/settings', { autoPickupBacklog: true });
     expect((await api('POST', `/api/projects/${project.id}/issue-sync/run`)).json().lastError).toBeNull();
     const [ticket] = t.tickets.list(project.id);
@@ -879,6 +883,21 @@ describe('a person’s merge from the Board', () => {
         { method: 'POST', path: '/repos/acme/widget/issues/5/comments', body: { body: `Emberline closed this issue because ${ticket.key} is done.` } },
       ]),
     );
+
+    // Someone reopens the issue and main moves on; the person drags the ticket back and to Done
+    // again. Nothing new is merged: no second note, no comment, and the reopened issue stays open.
+    const personNotes = async () => (await eventTypes(run)).filter((type) => type === 'merged_by_person').length;
+    t.tickets.syncIssueLinks(project.id, 'github', [{ externalId: '9005', state: 'open', labels: [] }]);
+    writeFileSync(path.join(project.path, 'later.txt'), 'later\n');
+    wgit(project.path, 'add', '-A');
+    wgit(project.path, 'commit', '-q', '-m', 'later');
+    await api('PATCH', `/api/tickets/${ticket.id}`, { status: 'review' });
+    const again = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
+    expect(again.json()).toMatchObject({ ok: true, alreadyMerged: true });
+    await api('PATCH', `/api/tickets/${ticket.id}`, { status: 'done' });
+    await t.issueSync.settled();
+    expect(await personNotes()).toBe(1);
+    expect(seen.filter((c) => c.method !== 'GET')).toHaveLength(3);
   });
 
   it('a merge that fails notes nothing', async () => {

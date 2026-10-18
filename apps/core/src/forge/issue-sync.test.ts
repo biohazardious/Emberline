@@ -111,7 +111,9 @@ function addProject(id: string, repo: string, settings: Partial<IssueSyncSetting
     .insert(projects)
     .values({ id, name: `Proj ${id}`, slug: id, repoUrl: `https://github.com/acme/${repo}.git`, path: dir, createdAt: new Date() })
     .run();
-  if (settings) writeIssueSync(t.db, id, IssueSyncSettings.parse({ enabled: true, label: 'emberline', ...settings }));
+  // Pinned like a person's enable does (IssueImportService.updateSync).
+  const repoPin = { provider: 'github' as const, repoPath: `acme/${repo}` };
+  if (settings) writeIssueSync(t.db, id, IssueSyncSettings.parse({ enabled: true, label: 'emberline', repo: repoPin, ...settings }));
   if (!repos.has(repo)) repos.set(repo, { issues: [], version: 1 });
   return repos.get(repo)!;
 }
@@ -234,7 +236,7 @@ describe('label sync', () => {
     const repo = addProject('p1', 'widget');
     repo.issues = [ghIssue('widget', 1)];
     await sync.tick();
-    writeIssueSync(t.db, 'p1', IssueSyncSettings.parse({ enabled: true, label: 'other' }));
+    writeIssueSync(t.db, 'p1', IssueSyncSettings.parse({ enabled: true, label: 'other', repo: { provider: 'github', repoPath: 'acme/widget' } }));
     await sync.tick();
     expect(listCalls()[1]!.headers['If-None-Match']).toBeUndefined();
     expect(listCalls()[1]!.url.searchParams.get('labels')).toBe('other');
@@ -258,21 +260,25 @@ describe('label sync', () => {
     expect(row.externalSyncedAt?.getTime()).toBe(clock);
   });
 
-  it('pins the repository on its first sync and refuses one that origin moved to', async () => {
+  it('refuses an origin that moved away from the pinned repository, and a project without a pin', async () => {
     const repo = addProject('p1', 'widget');
     repo.issues = [ghIssue('widget', 1)];
     await sync.tick();
-    expect(readIssueSync(t.db, 'p1').repo).toEqual({ provider: 'github', repoPath: 'acme/widget' });
     const other = addProject('p2', 'other', null);
     other.issues = [ghIssue('other', 7)];
     t.db.update(projects).set({ repoUrl: 'https://github.com/acme/other.git' }).where(eq(projects.id, 'p1')).run();
+    // Sync was never enabled by a person for p2: nothing pins it, and no sync pass does either.
+    writeIssueSync(t.db, 'p2', IssueSyncSettings.parse({ enabled: true, label: 'emberline' }));
     clock += ISSUE_SYNC_INTERVAL_MS;
     const before = listCalls().length;
     await sync.tick();
     expect(listCalls()).toHaveLength(before);
     expect(ticketsOf('p1').map((tk) => tk.external?.number)).toEqual([1]);
+    expect(ticketsOf('p2')).toEqual([]);
     expect(sync.status('p1').lastError).toMatch(/acme\/other.*acme\/widget|acme\/widget.*acme\/other/);
     expect(sync.status('p1').lastError).toMatch(/turn issue sync off and on/);
+    expect(sync.status('p2').lastError).toMatch(/no repository pinned.*turn issue sync off and on/);
+    expect(readIssueSync(t.db, 'p2').repo).toBeNull();
   });
 
   it('skips disabled projects and records errors per project without stopping the others', async () => {

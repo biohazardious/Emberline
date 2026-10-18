@@ -374,8 +374,9 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         runId: run.id,
       });
       // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
-      // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold.
-      if (result.ok && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
+      // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that
+      // was already in main is no new merge (its sha would be main's HEAD, not this merge).
+      if (result.ok && !result.alreadyMerged && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
       return result;
     },
   );

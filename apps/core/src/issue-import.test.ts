@@ -302,12 +302,30 @@ describe('issue-sync settings', () => {
     expect(settingsOf(await patch('/api/projects/p1/issue-sync', { label: 'y' })).repo).toEqual({ provider: 'github', repoPath: 'acme/widget' });
     expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: false })).repo).toBeNull();
     expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: true })).repo).toEqual({ provider: 'github', repoPath: 'acme/renamed' });
-    // No forge configured: enabling still works, and the first sync pins it.
+  });
+
+  it('409 "connect the forge first" when enabling without a usable remote; nothing is stored', async () => {
+    // No token.
     t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: null });
-    await patch('/api/projects/p1/issue-sync', { enabled: false });
-    const res = await patch('/api/projects/p1/issue-sync', { enabled: true });
-    expect(res.statusCode).toBe(200);
-    expect(settingsOf(res).repo).toBeNull();
+    const noToken = await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
+    expect(noToken.statusCode).toBe(409);
+    expect(noToken.json().message).toMatch(/^connect the forge first: .*token/i);
+    // No remote at all.
+    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    t.db.update(projects).set({ repoUrl: null }).where(eq(projects.id, 'p1')).run();
+    const noRemote = await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
+    expect(noRemote.statusCode).toBe(409);
+    expect(noRemote.json().message).toMatch(/^connect the forge first: .*origin/);
+    // An origin on a host the token is not trusted with.
+    const dir = `${t.dir}/proj`;
+    execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'main']);
+    execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://git.unknown.example/acme/widget.git']);
+    const untrusted = await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
+    expect(untrusted.statusCode).toBe(409);
+    expect(untrusted.json().message).toMatch(/^connect the forge first: /);
+    expect(settingsOf(await get('/api/projects/p1/issue-sync'))).toMatchObject({ enabled: false, label: '', repo: null });
+    // Settings that do not enable sync need no forge.
+    expect((await patch('/api/projects/p1/issue-sync', { label: 'later' })).statusCode).toBe(200);
   });
 
   it('400 when enabling without a label, and the stored settings stay untouched', async () => {

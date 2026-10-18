@@ -50,7 +50,8 @@ async function fetchOnce(fetchFn: FetchLike, url: string, init: RequestInit): Pr
  * fetch with the shared 15 s timeout (per request); a timeout becomes a 504. fetch itself never
  * follows a redirect (a GitLab PRIVATE-TOKEN header would survive a cross-origin one): a redirect
  * to the same origin (a renamed repository) is followed here, at most {@link FORGE_REDIRECT_HOPS}
- * times, with the same method, headers and body. Any other redirect is a 502 naming its Location.
+ * times, with the same method, headers and body: any 3xx for GET/HEAD, only 307/308 otherwise.
+ * Any other redirect is a 502 naming its Location.
  */
 export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestInit = {}): Promise<Response> {
   let current = url;
@@ -66,7 +67,10 @@ export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestI
       next = null;
     }
     if (!next) throw redirectError(location);
-    if (hop >= FORGE_REDIRECT_HOPS || next.origin !== new URL(current).origin) throw redirectError(next.href);
+    // 301/302/303 turn a request with a body into a GET (fetch semantics): never re-send it there.
+    const method = (init.method ?? 'GET').toUpperCase();
+    const keepsMethod = res.status === 307 || res.status === 308 || method === 'GET' || method === 'HEAD';
+    if (!keepsMethod || hop >= FORGE_REDIRECT_HOPS || next.origin !== new URL(current).origin) throw redirectError(next.href);
     current = next.href;
   }
 }
@@ -275,7 +279,6 @@ export class IssuesClient {
       params.set('state', state);
       if (labels) params.set('labels', labels);
       if (search) params.set('q', search);
-      params.set('sort', 'recentupdate');
       params.set('limit', perPage);
       params.set('page', String(page));
       path = `/repos/${remote.repoPath}/issues`;
