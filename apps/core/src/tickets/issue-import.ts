@@ -4,7 +4,9 @@ import {
   type ForgeIssueListResponse,
   ImportIssuesBody,
   type ImportIssuesResponse,
+  type IssueSyncResponse,
   IssueSyncSettings,
+  type IssueSyncStatus,
   type Ticket,
   UpdateIssueSyncBody,
 } from '@emberline/protocol';
@@ -22,7 +24,13 @@ export class IssueImportService {
     private readonly db: Db,
     private readonly tickets: TicketService,
     private readonly forge: ForgeService,
+    /** The label sync, for its status; without one the status is empty. */
+    private readonly sync?: { status(projectId: string): IssueSyncStatus },
   ) {}
+
+  private withStatus(projectId: string, settings: IssueSyncSettings): IssueSyncResponse {
+    return { ...settings, syncStatus: this.sync?.status(projectId) ?? { lastSyncAt: null, lastError: null, pausedUntil: null } };
+  }
 
   private assertProject(projectId: string): void {
     if (!this.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get()) {
@@ -88,17 +96,17 @@ export class IssueImportService {
     return { created: result.created, existing, skipped };
   }
 
-  getSync(projectId: string): IssueSyncSettings {
+  getSync(projectId: string): IssueSyncResponse {
     this.assertProject(projectId);
-    return readIssueSync(this.db, projectId);
+    return this.withStatus(projectId, readIssueSync(this.db, projectId));
   }
 
-  updateSync(projectId: string, rawBody: unknown): IssueSyncSettings {
+  updateSync(projectId: string, rawBody: unknown): IssueSyncResponse {
     this.assertProject(projectId);
     const patch = UpdateIssueSyncBody.parse(rawBody ?? {});
     const merged = IssueSyncSettings.safeParse({ ...readIssueSync(this.db, projectId), ...patch });
     if (!merged.success) throw badRequest(merged.error.issues.map((i) => i.message).join('; '));
     writeIssueSync(this.db, projectId, merged.data);
-    return merged.data;
+    return this.withStatus(projectId, merged.data);
   }
 }

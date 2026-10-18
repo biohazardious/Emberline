@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncSettings, Ticket } from '@emberline/protocol';
+import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncResponse, IssueSyncSettings, Ticket } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, tickets } from './db/schema.js';
@@ -269,20 +269,26 @@ describe('POST /api/projects/:id/issues/import', () => {
   });
 });
 
+/** The settings of an issue-sync response, without the sync status. */
+const settingsOf = (res: { json(): IssueSyncResponse }): IssueSyncSettings => {
+  const { syncStatus: _syncStatus, ...settings } = res.json();
+  return settings;
+};
+
 describe('issue-sync settings', () => {
   it('defaults, round trip and partial updates', async () => {
-    const def = (await get('/api/projects/p1/issue-sync')).json<IssueSyncSettings>();
+    const def = settingsOf(await get('/api/projects/p1/issue-sync'));
     expect(def).toEqual({ enabled: false, label: '', status: 'backlog', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
     const set = await patch('/api/projects/p1/issue-sync', { enabled: true, label: ' emberline ', status: 'ready' });
     expect(set.statusCode).toBe(200);
-    expect(set.json()).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
+    expect(settingsOf(set)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true, trustedAuthors: [] });
     const more = await patch('/api/projects/p1/issue-sync', { closeOnDone: true });
-    expect(more.json()).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true, trustedAuthors: [] });
+    expect(settingsOf(more)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true, trustedAuthors: [] });
     const trusted = await patch('/api/projects/p1/issue-sync', { trustedAuthors: ['octo'] });
     expect(trusted.json().trustedAuthors).toEqual(['octo']);
     expect((await patch('/api/projects/p1/issue-sync', { trustedAuthors: Array.from({ length: 51 }, (_, i) => `u${i}`) })).statusCode).toBe(400);
     await patch('/api/projects/p1/issue-sync', { trustedAuthors: [] });
-    expect((await get('/api/projects/p1/issue-sync')).json()).toEqual(more.json());
+    expect(settingsOf(await get('/api/projects/p1/issue-sync'))).toEqual(settingsOf(more));
   });
 
   it('400 when enabling without a label, and the stored settings stay untouched', async () => {

@@ -145,7 +145,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
  * tool's check-in and the turn boundary it is checked against (`ticket_complete`,
  * `completion_tool_ready`, `UserPromptSubmit`), one-shot markers
  * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
- * HOLD_ENDING_EVENTS, `conflict_resolution_requested`), `pr_created`, and the watchdog outcomes.
+ * HOLD_ENDING_EVENTS, `conflict_resolution_requested`), `pr_created`, the issue write-back records, and the watchdog outcomes.
  */
 export const PRUNE_PROTECTED_EVENT_TYPES = [
   'last_screen',
@@ -161,6 +161,10 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   ...HOLD_ENDING_EVENTS,
   'conflict_resolution_requested',
   'pr_created',
+  // The issue write-back reads these back so a comment or a close never repeats.
+  'issue_commented',
+  'issue_closed',
+  'issue_close_failed',
   'stall_detected',
   'waiting_input_timeout',
   // previewStatus reads the latest of these.
@@ -168,7 +172,15 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'preview_stopped',
 ];
 /** Events that never become a run's `lastEvent`. */
-const BOOKKEEPING_EVENT_TYPES = new Set(['last_screen', 'completion_tool_ready']);
+const BOOKKEEPING_EVENT_TYPES = new Set([
+  'last_screen',
+  'completion_tool_ready',
+  // The issue write-back reports on the run; it is not something the run did.
+  'issue_commented',
+  'issue_comment_failed',
+  'issue_closed',
+  'issue_close_failed',
+]);
 /** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
 const PRUNE_RUNS_PER_PASS = 10;
 /**

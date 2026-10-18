@@ -8,6 +8,8 @@ export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 export const FORGE_FETCH_TIMEOUT_MS = 15_000;
 /** Issues per list page (GitHub `per_page`, GitLab `per_page`, Gitea `limit`). */
 export const ISSUES_PAGE_SIZE = 50;
+/** The most a provider returns per page (GitHub and GitLab cap `per_page` at 100). */
+export const ISSUES_PAGE_SIZE_MAX = 100;
 /** Below this many remaining requests the caller should stop syncing until the reset time. */
 export const RATE_LIMIT_LOW_WATER = 50;
 
@@ -80,6 +82,8 @@ export interface IssueListQuery {
   labels?: string;
   search?: string;
   page?: number;
+  /** Issues per page, at most {@link ISSUES_PAGE_SIZE_MAX}; {@link ISSUES_PAGE_SIZE} by default. */
+  perPage?: number;
   /** ETag from an earlier identical request; a 304 comes back as `notModified`. */
   etag?: string | null;
 }
@@ -171,7 +175,7 @@ function normaliseGitlab(raw: Raw): ForgeIssue {
   };
 }
 
-function nextPageFrom(res: Response, page: number, rawCount: number): number | null {
+function nextPageFrom(res: Response, page: number, rawCount: number, perPage: number): number | null {
   const link = res.headers.get('link');
   if (link !== null) {
     const m = /<([^>]*)>\s*;\s*rel="next"/.exec(link);
@@ -184,7 +188,7 @@ function nextPageFrom(res: Response, page: number, rawCount: number): number | n
     const p = Number(gl);
     return Number.isInteger(p) && p > 0 ? p : null;
   }
-  return rawCount >= ISSUES_PAGE_SIZE ? page + 1 : null;
+  return rawCount >= perPage ? page + 1 : null;
 }
 
 /** Issue reads and write-back for GitHub, GitLab and Gitea. Stateless: pass the target on every call. */
@@ -203,6 +207,7 @@ export class IssuesClient {
     const state = query.state ?? 'open';
     const labels = query.labels?.trim() ?? '';
     const search = query.search?.trim() ?? '';
+    const perPage = String(Math.min(Math.max(1, Math.trunc(query.perPage ?? ISSUES_PAGE_SIZE)), ISSUES_PAGE_SIZE_MAX));
     const params = new URLSearchParams();
     let path: string;
     if (remote.provider === 'github' && search) {
@@ -213,7 +218,7 @@ export class IssuesClient {
       params.set('q', q.join(' '));
       params.set('sort', 'updated');
       params.set('order', 'desc');
-      params.set('per_page', String(ISSUES_PAGE_SIZE));
+      params.set('per_page', perPage);
       params.set('page', String(page));
       path = '/search/issues';
     } else if (remote.provider === 'gitlab') {
@@ -222,7 +227,7 @@ export class IssuesClient {
       if (search) params.set('search', search);
       params.set('order_by', 'updated_at');
       params.set('sort', 'desc');
-      params.set('per_page', String(ISSUES_PAGE_SIZE));
+      params.set('per_page', perPage);
       params.set('page', String(page));
       path = `/projects/${encodeURIComponent(remote.repoPath)}/issues`;
     } else if (remote.provider === 'gitea') {
@@ -230,7 +235,7 @@ export class IssuesClient {
       params.set('state', state);
       if (labels) params.set('labels', labels);
       if (search) params.set('q', search);
-      params.set('limit', String(ISSUES_PAGE_SIZE));
+      params.set('limit', perPage);
       params.set('page', String(page));
       path = `/repos/${remote.repoPath}/issues`;
     } else {
@@ -238,7 +243,7 @@ export class IssuesClient {
       if (labels) params.set('labels', labels);
       params.set('sort', 'updated');
       params.set('direction', 'desc');
-      params.set('per_page', String(ISSUES_PAGE_SIZE));
+      params.set('per_page', perPage);
       params.set('page', String(page));
       path = `/repos/${remote.repoPath}/issues`;
     }
@@ -259,7 +264,7 @@ export class IssuesClient {
     }
     return {
       items,
-      nextPage: nextPageFrom(res, page, rows.length),
+      nextPage: nextPageFrom(res, page, rows.length, Number(perPage)),
       notModified: false,
       etag: res.headers.get('etag'),
       rateLimit,

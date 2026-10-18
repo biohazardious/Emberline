@@ -362,6 +362,18 @@ describe('ForgeService.projectRemote', () => {
     await expect(forge.projectRemote('p9')).rejects.toMatchObject({ statusCode: 409 });
   });
 
+  it('an ssh origin on a custom port is the same server as an https repoUrl on that host', async () => {
+    addProject('p10', 'https://git.example.com/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
+    addProject('p11', 'https://git.example.com:8443/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
+    addProject('p12', 'https://git.example.com/acme/widget.git', 'ssh://git@other.example.com:2222/acme/widget.git');
+    const forge = new ForgeService(t.db, t.runs);
+    configure(forge, 'secret', 'https://git.example.com/api/v1');
+    const target = await forge.projectRemote('p10');
+    expect(target.remote).toMatchObject({ host: 'git.example.com', repoPath: 'acme/widget' });
+    expect((await forge.projectRemote('p11')).remote.repoPath).toBe('acme/widget');
+    await expect(forge.projectRemote('p12')).rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it('accepts origin matching repoUrl across URL styles and case', async () => {
     addProject('p7', 'https://github.com/Acme/Widget', 'git@github.com:acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);

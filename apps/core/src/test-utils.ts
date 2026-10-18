@@ -5,6 +5,7 @@ import { CSRF_HEADER } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { CoreConfig } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
+import { IssueSyncService } from './forge/issue-sync.js';
 import type { FetchLike } from './forge/issues.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
@@ -27,6 +28,8 @@ export interface TestApp {
   forge: ForgeService;
   /** The forge's fetch: tests assign `current` to fake the provider (the default is the global fetch). */
   forgeFetch: { current: FetchLike };
+  /** The server's label sync and write-back (started with the server). */
+  issueSync: IssueSyncService;
   close(): Promise<void>;
 }
 
@@ -72,7 +75,8 @@ export async function createTestApp(
   const presence = new PresenceRegistry();
   const forgeFetch: { current: FetchLike } = { current: (url, init) => globalThis.fetch(url, init) };
   const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
-  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge });
+  const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
+  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync });
   return {
     app,
     config,
@@ -85,6 +89,7 @@ export async function createTestApp(
     presence,
     forge,
     forgeFetch,
+    issueSync,
     async close() {
       await app.close();
       // Background archive passes must not outlive the DB and temp dir they use.

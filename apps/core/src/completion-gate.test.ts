@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { Run, RunDetail, Ticket } from '@emberline/protocol';
+import { IssueSyncSettings, type Run, type RunDetail, type Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runs, tickets } from './db/schema.js';
+import { writeIssueSync } from './db/project-settings.js';
+import { projects, runs, tickets } from './db/schema.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -186,6 +187,9 @@ describe('completion gate', () => {
     expect(await eventTypes(run)).toContain('completion_accepted');
     expect(await eventTypes(run)).not.toContain('completion_nudged');
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(true);
+    // The merge note names the merge commit (the issue write-back quotes it).
+    const sha = wgit(project.path, 'rev-parse', '--short', 'HEAD').trim();
+    expect(await eventPayload(run, 'merged_to_main')).toMatchObject({ commitSha: sha });
   });
 
   it('2. a signal with blockers holds the ticket in Review without merging', async () => {
@@ -725,5 +729,60 @@ describe('dependencyContextSection', () => {
     expect(small.startsWith('## Context from finished dependencies\n\n### A: Title A\nSummary: aaa')).toBe(true);
     expect(small.endsWith('…')).toBe(true);
     expect(dependencyContextSection(deps, 20)).toBe('');
+  });
+});
+
+describe('issue write-back in the pipeline', () => {
+  /** A factory ticket linked to issue #5 of acme/widget, with label sync settings. */
+  async function linkedFactoryTicket(settings: Partial<IssueSyncSettings>) {
+    const made = await factoryTicket();
+    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, made.project.id)).run();
+    t.db
+      .update(tickets)
+      .set({ externalSource: 'github', externalId: '9005', externalNumber: 5, externalUrl: 'https://github.com/acme/widget/issues/5', externalState: 'open', externalLabels: [] })
+      .where(eq(tickets.id, made.ticket.id))
+      .run();
+    writeIssueSync(t.db, made.project.id, IssueSyncSettings.parse({ closeOnDone: true, ...settings }));
+    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    return made;
+  }
+
+  it('a merged, Done ticket comments the merge and closes its issue', async () => {
+    const seen: { method: string; path: string; body: unknown }[] = [];
+    t.forgeFetch.current = async (url, init) => {
+      seen.push({ method: init?.method ?? 'GET', path: new URL(url).pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const { project, ticket, run } = await linkedFactoryTicket({});
+    await begin(run);
+    await stop(run, { summary: 'did A' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    await t.issueSync.settled();
+    await expect.poll(() => seen.length, { timeout: 5_000 }).toBe(3);
+    const sha = wgit(project.path, 'rev-parse', '--short', 'HEAD').trim();
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        {
+          method: 'POST',
+          path: '/repos/acme/widget/issues/5/comments',
+          body: { body: `Emberline merged ${ticket.key} into \`main\` locally (${sha}). It reaches the remote when the branch is pushed.` },
+        },
+        { method: 'PATCH', path: '/repos/acme/widget/issues/5', body: { state: 'closed' } },
+      ]),
+    );
+    expect(await eventTypes(run)).toEqual(expect.arrayContaining(['issue_commented', 'issue_closed']));
+  });
+
+  it('a failing forge is noted and the pipeline still finishes', async () => {
+    t.forgeFetch.current = async () => {
+      throw new TypeError('fetch failed');
+    };
+    const { project, ticket, run } = await linkedFactoryTicket({});
+    await begin(run);
+    await stop(run, { summary: 'did A' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    await t.issueSync.settled();
+    expect(existsSync(path.join(project.path, 'A.txt'))).toBe(true);
+    await expect.poll(() => eventTypes(run), { timeout: 5_000 }).toEqual(expect.arrayContaining(['issue_comment_failed', 'issue_close_failed']));
   });
 });

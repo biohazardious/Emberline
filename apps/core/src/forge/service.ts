@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import {
   type CreatePullRequestBody,
@@ -58,7 +59,8 @@ export function parseForgeRemote(
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('ssh://')) {
     try {
       const parsed = new URL(trimmed);
-      host = parsed.host;
+      // An ssh port (Gitea's 2222) never serves the web UI or the API: keep only the hostname.
+      host = parsed.protocol === 'ssh:' ? parsed.hostname : parsed.host;
       rawPath = parsed.pathname;
       if (parsed.protocol === 'http:') protocol = 'http';
     } catch {
@@ -139,6 +141,21 @@ function hostOf(url: string | null | undefined): string | null {
 }
 
 /**
+ * Whether two remotes of a repository name the same server. The port counts only when both are
+ * http(s) URLs: an ssh remote on a custom port (`ssh://git@host:2222/…`, common for Gitea) and an
+ * https URL on the same hostname are the same server.
+ */
+function sameForgeServer(a: string, b: string): boolean {
+  const isHttp = (url: string) => /^https?:\/\//i.test(url.trim());
+  const hostA = hostOf(a);
+  const hostB = hostOf(b);
+  if (!hostA || !hostB) return false;
+  if (isHttp(a) && isHttp(b)) return hostA === hostB;
+  const hostname = (host: string) => host.replace(/:\d+$/, '');
+  return hostname(hostA) === hostname(hostB);
+}
+
+/**
  * The remote URL comes from the worktree's git config, which the agent can rewrite. The token is
  * only sent to the public GitHub API, the API URL the user configured, the host of the repo URL
  * the project was cloned from, or hosts listed in EMBERLINE_FORGE_ALLOWED_HOSTS.
@@ -173,7 +190,12 @@ export interface ForgeServiceOptions {
   fetch?: FetchLike;
 }
 
-export class ForgeService {
+interface ForgeServiceEvents {
+  /** A pull request was opened for a run (recorded as its `pr_created` event). */
+  pullRequest: [runId: string, pr: ForgePullRequest];
+}
+
+export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   private readonly fetch: FetchLike;
   /** Issue reads and write-back, sharing this service's fetch. */
   readonly issues: IssuesClient;
@@ -183,6 +205,7 @@ export class ForgeService {
     private readonly runs: RunService,
     options: ForgeServiceOptions = {},
   ) {
+    super();
     this.fetch = options.fetch ?? ((url, init) => globalThis.fetch(url, init));
     this.issues = new IssuesClient({ fetch: this.fetch });
   }
@@ -278,7 +301,7 @@ export class ForgeService {
     if (project.repoUrl?.trim()) {
       const declared = parseForgeRemote(project.repoUrl);
       if (!declared) throw conflict(`unable to parse the project's repository URL: ${project.repoUrl}`);
-      if (declared.host.toLowerCase() !== remote.host.toLowerCase() || declared.repoPath.toLowerCase() !== remote.repoPath.toLowerCase()) {
+      if (!sameForgeServer(project.repoUrl, remoteUrl) || declared.repoPath.toLowerCase() !== remote.repoPath.toLowerCase()) {
         throw conflict('origin points at a different repository than the project');
       }
     }
@@ -410,6 +433,12 @@ export class ForgeService {
       .set({ lastEvent: 'pr_created' })
       .where(eq(runs.id, runId))
       .run();
+    // Listeners (the issue write-back) must never fail the request that created the PR.
+    try {
+      this.emit('pullRequest', runId, pr);
+    } catch {
+      // ignore
+    }
 
     return {
       provider: parsed.provider,

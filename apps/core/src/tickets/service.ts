@@ -1107,10 +1107,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       mainWorkspacePath,
       ticketKey,
       runId: run.id,
-    }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[] }));
+    }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[], commitSha: null }));
     const autoFix = !res.ok && res.conflicts.length > 0 && !run.endedAt && !this.conflictResolutionRequested(run.id);
     this.runs.note(run.id, res.ok ? 'merged_to_main' : 'merge_failed', {
       summary: res.summary,
+      // The merge commit in main (the issue write-back quotes it).
+      ...(res.ok && res.commitSha ? { commitSha: res.commitSha } : {}),
       ...(res.conflicts.length > 0 ? { conflicts: res.conflicts } : {}),
       ...(autoFix ? { autoFix } : {}),
     });
@@ -1415,6 +1417,39 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
     }
     return { created, existing };
+  }
+
+  /**
+   * Refreshes the issue link of linked tickets from the forge: state, labels and the sync time. It
+   * never moves, edits or deletes a ticket (a closed issue only shows as closed). Tickets whose
+   * state or labels changed are published; returns them.
+   */
+  syncIssueLinks(
+    projectId: string,
+    source: ForgeProvider,
+    issues: { externalId: string; state: 'open' | 'closed'; labels: string[] }[],
+    at = new Date(),
+  ): Ticket[] {
+    const linked = this.linkedTickets(projectId, source, issues.map((i) => i.externalId));
+    const changed: string[] = [];
+    for (const issue of issues) {
+      const ticket = linked.get(issue.externalId);
+      if (!ticket) continue;
+      const before = ticket.external;
+      const same =
+        before?.state === issue.state &&
+        before.labels.length === issue.labels.length &&
+        before.labels.every((l, i) => l === issue.labels[i]);
+      this.db
+        .update(tickets)
+        .set({ externalState: issue.state, externalLabels: issue.labels, externalSyncedAt: at })
+        .where(eq(tickets.id, ticket.id))
+        .run();
+      if (!same) changed.push(ticket.id);
+    }
+    if (changed.length === 0) return [];
+    this.publishTickets(changed);
+    return changed.map((id) => this.get(id));
   }
 
   update(id: string, input: UpdateTicketBody): Ticket {

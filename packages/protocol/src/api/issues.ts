@@ -56,27 +56,45 @@ export const ImportIssuesResponse = z.object({
 });
 export type ImportIssuesResponse = z.infer<typeof ImportIssuesResponse>;
 
-export const IssueSyncSettings = z
-  .object({
-    enabled: z.boolean().default(false),
-    /** The issue label that pulls an issue in; required when sync is enabled. */
-    label: z.string().trim().max(100).default(''),
-    status: z.enum(['backlog', 'ready']).default('backlog'),
-    closeOnDone: z.boolean().default(false),
-    commentOnProgress: z.boolean().default(true),
-    /**
-     * Issue authors (usernames) whose issues label sync may put straight into `status`. Label sync
-     * imports from anyone else always land in `backlog`. A manual import keeps the status the
-     * person chose.
-     */
-    trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
-  })
-  .superRefine((v, ctx) => {
-    if (v.enabled && !v.label) {
-      ctx.addIssue({ code: 'custom', path: ['label'], message: 'a label is required when issue sync is enabled' });
-    }
-  });
+const IssueSyncSettingsObject = z.object({
+  enabled: z.boolean().default(false),
+  /** The issue label that pulls an issue in; required when sync is enabled. */
+  label: z.string().trim().max(100).default(''),
+  status: z.enum(['backlog', 'ready']).default('backlog'),
+  closeOnDone: z.boolean().default(false),
+  commentOnProgress: z.boolean().default(true),
+  /**
+   * Issue authors (usernames) whose issues label sync may put straight into `status`. Label sync
+   * imports from anyone else always land in `backlog`. A manual import keeps the status the
+   * person chose.
+   */
+  trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+});
+
+export const IssueSyncSettings = IssueSyncSettingsObject.superRefine((v, ctx) => {
+  if (v.enabled && !v.label) {
+    ctx.addIssue({ code: 'custom', path: ['label'], message: 'a label is required when issue sync is enabled' });
+  }
+});
 export type IssueSyncSettings = z.infer<typeof IssueSyncSettings>;
+
+/** What the label sync last did for a project (kept in memory: empty after a restart). */
+export const IssueSyncStatus = z.object({
+  /** ISO time of the last sync that reached the forge (a 304 counts). */
+  lastSyncAt: z.string().nullable(),
+  /** Why the last sync of this project failed; null after a good one. */
+  lastError: z.string().nullable(),
+  /** ISO time until which all forge sync is paused by the rate limit. */
+  pausedUntil: z.string().nullable(),
+});
+export type IssueSyncStatus = z.infer<typeof IssueSyncStatus>;
+
+/**
+ * GET / PATCH /api/projects/:id/issue-sync: the settings plus the sync status (`syncStatus`, as
+ * `status` is the settings' target column).
+ */
+export const IssueSyncResponse = IssueSyncSettingsObject.extend({ syncStatus: IssueSyncStatus });
+export type IssueSyncResponse = z.infer<typeof IssueSyncResponse>;
 
 /** PATCH body: any subset of the settings; the merged result must be valid. */
 export const UpdateIssueSyncBody = z.object({

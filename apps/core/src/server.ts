@@ -9,6 +9,7 @@ import type { CoreConfig } from './config.js';
 import { CronService } from './cron/service.js';
 import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
+import { IssueSyncService } from './forge/issue-sync.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
@@ -48,6 +49,8 @@ export interface CoreDeps {
   presence?: PresenceRegistry;
   /** The forge service; built from `db` and `runs` when omitted. */
   forge?: ForgeService;
+  /** Issue label sync and write-back; built from the other services when omitted. */
+  issueSync?: IssueSyncService;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -64,13 +67,18 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const forge = deps.forge ?? new ForgeService(deps.db, deps.runs);
   const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);
   const updates = new UpdateService(deps.db, { version: VERSION });
+  const issueSync =
+    deps.issueSync ??
+    new IssueSyncService(deps.db, deps.tickets, deps.runs, forge, { log: (message, err) => app.log.warn({ err }, message) });
   cron.start();
   notifications.start();
   updates.start();
+  issueSync.start();
   app.addHook('onClose', async () => {
     cron.stop();
     notifications.stop();
     updates.stop();
+    issueSync.stop();
   });
 
   installErrorHandler(app);
@@ -102,7 +110,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
-  registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge));
+  registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync));
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);
   registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler, presence);
