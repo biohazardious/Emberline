@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-18
+
 ### Fixed
 
 - A factory project could create the same tickets over and over when a tickets file an agent had staged ended up committed to main; Emberline now never commits its scratch files, ignores a tickets file a run inherited from main, removes ones already committed on the next merge, and never imports the same tickets file twice.
@@ -220,7 +222,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/biohazardious/emberline/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/biohazardious/emberline/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/biohazardious/emberline/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/biohazardious/emberline/compare/v0.2.0...v0.2.1
