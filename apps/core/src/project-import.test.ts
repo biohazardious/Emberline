@@ -360,6 +360,19 @@ describe('GET /api/projects/:id/detect', () => {
     expect(detected.commands.test).toBe('pytest');
   });
 
+  it('file names in a detected command are shell-quoted: a crafted name never runs', async () => {
+    const dir = fixture('scripts', { '$(touch PWNED).sh': 'echo hi\n', 'my script.sh': 'echo hi\n', "it's.sh": 'echo hi\n' });
+    const { detected, suggestions } = await detect((await imported('scripts')).id);
+    const build = detected.commands.build ?? '';
+    expect(build).toContain("'$(touch PWNED).sh'");
+    expect(build).toContain("'my script.sh'");
+    expect(build).toContain("'it'\\''s.sh'");
+    expect(suggestions.worktreeYml).toContain('PWNED');
+    // Run as the suggested worktree.yml would: the crafted name is only an argument.
+    execFileSync('sh', ['-c', build], { cwd: dir });
+    expect(existsSync(path.join(dir, 'PWNED'))).toBe(false);
+  });
+
   it('static site', async () => {
     fixture('bakery', STATIC_SITE);
     const { detected, suggestions } = await detect((await imported('bakery')).id);

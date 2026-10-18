@@ -388,6 +388,11 @@ function toChoices(
 }
 
 type CommandKind = 'setup' | 'build' | 'lint' | 'test';
+/** One shell word: plain when it has no special characters, else single-quoted (`'` as `'\''`). */
+export function shellQuote(arg: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
 function classify(command: string): CommandKind {
   if (/\b(install|ci|pub get|mod download|restore|deps\.get)\b/.test(command)) return 'setup';
   if (/\b(lint|analyze|clippy|vet)\b/.test(command)) return 'lint';
@@ -491,11 +496,16 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
     const steps = await planGateSteps(dir, topFiles).catch(() => []);
     for (const step of steps) {
       const rel = path.relative(dir, step.cwd);
-      for (const part of step.display.split(' && ')) {
+      // A `sh -c` step is a fixed command line; any other step's arguments may be repo file names.
+      const parts =
+        step.file === 'sh' && step.args[0] === '-c' && step.args.length === 2
+          ? step.display.split(' && ')
+          : [[step.file, ...step.args].map(shellQuote).join(' ')];
+      for (const part of parts) {
         const kind = classify(part);
         // Node installs come from the lockfile above, not the gate's "install when node_modules is missing".
         if (kind === 'setup' && /^(npm|pnpm|yarn) install\b/.test(part)) continue;
-        add(kind, rel && !rel.startsWith('..') ? `cd ${rel} && ${part}` : part);
+        add(kind, rel && !rel.startsWith('..') ? `cd ${shellQuote(rel)} && ${part}` : part);
       }
     }
   }
