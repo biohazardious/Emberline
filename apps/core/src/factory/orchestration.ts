@@ -194,7 +194,7 @@ export async function committedWithContent(workspacePath: string, ref: string, r
     return false;
   }
   if (Number(size) !== raw.length) return false;
-  const blob = await execGitFile(['cat-file', 'blob', oid], { ...inDir, encoding: 'buffer', maxBuffer: raw.length + 1 });
+  const blob = await execGitFile(['cat-file', 'blob', oid], { ...inDir, encoding: 'buffer', maxBuffer: Math.max(raw.length + 1, 64 * 1024) });
   return blob.stdout.equals(raw);
 }
 

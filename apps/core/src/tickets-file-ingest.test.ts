@@ -180,4 +180,18 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
     expect(await eventTypes(run)).not.toContain('tickets_file_inherited');
     expect(wgit(project.path, 'ls-files', '.emberline')).toBe('');
   });
+
+  it('with main checked out detached, a tickets file the agent committed on its branch is still imported', async () => {
+    const project = await createProject();
+    wgit(project.path, 'checkout', '-q', '--detach');
+    const run = await startTicket(project.id, 'Plan it');
+    writeTickets(run.worktreePath, draftsFile(['Detached child']));
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'plan');
+    await finishTurn(run);
+
+    await expect.poll(() => titles(project.id), { timeout: 10_000 }).toContain('Detached child');
+    expect(await eventTypes(run)).not.toContain('tickets_file_inherited');
+  });
 });
+

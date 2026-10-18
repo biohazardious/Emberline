@@ -32,11 +32,10 @@ export const EMBERLINE_SCRATCH_PATHS = [
   '.emberline/attachments/**',
 ] as const;
 
+const SCRATCH_EXCLUDES = EMBERLINE_SCRATCH_PATHS.map((p) => `:(exclude,glob)**/${p}`);
+
 /** Never committed from a run's worktree even when the project forgot to ignore them. */
-const RUN_OUTPUT_EXCLUDES = [
-  ':(exclude,glob)**/node_modules/**',
-  ...EMBERLINE_SCRATCH_PATHS.map((p) => `:(exclude,glob)**/${p}`),
-];
+const RUN_OUTPUT_EXCLUDES = [':(exclude,glob)**/node_modules/**', ...SCRATCH_EXCLUDES];
 
 /** The scratch files at any depth, as pathspecs. */
 const SCRATCH_PATHSPECS = EMBERLINE_SCRATCH_PATHS.map((p) => `:(glob)**/${p}`);
@@ -50,6 +49,15 @@ const SCRATCH_PATHSPECS = EMBERLINE_SCRATCH_PATHS.map((p) => `:(glob)**/${p}`);
 export async function unstageScratchFiles(cwd: string): Promise<void> {
   // -f: the staged content may differ from both HEAD and the file on disk; only the index changes.
   await execGitFile(['rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', ...SCRATCH_PATHSPECS], { cwd });
+}
+
+/**
+ * Puts the scratch files' index entries back to HEAD (a staged new one leaves the index, a staged
+ * change to a tracked one is undone); the files on disk are left alone. For the main workspace,
+ * where a tracked scratch file is removed by the run's merge rather than by a snapshot commit.
+ */
+async function resetScratchFilesToHead(cwd: string): Promise<void> {
+  await execGitFile(['reset', '-q', 'HEAD', '--', ...SCRATCH_PATHSPECS], { cwd });
 }
 
 /** One merge into a main workspace at a time (parallel runs finish independently). */
@@ -151,15 +159,20 @@ export async function syncWorktreeToMainWorkspace(params: {
     beforeMerge?.();
 
     // 2. Edits made directly in the main workspace (file explorer, blueprint) are committed first so
-    //    the merge can never overwrite them. Untracked files stay untracked.
+    //    the merge can never overwrite them. Untracked files stay untracked. Scratch files are put
+    //    back to HEAD in the index and never snapshotted: one main still tracks leaves with the
+    //    run's merge (which also deletes it from disk) instead of staying behind untracked.
+    await resetScratchFilesToHead(mainWorkspacePath);
     const editedTracked = await execGitFile(['diff', 'HEAD', '--name-only'], inMain);
     if (editedTracked.stdout.trim()) {
-      await execGitFile(['add', '-u'], inMain);
-      await unstageScratchFiles(mainWorkspacePath);
-      await execGitFile(
-        [...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `chore: snapshot workspace edits before merging ${label}`],
-        inMain,
-      );
+      await execGitFile(['add', '-u', '--', '.', ...SCRATCH_EXCLUDES], inMain);
+      const snapshot = await execGitFile(['diff', '--cached', '--name-only'], inMain);
+      if (snapshot.stdout.trim()) {
+        await execGitFile(
+          [...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `chore: snapshot workspace edits before merging ${label}`],
+          inMain,
+        );
+      }
     }
     const before = (await execGitFile(['rev-parse', 'HEAD'], inMain)).stdout.trim();
 

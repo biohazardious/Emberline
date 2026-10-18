@@ -183,4 +183,64 @@ describe('Emberline commits never carry scratch files', () => {
     expect(filesIn(a, 'HEAD')).toEqual(['feature-b.js']);
     expect(git(a, 'ls-files', '.emberline')).toBe('');
   });
+
+  it("main's only change is a staged scratch file: the merge goes ahead without an empty snapshot", async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeTickets(main);
+    git(main, 'add', '-A');
+    const head = git(main, 'rev-parse', 'HEAD');
+
+    const res = await sync(a, 'T-1');
+    expect(res.ok).toBe(true);
+    expect(git(main, 'log', '--format=%s', `${head}..HEAD`).split('\n')).toEqual(['Merge T-1 (emberline/a)', 'feat(T-1): factory run output']);
+    expect(git(main, 'ls-files', '.emberline')).toBe('');
+    // Still on disk, no longer staged.
+    expect(existsSync(path.join(main, TICKETS))).toBe(true);
+  });
+
+  it('a scratch file staged in main and then deleted from disk does not block the merge', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeTickets(main);
+    git(main, 'add', '-A');
+    rmSync(path.join(main, TICKETS));
+
+    const res = await sync(a, 'T-1');
+    expect(res.ok).toBe(true);
+    expect(existsSync(path.join(main, 'feature-a.js'))).toBe(true);
+    expect(git(main, 'ls-files', '.emberline')).toBe('');
+    expect(git(main, 'status', '--porcelain')).toBe('');
+  });
+
+  it('a scratch file main tracks leaves main with the merge even when main has its own edits', async () => {
+    writeTickets(main);
+    git(main, 'add', '-A');
+    git(main, 'commit', '-q', '-m', 'factory run output (old bug)');
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeFileSync(path.join(main, 'app.js'), 'line1\nedited in main\nline3\n');
+
+    const res = await sync(a, 'T-1');
+    expect(res.ok).toBe(true);
+    const snapshot = git(main, 'log', '--format=%H', '--grep', 'snapshot workspace edits');
+    expect(filesIn(main, snapshot)).toEqual(['app.js']);
+    expect(git(main, 'ls-files', '.emberline')).toBe('');
+    // Deleted by the merge, not left behind untracked for the pipeline to import from main again.
+    expect(existsSync(path.join(main, TICKETS))).toBe(false);
+  });
+
+  it('commitWorktree answers 409 when the scratch files cannot be unstaged', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    git(a, 'add', '-A');
+    const lock = path.resolve(a, git(a, 'rev-parse', '--git-path', 'index.lock'));
+    writeFileSync(lock, '');
+    try {
+      await expect(commitWorktree(a, 'emberline/a', { message: 'locked', stageAll: false })).rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      rmSync(lock, { force: true });
+    }
+  });
 });
+

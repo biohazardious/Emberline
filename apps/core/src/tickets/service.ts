@@ -841,7 +841,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const fromWorktree = worktreePath
       ? await ingestAgentTicketsFile(
           worktreePath,
-          hooksFor(async () => runBranchBase(worktreePath, await mainWorkspaceBranch(projectRow.path)), worktreePath),
+          hooksFor(
+            // A detached main checkout has no branch: the project's default branch is main then.
+            async () => runBranchBase(worktreePath, (await mainWorkspaceBranch(projectRow.path)) ?? projectRow.defaultBranch),
+            worktreePath,
+          ),
         )
       : null;
     const fromMain =

@@ -638,7 +638,12 @@ export async function commitWorktree(
   if (body.stageAll) {
     await git(worktreePath, ['add', '-A']);
   }
-  await unstageScratchFiles(worktreePath);
+  try {
+    await unstageScratchFiles(worktreePath);
+  } catch (error) {
+    const stderr = (error as { stderr?: string }).stderr?.trim();
+    throw conflict(`could not unstage Emberline scratch files${stderr ? `: ${stderr}` : ''}`);
+  }
   const staged = await git(worktreePath, ['diff', '--cached', '--name-only']);
   if (!staged) throw conflict('no changes staged to commit');
 
