@@ -12,6 +12,7 @@ import {
   type IssueSyncStatus,
   type Run,
   type Ticket,
+  type TicketStatus,
 } from '@emberline/protocol';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -26,6 +27,8 @@ import { type ForgeTarget, RateLimitError } from './issues.js';
 import type { ForgeService } from './service.js';
 
 export const ISSUE_SYNC_INTERVAL_MS = 10 * 60_000;
+/** Run notes of work merged into the main workspace: by the pipeline, or by a person (sync-worktree). */
+const MERGE_NOTES = ['merged_to_main', 'merged_by_person'];
 /** Pages read per project and tick, sorted by last update. */
 export const SYNC_PAGES = 2;
 export const SYNC_PAGE_SIZE = 100;
@@ -114,7 +117,7 @@ export class IssueSyncService {
     if (this.timer) return;
     this.runs.on('note', this.onNote);
     this.forge.on('pullRequest', this.onPullRequest);
-    this.tickets.on('ticket', this.onTicket);
+    this.tickets.on('moved', this.onMoved);
     this.timer = setInterval(() => {
       void this.tick();
     }, intervalMs);
@@ -128,7 +131,7 @@ export class IssueSyncService {
       this.timer = undefined;
       this.runs.off('note', this.onNote);
       this.forge.off('pullRequest', this.onPullRequest);
-      this.tickets.off('ticket', this.onTicket);
+      this.tickets.off('moved', this.onMoved);
     }
     const running = [...(this.ticking ? [this.ticking] : []), ...this.inflight.values(), ...this.pending];
     if (running.length === 0) return;
@@ -352,15 +355,16 @@ export class IssueSyncService {
   // --- Write-back ---------------------------------------------------------------------------
 
   private readonly onNote = (run: Run, type: string, payload: unknown): void => {
-    if (type === 'merged_to_main') this.track(() => this.commentMerge(run, payload));
+    if (MERGE_NOTES.includes(type)) this.track(() => this.commentMerge(run, payload));
   };
 
   private readonly onPullRequest = (runId: string, pr: ForgePullRequest): void => {
     this.track(() => this.commentPullRequest(runId, pr));
   };
 
-  private readonly onTicket = (ticket: Ticket): void => {
-    if (ticket.status === 'done' && ticket.external?.state === 'open') this.track(() => this.closeDone(ticket.id));
+  /** closeOnDone acts on the move into Done only, never on a later change of a Done ticket. */
+  private readonly onMoved = (ticket: Ticket, from: TicketStatus): void => {
+    if (ticket.status === 'done' && from !== 'done' && ticket.external) this.track(() => this.closeDone(ticket.id));
   };
 
   /** Runs a write-back in the background; it never throws into the caller (the pipeline). */
@@ -463,7 +467,7 @@ export class IssueSyncService {
       .select({ runId: runEvents.runId, payload: runEvents.payload })
       .from(runEvents)
       .innerJoin(runs, eq(runEvents.runId, runs.id))
-      .where(and(eq(runs.ticketId, ticketId), eq(runEvents.type, 'merged_to_main')))
+      .where(and(eq(runs.ticketId, ticketId), inArray(runEvents.type, MERGE_NOTES)))
       .orderBy(desc(runEvents.id))
       .limit(1)
       .get();
@@ -471,8 +475,9 @@ export class IssueSyncService {
   }
 
   /**
-   * closeOnDone: a merged ticket in Done closes its issue, with a comment. One attempt per merge:
-   * a failure is noted (`issue_close_failed`) and not retried.
+   * closeOnDone: a merged ticket that moved into Done closes its issue, with a comment. One attempt
+   * per merge: a failure is noted (`issue_close_failed`) and not retried. An issue already closed by
+   * then is noted `issue_close_skipped`, so a person who reopens it is not overruled later.
    */
   private async closeDone(ticketId: string): Promise<void> {
     const first = this.linkedRow(ticketId);
@@ -481,9 +486,13 @@ export class IssueSyncService {
     if (!merge) return;
     await writeBackLock.run(ticketId, async () => {
       const row = this.linkedRow(ticketId);
-      if (!row || row.status !== 'done' || row.externalState !== 'open') return;
-      if (this.recorded(ticketId, ['issue_closed', 'issue_close_failed'], merge.ref)) return;
+      if (!row || row.status !== 'done') return;
+      if (this.recorded(ticketId, ['issue_closed', 'issue_close_failed', 'issue_close_skipped'], merge.ref)) return;
       const info = { ticketKey: row.key, ref: merge.ref };
+      if (row.externalState !== 'open') {
+        this.runs.note(merge.runId, 'issue_close_skipped', info);
+        return;
+      }
       let target: ForgeTarget;
       try {
         target = await this.targetFor(row);

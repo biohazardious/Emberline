@@ -4,6 +4,8 @@ import { and, eq, like } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeIssueSync } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, tickets } from '../db/schema.js';
+import { HOLD_ENDING_EVENTS } from '../runs/hold-events.js';
+import { stillHeld } from '../runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from '../runs/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from '../test-utils.js';
 import { ISSUE_SYNC_INTERVAL_MS, IssueSyncService, SYNC_TICK_REQUEST_CAP } from './issue-sync.js';
@@ -534,8 +536,68 @@ describe('write-back', () => {
     expect(notes()).toEqual([{ type: 'issue_comment_failed', payload: { kind: 'merge', ticketKey: ticket.key, ref: 'abc1234', message: expect.stringMatching(/repository/) } }]);
   });
 
+  it('a person’s merge (merged_by_person) gets the merge comment and lets closeOnDone close', async () => {
+    const ticket = linkedRun({ closeOnDone: true });
+    t.runs.note('run-1', 'merged_by_person', { commitSha: 'abc1234' });
+    await sync.settled();
+    expect(comments().map((c) => c.body)).toEqual([
+      { body: `Emberline merged ${ticket.key} into \`main\` locally (abc1234). It reaches the remote when the branch is pushed.` },
+    ]);
+    t.tickets.update(ticket.id, { status: 'done' });
+    await sync.settled();
+    expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ state: 'closed' }]);
+    expect(notes()).toContainEqual({ type: 'issue_closed', payload: { ticketKey: ticket.key, ref: 'abc1234' } });
+  });
+
+  it('a person’s merge ends an earlier hold, like the pipeline’s own merge', () => {
+    expect(HOLD_ENDING_EVENTS).toContain('merged_by_person');
+    expect(PRUNE_PROTECTED_EVENT_TYPES).toEqual(expect.arrayContaining(['merged_by_person', 'issue_close_skipped']));
+    linkedRun();
+    const event = (runId: string, type: string, state: string | null = null) =>
+      t.db.insert(runEvents).values({ runId, ts: new Date(), source: 'core', type, state, payload: {} }).run();
+    event('run-1', 'merge_failed');
+    event('run-1', 'Stop', 'done');
+    expect(stillHeld(t.db, 'run-1')).toBe(true);
+    event('run-1', 'merged_by_person');
+    event('run-1', 'Stop', 'done');
+    expect(stillHeld(t.db, 'run-1')).toBe(false);
+  });
+
+  it('closeOnDone acts only on the move into Done: an issue closed by then is skipped for good, also after a reopen', async () => {
+    const ticket = linkedRun({ closeOnDone: true, commentOnProgress: false });
+    t.runs.note('run-1', 'merged_to_main', { commitSha: 'abc1234', branch: 'main' });
+    // Closed on the forge before the ticket reached Done.
+    t.tickets.syncIssueLinks('p1', 'github', [{ externalId: '9005', state: 'closed', labels: [] }]);
+    t.tickets.update(ticket.id, { status: 'done' });
+    await sync.settled();
+    expect(notes()).toEqual([{ type: 'issue_close_skipped', payload: { ticketKey: ticket.key, ref: 'abc1234' } }]);
+    // Reopened on the forge: the sync publishes the Done ticket with an open issue.
+    t.tickets.syncIssueLinks('p1', 'github', [{ externalId: '9005', state: 'open', labels: ['again'] }]);
+    t.tickets.update(ticket.id, { priority: 3 });
+    await sync.settled();
+    // Even a new move into Done for the same merge leaves the reopened issue alone.
+    t.tickets.update(ticket.id, { status: 'review' });
+    t.tickets.update(ticket.id, { status: 'done' });
+    await sync.settled();
+    expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+    expect(notes()).toHaveLength(1);
+  });
+
+  it('turning closeOnDone on later does not close tickets that were already Done', async () => {
+    const ticket = linkedRun({ closeOnDone: false, commentOnProgress: false });
+    t.runs.note('run-1', 'merged_to_main', { commitSha: 'abc1234', branch: 'main' });
+    t.tickets.update(ticket.id, { status: 'done' });
+    await sync.settled();
+    writeIssueSync(t.db, 'p1', IssueSyncSettings.parse({ enabled: true, label: 'emberline', closeOnDone: true, commentOnProgress: false }));
+    t.tickets.syncIssueLinks('p1', 'github', [{ externalId: '9005', state: 'open', labels: ['changed'] }]);
+    t.tickets.update(ticket.id, { priority: 3, status: 'done' });
+    await sync.settled();
+    expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+    expect(notes()).toEqual([]);
+  });
+
   it('write-back notes survive event pruning and do not become the run’s last event', async () => {
-    for (const type of ['issue_commented', 'issue_closed', 'issue_close_failed']) expect(PRUNE_PROTECTED_EVENT_TYPES).toContain(type);
+    for (const type of ['issue_commented', 'issue_closed', 'issue_close_failed', 'issue_close_skipped']) expect(PRUNE_PROTECTED_EVENT_TYPES).toContain(type);
     linkedRun();
     t.runs.note('run-1', 'merged_to_main', { commitSha: 'abc1234', branch: 'main' });
     await sync.settled();

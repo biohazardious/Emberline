@@ -165,6 +165,7 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'issue_commented',
   'issue_closed',
   'issue_close_failed',
+  'issue_close_skipped',
   'stall_detected',
   'waiting_input_timeout',
   // previewStatus reads the latest of these.

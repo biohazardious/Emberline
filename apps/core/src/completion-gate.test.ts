@@ -832,3 +832,67 @@ describe('issue triage', () => {
     expect(runsFor(ticket!.id)).toHaveLength(1);
   });
 });
+
+describe('a person’s merge from the Board', () => {
+  it('drag to Done (sync-worktree, then the move) comments the merge and closes the issue', async () => {
+    const seen: { method: string; path: string; body: unknown }[] = [];
+    t.forgeFetch.current = async (url, init) => {
+      seen.push({ method: init?.method ?? 'GET', path: new URL(url).pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const project = await createProject('Person Merge');
+    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, project.id)).run();
+    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    writeIssueSync(t.db, project.id, IssueSyncSettings.parse({ closeOnDone: true }));
+    const ticket = await createTicket(project.id, { title: 'Hand work', status: 'backlog' });
+    t.db
+      .update(tickets)
+      .set({ externalSource: 'github', externalId: '9005', externalNumber: 5, externalUrl: 'https://github.com/acme/widget/issues/5', externalState: 'open', externalLabels: [], externalTriage: true })
+      .where(eq(tickets.id, ticket.id))
+      .run();
+    // A person starts it by hand: that is its triage too.
+    const started = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json() as { ticket: Ticket; run: Run };
+    expect(started.ticket.external).toMatchObject({ triage: false });
+    const run = started.run;
+    await waitFile(`ready-${run.id}`);
+    writeFileSync(path.join(run.worktreePath, 'hand.txt'), 'hand\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'hand');
+
+    const merged = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
+    expect(merged.json()).toMatchObject({ ok: true });
+    const sha = wgit(project.path, 'rev-parse', '--short', 'HEAD').trim();
+    expect(await eventPayload(run, 'merged_by_person')).toEqual({ commitSha: sha });
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect((await api('PATCH', `/api/tickets/${ticket.id}`, { status: 'done' })).statusCode).toBe(200);
+    await expect.poll(() => seen.filter((c) => c.method !== 'GET').length, { timeout: 5_000 }).toBe(3);
+    await t.issueSync.settled();
+    // The merge comment and the close run side by side: any order.
+    expect(seen.filter((c) => c.method !== 'GET')).toEqual(
+      expect.arrayContaining([
+        {
+          method: 'POST',
+          path: '/repos/acme/widget/issues/5/comments',
+          body: { body: `Emberline merged ${ticket.key} into \`main\` locally (${sha}). It reaches the remote when the branch is pushed.` },
+        },
+        { method: 'PATCH', path: '/repos/acme/widget/issues/5', body: { state: 'closed' } },
+        { method: 'POST', path: '/repos/acme/widget/issues/5/comments', body: { body: `Emberline closed this issue because ${ticket.key} is done.` } },
+      ]),
+    );
+  });
+
+  it('a merge that fails notes nothing', async () => {
+    const project = await createProject('No Ticket Merge');
+    const ticket = await createTicket(project.id, { title: 'Conflict', status: 'backlog' });
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json() as { run: Run };
+    await waitFile(`ready-${run.id}`);
+    writeFileSync(path.join(run.worktreePath, 'c.txt'), 'run\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'run side');
+    writeFileSync(path.join(project.path, 'c.txt'), 'main\n');
+    wgit(project.path, 'add', '-A');
+    wgit(project.path, 'commit', '-q', '-m', 'main side');
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json()).toMatchObject({ ok: false });
+    expect(await eventTypes(run)).not.toContain('merged_by_person');
+  });
+});

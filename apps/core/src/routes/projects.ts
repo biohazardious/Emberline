@@ -367,12 +367,16 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       const run = runs.get(body.runId);
       if (!run || run.projectId !== project.id) throw notFound('no such run for this project');
       const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
-      return syncWorktreeToMainWorkspace({
+      const result = await syncWorktreeToMainWorkspace({
         worktreePath: run.worktreePath,
         mainWorkspacePath: project.path,
         ticketKey: ticket?.key ?? null,
         runId: run.id,
       });
+      // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
+      // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold.
+      if (result.ok && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
+      return result;
     },
   );
 

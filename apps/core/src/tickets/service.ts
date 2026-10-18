@@ -56,6 +56,8 @@ type TicketRow = typeof tickets.$inferSelect;
 
 interface TicketServiceEvents {
   ticket: [ticket: Ticket];
+  /** The ticket changed column (a person, the pipeline or a run); after its `ticket` event. */
+  moved: [ticket: Ticket, from: TicketStatus];
   removed: [ticket: { id: string; projectId: string }];
 }
 
@@ -1513,6 +1515,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if ((patch.status && patch.status !== current.status) || (patch.title && patch.title !== current.title)) {
       this.publishDependents(id);
     }
+    if (patch.status && patch.status !== current.status) this.emit('moved', ticket, current.status as TicketStatus);
     // A person closed a ticket by hand: the tickets waiting for it may start now (the whole queue
     // when the factory already chains this project); a plain board move starts nothing else.
     if (patch.status === 'done' && current.status !== 'done') {
@@ -1702,6 +1705,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     );
     if (status !== row.status) this.publishDependents(id);
     if (status === 'done') this.failedInARow.delete(row.projectId);
+    if (status !== row.status) this.emit('moved', ticket, row.status as TicketStatus);
     return ticket;
   }
 
