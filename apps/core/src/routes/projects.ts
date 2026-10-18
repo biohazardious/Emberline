@@ -1209,9 +1209,18 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
       if (!row) throw notFound('no such project');
 
       tickets.setAutoChain(projectId, false);
-      // worktree.yml teardown (e.g. `docker compose down`) before the worktrees go; best effort.
-      await runs.teardownProjectWorktrees(projectId).catch((err: unknown) => {
+      // Live runs stop first (a run in setup gets its setup command killed): a teardown must not
+      // take services down under a working agent.
+      for (const run of runs.list()) {
+        if (run.projectId === projectId && !run.endedAt) {
+          await runs.stop(run.id, { reason: 'project removed' }).catch(() => undefined);
+        }
+      }
+      // worktree.yml teardown (e.g. `docker compose down`) before the worktrees go; best effort,
+      // waited for a bounded time.
+      const teardown = await runs.teardownProjectWorktrees(projectId).catch((err: unknown) => {
         request.log.warn({ err, projectId }, 'worktree.yml teardown before deleting the project failed');
+        return { finished: true, settled: Promise.resolve() };
       });
       for (const run of runs.list()) {
         if (run.projectId === projectId) {
@@ -1219,8 +1228,11 @@ export function registerProjectRoutes(app: FastifyInstance, { db, config, ptyd, 
         }
       }
 
+      // Never pull the worktrees out from under a teardown that still runs: they go once it ended.
       const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
-      await rm(worktreeSlugDir, { recursive: true, force: true }).catch(() => {});
+      const removeWorktrees = () => rm(worktreeSlugDir, { recursive: true, force: true }).catch(() => {});
+      if (teardown.finished) await removeWorktrees();
+      else void teardown.settled.then(removeWorktrees);
 
       // A folder registered in place is the user's own repository: only an explicit request deletes it.
       const flag = request.query.deleteFiles;

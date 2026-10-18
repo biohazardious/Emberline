@@ -686,12 +686,14 @@ export const GarbageCollectRunsResponse = z.object({
   /**
    * Finished runs whose worktree (and run row) were kept because removing it could lose work.
    * `archive_pending`: its build outputs could not be archived within the request's time budget.
+   * `teardown_running`: its worktree.yml teardown outlasted the request's time budget; the worktree
+   * is pruned and the run removed in the background once it ends.
    */
   keptWorktrees: z
     .array(
       z.object({
         runId: z.string(),
-        reason: z.enum(['uncommitted_changes', 'unmerged_commits', 'in_review', 'archive_pending']),
+        reason: z.enum(['uncommitted_changes', 'unmerged_commits', 'in_review', 'archive_pending', 'teardown_running']),
       }),
     )
     .default([]),

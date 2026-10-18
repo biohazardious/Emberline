@@ -121,6 +121,8 @@ export const PruneWorktreeResponse = z.object({
   runId: z.string(),
   worktreePath: z.string(),
   removed: z.boolean(),
+  /** The worktree.yml teardown still runs after the request's time budget; the prune follows it. */
+  pending: z.boolean().optional(),
 });
 export type PruneWorktreeResponse = z.infer<typeof PruneWorktreeResponse>;
 

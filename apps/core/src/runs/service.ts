@@ -128,6 +128,24 @@ export interface RunServiceLogger {
 }
 /** A project delete waits this long at most for worktree.yml teardowns. */
 export const PROJECT_DELETE_TEARDOWN_BUDGET_MS = 30_000;
+/** A per-run prune or a manual GC waits this long in all for teardowns; the rest finish in the background. */
+export const REQUEST_TEARDOWN_BUDGET_MS = 60_000;
+/** Waits for `job` at most `ms`; resolves whether it settled in time (the job itself carries on). */
+function settlesWithin(job: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    void job.then(
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+    );
+  });
+}
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
 const setupExecId = (runId: string) => `setup-${runId}`;
 /** A copy entry left out whole because it is over the copy caps. */
@@ -416,6 +434,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly settingUp = new Set<string>();
   /** Runs whose worktree auto-GC is tearing down in the background before it prunes it. */
   private readonly tearingDown = new Set<string>();
+  /** How long a request waits for worktree.yml teardowns (overridable in tests). */
+  readonly teardownBudgets = { request: REQUEST_TEARDOWN_BUDGET_MS, projectDelete: PROJECT_DELETE_TEARDOWN_BUDGET_MS };
+  /** Background teardown-then-prune jobs by worktree path, so a project delete can wait for them. */
+  private readonly teardownJobs = new Map<string, Promise<void>>();
   private log?: RunServiceLogger;
 
   constructor(
@@ -1842,18 +1864,60 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         );
       }
     }
+    // Its teardown runs already (an earlier prune, auto-GC): the prune follows it.
+    if (this.tearingDown.has(id)) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
     // Deliverables in git-ignored build directories exist only here: archive them first.
     if (row.worktreePath !== project.path) await this.outputs.archiveBeforePrune(id);
-    await this.teardownWorktree(row, project);
-    const removed = await pruneWorktree(project.path, row.worktreePath);
-    if (removed) {
-      this.record(id, {
-        source: 'user',
-        type: 'worktree_pruned',
-        payload: { worktreePath: row.worktreePath },
+    const recordPruned = (removed: boolean) => {
+      if (removed) {
+        this.record(id, {
+          source: 'user',
+          type: 'worktree_pruned',
+          payload: { worktreePath: row.worktreePath },
+        });
+      }
+    };
+    if (this.hasTeardown(project.id) && row.worktreePath !== project.path && existsSync(row.worktreePath)) {
+      // Teardown commands may take minutes: the request waits a bounded time, the rest is background.
+      let removed = false;
+      const job = this.teardownThenPrune(row, project, (r) => {
+        removed = r;
+        recordPruned(r);
       });
+      const done = await settlesWithin(job, this.teardownBudgets.request);
+      return { runId: id, worktreePath: row.worktreePath, removed, ...(done ? {} : { pending: true }) };
     }
+    const removed = await pruneWorktree(project.path, row.worktreePath);
+    recordPruned(removed);
     return { runId: id, worktreePath: row.worktreePath, removed };
+  }
+
+  /**
+   * Teardown, then prune, then `after`, as one background job: guarded by `tearingDown` so no
+   * other path starts it again, and listed in `teardownJobs` so a project delete can wait for it.
+   * Never rejects.
+   */
+  private teardownThenPrune(
+    row: RunRow,
+    project: { id: string; path: string },
+    after: (removed: boolean) => unknown,
+  ): Promise<void> {
+    this.tearingDown.add(row.id);
+    const job: Promise<void> = this.teardownWorktree(row, project)
+      // Best effort: a teardown that throws must not leave the worktree behind.
+      .catch(() => undefined)
+      .then(() => pruneWorktree(project.path, row.worktreePath))
+      .catch(() => false)
+      .then(async (removed) => {
+        await after(removed);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.tearingDown.delete(row.id);
+        if (this.teardownJobs.get(row.worktreePath) === job) this.teardownJobs.delete(row.worktreePath);
+      });
+    this.teardownJobs.set(row.worktreePath, job);
+    return job;
   }
 
   /**
@@ -1883,24 +1947,34 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /**
    * Before a project and its `.worktrees/<slug>` go: best-effort teardown in each run worktree that
-   * still exists (each once, also when runs share it).
+   * still exists (each once, also when runs share it), next to the background teardowns already
+   * running for it. Waits at most `budgetMs`; `settled` resolves once all of them ended (each
+   * command is capped), so the caller removes the worktrees only then.
    */
-  async teardownProjectWorktrees(projectId: string, budgetMs = PROJECT_DELETE_TEARDOWN_BUDGET_MS): Promise<void> {
+  async teardownProjectWorktrees(
+    projectId: string,
+    budgetMs = this.teardownBudgets.projectDelete,
+  ): Promise<{ finished: boolean; settled: Promise<void> }> {
     const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
-    if (!project || !this.hasTeardown(projectId)) return;
-    const all = (async () => {
-      const seen = new Set<string>();
-      for (const row of this.db.select().from(runs).where(eq(runs.projectId, projectId)).orderBy(desc(runs.createdAt)).all()) {
-        // Auto-GC is tearing that one down already.
-        if (seen.has(row.worktreePath) || this.tearingDown.has(row.id)) continue;
-        seen.add(row.worktreePath);
-        await this.teardownWorktree(row, project).catch(() => undefined);
-      }
-    })();
-    // The delete waits this long at most; the rest carries on in the background, best effort.
-    let timer: NodeJS.Timeout | undefined;
-    await Promise.race([all, new Promise<void>((resolve) => (timer = setTimeout(resolve, budgetMs)))]);
-    clearTimeout(timer);
+    if (!project) return { finished: true, settled: Promise.resolve() };
+    const rows = this.db.select().from(runs).where(eq(runs.projectId, projectId)).orderBy(desc(runs.createdAt)).all();
+    const inFlight = [...new Set(rows.flatMap((row) => this.teardownJobs.get(row.worktreePath) ?? []))];
+    const own = this.hasTeardown(projectId)
+      ? (async () => {
+          const seen = new Set<string>();
+          for (const row of rows) {
+            // A background job is tearing that one down already.
+            if (seen.has(row.worktreePath) || this.tearingDown.has(row.id)) continue;
+            seen.add(row.worktreePath);
+            this.tearingDown.add(row.id);
+            await this.teardownWorktree(row, project)
+              .catch(() => undefined)
+              .finally(() => this.tearingDown.delete(row.id));
+          }
+        })()
+      : Promise.resolve();
+    const settled = Promise.allSettled([own, ...inFlight]).then(() => undefined);
+    return { finished: await settlesWithin(settled, budgetMs), settled };
   }
 
   /** The approved worktree.yml's preview service, else what the workspace's package.json offers. */
@@ -2186,6 +2260,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
 
     const archiveDeadline = Date.now() + MANUAL_GC_ARCHIVE_BUDGET_MS;
+    const teardownDeadline = Date.now() + this.teardownBudgets.request;
     for (const [projId, list] of byProject.entries()) {
       const toRemove = list.slice(body.keepRecent);
       const proj = projectMap.get(projId);
@@ -2217,7 +2292,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           }
         }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
-          await this.teardownWorktree(row, proj);
+          if (this.hasTeardown(proj.id) && existsSync(row.worktreePath)) {
+            // Teardowns share one time budget per request; one still running prunes (and removes
+            // its run) in the background when it ends.
+            let removedWt = false;
+            const job = this.teardownThenPrune(row, proj, async (r) => {
+              removedWt = r;
+              await this.remove(row.id).catch(() => undefined);
+            });
+            if (await settlesWithin(job, teardownDeadline - Date.now())) {
+              if (removedWt) prunedWorktrees += 1;
+              removedRuns += 1;
+            } else {
+              keptWorktrees.push({ runId: row.id, reason: 'teardown_running' });
+            }
+            continue;
+          }
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
@@ -2554,16 +2644,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 // Teardown commands may take minutes: they run beside reconcile, and this worktree is
                 // pruned (and its run removed) only once they finished. The guard keeps a later
                 // pass from starting them again meanwhile.
-                this.tearingDown.add(stale.id);
-                const worktreeProject = proj;
-                void this.teardownWorktree(stale, worktreeProject)
-                  // Best effort: a teardown that throws must not leave the worktree behind.
-                  .catch(() => undefined)
-                  .then(() => pruneWorktree(worktreeProject.path, stale.worktreePath))
-                  .catch(() => undefined)
-                  .then(() => this.remove(stale.id))
-                  .catch(() => undefined)
-                  .finally(() => this.tearingDown.delete(stale.id));
+                void this.teardownThenPrune(stale, proj, () => this.remove(stale.id));
                 continue;
               }
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);

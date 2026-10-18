@@ -656,6 +656,86 @@ describe('teardown before prune', () => {
     release();
   });
 
+  /** Holds every teardown command containing `slow-teardown` until `release()`. */
+  function holdTeardowns() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const order: string[] = [];
+    setCommandExecutor(async (request) => {
+      if (request.file === 'sh' && request.args[1]?.includes('slow-teardown')) {
+        order.push(`teardown:${request.cwd}`);
+        await gate;
+      }
+      return localCommandExecutor(request);
+    });
+    return { release, order };
+  }
+  const budgets = () => (t.runs as unknown as { teardownBudgets: { request: number; projectDelete: number } }).teardownBudgets;
+
+  it('a per-run prune answers within its time budget; the teardown and the prune finish in the background', async () => {
+    const { release } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const run = await endedRun(project.id);
+    const startedAt = Date.now();
+    const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ removed: false, pending: true });
+    expect(existsSync(run.worktreePath)).toBe(true);
+    // A second prune meanwhile does not start the teardown again.
+    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({ pending: true });
+    release();
+    await expect.poll(() => existsSync(run.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => typesOf(run.id)).toContain('worktree_pruned');
+  });
+
+  it('a manual GC answers within its time budget and reports the teardowns still running', async () => {
+    const { release, order } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    const startedAt = Date.now();
+    const res = await api('POST', '/api/runs/gc', { projectId: project.id, keepRecent: 0, includeFailed: true, pruneWorktrees: true });
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().keptWorktrees).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runId: a.id, reason: 'teardown_running' })]),
+    );
+    expect(existsSync(a.worktreePath)).toBe(true);
+    release();
+    await expect.poll(() => existsSync(a.worktreePath) || existsSync(b.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => t.runs.list().filter((r) => r.projectId === project.id).length, { timeout: 8_000 }).toBe(0);
+    expect(order.length).toBe(2);
+  });
+
+  it('a project delete stops live runs before teardown, and removes .worktrees/<slug> only once teardowns ended', async () => {
+    const { release, order } = holdTeardowns();
+    budgets().projectDelete = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const live = await startRun(project.id);
+    const stop = t.runs.stop.bind(t.runs);
+    vi.spyOn(t.runs, 'stop').mockImplementation(async (id, opts) => {
+      order.push(`stop:${id}`);
+      return stop(id, opts);
+    });
+    const slugDir = path.dirname(live.worktreePath);
+    const res = await api('DELETE', `/api/projects/${project.id}?deleteFiles=0`);
+    expect(res.statusCode).toBe(200);
+    expect(order[0]).toBe(`stop:${live.id}`);
+    expect(order).toContain(`teardown:${live.worktreePath}`);
+    // The teardown still runs in there: the directory waits for it.
+    expect(existsSync(slugDir)).toBe(true);
+    release();
+    await expect.poll(() => existsSync(slugDir), { timeout: 8_000 }).toBe(false);
+  });
+
   it('logs a failed teardown too', async () => {
     const warn = vi.fn();
     t.runs.setLogger({ warn });
