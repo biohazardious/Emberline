@@ -7,6 +7,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Fixed
 
 - Run Build & Verify (and the build gate) runs the project's approved `setup` commands from `.emberline/worktree.yml` before its `checks`, so a fresh main workspace no longer fails with errors like `astro: not found`.
+- A merge conflict found after a run's session had gone idle no longer leaves the ticket held as "Merge failed": Emberline resumes the session to resolve it, and no longer closes an idle session while its checks and merge are still running.
 
 ## [0.3.1] - 2026-10-18
 

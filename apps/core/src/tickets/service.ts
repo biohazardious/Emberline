@@ -347,6 +347,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Drops pending settle timers (shutdown, tests). */
   dispose(): void {
     for (const timer of this.settlingRuns.values()) clearTimeout(timer);
+    for (const id of this.settlingRuns.keys()) this.runs.pipelineBusy(id, false);
     this.settlingRuns.clear();
   }
 
@@ -357,27 +358,41 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * cannot wake up again and goes straight on.
    */
   private completeRunWhenSettled(run: Run): void {
-    clearTimeout(this.settlingRuns.get(run.id));
-    this.settlingRuns.delete(run.id);
+    this.stopSettling(run.id);
     if (this.pipelineSettleMs <= 0 || run.endedAt) {
       this.completeRun(run);
       return;
     }
     const timer = setTimeout(() => {
       if (this.settlingRuns.get(run.id) !== timer) return;
-      this.settlingRuns.delete(run.id);
-      let fresh: Run;
+      // The pass below marks the run busy itself before this wait is released.
       try {
-        fresh = this.runs.getRun(run.id);
-      } catch {
-        return; // removed meanwhile
+        let fresh: Run;
+        try {
+          fresh = this.runs.getRun(run.id);
+        } catch {
+          return; // removed meanwhile
+        }
+        // Woke up again (its next Stop starts a new wait), or finished differently in the meantime.
+        if (fresh.state !== 'done' || fresh.stateChangedAt !== run.stateChangedAt || fresh.handedOffTo) return;
+        this.completeRun(fresh);
+      } finally {
+        this.stopSettling(run.id);
       }
-      // Woke up again (its next Stop starts a new wait), or finished differently in the meantime.
-      if (fresh.state !== 'done' || fresh.stateChangedAt !== run.stateChangedAt || fresh.handedOffTo) return;
-      this.completeRun(fresh);
     }, this.pipelineSettleMs);
     timer.unref();
     this.settlingRuns.set(run.id, timer);
+    // Busy from the moment the wait starts, so the idle sweep cannot close the session before the pass.
+    this.runs.pipelineBusy(run.id, true);
+  }
+
+  /** Ends a pending settle wait, if any, and lifts its busy mark. */
+  private stopSettling(runId: string): void {
+    const timer = this.settlingRuns.get(runId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.settlingRuns.delete(runId);
+    this.runs.pipelineBusy(runId, false);
   }
 
   /** Runs the completion pipeline in the background; it is best effort per run. */
@@ -790,9 +805,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // not merge this run before its gates have passed.
     // Counted: an overlapping pass for the same run must not lift the guard while one is still going.
     this.pipelineRuns.set(run.id, (this.pipelineRuns.get(run.id) ?? 0) + 1);
+    this.runs.pipelineBusy(run.id, true);
     try {
       await this.runPipeline(run, opts);
     } finally {
+      this.runs.pipelineBusy(run.id, false);
       const left = (this.pipelineRuns.get(run.id) ?? 1) - 1;
       if (left > 0) this.pipelineRuns.set(run.id, left);
       else this.pipelineRuns.delete(run.id);
@@ -1272,7 +1289,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
     const text = `${conflictResolutionPrompt(branch, conflicts)}${this.completeAgain(run, ' ')}`;
     try {
-      await this.runs.sendPrompt(run.id, text, { automatic: true });
+      // prompt() resumes a session the idle sweep closed meanwhile (the checks can outlast its TTL).
+      await this.runs.prompt(run.id, text, { automatic: true });
     } catch (error) {
       this.runs.note(run.id, 'conflict_resolution_failed', { conflicts, message: error instanceof Error ? error.message : String(error) });
       return false;
