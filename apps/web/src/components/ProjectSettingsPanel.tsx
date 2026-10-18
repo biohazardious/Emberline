@@ -71,7 +71,7 @@ function WorktreeReviewBody({
 }
 
 /** Native radios styled as segments: one tab stop, arrow keys move and select. */
-function GateRadios({
+export function GateRadios({
   name,
   labelledBy,
   options,

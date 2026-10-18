@@ -3,7 +3,6 @@ import type {
   AgentId,
   AgentModelId,
   AgentPersona,
-  CreateProjectResponse,
   PermissionMode,
   Project,
   Run,
@@ -392,14 +391,6 @@ export function Dashboard({
                   </button>
                 )}
               </header>
-              <NewProjectForm
-                disabled={runnerDown}
-                onCreated={async (res) => {
-                  await projects.refresh();
-                  onSelectProject?.(res.project.id);
-                  if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
-                }}
-              />
             </section>
           )}
         </>
@@ -531,14 +522,6 @@ export function Dashboard({
                   </li>
                 ))}
               </ul>
-              <NewProjectForm
-                disabled={runnerDown}
-                onCreated={async (res) => {
-                  await projects.refresh();
-                  onSelectProject?.(res.project.id);
-                  if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
-                }}
-              />
             </section>
 
             <section className="panel" aria-labelledby="terminals-title">
@@ -930,59 +913,6 @@ function StartRunForm({
       </div>
       <p className="muted small">{modeHint(mode)}. Runs on a new branch in its own worktree.</p>
       {error && <p className="form-error">{error}</p>}
-    </form>
-  );
-}
-
-function NewProjectForm({
-  disabled,
-  onCreated,
-}: {
-  disabled: boolean;
-  onCreated: (res: CreateProjectResponse) => Promise<void>;
-}) {
-  const [name, setName] = useState('');
-  const [repoUrl, setRepoUrl] = useState('');
-  const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(undefined);
-    try {
-      const res = await api<CreateProjectResponse>('/api/projects', 'POST', { name, repoUrl });
-      setName('');
-      setRepoUrl('');
-      await onCreated(res);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form className="inline-form" onSubmit={(e) => void submit(e)}>
-      <input
-        id="project-name"
-        className="input"
-        placeholder="Project name"
-        required
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <input
-        id="project-repo"
-        className="input grow"
-        placeholder="Repository URL (optional) — https://… or git@…"
-        value={repoUrl}
-        onChange={(e) => setRepoUrl(e.target.value)}
-      />
-      <button id="project-create" className="btn btn-primary" disabled={busy || (disabled && !!repoUrl)}>
-        {busy ? 'Adding…' : repoUrl ? 'Clone' : 'Add'}
-      </button>
-      {error && <p className="form-error full">{error}</p>}
     </form>
   );
 }

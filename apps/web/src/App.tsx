@@ -38,7 +38,7 @@ import { AuthGate, useAuth } from './auth';
 import { BrandLogo } from './components/BrandLogo';
 import { CommandPalette } from './components/CommandPalette';
 import { PersonaBadge } from './components/PersonaBadge';
-import { ProjectWizardModal } from './components/ProjectWizardModal';
+import { ProjectWizard } from './components/wizard/WizardShell';
 import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
 import { ProviderMark } from './components/ProviderMark';
 import { RunInspector } from './components/RunInspector';
@@ -1011,14 +1011,15 @@ function Shell() {
         </div>
       </div>
 
-      <ProjectWizardModal
+      <ProjectWizard
         open={wizardOpen}
         runnerDown={ptyd !== 'connected'}
         onClose={() => setWizardOpen(false)}
-        onCreated={async (res) => {
+        onProjectsChanged={() => void projects.refresh()}
+        onCreated={async (project) => {
           await projects.refresh();
-          selectProject(res.project.id);
-          if (res.terminalId) navigate(`/terminals/${res.terminalId}`);
+          selectProject(project.id);
+          navigate(`/projects/${project.id}/board`);
         }}
       />
 

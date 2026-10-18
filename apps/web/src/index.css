@@ -4596,3 +4596,664 @@ dialog.cmd-dialog::backdrop {
   opacity: 0;
   cursor: pointer;
 }
+
+/* --- project wizard -----------------------------------------------------------
+   Mobile first: a full-screen sheet with a top bar (step x of n, close) and a bottom bar
+   (Back / Next / Create) that stay put while the step scrolls. From 900 px: a centred dialog,
+   max 960 px, with a step rail on the left. */
+.wizard-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.6);
+}
+
+.wizard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'top' 'body' 'foot';
+  width: 100%;
+  height: 100dvh;
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.wizard-top {
+  grid-area: top;
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.wizard-top-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wizard-top-title h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.wizard-top .icon-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.wizard-rail {
+  display: none;
+  grid-area: rail;
+}
+
+.wizard-body {
+  grid-area: body;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+}
+
+.wizard-step-title {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.wizard-step-title:focus {
+  outline: none;
+}
+
+.wizard-step-title:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+.wizard-step {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.wizard-foot {
+  grid-area: foot;
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.wizard-foot-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wizard-foot-actions .btn {
+  min-height: 40px;
+  min-width: 96px;
+}
+
+.wizard-hint:empty {
+  display: none;
+}
+
+.wizard-foot-error {
+  margin: 0;
+}
+
+.wizard-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.wizard-confirm .btn {
+  min-height: 36px;
+}
+
+/* Radio cards: native radio inputs over the whole card, so keyboard and ARIA come for free. */
+.wizard-fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.wizard-legend {
+  margin: 0 0 4px;
+  padding: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.wizard-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.wizard-card {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-height: 44px;
+  padding: 10px 34px 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.wizard-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.wizard-card input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* The checked mark: a filled dot, so the choice is not shown by colour alone. */
+.wizard-card::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.wizard-card:has(input:checked) {
+  border-color: var(--ember-1);
+  background: color-mix(in hsl, var(--ember-1) 9%, var(--surface));
+}
+
+.wizard-card:has(input:checked)::after {
+  border-color: var(--ember-1);
+  background: radial-gradient(circle, var(--ember-1) 45%, transparent 50%);
+}
+
+.wizard-card:focus-within {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+.wizard-card-disabled,
+.wizard-card:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.wizard-card:has(input:disabled) input {
+  cursor: not-allowed;
+}
+
+.wizard-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.wizard-card-hint {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.wizard-draft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--ember-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+
+.wizard-textarea {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.45;
+}
+
+.wizard-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+.wizard-details > summary {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wizard-details[open] > summary {
+  margin-bottom: 10px;
+}
+
+.wizard-file {
+  position: relative;
+  cursor: pointer;
+}
+
+.wizard-file:focus-within {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+/* Visually hidden but still focusable, so the label works from the keyboard. */
+.wizard-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  opacity: 0;
+}
+
+/* Stack rows: label above the control on phones, beside it from 640 px. */
+.wizard-dims {
+  display: grid;
+  gap: 12px;
+}
+
+.wizard-dim {
+  display: grid;
+  gap: 5px;
+}
+
+.wizard-dim-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.wizard-dim-edited {
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 500;
+}
+
+.wizard-dim-control {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wizard-dim-control select.input,
+.wizard-dim select.input,
+.wizard-step select.input {
+  min-height: 36px;
+}
+
+.wizard-section {
+  display: grid;
+  gap: 8px;
+}
+
+.wizard-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+.wizard-gate-radios {
+  display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.wizard-routes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.wizard-routes div {
+  display: grid;
+  gap: 2px;
+}
+
+.wizard-routes dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Summary */
+.wizard-sum-group {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wizard-sum-group h4 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.wizard-sum-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wizard-sum-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.wizard-sum-list div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 12px;
+}
+
+.wizard-sum-list dt {
+  color: var(--muted);
+}
+
+.wizard-sum-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.wizard-tickets,
+.wizard-files {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+}
+
+.wizard-files {
+  padding-left: 0;
+  list-style: none;
+}
+
+.wizard-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.wizard-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--ember-1);
+}
+
+.wizard-own-yml {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid hsl(40 90% 50% / 0.4);
+  border-radius: var(--radius-sm);
+  background: hsl(40 80% 20% / 0.12);
+}
+
+.wizard-tabs {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.wizard-tablist {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.wizard-tab {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wizard-tab:hover {
+  color: var(--text);
+}
+
+.wizard-tab.active {
+  border-bottom-color: var(--ember-1);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wizard-tab:focus-visible,
+.wizard-file-preview:focus-visible,
+.wizard-tail:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: -2px;
+}
+
+.wizard-file-preview,
+.wizard-tail {
+  max-height: 340px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wizard-tail {
+  max-height: 260px;
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: pre;
+}
+
+.wizard-status {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+@media (min-width: 560px) {
+  .wizard-cards-2,
+  .wizard-cards-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 640px) {
+  .wizard-dim {
+    grid-template-columns: 160px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .wizard-dim-label {
+    min-height: 36px;
+  }
+
+  .wizard-sum-list div {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+
+  .wizard-foot-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (min-width: 900px) {
+  .wizard-backdrop {
+    align-items: center;
+    padding: 24px;
+  }
+
+  .wizard {
+    grid-template-columns: 196px minmax(0, 1fr);
+    grid-template-areas: 'top top' 'rail body' 'rail foot';
+    width: min(960px, 100%);
+    height: min(780px, 100%);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgb(0 0 0 / 0.45);
+  }
+
+  .wizard-top-step {
+    display: none;
+  }
+
+  .wizard-rail {
+    display: block;
+    padding: 14px 10px;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .wizard-rail ol {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .wizard-rail-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .wizard-rail-step:hover:not(:disabled) {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .wizard-rail-step:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .wizard-rail-step:focus-visible {
+    outline: 2px solid var(--ember-2);
+    outline-offset: 1px;
+  }
+
+  .wizard-rail-step.current {
+    background: var(--surface-2);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .wizard-rail-index {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wizard-rail-step.current .wizard-rail-index {
+    border-color: var(--ember-1);
+    color: var(--ember-1);
+  }
+
+  .wizard-rail-step.complete .wizard-rail-index {
+    border-color: color-mix(in hsl, var(--ok) 60%, var(--border));
+    color: var(--ok);
+  }
+
+  .wizard-body {
+    padding: 18px 22px;
+  }
+
+  .wizard-foot {
+    padding: 10px 22px;
+  }
+
+  .wizard-cards-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
