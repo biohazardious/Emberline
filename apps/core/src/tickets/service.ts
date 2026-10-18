@@ -24,6 +24,7 @@ import {
   type TicketStatus,
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
+  type WorktreeChecks,
 } from '@emberline/protocol';
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
@@ -52,6 +53,7 @@ import { openBlockingCount } from '../review/blocking.js';
 import { pipelineOutcome, reviewUnblockPending, stillHeld } from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
+import { approvedChecks } from '../worktree-config/load.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -190,7 +192,9 @@ export function statusForRunState(state: Run['state']): TicketStatus | null {
   return null; // failed: stays put and shows the failed run
 }
 
-function hasVerifiableBuildTarget(workspacePath: string): boolean {
+/** Whether the build gate has something to verify: approved worktree.yml checks, or a detected target. */
+export function hasVerifiableBuildTarget(workspacePath: string, checks?: WorktreeChecks | null): boolean {
+  if (checks && (checks.build || checks.lint || checks.test)) return true;
   const pkgPath = path.join(workspacePath, 'package.json');
   if (existsSync(pkgPath)) {
     try {
@@ -917,18 +921,21 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // 2. Polyglot Self-Healing Build, Lint & Unit Test Gate: if enabled and the workspace has a
     //    verifiable build, lint, or test target (Node/TS, Python, Go, Rust, PlatformIO, or Makefile),
     //    verify it before syncing or moving to Done. If verification fails, resume the agent with the error log.
+    //    An approved worktree.yml with `checks` replaces the detected steps (and is always verifiable).
+    const checks = approvedChecks(this.db, run.projectId);
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
       (!run.endedAt || run.resumable) &&
       run.worktreePath &&
-      hasVerifiableBuildTarget(run.worktreePath)
+      hasVerifiableBuildTarget(run.worktreePath, checks)
     ) {
       this.selfHealedRuns.add(run.id);
       const buildRes = await buildWorkspaceDemo({
         projectId: run.projectId,
         targetId: run.id,
         workspacePath: run.worktreePath,
+        checks,
       }).catch((error: unknown) => {
         this.runs.note(run.id, 'build_gate_error', { message: (error as Error).message?.slice(0, 500) });
         return null;

@@ -103,6 +103,14 @@ import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } fro
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 import { providerAdapter } from './providers.js';
 import { detectPreviewCommand } from './preview-command.js';
+import {
+  copyIntoWorktree,
+  runWorktreeCommand,
+  SETUP_TIMEOUT_MS,
+  setupFailurePrefix,
+  TEARDOWN_TIMEOUT_MS,
+} from '../worktree-config/lifecycle.js';
+import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
 import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
 
@@ -182,6 +190,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   // previewStatus reads the latest of these.
   'preview_started',
   'preview_stopped',
+  // launch reads the setup a fresh worktree still needs.
+  'worktree_setup_pending',
 ];
 /** Events that never become a run's `lastEvent`. */
 const BOOKKEEPING_EVENT_TYPES = new Set([
@@ -381,6 +391,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   readonly outputs: BuildOutputArchive;
   /** Stall watchdog per working (or starting) run: the screen hash, since when it is unchanged, when it was last read. */
   private readonly stallWatch = new Map<string, { hash: string | null; since: number; sampledAt: number }>();
+  /**
+   * Runs whose worktree.yml setup is running (in the runner) before their agent is spawned. They are
+   * `starting` without a terminal on purpose, so the starting watchdog leaves them alone.
+   */
+  private readonly settingUp = new Set<string>();
 
   constructor(
     private readonly db: Db,
@@ -420,7 +435,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .from(runs)
       .where(and(eq(runs.state, 'starting'), isNull(runs.ptydSessionId), isNull(runs.endedAt)))
       .all()
-      .filter((row) => row.stateChangedAt.getTime() <= cutoff);
+      .filter((row) => row.stateChangedAt.getTime() <= cutoff && !this.settingUp.has(row.id));
     for (const row of stuck) {
       this.record(row.id, {
         source: 'system',
@@ -682,6 +697,24 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         path.join(this.config.workspacesDir, '.worktrees', project.slug, short),
         origin?.branch ?? `emberline/run-${short}`,
       ));
+    // A fresh worktree (not in place, not a shared one) gets the approved worktree.yml's lifecycle:
+    // `copy` now, before the run exists for the scheduler; `setup` at launch (spawnAgent).
+    const lifecycle =
+      !origin?.worktree && workspace.path !== project.path ? loadApprovedWorktreeConfig(this.db, project.id) : null;
+    const copied =
+      lifecycle && lifecycle.config.copy.length > 0
+        ? await copyIntoWorktree(
+            { trustedBase: this.config.workspacesDir, mainPath: project.path, worktreePath: workspace.path },
+            lifecycle.config.copy,
+          ).catch((error: unknown) =>
+            lifecycle.config.copy.map((entry) => ({
+              path: entry.path,
+              mode: entry.mode,
+              status: 'skipped' as const,
+              reason: `copy failed: ${(error as Error).message.slice(0, 200)}`,
+            })),
+          )
+        : null;
 
     const persona = body.persona ?? 'coder';
     const tag = parseRouteTag(body.prompt ?? '');
@@ -724,6 +757,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         createdAt: now,
       })
       .run();
+    // Synchronous with the insert: no dispatch can launch the run before its setup is on record.
+    if (lifecycle && copied) this.note(id, 'worktree_copied', { sha256: lifecycle.sha256, entries: copied });
+    if (lifecycle && lifecycle.config.setup.length > 0) {
+      this.note(id, 'worktree_setup_pending', { sha256: lifecycle.sha256, setup: lifecycle.config.setup });
+    }
     return this.record(id, {
       source: 'system',
       type: 'queued',
@@ -803,6 +841,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const row = this.row(id);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
     if (row.handedOffTo) throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
+    if (this.settingUp.has(id)) throw conflict('the worktree is still being set up; the agent starts once setup is done');
     // A pending automatic retry is taken now (by the scheduler or the user's own resume).
     if (row.autoRetryAt) this.db.update(runs).set({ autoRetryAt: null }).where(eq(runs.id, id)).run();
     if (row.state === 'queued') return this.launch(id);
@@ -1011,22 +1050,106 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
       }
     }
-    const ptyd = this.ptyd.get();
+    this.ptyd.get(); // fail fast (503) before the run is marked
     const hookToken = randomBytes(32).toString('base64url');
     // Mark as starting first so concurrent ticks never launch the same run twice.
-    this.record(row.id, {
+    const starting = this.record(row.id, {
       source: 'system',
       type: options.type === 'spawned' ? 'launching' : 'respawning',
       state: 'starting',
       patch: { hookTokenHash: sha256(hookToken), endedAt: null },
     });
 
+    // A fresh worktree's approved setup runs first, in the background: the caller (the scheduler's
+    // dispatch, an API request) is not held for it, and the run stays `starting` meanwhile.
+    const setup = options.type === 'spawned' ? this.pendingSetup(row.id) : null;
+    if (setup) {
+      this.settingUp.add(row.id);
+      void this.setUpThenSpawn(row, project, options, hookToken, setup);
+      return starting;
+    }
+    return this.spawnTerminal(row, project, options, hookToken);
+  }
+
+  /** The setup commands recorded at enqueue for a fresh worktree, if any. */
+  private pendingSetup(runId: string): string[] | null {
+    const event = this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'worktree_setup_pending')))
+      .orderBy(asc(runEvents.id))
+      .limit(1)
+      .get();
+    const setup = (event?.payload as { setup?: unknown } | null | undefined)?.setup;
+    return Array.isArray(setup) && setup.length > 0 && setup.every((c) => typeof c === 'string') ? (setup as string[]) : null;
+  }
+
+  /** Whether the run is still the one to set up: not stopped, ended or handed off meanwhile. */
+  private setupGoesOn(runId: string): boolean {
+    const row = this.db.select().from(runs).where(eq(runs.id, runId)).get();
+    return Boolean(row && row.state === 'starting' && !row.endedAt && !row.cancelledAt && !row.handedOffTo);
+  }
+
+  /**
+   * Runs each setup command in order in the runner (10 min each), then spawns the agent. A failure
+   * stops the setup but not the run: its first prompt says what failed. Never throws.
+   */
+  private async setUpThenSpawn(
+    row: RunRow,
+    project: typeof projects.$inferSelect,
+    options: { prompt?: string; resumeSessionId?: string; type: 'spawned' | 'resumed' },
+    hookToken: string,
+    setup: string[],
+  ): Promise<void> {
+    try {
+      let promptPrefix: string | undefined;
+      this.note(row.id, 'worktree_setup_started', { commands: setup });
+      const startedAt = Date.now();
+      for (const command of setup) {
+        if (!this.setupGoesOn(row.id)) return;
+        const outcome = await runWorktreeCommand(command, row.worktreePath, SETUP_TIMEOUT_MS);
+        if (!outcome.ok) {
+          this.note(row.id, 'worktree_setup_failed', { command, exitCode: outcome.exitCode, tail: outcome.tail });
+          promptPrefix = setupFailurePrefix(outcome);
+          break;
+        }
+      }
+      if (!promptPrefix) this.note(row.id, 'worktree_setup_finished', { commands: setup.length, durationMs: Date.now() - startedAt });
+      if (!this.setupGoesOn(row.id)) return;
+      await this.spawnTerminal(this.row(row.id), project, options, hookToken, promptPrefix);
+    } catch (error) {
+      // spawnTerminal records its own spawn failures; anything else ends the run here, not in 3 min.
+      const current = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
+      if (current && !current.endedAt && !current.ptydSessionId) {
+        this.record(row.id, {
+          source: 'system',
+          type: 'spawn_failed',
+          state: 'failed',
+          payload: { message: (error as Error).message },
+          patch: { endedAt: new Date() },
+        });
+      }
+    } finally {
+      this.settingUp.delete(row.id);
+    }
+  }
+
+  /** Spawns the agent's terminal for a run already marked `starting`. */
+  private async spawnTerminal(
+    row: RunRow,
+    project: typeof projects.$inferSelect,
+    options: { prompt?: string; resumeSessionId?: string; type: 'spawned' | 'resumed' },
+    hookToken: string,
+    promptPrefix?: string,
+  ): Promise<Run> {
+    const ptyd = this.ptyd.get();
     const persona = (row.persona as AgentPersona) ?? 'coder';
     const resolvedModel = (runModel(row) ??
       resolveModelForPersona(this.db, persona, undefined, row.agent as AgentId)) as AgentModelId;
 
-    const effectivePrompt =
-      options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
+    const decorated = options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
+    // A failed worktree setup leads the first prompt, so the agent fixes it as part of the ticket.
+    const effectivePrompt = promptPrefix ? (decorated ? `${promptPrefix}\n\n${decorated}` : promptPrefix) : decorated;
 
     // A pre-0.2.0 row has no stored route: it gets the key it would have got then.
     const credential = row.routes.length === 0 ? defaultCredentialFor(this.db, row.agent as AgentId) : (row.credential as Credential);
@@ -1285,6 +1408,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     if (row.endedAt) return this.withAttention([toRun(row)])[0] as Run;
+    if (this.settingUp.has(id) && !row.ptydSessionId) {
+      // Still in worktree setup: no agent to stop yet. The current command runs out in the runner;
+      // the setup notices the end before the next one and never spawns the agent.
+      return this.record(id, {
+        source,
+        type: 'cancelled',
+        state: 'failed',
+        payload: reasonPayload,
+        patch: { endedAt: new Date(), cancelledAt },
+      });
+    }
     // Live, or still spawning (no terminal yet): spawnAgent checks the flag once the terminal exists.
     const run = this.record(id, { source, type: 'stop_requested', payload: reasonPayload, patch: { cancelledAt } });
     const sessionId = row.ptydSessionId;
@@ -1640,6 +1774,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // Deliverables in git-ignored build directories exist only here: archive them first.
     if (row.worktreePath !== project.path) await this.outputs.archiveBeforePrune(id);
+    await this.teardownWorktree(row, project);
     const removed = await pruneWorktree(project.path, row.worktreePath);
     if (removed) {
       this.record(id, {
@@ -1651,8 +1786,23 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { runId: id, worktreePath: row.worktreePath, removed };
   }
 
-  private detectPreviewCommand(worktreePath: string): string | null {
-    return detectPreviewCommand(worktreePath);
+  /**
+   * Runs the approved worktree.yml's `teardown` commands in a worktree that is about to be pruned
+   * (after its outputs were archived). Best effort, 2 min each: a failure is a run event and the
+   * prune goes ahead.
+   */
+  private async teardownWorktree(row: RunRow, project: { id: string; path: string }): Promise<void> {
+    if (!row.worktreePath || row.worktreePath === project.path || !existsSync(row.worktreePath)) return;
+    const teardown = loadApprovedWorktreeConfig(this.db, project.id)?.config.teardown ?? [];
+    for (const command of teardown) {
+      const outcome = await runWorktreeCommand(command, row.worktreePath, TEARDOWN_TIMEOUT_MS);
+      if (!outcome.ok) this.note(row.id, 'worktree_teardown_failed', { command, exitCode: outcome.exitCode, tail: outcome.tail });
+    }
+  }
+
+  /** The approved worktree.yml's preview service, else what the workspace's package.json offers. */
+  private detectPreviewCommand(projectId: string, worktreePath: string): string | null {
+    return approvedPreviewService(this.db, projectId)?.command ?? detectPreviewCommand(worktreePath);
   }
 
   /**
@@ -1679,7 +1829,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async previewStatus(id: string): Promise<RunPreviewStatus> {
     const row = this.row(id);
-    const detectedCommand = this.detectPreviewCommand(row.worktreePath);
+    const detectedCommand = this.detectPreviewCommand(row.projectId, row.worktreePath);
     const events = this.db
       .select()
       .from(runEvents)
@@ -1747,7 +1897,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .catch(() => undefined);
     }
 
-    const detectedCommand = this.detectPreviewCommand(row.worktreePath);
+    const detectedCommand = this.detectPreviewCommand(row.projectId, row.worktreePath);
     const command = body.command?.trim() || detectedCommand || 'npm run dev';
     const port = body.port ?? (await this.allocatePreviewPort(id));
     const hostBase = process.env.EMBERLINE_PREVIEW_HOST?.trim() || 'http://localhost';
@@ -1962,6 +2112,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           }
         }
         if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
+          await this.teardownWorktree(row, proj);
           const removedWt = await pruneWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
@@ -2292,6 +2443,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 const firstFailure = this.outputs.firstFailureAt(stale.id);
                 if (firstFailure && Date.now() - firstFailure.getTime() < AUTO_GC_ARCHIVE_RETRY_MS) continue;
               }
+              await this.teardownWorktree(stale, proj);
               await pruneWorktree(proj.path, stale.worktreePath).catch(() => undefined);
             }
             await this.remove(stale.id).catch(() => undefined);

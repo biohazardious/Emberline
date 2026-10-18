@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { type BrowserViewportSnapshot, type BuildDemoResponse } from '@emberline/protocol';
+import { type BrowserViewportSnapshot, type BuildDemoResponse, type WorktreeChecks } from '@emberline/protocol';
 import { CommandFailedError, execCommand } from '../command-exec.js';
 import {
   collectWorkspaceFiles,
@@ -152,10 +152,29 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   return [];
 }
 
+/** A check of an approved worktree.yml may take this long. */
+export const CHECK_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * The approved worktree.yml's `checks` as gate steps, in the order build, lint, test; empty when it
+ * sets none. They replace {@link planGateSteps} entirely.
+ */
+export function checkSteps(workspacePath: string, checks: WorktreeChecks | null | undefined): GateStep[] {
+  if (!checks) return [];
+  return (['build', 'lint', 'test'] as const).flatMap((kind) => {
+    const command = checks[kind];
+    return command
+      ? [{ display: command, file: 'sh', args: ['-c', command], cwd: workspacePath, timeout: CHECK_TIMEOUT_MS, env: { CI: 'true', FORCE_COLOR: '0' } }]
+      : [];
+  });
+}
+
 export async function buildWorkspaceDemo(params: {
   projectId: string;
   targetId: string;
   workspacePath: string;
+  /** The project's approved worktree.yml checks: when any is set, the gate runs exactly those. */
+  checks?: WorktreeChecks | null;
 }): Promise<BuildDemoResponse> {
   const { projectId, targetId, workspacePath } = params;
   if (!existsSync(workspacePath)) {
@@ -168,7 +187,8 @@ export async function buildWorkspaceDemo(params: {
   let buildCommandSucceeded = false;
 
   try {
-    const steps = await planGateSteps(workspacePath, filesInfo.topFiles);
+    const approved = checkSteps(workspacePath, params.checks);
+    const steps = approved.length > 0 ? approved : await planGateSteps(workspacePath, filesInfo.topFiles);
     if (steps.length === 0) {
       logs.push(`Verified workspace structure (${filesInfo.fileCount} files, stack: ${inspection.detectedStack}).`);
     }

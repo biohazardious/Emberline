@@ -63,3 +63,31 @@ export const WorktreeConfig = z
     }
   });
 export type WorktreeConfig = z.output<typeof WorktreeConfig>;
+
+/** A worktree.yml version runs use: the content a person (or the wizard) approved. */
+export const ApprovedWorktreeConfig = z.object({
+  content: z.string(),
+  sha256: z.string(),
+  approvedAt: z.string(),
+  /** `wizard` (Emberline's own file), `import` (ticked on the import summary) or `person` (approved later). */
+  approvedBy: z.string(),
+});
+export type ApprovedWorktreeConfig = z.infer<typeof ApprovedWorktreeConfig>;
+
+/** `GET /api/projects/:id/worktree-config`: the approved content next to what the main workspace's HEAD has. */
+export const WorktreeConfigStatusResponse = z.object({
+  approved: ApprovedWorktreeConfig.nullable(),
+  /** HEAD's committed `.emberline/worktree.yml`; null when there is none or it cannot be read safely. */
+  head: z.object({ content: z.string(), sha256: z.string() }).nullable(),
+  /** HEAD has a file whose content differs from the approved one (the "changed — review" banner). */
+  changed: z.boolean(),
+  /** Unified diff from the approved content to HEAD's, bounded; empty when unchanged. */
+  diff: z.string(),
+  /** Why HEAD's file cannot be approved (read or schema errors); empty when it can. */
+  errors: z.array(z.string()),
+});
+export type WorktreeConfigStatusResponse = z.infer<typeof WorktreeConfigStatusResponse>;
+
+/** `POST /api/projects/:id/worktree-config/approve`: the sha256 of the HEAD content the person reviewed. */
+export const ApproveWorktreeConfigBody = z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/) }).strict();
+export type ApproveWorktreeConfigBody = z.infer<typeof ApproveWorktreeConfigBody>;

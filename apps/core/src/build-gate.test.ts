@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { buildWorkspaceDemo, planGateSteps } from './factory/demo.js';
 import { inspectWorkspaceProject } from './factory/workspace-status.js';
+import { hasVerifiableBuildTarget } from './tickets/service.js';
 
 let ws: string;
 
@@ -110,5 +111,55 @@ describe('build gate execution', () => {
     const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws });
     expect(res.ok).toBe(true);
     expect(seen).toEqual(['sh -c command -v pio', 'sh -c pio run']);
+  });
+});
+
+describe('approved worktree.yml checks', () => {
+  it('replace the planned steps and run in the order build, lint, test (sh -c, in the worktree)', async () => {
+    files({ 'package.json': JSON.stringify({ scripts: { build: 'vite build', test: 'vitest' } }), 'node_modules/.keep': '' });
+    const seen: ExecRequest[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push(request);
+      return { exitCode: 0, signal: null, stdout: 'ok', stderr: '', timedOut: false, truncated: false };
+    });
+    const res = await buildWorkspaceDemo({
+      projectId: 'p',
+      targetId: 'main',
+      workspacePath: ws,
+      checks: { test: 'make test', build: 'make all', lint: 'make lint' },
+    });
+    expect(res.ok).toBe(true);
+    expect(seen.map((r) => [r.file, ...r.args].join(' '))).toEqual(['sh -c make all', 'sh -c make lint', 'sh -c make test']);
+    expect(seen.every((r) => r.cwd === ws)).toBe(true);
+  });
+
+  it('stop at the first failing check', async () => {
+    const seen: string[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push(request.args[1] ?? '');
+      const failed = request.args[1] === 'make lint';
+      return { exitCode: failed ? 2 : 0, signal: null, stdout: '', stderr: failed ? 'lint error' : '', timedOut: false, truncated: false };
+    });
+    const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { build: 'make all', lint: 'make lint', test: 'make test' } });
+    expect(res.ok).toBe(false);
+    expect(res.output).toContain('lint error');
+    expect(seen).toEqual(['make all', 'make lint']);
+  });
+
+  it('only some checks: the others are not run, and no detected step is added', async () => {
+    files({ 'package.json': JSON.stringify({ scripts: { build: 'vite build' } }), 'node_modules/.keep': '' });
+    const seen: string[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push([request.file, ...request.args].join(' '));
+      return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
+    });
+    await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { test: 'pytest' } });
+    expect(seen).toEqual(['sh -c pytest']);
+  });
+
+  it('make a workspace without a detected target verifiable', () => {
+    expect(hasVerifiableBuildTarget(ws)).toBe(false);
+    expect(hasVerifiableBuildTarget(ws, {})).toBe(false);
+    expect(hasVerifiableBuildTarget(ws, { lint: 'true' })).toBe(true);
   });
 });

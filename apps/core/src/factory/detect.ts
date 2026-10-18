@@ -151,6 +151,17 @@ async function headWorktreeYml(
   };
 }
 
+/**
+ * `.emberline/worktree.yml` as committed in `dir`'s HEAD (the main workspace's), read the hardened
+ * way above; null when HEAD has no such entry (or there is no git or commit).
+ */
+export async function readHeadWorktreeYml(dir: string): Promise<ExistingWorktreeYml | null> {
+  const rel = ADOPT_FILE_PATHS.worktreeYml;
+  const entry = (await headEntries(dir, [rel])).get(rel);
+  if (!entry) return null;
+  return headWorktreeYml(dir, entry, { kind: 'missing' });
+}
+
 interface Signals {
   /** Dependency names from package.json (empty when there is none or it is unsafe). */
   deps: Set<string>;

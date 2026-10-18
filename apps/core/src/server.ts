@@ -22,6 +22,7 @@ import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { registerWorktreeConfigRoutes } from './routes/worktree-config.js';
 import { registerReviewRoutes } from './routes/review.js';
 import { registerBuildOutputRoutes } from './routes/build-outputs.js';
 import { registerRunRoutes } from './routes/runs.js';
@@ -120,6 +121,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   }));
   registerProjectRoutes(app, deps);
   registerProjectImportRoutes(app, deps);
+  registerWorktreeConfigRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
