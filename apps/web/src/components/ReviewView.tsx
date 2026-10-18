@@ -1029,6 +1029,12 @@ export function ReviewView({ run, onRunUpdated }: Props) {
         </div>
       )}
 
+      {previewStatus?.note && previewStatus.status !== 'stopped' && (
+        <p className="muted small" role="status">
+          {previewStatus.note}
+        </p>
+      )}
+
       {previewStatus?.error && (previewStatus.status === 'failed' || previewStatus.status === 'exited') && (
         <div className="review-actions-bar" role="status" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
           <span>Preview {previewStatus.status}: {previewStatus.error}</span>

@@ -3,7 +3,7 @@
  * the command executor (a tiny in-memory engine). Covers the plan's Review Focus 1, 2, 4 and 5.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunPreviewStatus } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -286,7 +286,10 @@ describe('compose previews (worktree.yml v2)', () => {
       expect(up!.cwd).toBe(run.worktreePath);
       expect(up!.env).toMatchObject({ DOCKER_HOST: 'tcp://docker:2376', DOCKER_TLS_VERIFY: '1' });
       // The override drops the file's fixed ports: the preview service gets only its own, the rest none.
-      expect(up!.stdin).toBe('services:\n  "web":\n    ports: !override ["' + port + ':80"]\n  "db":\n    ports: !reset []\n');
+      expect(up!.stdin).toBe(
+        'services:\n  "web":\n    ports: !override ["' + port + ':80"]\n    container_name: !reset null\n' +
+          '  "db":\n    ports: !reset []\n    container_name: !reset null\n',
+      );
       // Every compose command Emberline ran used the run's project, never the file's or `.env`'s.
       for (const call of engine.calls) expect(call.args.slice(0, 3)).toEqual(['compose', '-p', composeProject]);
       expect(engine.calls.some((c) => c.args.includes('chosen-by-agent'))).toBe(false);
@@ -522,11 +525,130 @@ describe('compose previews (worktree.yml v2)', () => {
       await waitStatus(run, 'running');
       await t.runs.stop(run.id).catch(() => undefined);
       expect((await api('DELETE', `/api/runs/${run.id}`)).statusCode).toBeLessThan(300);
+      // The preview project, then (the worktree is kept, no other run in it) the run's own project.
       expect(engine.composeCalls('down').map((c) => c.args)).toEqual([
-        ['compose', '-p', previewComposeProjectName(run.id), 'down', '-v', '--remove-orphans'],
+        ['compose', '-p', previewComposeProjectName(run.id), 'down', '-v', '--rmi', 'local', '--remove-orphans'],
+        ['compose', '-p', composeProjectName(run.id, run.worktreePath), 'down', '-v', '--rmi', 'local', '--remove-orphans'],
       ]);
       // Nothing per run is left behind in the service.
       expect((t.runs as unknown as { previewGenerations: Map<string, number> }).previewGenerations.has(run.id)).toBe(false);
+    });
+
+    const singlePort = { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } } };
+
+    it('a prune takes a running preview down, records it stopped, and its port is free again', async () => {
+      await start('tcp://docker:2376', singlePort);
+      const p = await project();
+      const a = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const b = await t.runs.enqueue({ projectId: p.id, prompt: 'y' });
+      await startPreview(a);
+      await waitStatus(a, 'running');
+      await t.runs.stop(a.id);
+      const res = await api('POST', `/api/runs/${a.id}/worktree/prune`, {});
+      expect(res.json()).toMatchObject({ removed: true });
+      expect(t.runs.get(a.id).events.filter((e) => e.type === 'preview_stopped')).toHaveLength(1);
+      const status = await preview(a);
+      expect(status.status).toBe('stopped');
+      expect(status.error ?? '').not.toContain('restarted');
+      // The only docker port is free for another run.
+      const started = await startPreview(b);
+      expect(started.statusCode).toBe(200);
+      expect((started.json() as RunPreviewStatus).port).toBe(4325);
+    });
+
+    it("a run whose worktree is gone no longer holds its preview port", async () => {
+      await start('tcp://docker:2376', singlePort);
+      const p = await project();
+      const a = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const b = await t.runs.enqueue({ projectId: p.id, prompt: 'y' });
+      await startPreview(a);
+      await waitStatus(a, 'running');
+      rmSync(a.worktreePath, { recursive: true, force: true });
+      const started = await startPreview(b);
+      expect(started.statusCode).toBe(200);
+      expect((started.json() as RunPreviewStatus).port).toBe(4325);
+    });
+
+    it('a start abandoned by a stop, whose run is then deleted, is taken down with its volumes and images', async () => {
+      await start('tcp://docker:2376');
+      let open!: () => void;
+      engine.upGate = new Promise((resolve) => (open = resolve));
+      engine.ignoreCancels = 10;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      await t.runs.stop(run.id).catch(() => undefined);
+      expect((await api('DELETE', `/api/runs/${run.id}`)).statusCode).toBeLessThan(300);
+      const downsBefore = engine.composeCalls('down').length;
+      open();
+      await expect.poll(() => engine.composeCalls('down').length).toBe(downsBefore + 1);
+      expect(engine.composeCalls('down').at(-1)!.args).toEqual([
+        'compose', '-p', previewComposeProjectName(run.id), 'down', '-v', '--rmi', 'local', '--remove-orphans',
+      ]);
+    });
+
+    it('a preview start is refused while the worktree is being torn down', async () => {
+      await start('tcp://docker:2376');
+      let release!: () => void;
+      engine.downGate = new Promise((resolve) => (release = resolve));
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await t.runs.stop(run.id);
+      (t.runs as unknown as { teardownBudgets: { request: number } }).teardownBudgets.request = 50;
+      expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({ pending: true });
+      const res = await startPreview(run);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain('being removed');
+      engine.downGate = null;
+      release();
+    });
+
+    describe('compose file not there yet', () => {
+      const FALLBACK_V2 = [
+        'version: 2',
+        'services:',
+        '  - name: dev',
+        '    command: sleep 30',
+        '  - name: container',
+        '    compose: { service: web, port: 80 }',
+        '    preview: true',
+        '',
+      ].join('\n');
+
+      it('previews the first command service instead and says why', async () => {
+        await start('tcp://docker:2376');
+        const p = await project(FALLBACK_V2);
+        const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        rmSync(path.join(run.worktreePath, 'compose.yaml'));
+        const res = await startPreview(run);
+        expect(res.statusCode).toBe(200);
+        const status = res.json() as RunPreviewStatus;
+        expect(status).toMatchObject({ kind: 'command', command: 'sleep 30', status: 'running' });
+        expect(status.note).toBe('compose.yaml not found yet — previewing dev');
+        expect((await preview(run)).note).toBe('compose.yaml not found yet — previewing dev');
+        expect(engine.composeCalls('up')).toEqual([]);
+        await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      });
+
+      it('without a command service it fails clearly', async () => {
+        await start('tcp://docker:2376');
+        const p = await project();
+        const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        writeFileSync(
+          path.join(p.path, '.emberline/worktree.yml'),
+          'version: 2\nservices:\n  - name: container\n    compose: { service: web, port: 80 }\n    preview: true\n',
+        );
+        execFileSync('git', ['-C', p.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qam', 'only compose']);
+        const { head } = (await api('GET', `/api/projects/${p.id}/worktree-config`)).json();
+        await api('POST', `/api/projects/${p.id}/worktree-config/approve`, { sha256: head.sha256 });
+        rmSync(path.join(run.worktreePath, 'compose.yaml'));
+        const res = await startPreview(run);
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toContain('compose.yaml not found');
+        expect(engine.composeCalls('up')).toEqual([]);
+      });
     });
 
     it('while a stop waits for the start to settle, the status still reads starting', async () => {

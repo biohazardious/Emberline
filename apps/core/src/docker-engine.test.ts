@@ -315,6 +315,9 @@ describe('Docker engine in core: /api/system, run env, first prompt, worktree.ym
     expect(docker).toBe(dockerEnvLine(`emberline-${run.id.slice(0, 8)}`));
     expect(prompt).toBe(`build it\n\n${DOCKER_PROMPT_PARAGRAPH}`);
     expect(DOCKER_PROMPT_PARAGRAPH).toContain('$EMBERLINE_COMPOSE_PROJECT');
+    // Fixed names would collide between runs sharing the engine.
+    expect(DOCKER_PROMPT_PARAGRAPH).toContain('container_name');
+    expect(DOCKER_PROMPT_PARAGRAPH).toMatch(/volume or network `name:`/);
   });
 
   it('unreachable: /api/system carries the error, and runs get no DOCKER_HOST', async () => {
@@ -406,7 +409,7 @@ describe('Docker engine in core: /api/system, run env, first prompt, worktree.ym
 });
 
 describe('buildWorkspaceDemo with a Docker env', () => {
-  it('passes it to the setup commands only', async () => {
+  it('passes it to the setup commands and the approved checks', async () => {
     const ws = mkdtempSync(path.join(tmpdir(), 'docker-build-'));
     const seen: ExecRequest[] = [];
     setCommandExecutor(async (request) => {
@@ -418,7 +421,7 @@ describe('buildWorkspaceDemo with a Docker env', () => {
       await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { build: 'make' }, setup: ['make deps'], env });
       expect(seen.map((r) => r.args[1])).toEqual(['exec 2>&1\nmake deps', 'make']);
       expect(seen[0]!.env).toMatchObject(env);
-      expect(seen[1]!.env ?? {}).not.toHaveProperty('DOCKER_HOST');
+      expect(seen[1]!.env).toMatchObject({ ...env, CI: 'true' });
     } finally {
       setCommandExecutor(localCommandExecutor);
       rmSync(ws, { recursive: true, force: true });

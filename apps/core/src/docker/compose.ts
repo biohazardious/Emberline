@@ -54,10 +54,11 @@ export function composeLogsArgs(project: string, service: string): string[] {
 
 /**
  * Stops the project's containers. Only the project name, no file: it works when the agent deleted or
- * broke the compose file. `volumes` (teardown and prune) also removes its named volumes.
+ * broke the compose file. `volumes` (cleanup) also removes its named volumes, `images` (cleanup) the
+ * images it built (`--rmi local`: those without a tag of their own; pulled images stay).
  */
-export function composeDownArgs(project: string, { volumes = false }: { volumes?: boolean } = {}): string[] {
-  return ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), '--remove-orphans'];
+export function composeDownArgs(project: string, { volumes = false, images = false }: { volumes?: boolean; images?: boolean } = {}): string[] {
+  return ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), ...(images ? ['--rmi', 'local'] : []), '--remove-orphans'];
 }
 
 /**
@@ -71,7 +72,9 @@ export function composeShell(args: string[]): { file: string; args: string[] } {
 /**
  * The override: the preview service publishes exactly `<hostPort>:<port>` (`!override` drops the
  * project's own fixed host ports), and every other service publishes none (`!reset`), so two runs'
- * projects never claim the same port in the engine. Names are JSON-quoted (valid YAML keys).
+ * projects never claim the same port in the engine. No service keeps a fixed `container_name`
+ * either: two runs' previews of the same file would collide on it. Names are JSON-quoted (valid YAML
+ * keys).
  */
 export function composeOverrideYaml(opts: { service: string; port: number; hostPort: number; services: readonly string[] }): string {
   const lines = ['services:'];
@@ -82,6 +85,7 @@ export function composeOverrideYaml(opts: { service: string; port: number; hostP
         ? `    ports: !override [${JSON.stringify(`${opts.hostPort}:${opts.port}`)}]`
         : '    ports: !reset []',
     );
+    lines.push('    container_name: !reset null');
   }
   return `${lines.join('\n')}\n`;
 }
@@ -208,8 +212,16 @@ export function imagePruneArgs(): string[] {
   return ['image', 'prune', '-f', '--filter', 'until=72h'];
 }
 
-/** Pinned image of the throwaway container that hands a worktree's files back (present or pulled once). */
-export const RECLAIM_IMAGE = 'busybox:1.37.0';
+/** Build cache older than 72 h (daily, with the image prune). */
+export function builderPruneArgs(): string[] {
+  return ['builder', 'prune', '-f', '--filter', 'until=72h'];
+}
+
+/**
+ * Image of the throwaway container that hands a worktree's files back (pulled once), pinned by its
+ * index digest (from `docker buildx imagetools inspect busybox:1.37.0`).
+ */
+export const RECLAIM_IMAGE = 'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
 
 /**
  * Hands every file under `dir` back to the runner user so the worktree can be removed. The engine is

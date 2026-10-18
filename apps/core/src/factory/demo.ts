@@ -160,12 +160,17 @@ export const CHECK_TIMEOUT_MS = 15 * 60_000;
  * The approved worktree.yml's `checks` as gate steps, in the order build, lint, test; empty when it
  * sets none. They replace {@link planGateSteps} entirely.
  */
-export function checkSteps(workspacePath: string, checks: WorktreeChecks | null | undefined): GateStep[] {
+export function checkSteps(
+  workspacePath: string,
+  checks: WorktreeChecks | null | undefined,
+  /** The Docker engine's variables while it answers, the same the setup commands get. */
+  env: Record<string, string> = {},
+): GateStep[] {
   if (!checks) return [];
   return (['build', 'lint', 'test'] as const).flatMap((kind) => {
     const command = checks[kind];
     return command
-      ? [{ display: command, file: 'sh', args: ['-c', command], cwd: workspacePath, timeout: CHECK_TIMEOUT_MS, env: { CI: 'true', FORCE_COLOR: '0' } }]
+      ? [{ display: command, file: 'sh', args: ['-c', command], cwd: workspacePath, timeout: CHECK_TIMEOUT_MS, env: { CI: 'true', FORCE_COLOR: '0', ...env } }]
       : [];
   });
 }
@@ -209,8 +214,8 @@ export async function buildWorkspaceDemo(params: {
   /** The approved worktree.yml `setup` commands: run first, in this workspace, when checks are used. */
   setup?: readonly string[];
   /**
-   * Extra variables for the setup commands: the Docker client variables and the target's compose
-   * project while the engine answers (RunService.dockerEnvFor / dockerEnvForMain).
+   * Extra variables for the setup commands and the approved checks: the Docker client variables and
+   * the target's compose project while the engine answers (RunService.dockerEnvFor / dockerEnvForMain).
    */
   env?: Record<string, string>;
 }): Promise<BuildDemoResponse> {
@@ -225,7 +230,7 @@ export async function buildWorkspaceDemo(params: {
   let buildCommandSucceeded = false;
 
   try {
-    const approved = checkSteps(workspacePath, params.checks);
+    const approved = checkSteps(workspacePath, params.checks, params.env);
     if (approved.length > 0 && params.setup && params.setup.length > 0) {
       await runApprovedSetup(workspacePath, params.setup, logs, params.env);
     }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  builderPruneArgs,
+  RECLAIM_IMAGE,
   isEmberlineComposeProject,
   parseComposeLs,
   reclaimArgs,
@@ -40,6 +42,10 @@ describe('compose command lines', () => {
     expect(composeDownArgs('emberline-abcd1234', { volumes: true })).toEqual([
       'compose', '-p', 'emberline-abcd1234', 'down', '-v', '--remove-orphans',
     ]);
+    // Cleanup also removes the images the project built (not pulled ones with their own tag).
+    expect(composeDownArgs('emberline-abcd1234', { volumes: true, images: true })).toEqual([
+      'compose', '-p', 'emberline-abcd1234', 'down', '-v', '--rmi', 'local', '--remove-orphans',
+    ]);
   });
   it('the override reaches compose on stdin from a variable, never as a file or an argument', () => {
     const { file, args } = composeShell(['compose', 'up']);
@@ -56,10 +62,13 @@ describe('composeOverrideYaml', () => {
         'services:',
         '  "db":',
         '    ports: !reset []',
+        '    container_name: !reset null',
         '  "web":',
         '    ports: !override ["4331:80"]',
+        '    container_name: !reset null',
         '  "cache":',
         '    ports: !reset []',
+        '    container_name: !reset null',
         '',
       ].join('\n'),
     );
@@ -144,5 +153,14 @@ describe('cleanup builders', () => {
     expect(reclaimArgs('/workspaces/.worktrees/shop/deadbeef')).toContain('type=bind,source=/workspaces/.worktrees/shop/deadbeef,target=/w');
     expect(() => reclaimArgs('/workspaces/a,b')).toThrow();
     expect(() => reclaimArgs('relative')).toThrow();
+  });
+});
+
+describe('cleanup pins', () => {
+  it('the reclaim image is pinned by digest', () => {
+    expect(RECLAIM_IMAGE).toMatch(/^busybox:1\.37\.0@sha256:[0-9a-f]{64}$/);
+  });
+  it('the daily prune also drops build cache older than 72 h', () => {
+    expect(builderPruneArgs()).toEqual(['builder', 'prune', '-f', '--filter', 'until=72h']);
   });
 });

@@ -19,6 +19,8 @@ export const RunPreviewStatus = z.object({
   error: z.string().nullable(),
   /** The end of the build or container output (at most 2000 chars): untrusted, show it as text. */
   logs: z.string().nullable(),
+  /** Why the preview is not the configured one, e.g. "compose.yaml not found yet — previewing dev". */
+  note: z.string().optional(),
 });
 export type RunPreviewStatus = z.infer<typeof RunPreviewStatus>;
 

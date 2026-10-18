@@ -5,7 +5,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -32,6 +33,8 @@ class FakeEngine {
   worktreeAtDown = new Map<string, boolean>();
   watchWorktree: string | null = null;
   reclaims: ExecRequest[] = [];
+  /** While set, `compose ls` waits for it. */
+  lsGate: Promise<void> | null = null;
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
     if (request.file !== 'docker') return localCommandExecutor(request);
@@ -39,6 +42,7 @@ class FakeEngine {
     if (args[0] === 'version') return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
     this.calls.push(args);
     if (args[0] === 'compose' && args[1] === 'ls') {
+      if (this.lsGate) await this.lsGate;
       return ok(JSON.stringify([...this.projects].map((Name) => ({ Name, Status: 'running(1)', ConfigFiles: '/x/compose.yaml' }))));
     }
     if (args[0] === 'compose' && args.includes('down')) {
@@ -48,7 +52,7 @@ class FakeEngine {
       this.projects.delete(project);
       return ok();
     }
-    if (args[0] === 'image' && args[1] === 'prune') return ok('Total reclaimed space: 0B\n');
+    if ((args[0] === 'image' || args[0] === 'builder') && args[1] === 'prune') return ok('Total reclaimed space: 0B\n');
     if (args[0] === 'run') {
       this.reclaims.push(request);
       // What the throwaway container does to the files the engine's containers left: make them the
@@ -114,7 +118,7 @@ function successorOf(run: Run): string {
   return id;
 }
 
-const downArgs = (project: string) => ['compose', '-p', project, 'down', '-v', '--remove-orphans'];
+const downArgs = (project: string) => ['compose', '-p', project, 'down', '-v', '--rmi', 'local', '--remove-orphans'];
 const typesOf = (id: string) => t.runs.get(id).events.map((e) => e.type);
 
 describe('compose cleanup on every prune path (Review Focus 3)', () => {
@@ -202,7 +206,7 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
     expect(res.json()).toMatchObject({ removed: true });
     const note = t.runs.get(run.id).events.find((e) => e.type === 'worktree_teardown_failed');
-    expect(note?.payload).toMatchObject({ command: `docker ${downArgs(agent).join(' ')}` });
+    expect(note?.payload).toMatchObject({ command: `docker ${downArgs(agent).join(' ')}`, exitCode: 1 });
     expect(String((note?.payload as { tail: string }).tail)).toContain('is stuck');
     expect(typesOf(run.id).indexOf('worktree_pruned')).toBeGreaterThan(typesOf(run.id).indexOf('worktree_teardown_failed'));
   });
@@ -218,6 +222,21 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`);
     expect((await t.runs.sweepDockerProjects()).removed).toEqual([]);
     expect(engine.calls).toEqual([]);
+  });
+
+  it("deleting a run takes down its agent project unless another run shares the worktree", async () => {
+    await start();
+    const p = await createProject();
+    const alone = await endedRun(p.id);
+    expect((await api('DELETE', `/api/runs/${alone.id}`)).statusCode).toBeLessThan(300);
+    expect(engine.calls).toContainEqual(downArgs(composeProjectName(alone.id, alone.worktreePath)));
+    // The worktree itself is kept.
+    expect(existsSync(alone.worktreePath)).toBe(true);
+    engine.calls = [];
+    const first = await endedRun(p.id);
+    successorOf(first);
+    expect((await api('DELETE', `/api/runs/${first.id}`)).statusCode).toBeLessThan(300);
+    expect(engine.downs()).not.toContain(composeProjectName(first.id, first.worktreePath));
   });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -242,6 +261,40 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
       expect(reclaim.env).toMatchObject({ DOCKER_HOST: 'tcp://docker:2376', DOCKER_TLS_VERIFY: '1' });
     },
   );
+
+  /** A directory the runner user cannot empty, as a container's sub-uid would leave it. */
+  function stuckDir(dir: string): void {
+    mkdirSync(path.join(dir, 'pgdata', 'base'), { recursive: true });
+    writeFileSync(path.join(dir, 'pgdata', 'base', 'PG_VERSION'), '18\n');
+    chmodSync(path.join(dir, 'pgdata', 'base'), 0o555);
+    chmodSync(path.join(dir, 'pgdata'), 0o555);
+  }
+
+  it.skipIf(process.getuid?.() === 0)('a project delete reclaims such files too, then removes the worktrees', async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    stuckDir(run.worktreePath);
+    expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+    await expect.poll(() => existsSync(path.dirname(run.worktreePath)), { timeout: 8_000 }).toBe(false);
+    expect(engine.reclaims.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('never reclaims outside .worktrees, the project directory, or outside the workspaces', async () => {
+    await start();
+    const p = await createProject();
+    // Outside the workspaces volume (the test's workspaces are its temp dir).
+    const outside = mkdtempSync(path.join(tmpdir(), 'not-a-worktree-'));
+    stuckDir(outside);
+    const internals = t.runs as unknown as { pruneRunWorktree: (project: string, worktree: string) => Promise<boolean> };
+    await expect(internals.pruneRunWorktree(p.path, outside)).rejects.toThrow();
+    await expect(internals.pruneRunWorktree(p.path, p.path)).rejects.toThrow();
+    await t.runs.removeTree(outside);
+    expect(engine.reclaims).toEqual([]);
+    chmodSync(path.join(outside, 'pgdata'), 0o755);
+    chmodSync(path.join(outside, 'pgdata', 'base'), 0o755);
+    rmSync(outside, { recursive: true, force: true });
+  });
 });
 
 describe('GC sweep of compose projects', () => {
@@ -287,10 +340,13 @@ describe('GC sweep of compose projects', () => {
     const now = Date.now();
     await t.runs.sweepDockerProjects(now);
     await t.runs.sweepDockerProjects(now + 30 * 60_000);
-    const prunes = () => engine.calls.filter((a) => a[0] === 'image');
-    expect(prunes()).toEqual([['image', 'prune', '-f', '--filter', 'until=72h']]);
+    const prunes = () => engine.calls.filter((a) => a[0] === 'image' || a[0] === 'builder');
+    expect(prunes()).toEqual([
+      ['image', 'prune', '-f', '--filter', 'until=72h'],
+      ['builder', 'prune', '-f', '--filter', 'until=72h'],
+    ]);
     await t.runs.sweepDockerProjects(now + 24 * 3_600_000);
-    expect(prunes()).toHaveLength(2);
+    expect(prunes()).toHaveLength(4);
   });
 
   it('runs a minute after start (leftovers from before a restart), then every 30 minutes', async () => {
@@ -310,6 +366,19 @@ describe('GC sweep of compose projects', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('never runs two sweeps at once', async () => {
+    await start();
+    engine.projects.add('emberline-deadbeef');
+    let open!: () => void;
+    engine.lsGate = new Promise((resolve) => (open = resolve));
+    const first = t.runs.sweepDockerProjects();
+    await expect.poll(() => engine.calls.filter((a) => a[1] === 'ls').length).toBe(1);
+    expect((await t.runs.sweepDockerProjects()).removed).toEqual([]);
+    open();
+    expect((await first).removed).toEqual(['emberline-deadbeef']);
+    expect(engine.calls.filter((a) => a[1] === 'ls')).toHaveLength(1);
   });
 
   it('does nothing while the engine does not answer', async () => {

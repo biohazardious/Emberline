@@ -24,7 +24,8 @@ export const DOCKER_PROMPT_PARAGRAPH =
   'An isolated Docker engine is available for this run (DOCKER_HOST is set). Use compose project name ' +
   '$EMBERLINE_COMPOSE_PROJECT (`docker compose -p "$EMBERLINE_COMPOSE_PROJECT" …`), don\'t publish fixed host ' +
   'ports, and stop what you started when you finish; Emberline wires previews and removes the project when the ' +
-  'worktree is pruned.';
+  'worktree is pruned. Don\'t set `container_name` or a fixed volume or network `name:`: runs share this engine, ' +
+  'and fixed names collide between them.';
 
 /**
  * The compose project of a run: `emberline-<first 8 of the run id>`. A run in a worktree Emberline

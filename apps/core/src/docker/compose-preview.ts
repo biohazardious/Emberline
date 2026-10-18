@@ -16,6 +16,7 @@ import {
   composeServicesArgs,
   composeShell,
   composeUpArgs,
+  builderPruneArgs,
   imagePruneArgs,
   isPortConflict,
   parseComposeLs,
@@ -145,14 +146,17 @@ export async function composeServiceStatus(
   return composeServiceState(parseComposePs(ps.result!.stdout), target.service);
 }
 
-/** `down --remove-orphans` (stop; volumes stay) or with `-v` (teardown). Never throws. */
+/**
+ * `down --remove-orphans` (stop: volumes and images stay), or with `-v` and `--rmi local` (cleanup).
+ * Never throws; `exitCode` is null when compose did not exit by itself (timeout, could not run).
+ */
 export async function composeDown(
   project: string,
   env: Record<string, string>,
-  opts: { volumes?: boolean } = {},
-): Promise<{ ok: boolean; output: string }> {
+  opts: { volumes?: boolean; images?: boolean } = {},
+): Promise<{ ok: boolean; output: string; exitCode: number | null }> {
   const down = await run(composeDownArgs(project, opts), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
-  return { ok: down.ok, output: down.output };
+  return { ok: down.ok, output: down.output, exitCode: down.result && !down.result.timedOut ? down.result.exitCode : null };
 }
 
 /** Every compose project in the engine (`compose ls -a`); null when compose could not answer. */
@@ -161,10 +165,11 @@ export async function composeProjects(env: Record<string, string>): Promise<stri
   return ls.ok ? parseComposeLs(ls.result!.stdout) : null;
 }
 
-/** `image prune -f --filter until=72h`. Never throws. */
+/** `image prune` and `builder prune`, each `-f --filter until=72h`. Never throws. */
 export async function pruneImages(env: Record<string, string>): Promise<{ ok: boolean; output: string }> {
-  const prune = await run(imagePruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
-  return { ok: prune.ok, output: prune.output };
+  const images = await run(imagePruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
+  const cache = await run(builderPruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
+  return { ok: images.ok && cache.ok, output: [images.output, cache.output].filter(Boolean).join('\n') };
 }
 
 /**
