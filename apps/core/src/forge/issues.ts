@@ -24,23 +24,51 @@ function timeoutError(): HttpError {
   return new HttpError(504, 'forge_timeout', `the forge did not answer within ${FORGE_FETCH_TIMEOUT_MS / 1000} seconds`);
 }
 
-/**
- * fetch with the shared 15 s timeout; a timeout becomes a 504. Redirects are not followed (a
- * GitLab PRIVATE-TOKEN header would survive a cross-origin redirect), a 3xx becomes a 502.
- */
-export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestInit = {}): Promise<Response> {
-  let res: Response;
+/** Same-origin redirects a forge request follows (a renamed or moved repository) before giving up. */
+export const FORGE_REDIRECT_HOPS = 3;
+
+function redirectError(location: string | null): HttpError {
+  if (!location) return new HttpError(502, 'forge_error', 'the forge redirected without a Location; set the Forge API URL');
+  return new HttpError(
+    502,
+    'forge_error',
+    `the forge redirected to ${location.slice(0, 300)} — has the repository moved? update the remote, or set the Forge API URL`,
+  );
+}
+
+async function fetchOnce(fetchFn: FetchLike, url: string, init: RequestInit): Promise<Response> {
   try {
-    res = await fetchFn(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS) });
+    return await fetchFn(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS) });
   } catch (err) {
     if (isAbort(err)) throw timeoutError();
     const cause = err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : '';
     throw new HttpError(502, 'forge_error', `could not reach the forge${cause}`.slice(0, 300));
   }
-  if (res.status >= 300 && res.status < 400 && res.status !== 304) {
-    throw new HttpError(502, 'forge_error', 'forge API redirected; set the API URL');
+}
+
+/**
+ * fetch with the shared 15 s timeout (per request); a timeout becomes a 504. fetch itself never
+ * follows a redirect (a GitLab PRIVATE-TOKEN header would survive a cross-origin one): a redirect
+ * to the same origin (a renamed repository) is followed here, at most {@link FORGE_REDIRECT_HOPS}
+ * times, with the same method, headers and body. Any other redirect is a 502 naming its Location.
+ */
+export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestInit = {}): Promise<Response> {
+  let current = url;
+  for (let hop = 0; ; hop++) {
+    const res = await fetchOnce(fetchFn, current, init);
+    if (res.status < 300 || res.status >= 400 || res.status === 304) return res;
+    await res.body?.cancel().catch(() => undefined);
+    const location = res.headers.get('location');
+    let next: URL | null = null;
+    try {
+      next = location ? new URL(location, current) : null;
+    } catch {
+      next = null;
+    }
+    if (!next) throw redirectError(location);
+    if (hop >= FORGE_REDIRECT_HOPS || next.origin !== new URL(current).origin) throw redirectError(next.href);
+    current = next.href;
   }
-  return res;
 }
 
 /** Reads a JSON body; the request's timeout also covers the body, so an abort here is a 504 too. */
@@ -132,6 +160,17 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
+/** The URL when it is http(s), else '' (the web links issue URLs: no `javascript:` or `data:`). */
+function httpUrl(v: unknown): string {
+  const raw = str(v);
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === 'http:' || protocol === 'https:' ? raw : '';
+  } catch {
+    return '';
+  }
+}
+
 function labelNames(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
@@ -154,7 +193,7 @@ function normaliseGithubLike(raw: Raw): ForgeIssue | null {
     title: str(raw.title),
     body: str(raw.body),
     labels: labelNames(raw.labels),
-    url: str(raw.html_url),
+    url: httpUrl(raw.html_url),
     author: typeof user?.login === 'string' ? user.login : null,
     updatedAt: str(raw.updated_at),
     state: raw.state === 'closed' ? 'closed' : 'open',
@@ -169,7 +208,7 @@ function normaliseGitlab(raw: Raw): ForgeIssue {
     title: str(raw.title),
     body: str(raw.description),
     labels: labelNames(raw.labels),
-    url: str(raw.web_url),
+    url: httpUrl(raw.web_url),
     author: typeof author?.username === 'string' ? author.username : null,
     updatedAt: str(raw.updated_at),
     state: raw.state === 'closed' ? 'closed' : 'open',
@@ -236,6 +275,7 @@ export class IssuesClient {
       params.set('state', state);
       if (labels) params.set('labels', labels);
       if (search) params.set('q', search);
+      params.set('sort', 'recentupdate');
       params.set('limit', perPage);
       params.set('page', String(page));
       path = `/repos/${remote.repoPath}/issues`;

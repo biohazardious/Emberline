@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { projects } from '../db/schema.js';
+import { projects, runs } from '../db/schema.js';
 import { createTestApp, type TestApp } from '../test-utils.js';
 import { IssuesClient, RateLimitError } from './issues.js';
 import { ForgeService, type ParsedForgeRemote, parseForgeRemote } from './service.js';
@@ -273,6 +273,8 @@ describe('IssuesClient Gitea', () => {
     expect(url.searchParams.get('type')).toBe('issues');
     expect(url.searchParams.get('q')).toBe('x');
     expect(url.searchParams.get('limit')).toBe('50');
+    // Most recently updated first, like the other providers (older Gitea versions ignore it).
+    expect(url.searchParams.get('sort')).toBe('recentupdate');
     expect(calls[0]!.headers.Authorization).toBe('token tok');
   });
 
@@ -283,6 +285,29 @@ describe('IssuesClient Gitea', () => {
     await client.close(target(gitea), 3);
     expect(calls[0]!.url).toBe('https://gitea.example.com/api/v1/repos/acme/widget/issues/3/comments');
     expect(calls[1]).toMatchObject({ method: 'PATCH', url: 'https://gitea.example.com/api/v1/repos/acme/widget/issues/3' });
+  });
+});
+
+describe('issue URLs', () => {
+  it.each(['javascript:alert(1)', 'data:text/html,x', 'vbscript:x', 'ftp://x/1', '/relative/1', 'not a url'])(
+    'keeps only http(s) issue URLs: %s becomes empty',
+    async (bad) => {
+      const { fn } = fakeFetch((c) =>
+        c.url.includes('gitlab')
+          ? json([{ id: 1, iid: 1, title: 't', description: '', state: 'opened', labels: [], web_url: bad, author: null, updated_at: '' }])
+          : json([ghIssue(1, { html_url: bad })]),
+      );
+      const client = new IssuesClient({ fetch: fn });
+      expect((await client.list(target(gh), {})).items[0]!.url).toBe('');
+      expect((await client.list(target(gl), {})).items[0]!.url).toBe('');
+      expect((await client.list(target(gitea), {})).items[0]!.url).toBe('');
+    },
+  );
+
+  it('keeps http and https URLs as they are', async () => {
+    const { fn } = fakeFetch(() => json([ghIssue(1, { html_url: 'http://gitea.lan:3000/acme/widget/issues/1' }), ghIssue(2)]));
+    const res = await new IssuesClient({ fetch: fn }).list(target(gitea), {});
+    expect(res.items.map((i) => i.url)).toEqual(['http://gitea.lan:3000/acme/widget/issues/1', 'https://github.com/acme/widget/issues/2']);
   });
 });
 
@@ -411,15 +436,94 @@ describe('ForgeService fetch plumbing', () => {
   });
 });
 
+describe('ForgeService pull requests through a redirect', () => {
+  it('creates the PR of a renamed repository through a same-origin 301; a cross-origin one is a 502 naming it', async () => {
+    const t = await createTestApp();
+    try {
+      const calls: Call[] = [];
+      let renamedTo = '/repositories/42/pulls';
+      const fn = (async (url: string | URL | Request, init?: RequestInit) => {
+        const u = new URL(String(url));
+        calls.push({ url: String(url), method: init?.method ?? 'GET', headers: {}, body: init?.body as string, signal: init?.signal });
+        if (u.pathname === '/repos/acme/old/pulls') return new Response(null, { status: 301, headers: { location: renamedTo } });
+        return json({ number: 7, title: 'T', html_url: 'https://github.com/acme/new/pull/7', state: 'open', head: { sha: 'abc' } }, { status: 201 });
+      }) as typeof fetch;
+      const forge = new ForgeService(t.db, t.runs, { fetch: fn });
+      forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'tok' });
+      const now = new Date();
+      t.db.insert(projects).values({ id: 'p1', name: 'p1', slug: 'p1', repoUrl: 'https://github.com/acme/old.git', path: `${t.dir}/none`, createdAt: now }).run();
+      t.db
+        .insert(runs)
+        .values({ id: 'r1', projectId: 'p1', agent: 'claude', state: 'done', worktreePath: `${t.dir}/none`, branch: 'emberline/x', hookTokenHash: 'h', stateChangedAt: now, createdAt: now, title: 'T' })
+        .run();
+      const res = await forge.createPullRequest('r1', { title: 'T' });
+      expect(res.pullRequest?.number).toBe(7);
+      expect(calls.filter((c) => c.method === 'POST').map((c) => [c.method, new URL(c.url).pathname])).toEqual([
+        ['POST', '/repos/acme/old/pulls'],
+        ['POST', '/repositories/42/pulls'],
+      ]);
+      expect(JSON.parse(calls[1]!.body!)).toMatchObject({ title: 'T', head: 'emberline/x' });
+      renamedTo = 'https://other.example.com/acme/new/pulls';
+      await expect(forge.createPullRequest('r1', { title: 'T' })).rejects.toMatchObject({
+        statusCode: 502,
+        message: expect.stringContaining('the forge redirected to https://other.example.com/acme/new/pulls — has the repository moved?'),
+      });
+    } finally {
+      await t.close();
+    }
+  });
+});
+
 describe('forge fetch hardening', () => {
-  it('does not follow redirects and maps a 3xx to a 502 naming the API URL', async () => {
-    const { fn } = fakeFetch(
+  it('follows a same-origin redirect (a renamed repository), re-sending method, headers and body', async () => {
+    const { fn, calls } = fakeFetch((c) => {
+      const u = new URL(c.url);
+      if (u.pathname === '/repos/acme/widget/issues') {
+        return new Response(null, { status: 301, headers: { location: `/repositories/42/issues${u.search}` } });
+      }
+      if (u.pathname === '/repos/acme/widget/issues/3/comments') {
+        return new Response(null, { status: 307, headers: { location: 'https://api.github.com/repositories/42/issues/3/comments' } });
+      }
+      return c.method === 'POST' ? json({ id: 1 }, { status: 201 }) : json([ghIssue(1)]);
+    });
+    const client = new IssuesClient({ fetch: fn });
+    const res = await client.list(target(gh), { labels: 'bug' });
+    expect(res.items.map((i) => i.number)).toEqual([1]);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/repos/acme/widget/issues', '/repositories/42/issues']);
+    expect(new URL(calls[1]!.url).searchParams.get('labels')).toBe('bug');
+    expect(calls[1]!.headers.Authorization).toBe('Bearer tok');
+    await client.comment(target(gh), 3, 'hello');
+    expect(calls.slice(2).map((c) => [c.method, new URL(c.url).pathname, c.body, c.headers.Authorization])).toEqual([
+      ['POST', '/repos/acme/widget/issues/3/comments', JSON.stringify({ body: 'hello' }), 'Bearer tok'],
+      ['POST', '/repositories/42/issues/3/comments', JSON.stringify({ body: 'hello' }), 'Bearer tok'],
+    ]);
+  });
+
+  it('a cross-origin redirect is a 502 naming the Location, and the token is not sent there', async () => {
+    const { fn, calls } = fakeFetch(
       () => new Response(null, { status: 302, headers: { location: 'https://evil.example.org/x' } }),
     );
     await expect(new IssuesClient({ fetch: fn }).list(target(gl), {})).rejects.toMatchObject({
       statusCode: 502,
       code: 'forge_error',
-      message: expect.stringMatching(/redirected; set the API URL/),
+      message:
+        'the forge redirected to https://evil.example.org/x — has the repository moved? update the remote, or set the Forge API URL',
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('gives up after 3 same-origin hops, and on a redirect without a Location', async () => {
+    let n = 0;
+    const { fn, calls } = fakeFetch(() => new Response(null, { status: 301, headers: { location: `/hop/${++n}` } }));
+    await expect(new IssuesClient({ fetch: fn }).list(target(gh), {})).rejects.toMatchObject({
+      statusCode: 502,
+      message: expect.stringMatching(/^the forge redirected to https:\/\/api\.github\.com\/hop\/4 — has the repository moved\?/),
+    });
+    expect(calls).toHaveLength(4);
+    const bare = fakeFetch(() => new Response(null, { status: 302 }));
+    await expect(new IssuesClient({ fetch: bare.fn }).list(target(gh), {})).rejects.toMatchObject({
+      statusCode: 502,
+      message: expect.stringMatching(/redirected/),
     });
   });
 
