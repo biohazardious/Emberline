@@ -4562,3 +4562,37 @@ dialog.cmd-dialog::backdrop {
   margin: 0;
   font-size: 0.75rem;
 }
+
+.segmented-radios label {
+  position: relative;
+  padding: 4px 9px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segmented-radios label:hover {
+  color: var(--text);
+}
+
+.segmented-radios label.active {
+  background: var(--surface-hover);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.segmented-radios label:focus-within {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 1px;
+}
+
+.segmented-radios input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}

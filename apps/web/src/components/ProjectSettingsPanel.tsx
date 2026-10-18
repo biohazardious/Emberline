@@ -1,5 +1,6 @@
 import type { Project, ProjectSettingsResponse, WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { useState } from 'react';
+import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
 import { gateChoices, gateUpdate, type GateChoice, type WorktreeBanner, worktreeBanner } from '../projectSettings';
@@ -69,6 +70,41 @@ function WorktreeReviewBody({
   );
 }
 
+/** Native radios styled as segments: one tab stop, arrow keys move and select. */
+function GateRadios({
+  name,
+  labelledBy,
+  options,
+  value,
+  disabled,
+  onChange,
+}: {
+  name: string;
+  labelledBy: string;
+  options: { value: GateChoice; label: string }[];
+  value: GateChoice;
+  disabled: boolean;
+  onChange: (choice: GateChoice) => void;
+}) {
+  return (
+    <div className="segmented segmented-radios" role="radiogroup" aria-labelledby={labelledBy}>
+      {options.map((o) => (
+        <label key={o.value} className={value === o.value ? 'active' : ''}>
+          <input
+            type="radio"
+            name={name}
+            value={o.value}
+            checked={value === o.value}
+            disabled={disabled}
+            onChange={() => onChange(o.value)}
+          />
+          <span>{o.label}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 /** Slim banner for the Board: names the worktree.yml state and opens the review in place. */
 export function WorktreeConfigBanner({ project }: { project: Project }) {
   const status = useApi<WorktreeConfigStatusResponse>(`/api/projects/${project.id}/worktree-config`, 30_000);
@@ -80,6 +116,7 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
     <section className="banner banner-warn worktree-banner" aria-label="worktree.yml review">
       <div className="worktree-banner-head">
         <strong>{banner.title}</strong>
+        <Link href={`/projects/${project.id}/settings`}>Project settings</Link>
         <button
           type="button"
           className="btn btn-sm"
@@ -131,6 +168,11 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
         </p>
       )}
       <h3>Gates</h3>
+      {settings.error !== undefined && settings.data && (
+        <p className="muted" role="alert">
+          Couldn&apos;t refresh the gate settings ({errorMessage(settings.error)}); showing the last values.
+        </p>
+      )}
       {settings.error !== undefined && !settings.data && (
         <p className="banner banner-error" role="alert">
           {errorMessage(settings.error)}
@@ -144,26 +186,24 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
                 <span id={`gate-${row.key}`}>{row.label}</span>
                 <p className="muted">{row.hint}</p>
               </div>
-              <div className="segmented" role="radiogroup" aria-labelledby={`gate-${row.key}`}>
-                {row.options.map((o) => (
-                  <button
-                    key={o.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={row.choice === o.value}
-                    className={row.choice === o.value ? 'active' : ''}
-                    disabled={saving === row.key}
-                    onClick={() => void choose(row.key, o.value)}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
+              <GateRadios
+                name={`gate-${row.key}`}
+                labelledBy={`gate-${row.key}`}
+                options={row.options}
+                value={row.choice}
+                disabled={saving === row.key}
+                onChange={(choice) => void choose(row.key, choice)}
+              />
             </li>
           ))}
         </ul>
       )}
       <h3>worktree.yml</h3>
+      {status.error !== undefined && status.data && (
+        <p className="muted" role="alert">
+          Couldn&apos;t refresh the worktree.yml status ({errorMessage(status.error)}); showing the last state.
+        </p>
+      )}
       {!banner && <p className="muted">The approved .emberline/worktree.yml matches the repository.</p>}
       {banner?.kind === 'unreadable' && <p className="muted">{banner.title}.</p>}
       {banner && banner.kind !== 'unreadable' && (

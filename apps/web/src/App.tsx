@@ -69,6 +69,9 @@ const LiveBrowserPage = lazy(() =>
 const RoadmapPage = lazy(() =>
   import('./pages/RoadmapPage').then((m) => ({ default: m.RoadmapPage })),
 );
+const ProjectSettingsPage = lazy(() =>
+  import('./pages/ProjectSettingsPage').then((m) => ({ default: m.ProjectSettingsPage })),
+);
 const InboxPage = lazy(() => import('./pages/InboxPage').then((m) => ({ default: m.InboxPage })));
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
@@ -923,6 +926,13 @@ function Shell() {
                 {(params) => (
                   <Suspense fallback={<div className="board-page" aria-busy="true" />}>
                     <BoardPage key={params.id} projectId={params.id} />
+                  </Suspense>
+                )}
+              </Route>
+              <Route path="/projects/:id/settings">
+                {(params) => (
+                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                    <ProjectSettingsPage key={params.id} projectId={params.id} />
                   </Suspense>
                 )}
               </Route>

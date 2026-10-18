@@ -257,6 +257,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
         <div className="board-controls">
           {project && (
             <>
+              <Link href={`/projects/${project.id}/settings`} className="btn btn-sm">
+                Project settings
+              </Link>
               <button
                 type="button"
                 className={`btn btn-sm${demoPanelOpen ? ' btn-primary' : ''}`}
