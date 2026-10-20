@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { type SyncWorktreeResponse } from '@emberline/protocol';
 import { HttpError } from '../errors.js';
-import { execGitFile } from '../git-exec.js';
+import { execGitFile, runGit } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 
 /**
@@ -80,6 +80,12 @@ export async function mainWorkspaceBranch(mainWorkspacePath: string): Promise<st
   const res = await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainWorkspacePath }).catch(() => ({ stdout: '' }));
   const branch = res.stdout.trim();
   return branch && branch !== 'HEAD' ? branch : null;
+}
+
+/** The commit the main workspace is at; null when unknown (no commits, not a repository). */
+export async function mainHead(mainWorkspacePath: string): Promise<string | null> {
+  const head = (await runGit(mainWorkspacePath, ['rev-parse', 'HEAD']).catch(() => '')).trim();
+  return head || null;
 }
 
 /** The one follow-up a run gets when its branch no longer merges into `branch` cleanly. */

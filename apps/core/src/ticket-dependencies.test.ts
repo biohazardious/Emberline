@@ -9,7 +9,7 @@ import { setSetting } from './db/index.js';
 import { runs, settings } from './db/schema.js';
 import type * as FactoryService from './factory/service.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
-import { TicketService } from './tickets/service.js';
+import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
 
 /** A critic verdict for the next pipelines to get instead of running the real critic (null: the real one). */
 const critic = vi.hoisted(() => ({ result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null } }));
@@ -740,13 +740,14 @@ describe('one automatic merge-conflict resolution', () => {
 
 
   it('asks the agent once to resolve the conflict, then merges the resolution', async () => {
-    const { b, runB } = await conflictingPair();
+    const { project, b, runB } = await conflictingPair();
     await stopAgain(runB);
     await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
     expect(followups(runB)).toEqual([FOLLOW_UP('app.js')]);
     const events = (await api('GET', `/api/runs/${runB.id}`)).json() as RunDetail;
-    expect(events.events.find((e) => e.type === 'conflict_resolution_requested')?.payload).toMatchObject({
+    expect(events.events.find((e) => e.type === 'conflict_resolution_requested')?.payload).toEqual({
       conflicts: ['app.js'],
+      mainHead: wgit(project.path, 'rev-parse', 'HEAD').trim(),
     });
     expect(await statusOf(b.id)).not.toBe('done');
     expect(t.runs.get(runB.id).endedAt).toBeNull();
@@ -837,7 +838,81 @@ describe('one automatic merge-conflict resolution', () => {
     expect(await eventTypes(runB)).toContain('merge_failed');
     expect((await eventTypes(runB)).filter((x) => x === 'conflict_resolution_requested')).toHaveLength(1);
     expect(followups(runB)).toHaveLength(1);
+    // Main did not move, so the second failure is for a person.
+    const failed = await noteOf(runB, 'merge_failed');
+    expect(failed.at(-1)).toMatchObject({ conflicts: ['app.js'] });
+    expect((failed.at(-1) as { autoFix?: boolean }).autoFix).toBeUndefined();
     await settle(project.id);
+  });
+
+  /** Another run lands a change in main: the head moves and the conflict with B stays. */
+  const moveMain = (dir: string, n: number) => {
+    writeFileSync(path.join(dir, 'app.js'), `one\nfrom-a${n}\nthree\n`);
+    wgit(dir, 'add', '-A');
+    wgit(dir, 'commit', '-q', '-m', `main ${n}`);
+  };
+  const requestedHeads = async (run: Run) =>
+    ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events
+      .filter((e) => e.type === 'conflict_resolution_requested')
+      .map((e) => (e.payload as { mainHead?: string | null }).mainHead);
+
+  it('asks again when main moved after the first attempt and the merge conflicts again', async () => {
+    const { project, runB } = await conflictingPair();
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    moveMain(project.path, 2);
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(2);
+    const heads = await requestedHeads(runB);
+    expect(heads).toHaveLength(2);
+    expect(heads[1]).toBe(wgit(project.path, 'rev-parse', 'HEAD').trim());
+    expect(heads[1]).not.toBe(heads[0]);
+  });
+
+  it('stops asking after three attempts even when main keeps moving', async () => {
+    const { project, runB } = await conflictingPair();
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    for (const n of [2, 3]) {
+      moveMain(project.path, n);
+      await stopAgain(runB);
+      await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(n);
+    }
+    expect(CONFLICT_ATTEMPT_CAP).toBe(3);
+    moveMain(project.path, 4);
+    await stopAgain(runB);
+    await expect.poll(async () => (await eventTypes(runB)).filter((x) => x === 'merge_failed').length, { timeout: 10_000 }).toBe(4);
+    expect(followups(runB)).toHaveLength(3);
+    expect(await requestedHeads(runB)).toHaveLength(3);
+  });
+
+  it('counts an old request without a main head as one attempt and retries once main has moved', async () => {
+    const { project, runB } = await conflictingPair();
+    t.runs.note(runB.id, 'conflict_resolution_requested', { conflicts: ['app.js'] });
+    await stopAgain(runB);
+    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    expect((await requestedHeads(runB)).at(-1)).toBe(wgit(project.path, 'rev-parse', 'HEAD').trim());
+  });
+
+  it('asks a run whose process already ended but can be resumed', async () => {
+    const { b, runB } = await conflictingPair();
+    // A one-shot agent: its process exited before the merge, the session id stays.
+    t.db.update(runs).set({ endedAt: new Date(), ptydSessionId: null }).where(eq(runs.id, runB.id)).run();
+    expect(t.runs.getRun(runB.id)).toMatchObject({ resumable: true });
+    const svc = t.runs as unknown as { resume(id: string, text?: string): Promise<Run> };
+    const original = svc.resume.bind(t.runs);
+    const resumed: string[] = [];
+    svc.resume = async (id, text) => {
+      resumed.push(text ?? '');
+      return original(id, text);
+    };
+    // The pipeline starts from a run that is already ended (the stop hook of a one-shot CLI).
+    const pipeline = t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
+    await pipeline.handleRunCompleted(t.runs.get(runB.id));
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]).toContain('conflicts in: app.js');
+    expect(await eventTypes(runB)).toContain('conflict_resolution_requested');
+    expect(await statusOf(b.id)).not.toBe('done');
   });
 
   it('a later dispatch leaves a ticket whose merge failed in Review and does not retry the merge', async () => {
@@ -1355,7 +1430,7 @@ describe('a hold the agent is already fixing does not need you', () => {
     await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(pages.sent).toEqual([]);
     expect(t.runs.getRun(run.id).attention).toBeNull();
-    expect(await noteOf(run, 'build_gate_failed')).toEqual([{ autoFix: true }]);
+    expect(await noteOf(run, 'build_gate_failed')).toEqual([{ autoFix: true, output: 'error TS2322' }]);
     pages.stop();
     await settle(project.id);
   });
@@ -1373,7 +1448,10 @@ describe('a hold the agent is already fixing does not need you', () => {
     await finish(run);
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
     await Promise.all(passes);
-    expect(await noteOf(run, 'build_gate_failed')).toEqual([{ autoFix: true }, { autoFix: false }]);
+    expect(await noteOf(run, 'build_gate_failed')).toEqual([
+      { autoFix: true, output: 'error TS2322' },
+      { autoFix: false, output: 'error TS2322' },
+    ]);
     expect(await statusOf(a.id)).toBe('review');
     expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held', detail: 'Build checks failed' });
     await expect.poll(() => pages.sent.length).toBe(1);
@@ -1397,7 +1475,9 @@ describe('a hold the agent is already fixing does not need you', () => {
     await Promise.all(passes);
     expect(pages.sent).toEqual([]);
     expect(t.runs.getRun(run.id).attention).toBeNull();
-    expect(await noteOf(run, 'slop_guard_blocked')).toEqual([{ autoFix: true }]);
+    const slopNotes = await noteOf(run, 'slop_guard_blocked');
+    expect(slopNotes).toHaveLength(1);
+    expect(slopNotes[0]).toMatchObject({ autoFix: true, autoFixPrompt: expect.stringContaining('slop.ts') });
     pages.stop();
     await settle(project.id);
   });
@@ -1415,7 +1495,11 @@ describe('a hold the agent is already fixing does not need you', () => {
     await finish(run);
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
     await Promise.all(passes);
-    expect(await noteOf(run, 'critic_blocked')).toEqual([{ autoFix: true }, { autoFix: false }]);
+    const followUpPrompt = 'Fix the findings of the review.';
+    expect(await noteOf(run, 'critic_blocked')).toEqual([
+      { autoFix: true, followUpPrompt },
+      { autoFix: false, followUpPrompt },
+    ]);
     expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held' });
     await expect.poll(() => pages.sent.length).toBe(1);
     pages.stop();
@@ -1436,6 +1520,7 @@ describe('a hold the agent is already fixing does not need you', () => {
     await Promise.all(passes);
     const notes = await noteOf(run, 'secret_guard_blocked');
     expect(notes.map((n) => (n as { autoFix?: boolean }).autoFix)).toEqual([true, false]);
+    for (const n of notes) expect((n as { autoFixPrompt?: string }).autoFixPrompt?.length ?? 0).toBeGreaterThan(0);
     expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held' });
     await expect.poll(() => pages.sent.length).toBe(1);
     pages.stop();
