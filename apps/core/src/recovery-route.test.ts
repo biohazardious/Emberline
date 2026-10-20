@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CONTINUE_PROMPT } from '@emberline/adapter-claude';
-import type { RecoverResponse, RunRecovery } from '@emberline/protocol';
+import type { RecoverResponse, Run, RunRecovery } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { desc, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -404,6 +404,18 @@ describe('delivering a recovery prompt', () => {
       expect(await argsOf(body.run.id)).toContain('resolve the conflicts in app.js');
       // The old run holds nothing any more.
       expect((await recover('el-2', 'again')).json()).toMatchObject({ error: 'not_held' });
+    });
+
+    it("the successor's finish runs the pipeline, also when no factory chain is going", async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
+      const body = (await recover('el-2', 'merge main and finish')).json() as RecoverResponse;
+      expect(body.delivery).toBe('successor');
+      // No ticket is ready and none is a [Factory] ticket: only the held predecessor makes it a factory run.
+      const pipeline = t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
+      await pipeline.handleRunCompleted(t.runs.get(body.run.id));
+      expect(t.runs.get(body.run.id).events.map((e) => e.type)).toContain('merged_to_main');
+      expect(git(main, 'log', '--format=%s', '-1')).toMatch(/EL-2/);
     });
 
     it('a run a person stopped stays stopped: 409 run_stopped_by_you, and Resume stays 409', async () => {
