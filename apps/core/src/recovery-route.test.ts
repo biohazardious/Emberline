@@ -2,14 +2,20 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunRecovery } from '@emberline/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, reviewComments, runEvents, runs, tickets } from './db/schema.js';
+import * as gitExec from './git-exec.js';
 import { createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
 let main: string;
 let ticketNo = 0;
+
+vi.mock('./git-exec.js', async (orig) => {
+  const actual = await orig<typeof gitExec>();
+  return { ...actual, execGitFile: vi.fn(actual.execGitFile) };
+});
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -29,6 +35,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await t.close();
+  vi.mocked(gitExec.execGitFile).mockClear();
 });
 
 function addTicket(key: string, status: string): string {
@@ -59,7 +66,7 @@ interface RunSeed {
   worktreePath?: string;
   ended?: boolean;
   /** Who stopped it: `system` = the pipeline's factory_step_finished stop. */
-  stops?: { source: 'system' | 'user'; reason?: string }[];
+  stops?: { source: 'system' | 'user'; reason?: string; type?: 'stop_requested' | 'cancelled'; payload?: Record<string, unknown> }[];
   handedOffTo?: string;
   /** The hold note after the run's switch to done; null for none. */
   hold?: { type: string; payload: Record<string, unknown> } | null;
@@ -92,7 +99,13 @@ function seedRun(seed: RunSeed): string {
   for (const stop of seed.stops ?? []) {
     t.db
       .insert(runEvents)
-      .values({ runId: seed.id, ts: now, source: stop.source, type: 'stop_requested', payload: stop.reason ? { reason: stop.reason } : null })
+      .values({
+        runId: seed.id,
+        ts: now,
+        source: stop.source,
+        type: stop.type ?? 'stop_requested',
+        payload: stop.payload ?? (stop.reason ? { reason: stop.reason } : null),
+      })
       .run();
   }
   t.db.insert(runEvents).values({ runId: seed.id, ts: now, source: 'hook', type: 'Stop', state: 'done', payload: null }).run();
@@ -183,6 +196,19 @@ describe('GET /api/runs/:id/recovery', () => {
     expect(body!.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (3 of 3 conflicts)' });
   });
 
+  it('a second read with unchanged heads looks nothing up again', async () => {
+    const wt = worktree('r1', { a: 'mine\n', b: 'mine\n', c: 'mine\n' });
+    superseded('done');
+    seedRun({ id: 'r1', ticketKey: 'EL-6', ...wt });
+    const logCalls = () => vi.mocked(gitExec.execGitFile).mock.calls.filter(([args]) => args.includes('log')).length;
+    const first = await recovery('r1');
+    const before = logCalls();
+    expect(before).toBeGreaterThan(0);
+    const second = await recovery('r1');
+    expect(logCalls()).toBe(before);
+    expect(second.body).toEqual(first.body);
+  });
+
   it('superseded by a ticket that is not done: Discard is not first', async () => {
     const wt = worktree('r1', { a: 'mine\n', b: 'mine\n', c: 'mine\n' });
     superseded('review');
@@ -237,6 +263,27 @@ describe('RecoveryService.deliveryFor', () => {
     seedRun({ id: 'both', stops: [legacyStop, { source: 'user' }] });
     expect(delivery('user')).toBe('none');
     expect(delivery('both')).toBe('none');
+  });
+
+  it('successor for a real legacy stop: the pipeline stop, then reconcile noting the exit', () => {
+    mkdirSync(path.join(t.dir, '.worktrees', 'el-2'), { recursive: true });
+    seedRun({ id: 'el-2', stops: [legacyStop, { source: 'system', type: 'cancelled', payload: { exitCode: 129, signal: 0 } }] });
+    expect(delivery('el-2')).toBe('successor');
+  });
+
+  it('none when a person stopped it after the pipeline stop and the exit', () => {
+    mkdirSync(path.join(t.dir, '.worktrees', 'el-3'), { recursive: true });
+    seedRun({
+      id: 'el-3',
+      stops: [legacyStop, { source: 'system', type: 'cancelled', payload: { exitCode: 129, signal: 0 } }, { source: 'user' }],
+    });
+    expect(delivery('el-3')).toBe('none');
+  });
+
+  it('none for a person cancelling it directly (no agent to stop)', () => {
+    mkdirSync(path.join(t.dir, '.worktrees', 'queued'), { recursive: true });
+    seedRun({ id: 'queued', stops: [{ source: 'user', type: 'cancelled' }] });
+    expect(delivery('queued')).toBe('none');
   });
 
   it('none for a system stop for another reason', () => {

@@ -3,7 +3,7 @@ import type { Run, RunRecovery } from '@emberline/protocol';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projects, reviewComments, runEvents, runs, tickets } from '../db/schema.js';
-import { findSuperseding, type MergeProbeResult, probeMerge } from '../factory/merge-probe.js';
+import { type MergeProbeResult, probeMerge, supersedingFor } from '../factory/merge-probe.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { CHAIN_MAX } from '../review/blocking.js';
 import { currentHold } from './hold-outcome.js';
@@ -54,7 +54,7 @@ export class RecoveryService {
         ? await probeMerge(project.path, mainBranch, run.branch)
         : { ok: false, error: 'the run has no branch' };
       if (probe.ok && probe.conflicts.length > 0) {
-        const found = await findSuperseding(project.path, mainBranch, probe.conflicts, ticketKey);
+        const found = await supersedingFor(project.path, probe, ticketKey);
         if (found) {
           const other = this.db
             .select({ status: tickets.status })
@@ -105,17 +105,21 @@ export class RecoveryService {
     return 'none';
   }
 
-  /** Whether the run was cancelled by the pipeline's finished-step stops alone. */
+  /**
+   * Whether the run was cancelled by the pipeline's finished-step stop alone. Only stop decisions
+   * count: every `stop_requested`, and a `cancelled` that carries a reason or came from a person
+   * (stop() of a queued or setting-up run). Reconcile's `cancelled` that only notes the exit
+   * (`{exitCode, signal}`, source system) follows a stop_requested and decides nothing.
+   */
   private onlyFinishedStepStops(runId: string): boolean {
-    const stops = this.db
-      .select({ source: runEvents.source, payload: runEvents.payload })
+    const decisions = this.db
+      .select({ type: runEvents.type, source: runEvents.source, payload: runEvents.payload })
       .from(runEvents)
       .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, ['stop_requested', 'cancelled'])))
-      .all();
-    return (
-      stops.length > 0 &&
-      stops.every((s) => s.source === 'system' && (s.payload as { reason?: unknown } | null)?.reason === FINISHED_STEP_STOP)
-    );
+      .all()
+      .map((e) => ({ ...e, reason: (e.payload as { reason?: unknown } | null)?.reason }))
+      .filter((e) => e.type === 'stop_requested' || e.source !== 'system' || e.reason !== undefined);
+    return decisions.length > 0 && decisions.every((e) => e.source === 'system' && e.reason === FINISHED_STEP_STOP);
   }
 
   /** Open blocking review comments on the run and the runs it took over from, one line each. */

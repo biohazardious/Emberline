@@ -19,12 +19,19 @@ export type MergeProbeResult = MergeProbe | { ok: false; error: string };
 const CACHE_LIMIT = 200;
 const cache = new Map<string, MergeProbe>();
 
-function remember(key: string, probe: MergeProbe): void {
-  cache.set(key, probe);
-  while (cache.size > CACHE_LIMIT) {
-    const oldest = cache.keys().next().value;
+export interface Superseding {
+  key: string;
+  files: number;
+}
+/** findSuperseding results by main head, own key and add/add paths: main's history at a head never changes. */
+const supersedingCache = new Map<string, Superseding | null>();
+
+function remember<T>(map: Map<string, T>, key: string, value: T): void {
+  map.set(key, value);
+  while (map.size > CACHE_LIMIT) {
+    const oldest = map.keys().next().value;
     if (oldest === undefined) break;
-    cache.delete(oldest);
+    map.delete(oldest);
   }
 }
 
@@ -88,7 +95,7 @@ export async function probeMerge(
       stdout = e.stdout;
     }
     const probe: MergeProbe = { ok: true, mainHead, branchHead, conflicts: parseMergeTree(stdout) };
-    remember(key, probe);
+    remember(cache, key, probe);
     return probe;
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -110,7 +117,7 @@ export async function findSuperseding(
   mainBranch: string,
   conflicts: ConflictFile[],
   ownKey: string | null,
-): Promise<{ key: string; files: number } | null> {
+): Promise<Superseding | null> {
   const counts = new Map<string, number>();
   for (const file of conflicts) {
     if (file.kind !== 'add/add') continue;
@@ -129,7 +136,28 @@ export async function findSuperseding(
     }
     for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  let best: { key: string; files: number } | null = null;
+  let best: Superseding | null = null;
   for (const [key, files] of counts) if (!best || files > best.files) best = { key, files };
   return best;
+}
+
+/**
+ * {@link findSuperseding} for a probe's conflicts, read at the probe's main head and cached, so
+ * repeated reads of the same heads run no `git log`.
+ */
+export async function supersedingFor(
+  mainWorkspacePath: string,
+  probe: MergeProbe,
+  ownKey: string | null,
+): Promise<Superseding | null> {
+  const added = probe.conflicts
+    .filter((c) => c.kind === 'add/add')
+    .map((c) => c.path)
+    .sort();
+  if (added.length === 0) return null;
+  const key = JSON.stringify([mainWorkspacePath, probe.mainHead, ownKey, added]);
+  if (supersedingCache.has(key)) return supersedingCache.get(key) ?? null;
+  const found = await findSuperseding(mainWorkspacePath, probe.mainHead, probe.conflicts, ownKey);
+  remember(supersedingCache, key, found);
+  return found;
 }
