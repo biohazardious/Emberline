@@ -796,7 +796,25 @@ describe('one automatic merge-conflict resolution', () => {
     expect(t.runs.getRun(runB.id).attention).toMatchObject({ reason: 'held', detail: 'Merge failed' });
     await expect.poll(() => pages.sent.length).toBe(1);
     pages.stop();
+    // The held run's session is closed, not cancelled: a person's prompt respawns the agent.
+    await expect.poll(() => t.runs.get(runB.id).endedAt, { timeout: 10_000 }).not.toBeNull();
+    expect(t.runs.getRun(runB.id)).toMatchObject({ resumable: true, cancelled: false });
+    const types = await eventTypes(runB);
+    expect(types).toContain('idle_session_closed');
+    expect(types).not.toContain('stop_requested');
+    delete (t.runs as unknown as Record<string, unknown>).prompt;
+    delete (t.runs as unknown as Record<string, unknown>).sendPrompt;
+    expect((await api('POST', `/api/runs/${runB.id}/prompt`, { text: 'resolve it' })).statusCode).toBe(200);
     await settle(project.id);
+  });
+
+  it('a merged factory run is still stopped by the pipeline, not kept resumable', async () => {
+    const { runA } = await conflictingPair();
+    await expect.poll(() => t.runs.get(runA.id).endedAt, { timeout: 10_000 }).not.toBeNull();
+    expect(t.runs.getRun(runA.id)).toMatchObject({ resumable: false });
+    expect(t.runs.getRun(runA.id).cancelled).toBe(true);
+    const detail = (await api('GET', `/api/runs/${runA.id}`)).json() as RunDetail;
+    expect(detail.events.find((e) => e.type === 'stop_requested')?.payload).toMatchObject({ reason: 'factory_step_finished' });
   });
 
   it('names the branch the main workspace is on, not main', async () => {
@@ -1166,6 +1184,8 @@ describe('factory chain robustness', () => {
     await Promise.all(passes);
     expect(await statusOf(a.id)).toBe('review');
     await expect.poll(() => t.runs.get(run.id).endedAt, { timeout: 10_000 }).not.toBeNull();
+    // A secret-guard hold that fell through keeps the run resumable.
+    expect(t.runs.getRun(run.id)).toMatchObject({ resumable: true, cancelled: false });
 
     await t.tickets.dispatchNextReadyTicket(project.id);
     expect(await statusOf(a.id)).toBe('review');

@@ -805,6 +805,32 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
   }
 
+  /** Saves the last screen, removes the ptyd session and ends the run as resumable (no cancel). */
+  private async closeIdleSession(runId: string, sessionId: string, payload?: { reason: string }): Promise<Run> {
+    await this.saveLastScreen(runId, sessionId);
+    await this.ptyd
+      .get()
+      .remove(sessionId)
+      .catch(() => undefined);
+    return this.record(runId, {
+      source: 'system',
+      type: 'idle_session_closed',
+      state: 'done',
+      payload,
+      patch: { endedAt: new Date(), ptydSessionId: null },
+    });
+  }
+
+  /**
+   * Closes the session of a run the pipeline held for a person: the run ends but stays resumable
+   * (not cancelled), so a later prompt respawns the agent. No-op when the run already ended.
+   */
+  async closeHeldSession(id: string): Promise<Run> {
+    const row = this.row(id);
+    if (row.endedAt || !row.ptydSessionId) return this.withAttention([toRun(row)])[0] as Run;
+    return this.closeIdleSession(id, row.ptydSessionId, { reason: 'held' });
+  }
+
   getTelemetry(id: string): RunTelemetry {
     const row = this.row(id);
     const toolCalls = this.db
@@ -3387,18 +3413,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // so it never lingers as a zombie process in Fleet Multiplexer.
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
           if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl && !this.pipelineBusyRuns.has(row.id)) {
-            await this.saveLastScreen(row.id, row.ptydSessionId);
-            await this.ptyd
-              .get()
-              .remove(row.ptydSessionId)
-              .catch(() => undefined);
+            await this.closeIdleSession(row.id, row.ptydSessionId);
             byId.delete(row.ptydSessionId);
-            this.record(row.id, {
-              source: 'system',
-              type: 'idle_session_closed',
-              state: 'done',
-              patch: { endedAt: new Date(), ptydSessionId: null },
-            });
           }
           continue;
         }

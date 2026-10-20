@@ -907,6 +907,33 @@ describe('runs', () => {
       expect(after.endedAt).not.toBeNull();
       expect(after.events.map((e) => e.type)).toContain('idle_session_closed');
     });
+
+    it('closes a held run\'s session as resumable, not cancelled, and a prompt respawns it', async () => {
+      const { run, token } = await working('Held close');
+      await hook(run.id, 'Stop', token);
+      const closed = await t.runs.closeHeldSession(run.id);
+      expect(closed).toMatchObject({ state: 'done', resumable: true, cancelled: false });
+      expect(closed.endedAt).not.toBeNull();
+      const detail = t.runs.get(run.id);
+      expect(detail.terminalId).toBeNull();
+      expect(detail.events.find((e) => e.type === 'idle_session_closed')?.payload).toEqual({ reason: 'held' });
+      expect(detail.events.map((e) => e.type)).not.toContain('stop_requested');
+
+      // Reconcile does not turn it into a cancelled or failed run.
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'done', resumable: true, cancelled: false });
+
+      // Closing again is a no-op.
+      await t.runs.closeHeldSession(run.id);
+      expect(t.runs.get(run.id).events.filter((e) => e.type === 'idle_session_closed')).toHaveLength(1);
+
+      // A prompt respawns the agent; the hooks of the resumed session are accepted.
+      expect((await api('POST', `/api/runs/${run.id}/prompt`, { text: 'carry on' })).statusCode).toBe(200);
+      const resumedToken = await tokenFor(run.id);
+      const res = await hook(run.id, 'UserPromptSubmit', resumedToken, { prompt: 'carry on' });
+      expect(res.statusCode).toBe(200);
+      expect(t.runs.getRun(run.id)).toMatchObject({ endedAt: null, cancelled: false });
+    });
   });
 
   describe('idle close and the completion pipeline', () => {

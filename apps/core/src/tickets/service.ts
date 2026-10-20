@@ -1124,9 +1124,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // 5. Close the idle interactive CLI process for this completed factory step so it does not
     //    linger at the `>` prompt or fire idle notifications. A run held for review feedback keeps
-    //    its session: the person's next step is usually a request for changes to it.
+    //    its session: the person's next step is usually a request for changes to it. A run held for
+    //    anything else (merge conflict, secret guard) is closed but stays resumable, so a person can
+    //    continue it later instead of finding it cancelled.
     if (!run.endedAt && !reviewBlocked) {
-      await this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' }).catch(() => undefined);
+      const held = mergeBlocked || this.pipelineOutcome(run.id) === 'held';
+      await (held
+        ? this.runs.closeHeldSession(run.id)
+        : this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' })
+      ).catch(() => undefined);
     }
 
     // 6. Dispatch the next specialist ticket in the project's queue if auto-chaining is active;
