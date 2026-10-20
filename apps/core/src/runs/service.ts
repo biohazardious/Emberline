@@ -485,9 +485,26 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
 /** A run that is live, or parked on a quota limit and still going to resume (not cancelled). */
 const runStillActive = () => or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
 
-/** Why a run cannot be handed off right now, if it cannot. */
-function handoffBlocker(row: RunRow): string | undefined {
-  if (row.cancelledAt) return 'this run was stopped';
+/** The pipeline's own stop of a finished factory step: the only cancel a successor may continue. */
+export const FINISHED_STEP_STOP = 'factory_step_finished';
+
+/** Whether a hold note keeps the run in front of a person (a `completion_blocked` hold reads as `blocked`). */
+export const isHeldRun = (run: Pick<Run, 'attention'>): boolean =>
+  run.attention?.reason === 'held' || run.attention?.reason === 'blocked';
+
+export interface HandOffOptions {
+  reason: string;
+  source: 'system' | 'user';
+  automatic: boolean;
+  /** Follows the handoff context in the successor's prompt (a person's recovery prompt). */
+  extraPrompt?: string;
+  /** Also continue a cancelled run, when it is a held run the pipeline's finished-step stop alone cancelled. */
+  allowSystemFinishedCancel?: boolean;
+}
+
+/** Why a run cannot be handed off right now, if it cannot. `continuesHeld`: its cancel does not count. */
+function handoffBlocker(row: RunRow, continuesHeld = false): string | undefined {
+  if (row.cancelledAt && !continuesHeld) return 'this run was stopped';
   if (row.handedOffTo) return 'this run was already handed off';
   if (row.state === 'queued' || row.state === 'starting' || row.state === 'working') return `a ${row.state} run cannot be handed off`;
   return undefined;
@@ -1158,18 +1175,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * a prompt that hands over what was done. The successor is inserted first, so every listener that
    * sees the predecessor turn `done` also sees `handedOffTo` and does not treat it as finished work.
    */
-  async handOff(id: string, route: Route, opts: { reason: string; source: 'system' | 'user'; automatic: boolean }): Promise<Run> {
+  async handOff(id: string, route: Route, opts: HandOffOptions): Promise<Run> {
     // One handoff per run at a time: the guards are re-read inside the lock, so a second caller sees `handedOffTo`.
     return this.handoffLock.run(id, () => this.handOffLocked(id, route, opts));
   }
 
-  private async handOffLocked(
-    id: string,
-    route: Route,
-    opts: { reason: string; source: 'system' | 'user'; automatic: boolean },
-  ): Promise<Run> {
+  private async handOffLocked(id: string, route: Route, opts: HandOffOptions): Promise<Run> {
+    const continuesHeld = () => Boolean(opts.allowSystemFinishedCancel) && this.continuesInSuccessor(this.getRun(id));
     const row = this.row(id);
-    const blocked = handoffBlocker(row);
+    const blocked = handoffBlocker(row, continuesHeld());
     if (blocked) throw conflict(blocked);
     const routes = [...runRoutes(row)];
     let routeIndex = routes.findIndex((r) => sameRoute(r, route));
@@ -1177,11 +1191,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       routes.push(route);
       routeIndex = routes.length - 1;
     }
-    const prompt = buildHandoffPrompt(await this.handoffContext(row, opts.reason, false));
+    const context = buildHandoffPrompt(await this.handoffContext(row, opts.reason, false));
+    const prompt = opts.extraPrompt?.trim() ? `${context}\n\n${opts.extraPrompt.trim()}` : context;
     // A stop or a resume may have landed while the context was built: re-read before creating the
     // successor, so no orphan successor is left and the kill below reaches the current terminal.
     const current = this.row(id);
-    const changed = handoffBlocker(current) ?? (current.state !== row.state ? `the run is ${current.state} now` : undefined);
+    const changed =
+      handoffBlocker(current, continuesHeld()) ?? (current.state !== row.state ? `the run is ${current.state} now` : undefined);
     if (changed) throw conflict(changed);
     const successor = await this.enqueue(
       { projectId: row.projectId, prompt, persona: row.persona as AgentPersona, permissionMode: row.permissionMode as Run['permissionMode'] },
@@ -1216,6 +1232,39 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .catch(() => undefined);
     }
     return this.getRun(successor.id);
+  }
+
+  /**
+   * Whether a held run continues in a successor on its worktree: it was cancelled by the pipeline's
+   * finished-step stop alone (before held runs stayed resumable), was not handed off, and its worktree
+   * still exists. A person's stop stays final.
+   */
+  continuesInSuccessor(run: Run): boolean {
+    return (
+      isHeldRun(run) &&
+      run.cancelled &&
+      !run.handedOffTo &&
+      Boolean(run.worktreePath) &&
+      existsSync(run.worktreePath) &&
+      this.cancelledOnlyByFinishedStep(run.id)
+    );
+  }
+
+  /**
+   * Whether the run was cancelled by the pipeline's finished-step stop alone. Only stop decisions
+   * count: every `stop_requested`, and a `cancelled` that carries a reason or came from a person
+   * (stop() of a queued or setting-up run). Reconcile's `cancelled` that only notes the exit
+   * (`{exitCode, signal}`, source system) follows a stop_requested and decides nothing.
+   */
+  cancelledOnlyByFinishedStep(runId: string): boolean {
+    const decisions = this.db
+      .select({ type: runEvents.type, source: runEvents.source, payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, ['stop_requested', 'cancelled'])))
+      .all()
+      .map((e) => ({ ...e, reason: (e.payload as { reason?: unknown } | null)?.reason }))
+      .filter((e) => e.type === 'stop_requested' || e.source !== 'system' || e.reason !== undefined);
+    return decisions.length > 0 && decisions.every((e) => e.source === 'system' && e.reason === FINISHED_STEP_STOP);
   }
 
   /** Re-points a queued run at another route of its own chain (the scheduler's fallback for new runs). */

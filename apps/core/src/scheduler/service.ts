@@ -224,6 +224,14 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     if (!existsSync(run.worktreePath)) {
       throw new HttpError(409, 'worktree_missing', "this run's worktree was removed; start a new run instead");
     }
+    this.assertRouteOpen(route);
+    const successor = await this.runs.handOff(runId, route, { reason: 'handed off by you', source: 'user', automatic: false });
+    await this.tick();
+    return this.runs.getRun(successor.id);
+  }
+
+  /** Refuses a route a person's handoff cannot start on: one the agent cannot sign in with, without its API key, or out of quota. */
+  assertRouteOpen(route: Route): void {
     if (!PROVIDER_RUNTIME[route.agent]?.credentials.includes(route.credential)) {
       throw new HttpError(400, 'route_unsupported', `${route.agent} cannot run with credential ${route.credential}`);
     }
@@ -233,9 +241,6 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     if (this.laneClosed(laneOf(route), this.openWindows())) {
       throw new HttpError(409, 'lane_exhausted', `${route.agent} (${route.model}) is out of quota too`);
     }
-    const successor = await this.runs.handOff(runId, route, { reason: 'handed off by you', source: 'user', automatic: false });
-    await this.tick();
-    return this.runs.getRun(successor.id);
   }
 
   /** Schedules a dispatch pass, e.g. after the quota policy or a provider key changed. */

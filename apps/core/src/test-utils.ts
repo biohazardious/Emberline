@@ -85,7 +85,7 @@ export async function createTestApp(
   const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
   const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
   const postMerge = new PostMergeJobs(opened.db, runs);
-  const recovery = new RecoveryService(opened.db, runs, { completionReminder: (run) => tickets.completionReminder(run, '\n\n') });
+  const recovery = new RecoveryService(opened.db, runs, scheduler, { completionReminder: (run) => tickets.completionReminder(run, '\n\n') });
   const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync, postMerge, recovery });
   return {
     app,

@@ -8,6 +8,8 @@ import {
   HandoffBody,
   HookEnvelope,
   type PruneWorktreeResponse,
+  RecoverRequest,
+  type RecoverResponse,
   ResumeRunBody,
   type Run,
   type RunArtifact,
@@ -52,10 +54,13 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/stop', async (request): Promise<Run> => runs.stop(request.params.id));
 
-  /** Manual resume (ignores the quota pause): live session gets a prompt, ended ones `--resume`. */
+  /**
+   * Manual resume (ignores the quota pause): live session gets a prompt, ended ones `--resume`.
+   * Without text, a held run is told what holds it (its recovery's first prompt) instead of a bare "continue".
+   */
   app.post<{ Params: { id: string } }>('/api/runs/:id/resume', async (request): Promise<Run> => {
     const { text } = ResumeRunBody.parse(request.body ?? {});
-    return runs.resume(request.params.id, text || undefined);
+    return runs.resume(request.params.id, text || (await recovery.holdPrompt(request.params.id)) || undefined);
   });
 
   /** Continues a waiting run on another provider/model in the same worktree. */
@@ -71,6 +76,12 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     '/api/runs/:id/recovery',
     async (request): Promise<RunRecovery | null> => recovery.get(request.params.id),
   );
+
+  /** Delivers a person's prompt to a held run: its own session, or a successor on the same branch. */
+  app.post<{ Params: { id: string } }>('/api/runs/:id/recover', async (request): Promise<RecoverResponse> => {
+    const { text } = RecoverRequest.parse(request.body ?? {});
+    return recovery.recover(request.params.id, text);
+  });
 
   /** Sends a follow-up prompt into a live run (or resumes an ended session with that prompt). */
   app.post<{ Params: { id: string } }>('/api/runs/:id/prompt', async (request): Promise<Run> => {

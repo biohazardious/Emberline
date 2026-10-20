@@ -101,7 +101,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   });
   const recovery =
     deps.recovery ??
-    new RecoveryService(deps.db, deps.runs, { completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n') });
+    new RecoveryService(deps.db, deps.runs, deps.scheduler, { completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n') });
   cron.start();
   notifications.start();
   review.start();

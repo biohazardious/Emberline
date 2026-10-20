@@ -1,41 +1,48 @@
 import { existsSync } from 'node:fs';
-import type { Run, RunRecovery } from '@emberline/protocol';
+import type { RecoverResponse, Route, Run, RunRecovery } from '@emberline/protocol';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, reviewComments, runEvents, runs, tickets } from '../db/schema.js';
+import { projects, reviewComments, runs, tickets } from '../db/schema.js';
+import { HttpError } from '../errors.js';
 import { type MergeProbeResult, probeMerge, supersedingFor } from '../factory/merge-probe.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import { CHAIN_MAX } from '../review/blocking.js';
+import type { Scheduler } from '../scheduler/service.js';
 import { currentHold } from './hold-outcome.js';
 import { buildRecovery, type RecoveryInput } from './recovery.js';
-import type { RunService } from './service.js';
+import { isHeldRun, type RunService } from './service.js';
 
-/** The pipeline's own stop of a finished factory step: the only cancel a successor may continue. */
-export const FINISHED_STEP_STOP = 'factory_step_finished';
+/** The handoff reason of a held run that continues in a successor. */
+export const CONTINUED_AFTER_HOLD = 'continued after a hold';
+
+/** States in which an agent is about to work or working: a prompt now would land mid-start or mid-turn. */
+const BUSY_STATES: ReadonlySet<string> = new Set(['queued', 'starting', 'working']);
 
 export interface RecoveryServiceOptions {
   /** What ends a prompt asking the run for more work (TicketService.completionReminder; injected to avoid a cycle). */
   completionReminder: (run: Run) => string;
 }
 
-/** Attention reasons a hold note leaves (a `completion_blocked` hold reads as `blocked`). */
-const isHeld = (run: Run) => run.attention?.reason === 'held' || run.attention?.reason === 'blocked';
-
 /**
  * Why a held run is held, what a person can do about it, and how a prompt would reach an agent.
  * Reads the run's current hold note, its ticket and project, and dry-runs the merge for merge holds.
  */
 export class RecoveryService {
+  /** One delivery per run at a time: a double click starts one successor. */
+  private readonly delivering = new KeyedMutex();
+
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
+    private readonly scheduler: Scheduler,
     private readonly opts: RecoveryServiceOptions,
   ) {}
 
   /** The run's recovery, or null when nothing holds it for a person (any more). */
   async get(runId: string): Promise<RunRecovery | null> {
     const run = this.runs.getRun(runId);
-    if (!isHeld(run)) return null;
+    if (!isHeldRun(run)) return null;
     const hold = currentHold(this.runs.loadAttentionFacts([run.id]).get(run.id)?.pipeline ?? []);
     if (!hold) return null;
 
@@ -92,34 +99,47 @@ export class RecoveryService {
    */
   deliveryFor(run: Run): RunRecovery['delivery'] {
     if ((!run.endedAt && !run.cancelled) || run.resumable) return 'session';
-    if (
-      isHeld(run) &&
-      run.cancelled &&
-      !run.handedOffTo &&
-      Boolean(run.worktreePath) &&
-      existsSync(run.worktreePath) &&
-      this.onlyFinishedStepStops(run.id)
-    ) {
-      return 'successor';
-    }
-    return 'none';
+    return this.runs.continuesInSuccessor(run) ? 'successor' : 'none';
   }
 
   /**
-   * Whether the run was cancelled by the pipeline's finished-step stop alone. Only stop decisions
-   * count: every `stop_requested`, and a `cancelled` that carries a reason or came from a person
-   * (stop() of a queued or setting-up run). Reconcile's `cancelled` that only notes the exit
-   * (`{exitCode, signal}`, source system) follows a stop_requested and decides nothing.
+   * Delivers a person's prompt to a held run (`deliveryFor`): into its own session, or as the prompt
+   * of a successor on the same worktree, branch and route. Refusals are 409s with a code.
    */
-  private onlyFinishedStepStops(runId: string): boolean {
-    const decisions = this.db
-      .select({ type: runEvents.type, source: runEvents.source, payload: runEvents.payload })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, ['stop_requested', 'cancelled'])))
-      .all()
-      .map((e) => ({ ...e, reason: (e.payload as { reason?: unknown } | null)?.reason }))
-      .filter((e) => e.type === 'stop_requested' || e.source !== 'system' || e.reason !== undefined);
-    return decisions.length > 0 && decisions.every((e) => e.source === 'system' && e.reason === FINISHED_STEP_STOP);
+  async recover(runId: string, text: string): Promise<RecoverResponse> {
+    return this.delivering.run(runId, async () => {
+      const run = this.runs.getRun(runId);
+      if (BUSY_STATES.has(run.state)) {
+        throw new HttpError(409, 'run_busy', `the agent is ${run.state}; send your prompt once it is waiting`);
+      }
+      if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
+      const delivery = this.deliveryFor(run);
+      if (delivery === 'session') return { delivery, run: await this.runs.prompt(run.id, text, { automatic: false }) };
+      if (delivery === 'none') throw this.refusal(run);
+      const route = { agent: run.agent, model: run.model ?? 'auto', credential: run.credential } as Route;
+      this.scheduler.assertRouteOpen(route);
+      const successor = await this.runs.handOff(run.id, route, {
+        reason: CONTINUED_AFTER_HOLD,
+        source: 'user',
+        automatic: false,
+        extraPrompt: text,
+        allowSystemFinishedCancel: true,
+      });
+      await this.scheduler.tick();
+      return { delivery, run: this.runs.getRun(successor.id) };
+    });
+  }
+
+  /** Why a held run cannot take a prompt at all. */
+  private refusal(run: Run): HttpError {
+    if (run.handedOffTo) return new HttpError(409, 'not_held', 'this run was handed off; its successor continues the work');
+    if (run.cancelled && !this.runs.cancelledOnlyByFinishedStep(run.id)) {
+      return new HttpError(409, 'run_stopped_by_you', 'this run was stopped; start a new run or discard it');
+    }
+    if (!run.worktreePath || !existsSync(run.worktreePath)) {
+      return new HttpError(409, 'worktree_missing', "this run's worktree was removed; start a new run or discard it");
+    }
+    return new HttpError(409, 'no_session', 'this run has no agent session to continue; start a new run or discard it');
   }
 
   /** Open blocking review comments on the run and the runs it took over from, one line each. */

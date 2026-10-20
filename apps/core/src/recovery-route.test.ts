@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { RunRecovery } from '@emberline/protocol';
+import { CONTINUE_PROMPT } from '@emberline/adapter-claude';
+import type { RecoverResponse, RunRecovery } from '@emberline/protocol';
+import { PtydServer } from '@emberline/ptyd/server';
+import { desc, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, reviewComments, runEvents, runs, tickets } from './db/schema.js';
 import * as gitExec from './git-exec.js';
-import { createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -307,5 +310,229 @@ describe('RecoveryService.deliveryFor', () => {
     mkdirSync(path.join(t.dir, '.worktrees', 'free'), { recursive: true });
     seedRun({ id: 'free', stops: [legacyStop], hold: null });
     expect(delivery('free')).toBe('none');
+  });
+});
+
+/** Delivering a prompt: these spawn agents, so a ptyd and a fake CLI that logs its arguments. */
+describe('delivering a recovery prompt', () => {
+  let ptydServer: PtydServer;
+  const legacyStop = { source: 'system' as const, reason: 'factory_step_finished' };
+  /** Reconcile's note of the exit that followed the pipeline's stop (a real pre-upgrade run, like EL-2). */
+  const exitNoted = { source: 'system' as const, type: 'cancelled' as const, payload: { exitCode: 129, signal: 0 } };
+
+  beforeEach(async () => {
+    const file = path.join(t.dir, 'fake-claude.sh');
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' "$@" >> "${t.dir}/args-$EMBERLINE_RUN_ID"`,
+        `printf %s "$EMBERLINE_HOOK_TOKEN" > "${t.dir}/.token-$EMBERLINE_RUN_ID"`,
+        `mv "${t.dir}/.token-$EMBERLINE_RUN_ID" "${t.dir}/token-$EMBERLINE_RUN_ID"`,
+        'read line',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    t.config.claudeCommand = file;
+    ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+    await ptydServer.listen();
+    t.ptyd.start();
+    await t.ptyd.waitUntilConnected();
+  });
+  afterEach(async () => {
+    t.scheduler.dispose();
+    for (const run of t.runs.list()) {
+      if (!run.endedAt) await t.runs.stop(run.id).catch(() => undefined);
+    }
+    await ptydServer.close();
+  });
+
+  const post = (url: string, payload?: object) => t.app.inject({ method: 'POST', url, payload, headers: { ...CSRF, cookie } });
+  const recover = (id: string, text: string) => post(`/api/runs/${id}/recover`, { text });
+  /** The arguments the fake CLI was started with for `runId` (every start appends). */
+  async function argsOf(runId: string): Promise<string> {
+    const file = path.join(t.dir, `args-${runId}`);
+    await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
+    return readFileSync(file, 'utf8');
+  }
+  /** The prompt of the run's latest `--resume <session>` start. */
+  const resumedWith = async (runId: string) => (await argsOf(runId)).split('--resume\nsess\n--\n').at(-1)!.replace(/\n$/, '');
+  const successorsOf = (id: string) => t.db.select().from(runs).where(eq(runs.predecessorRunId, id)).all();
+
+  describe('POST /api/runs/:id/recover', () => {
+    it('a held resumable run gets the prompt in its own session', async () => {
+      const wt = worktree('r1', { 'app.js': 'line1\nfrom-run\nline3\n' });
+      seedRun({ id: 'r1', ...wt });
+      const res = await recover('r1', 'resolve the conflicts please');
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as RecoverResponse;
+      expect(body.delivery).toBe('session');
+      expect(body.run.id).toBe('r1');
+      expect(body.run.state).toBe('starting');
+      expect(await resumedWith('r1')).toBe('resolve the conflicts please');
+      expect(successorsOf('r1')).toHaveLength(0);
+    });
+
+    it('a legacy run the pipeline stopped continues in a successor on the same worktree and branch', async () => {
+      const wt = worktree('el-2', { 'app.js': 'line1\nfrom-run\nline3\n' });
+      seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
+      const res = await recover('el-2', 'resolve the conflicts in app.js');
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as RecoverResponse;
+      expect(body.delivery).toBe('successor');
+      expect(body.run).toMatchObject({
+        worktreePath: wt.worktreePath,
+        branch: wt.branch,
+        predecessorRunId: 'el-2',
+        agent: 'claude',
+        credential: 'login',
+        ticketId: 'tk-EL-2',
+      });
+      expect(t.runs.getRun('el-2').handedOffTo).toBe(body.run.id);
+      const handedOff = t.runs.get('el-2').events.find((e) => e.type === 'handed_off');
+      expect(handedOff?.payload).toMatchObject({ reason: 'continued after a hold' });
+      // The ticket follows the successor.
+      const latest = t.db.select().from(runs).where(eq(runs.ticketId, 'tk-EL-2')).orderBy(desc(runs.createdAt), desc(runs.id)).get();
+      expect(latest?.id).toBe(body.run.id);
+      // Its prompt: the handoff context, then the person's text.
+      const prompt = t.db.select({ prompt: runs.prompt }).from(runs).where(eq(runs.id, body.run.id)).get()!.prompt;
+      expect(prompt).toContain('continued after a hold');
+      expect(prompt.endsWith('\n\nresolve the conflicts in app.js')).toBe(true);
+      expect(await argsOf(body.run.id)).toContain('resolve the conflicts in app.js');
+      // The old run holds nothing any more.
+      expect((await recover('el-2', 'again')).json()).toMatchObject({ error: 'not_held' });
+    });
+
+    it('a run a person stopped stays stopped: 409 run_stopped_by_you, and Resume stays 409', async () => {
+      const wt = worktree('user', { 'new.js': 'x\n' });
+      seedRun({ id: 'user', ...wt, stops: [{ source: 'user' }] });
+      const both = worktree('both', { 'new.js': 'y\n' });
+      seedRun({ id: 'both', ...both, stops: [legacyStop, exitNoted, { source: 'user' }] });
+      for (const id of ['user', 'both']) {
+        const res = await recover(id, 'go on');
+        expect(res.statusCode, id).toBe(409);
+        expect(res.json(), id).toMatchObject({ error: 'run_stopped_by_you' });
+        expect((await post(`/api/runs/${id}/resume`, {})).statusCode, id).toBe(409);
+        expect(successorsOf(id), id).toHaveLength(0);
+      }
+    });
+
+    it('a legacy run whose worktree is gone: 409 worktree_missing', async () => {
+      seedRun({ id: 'gone', stops: [legacyStop, exitNoted] });
+      const res = await recover('gone', 'go on');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'worktree_missing' });
+    });
+
+    it('two concurrent calls start one successor; the other is told nothing holds the run', async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ...wt, stops: [legacyStop, exitNoted] });
+      const [a, b] = await Promise.all([recover('el-2', 'first'), recover('el-2', 'second')]);
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+      expect((a.statusCode === 409 ? a : b).json()).toMatchObject({ error: 'not_held' });
+      expect(successorsOf('el-2')).toHaveLength(1);
+    });
+
+    it('two concurrent calls on a resumable run deliver once; the other finds it busy', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt });
+      const [a, b] = await Promise.all([recover('r1', 'first'), recover('r1', 'second')]);
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+      expect((a.statusCode === 409 ? a : b).json()).toMatchObject({ error: 'run_busy' });
+    });
+
+    it('a busy run: 409 run_busy', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt });
+      for (const state of ['queued', 'starting', 'working']) {
+        t.db.update(runs).set({ state }).where(eq(runs.id, 'r1')).run();
+        const res = await recover('r1', 'go on');
+        expect(res.statusCode, state).toBe(409);
+        expect(res.json(), state).toMatchObject({ error: 'run_busy' });
+      }
+    });
+
+    it('a run whose hold was lifted: 409 not_held', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt, hold: null });
+      const res = await recover('r1', 'go on');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'not_held' });
+      seedRun({ id: 'r2', ...worktree('r2', { 'new.js': 'x\n' }) });
+      t.db.update(tickets).set({ status: 'done' }).where(eq(tickets.id, t.runs.getRun('r2').ticketId!)).run();
+      expect((await recover('r2', 'go on')).json()).toMatchObject({ error: 'not_held' });
+    });
+
+    it('needs text', async () => {
+      seedRun({ id: 'r1' });
+      expect((await post('/api/runs/r1/recover', { text: '  ' })).statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /api/runs/:id/resume', () => {
+    it('without text on a held run sends the hold prompt', async () => {
+      for (const [id, payload] of [['r1', {}], ['r2', { text: '   ' }]] as const) {
+        seedRun({ id, ...worktree(id, { 'new.js': `${id}\n` }), hold: { type: 'completion_missing', payload: {} } });
+        const expected = await t.recovery.holdPrompt(id);
+        expect(expected, id).toContain('ticket_complete');
+        expect((await post(`/api/runs/${id}/resume`, payload)).statusCode, id).toBe(200);
+        expect(await resumedWith(id), id).toBe(expected);
+      }
+    });
+
+    it('with text keeps the text', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt, hold: { type: 'completion_missing', payload: {} } });
+      expect((await post('/api/runs/r1/resume', { text: 'my own words' })).statusCode).toBe(200);
+      expect(await resumedWith('r1')).toBe('my own words');
+    });
+
+    it('on a run that is not held sends the plain continue', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt, hold: null });
+      expect((await post('/api/runs/r1/resume', {})).statusCode).toBe(200);
+      expect(await resumedWith('r1')).toBe(CONTINUE_PROMPT);
+    });
+  });
+
+  describe('RunService.handOff of a cancelled run', () => {
+    const route = { agent: 'claude', model: 'auto', credential: 'login' } as const;
+    const held = { reason: 'continued after a hold', source: 'user' as const, automatic: false, extraPrompt: 'go on' };
+
+    it('continues a held run the pipeline alone stopped, only when asked to', async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ...wt, stops: [legacyStop, exitNoted] });
+      await expect(t.runs.handOff('el-2', route, held)).rejects.toMatchObject({ statusCode: 409 });
+      const successor = await t.runs.handOff('el-2', route, { ...held, allowSystemFinishedCancel: true });
+      expect(successor.predecessorRunId).toBe('el-2');
+    });
+
+    it('still refuses a run a person stopped, another system stop, and a stopped run that is not held', async () => {
+      const cases: RunSeed[] = [
+        { id: 'user', stops: [{ source: 'user' }] },
+        { id: 'both', stops: [legacyStop, exitNoted, { source: 'user' }] },
+        { id: 'queued', stops: [{ source: 'user', type: 'cancelled' }] },
+        { id: 'other', stops: [{ source: 'system', reason: 'replaced' }] },
+        { id: 'free', stops: [legacyStop, exitNoted], hold: null },
+      ];
+      for (const seed of cases) {
+        seedRun({ ...seed, ...worktree(seed.id, { 'new.js': `${seed.id}\n` }) });
+        await expect(t.runs.handOff(seed.id, route, { ...held, allowSystemFinishedCancel: true }), seed.id).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        expect(successorsOf(seed.id), seed.id).toHaveLength(0);
+      }
+    });
+
+    it('a manual handoff of a run a person stopped is still refused', async () => {
+      const wt = worktree('user', { 'new.js': 'x\n' });
+      seedRun({ id: 'user', ...wt, stops: [{ source: 'user' }] });
+      t.db.update(runs).set({ state: 'failed' }).where(eq(runs.id, 'user')).run();
+      const res = await post('/api/runs/user/handoff', { route });
+      expect(res.statusCode).toBe(409);
+      expect(successorsOf('user')).toHaveLength(0);
+    });
   });
 });
