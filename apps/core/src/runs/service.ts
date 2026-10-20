@@ -1150,11 +1150,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       throw conflict('this run has no agent session to resume; start a new run');
     }
     const previous = row.ptydSessionId;
-    // Providers without session resume start a new conversation: give it the context a bare "continue" lacks.
-    const respawnPrompt =
-      mode === 'fresh' && text === CONTINUE_PROMPT
-        ? buildHandoffPrompt(await this.handoffContext(row, 'the session ended', true))
-        : text;
+    // Providers without session resume start a new conversation: it gets the handoff context first,
+    // then the text (a bare "continue" adds nothing to it).
+    let respawnPrompt = text;
+    if (mode === 'fresh') {
+      const context = buildHandoffPrompt(await this.handoffContext(row, 'the session ended', true));
+      respawnPrompt = text === CONTINUE_PROMPT ? context : `${context}\n\n${text}`;
+    }
     const run = await this.spawnAgent(row, {
       prompt: respawnPrompt,
       resumeSessionId: mode === 'fresh' ? undefined : (row.agentSessionId ?? undefined),

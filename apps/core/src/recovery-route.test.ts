@@ -64,6 +64,7 @@ function worktree(id: string, files: Record<string, string>): { worktreePath: st
 
 interface RunSeed {
   id: string;
+  agent?: string;
   ticketKey?: string;
   branch?: string | null;
   worktreePath?: string;
@@ -85,7 +86,7 @@ function seedRun(seed: RunSeed): string {
       id: seed.id,
       projectId: 'p1',
       ticketId,
-      agent: 'claude',
+      agent: seed.agent ?? 'claude',
       state: 'done',
       branch: seed.branch ?? null,
       worktreePath: seed.worktreePath ?? path.join(t.dir, '.worktrees', seed.id),
@@ -494,6 +495,42 @@ describe('delivering a recovery prompt', () => {
       seedRun({ id: 'r1', ...wt, hold: null });
       expect((await post('/api/runs/r1/resume', {})).statusCode).toBe(200);
       expect(await resumedWith('r1')).toBe(CONTINUE_PROMPT);
+    });
+  });
+
+  describe('resuming a provider without session resume (a fresh conversation)', () => {
+    beforeEach(() => {
+      process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+    });
+    afterEach(() => {
+      delete process.env.EMBERLINE_GEMINI_COMMAND;
+    });
+    /** The `-p` prompt of the run's latest start. */
+    const freshPrompt = async (runId: string) => (await argsOf(runId)).split('-p\n').at(-1)!.replace(/\n$/, '');
+
+    it('an empty Resume of a held run gets the handoff context, then the hold prompt', async () => {
+      seedRun({ id: 'g1', agent: 'gemini', ...worktree('g1', { 'new.js': 'x\n' }), hold: { type: 'completion_missing', payload: {} } });
+      const expected = await t.recovery.holdPrompt('g1');
+      expect((await post('/api/runs/g1/resume', {})).statusCode).toBe(200);
+      const prompt = await freshPrompt('g1');
+      expect(prompt).toContain('Your previous session on this task ended');
+      expect(prompt.endsWith(`\n\n${expected}`)).toBe(true);
+    });
+
+    it('explicit text gets the handoff context first', async () => {
+      seedRun({ id: 'g2', agent: 'gemini', ...worktree('g2', { 'new.js': 'x\n' }), hold: null });
+      expect((await post('/api/runs/g2/resume', { text: 'my own words' })).statusCode).toBe(200);
+      const prompt = await freshPrompt('g2');
+      expect(prompt).toContain('Your previous session on this task ended');
+      expect(prompt.endsWith('\n\nmy own words')).toBe(true);
+    });
+
+    it('a bare continue is the handoff context alone, as before', async () => {
+      seedRun({ id: 'g3', agent: 'gemini', ...worktree('g3', { 'new.js': 'x\n' }), hold: null });
+      expect((await post('/api/runs/g3/resume', {})).statusCode).toBe(200);
+      const prompt = await freshPrompt('g3');
+      expect(prompt).toContain('Your previous session on this task ended');
+      expect(prompt).not.toContain(CONTINUE_PROMPT);
     });
   });
 
