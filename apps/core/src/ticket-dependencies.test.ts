@@ -1252,8 +1252,10 @@ describe('factory chain robustness', () => {
     const token = await waitFile(`token-${run.id}`);
     await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
     await stopAgain(run);
-    // The guard first asks the agent to clean up; it stops again with the leak still there.
+    // The guard first asks the agent to clean up; it stops again with the leak still there. Its
+    // next turn starts once the request is recorded (the fake reads the line before core notes it).
     await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await eventTypes(run)).includes('prompt_sent'), { timeout: 10_000 }).toBe(true);
     await stopAgain(run);
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
     await Promise.all(passes);
