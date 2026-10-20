@@ -7,7 +7,7 @@ import * as gitExec from '../git-exec.js';
 import { findSuperseding, parseMergeTree, probeMerge, ticketKeyFromSubject } from './merge-probe.js';
 
 vi.mock('../git-exec.js', async (orig) => {
-  const actual = await orig<typeof import('../git-exec.js')>();
+  const actual = await orig<typeof gitExec>();
   return { ...actual, execGitFile: vi.fn(actual.execGitFile) };
 });
 

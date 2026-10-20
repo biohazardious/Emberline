@@ -17,7 +17,10 @@ const sug = (kind: RecoverySuggestion['kind'], prompt: string | null = null): Re
   files: [],
   commands: [],
 });
-const rec = (kinds: RecoverySuggestion['kind'][], delivery: RunRecovery['delivery'] = 'session'): RunRecovery => ({
+const rec = (
+  kinds: RecoverySuggestion['kind'][],
+  delivery: RunRecovery['delivery'] = 'session',
+): RunRecovery => ({
   hold: 'merge_failed',
   label: 'Merge failed',
   why: 'main moved',
@@ -36,7 +39,9 @@ describe('recoverErrorText', () => {
   it('has plain copy for each refusal', () => {
     expect(recoverErrorText('not_held', 'x')).toBe('This ticket is no longer held.');
     expect(recoverErrorText('run_busy', 'x')).toBe('The agent is working; try again when it stops.');
-    expect(recoverErrorText('worktree_missing', 'x')).toBe("This run's worktree was removed; start a new run.");
+    expect(recoverErrorText('worktree_missing', 'x')).toBe(
+      "This run's worktree was removed; start a new run.",
+    );
     expect(recoverErrorText('run_stopped_by_you', 'x')).toBe(
       "This run was stopped, so it can't take a prompt. Start a new run or discard the ticket.",
     );
@@ -54,7 +59,11 @@ describe('visibleSuggestions', () => {
   it('drops discard and merge without callbacks', () => {
     const r = rec(['prompt', 'discard', 'merge', 'manual']);
     expect(visibleSuggestions(r, {}).map((s) => s.kind)).toEqual(['prompt', 'manual']);
-    expect(visibleSuggestions(r, { onDiscard: true }).map((s) => s.kind)).toEqual(['prompt', 'discard', 'manual']);
+    expect(visibleSuggestions(r, { onDiscard: true }).map((s) => s.kind)).toEqual([
+      'prompt',
+      'discard',
+      'manual',
+    ]);
     expect(visibleSuggestions(r, { onDiscard: true, onMerge: true }).map((s) => s.kind)).toEqual([
       'prompt',
       'discard',

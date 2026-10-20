@@ -124,9 +124,7 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
         <strong>{rec.label}</strong>
         <span className="muted small">{sentenceCase(rec.why)}</span>
       </div>
-      {!canDeliver && (
-        <p className="muted small hold-recovery-none">{recoverErrorText('no_session', '')}</p>
-      )}
+      {!canDeliver && <p className="muted small hold-recovery-none">{recoverErrorText('no_session', '')}</p>}
       <ul className="hold-recovery-list">
         {suggestions.map((s) => (
           <li key={s.id} className="hold-recovery-item">
@@ -134,8 +132,15 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
             {s.kind === 'discard' &&
               (confirming ? (
                 <span className="hold-recovery-confirm">
-                  <span className="small">Move to Done without merging? The branch and worktree are kept.</span>
-                  <button type="button" className="btn btn-sm danger" disabled={busy} onClick={() => void guarded(onDiscard!)}>
+                  <span className="small">
+                    Move to Done without merging? The branch and worktree are kept.
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm danger"
+                    disabled={busy}
+                    onClick={() => void guarded(onDiscard!)}
+                  >
                     Discard ticket
                   </button>
                   <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirming(false)}>
@@ -202,7 +207,10 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
         ))}
       </ul>
       {linkOnly && (
-        <Link href={`/projects/${run.projectId}/board?ticket=${run.ticketId}`} className="btn btn-sm btn-ghost">
+        <Link
+          href={`/projects/${run.projectId}/board?ticket=${run.ticketId}`}
+          className="btn btn-sm btn-ghost"
+        >
           Open ticket
         </Link>
       )}

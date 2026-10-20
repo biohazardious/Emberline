@@ -37,7 +37,9 @@ export function visibleSuggestions(
   have: { onDiscard?: unknown; onMerge?: unknown },
 ): RecoverySuggestion[] {
   if (!rec) return [];
-  return rec.suggestions.filter((s) => (s.kind === 'discard' ? !!have.onDiscard : s.kind === 'merge' ? !!have.onMerge : true));
+  return rec.suggestions.filter((s) =>
+    s.kind === 'discard' ? !!have.onDiscard : s.kind === 'merge' ? !!have.onMerge : true,
+  );
 }
 
 /** The API sends a lowercase fragment: first letter up, one final stop. */
