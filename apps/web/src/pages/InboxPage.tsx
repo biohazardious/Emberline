@@ -1,7 +1,7 @@
-import { type Project, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
+import { type Project, type RecoverResponse, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
 import { useQueries } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
-import { api, errorMessage } from '../api';
+import { api, ApiRequestError, errorMessage } from '../api';
 import {
   ATTENTION_LABELS,
   dismissable,
@@ -11,6 +11,8 @@ import {
   type SeenMap,
   type TicketName,
 } from '../attention';
+import { HoldRecovery } from '../components/HoldRecovery';
+import { deliveryNote, recoverErrorText, recoveryApplies } from '../holdRecovery';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
@@ -59,6 +61,8 @@ function InboxItem({
   const detail = attention.detail === null ? null : holdLabel(attention.detail);
   const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
 
+  const recovering = recoveryApplies(run);
+
   const send = async (e: FormEvent) => {
     e.preventDefault();
     const value = text.trim();
@@ -66,11 +70,17 @@ function InboxItem({
     setBusy(true);
     setError(undefined);
     try {
-      await api(`/api/runs/${run.id}/prompt`, 'POST', { text: value });
+      // A held run goes through recovery: a run that cannot take a prompt continues in a successor.
+      if (recovering) {
+        const res = await api<RecoverResponse>(`/api/runs/${run.id}/recover`, 'POST', { text: value });
+        toastInfo(`${deliveryNote(res.delivery)}.`);
+      } else {
+        await api(`/api/runs/${run.id}/prompt`, 'POST', { text: value });
+        toastInfo('Reply sent.');
+      }
       setText('');
-      toastInfo('Reply sent.');
     } catch (err) {
-      setError(errorMessage(err));
+      setError(recovering ? recoverErrorText(err instanceof ApiRequestError ? err.code : '', errorMessage(err)) : errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -104,6 +114,7 @@ function InboxItem({
           )}
         </div>
       )}
+      {recovering && <HoldRecovery run={run} compact onFill={setText} />}
       {REPLYABLE.has(attention.reason) && (
         <form className="inbox-reply" onSubmit={(e) => void send(e)}>
           <textarea

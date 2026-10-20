@@ -23,6 +23,7 @@ export function LiveEvents(): null {
       switch (event.type) {
         case 'run':
           client.setQueryData<Run[]>(liveKeys.runs, (list) => (list ? upsert(list, event.run) : list));
+          void client.invalidateQueries({ queryKey: ['run-recovery', event.run.id] });
           break;
         case 'run_removed':
           client.setQueryData<Run[]>(liveKeys.runs, (list) => list?.filter((r) => r.id !== event.id));
@@ -50,6 +51,7 @@ export function LiveEvents(): null {
     () => {
       void client.invalidateQueries({ queryKey: liveKeys.runs });
       void client.invalidateQueries({ queryKey: ['tickets'] });
+      void client.invalidateQueries({ queryKey: ['run-recovery'] });
       void client.invalidateQueries({ queryKey: liveKeys.scheduler });
     },
   );

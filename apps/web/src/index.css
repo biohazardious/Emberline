@@ -5667,3 +5667,88 @@ dialog.cmd-dialog::backdrop {
 .wizard-step p[tabindex='-1']:focus {
   outline: none;
 }
+
+/* --- held-run recovery ------------------------------------------------------ */
+.hold-recovery {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.hold-recovery-head {
+  display: grid;
+  gap: 2px;
+}
+
+.hold-recovery-none {
+  margin: 0;
+}
+
+.hold-recovery-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hold-recovery-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.hold-recovery-detail {
+  flex: 1 1 180px;
+}
+
+.hold-recovery-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.hold-recovery-form,
+.hold-recovery-manual {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hold-recovery-text {
+  width: 100%;
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.hold-recovery-files {
+  margin: 0;
+  padding-left: 1.1em;
+  overflow-wrap: anywhere;
+}
+
+.hold-recovery-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hold-recovery-command code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hold-recovery-note {
+  margin: 0;
+  color: var(--muted);
+}

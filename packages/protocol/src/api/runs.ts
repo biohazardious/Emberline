@@ -560,7 +560,7 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   merge_failed: 'Merge failed',
   secret_guard_blocked: 'Secret found in the diff',
   slop_guard_blocked: 'Quality guard blocked',
-  critic_blocked: 'Critic blocked',
+  critic_blocked: 'Code audit asked for changes',
   build_gate_error: 'Build checks could not run',
   build_gate_failed: 'Build checks failed',
   completion_missing: 'No completion signal',

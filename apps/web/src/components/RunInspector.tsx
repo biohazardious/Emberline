@@ -6,6 +6,7 @@ import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { timeAgo } from '../time';
 import { WORKTREE_EVENT_LABELS } from '../worktreeEvents';
+import { HoldRecovery } from './HoldRecovery';
 import { HandoffMenu } from './QuotaLanes';
 import { BuildOutputsList, ExpandableText, FinalAnswer, LastScreen } from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
@@ -237,7 +238,7 @@ const EVENT_LABEL: Record<string, string> = {
   factory_chain_paused: 'factory paused',
   secret_guard_blocked: 'held: secret found',
   slop_guard_blocked: 'held: slop check',
-  critic_blocked: 'held: critic review',
+  critic_blocked: 'held: code audit',
   build_gate_failed: 'held: build failed',
   build_gate_error: 'held: build gate error',
   merge_failed: 'held: merge failed',
@@ -455,6 +456,7 @@ export function RunInspector({
         {(tab === 'split' || tab === 'timeline' || !run.terminalId) && (
           <div className="dock-events-pane">
             <RunFailureBanner run={run} />
+            <HoldRecovery run={run} />
             <div className="dock-section-head">
               <span className="eyebrow">Hook & Activity Stream</span>
               <span className="muted small mono">{run.lastEvent ?? 'idle'}</span>

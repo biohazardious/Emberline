@@ -35,6 +35,7 @@ import { useRuns, useTickets } from '../hooks/liveData';
 import { useGoBack, useQueryParam, useUpdateQuery } from '../hooks/navigation';
 import { timeAgo } from '../time';
 import { dependencyCandidates, dropIntoInProgress, waitingLabel, waitingTitle } from '../ticketDeps';
+import { HoldRecovery } from '../components/HoldRecovery';
 import { toastInfo } from '../toast';
 
 const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -451,6 +452,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
           onMove={(status) => {
             if (status !== open.status) void move(open, { status, beforeId: null });
           }}
+          onDiscard={() => move(open, { status: 'done', beforeId: null }, { skipMerge: true })}
         />
       )}
 
@@ -664,6 +666,7 @@ function TicketDrawer({
   onChanged,
   armStart,
   onMove,
+  onDiscard,
 }: {
   ticket: Ticket;
   allTickets: Ticket[];
@@ -673,6 +676,8 @@ function TicketDrawer({
   /** Changes (non-zero) when a drop asks this drawer to confirm starting a blocked ticket. */
   armStart: number;
   onMove: (status: TicketStatus) => void;
+  /** Moves the ticket to Done without merging its branch. */
+  onDiscard: () => Promise<void>;
 }) {
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
@@ -681,6 +686,14 @@ function TicketDrawer({
   // A drop that armed the start uses the permission mode a normal drop does.
   const [mode, setMode] = useState<PermissionMode>(armStart > 0 ? 'auto' : 'default');
   const [followUp, setFollowUp] = useState('');
+  /** Brings the run's branch into main (the same call as accepting the ticket); a failure shows in the recovery block. */
+  const mergeRun = async () => {
+    const sync = await api<SyncWorktreeResponse>(`/api/projects/${ticket.projectId}/sync-worktree`, 'POST', {
+      runId: run!.id,
+    });
+    if (!sync.ok) throw new Error(sync.summary);
+    toastInfo(sync.summary);
+  };
   // The drawer tab lives in the address too (`?view=events`), next to the open ticket.
   const defaultView: DrawerView = ticket.status === 'review' && run?.worktreePath ? 'review' : 'details';
   const [viewParam, setViewParam] = useQueryParam('view');
@@ -1065,6 +1078,7 @@ function TicketDrawer({
           {run && <HandoffMenu run={run} />}
           {run && <AttemptChain run={run} />}
           {run && <RunFailureBanner run={run} />}
+          {run && <HoldRecovery run={run} onDiscard={onDiscard} onMerge={mergeRun} />}
           {/* The Events tab shows these itself, next to the final answer. */}
           {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}
           {queued && (
