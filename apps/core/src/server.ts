@@ -33,6 +33,7 @@ import { registerTerminalRoutes } from './routes/terminals.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import { registerUpdateRoutes } from './routes/updates.js';
 import { ReviewService } from './review/service.js';
+import { RecoveryService } from './runs/recovery-service.js';
 import type { RunService } from './runs/service.js';
 import type { Scheduler } from './scheduler/service.js';
 import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.js';
@@ -57,6 +58,8 @@ export interface CoreDeps {
   issueSync?: IssueSyncService;
   /** Background work after merges into main (rebuild main's demo); built from `db` and `runs` when omitted. */
   postMerge?: PostMergeJobs;
+  /** Recovery suggestions for held runs; built from `db`, `runs` and `tickets` when omitted. */
+  recovery?: RecoveryService;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -94,8 +97,11 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
         )
       ).run,
     // Review feedback asks for more work: a run with the completion tool must signal again.
-    completionHint: (run) => deps.tickets.completeAgain(run, '\n\n'),
+    completionHint: (run) => deps.tickets.completionReminder(run, '\n\n'),
   });
+  const recovery =
+    deps.recovery ??
+    new RecoveryService(deps.db, deps.runs, { completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n') });
   cron.start();
   notifications.start();
   review.start();
@@ -142,7 +148,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerProjectImportRoutes(app, deps);
   registerWorktreeConfigRoutes(app, deps);
   registerTerminalRoutes(app, deps);
-  registerRunRoutes(app, deps.runs, deps.scheduler);
+  registerRunRoutes(app, deps.runs, deps.scheduler, recovery);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
   registerDockerRoutes(app, deps.runs);
   registerReviewRoutes(app, review);

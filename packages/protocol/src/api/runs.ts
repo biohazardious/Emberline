@@ -568,6 +568,46 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   review_blocked: 'Blocking review comments',
 };
 
+/** One way out of a hold, best first (apps/core/src/runs/recovery.ts). */
+export const RecoverySuggestion = z.object({
+  /** Stable per kind, e.g. `resolve_conflicts`. */
+  id: z.string(),
+  kind: z.enum(['prompt', 'discard', 'merge', 'manual', 'open_review']),
+  /** Button text. */
+  label: z.string(),
+  /** One line under the button. */
+  detail: z.string().nullable(),
+  /** Kind `prompt`: the prefilled, editable text for the agent. */
+  prompt: z.string().nullable(),
+  /** Files the suggestion is about (conflicts, for `manual`). */
+  files: z.array(z.string()),
+  /** Kind `manual`: copyable git commands. */
+  commands: z.array(z.string()),
+});
+export type RecoverySuggestion = z.infer<typeof RecoverySuggestion>;
+
+/** How a recovery prompt reaches an agent: the run's own session, a successor on the same branch, or not at all. */
+export const RecoveryDelivery = z.enum(['session', 'successor', 'none']);
+export type RecoveryDelivery = z.infer<typeof RecoveryDelivery>;
+
+/** Why a held run is held and what a person can do about it (`GET /api/runs/:id/recovery`). */
+export const RunRecovery = z.object({
+  /** The hold note's type (HOLD_EVENTS); not shown to people. */
+  hold: z.string(),
+  /** HOLD_LABELS text. */
+  label: z.string(),
+  /** One plain sentence. */
+  why: z.string(),
+  delivery: RecoveryDelivery,
+  /** At most three, best first. */
+  suggestions: z.array(RecoverySuggestion).max(3),
+});
+export type RunRecovery = z.infer<typeof RunRecovery>;
+
+/** `POST /api/runs/:id/recover`: the prompt to deliver. */
+export const RecoverRequest = z.object({ text: z.string().trim().min(1).max(20_000) });
+export type RecoverRequest = z.input<typeof RecoverRequest>;
+
 export const Run = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -618,6 +658,13 @@ export const Run = z.object({
   telemetry: RunTelemetry.optional(),
 });
 export type Run = z.infer<typeof Run>;
+
+/** Where a recovery prompt went; `run` is the run that got it (the successor when continued). */
+export const RecoverResponse = z.object({
+  delivery: z.enum(['session', 'successor']),
+  run: Run,
+});
+export type RecoverResponse = z.infer<typeof RecoverResponse>;
 
 export const CreateRunBody = z.object({
   projectId: z.string().min(1),

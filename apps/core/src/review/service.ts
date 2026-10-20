@@ -69,7 +69,7 @@ export interface ReviewServiceOptions {
   log?: (message: string, error?: unknown) => void;
   startTicketRun?: StartTicketRun;
   /**
-   * What closes a prompt that asks the run for more work (TicketService.completeAgain, injected to
+   * What closes a prompt that asks the run for more work (TicketService.completionReminder, injected to
    * avoid a cycle): the completion signal hint for a run whose agent has the tool, else empty.
    */
   completionHint?: (run: Run) => string;

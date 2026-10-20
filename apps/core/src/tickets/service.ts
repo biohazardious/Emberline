@@ -1006,7 +1006,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         await this.runs
           .prompt(
             run.id,
-            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.${this.completeAgain(run, ' ')}`,
+            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.${this.completionReminder(run, ' ')}`,
             { automatic: true },
           )
           .catch(() => this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote }));
@@ -1054,7 +1054,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
         if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', { autoFix: true, ...slopNote });
         await this.runs
-          .prompt(run.id, `${slopReport.autoFixPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true })
+          .prompt(run.id, `${slopReport.autoFixPrompt}${this.completionReminder(run, '\n\n')}`, { automatic: true })
           .catch(() =>
             hasSecretViolation
               ? this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix: false })
@@ -1091,7 +1091,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         const criticNote = { followUpPrompt: holdText(criticRes.followUpPrompt) };
         this.runs.note(run.id, 'critic_blocked', { autoFix: true, ...criticNote });
         await this.runs
-          .prompt(run.id, `${criticRes.followUpPrompt}${this.completeAgain(run, '\n\n')}`, { automatic: true })
+          .prompt(run.id, `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`, { automatic: true })
           .catch(() => this.runs.note(run.id, 'critic_blocked', { autoFix: false, ...criticNote }));
         return;
       }
@@ -1170,7 +1170,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * {@link COMPLETE_AGAIN} after `separator`, for a run whose agent has the tool; empty otherwise.
    * Every prompt that asks for more work ends with it (the gates here, a person's review feedback).
    */
-  completeAgain(run: Run, separator: string): string {
+  completionReminder(run: Run, separator: string): string {
     return this.hasCompletionTool(run) ? `${separator}${COMPLETE_AGAIN}` : '';
   }
 
@@ -1294,7 +1294,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   ): Promise<boolean> {
     // The merge goes into whatever the main workspace has checked out; the column is the fallback.
     const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
-    const text = `${conflictResolutionPrompt(branch, conflicts)}${this.completeAgain(run, ' ')}`;
+    const text = `${conflictResolutionPrompt(branch, conflicts)}${this.completionReminder(run, ' ')}`;
     try {
       // prompt() resumes a session the idle sweep closed meanwhile (the checks can outlast its TTL).
       await this.runs.prompt(run.id, text, { automatic: true });

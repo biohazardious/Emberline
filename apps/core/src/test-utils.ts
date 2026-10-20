@@ -11,6 +11,7 @@ import type { FetchLike } from './forge/issues.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { PtydBridge } from './ptyd-bridge.js';
+import { RecoveryService } from './runs/recovery-service.js';
 import { RunService } from './runs/service.js';
 import { Scheduler, type SchedulerOptions } from './scheduler/service.js';
 import { buildServer } from './server.js';
@@ -33,6 +34,8 @@ export interface TestApp {
   issueSync: IssueSyncService;
   /** The server's post-merge jobs (rebuild main after a merge). */
   postMerge: PostMergeJobs;
+  /** The server's recovery suggestions for held runs. */
+  recovery: RecoveryService;
   close(): Promise<void>;
 }
 
@@ -82,7 +85,8 @@ export async function createTestApp(
   const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
   const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
   const postMerge = new PostMergeJobs(opened.db, runs);
-  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync, postMerge });
+  const recovery = new RecoveryService(opened.db, runs, { completionReminder: (run) => tickets.completionReminder(run, '\n\n') });
+  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync, postMerge, recovery });
   return {
     app,
     config,
@@ -97,6 +101,7 @@ export async function createTestApp(
     forgeFetch,
     issueSync,
     postMerge,
+    recovery,
     async close() {
       await app.close();
       // Background archive passes must not outlive the DB and temp dir they use.

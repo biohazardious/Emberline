@@ -15,12 +15,14 @@ import {
   type RunDetail,
   type RunDiffSummary,
   type RunFileDiff,
+  type RunRecovery,
   type TicketCompleteBody,
   TicketPromptBody,
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { badRequest } from '../errors.js';
 import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
+import type { RecoveryService } from '../runs/recovery-service.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -29,7 +31,7 @@ const HOOK_BODY_LIMIT = 8 * 1024 * 1024;
 /** The `preview` tool sends `{}` or `{"restart":true}`. */
 const PREVIEW_TOOL_BODY_LIMIT = 1024;
 
-export function registerRunRoutes(app: FastifyInstance, runs: RunService, scheduler: Scheduler): void {
+export function registerRunRoutes(app: FastifyInstance, runs: RunService, scheduler: Scheduler, recovery: RecoveryService): void {
   app.get('/api/runs', async (): Promise<Run[]> => runs.list());
 
   app.get<{ Params: { id: string } }>('/api/runs/:id', async (request): Promise<RunDetail> => runs.get(request.params.id));
@@ -63,6 +65,12 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     reply.code(201);
     return run;
   });
+
+  /** Why a held run is held and what can be done about it; null when nothing holds it for a person. */
+  app.get<{ Params: { id: string } }>(
+    '/api/runs/:id/recovery',
+    async (request): Promise<RunRecovery | null> => recovery.get(request.params.id),
+  );
 
   /** Sends a follow-up prompt into a live run (or resumes an ended session with that prompt). */
   app.post<{ Params: { id: string } }>('/api/runs/:id/prompt', async (request): Promise<Run> => {
