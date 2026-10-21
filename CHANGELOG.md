@@ -9,7 +9,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Changed
 
 - The isolated Docker engine for agents and compose previews is on by default: `make up` and `docker compose up -d` start it without any change to `.env`. `EMBERLINE_DOCKER_ENGINE=0` in `.env` turns it off; then no engine container is created, and Emberline treats the engine as off even when `EMBERLINE_DOCKER_HOST` is still set. Where Emberline used to say "enable the Docker engine (COMPOSE_PROFILES=docker)", it now says that the engine is turned off and how to turn it on again. When the engine does not answer, the Dashboard and the Docker page add that a host which cannot run it (privileged containers, overlay) can set `EMBERLINE_DOCKER_ENGINE=0`. When core has no engine address and nobody turned the engine off (it was started from a compose file older than 0.3.5), Emberline says that no Docker engine is configured and to use the current `deploy/compose.yaml`, instead of claiming that `EMBERLINE_DOCKER_ENGINE=0` is set; an engine that has not answered yet is no longer reported as turned off either.
-- The upgrade box on the Settings page first downloads the current `deploy/compose.yaml`, and no longer says that running agents keep working: the runner restarts when its image or settings change.
+- The upgrade box on the Settings page first downloads the `deploy/compose.yaml` of the release it offers (keeping a copy of yours as `compose.yaml.bak`), and no longer says that running agents keep working: the runner restarts when its image or settings change.
 - `make up-docker` is removed: `make up` starts the engine.
 - The runner no longer receives `EMBERLINE_DOCKER_HOST`; nothing in the runner read it. Agents still get `DOCKER_HOST` from core for each run.
 
