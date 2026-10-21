@@ -2,7 +2,12 @@
  * Container previews in Preview & Build and Live Browser: which view a target opens with, the
  * texts of a preview's state, the runner browser's URL for a target, and the QA request text.
  */
-import type { BrowserUrlResponse, RunPreviewStatus, WorkspaceDemoTarget } from '@emberline/protocol';
+import type {
+  BrowserUrlResponse,
+  BrowserViewportSnapshot,
+  RunPreviewStatus,
+  WorkspaceDemoTarget,
+} from '@emberline/protocol';
 
 /** The fields of a run's or main's preview status these helpers read (`unavailable`: main only). */
 export type PreviewLike = Pick<
@@ -195,4 +200,12 @@ export async function resolveRunnerBrowserUrl(
     return { url: res.url, message: `${previewError}. Opening the static build instead.`, problem: true };
   }
   return { url: res.url, message: res.note ?? null, problem: false };
+}
+
+export const LIVE_BROWSER_FOLLOWING_NOTE =
+  "An agent of this project is using the browser, so this shows its tab. The project's own tab comes back when it stops.";
+
+/** The line above the viewport while the Live Browser follows an agent; null otherwise. */
+export function liveBrowserNote(snap: Pick<BrowserViewportSnapshot, 'following'> | null): string | null {
+  return snap?.following ? LIVE_BROWSER_FOLLOWING_NOTE : null;
 }

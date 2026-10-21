@@ -2,11 +2,13 @@ import type { BrowserUrlResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   FRAMING_UNKNOWN_NOTE,
+  LIVE_BROWSER_FOLLOWING_NOTE,
   OPEN_IN_NEW_TAB,
   type PreviewLike,
   choosePrimaryView,
   framingRefusedText,
   framingView,
+  liveBrowserNote,
   previewBadge,
   previewEmptyText,
   previewFrameMode,
@@ -342,5 +344,14 @@ describe('framing', () => {
   it("the unknown note and the button are the spec's", () => {
     expect(FRAMING_UNKNOWN_NOTE).toBe('If the preview stays blank, open it in a new tab.');
     expect(OPEN_IN_NEW_TAB).toBe('Open in new tab');
+  });
+});
+
+describe('liveBrowserNote', () => {
+  it("says when the view follows an agent's tab", () => {
+    expect(liveBrowserNote({ following: true })).toBe(LIVE_BROWSER_FOLLOWING_NOTE);
+    expect(liveBrowserNote({ following: false })).toBeNull();
+    expect(liveBrowserNote({})).toBeNull();
+    expect(liveBrowserNote(null)).toBeNull();
   });
 });

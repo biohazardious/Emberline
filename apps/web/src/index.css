@@ -3595,6 +3595,48 @@ dialog.cmd-dialog::backdrop {
   overflow-wrap: anywhere;
 }
 
+/* Live Browser rows wrap instead of clipping on a phone (390 px). */
+.browser-address-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.browser-address-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  width: auto;
+  font-size: 0.78rem;
+  padding: 5px 10px;
+}
+
+.browser-type-form {
+  display: flex;
+  flex: 1 1 240px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.browser-type-input {
+  flex: 1 1 10rem;
+  min-width: 0;
+  width: auto;
+  font-size: 0.76rem;
+  padding: 4px 8px;
+}
+
+.browser-following-note {
+  margin: 0;
+  padding: 4px 10px;
+  overflow-wrap: anywhere;
+}
+
 .badge-ok {
   color: var(--ok);
   border-color: color-mix(in hsl, var(--ok) 50%, var(--border));

@@ -1683,6 +1683,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       {/* TAB 3: Live Browser Studio */}
       {activeTab === 'browser' && (
         <LiveBrowserStudio
+          key={project.id}
           project={project}
           targetId={activeTarget.id}
           onClose={() => setActiveTab('factory')}

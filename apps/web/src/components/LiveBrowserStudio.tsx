@@ -28,7 +28,13 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
-import { type PreviewLike, choosePrimaryView, qaRequestPrompt, resolveRunnerBrowserUrl } from '../containerPreview';
+import {
+  type PreviewLike,
+  choosePrimaryView,
+  liveBrowserNote,
+  qaRequestPrompt,
+  resolveRunnerBrowserUrl,
+} from '../containerPreview';
 import { useApi } from '../hooks/useApi';
 import { PersonaBadge } from './PersonaBadge';
 import { previewApiPath } from './PreviewAndBuildView';
@@ -120,6 +126,9 @@ export function LiveBrowserStudio({
       );
       setSnap(res);
       if (res.targetUrl) setUrlInput(res.targetUrl);
+      if (body.action === 'start_playtest' && res.message) {
+        setBanner({ kind: 'err', text: res.message });
+      }
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
     } finally {
@@ -509,8 +518,8 @@ export function LiveBrowserStudio({
                 gap: 6,
                 padding: '4px 10px',
                 borderRadius: 'var(--radius-sm)',
-                background: tab.active ? 'var(--surface-2)' : 'transparent',
-                border: tab.active ? '1px solid var(--ember-1)' : '1px solid var(--border)',
+                background: tab.active && !snap?.following ? 'var(--surface-2)' : 'transparent',
+                border: tab.active && !snap?.following ? '1px solid var(--ember-1)' : '1px solid var(--border)',
                 fontSize: '0.75rem',
                 cursor: 'pointer',
                 maxWidth: 220,
@@ -524,7 +533,7 @@ export function LiveBrowserStudio({
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  fontWeight: tab.active ? 600 : 400,
+                  fontWeight: tab.active && !snap?.following ? 600 : 400,
                 }}
               >
                 {tab.title || tab.url || 'New Tab'}
@@ -565,17 +574,7 @@ export function LiveBrowserStudio({
       )}
 
       {/* Browser Address Bar & Navigation Controls */}
-      <form
-        onSubmit={(e) => void handleNavigateSubmit(e)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '6px 10px',
-          background: 'var(--surface-2)',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
+      <form onSubmit={(e) => void handleNavigateSubmit(e)} className="browser-address-row">
         <button
           type="button"
           className="btn btn-sm"
@@ -608,24 +607,24 @@ export function LiveBrowserStudio({
         </button>
         <input
           type="text"
-          className="input mono"
+          className="input mono browser-address-input"
           value={urlInput}
           onFocus={() => setEditingUrl(true)}
           onBlur={() => setEditingUrl(false)}
           onChange={(e) => setUrlInput(e.target.value)}
           aria-label="Address as the runner's browser sees it"
           placeholder="Address as the runner sees it, e.g. http://localhost:5173"
-          style={{
-            flex: 1,
-            width: 'auto',
-            fontSize: '0.78rem',
-            padding: '5px 10px',
-          }}
         />
         <button type="submit" className="btn btn-sm btn-primary" disabled={acting}>
           Go →
         </button>
       </form>
+
+      {liveBrowserNote(snap) && (
+        <p className="muted small browser-following-note" role="status">
+          {liveBrowserNote(snap)}
+        </p>
+      )}
 
       {banner && (
         <div
@@ -750,15 +749,14 @@ export function LiveBrowserStudio({
           >
             <form
               onSubmit={(e) => void handleTypeSubmit(e, true)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 240px' }}
+              className="browser-type-form"
             >
               <input
                 type="text"
-                className="input"
+                className="input browser-type-input"
                 value={typeInput}
                 onChange={(e) => setTypeInput(e.target.value)}
                 placeholder="Type text into focused browser element…"
-                style={{ width: 'auto', flex: 1, fontSize: '0.76rem', padding: '4px 8px' }}
               />
               <button
                 type="button"
