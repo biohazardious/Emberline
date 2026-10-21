@@ -97,7 +97,7 @@ export function techStackFromChoices(choices: ProjectChoices, versionPolicy?: st
 
 /** The summary's note when a Docker Compose project gets a command preview because the engine is off. */
 export const ENABLE_DOCKER_NOTE =
-  'The deploy target is Docker Compose: enable the Docker engine to preview the container (COMPOSE_PROFILES=docker, see the README). Until then the preview runs the dev command.';
+  'The deploy target is Docker Compose: previewing the container needs the Docker engine, which is on by default (`EMBERLINE_DOCKER_ENGINE=0` turns it off). Until it answers, the preview runs the dev command.';
 
 /**
  * `dockerEngine`: the Docker engine answers right now. A Docker Compose deploy target then previews

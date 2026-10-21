@@ -371,7 +371,7 @@ describe('the preview tool endpoint: unavailable', () => {
     writeDemo(run.worktreePath, 'RUN');
     const answer = await previewOk(run.id);
     expect(answer.status).toBe('unavailable');
-    expect(answer.error).toContain('enable the Docker engine (COMPOSE_PROFILES=docker)');
+    expect(answer.error).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
     expect(answer.kind).toBe('static');
     expect(demoTarget(answer.url!)).toEqual({ projectId: p.id, targetId: run.id });
     expect(engine.calls).toEqual([]);

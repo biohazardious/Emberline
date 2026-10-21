@@ -211,7 +211,7 @@ describe('emberline MCP server', () => {
           status: 'unavailable',
           url: 'http://core:7420/api/demo/tok/',
           kind: 'static',
-          error: 'the preview service "site" runs in Docker: enable the Docker engine (COMPOSE_PROFILES=docker)',
+          error: 'the preview service "site" runs in Docker. The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`). Remove that line and restart to turn it on.',
         },
       };
       const client = await connect(env());

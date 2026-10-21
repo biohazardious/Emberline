@@ -384,7 +384,7 @@ describe('engine off', () => {
     ] as const) {
       const res = await api(method, url);
       expect(res.statusCode, url).toBe(409);
-      expect(res.json().hint, url).toBe('enable the Docker engine (COMPOSE_PROFILES=docker)');
+      expect(res.json().hint, url).toContain('EMBERLINE_DOCKER_ENGINE=0');
     }
     expect(engine.calls).toEqual([]);
   });

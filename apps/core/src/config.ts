@@ -51,8 +51,9 @@ export interface CoreConfig {
   /** Claude Code transcripts (runner home, mounted read-only); only paths under it are read. */
   transcriptsDir: string;
   /**
-   * The isolated Docker engine (compose profile `docker`, `tcp://docker:2376`, mutual TLS) that runs
-   * and worktree.yml commands get as `DOCKER_HOST` while it answers. Unset: no Docker.
+   * The isolated Docker engine (compose service `docker`, `tcp://docker:2376`, mutual TLS) that runs
+   * and worktree.yml commands get as `DOCKER_HOST` while it answers. Unset: no Docker, also when
+   * `EMBERLINE_DOCKER_ENGINE=0` (the compose files default the host; core alone stays off without one).
    */
   dockerHost?: string;
   /**
@@ -116,7 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
-    dockerHost: env.EMBERLINE_DOCKER_HOST?.trim() || undefined,
+    dockerHost: env.EMBERLINE_DOCKER_ENGINE?.trim() === '0' ? undefined : env.EMBERLINE_DOCKER_HOST?.trim() || undefined,
     dockerCertPath: env.EMBERLINE_DOCKER_CERT_PATH?.trim() || DEFAULT_DOCKER_CERT_PATH,
     previewPorts: {
       runner: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_RUNNER ?? '') ?? DEFAULT_PREVIEW_PORTS.runner,

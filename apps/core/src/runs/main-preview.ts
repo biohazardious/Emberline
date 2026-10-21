@@ -25,7 +25,12 @@ import {
   runComposePreview,
   settlesWithin,
 } from '../docker/compose-preview.js';
-import { type DockerEngine, mainPreviewComposeProjectName } from '../docker/engine.js';
+import {
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
+  type DockerEngine,
+  mainPreviewComposeProjectName,
+} from '../docker/engine.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { approvedPreviewService } from '../worktree-config/load.js';
@@ -58,10 +63,10 @@ const NO_COMPOSE_SERVICE = 'the approved worktree.yml has no compose preview ser
 
 /** The 409 of a compose preview without the engine (run previews say the same). */
 export function composeEngineOffMessage(serviceName: string, engineError: string | undefined): string {
-  return (
-    `the preview service "${serviceName}" runs in Docker: enable the Docker engine (COMPOSE_PROFILES=docker)` +
-    (engineError ? `; the engine is not reachable: ${engineError}` : '')
-  );
+  const base = `the preview service "${serviceName}" runs in Docker`;
+  return engineError
+    ? `${base}, but the Docker engine is not reachable: ${engineError}. ${DOCKER_ENGINE_UNREACHABLE_HINT}`
+    : `${base}. ${DOCKER_ENGINE_OFF_TEXT}`;
 }
 
 /** How a compose preview shows where the command box is: what Emberline runs for it. */

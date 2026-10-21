@@ -229,7 +229,7 @@ describe('compose previews (worktree.yml v2)', () => {
       expect(await preview(run)).toMatchObject({ status: 'stopped', kind: 'compose', detectedCommand: 'docker compose up web (compose.yaml, port 80)' });
       const res = await startPreview(run);
       expect(res.statusCode).toBe(409);
-      expect(res.json().message).toContain('enable the Docker engine (COMPOSE_PROFILES=docker)');
+      expect(res.json().message).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
       expect(engine.calls).toEqual([]);
       expect((await preview(run)).status).toBe('stopped');
     });
@@ -241,7 +241,7 @@ describe('compose previews (worktree.yml v2)', () => {
       const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
       const res = await startPreview(run);
       expect(res.statusCode).toBe(409);
-      expect(res.json().message).toContain('COMPOSE_PROFILES=docker');
+      expect(res.json().message).toContain("set `EMBERLINE_DOCKER_ENGINE=0`");
       expect(engine.calls).toEqual([]);
     });
 

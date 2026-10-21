@@ -1,5 +1,5 @@
 /**
- * The opt-in Docker engine sidecar (compose profile `docker`): a rootless dind on the compose network
+ * The Docker engine sidecar (compose service `docker`, on unless `EMBERLINE_DOCKER_ENGINE=0`): a rootless dind on the compose network
  * at `EMBERLINE_DOCKER_HOST` whose API requires mutual TLS. Only the runner holds the client
  * certificate (read-only mount at `dockerCertPath`). Core never talks to the engine directly: like
  * every other command, the probe runs the Docker CLI in the runner (command-exec.ts). While the
@@ -12,6 +12,14 @@ import type { DockerEngineStatus } from '@emberline/protocol';
 import { type CommandExecutor, execCommand } from '../command-exec.js';
 import { DEFAULT_DOCKER_CERT_PATH } from '../config.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
+
+/** What the user reads when the engine is switched off. */
+export const DOCKER_ENGINE_OFF_TEXT =
+  'The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`). Remove that line and restart to turn it on.';
+
+/** Added to an unreachable engine: a host that cannot run it can switch it off. */
+export const DOCKER_ENGINE_UNREACHABLE_HINT =
+  "If this host can't run it (privileged containers, overlay), set `EMBERLINE_DOCKER_ENGINE=0`.";
 
 export const DOCKER_PROBE_INTERVAL_MS = 60_000;
 /** A spawn right after boot waits this long at most for the first probe. */

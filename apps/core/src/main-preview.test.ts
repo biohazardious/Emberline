@@ -253,10 +253,11 @@ describe('without a container preview for main (Review Focus 5)', () => {
     const p = await createProject();
     const status = await mainPreview(p.id);
     expect(status).toMatchObject({ runId: null, targetId: 'main', status: 'stopped', kind: 'compose', port: null, url: null });
-    expect(status.unavailable).toContain('enable the Docker engine (COMPOSE_PROFILES=docker)');
+    expect(status.unavailable).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toContain('enable the Docker engine (COMPOSE_PROFILES=docker)');
+    expect(res.json().message).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
+    expect(res.json().message).not.toContain('COMPOSE_PROFILES');
     expect(engine.calls).toEqual([]);
     expect(stored(p.id)).toBeUndefined();
   });
@@ -267,7 +268,7 @@ describe('without a container preview for main (Review Focus 5)', () => {
     const p = await createProject();
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toContain('COMPOSE_PROFILES=docker');
+    expect(res.json().message).toContain("set `EMBERLINE_DOCKER_ENGINE=0`");
     expect(engine.calls).toEqual([]);
   });
 

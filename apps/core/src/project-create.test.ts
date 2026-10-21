@@ -644,18 +644,18 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
       expect(deploy).toContain('container port 8080');
     });
 
-    it('an unreachable engine gives v1 and the summary says to enable the engine', async () => {
+    it('an unreachable engine gives v1 and the summary says the container preview needs the engine', async () => {
       engine.up = false;
       await t.runs.docker.probe();
       const body = (await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse;
       expect(body.worktreeYml).toContain('version: 1');
-      expect(body.notes.join(' ')).toContain('enable the Docker engine to preview the container');
+      expect(body.notes.join(' ')).toContain('previewing the container needs the Docker engine');
     });
   });
 
   it('with Docker off the summary notes it only for the Docker Compose deploy target', async () => {
     expect(((await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse).notes.join(' ')).toContain(
-      'enable the Docker engine to preview the container',
+      'previewing the container needs the Docker engine',
     );
     expect(((await preview(STATIC)).json() as ProjectPreviewResponse).notes).toEqual([]);
   });

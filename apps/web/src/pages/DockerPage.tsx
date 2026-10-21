@@ -424,9 +424,8 @@ export function DockerPage() {
             <strong>The Docker engine is off.</strong>
           </p>
           <p className="muted small">
-            Turn it on with <code className="mono">COMPOSE_PROFILES=docker</code> and{' '}
-            <code className="mono">EMBERLINE_DOCKER_HOST=tcp://docker:2376</code> in{' '}
-            <code className="mono">.env</code>, then <code className="mono">make up</code>. The README's
+            It is turned off by <code className="mono">EMBERLINE_DOCKER_ENGINE=0</code> in{' '}
+            <code className="mono">.env</code>. Remove that line and restart to turn it on. The README's
             Docker engine section has the details.
           </p>
         </div>

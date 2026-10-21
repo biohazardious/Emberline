@@ -83,6 +83,8 @@ import {
 } from '../docker/compose-preview.js';
 import {
   composeProjectName,
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
   DOCKER_PROMPT_PARAGRAPH,
   DockerEngine,
   mainComposeProjectName,
@@ -2603,7 +2605,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (name !== null && !isEmberlineComposeProject(name)) throw badRequest('not a compose project Emberline made');
     if (!this.docker.host) {
       throw new HttpError(409, 'docker_off', 'the Docker engine is off', {
-        hint: 'enable the Docker engine (COMPOSE_PROFILES=docker)',
+        hint: DOCKER_ENGINE_OFF_TEXT,
       });
     }
     await this.docker.ready();
@@ -2611,7 +2613,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // Enabled but not answering: enabling it would not help, so no hint.
     if (!env.DOCKER_HOST) {
       const why = this.docker.status.error;
-      throw new HttpError(409, 'docker_off', `the Docker engine is not reachable${why ? `: ${why}` : ''}`);
+      throw new HttpError(409, 'docker_off', `the Docker engine is not reachable${why ? `: ${why}` : ''}. ${DOCKER_ENGINE_UNREACHABLE_HINT}`);
     }
     return env;
   }

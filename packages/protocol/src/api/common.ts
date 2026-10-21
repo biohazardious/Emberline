@@ -20,9 +20,9 @@ export type HealthResponse = z.infer<typeof HealthResponse>;
  */
 export const API_VERSION = 1;
 
-/** The opt-in Docker engine sidecar (compose profile `docker`), as core's last probe saw it. */
+/** The Docker engine sidecar (compose service `docker`, on unless `EMBERLINE_DOCKER_ENGINE=0`), as core's last probe saw it. */
 export const DockerEngineStatus = z.object({
-  /** `EMBERLINE_DOCKER_HOST` is set; false = Docker is off. */
+  /** The engine is switched on (`EMBERLINE_DOCKER_HOST` set, `EMBERLINE_DOCKER_ENGINE` not `0`); false = Docker is off. */
   enabled: z.boolean(),
   /** The first probe has answered; until then the engine's state is unknown ("checking"). */
   checked: z.boolean(),

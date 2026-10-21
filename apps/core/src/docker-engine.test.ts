@@ -43,6 +43,15 @@ describe('config: Docker host and preview port ranges', () => {
     expect(loadConfig({}).dockerHost).toBeUndefined();
   });
 
+  it('EMBERLINE_DOCKER_ENGINE=0 (trimmed) turns the engine off even with a host; 1 without a host stays off', () => {
+    const host = 'tcp://docker:2376';
+    expect(loadConfig({ EMBERLINE_DOCKER_HOST: host }).dockerHost).toBe(host);
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '1', EMBERLINE_DOCKER_HOST: host }).dockerHost).toBe(host);
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: host }).dockerHost).toBeUndefined();
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: ' 0 ', EMBERLINE_DOCKER_HOST: host }).dockerHost).toBeUndefined();
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '1' }).dockerHost).toBeUndefined();
+  });
+
   it('reads the client certificate directory, by default the runner\'s read-only mount', () => {
     expect(loadConfig({}).dockerCertPath).toBe('/run/emberline-docker-certs');
     expect(loadConfig({ EMBERLINE_DOCKER_CERT_PATH: ' /certs/client ' }).dockerCertPath).toBe('/certs/client');
