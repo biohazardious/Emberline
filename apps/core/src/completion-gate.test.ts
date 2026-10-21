@@ -5,6 +5,7 @@ import { IssueSyncSettings, type Run, type RunDetail, type Ticket } from '@ember
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { writeIssueSync } from './db/project-settings.js';
 import { projects, runs, tickets } from './db/schema.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
@@ -1177,7 +1178,7 @@ describe('the worktree config check before the merge', () => {
     await begin(run);
     await stop(run, { summary: 'linked the file' });
     await settled(passes, 1);
-    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain('not a regular file');
+    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain('.emberline/worktree.yml is a symbolic link');
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(ticket.id)).not.toBe('done');
     expect(mainHas(project, YML)).toBe(false);
@@ -1203,6 +1204,64 @@ describe('the worktree config check before the merge', () => {
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
     expect(await eventTypes(run)).not.toContain('build_gate_failed');
     expect(mainHas(project, 'A.txt')).toBe(true);
+  });
+
+  it('a file the run inherited unchanged passes after main fixed it meanwhile (the merge keeps main\'s)', async () => {
+    const { project, ticket, run } = await ymlTicket(INVALID);
+    writeFileSync(path.join(project.path, YML), VALID);
+    wgit(project.path, 'commit', '-q', '-am', 'fix worktree.yml on main');
+    writeFileSync(path.join(run.worktreePath, 'A.txt'), 'A\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'A');
+    await begin(run);
+    await stop(run, { summary: 'did A' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe(VALID);
+    expect(mainHas(project, 'A.txt')).toBe(true);
+  });
+
+  it('a run that changes an inherited invalid file into another invalid one is held', async () => {
+    const { project, ticket, run } = await ymlTicket(INVALID);
+    writeRunYml(run, 'version: 1\nchecks:\n  e2e: npm run e2e\n');
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'added an e2e check' });
+    await settled(passes, 1);
+    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain(
+      'checks: Unrecognized key: "e2e" (allowed: build, lint, test)',
+    );
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe(INVALID);
+  });
+
+  it("main's file that git cannot read is a gate error for a person, not a silent stop", async () => {
+    const { project, ticket, run } = await ymlTicket(VALID);
+    writeRunYml(run, INVALID, { commit: false });
+    // ls-tree lists main's blob, then reading it fails (e.g. the repository changed in between).
+    const oid = wgit(project.path, 'rev-parse', `HEAD:${YML}`).trim();
+    setCommandExecutor(async (request) =>
+      request.args.includes('cat-file') && request.args.includes(oid)
+        ? { exitCode: 128, signal: null, stdout: '', stderr: `fatal: git cat-file ${oid}: bad file`, timedOut: false, truncated: false }
+        : localCommandExecutor(request),
+    );
+    try {
+      const passes = trackPipelines();
+      await begin(run);
+      await stop(run, { summary: 'changed the file' });
+      await settled(passes, 1);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    const types = await eventTypes(run);
+    expect(types).toContain('build_gate_error');
+    expect(types).not.toContain('build_gate_failed');
+    expect(types).not.toContain('merged_to_main');
+    expect(((await eventPayload(run, 'build_gate_error')) as { message: string }).message).toContain(
+      '.emberline/worktree.yml could not be checked',
+    );
+    expect(await statusOf(ticket.id)).not.toBe('done');
   });
 
   it('a run that deletes the file passes (Review Focus 5)', async () => {

@@ -1022,7 +1022,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     //     prompt); after that, or otherwise, the hold is a person's, closed like other holds.
     //     Build gate, critic and merge wait for the next pass, exactly like a failed build gate.
     if (run.worktreePath && run.worktreePath !== projectRow.path) {
-      const problems = await runWorktreeYmlProblems(run.worktreePath, projectRow.path);
+      let problems: string[] | null;
+      try {
+        problems = await runWorktreeYmlProblems(run.worktreePath, projectRow.path);
+      } catch (error) {
+        // B17, like the build gate: a check that could not run is not a pass; left for a person.
+        const message = `.emberline/worktree.yml could not be checked: ${(error as Error).message ?? ''}`;
+        this.runs.note(run.id, 'build_gate_error', { message: message.slice(0, 500) });
+        return;
+      }
       if (problems) {
         const errorText = problems.join('\n').slice(0, 2_400);
         const gateNote = { output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`) };

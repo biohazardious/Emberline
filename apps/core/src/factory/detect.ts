@@ -159,18 +159,19 @@ export type HeadWorktreeYml =
   | { kind: 'unknown'; error: string };
 
 /**
- * `.emberline/worktree.yml` as committed in `dir`'s HEAD (the main workspace's), read the hardened
- * way above. Unlike detection, a git failure is reported as such, never as "no file".
+ * `.emberline/worktree.yml` as committed in `dir`'s HEAD (the main workspace's), or in another
+ * commit `ref` of that repository, read the hardened way above. Unlike detection, a git failure is
+ * reported as such, never as "no file".
  */
-export async function readHeadWorktreeYml(dir: string): Promise<HeadWorktreeYml> {
+export async function readHeadWorktreeYml(dir: string, ref = 'HEAD'): Promise<HeadWorktreeYml> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
   if (!(await entryExists(path.join(dir, '.git')))) return { kind: 'unknown', error: 'the main workspace is not a git repository' };
   let stdout: string;
   try {
-    stdout = (await execGitFile(['ls-tree', '-l', '-z', 'HEAD', '--', rel], { cwd: dir })).stdout;
+    stdout = (await execGitFile(['ls-tree', '-l', '-z', ref, '--', rel], { cwd: dir })).stdout;
   } catch (error) {
     const message = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
-    return { kind: 'unknown', error: `git could not read HEAD: ${message.slice(0, 300)}` };
+    return { kind: 'unknown', error: `git could not read ${ref}: ${message.slice(0, 300)}` };
   }
   const record = stdout.split('\0').find((r) => r.endsWith(`\t${rel}`));
   if (!record) return { kind: 'absent' };

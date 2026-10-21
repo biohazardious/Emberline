@@ -9,7 +9,8 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projectWorktreeConfig } from '../db/schema.js';
 import { badRequest, conflict } from '../errors.js';
-import { readHeadWorktreeYml } from '../factory/detect.js';
+import { type HeadWorktreeYml, readHeadWorktreeYml } from '../factory/detect.js';
+import { execGitFile } from '../git-exec.js';
 import { isMissing, UnsafePathError } from '../outputs/safe-fs.js';
 import { readWorktreeBytes } from '../runs/git.js';
 import { unifiedDiff } from './diff.js';
@@ -86,11 +87,35 @@ export async function approveWorktreeConfig(
   return worktreeConfigStatus(db, project);
 }
 
+/** Why a worktree file could not be opened safely, from {@link UnsafePathError}'s wording. */
+function unsafeReason(rel: string, error: UnsafePathError): string {
+  if (error.message.endsWith('is a symbolic link')) return `${rel} is a symbolic link`;
+  if (error.message.endsWith('resolves outside the expected place')) return `${rel} is inside a linked directory`;
+  return `${rel} is not a regular file`;
+}
+
+/**
+ * `.emberline/worktree.yml` where the run's branch started: its merge-base with main's HEAD, read
+ * from the run worktree (they share the objects). Null when git cannot tell.
+ */
+async function branchBaseWorktreeYml(worktreePath: string, mainWorkspacePath: string): Promise<HeadWorktreeYml | null> {
+  try {
+    const mainHead = (await execGitFile(['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: mainWorkspacePath })).stdout.trim();
+    const base = (await execGitFile(['merge-base', 'HEAD', mainHead], { cwd: worktreePath })).stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/.test(base)) return null;
+    const read = await readHeadWorktreeYml(worktreePath, base);
+    return read.kind === 'unknown' ? null : read;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Why a run worktree's `.emberline/worktree.yml` could not be used once merged, or null when it may
- * land: the run removed it (or never had one), left main's committed content as it is (a main whose
- * file is already unusable does not block runs that do not touch it), or changed it into a valid
- * file. Read from the working tree, which is what the merge commits, and never through a link.
+ * land: the run removed it (or never had one), left it as main has it or as it was where the branch
+ * started (the merge keeps main's version then; a main whose file is unusable does not block runs
+ * that do not touch it), or changed it into a valid file. Read from the working tree, which is what
+ * the merge commits, and never through a link. Throws when git cannot read main's committed file.
  */
 export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspacePath: string): Promise<string[] | null> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
@@ -102,14 +127,19 @@ export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspace
     else unreadable = `${rel} is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`;
   } catch (error) {
     if (isMissing(error) && !(error instanceof UnsafePathError)) return null;
-    unreadable =
-      error instanceof UnsafePathError ? `${rel} is not a regular file (a symbolic link or a linked directory)` : `${rel} cannot be read`;
+    unreadable = error instanceof UnsafePathError ? unsafeReason(rel, error) : `${rel} cannot be read`;
   }
+  /** Committed and present, but itself unusable (a link, too large): nothing to compare. */
+  const unusable = (read: HeadWorktreeYml | null) => read?.kind === 'present' && read.yml.content === null;
   const main = await readHeadWorktreeYml(mainWorkspacePath);
-  const mainContent = main.kind === 'present' ? main.yml.content : undefined;
-  // Main's own file cannot be used either (a link, too large): the run did not make it worse.
-  if (unreadable !== null) return main.kind === 'present' && mainContent === null ? null : [unreadable];
-  if (content === null || content === mainContent) return null;
-  const parsed = parseWorktreeYml(content);
-  return parsed.ok ? null : parsed.errors;
+  if (unreadable === null && content !== null) {
+    if (main.kind === 'present' && content === main.yml.content) return null;
+    const parsed = parseWorktreeYml(content);
+    if (parsed.ok) return null;
+    const base = await branchBaseWorktreeYml(worktreePath, mainWorkspacePath);
+    return base?.kind === 'present' && content === base.yml.content ? null : parsed.errors;
+  }
+  // The run did not make an unusable file worse than main's or its starting point's.
+  if (unusable(main) || unusable(await branchBaseWorktreeYml(worktreePath, mainWorkspacePath))) return null;
+  return [unreadable ?? `${rel} cannot be read`];
 }
