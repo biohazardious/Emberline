@@ -52,8 +52,13 @@ export function framingFromHeaders(raw: string): PreviewFraming {
     : UNKNOWN;
 }
 
-/** Asks the preview root (as the runner reaches it) for its headers; any failure is `unknown`. */
-export async function probePreviewFraming(url: string): Promise<PreviewFraming> {
+/** The probe's outcome: `answered` is whether the app sent an HTTP response at all. */
+interface Probe {
+  framing: PreviewFraming;
+  answered: boolean;
+}
+
+async function probe(url: string): Promise<Probe> {
   try {
     const result = await execCommand({
       file: 'curl',
@@ -61,22 +66,54 @@ export async function probePreviewFraming(url: string): Promise<PreviewFraming> 
       cwd: NEUTRAL_CWD,
       timeoutMs: PROBE_TIMEOUT_MS,
     });
-    return framingFromHeaders(result.stdout);
+    return {
+      framing: framingFromHeaders(result.stdout),
+      answered: /(^|\n)HTTP\/\S+ \d{3}/.test(result.stdout),
+    };
   } catch {
-    return UNKNOWN;
+    return { framing: UNKNOWN, answered: false };
   }
 }
 
-export class PreviewFramingCache {
-  private readonly entries = new Map<string, { startKey: string; promise: Promise<PreviewFraming> }>();
+/** Asks the preview root (as the runner reaches it) for its headers; any failure is `unknown`. */
+export async function probePreviewFraming(url: string): Promise<PreviewFraming> {
+  return (await probe(url)).framing;
+}
 
-  /** One probe per (target, start): `startKey` changes with each start; concurrent callers share the probe. */
+/** How long a probe that got no HTTP response (the dev server is not listening yet) is kept. */
+const NO_ANSWER_RETRY_MS = 3_000;
+
+interface Entry {
+  startKey: string;
+  promise: Promise<PreviewFraming>;
+  /** Set when the probe settled without an HTTP response: the time after which `get` probes again. */
+  retryAt?: number;
+}
+
+export class PreviewFramingCache {
+  private readonly entries = new Map<string, Entry>();
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly retryMs: number = NO_ANSWER_RETRY_MS,
+  ) {}
+
+  /**
+   * One probe per (target, start): `startKey` changes with each start; concurrent callers share the
+   * probe. A probe that got an answer stays for the start; one that got none is kept only for a
+   * few seconds, so a dev server that was not listening yet is probed again by a later poll.
+   */
   get(target: string, startKey: string, url: string): Promise<PreviewFraming> {
     const known = this.entries.get(target);
-    if (known && known.startKey === startKey) return known.promise;
-    const promise = probePreviewFraming(url);
-    this.entries.set(target, { startKey, promise });
-    return promise;
+    if (known && known.startKey === startKey && (known.retryAt === undefined || this.now() < known.retryAt))
+      return known.promise;
+    const entry: Entry = { startKey, promise: Promise.resolve(UNKNOWN) };
+    entry.promise = probe(url).then((outcome) => {
+      if (!outcome.answered) entry.retryAt = this.now() + this.retryMs;
+      return outcome.framing;
+    });
+    this.entries.set(target, entry);
+    return entry.promise;
   }
 
   forget(target: string): void {

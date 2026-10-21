@@ -152,4 +152,27 @@ describe('PreviewFramingCache', () => {
       reason: null,
     });
   });
+
+  it('does not keep an answer-less probe for the start: it is retried after a short interval, never more often', async () => {
+    let calls = 0;
+    const seen = fakeCurl(async () => {
+      calls += 1;
+      return calls === 1 ? { ...ok(''), exitCode: 7 } : ok(H('X-Frame-Options: DENY'));
+    });
+    let now = 1_000;
+    const cache = new PreviewFramingCache(() => now, 3_000);
+    expect(await cache.get('run:1', 'k', 'http://h:1/')).toEqual({ state: 'unknown', reason: null });
+    now += 1_000;
+    expect(await cache.get('run:1', 'k', 'http://h:1/')).toEqual({ state: 'unknown', reason: null });
+    expect(seen).toHaveLength(1);
+    now += 2_500;
+    expect(await cache.get('run:1', 'k', 'http://h:1/')).toEqual({
+      state: 'refused',
+      reason: 'X-Frame-Options: DENY',
+    });
+    expect(seen).toHaveLength(2);
+    now += 60_000;
+    await cache.get('run:1', 'k', 'http://h:1/');
+    expect(seen).toHaveLength(2);
+  });
 });
