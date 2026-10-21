@@ -2,7 +2,17 @@ import type { MainPreviewStatus, Project, RunPreviewStatus, WorkspaceDemoTarget 
 import { type ReactNode, useState } from 'react';
 import { Box, ExternalLink, Package, Play, RotateCw, Square } from 'lucide-react';
 import { api, errorMessage } from '../api';
-import { choosePrimaryView, previewBadge, previewEmptyText, previewFrameMode, previewProblem } from '../containerPreview';
+import {
+  FRAMING_UNKNOWN_NOTE,
+  OPEN_IN_NEW_TAB,
+  choosePrimaryView,
+  framingRefusedText,
+  framingView,
+  previewBadge,
+  previewEmptyText,
+  previewFrameMode,
+  previewProblem,
+} from '../containerPreview';
 import { useApi } from '../hooks/useApi';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 
@@ -130,6 +140,20 @@ function ContainerPreview({
     }
   };
 
+  // Reload probes the app's framing headers again (it may have been changed), then reloads the frame.
+  const reloadPreview = async () => {
+    setActionError(undefined);
+    try {
+      await api<PreviewStatus>(`${path}/framing`, 'POST', {});
+    } catch (err) {
+      setActionError(errorMessage(err));
+    }
+    await refresh().catch(() => undefined);
+    setNonce((n) => n + 1);
+  };
+
+  const framing = framingView(status);
+
   return (
     <div className="container-preview">
       <div className="container-preview-head">
@@ -153,7 +177,7 @@ function ContainerPreview({
           )}
           {status.status === 'running' && status.url && (
             <>
-              <button type="button" className="btn btn-sm" onClick={() => setNonce((n) => n + 1)}>
+              <button type="button" className="btn btn-sm" onClick={() => void reloadPreview()}>
                 <RotateCw className="icon" aria-hidden /> Reload
               </button>
               <a href={status.url} target="_blank" rel="noreferrer" className="btn btn-sm">
@@ -199,18 +223,28 @@ function ContainerPreview({
             Open the preview
           </a>
         </p>
+      ) : status.status === 'running' && status.url && framing === 'refused' ? (
+        <div className="container-preview-empty container-preview-refused" role="status">
+          <p>{framingRefusedText(status.framing?.reason ?? null)}</p>
+          <a className="btn btn-sm btn-primary" href={status.url} target="_blank" rel="noreferrer">
+            <ExternalLink className="icon" aria-hidden /> {OPEN_IN_NEW_TAB}
+          </a>
+        </div>
       ) : status.status === 'running' && status.url ? (
-        <iframe
-          key={nonce}
-          className="container-preview-frame"
-          src={status.url}
-          sandbox={DEMO_IFRAME_SANDBOX}
-          referrerPolicy="no-referrer"
-          // Cookies ignore ports: without this the preview's server (the agent's code) would get
-          // Emberline's session cookie. Chromium honours it; other browsers ignore the attribute.
-          {...CREDENTIALLESS}
-          title={`Container preview - ${label}`}
-        />
+        <>
+          {framing === 'unknown' && <p className="muted small container-preview-note">{FRAMING_UNKNOWN_NOTE}</p>}
+          <iframe
+            key={nonce}
+            className="container-preview-frame"
+            src={status.url}
+            sandbox={DEMO_IFRAME_SANDBOX}
+            referrerPolicy="no-referrer"
+            // Cookies ignore ports: without this the preview's server (the agent's code) would get
+            // Emberline's session cookie. Chromium honours it; other browsers ignore the attribute.
+            {...CREDENTIALLESS}
+            title={`Container preview - ${label}`}
+          />
+        </>
       ) : (
         <p className="muted small container-preview-empty">{previewEmptyText(status, label)}</p>
       )}

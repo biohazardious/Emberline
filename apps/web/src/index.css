@@ -3565,6 +3565,18 @@ dialog.cmd-dialog::backdrop {
   text-align: center;
 }
 
+.container-preview-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.container-preview-refused p {
+  margin: 0;
+  max-width: 48ch;
+}
+
 .container-preview-frame {
   width: 100%;
   height: 520px;

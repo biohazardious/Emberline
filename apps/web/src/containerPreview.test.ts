@@ -1,8 +1,12 @@
 import type { BrowserUrlResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import {
+  FRAMING_UNKNOWN_NOTE,
+  OPEN_IN_NEW_TAB,
   type PreviewLike,
   choosePrimaryView,
+  framingRefusedText,
+  framingView,
   previewBadge,
   previewEmptyText,
   previewFrameMode,
@@ -310,5 +314,33 @@ describe('runner browser URL', () => {
       message: 'Nothing to open yet: main has no demo yet.',
       problem: true,
     });
+  });
+});
+
+describe('framing', () => {
+  it('a refusing app gets the panel text with its reason', () => {
+    expect(framingRefusedText('X-Frame-Options: DENY')).toBe(
+      'This app does not allow being shown inside another page (X-Frame-Options: DENY). Open it in a new tab.',
+    );
+  });
+
+  it('the panel text has no parentheses without a reason', () => {
+    expect(framingRefusedText(null)).toBe('This app does not allow being shown inside another page. Open it in a new tab.');
+  });
+
+  it('maps framing to the view', () => {
+    expect(framingView(preview({ status: 'running', framing: { state: 'refused', reason: 'X-Frame-Options: DENY' } }))).toBe('refused');
+    expect(framingView(preview({ status: 'running', framing: { state: 'unknown', reason: null } }))).toBe('unknown');
+    expect(framingView(preview({ status: 'running', framing: { state: 'allowed', reason: null } }))).toBe('allowed');
+    expect(framingView(preview({ status: 'running' }))).toBe('allowed');
+  });
+
+  it('shows no notice while the preview is not running', () => {
+    expect(framingView(preview({ status: 'stopped', framing: { state: 'refused', reason: 'x' } }))).toBe('allowed');
+  });
+
+  it("the unknown note and the button are the spec's", () => {
+    expect(FRAMING_UNKNOWN_NOTE).toBe('If the preview stays blank, open it in a new tab.');
+    expect(OPEN_IN_NEW_TAB).toBe('Open in new tab');
   });
 });

@@ -7,7 +7,7 @@ import type { BrowserUrlResponse, RunPreviewStatus, WorkspaceDemoTarget } from '
 /** The fields of a run's or main's preview status these helpers read (`unavailable`: main only). */
 export type PreviewLike = Pick<
   RunPreviewStatus,
-  'status' | 'kind' | 'port' | 'url' | 'error' | 'command' | 'detectedCommand'
+  'status' | 'kind' | 'port' | 'url' | 'error' | 'command' | 'detectedCommand' | 'framing'
 > & {
   unavailable?: string;
 };
@@ -99,6 +99,23 @@ export function previewFrameMode(pageProtocol: string, url: string): { frame: bo
     return { frame: false, note: 'The preview is plain HTTP and this page is HTTPS, so it opens in a new tab.' };
   }
   return { frame: true, note: null };
+}
+
+export const FRAMING_UNKNOWN_NOTE = 'If the preview stays blank, open it in a new tab.';
+export const OPEN_IN_NEW_TAB = 'Open in new tab';
+
+/** The refused panel's text; `reason` is core's header description (none: no parentheses). */
+export function framingRefusedText(reason: string | null): string {
+  return `This app does not allow being shown inside another page${reason ? ` (${reason})` : ''}. Open it in a new tab.`;
+}
+
+/**
+ * How the running preview is shown: 'refused' (no iframe), 'unknown' (iframe plus a note) or
+ * 'allowed'. A missing framing (older core, or not running) is 'allowed'.
+ */
+export function framingView(p: Pick<PreviewLike, 'status' | 'framing'>): 'allowed' | 'refused' | 'unknown' {
+  if (p.status !== 'running' || !p.framing) return 'allowed';
+  return p.framing.state === 'allowed' ? 'allowed' : p.framing.state;
 }
 
 /**
