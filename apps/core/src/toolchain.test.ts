@@ -26,8 +26,9 @@ beforeEach(async () => {
     fakeSdk,
     [
       '#!/usr/bin/env bash',
-      // Blocks until the test creates the gate file (when one is set), so timing never matters.
-      'if [ -n "${FAKE_SDK_GATE:-}" ]; then while [ ! -e "$FAKE_SDK_GATE" ]; do sleep 0.05; done; fi',
+      // Once a test arms the gate, blocks until it opens, so timing never matters. The paths are
+      // written in: ptyd hands sessions only an allowlisted environment.
+      `if [ -e ${JSON.stringify(path.join(t.dir, 'sdk-gate-armed'))} ]; then while [ ! -e ${JSON.stringify(path.join(t.dir, 'sdk-gate'))} ]; do sleep 0.05; done; fi`,
       'mkdir -p "$EMBERLINE_TOOLS_DIR/sdk/.installed"',
       'echo "installing $2"',
       'echo "9.9.9" > "$EMBERLINE_TOOLS_DIR/sdk/.installed/$2"',
@@ -93,8 +94,7 @@ describe('ToolchainService', () => {
   });
 
   it('runs one SDK action at a time', async () => {
-    const gate = path.join(t.dir, 'sdk-gate');
-    process.env.FAKE_SDK_GATE = gate;
+    writeFileSync(path.join(t.dir, 'sdk-gate-armed'), '');
     const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
     try {
       await toolchain.executeSdkAction('flutter', { action: 'install' });
@@ -103,8 +103,7 @@ describe('ToolchainService', () => {
         statusCode: 409,
       });
     } finally {
-      writeFileSync(gate, '');
-      delete process.env.FAKE_SDK_GATE;
+      writeFileSync(path.join(t.dir, 'sdk-gate'), '');
     }
     await expect
       .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing, { timeout: 5_000 })
