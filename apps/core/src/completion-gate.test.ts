@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
-import { writeIssueSync } from './db/project-settings.js';
+import { writeIssueSync, writeWizardTickets } from './db/project-settings.js';
 import { projects, runs, tickets } from './db/schema.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
@@ -1375,5 +1375,114 @@ describe('the worktree config check before the merge', () => {
     expect(checkPrompts(run)).toBe(1);
     expect(await statusOf(ticket.id)).toBe('review');
     expect(mainHas(project, YML)).toBe(false);
+  });
+});
+
+describe('an Auto Bootstrap writes the worktree commands', () => {
+  const HEADER = '[Worktree commands]';
+  const YML = '.emberline/worktree.yml';
+  const PROMPT =
+    'This ticket asks you to write the setup, build, lint and test commands and the preview service for the chosen stack into `.emberline/worktree.yml`, and the file still has none. Add them, make them pass, then commit before finishing.';
+  const promptCount = (run: Run) => followups(run).filter((line) => line.includes(HEADER)).length;
+  async function bootstrapRun(writes = true) {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'Bootstrap', status: 'ready', persona: 'architect' });
+    writeWizardTickets(t.db, project.id, { bootstrap: ticket.id, bootstrapWritesWorktree: writes });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(ticket.id)[0] as Run;
+    writeFileSync(path.join(run.worktreePath, 'index.html'), '<h1>x</h1>\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'skeleton');
+    return { project, ticket, run };
+  }
+  const writeYml = (run: Run, text: string) => {
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(path.join(run.worktreePath, YML), text);
+  };
+
+  it('without commands: held, asked once with the exact prompt; with them the next stop merges', async () => {
+    const { ticket, run } = await bootstrapRun();
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await settled(passes, 1);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await eventPayload(run, 'build_gate_failed')).toMatchObject({ autoFix: true });
+    await expect.poll(() => followups(run).join('\n'), { timeout: 10_000 }).toContain(`${HEADER} ${PROMPT}`);
+    writeYml(run, 'version: 1\nchecks:\n  test: "true"\n');
+    await nextTurn(run, { summary: 'commands' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+  });
+
+  it('still none after the prompt: held for a person (autoFix false), session closed, no second prompt', async () => {
+    const { ticket, run } = await bootstrapRun();
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await settled(passes, 1);
+    await expect.poll(() => promptCount(run), { timeout: 10_000 }).toBe(1);
+    await nextTurn(run, { summary: 'did nothing' });
+    await expect
+      .poll(
+        async () =>
+          ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter((e) => e.type === 'build_gate_failed').map((e) => (e.payload as { autoFix: boolean }).autoFix),
+        { timeout: 10_000 },
+      )
+      .toEqual([true, false]);
+    expect(promptCount(run)).toBe(1);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+    await expect.poll(async () => t.runs.get(run.id).endedAt, { timeout: 5_000 }).not.toBeNull();
+  });
+
+  it('selfHealingBuildGate off: held at once with autoFix false', async () => {
+    await api('PATCH', '/api/factory/settings', { selfHealingBuildGate: false });
+    const { ticket, run } = await bootstrapRun();
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await settled(passes, 1);
+    expect(await eventPayload(run, 'build_gate_failed')).toMatchObject({ autoFix: false });
+    expect(promptCount(run)).toBe(0);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+  });
+
+  it('an empty `version: 1` file counts as none', async () => {
+    const { run } = await bootstrapRun();
+    writeYml(run, 'version: 1\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'empty config');
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await settled(passes, 1);
+    expect(await eventPayload(run, 'build_gate_failed')).toMatchObject({ autoFix: true });
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+  });
+
+  it('a decided preset (bootstrapWritesWorktree false) is not checked', async () => {
+    const { ticket, run } = await bootstrapRun(false);
+    writeYml(run, 'version: 1\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'empty config');
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
+  });
+
+  it('another ticket of the project is not checked', async () => {
+    const { project } = await bootstrapRun();
+    const other = await createTicket(project.id, { title: 'Other', status: 'ready', persona: 'architect' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(other.id)[0] as Run;
+    writeFileSync(path.join(run.worktreePath, 'other.txt'), 'x\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'other');
+    await begin(run);
+    await stop(run, { summary: 'other' });
+    await expect.poll(() => statusOf(other.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
   });
 });

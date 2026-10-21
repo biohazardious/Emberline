@@ -146,3 +146,28 @@ export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspace
   if (unusable(main) || unusable(await branchBaseWorktreeYml(worktreePath, mainWorkspacePath))) return null;
   return [unreadable ?? `${rel} cannot be read`];
 }
+
+/**
+ * Why the run's `.emberline/worktree.yml` has no commands, or null when it has some or is not
+ * this check's business (invalid, unreadable, a link, over the cap: the worktree.yml gate's job).
+ */
+export async function worktreeCommandsMissing(worktreePath: string): Promise<string | null> {
+  const rel = ADOPT_FILE_PATHS.worktreeYml;
+  let bytes: Buffer | null;
+  try {
+    bytes = await readWorktreeBytes(worktreePath, rel, MAX_WORKTREE_YML_BYTES);
+  } catch (error) {
+    if (isMissing(error) && !(error instanceof UnsafePathError)) {
+      return `${rel} is missing: this ticket asks for the setup, build, lint and test commands and the preview service.`;
+    }
+    return null;
+  }
+  if (!bytes) return null;
+  const parsed = parseWorktreeYml(bytes.toString('utf8'));
+  if (!parsed.ok) return null;
+  const { setup, services, checks } = parsed.config;
+  const hasChecks = Boolean(checks.build || checks.lint || checks.test);
+  return setup.length === 0 && services.length === 0 && !hasChecks
+    ? `${rel} has no setup, services or checks: this ticket asks for the setup, build, lint and test commands and the preview service.`
+    : null;
+}

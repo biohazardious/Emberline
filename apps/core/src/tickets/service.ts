@@ -63,7 +63,7 @@ import { branchMergedBefore, pipelineOutcome, reviewUnblockPending, stillHeld } 
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
-import { runWorktreeYmlProblems } from '../worktree-config/trust.js';
+import { runWorktreeYmlProblems, worktreeCommandsMissing } from '../worktree-config/trust.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -239,6 +239,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly selfHealedRuns = new Set<string>();
   /** Runs already asked once to fix their branch's worktree.yml: a second invalid stop is a person's. */
   private readonly worktreeConfigPromptedRuns = new Set<string>();
+  private readonly worktreeCommandsPromptedRuns = new Set<string>();
   private readonly slopHealedRuns = new Set<string>();
   private readonly criticReviewedRuns = new Set<string>();
   private readonly dispatchLock = new KeyedMutex();
@@ -1099,6 +1100,38 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           }
         }
         return;
+      }
+    }
+
+    // 1e. An Auto Bootstrap (the wizard left the stack to the agent and generated no commands) must
+    //     write its worktree commands; without them the build gate would fall back to detection.
+    const roles = readWizardTickets(this.db, run.projectId);
+    if (ticketRow && roles?.bootstrapWritesWorktree && ticketRow.id === roles.bootstrap) {
+      const missing = await worktreeCommandsMissing(run.worktreePath || projectRow.path).catch(() => null);
+      if (missing) {
+        const gateNote = { output: holdText(missing) };
+        const autoFix = fSettings.selfHealingBuildGate && !this.worktreeCommandsPromptedRuns.has(run.id) && (!run.endedAt || run.resumable);
+        let asked = false;
+        if (autoFix) {
+          this.worktreeCommandsPromptedRuns.add(run.id);
+          this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
+          asked = await this.runs
+            .prompt(
+              run.id,
+              `[Worktree commands] This ticket asks you to write the setup, build, lint and test commands and the preview service for the chosen stack into \`.emberline/worktree.yml\`, and the file still has none. Add them, make them pass, then commit before finishing.${this.completionReminder(run, ' ')}`,
+              { automatic: true },
+            )
+            .then(() => true)
+            .catch(() => false);
+        }
+        if (!asked) {
+          this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
+          if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
+          if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
+            await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+          }
+        }
+        return; // build gate, critic and merge wait for the next pass
       }
     }
 
