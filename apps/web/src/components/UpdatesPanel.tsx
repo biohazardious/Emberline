@@ -210,11 +210,12 @@ export function UpdatesPanel() {
             </a>
           </div>
           <p className="muted small" style={{ margin: 0 }}>
-            Upgrade on the Docker host. Running agents keep working while core restarts.
+            Upgrade on the Docker host. Core restarts; the runner restarts too when its image or settings change,
+            which stops running agents, so upgrade when they are idle.
           </p>
           <pre className="update-commands mono">
             {
-              '# deploy/compose.yaml (published images)\ndocker compose pull && docker compose up -d\n\n# from a git checkout\ngit pull && make up'
+              '# published images: download the current deploy/compose.yaml first (then redo your own edits to it)\ncurl -fsSLO https://raw.githubusercontent.com/biohazardious/Emberline/main/deploy/compose.yaml\ndocker compose pull && docker compose up -d\n\n# from a git checkout\ngit pull && make up'
             }
           </pre>
           {status.release.notes.trim() && (
