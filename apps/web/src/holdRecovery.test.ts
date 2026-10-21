@@ -58,19 +58,27 @@ describe('recoverErrorText', () => {
 });
 
 describe('visibleSuggestions', () => {
-  it('drops discard and merge without callbacks', () => {
+  const shown = (r: RunRecovery, have: Parameters<typeof visibleSuggestions>[1]) =>
+    visibleSuggestions(r, have).map((s) => `${s.kind}${s.onTicket ? '@ticket' : ''}`);
+
+  it('drops discard and merge without callbacks or a ticket', () => {
     const r = rec(['prompt', 'discard', 'merge', 'manual']);
-    expect(visibleSuggestions(r, {}).map((s) => s.kind)).toEqual(['prompt', 'manual']);
-    expect(visibleSuggestions(r, { onDiscard: true }).map((s) => s.kind)).toEqual([
-      'prompt',
+    expect(shown(r, {})).toEqual(['prompt', 'manual']);
+    expect(shown(r, { onDiscard: true })).toEqual(['prompt', 'discard', 'manual']);
+    expect(shown(r, { onDiscard: true, onMerge: true })).toEqual(['prompt', 'discard', 'merge', 'manual']);
+  });
+  it('without callbacks, offers discard and merge on the ticket, keeping label and detail', () => {
+    const r = rec(['discard', 'prompt', 'merge']);
+    r.suggestions[0]!.detail = 'EL-10 already added these files (3 of 3 conflicts)';
+    expect(shown(r, { ticket: true })).toEqual(['discard@ticket', 'prompt', 'merge@ticket']);
+    expect(visibleSuggestions(r, { ticket: true })[0]).toMatchObject({
+      label: 'discard',
+      detail: 'EL-10 already added these files (3 of 3 conflicts)',
+    });
+    expect(shown(r, { ticket: true, onDiscard: true, onMerge: true })).toEqual([
       'discard',
-      'manual',
-    ]);
-    expect(visibleSuggestions(r, { onDiscard: true, onMerge: true }).map((s) => s.kind)).toEqual([
       'prompt',
-      'discard',
       'merge',
-      'manual',
     ]);
   });
   it('is empty for a null recovery', () => {

@@ -33,15 +33,23 @@ export function recoverErrorText(code: string, message: string): string {
 }
 const MESSAGE_CODES: ReadonlySet<string> = new Set(['lane_exhausted']);
 
-/** Suggestions that can be acted on here: discard and merge need their callbacks. */
+/** A suggestion as offered here; `onTicket`: done on the ticket (a link to it), not here. */
+export type VisibleSuggestion = RecoverySuggestion & { onTicket: boolean };
+
+/**
+ * Suggestions that can be acted on here. Discard and merge need their callbacks; without them they
+ * become a link to the ticket (keeping label and detail) when the run has one, else they are left out.
+ */
 export function visibleSuggestions(
   rec: RunRecovery | null | undefined,
-  have: { onDiscard?: unknown; onMerge?: unknown },
-): RecoverySuggestion[] {
+  have: { onDiscard?: unknown; onMerge?: unknown; ticket?: boolean },
+): VisibleSuggestion[] {
   if (!rec) return [];
-  return rec.suggestions.filter((s) =>
-    s.kind === 'discard' ? !!have.onDiscard : s.kind === 'merge' ? !!have.onMerge : true,
-  );
+  return rec.suggestions.flatMap((s): VisibleSuggestion[] => {
+    const here = s.kind === 'discard' ? !!have.onDiscard : s.kind === 'merge' ? !!have.onMerge : true;
+    if (here) return [{ ...s, onTicket: false }];
+    return have.ticket ? [{ ...s, onTicket: true }] : [];
+  });
 }
 
 /** The API sends a lowercase fragment: first letter up, one final stop. */

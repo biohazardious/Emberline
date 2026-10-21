@@ -43,9 +43,10 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
   if (!applies || !rec) return null;
 
   const refetch = () => void client.invalidateQueries({ queryKey: ['run-recovery', run.id] });
-  const suggestions = visibleSuggestions(rec, { onDiscard, onMerge });
+  const ticketHref = run.ticketId ? `/projects/${run.projectId}/board?ticket=${run.ticketId}` : null;
+  const suggestions = visibleSuggestions(rec, { onDiscard, onMerge, ticket: !!ticketHref });
   const canDeliver = rec.delivery !== 'none';
-  const linkOnly = !onDiscard && !onMerge && run.ticketId;
+  const linkOnly = !onDiscard && !onMerge && ticketHref && !suggestions.some((s) => s.onTicket);
 
   const send = async (value: string) => {
     setBusy(true);
@@ -129,7 +130,13 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
         {suggestions.map((s) => (
           <li key={s.id} className="hold-recovery-item">
             {s.kind === 'prompt' && promptButton(s)}
+            {s.onTicket && (
+              <Link href={ticketHref!} className={btn(s)}>
+                {s.label}
+              </Link>
+            )}
             {s.kind === 'discard' &&
+              !s.onTicket &&
               (confirming ? (
                 <span className="hold-recovery-confirm">
                   <span className="small">
@@ -152,7 +159,7 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
                   {s.label}
                 </button>
               ))}
-            {s.kind === 'merge' && (
+            {s.kind === 'merge' && !s.onTicket && (
               <button type="button" className={btn(s)} disabled={busy} onClick={() => void guarded(onMerge!)}>
                 {s.label}
               </button>
@@ -207,10 +214,7 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
         ))}
       </ul>
       {linkOnly && (
-        <Link
-          href={`/projects/${run.projectId}/board?ticket=${run.ticketId}`}
-          className="btn btn-sm btn-ghost"
-        >
+        <Link href={ticketHref} className="btn btn-sm btn-ghost">
           Open ticket
         </Link>
       )}
