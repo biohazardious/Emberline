@@ -4905,6 +4905,19 @@ dialog.cmd-dialog::backdrop {
   white-space: pre;
 }
 
+.worktree-editor {
+  height: 360px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.worktree-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .worktree-review-errors {
   margin: 0;
   padding-left: 18px;

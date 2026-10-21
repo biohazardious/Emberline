@@ -7,6 +7,7 @@ import {
   type UpdateProjectSettingsBody,
   type WorktreeConfigStatusResponse,
 } from '@emberline/protocol';
+import { ApiRequestError, errorMessage } from './api';
 
 export type GateChoice = 'inherit' | 'on' | 'off';
 
@@ -122,4 +123,41 @@ export function worktreeBanner(s: WorktreeConfigStatusResponse | undefined): Wor
 /** Approve is offered once the person can see everything they approve: a truncated diff needs the full file open. */
 export function approveEnabled(banner: WorktreeBanner, view: { busy: boolean; fullFileShown: boolean }): boolean {
   return banner.canApprove && !view.busy && (!banner.truncated || view.fullFileShown);
+}
+
+export const WORKTREE_TEMPLATE = 'version: 1\n';
+export const WORKTREE_SAVE_LABEL = 'Save and approve';
+export const WORKTREE_EDIT_HINT = 'Saving commits the file to main and approves it. Runs use it from their next start.';
+export const WORKTREE_VALIDATE_DELAY_MS = 400;
+/** `/projects/:id/settings?edit=worktree` opens the editor. */
+export const WORKTREE_EDIT_PARAM = 'edit=worktree';
+
+/** HEAD's content and sha256, or the empty template and null when HEAD has no usable file. */
+export function worktreeEditorStart(s: WorktreeConfigStatusResponse | undefined): {
+  content: string;
+  baseSha256: string | null;
+} {
+  return s?.head ? { content: s.head.content, baseSha256: s.head.sha256 } : { content: WORKTREE_TEMPLATE, baseSha256: null };
+}
+
+export function worktreeSaveEnabled(v: { errors: string[]; validating: boolean; busy: boolean }): boolean {
+  return v.errors.length === 0 && !v.validating && !v.busy;
+}
+
+/** What a failed save shows: its message, the schema errors of a 400, and whether to offer Reload (any 409). */
+export function worktreeSaveFailure(err: unknown): { message: string; errors: string[]; reload: boolean } {
+  if (err instanceof ApiRequestError) {
+    const errors = err.data.errors;
+    return {
+      message: err.message,
+      errors: err.status === 400 && Array.isArray(errors) ? errors.filter((e): e is string => typeof e === 'string') : [],
+      reload: err.status === 409,
+    };
+  }
+  return { message: errorMessage(err), errors: [], reload: false };
+}
+
+/** The Board banner offers Edit when HEAD's file is unusable. */
+export function bannerOffersEdit(banner: WorktreeBanner | null): boolean {
+  return banner?.kind === 'unusable';
 }

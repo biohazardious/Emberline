@@ -1,9 +1,19 @@
 import type { Project, ProjectSettingsResponse, WorktreeConfigStatusResponse } from '@emberline/protocol';
-import { useState } from 'react';
-import { Link } from 'wouter';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useSearch } from 'wouter';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
-import { approveEnabled, gateChoices, gateUpdate, type GateChoice, type WorktreeBanner, worktreeBanner } from '../projectSettings';
+import {
+  approveEnabled,
+  bannerOffersEdit,
+  gateChoices,
+  gateUpdate,
+  type GateChoice,
+  WORKTREE_EDIT_PARAM,
+  type WorktreeBanner,
+  worktreeBanner,
+} from '../projectSettings';
+import { WorktreeEditor } from './WorktreeEditor';
 
 /** The unified diff, the schema errors and Approve for HEAD's .emberline/worktree.yml. */
 function WorktreeReviewBody({
@@ -126,6 +136,7 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
   const status = useApi<WorktreeConfigStatusResponse>(`/api/projects/${project.id}/worktree-config`, 30_000);
   const banner = worktreeBanner(status.data);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   if (!banner) return null;
   if (banner.kind === 'unreadable') return <p className="muted worktree-note">{banner.title}.</p>;
   return (
@@ -141,8 +152,14 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
         >
           {open ? 'Hide' : 'Review'}
         </button>
+        {bannerOffersEdit(banner) && !editing && (
+          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+            Edit
+          </button>
+        )}
       </div>
-      {open && <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />}
+      {editing && <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />}
+      {open && !editing && <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />}
     </section>
   );
 }
@@ -154,6 +171,16 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const banner = worktreeBanner(status.data);
+  const [editing, setEditing] = useState(false);
+  const search = useSearch();
+  const openedFromLink = useRef(false);
+  useEffect(() => {
+    if (openedFromLink.current || !status.data) return;
+    if (search.replace(/^\?/, '').split('&').includes(WORKTREE_EDIT_PARAM)) {
+      openedFromLink.current = true;
+      setEditing(true);
+    }
+  }, [search, status.data]);
 
   const choose = async (key: Parameters<typeof gateUpdate>[0], choice: GateChoice) => {
     setSaving(key);
@@ -214,18 +241,31 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
           ))}
         </ul>
       )}
-      <h3>worktree.yml</h3>
+      <div className="worktree-heading">
+        <h3>worktree.yml</h3>
+        {!editing && (
+          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+            Edit
+          </button>
+        )}
+      </div>
       {status.error !== undefined && status.data && (
         <p className="muted" role="alert">
           Couldn&apos;t refresh the worktree.yml status ({errorMessage(status.error)}); showing the last state.
         </p>
       )}
-      {!banner && <p className="muted">The approved .emberline/worktree.yml matches the repository.</p>}
-      {banner?.kind === 'unreadable' && <p className="muted">{banner.title}.</p>}
-      {banner && banner.kind !== 'unreadable' && (
+      {editing ? (
+        <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />
+      ) : (
         <>
-          <p className="banner banner-warn">{banner.title}</p>
-          <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />
+          {!banner && <p className="muted">The approved .emberline/worktree.yml matches the repository.</p>}
+          {banner?.kind === 'unreadable' && <p className="muted">{banner.title}.</p>}
+          {banner && banner.kind !== 'unreadable' && (
+            <>
+              <p className="banner banner-warn">{banner.title}</p>
+              <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />
+            </>
+          )}
         </>
       )}
     </section>

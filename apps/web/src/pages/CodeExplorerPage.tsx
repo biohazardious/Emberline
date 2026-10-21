@@ -7,6 +7,7 @@ import type {
   WorkspaceFileEntry,
   WorkspaceFileListResponse,
 } from '@emberline/protocol';
+import { isEmberlineDirPath, isWorktreeYmlPath, WORKTREE_YML_EDIT_IN_SETTINGS } from '@emberline/protocol';
 import {
   Book,
   ChevronDown,
@@ -35,7 +36,6 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
-import type * as Monaco from 'monaco-editor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api } from '../api';
@@ -43,7 +43,9 @@ import { PERSONA_BY_ID, PERSONA_LIST } from '../components/PersonaBadge';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
 import { useThemeMode } from '../hooks/useThemeMode';
-import { loadMonaco, monacoTheme } from '../monaco';
+import { WORKTREE_EDIT_PARAM } from '../projectSettings';
+import { monacoTheme } from '../monaco';
+import { MonacoEditor } from '../components/MonacoEditor';
 
 interface OpenTab {
   path: string;
@@ -301,71 +303,6 @@ function detectLanguage(filePath: string): string {
   }
 }
 
-function StandaloneMonacoEditor({
-  filePath,
-  language,
-  value,
-  theme,
-  onChange,
-}: {
-  filePath: string;
-  language: string;
-  value: string;
-  theme: string;
-  onChange: (next: string) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  // The editor is (re)created per file/language/theme with the value at that moment; later edits
-  // flow in through the effect below, so the creation effect reads the value from a ref.
-  const valueRef = useRef(value);
-  valueRef.current = value;
-
-  useEffect(() => {
-    let cancelled = false;
-    let model: Monaco.editor.ITextModel | null = null;
-    let sub: Monaco.IDisposable | null = null;
-
-    void loadMonaco().then((monaco) => {
-      if (cancelled || !containerRef.current) return;
-      model = monaco.editor.createModel(valueRef.current, language);
-      const editor = monaco.editor.create(containerRef.current, {
-        model,
-        theme,
-        automaticLayout: true,
-        minimap: { enabled: true },
-        fontSize: 13,
-        fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
-        scrollBeyondLastLine: false,
-        wordWrap: 'on',
-      });
-      sub = editor.onDidChangeModelContent(() => {
-        onChangeRef.current(editor.getValue());
-      });
-      editorRef.current = editor;
-    });
-
-    return () => {
-      cancelled = true;
-      sub?.dispose();
-      editorRef.current?.dispose();
-      editorRef.current = null;
-      model?.dispose();
-    };
-  }, [filePath, language, theme]);
-
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (editor && editor.getValue() !== value) {
-      editor.setValue(value);
-    }
-  }, [value]);
-
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
-}
-
 export function CodeExplorerPage({ projectId }: { projectId: string }) {
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const { runs } = useRuns();
@@ -478,7 +415,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   );
 
   const saveActiveFile = useCallback(async () => {
-    if (!activeTab || activeTab.binary) return;
+    if (!activeTab || activeTab.binary || isWorktreeYmlPath(activeTab.path)) return;
     setSaving(true);
     setError(null);
     setStatusMessage(null);
@@ -597,6 +534,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   };
 
   const handleDeleteFile = async (relPath: string) => {
+    if (isWorktreeYmlPath(relPath) || isEmberlineDirPath(relPath)) return;
     if (!window.confirm(`Delete "${relPath}" from workspace?`)) return;
     setError(null);
     try {
@@ -1036,6 +974,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                       >
                         <Download className="icon" aria-hidden />
                       </a>
+                      {!isWorktreeYmlPath(entry.path) && !isEmberlineDirPath(entry.path) && (
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
@@ -1049,6 +988,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                       >
                         <X className="icon" aria-hidden />
                       </button>
+                      )}
                     </span>
                   )}
                 </div>
@@ -1158,7 +1098,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 >
                   <Download className="icon" aria-hidden /> Download
                 </a>
-                {!activeTab.binary && (
+                {!activeTab.binary && !isWorktreeYmlPath(activeTab.path) && (
                   <button
                     type="button"
                     className="btn btn-sm btn-primary"
@@ -1297,30 +1237,41 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         <Download className="icon" aria-hidden /> Download {activeTab.path.split('/').pop()} (
                         {formatBytes(activeTab.sizeBytes)})
                       </a>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => void handleDeleteFile(activeTab.path)}
-                      >
-                        <Trash2 className="icon" aria-hidden /> Delete File
-                      </button>
+                      {!isWorktreeYmlPath(activeTab.path) && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => void handleDeleteFile(activeTab.path)}
+                        >
+                          <Trash2 className="icon" aria-hidden /> Delete File
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               ) : (
-                <StandaloneMonacoEditor
-                  filePath={`${targetId}:${activeTab.path}`}
-                  language={detectLanguage(activeTab.path)}
-                  theme={monacoTheme(themeMode)}
-                  value={activeTab.content}
-                  onChange={(nextVal: string) => {
-                    setTabs((prev) =>
-                      prev.map((t) =>
-                        t.path === activeTab.path ? { ...t, content: nextVal } : t,
-                      ),
-                    );
-                  }}
-                />
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  {isWorktreeYmlPath(activeTab.path) && (
+                    <p className="muted small worktree-readonly-note" style={{ margin: 0, padding: '6px 12px' }}>
+                      {WORKTREE_YML_EDIT_IN_SETTINGS}{' '}
+                      <Link href={`/projects/${projectId}/settings?${WORKTREE_EDIT_PARAM}`}>Open Project settings</Link>
+                    </p>
+                  )}
+                  <div style={{ flex: 1, minHeight: 0 }}>
+                    <MonacoEditor
+                      filePath={`${targetId}:${activeTab.path}`}
+                      language={detectLanguage(activeTab.path)}
+                      theme={monacoTheme(themeMode)}
+                      value={activeTab.content}
+                      readOnly={isWorktreeYmlPath(activeTab.path)}
+                      onChange={(nextVal: string) => {
+                        setTabs((prev) =>
+                          prev.map((t) => (t.path === activeTab.path ? { ...t, content: nextVal } : t)),
+                        );
+                      }}
+                    />
+                  </div>
+                </div>
               )
             ) : (
               <div

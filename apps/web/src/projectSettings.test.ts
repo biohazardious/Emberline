@@ -1,6 +1,19 @@
 import type { ProjectSettingsResponse, WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { approveEnabled, gateChoice, gateChoices, gateUpdate, worktreeBanner } from './projectSettings';
+import { ApiRequestError } from './api';
+import {
+  approveEnabled,
+  bannerOffersEdit,
+  gateChoice,
+  gateChoices,
+  gateUpdate,
+  WORKTREE_EDIT_HINT,
+  WORKTREE_SAVE_LABEL,
+  worktreeBanner,
+  worktreeEditorStart,
+  worktreeSaveEnabled,
+  worktreeSaveFailure,
+} from './projectSettings';
 
 const status = (o: Partial<WorktreeConfigStatusResponse> = {}): WorktreeConfigStatusResponse => ({
   approved: null,
@@ -110,5 +123,53 @@ describe('gate controls', () => {
     expect(gateUpdate('secretGuardGate', 'inherit')).toEqual({ gates: { secretGuardGate: null } });
     expect(gateUpdate('secretGuardGate', 'on')).toEqual({ gates: { secretGuardGate: true } });
     expect(gateUpdate('secretGuardGate', 'off')).toEqual({ gates: { secretGuardGate: false } });
+  });
+});
+
+describe('worktree.yml editor helpers', () => {
+  it('starts from HEAD, or from the template without one', () => {
+    expect(worktreeEditorStart(status({ head: { content: 'version: 2\n', sha256: 'a'.repeat(64) } }))).toEqual({
+      content: 'version: 2\n',
+      baseSha256: 'a'.repeat(64),
+    });
+    expect(worktreeEditorStart(status({ head: null }))).toEqual({ content: 'version: 1\n', baseSha256: null });
+    expect(worktreeEditorStart(undefined)).toEqual({ content: 'version: 1\n', baseSha256: null });
+  });
+
+  it('Save waits for a clean, finished validation', () => {
+    expect(worktreeSaveEnabled({ errors: [], validating: false, busy: false })).toBe(true);
+    expect(worktreeSaveEnabled({ errors: ['x'], validating: false, busy: false })).toBe(false);
+    expect(worktreeSaveEnabled({ errors: [], validating: true, busy: false })).toBe(false);
+    expect(worktreeSaveEnabled({ errors: [], validating: false, busy: true })).toBe(false);
+  });
+
+  it('a 409 offers Reload with its message; a 400 shows the errors', () => {
+    expect(worktreeSaveFailure(new ApiRequestError(409, 'worktree_config_changed', 'changed'))).toEqual({
+      message: 'changed',
+      errors: [],
+      reload: true,
+    });
+    expect(worktreeSaveFailure(new ApiRequestError(400, 'worktree_config_invalid', 'bad', { errors: ['e1'] }))).toEqual({
+      message: 'bad',
+      errors: ['e1'],
+      reload: false,
+    });
+    expect(worktreeSaveFailure(new ApiRequestError(500, 'http_error', 'git said no'))).toEqual({
+      message: 'git said no',
+      errors: [],
+      reload: false,
+    });
+    expect(worktreeSaveFailure(new Error('offline'))).toEqual({ message: 'offline', errors: [], reload: false });
+  });
+
+  it('the Board banner offers Edit only for an unusable file', () => {
+    expect(bannerOffersEdit(worktreeBanner(status({ changed: true, unusable: true, errors: ['link'] })))).toBe(true);
+    expect(bannerOffersEdit(worktreeBanner(status({ changed: true, head: { content: 'x', sha256: 'a'.repeat(64) } })))).toBe(false);
+    expect(bannerOffersEdit(null)).toBe(false);
+  });
+
+  it("the copy is the spec's", () => {
+    expect(WORKTREE_SAVE_LABEL).toBe('Save and approve');
+    expect(WORKTREE_EDIT_HINT).toBe('Saving commits the file to main and approves it. Runs use it from their next start.');
   });
 });
