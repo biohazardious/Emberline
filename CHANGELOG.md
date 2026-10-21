@@ -4,6 +4,24 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-21
+
+### Added
+
+- `.emberline/worktree.yml` can be edited on Project settings (Edit, then "Save and approve"): the editor checks the file as you type, and saving commits it to main and approves it in one step. Runs use it from their next start. When the file in the repository can't be used, the Board banner has Edit too. The Code Explorer lists the file read-only and links to the editor.
+- A container preview whose app does not allow being shown inside another page (`X-Frame-Options` or `Content-Security-Policy: frame-ancestors`) now says so, with the header, and offers "Open in new tab" instead of a blank frame. When Emberline can't tell, a line under the frame says to open it in a new tab if it stays blank.
+
+### Fixed
+
+- A new project's Bootstrap or Deploy ticket could write its own ticket plan while the [Factory] ticket planned the same work, so the board got two overlapping plans. The [Factory] ticket is now the only planner of a wizard project: a tickets file from Bootstrap or Deploy creates no tickets while it is open ("Ticket plan left to the [Factory] ticket"), and their instructions, the generated CLAUDE.md and the architect's prompt say so.
+- A tickets file draft with the same title as an open ticket, or as an earlier draft in the same file, is skipped; drafts that depended on it depend on the existing ticket.
+- An Auto Bootstrap (stack left to the agent) that finished without writing the commands into `.emberline/worktree.yml` was merged and the build gate silently fell back to detection. It is now held and asked once to add them.
+
+### Upgrade notes
+
+- The compose file is unchanged. Only core (with the web app) has changes of its own, but updating with the published images (`docker compose pull && docker compose up -d`) also replaces the runner container, which stops running agents, so update when they are idle. From source, `make upgrade-core` updates core alone.
+- Projects created before 0.4.0 have no recorded wizard tickets: their tickets files are imported as before.
+
 ## [0.3.6] - 2026-10-21
 
 ### Fixed

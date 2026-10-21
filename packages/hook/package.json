@@ -1,7 +1,7 @@
 {
   "name": "@emberline/hook",
   "license": "AGPL-3.0-or-later",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "emberline-hook: forwards Claude Code hook payloads to Emberline core; emberline-mcp serves the ticket_complete and preview tools.",
