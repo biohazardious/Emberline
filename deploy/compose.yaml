@@ -8,6 +8,11 @@
 #   - Choose where the projects live: by default a named volume; set EMBERLINE_WORKSPACES to a host
 #     path (for example a TrueNAS dataset such as /mnt/tank/apps/emberline/workspaces) to see and
 #     back them up from the host. The runner works as uid 1000, so that path must be writable by it.
+#   - The Docker engine for agents and compose previews (privileged, rootless; see SECURITY.md) is on
+#     by default. To turn it off, set EMBERLINE_DOCKER_ENGINE=0 in the stack's environment (Portainer:
+#     environment variables; Dockge: .env). Where there is no environment (TrueNAS "Install via YAML"),
+#     replace both ${EMBERLINE_DOCKER_ENGINE:-1} below with 0.
+#   - Needs Docker Compose v2: docker-compose 1.x ignores deploy.replicas and would start the engine anyway.
 #   - The first start prints a one-time setup token in the core log.
 # See SECURITY.md before exposing it beyond localhost.
 name: emberline
@@ -72,7 +77,7 @@ services:
     #   - "20"   # the group owning the device on the host: stat -c %g /dev/ttyACM0
 
   # Docker engine for agents and compose previews, on by default: EMBERLINE_DOCKER_ENGINE=0 in .env
-  # scales it to zero replicas (no container). Rootless Docker-in-Docker; the host's
+  # (or the host's equivalent environment) scales it to zero replicas (no container). Rootless Docker-in-Docker; the host's
   # Docker socket is never mounted anywhere. dind must run privileged (rootless included): see
   # SECURITY.md. Its API (tcp 2376) requires client certificates (mutual TLS), which only Emberline's
   # runner holds; nothing else on the compose network, and no container inside the engine, can use it.
