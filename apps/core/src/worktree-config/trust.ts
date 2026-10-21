@@ -4,13 +4,16 @@
  * the main workspace's HEAD applies once a person approved exactly that content.
  */
 import { createHash } from 'node:crypto';
-import type { WorktreeConfigStatusResponse } from '@emberline/protocol';
+import { ADOPT_FILE_PATHS, MAX_WORKTREE_YML_BYTES, type WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projectWorktreeConfig } from '../db/schema.js';
 import { badRequest, conflict } from '../errors.js';
 import { readHeadWorktreeYml } from '../factory/detect.js';
+import { isMissing, UnsafePathError } from '../outputs/safe-fs.js';
+import { readWorktreeBytes } from '../runs/git.js';
 import { unifiedDiff } from './diff.js';
+import { parseWorktreeYml } from './load.js';
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -81,4 +84,32 @@ export async function approveWorktreeConfig(
     .onConflictDoUpdate({ target: projectWorktreeConfig.projectId, set: approval })
     .run();
   return worktreeConfigStatus(db, project);
+}
+
+/**
+ * Why a run worktree's `.emberline/worktree.yml` could not be used once merged, or null when it may
+ * land: the run removed it (or never had one), left main's committed content as it is (a main whose
+ * file is already unusable does not block runs that do not touch it), or changed it into a valid
+ * file. Read from the working tree, which is what the merge commits, and never through a link.
+ */
+export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspacePath: string): Promise<string[] | null> {
+  const rel = ADOPT_FILE_PATHS.worktreeYml;
+  let content: string | null = null;
+  let unreadable: string | null = null;
+  try {
+    const bytes = await readWorktreeBytes(worktreePath, rel, MAX_WORKTREE_YML_BYTES);
+    if (bytes) content = bytes.toString('utf8');
+    else unreadable = `${rel} is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`;
+  } catch (error) {
+    if (isMissing(error) && !(error instanceof UnsafePathError)) return null;
+    unreadable =
+      error instanceof UnsafePathError ? `${rel} is not a regular file (a symbolic link or a linked directory)` : `${rel} cannot be read`;
+  }
+  const main = await readHeadWorktreeYml(mainWorkspacePath);
+  const mainContent = main.kind === 'present' ? main.yml.content : undefined;
+  // Main's own file cannot be used either (a link, too large): the run did not make it worse.
+  if (unreadable !== null) return main.kind === 'present' && mainContent === null ? null : [unreadable];
+  if (content === null || content === mainContent) return null;
+  const parsed = parseWorktreeYml(content);
+  return parsed.ok ? null : parsed.errors;
 }

@@ -22,8 +22,54 @@ export function parseWorktreeYml(text: string): WorktreeYmlParse {
   if (parsed.success) return { ok: true, config: parsed.data };
   return {
     ok: false,
-    errors: parsed.error.issues.map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '(file)'}: ${issue.message}`),
+    errors: parsed.error.issues.map((issue) => {
+      const allowed = issue.code === 'unrecognized_keys' ? keysAt(issue.path) : null;
+      const where = issue.path.length > 0 ? issue.path.join('.') : '(file)';
+      return `${where}: ${issue.message}${allowed ? ` (allowed: ${allowed.join(', ')})` : ''}`;
+    }),
   };
+}
+
+/** The parts of a zod schema's definition the walk below reads (zod 4: `.def`). */
+interface SchemaNode {
+  def: {
+    type: string;
+    innerType?: SchemaNode;
+    element?: SchemaNode;
+    options?: readonly SchemaNode[];
+    shape?: Record<string, SchemaNode>;
+  };
+}
+
+/** Wrappers that keep their inner schema's keys (`.default()`, `.optional()`, ...). */
+const WRAPPERS = new Set(['default', 'prefault', 'optional', 'nullable', 'readonly', 'catch', 'nonoptional']);
+
+/** The object schema `node` stands for: through wrappers, and the object option of a union (a copy entry). */
+function objectOf(node: SchemaNode | undefined): SchemaNode | null {
+  while (node && WRAPPERS.has(node.def.type)) node = node.def.innerType;
+  if (!node) return null;
+  if (node.def.type === 'object') return node;
+  if (node.def.type === 'union') return node.def.options?.map(objectOf).find((option) => option !== null) ?? null;
+  return null;
+}
+
+/**
+ * The keys the schema allows at `path` (an object's issue path: root, `checks`, `services.N`,
+ * `services.N.compose`, `copy.N`), read from WorktreeConfig itself; null when the path is not an object.
+ */
+function keysAt(path: readonly PropertyKey[]): string[] | null {
+  let node: SchemaNode | undefined = WorktreeConfig as unknown as SchemaNode;
+  for (const segment of path) {
+    if (typeof segment === 'number') {
+      while (node && WRAPPERS.has(node.def.type)) node = node.def.innerType;
+      node = node?.def.type === 'array' ? node.def.element : undefined;
+    } else {
+      node = objectOf(node)?.def.shape?.[String(segment)];
+    }
+    if (!node) return null;
+  }
+  const object = objectOf(node);
+  return object?.def.shape ? Object.keys(object.def.shape) : null;
 }
 
 export interface ApprovedConfig {

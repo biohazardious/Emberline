@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { IssueSyncSettings, type Run, type RunDetail, type Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -1088,5 +1088,184 @@ describe('a run that changed nothing', () => {
     await stop(run);
     await expect.poll(() => statusOf(po.id), { timeout: 10_000 }).toBe('done');
     expect(await eventTypes(run)).not.toContain('no_changes');
+  });
+});
+
+describe('the worktree config check before the merge', () => {
+  const YML = '.emberline/worktree.yml';
+  const INVALID = 'version: 1\nchecks:\n  container: npm run test:container\n';
+  const VALID = 'version: 1\nchecks:\n  test: npm test\n';
+  const MESSAGE = 'checks: Unrecognized key: "container" (allowed: build, lint, test)';
+  const HEADER = '[Worktree config check]';
+  const AGAIN = 'When finished, call `ticket_complete` again.';
+
+  /** A factory ticket run on a project whose main commits `mainYml` (if given) before the run branches. */
+  async function ymlTicket(mainYml?: string) {
+    const project = await createProject();
+    if (mainYml !== undefined) {
+      mkdirSync(path.join(project.path, '.emberline'), { recursive: true });
+      writeFileSync(path.join(project.path, YML), mainYml);
+      wgit(project.path, 'add', YML);
+      wgit(project.path, 'commit', '-q', '-m', 'worktree.yml');
+    }
+    const ticket = await createTicket(project.id, { title: 'Y', status: 'ready' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    return { project, ticket, run: runsFor(ticket.id)[0] as Run };
+  }
+
+  /** The agent writes the run's worktree.yml (and commits it unless `commit: false`). */
+  const writeRunYml = (run: Run, text: string, { commit = true } = {}) => {
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(path.join(run.worktreePath, YML), text);
+    if (!commit) return;
+    wgit(run.worktreePath, 'add', YML);
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'worktree.yml');
+  };
+  const checkPrompts = (run: Run) => followups(run).filter((line) => line.includes(HEADER)).length;
+  const mainHas = (project: { path: string }, rel: string) => existsSync(path.join(project.path, rel));
+
+  it('a run adding an unknown key is held with the message and asked to fix it; its fix then merges', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await settled(passes, 1);
+    const types = await eventTypes(run);
+    expect(types).toContain('build_gate_failed');
+    expect(types).not.toContain('merged_to_main');
+    const note = (await eventPayload(run, 'build_gate_failed')) as { autoFix: boolean; output: string };
+    expect(note.autoFix).toBe(true);
+    expect(note.output).toContain(MESSAGE);
+    // Not merged and not Done; the typed request puts the agent (and its ticket) back to work.
+    expect(await statusOf(ticket.id)).not.toBe('done');
+    expect(mainHas(project, YML)).toBe(false);
+    await expect.poll(() => checkPrompts(run), { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => followups(run).join('\n'), { timeout: 10_000 }).toContain(MESSAGE);
+    await expect.poll(() => followups(run).join('\n'), { timeout: 10_000 }).toContain(AGAIN);
+    expect(followups(run).join('\n')).toContain('Fix it (or remove your change)');
+
+    // The agent fixes the file: the next stop passes the check and merges it.
+    writeRunYml(run, VALID);
+    await nextTurn(run, { summary: 'fixed the file' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).toContain('merged_to_main');
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe(VALID);
+  });
+
+  it('an uncommitted invalid file is checked too (the merge would commit it)', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID, { commit: false });
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('build_gate_failed');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+    expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('a worktree.yml the run turned into a symbolic link is refused, never followed', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeFileSync(path.join(run.worktreePath, 'elsewhere.yml'), VALID);
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    symlinkSync('../elsewhere.yml', path.join(run.worktreePath, YML));
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'link');
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'linked the file' });
+    await settled(passes, 1);
+    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain('not a regular file');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+    expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('a valid change passes and merges', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, VALID);
+    await begin(run);
+    await stop(run, { summary: 'added a test check' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe(VALID);
+  });
+
+  it('an invalid file already on main does not block a run that leaves it alone (Review Focus 4)', async () => {
+    const { project, ticket, run } = await ymlTicket(INVALID);
+    writeFileSync(path.join(run.worktreePath, 'A.txt'), 'A\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'A');
+    await begin(run);
+    await stop(run, { summary: 'did A' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
+    expect(mainHas(project, 'A.txt')).toBe(true);
+  });
+
+  it('a run that deletes the file passes (Review Focus 5)', async () => {
+    const { project, ticket, run } = await ymlTicket(INVALID);
+    wgit(run.worktreePath, 'rm', '-q', YML);
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'remove worktree.yml');
+    await begin(run);
+    await stop(run, { summary: 'removed the broken file' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
+    expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('with the self-healing gate off the invalid file still holds, for a person (autoFix: false)', async () => {
+    await api('PATCH', '/api/factory/settings', { selfHealingBuildGate: false });
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await settled(passes, 1);
+    const note = (await eventPayload(run, 'build_gate_failed')) as { autoFix: boolean; output: string };
+    expect(note).toMatchObject({ autoFix: false });
+    expect(note.output).toContain(MESSAGE);
+    expect(checkPrompts(run)).toBe(0);
+    expect(await statusOf(ticket.id)).toBe('review');
+    // Closed like other holds for a person (kept resumable); a later dispatch does not merge it.
+    await expect.poll(async () => t.runs.get(run.id).endedAt, { timeout: 5_000 }).not.toBeNull();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('a run that cannot take a prompt any more is held for a person', async () => {
+    const { ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const passes = trackPipelines();
+    const svc = t.tickets as unknown as { runPipeline(r: Run, o: object): Promise<void> };
+    const original = svc.runPipeline.bind(t.tickets);
+    svc.runPipeline = (r, o) => original({ ...r, endedAt: new Date().toISOString(), resumable: false }, o);
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await settled(passes, 1);
+    expect(await eventPayload(run, 'build_gate_failed')).toMatchObject({ autoFix: false });
+    expect(checkPrompts(run)).toBe(0);
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  it('an agent that stops again with the file still invalid is not asked twice: held for a person', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await settled(passes, 1);
+    await expect.poll(() => checkPrompts(run), { timeout: 10_000 }).toBe(1);
+    await nextTurn(run, { summary: 'still my way' });
+    await settled(passes, 2);
+    const notes = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+    const gateNotes = notes.events.filter((e) => e.type === 'build_gate_failed').map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    expect(gateNotes).toEqual([true, false]);
+    expect(checkPrompts(run)).toBe(1);
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect(mainHas(project, YML)).toBe(false);
   });
 });

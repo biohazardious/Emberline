@@ -62,6 +62,7 @@ import { branchMergedBefore, pipelineOutcome, reviewUnblockPending, stillHeld } 
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
+import { runWorktreeYmlProblems } from '../worktree-config/trust.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -235,6 +236,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
   private readonly selfHealedRuns = new Set<string>();
+  /** Runs already asked once to fix their branch's worktree.yml: a second invalid stop is a person's. */
+  private readonly worktreeConfigPromptedRuns = new Set<string>();
   private readonly slopHealedRuns = new Set<string>();
   private readonly criticReviewedRuns = new Set<string>();
   private readonly dispatchLock = new KeyedMutex();
@@ -1010,6 +1013,44 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
       }
       return;
+    }
+
+    // 1d. The run's `.emberline/worktree.yml` must stay usable on main: one it added or changed that
+    //     does not parse would be ignored there (only a person sees the banner), so it fails the gate
+    //     before the merge, whatever the self-healing setting and whether a build target exists. The
+    //     agent is asked once to fix it (with the self-healing gate on and a run that can take a
+    //     prompt); after that, or otherwise, the hold is a person's, closed like other holds.
+    //     Build gate, critic and merge wait for the next pass, exactly like a failed build gate.
+    if (run.worktreePath && run.worktreePath !== projectRow.path) {
+      const problems = await runWorktreeYmlProblems(run.worktreePath, projectRow.path);
+      if (problems) {
+        const errorText = problems.join('\n').slice(0, 2_400);
+        const gateNote = { output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`) };
+        const autoFix =
+          fSettings.selfHealingBuildGate && !this.worktreeConfigPromptedRuns.has(run.id) && (!run.endedAt || run.resumable);
+        let asked = false;
+        if (autoFix) {
+          this.worktreeConfigPromptedRuns.add(run.id);
+          // Held before asking: an undelivered request must not let a later dispatch merge the file.
+          this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
+          asked = await this.runs
+            .prompt(
+              run.id,
+              `[Worktree config check] \`.emberline/worktree.yml\` in your branch is not valid, so Emberline would ignore it:\n\n\`\`\`\n${errorText}\n\`\`\`\n\nFix it (or remove your change) so the file matches the schema, then commit before finishing.${this.completionReminder(run, ' ')}`,
+              { automatic: true },
+            )
+            .then(() => true)
+            .catch(() => false);
+        }
+        if (!asked) {
+          this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
+          if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
+          if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
+            await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+          }
+        }
+        return;
+      }
     }
 
     // 2. Polyglot Self-Healing Build, Lint & Unit Test Gate: if enabled and the workspace has a
