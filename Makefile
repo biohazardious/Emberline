@@ -5,7 +5,7 @@ E2E  := docker compose -p emberline-e2e -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password up up-docker down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password up down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -57,16 +57,10 @@ e2e: ## End-to-end smoke test on an isolated core + runner stack (port 7498, rem
 
 # --- production stack ------------------------------------------------------
 
-up: ## Build and start core + runner
+up: ## Build and start core + runner + the Docker engine (off with EMBERLINE_DOCKER_ENGINE=0 in .env)
 	$(PROD) up -d --build
 
-up-docker: ## Same with the isolated Docker engine for agents and compose previews (profile docker)
-	COMPOSE_PROFILES=docker EMBERLINE_DOCKER_HOST=$${EMBERLINE_DOCKER_HOST:-tcp://docker:2376} $(PROD) up -d --build
-	@echo "Docker engine on for this start. To keep it on with 'make up', add to .env:"
-	@echo "  COMPOSE_PROFILES=docker"
-	@echo "  EMBERLINE_DOCKER_HOST=tcp://docker:2376"
-
-down: ## Stop core + runner
+down: ## Stop core + runner + the Docker engine
 	$(PROD) down
 
 logs: ## Follow logs

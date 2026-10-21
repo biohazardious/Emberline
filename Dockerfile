@@ -179,9 +179,9 @@ RUN apt-get update \
 ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN npm install -g --prefix /usr/local --no-fund --no-audit @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
   && test -x /usr/local/bin/playwright-mcp
-# Docker CLI with the compose and buildx plugins, for the opt-in isolated engine (compose profile
-# `docker`). The runner has no daemon and never sees the host's socket: core sets DOCKER_HOST per run
-# while the sidecar answers. Static binaries at exact versions; change a version together with its
+# Docker CLI with the compose and buildx plugins, for the isolated engine (compose service
+# `docker`, on by default). The runner has no daemon and never sees the host's socket: core sets
+# DOCKER_HOST per run while the sidecar answers. Static binaries at exact versions; change a version together with its
 # checksums (docker/compose and docker/buildx publish theirs; the CLI tarball's were taken at pin time).
 # Compose >= 2.24 is required for `!override` (compose previews); compose v5 builds through buildx.
 ARG DOCKER_CLI_VERSION=29.8.2

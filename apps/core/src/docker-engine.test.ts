@@ -156,7 +156,7 @@ describe('DockerEngine probe', () => {
 
   it('says so when the runner image has no Docker CLI', async () => {
     const engine = new DockerEngine('tcp://docker:2376', { exec: async () => failed('spawn docker ENOENT\n', 127) });
-    expect((await engine.probe()).error).toBe('the runner image has no Docker CLI; rebuild it (make up-docker)');
+    expect((await engine.probe()).error).toBe('the runner image has no Docker CLI; rebuild it (make up)');
   });
 
   it('a runner that is not reachable is an error too, never a throw', async () => {

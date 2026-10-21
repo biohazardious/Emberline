@@ -29,8 +29,10 @@ services:
       EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
       # Host path of the workspaces bind mount, only to show where build outputs are on the host.
       EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES_HOST_DIR:-${PWD}/workspaces}
-      # The opt-in Docker engine (profile `docker`): tcp://docker:2376. Unset = no Docker for agents.
-      EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-}
+      # The Docker engine (service `docker`) is on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off
+      # (core then gives agents no Docker, even if a host is set).
+      EMBERLINE_DOCKER_ENGINE: ${EMBERLINE_DOCKER_ENGINE:-1}
+      EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-tcp://docker:2376}
       # Where the runner has the engine's client certificate (core passes it to the CLI there).
       EMBERLINE_DOCKER_CERT_PATH: /run/emberline-docker-certs
       # Preview host ports: the runner publishes the first range (command previews), the docker
@@ -62,7 +64,6 @@ services:
     environment:
       # Same zone as core, so provider limit banners and core's parser agree.
       TZ: ${TZ:-UTC}
-      EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-}
     volumes:
       - ptyd-socket:/run/emberline
       - ${EMBERLINE_WORKSPACES_HOST_DIR:-./workspaces}:/workspaces
@@ -71,18 +72,19 @@ services:
       # Persists dynamically installed & updated AI CLI tools (/opt/ai-tools/bin, /opt/ai-tools/npm).
       - runner-tools:/opt/ai-tools
       - runner-logs:/var/log/emberline
-      # The Docker engine's client certificate (empty while the profile is off); agents may use it.
+      # The Docker engine's client certificate (empty while the engine is off); agents may use it.
       - docker-client-certs:/run/emberline-docker-certs:ro
 
-  # Opt-in Docker engine for agents and compose previews: set COMPOSE_PROFILES=docker and
-  # EMBERLINE_DOCKER_HOST=tcp://docker:2376 in .env, or run `make up-docker`. Rootless Docker-in-Docker; the host's
+  # Docker engine for agents and compose previews, on by default: EMBERLINE_DOCKER_ENGINE=0 in .env
+  # scales it to zero replicas (no container). Rootless Docker-in-Docker; the host's
   # Docker socket is never mounted anywhere. dind must run privileged (rootless included): see
   # SECURITY.md. Its API (tcp 2376) requires client certificates (mutual TLS), which only Emberline's
   # runner holds; nothing else on the compose network, and no container inside the engine, can use it.
   # 2376 has no `ports` entry.
   docker:
     image: docker:29.8.2-dind-rootless
-    profiles: [docker]
+    deploy:
+      replicas: ${EMBERLINE_DOCKER_ENGINE:-1}
     restart: unless-stopped
     privileged: true
     environment:

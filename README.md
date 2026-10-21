@@ -44,6 +44,8 @@ docker compose up -d         # the latest release; pin one with EMBERLINE_VERSIO
 docker compose logs core     # the first start prints a one-time setup token
 ```
 
+The privileged, rootless [Docker engine](#docker-engine) for agents and compose previews is on by default; set `EMBERLINE_DOCKER_ENGINE=0` in `.env` to turn it off.
+
 ### From source
 
 Building from source additionally needs `make` and `git`; nothing else is installed on the host.
@@ -91,8 +93,8 @@ Set these in `.env` (read by `compose.yaml`):
 | `EMBERLINE_PREVIEW_PORTS_RUNNER` | `4300-4324`    | Host ports for command previews (dev servers), published by the runner on `EMBERLINE_BIND`.                                                                                                                                       |
 | `EMBERLINE_PREVIEW_PORTS_DOCKER` | `4325-4349`    | Host ports for compose previews, published by the Docker engine. Keep the two ranges apart.                                                                                                                                       |
 | `EMBERLINE_PREVIEW_HOST`         | unset          | Base URL previews open on, such as `http://previews.lan` (a second name for this machine); unset uses the host name you opened Emberline by. A separate name keeps Emberline's session cookie away from previews ([SECURITY.md](SECURITY.md#preview-ports-and-the-session-cookie)). |
-| `COMPOSE_PROFILES`               | unset          | `docker` starts the optional [Docker engine](#docker-engine-optional).                                                                                                                                                            |
-| `EMBERLINE_DOCKER_HOST`          | unset          | `tcp://docker:2376` with the Docker engine on; unset means agents get no Docker.                                                                                                                                                  |
+| `EMBERLINE_DOCKER_ENGINE`        | `1`            | `0` turns the [Docker engine](#docker-engine) off; it is on by default. |
+| `EMBERLINE_DOCKER_HOST`          | `tcp://docker:2376` | Where core reaches the engine. Only change it for an engine of your own; `EMBERLINE_DOCKER_ENGINE=0` wins over it. |
 
 Core also understands the following variables. They are not passed through by `compose.yaml`; add them to the `core` service's `environment` if you need them:
 
@@ -130,7 +132,7 @@ checks:               # override the build gate's detected steps (in order)
   test: pnpm test
 ```
 
-**Containers (version 2).** With the [Docker engine](#docker-engine-optional) on, a `version: 2` file can preview a service of the project's own compose file instead of a command:
+**Containers (version 2).** With the [Docker engine](#docker-engine) on, a `version: 2` file can preview a service of the project's own compose file instead of a command:
 
 ```yaml
 version: 2
@@ -142,7 +144,7 @@ services:
     preview: true
 ```
 
-Preview then runs `docker compose up -d --build web` in the engine under its own compose project and publishes the container port on a free port of `EMBERLINE_PREVIEW_PORTS_DOCKER`. Host ports and `container_name` fixed in the compose file are dropped for the preview, so parallel runs never collide. Top-level volumes and networks that set an explicit `name:` are not renamed: every run's preview (and every agent) shares them, so leave `name:` out unless you want that. The preview shows "starting" while it builds, and a failed build or a container that exits shows the end of its output. Without the engine, Preview answers "enable the Docker engine (COMPOSE_PROFILES=docker)". The wizard writes such a file for the Docker Compose deploy target while the engine is on.
+Preview then runs `docker compose up -d --build web` in the engine under its own compose project and publishes the container port on a free port of `EMBERLINE_PREVIEW_PORTS_DOCKER`. Host ports and `container_name` fixed in the compose file are dropped for the preview, so parallel runs never collide. Top-level volumes and networks that set an explicit `name:` are not renamed: every run's preview (and every agent) shares them, so leave `name:` out unless you want that. The preview shows "starting" while it builds, and a failed build or a container that exits shows the end of its output. With the engine turned off, Preview says so and how to turn it on. The wizard writes such a file for the Docker Compose deploy target while the engine is on.
 
 **Preview & Build and Live Browser.** With a compose preview service and the engine on, the project's **Preview & Build** tab opens main and every run on its container preview: its state, **Start** / **Stop**, the end of the output when it fails, and the page itself (**Open** gives a new tab). Main's preview runs from the main workspace under its own compose project, `emberline-main-<id>-preview`, and is rebuilt after every merge into main; when that refresh fails the preview is down until you press **Start**. The static build stays under **Static build**: it shows when and from which commit it was built, and main's is rebuilt after every merge with the approved setup and checks. Live Browser's **Open Project Demo**, **Auto-Interact** and **Run QA Browser Check** start the container preview first and open it in the shared browser at the address the runner reaches (`http://docker:<port>/`); without one they open the static build. Claude runs get a `preview` tool that does the same for their own worktree (pre-allowed in the `auto` and `bypassPermissions` modes, asked for in the others), and `$EMBERLINE_DEMO_URL` points at the run's own static build.
 
@@ -154,18 +156,21 @@ Preview then runs `docker compose up -d --build web` in the engine under its own
 
 **Removing a project.** **Remove from Emberline** keeps the project's folder; **Remove and delete files** deletes it. A project imported from a workspaces folder keeps its files unless you choose the second.
 
-## Docker engine (optional)
+## Docker engine
 
-Some projects only run in containers: their own compose file, a database, system packages. Emberline can run an isolated Docker engine next to the runner, so agents can build and run containers and Preview can show a compose service. It is off by default.
+Some projects only run in containers: their own compose file, a database, system packages. Emberline runs an isolated Docker engine next to the runner, so agents can build and run containers and Preview can show a compose service. It is on by default: `make up` and `docker compose up -d` start it. The first start pulls `docker:29.8.2-dind-rootless` (a few hundred MB).
 
-**Turning it on.** Add these two lines to `.env` and run `make up` (with the published images, `docker compose up -d`):
+**Turning it off.** Add this line to `.env` and run `make up` again (with the published images, `docker compose up -d`):
 
 ```sh
-COMPOSE_PROFILES=docker
-EMBERLINE_DOCKER_HOST=tcp://docker:2376
+EMBERLINE_DOCKER_ENGINE=0
 ```
 
-`make up-docker` starts it once without editing `.env`. A later plain `make up` makes Emberline stop using the engine, but does not stop the engine's container; stop it with `docker compose --profile docker stop docker` (remove it with `docker compose --profile docker rm -sf docker`). The Dashboard shows "Docker engine: on (version)", "off", or "unreachable" with the reason.
+Core and the runner then run without Docker, and no engine container is created. Do this on a host that refuses privileged containers or overlayfs: there the `docker` service keeps restarting, the Dashboard shows "Docker engine: unreachable" with the reason, and everything else keeps working, but the wizard writes command previews instead of compose previews. Remove the line and run `make up` to turn it on again. The Dashboard shows "Docker engine: on (version)", "off", or "unreachable" with the reason.
+
+**Stopping it.** `make down` stops the engine with the rest. To stop only the engine while the rest runs, use `docker compose stop docker` (remove its container with `docker compose rm -sf docker`); Emberline then shows it as unreachable until you start it again, so for good set `EMBERLINE_DOCKER_ENGINE=0`.
+
+**Upgrading from 0.3.4 or earlier.** The `COMPOSE_PROFILES=docker` and `EMBERLINE_DOCKER_HOST` lines in `.env` are not needed any more; leaving them does no harm. `make up-docker` is gone: `make up` does the same.
 
 **What agents get.** While the engine answers, every run gets `DOCKER_HOST` and the client certificate variables, plus `EMBERLINE_COMPOSE_PROJECT` (`emberline-` and the first 8 characters of the run id). Its first prompt asks the agent to use that compose project, not to publish fixed host ports, and to stop what it started. A run that takes over another run's worktree keeps that compose project. `worktree.yml` setup and teardown commands and Run Build & Verify's setup get the same variables. All agents share this one engine.
 
@@ -175,7 +180,7 @@ EMBERLINE_DOCKER_HOST=tcp://docker:2376
 
 **Docker page.** While the engine is on, the sidebar shows **Docker**. It lists Emberline's own compose projects in the engine (Agents, Previews, Build & Verify, and Leftovers that the cleanup removes), with their containers, state and published ports (a port of `EMBERLINE_PREVIEW_PORTS_DOCKER` is a link, like a preview link), the engine's disk use, and when the cleanup and the image prune last ran. **Logs** shows the end of a project's output, **Stop** takes its containers down and keeps its volumes, **Remove** also deletes its volumes and the images it built, and **Clean up now** runs the cleanup with the prune at once. Leftovers only offer **Remove**: a stopped leftover would keep its volumes, and the cleanup could no longer find it. Stopping a running agent's project is allowed, with a warning, since the agent may be using it. Compose projects with other names never appear there.
 
-**Privileged, but rootless.** Docker inside a container needs the `privileged` flag, also in rootless mode. In plain words: the engine container can reach much more of the host's kernel than an ordinary container (devices, mounts, kernel settings). Emberline uses the rootless engine, so the Docker daemon and every container it starts run as an unprivileged user (uid 1000 and its sub-uids), never as root on the host. The host's Docker socket is never mounted, so agents cannot see or control the host's own containers. Turn the engine on only if you accept that trade; [SECURITY.md](SECURITY.md#the-optional-docker-engine) has the details.
+**Privileged, but rootless.** Docker inside a container needs the `privileged` flag, also in rootless mode. In plain words: the engine container can reach much more of the host's kernel than an ordinary container (devices, mounts, kernel settings). Emberline uses the rootless engine, so the Docker daemon and every container it starts run as an unprivileged user (uid 1000 and its sub-uids), never as root on the host. The host's Docker socket is never mounted, so agents cannot see or control the host's own containers. It is on by default; if you do not accept that trade, turn it off with `EMBERLINE_DOCKER_ENGINE=0`. [SECURITY.md](SECURITY.md#the-docker-engine) has the details.
 
 **Storage.** Images, containers and volumes live in the `docker-data` volume. `make down` keeps it; `docker compose down -v` deletes it, along with the engine's certificates (a new set is made at the next start). The engine stores layers with overlayfs, which works on ext4, xfs and btrfs; on ZFS (TrueNAS, for example) it needs OpenZFS 2.2 or later.
 
@@ -203,7 +208,7 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 - **Host names are checked.** Requests whose `Host` is not an IP address, `localhost` or a name in `EMBERLINE_ALLOWED_HOSTS` get HTTP 421, which stops DNS-rebinding pages from reaching Emberline through your browser. WebSocket connections must also carry an `Origin` header.
 - **Single admin account.** The first visitor needs the setup token from the server log, so nobody else on the network can claim a fresh instance.
 - **Two containers, two roles.** `core` (API and UI) runs no workspace processes and ships without git, ssh or build tools. Everything that runs in a workspace (agents, git, installs, builds, tests) runs in `runner`. Git commands ignore repository hooks and command-running config.
-- **The optional Docker engine is privileged.** It runs rootless and never gets the host's Docker socket, and its API needs a client certificate, but the container itself is privileged, and anything that can start containers in it (every agent) can control all of it. See [Docker engine](#docker-engine-optional).
+- **The Docker engine is privileged, and on by default.** It runs rootless and never gets the host's Docker socket, and its API needs a client certificate, but the container itself is privileged, and anything that can start containers in it (every agent) can control all of it. See [Docker engine](#docker-engine).
 - **Preview ports are published.** The runner publishes 4300-4324 on `EMBERLINE_BIND` on every install; with `0.0.0.0` a running preview is open to your network without a login.
 - **The runner is one trust domain.** All agents and terminals run as the same user and can read each other's workspaces and the provider logins in the runner's home. Don't run agents for projects you don't trust next to ones you do.
 - **Secrets are stored in plaintext** in the SQLite database in core's data volume. They are never sent back to the browser, but anyone with access to that volume or a backup can read them.

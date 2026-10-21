@@ -183,7 +183,7 @@ export class DockerEngine {
         timeoutMs: PROBE_TIMEOUT_MS,
       });
       if (result.exitCode === 127 && /ENOENT|not found/.test(result.stderr)) {
-        return off('the runner image has no Docker CLI; rebuild it (make up-docker)');
+        return off('the runner image has no Docker CLI; rebuild it (make up)');
       }
       if (result.timedOut) return off(`no answer from ${host} within ${PROBE_TIMEOUT_MS / 1000} s`);
       if (result.exitCode !== 0) return off(result.stderr || result.stdout || `docker version exited with ${result.exitCode}`);

@@ -8,9 +8,13 @@ services:
     environment:
       EMBERLINE_SETUP_TOKEN: e2e-setup-token
       EMBERLINE_METRICS_TOKEN: e2e-metrics-token
+      # No engine in e2e (no privileged dind on CI runners), whatever .env says.
+      EMBERLINE_DOCKER_ENGINE: "0"
   runner:
     image: emberline/runner:e2e
     # Preview ports stay unpublished: a running Emberline already holds them.
     ports: !reset []
   docker:
+    deploy:
+      replicas: 0
     ports: !reset []

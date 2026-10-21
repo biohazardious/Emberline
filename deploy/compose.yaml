@@ -26,8 +26,10 @@ services:
       EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
       # Shows host paths of build outputs when EMBERLINE_WORKSPACES is a host path.
       EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES:-}
-      # The opt-in Docker engine (profile `docker`): tcp://docker:2376. Unset = no Docker for agents.
-      EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-}
+      # The Docker engine (service `docker`) is on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off
+      # (core then gives agents no Docker, even if a host is set).
+      EMBERLINE_DOCKER_ENGINE: ${EMBERLINE_DOCKER_ENGINE:-1}
+      EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-tcp://docker:2376}
       # Where the runner has the engine's client certificate (core passes it to the CLI there).
       EMBERLINE_DOCKER_CERT_PATH: /run/emberline-docker-certs
       # Preview host ports: the runner publishes the first range (command previews), the docker
@@ -54,14 +56,13 @@ services:
       - "${EMBERLINE_BIND:-127.0.0.1}:${EMBERLINE_PREVIEW_PORTS_RUNNER:-4300-4324}:${EMBERLINE_PREVIEW_PORTS_RUNNER:-4300-4324}"
     environment:
       TZ: ${TZ:-UTC}
-      EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-}
     volumes:
       - ptyd-socket:/run/emberline
       - ${EMBERLINE_WORKSPACES:-workspaces}:/workspaces
       - runner-home:/home/node
       - runner-tools:/opt/ai-tools
       - runner-logs:/var/log/emberline
-      # The Docker engine's client certificate (empty while the profile is off); agents may use it.
+      # The Docker engine's client certificate (empty while the engine is off); agents may use it.
       - docker-client-certs:/run/emberline-docker-certs:ro
     # Optional: hand a USB serial board to the agents (see compose.usb.yaml in the repository).
     # The board must be plugged in when the runner starts; the device keeps its host name.
@@ -70,15 +71,16 @@ services:
     # group_add:
     #   - "20"   # the group owning the device on the host: stat -c %g /dev/ttyACM0
 
-  # Opt-in Docker engine for agents and compose previews: set COMPOSE_PROFILES=docker and
-  # EMBERLINE_DOCKER_HOST=tcp://docker:2376 in .env (or the host's equivalent environment). Rootless Docker-in-Docker; the host's
+  # Docker engine for agents and compose previews, on by default: EMBERLINE_DOCKER_ENGINE=0 in .env
+  # scales it to zero replicas (no container). Rootless Docker-in-Docker; the host's
   # Docker socket is never mounted anywhere. dind must run privileged (rootless included): see
   # SECURITY.md. Its API (tcp 2376) requires client certificates (mutual TLS), which only Emberline's
   # runner holds; nothing else on the compose network, and no container inside the engine, can use it.
   # 2376 has no `ports` entry.
   docker:
     image: docker:29.8.2-dind-rootless
-    profiles: [docker]
+    deploy:
+      replicas: ${EMBERLINE_DOCKER_ENGINE:-1}
     restart: unless-stopped
     privileged: true
     environment:
