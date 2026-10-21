@@ -10,7 +10,7 @@ import { KeyedMutex } from '../keyed-mutex.js';
 import { CHAIN_MAX } from '../review/blocking.js';
 import type { Scheduler } from '../scheduler/service.js';
 import { currentHold } from './hold-outcome.js';
-import { buildRecovery, type RecoveryInput } from './recovery.js';
+import { buildRecovery, NEEDS_PERSON_INPUT, type RecoveryInput } from './recovery.js';
 import { isHeldRun, type RunService } from './service.js';
 
 /** The handoff reason of a held run that continues in a successor. */
@@ -86,10 +86,13 @@ export class RecoveryService {
     return { ...recovery, delivery: this.deliveryFor(run) };
   }
 
-  /** The first prompt suggestion of the run's recovery: what an empty Resume of a held run sends. */
+  /**
+   * The first prompt suggestion of the run's recovery that can go as it is: what an empty Resume of
+   * a held run sends. Null (the plain continue) when only a form for the person's answer fits.
+   */
   async holdPrompt(runId: string): Promise<string | null> {
     const recovery = await this.get(runId);
-    return recovery?.suggestions.find((s) => s.kind === 'prompt')?.prompt ?? null;
+    return recovery?.suggestions.find((s) => s.kind === 'prompt' && !NEEDS_PERSON_INPUT.has(s.id))?.prompt ?? null;
   }
 
   /**

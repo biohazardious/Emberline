@@ -238,6 +238,13 @@ describe('GET /api/runs/:id/recovery', () => {
     expect(await t.recovery.holdPrompt('r1')).toContain('ticket_complete');
     expect(await t.recovery.holdPrompt('r2')).toBeNull();
   });
+
+  it('holdPrompt skips a prompt the person has to fill in (the blockers answer)', async () => {
+    seedRun({ id: 'r1', hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } } });
+    const { body } = await recovery('r1');
+    expect(body!.suggestions[0]).toMatchObject({ id: 'answer_blockers', kind: 'prompt' });
+    expect(await t.recovery.holdPrompt('r1')).toBeNull();
+  });
 });
 
 describe('RecoveryService.deliveryFor', () => {
@@ -439,6 +446,15 @@ describe('delivering a recovery prompt', () => {
       expect(res.json()).toMatchObject({ error: 'worktree_missing' });
     });
 
+    it('a blocked run gets the answer the person wrote', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt, hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } } });
+      const res = await recover('r1', 'Use the TEST_KEY variable.');
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as RecoverResponse).delivery).toBe('session');
+      expect(await resumedWith('r1')).toBe('Use the TEST_KEY variable.');
+    });
+
     it('two concurrent calls start one successor; the other is told nothing holds the run', async () => {
       const wt = worktree('el-2', { 'new.js': 'x\n' });
       seedRun({ id: 'el-2', ...wt, stops: [legacyStop, exitNoted] });
@@ -493,6 +509,13 @@ describe('delivering a recovery prompt', () => {
         expect((await post(`/api/runs/${id}/resume`, payload)).statusCode, id).toBe(200);
         expect(await resumedWith(id), id).toBe(expected);
       }
+    });
+
+    it('without text on a blocked run sends the plain continue, not the empty answer form', async () => {
+      const wt = worktree('r1', { 'new.js': 'x\n' });
+      seedRun({ id: 'r1', ...wt, hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } } });
+      expect((await post('/api/runs/r1/resume', {})).statusCode).toBe(200);
+      expect(await resumedWith('r1')).toBe(CONTINUE_PROMPT);
     });
 
     it('with text keeps the text', async () => {
