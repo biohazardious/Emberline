@@ -999,6 +999,81 @@ describe('a run that changed nothing', () => {
     expect(await eventTypes(run)).not.toContain('no_changes');
   });
 
+  it('a run whose tickets file created tickets is not held (it produced board work)', async () => {
+    const { project, ticket, run } = await emptyFactoryTicket();
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+      JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Follow-up' }] }),
+    );
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('no_changes');
+    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title);
+    expect(titles).toContain('Follow-up');
+  });
+
+  /** The run's own commit, fast-forwarded into main by hand: its tip is now on main's first-parent line. */
+  const fastForwarded = async () => {
+    const made = await factoryTicket();
+    wgit(made.project.path, 'merge', '-q', '--ff-only', made.run.branch!);
+    return made;
+  };
+
+  it('own commits fast-forwarded into main with a recorded merge reach Done', async () => {
+    const { ticket, run } = await fastForwarded();
+    t.runs.note(run.id, 'merged_by_person', {});
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('no_changes');
+  });
+
+  it('the same fast-forward without a recorded merge is held: the merge note is what passes it', async () => {
+    const { ticket, run } = await fastForwarded();
+    const passes = trackPipelines();
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('no_changes');
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  /** A run the current one took over from (handoff), on `branch`, whose merge into main was recorded. */
+  const mergedPredecessor = (run: Run, branch: string | null) => {
+    const row = t.db.select().from(runs).where(eq(runs.id, run.id)).get()!;
+    const id = `pred-${run.id}`;
+    t.db.insert(runs).values({ ...row, id, branch, ptydSessionId: null, hookTokenHash: `pred-${row.hookTokenHash}`, handedOffTo: run.id }).run();
+    t.db.update(runs).set({ predecessorRunId: id }).where(eq(runs.id, run.id)).run();
+    t.runs.note(id, 'merged_to_main', { summary: 'merged' });
+  };
+
+  it('a predecessor on the same branch already merged it: Done', async () => {
+    const { ticket, run } = await fastForwarded();
+    mergedPredecessor(run, run.branch);
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('no_changes');
+  });
+
+  it("a predecessor's merge of another branch does not count", async () => {
+    const { ticket, run } = await fastForwarded();
+    mergedPredecessor(run, 'emberline/other');
+    const passes = trackPipelines();
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('no_changes');
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
   it('the [Factory] orchestrator ticket (only a tickets file) is not held', async () => {
     const project = await createProject();
     const po = await createTicket(project.id, { title: '[Factory] Plan it', status: 'ready', persona: 'product_owner' });

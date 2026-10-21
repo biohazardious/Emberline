@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, inArray, lt } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { runEvents } from '../db/schema.js';
+import { runEvents, runs } from '../db/schema.js';
+import { CHAIN_MAX } from '../review/blocking.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 
 /** Notes the completion pipeline writes after a run's switch to `done`; they decide its outcome. */
@@ -160,4 +161,42 @@ export function reviewBlockedIsCurrent(db: Db, runId: string): boolean {
     .limit(1)
     .get();
   return newest?.type === 'review_blocked';
+}
+
+/** The run and the runs it took over from by handoff, the run first (bounded by CHAIN_MAX). */
+export function handoffChain(db: Db, runId: string): string[] {
+  const chain: string[] = [];
+  let id: string | null = runId;
+  while (id && chain.length < CHAIN_MAX && !chain.includes(id)) {
+    chain.push(id);
+    id = db.select({ p: runs.predecessorRunId }).from(runs).where(eq(runs.id, id)).get()?.p ?? null;
+  }
+  return chain;
+}
+
+/** Notes by which a run's branch landed in main: the pipeline's merge, or a person's. Protected from pruning (HOLD_ENDING_EVENTS). */
+const MERGE_NOTES = ['merged_to_main', 'merged_by_person'];
+
+/**
+ * Whether the run's branch was merged into main before: a merge note on the run, or on a run it took
+ * over from that works on the same branch. Its commits may then sit on main's first-parent line (a
+ * fast-forward outside Emberline), where they look like no work at all.
+ */
+export function branchMergedBefore(db: Db, runId: string): boolean {
+  const chain = db
+    .select({ id: runs.id, branch: runs.branch })
+    .from(runs)
+    .where(inArray(runs.id, handoffChain(db, runId)))
+    .all();
+  const branch = chain.find((r) => r.id === runId)?.branch ?? null;
+  const ids = chain.filter((r) => r.id === runId || (branch !== null && r.branch === branch)).map((r) => r.id);
+  if (ids.length === 0) return false;
+  return Boolean(
+    db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(inArray(runEvents.runId, ids), inArray(runEvents.type, MERGE_NOTES)))
+      .limit(1)
+      .get(),
+  );
 }

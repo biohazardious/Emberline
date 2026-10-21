@@ -57,7 +57,7 @@ import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-c
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
 import { openBlockingCount } from '../review/blocking.js';
-import { pipelineOutcome, reviewUnblockPending, stillHeld } from '../runs/hold-outcome.js';
+import { branchMergedBefore, pipelineOutcome, reviewUnblockPending, stillHeld } from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
@@ -855,6 +855,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const ingested = fromWorktree ?? fromMain;
     if (inherited.length > 0) this.runs.note(run.id, 'tickets_file_inherited', { files: [...new Set(inherited)] });
 
+    // Tickets this pass created from the run's tickets file: board work, even without a code change.
+    let importedTickets = 0;
     const draftDepth = (ticketRow?.depth ?? 0) + 1;
     const fSettingsForDepth = getFactorySettings(this.db);
     if (ingested && ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
@@ -896,6 +898,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           });
         }
       }
+      importedTickets = created.length;
       this.applyDraftDependencies(run.id, run.projectId, created);
       if (ingested.autoDispatch) {
         this.chainOn(run.projectId);
@@ -977,14 +980,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // 1c. A run that changed nothing and did not say why (no completion of this turn) is not done:
     //     its branch is already in main, so the merge would find nothing and the ticket would reach
     //     Done empty. It is held for a person instead, its session closed like other holds', and the
-    //     rest of the queue goes on. The Factory orchestrator's output is its tickets file (a scratch
-    //     file), so it is left out; so is a run working in the main workspace itself.
+    //     rest of the queue goes on. Left out: the Factory orchestrator and any run whose tickets file
+    //     created tickets now (board work, in a scratch file), a run working in the main workspace
+    //     itself, and a branch merged before (a fast-forward by hand puts its commits on main's line).
     if (
       ticketRow &&
       !isFactoryOrchestratorTicket &&
+      importedTickets === 0 &&
       run.worktreePath &&
       run.worktreePath !== projectRow.path &&
       !this.runs.latestCompletion(run.id) &&
+      !branchMergedBefore(this.db, run.id) &&
       !(await runProducedChanges(run.worktreePath, projectRow.path))
     ) {
       this.runs.note(run.id, 'no_changes', { autoFix: false });

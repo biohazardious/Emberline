@@ -245,7 +245,6 @@ describe('Emberline commits never carry scratch files', () => {
   });
 });
 
-
 describe('runProducedChanges', () => {
   const produced = (wt: string) => runProducedChanges(wt, main);
 
@@ -292,6 +291,15 @@ describe('runProducedChanges', () => {
     expect((await sync(a, 'T-1')).ok).toBe(true);
     expect(git(main, 'merge-base', '--is-ancestor', git(a, 'rev-parse', 'HEAD'), 'HEAD')).toBe('');
     expect(await produced(a)).toBe(true);
+  });
+
+  it("its own commit fast-forwarded into main by hand looks unchanged here (the pipeline's merge-note guard decides)", async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    git(a, 'add', '-A');
+    git(a, 'commit', '-q', '-m', 'feat: a');
+    git(main, 'merge', '-q', '--ff-only', 'emberline/a');
+    expect(await produced(a)).toBe(false);
   });
 
   it('a worktree that is gone is not checked', async () => {

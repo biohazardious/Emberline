@@ -2,14 +2,13 @@ import { existsSync } from 'node:fs';
 import type { RecoverResponse, Route, Run, RunRecovery } from '@emberline/protocol';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, reviewComments, runs, tickets } from '../db/schema.js';
+import { projects, reviewComments, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
 import { type MergeProbeResult, probeMerge, supersedingFor } from '../factory/merge-probe.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { KeyedMutex } from '../keyed-mutex.js';
-import { CHAIN_MAX } from '../review/blocking.js';
 import type { Scheduler } from '../scheduler/service.js';
-import { currentHold } from './hold-outcome.js';
+import { currentHold, handoffChain } from './hold-outcome.js';
 import { buildRecovery, NEEDS_PERSON_INPUT, type RecoveryInput } from './recovery.js';
 import { isHeldRun, type RunService } from './service.js';
 
@@ -149,12 +148,7 @@ export class RecoveryService {
 
   /** Open blocking review comments on the run and the runs it took over from, one line each. */
   private openBlockingComments(run: Run): string[] {
-    const chain = [run.id];
-    let prev = run.predecessorRunId;
-    while (prev && chain.length < CHAIN_MAX && !chain.includes(prev)) {
-      chain.push(prev);
-      prev = this.db.select({ p: runs.predecessorRunId }).from(runs).where(eq(runs.id, prev)).get()?.p ?? null;
-    }
+    const chain = handoffChain(this.db, run.id);
     return this.db
       .select({ filePath: reviewComments.filePath, line: reviewComments.line, body: reviewComments.body })
       .from(reviewComments)
