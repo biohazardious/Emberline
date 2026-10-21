@@ -15,7 +15,7 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
 import { keptWorktreesSummary } from '../gcSummary';
-import { dockerEngineLine } from '../dockerEngine';
+import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -177,11 +177,8 @@ export function Dashboard({
           convenient (restarts agents).
         </div>
       )}
-      {dockerLine && (
-        <p
-          className="muted dashboard-docker"
-          title="Isolated Docker engine for agents and previews (on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off)"
-        >
+      {dockerLine && system?.docker && (
+        <p className="muted dashboard-docker" title={dockerEngineTitle(system.docker)}>
           {dockerLine}
         </p>
       )}

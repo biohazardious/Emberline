@@ -10,7 +10,7 @@ import { Container, FileText, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import { dockerEngineLine } from '../dockerEngine';
+import { dockerEngineLine, dockerEngineOffState } from '../dockerEngine';
 import {
   actionsFor,
   cleanupLines,
@@ -421,12 +421,10 @@ export function DockerPage() {
         <div className="docker-empty">
           <Container className="icon" aria-hidden />
           <p>
-            <strong>The Docker engine is off.</strong>
+            <strong>{dockerEngineOffState(data.engine).title}</strong>
           </p>
           <p className="muted small">
-            It is turned off by <code className="mono">EMBERLINE_DOCKER_ENGINE=0</code> in{' '}
-            <code className="mono">.env</code>. Remove that line and restart to turn it on. The README's
-            Docker engine section has the details.
+            {dockerEngineOffState(data.engine).text} The README's Docker engine section has the details.
           </p>
         </div>
       )}
