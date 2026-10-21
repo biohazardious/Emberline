@@ -25,7 +25,9 @@ import {
   needsElsewhere,
   type SeenMap,
 } from '../attention';
-import { moreInOtherProjects } from '../projectScope';
+import { AllProjectsToggle } from '../components/AllProjectsToggle';
+import { useAllProjects } from '../hooks/useAllProjects';
+import { inScope, moreInOtherProjects } from '../projectScope';
 import { keptWorktreesSummary } from '../gcSummary';
 import { api, errorMessage } from '../api';
 import { HandoffMenu } from '../components/QuotaLanes';
@@ -144,22 +146,25 @@ export function FleetPage({
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
 
+  const [all, setAll] = useAllProjects('fleet');
   const scopedRuns = useMemo(
-    () => (runs ?? []).filter((r) => !activeProjectId || r.projectId === activeProjectId),
-    [runs, activeProjectId],
+    () => inScope(runs ?? [], (r) => r.projectId, { activeProjectId: activeProjectId ?? null, all }),
+    [runs, activeProjectId, all],
   );
-  /** Fleet shows one project, the badge counts all: say what the other projects add to Needs you. */
-  const elsewhere = useMemo(() => needsElsewhere(runs ?? [], seen, activeProjectId), [runs, seen, activeProjectId]);
+  /** The badge counts every project: say what the other projects add to Needs you. */
+  const elsewhere = useMemo(
+    () => (all ? 0 : needsElsewhere(runs ?? [], seen, activeProjectId)),
+    [runs, seen, activeProjectId, all],
+  );
 
   const counts = useMemo(() => {
-    const all = scopedRuns;
-    const completed = all.filter((r) => isRunCompleted(r)).length;
-    const active = all.filter((r) => sectionOf(r) !== null).length;
+    const completed = scopedRuns.filter((r) => isRunCompleted(r)).length;
+    const active = scopedRuns.filter((r) => sectionOf(r) !== null).length;
     return {
       active,
-      queued: all.filter((r) => r.state === 'queued' && !isRunCompleted(r)).length,
+      queued: scopedRuns.filter((r) => r.state === 'queued' && !isRunCompleted(r)).length,
       completed,
-      total: all.length,
+      total: scopedRuns.length,
     };
   }, [scopedRuns, sectionOf]);
 
@@ -226,7 +231,7 @@ export function FleetPage({
     setNotice(undefined);
     try {
       const res = await api<GarbageCollectRunsResponse>('/api/runs/gc', 'POST', {
-        projectId: activeProjectId ?? undefined,
+        projectId: all ? undefined : (activeProjectId ?? undefined),
         keepRecent,
         includeFailed: true,
         pruneWorktrees: true,
@@ -313,6 +318,8 @@ export function FleetPage({
               )}
             </button>
           )}
+
+          {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
 
           <div className="segmented" role="tablist" aria-label="Fleet filter">
             <button
@@ -474,9 +481,9 @@ export function FleetPage({
       {filter === 'active' && elsewhere > 0 && !sections.some((s) => s.section === 'needs') && (
         <h2 className="fleet-section-head fleet-needs-elsewhere">
           {FLEET_SECTION_LABELS.needs} ·{' '}
-          <Link href="/inbox" className="fleet-section-more">
-            {moreInOtherProjects(elsewhere)} → Inbox
-          </Link>
+          <button type="button" className="link-btn fleet-section-more" onClick={() => setAll(true)}>
+            {moreInOtherProjects(elsewhere)}
+          </button>
         </h2>
       )}
 
@@ -520,9 +527,9 @@ export function FleetPage({
                 <h2 className="fleet-section-head">
                   {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
                   {section === 'needs' && elsewhere > 0 && (
-                    <Link href="/inbox" className="muted small fleet-section-more">
+                    <button type="button" className="link-btn fleet-section-more" onClick={() => setAll(true)}>
                       {moreInOtherProjects(elsewhere)}
-                    </Link>
+                    </button>
                   )}
                 </h2>
               )}

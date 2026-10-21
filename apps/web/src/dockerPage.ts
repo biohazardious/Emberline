@@ -39,6 +39,11 @@ function groupOf(owner: DockerProjectOwner): DockerOwnerKind {
 }
 
 /** The projects by owner kind, in `DOCKER_GROUPS` order; empty groups are left out. */
+/** The project a card names under "All projects": the project's name, "No project" for none (or a name not loaded yet). */
+export function dockerProjectLabel(projectId: string | null, names: ReadonlyMap<string, string>): string {
+  return (projectId && names.get(projectId)) || 'No project';
+}
+
 export function groupDockerProjects(projects: DockerProject[]): DockerGroup[] {
   return DOCKER_GROUPS.map((g) => ({
     ...g,

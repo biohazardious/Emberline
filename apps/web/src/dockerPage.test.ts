@@ -7,6 +7,7 @@ import {
 } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import { ApiRequestError } from './api';
+import { inScope, outOfScope } from './projectScope';
 import {
   cleanupLines,
   cleanupResultText,
@@ -19,6 +20,7 @@ import {
   ownerSummary,
   actionsFor,
   doneStillCurrent,
+  dockerProjectLabel,
   portLink,
   projectServices,
   projectStatusTone,
@@ -371,5 +373,30 @@ describe('chips, ports and services', () => {
       container({ service: null }),
     ]);
     expect(projectServices(p)).toEqual(['db', 'web']);
+  });
+});
+
+describe('dockerProjectLabel', () => {
+  it('names the project, or says there is none', () => {
+    const names = new Map([['p1', 'Shop']]);
+    expect(dockerProjectLabel('p1', names)).toBe('Shop');
+    expect(dockerProjectLabel(null, names)).toBe('No project');
+    expect(dockerProjectLabel('p9', names)).toBe('No project');
+  });
+});
+
+describe('Docker scope', () => {
+  it('the active project keeps its groups; unknown projects only under All projects', () => {
+    const list = [
+      project('emberline-main-aaaaaaaa', { kind: 'main', projectId: 'p1', projectName: 'Shop' }),
+      project('emberline-main-bbbbbbbb', { kind: 'main', projectId: 'p2', projectName: 'Blog' }),
+      project('emberline-cccccccc', { kind: 'orphan' }),
+    ];
+    const scoped = inScope(list, (p) => p.projectId, { activeProjectId: 'p1', all: false });
+    expect(groupDockerProjects(scoped).flatMap((g) => g.projects.map((p) => p.name))).toEqual([
+      'emberline-main-aaaaaaaa',
+    ]);
+    expect(outOfScope(list, (p) => p.projectId, { activeProjectId: 'p1', all: false })).toBe(2);
+    expect(inScope(list, (p) => p.projectId, { activeProjectId: 'p1', all: true })).toHaveLength(3);
   });
 });

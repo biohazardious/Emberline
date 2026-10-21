@@ -5,11 +5,13 @@ import type {
   DockerProject,
   DockerProjectActionResponse,
   DockerProjectLogsResponse,
+  Project,
 } from '@emberline/protocol';
 import { Container, FileText, RefreshCw, Square, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
 import { dockerEngineLine, dockerEngineOffState } from '../dockerEngine';
 import {
   actionsFor,
@@ -20,6 +22,7 @@ import {
   type DockerAction,
   type DockerDone,
   doneStillCurrent,
+  dockerProjectLabel,
   dockerErrorDetails,
   groupDockerProjects,
   ownerBadges,
@@ -28,7 +31,9 @@ import {
   projectServices,
   projectStatusTone,
 } from '../dockerPage';
+import { useAllProjects } from '../hooks/useAllProjects';
 import { useApi } from '../hooks/useApi';
+import { inScope, outOfScope } from '../projectScope';
 import { timeAgo } from '../time';
 
 type ErrorDetails = { message: string; output: string | null };
@@ -155,10 +160,13 @@ function LogsPanel({ project }: { project: DockerProject }) {
 
 function ProjectCard({
   project,
+  projectLabel,
   onStart,
   onDone,
 }: {
   project: DockerProject;
+  /** The Emberline project this card belongs to; shown under "All projects". */
+  projectLabel?: string;
   onStart: () => void;
   onDone: (done: DockerDone) => Promise<void>;
 }) {
@@ -199,6 +207,7 @@ function ProjectCard({
     <li className="docker-project">
       <div className="docker-project-head">
         <strong className="mono docker-project-name">{project.name}</strong>
+        {projectLabel !== undefined && <span className="badge badge-soft">{projectLabel}</span>}
         {project.status && (
           <span className={`badge${statusTone ? ` badge-${statusTone}` : ''}`}>{project.status}</span>
         )}
@@ -374,8 +383,11 @@ function EngineCard({
   );
 }
 
-export function DockerPage() {
+export function DockerPage({ activeProjectId }: { activeProjectId: string | null }) {
   const { data, error: loadError, loading, refresh } = useApi<DockerOverview>('/api/docker', 10_000);
+  const [all, setAll] = useAllProjects('docker');
+  const projectsList = useApi<Project[]>('/api/projects', 15_000);
+  const names = useMemo(() => new Map((projectsList.data ?? []).map((p) => [p.id, p.name])), [projectsList.data]);
   const [done, setDone] = useState<DockerDone | null>(null);
   const statusLine = useRef<HTMLParagraphElement>(null);
 
@@ -397,7 +409,11 @@ export function DockerPage() {
     if (done && data && !doneStillCurrent(done, data.projects)) setDone(null);
   }, [data, done]);
 
-  const groups = data ? groupDockerProjects(data.projects) : [];
+  const scope = { activeProjectId, all };
+  const shown = data ? inScope(data.projects, (p) => p.projectId, scope) : [];
+  const hidden = data ? outOfScope(data.projects, (p) => p.projectId, scope) : 0;
+  const groups = groupDockerProjects(shown);
+  const scoped = Boolean(activeProjectId) && !all;
   const enabled = data?.engine.enabled ?? false;
 
   return (
@@ -408,6 +424,7 @@ export function DockerPage() {
           <h1>Docker</h1>
         </div>
         <span className="muted small">Emberline's compose projects in the Docker engine</span>
+        {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
       </div>
 
       {loadError !== undefined && <DockerAlert error={errorMessage(loadError)} />}
@@ -445,8 +462,14 @@ export function DockerPage() {
             <DockerAlert error={`Containers could not be listed: ${data.containersError}`} />
           )}
 
+          <MoreInOtherProjects count={hidden} onShow={() => setAll(true)} />
+
           {!data.error && groups.length === 0 && (
-            <p className="muted">Emberline runs no compose projects in the engine right now.</p>
+            <p className="muted">
+              {scoped
+                ? 'This project runs no compose projects in the engine right now.'
+                : 'Emberline runs no compose projects in the engine right now.'}
+            </p>
           )}
 
           {groups.map((group) => (
@@ -457,7 +480,13 @@ export function DockerPage() {
               <p className="muted small docker-group-hint">{group.hint}</p>
               <ul className="docker-projects">
                 {group.projects.map((p) => (
-                  <ProjectCard key={p.name} project={p} onStart={clearDone} onDone={onDone} />
+                  <ProjectCard
+                    key={p.name}
+                    project={p}
+                    projectLabel={scoped ? undefined : dockerProjectLabel(p.projectId, names)}
+                    onStart={clearDone}
+                    onDone={onDone}
+                  />
                 ))}
               </ul>
             </section>
