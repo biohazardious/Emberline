@@ -927,7 +927,9 @@ describe('runs', () => {
       await t.runs.closeHeldSession(run.id);
       expect(t.runs.get(run.id).events.filter((e) => e.type === 'idle_session_closed')).toHaveLength(1);
 
-      // A prompt respawns the agent; the hooks of the resumed session are accepted.
+      // A prompt respawns the agent; the hooks of the resumed session are accepted. The first spawn's
+      // token file goes first, so tokenFor waits for the respawned CLI's new token.
+      rmSync(path.join(t.dir, `token-${run.id}`), { force: true });
       expect((await api('POST', `/api/runs/${run.id}/prompt`, { text: 'carry on' })).statusCode).toBe(200);
       const resumedToken = await tokenFor(run.id);
       const res = await hook(run.id, 'UserPromptSubmit', resumedToken, { prompt: 'carry on' });
