@@ -91,7 +91,16 @@ const comment = async (run: Run, body: object): Promise<ReviewComment> => {
 const comments = async (run: Run): Promise<ReviewComment[]> =>
   ((await api('GET', `/api/runs/${run.id}/review`)).json() as RunReviewState).comments;
 const byBody = async (run: Run) => Object.fromEntries((await comments(run)).map((c) => [c.body, c]));
-const requestChanges = (run: Run, body: object = {}) => api('POST', `/api/runs/${run.id}/review/request-changes`, body);
+/**
+ * A turn addresses comments sent strictly before it started (millisecond times): the clock moves
+ * on before the test's next hook, as it always does before a real agent answers.
+ */
+const requestChanges = async (run: Run, body: object = {}) => {
+  const res = await api('POST', `/api/runs/${run.id}/review/request-changes`, body);
+  const sentBy = Date.now();
+  while (Date.now() <= sentBy) await new Promise((resolve) => setTimeout(resolve, 1));
+  return res;
+};
 
 /** Captures prompts instead of typing them into the PTY. */
 function capturePrompts(): string[] {
