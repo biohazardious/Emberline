@@ -46,9 +46,11 @@ describe('recoverErrorText', () => {
       "This run was stopped, so it can't take a prompt. Start a new run or discard the ticket.",
     );
   });
-  it('maps no_session and unknown codes to the delivery-none copy', () => {
-    expect(recoverErrorText('no_session', 'x')).toBe(recoverErrorText('run_stopped_by_you', 'x'));
-    expect(recoverErrorText('weird', 'x')).toBe(recoverErrorText('run_stopped_by_you', 'x'));
+  it('maps no_session and unknown codes to the neutral delivery-none copy', () => {
+    const none = "This run can't take a prompt any more. Start a new run or discard the ticket.";
+    expect(recoverErrorText('no_session', 'x')).toBe(none);
+    expect(recoverErrorText('weird', 'x')).toBe(none);
+    expect(recoverErrorText('no_session', '')).not.toContain('stopped');
   });
   it("keeps the server's message for route checks", () => {
     expect(recoverErrorText('lane_exhausted', 'Lane is out of quota')).toBe('Lane is out of quota');

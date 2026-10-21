@@ -10,7 +10,8 @@ export const recoveryApplies = (run: Pick<Run, 'attention'>): boolean =>
 export const deliveryNote = (delivery: 'session' | 'successor'): string =>
   delivery === 'session' ? 'Sent to the agent' : 'Continuing in a new run on the same branch';
 
-const NO_PROMPT = "This run was stopped, so it can't take a prompt. Start a new run or discard the ticket.";
+const NO_PROMPT = "This run can't take a prompt any more. Start a new run or discard the ticket.";
+const STOPPED = "This run was stopped, so it can't take a prompt. Start a new run or discard the ticket.";
 
 /** Plain text for a `/recover` refusal; other codes (route checks) keep the server's message. */
 export function recoverErrorText(code: string, message: string): string {
@@ -22,6 +23,7 @@ export function recoverErrorText(code: string, message: string): string {
     case 'worktree_missing':
       return "This run's worktree was removed; start a new run.";
     case 'run_stopped_by_you':
+      return STOPPED;
     case 'no_session':
       return NO_PROMPT;
     default:
