@@ -4,6 +4,19 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-21
+
+### Fixed
+
+- A ticket run that ended without changing anything and without saying what it did (for example an agent that was refused every command) used to count as "already merged" and moved its ticket to Done. It is now held in Review as "Finished without changes", with suggestions: do the ticket, mark it done anyway, or discard it. Runs that explained why nothing was needed, runs whose tickets file created tickets, runs whose work was already merged, and the Factory planning ticket are not affected.
+- Antigravity, Copilot and Gemini run without a terminal to answer in, so in Ask and Accept edits modes they silently refused every command. Starting one in those modes is now refused with a message (start it in Autonomous mode or pick another agent), and a run that switches to one of them later (a quota handoff or a fallback) fails with that message instead of finishing empty. Plan mode is unchanged.
+- A run that adds an invalid `.emberline/worktree.yml` (for example an unknown `checks` key) is stopped before the merge and the agent is asked once to fix it; main no longer receives a file Emberline would ignore. A file the run inherited unchanged doesn't count. `worktree.yml` errors now list the allowed keys, for example `checks: Unrecognized key: "container" (allowed: build, lint, test)`.
+
+### Upgrade notes
+
+- Only the core image changes; the runner image has no changes of its own and the compose file is unchanged, so running agents are not affected.
+- If the repository of an existing project already has an invalid `.emberline/worktree.yml` on main (Settings shows "worktree.yml in the repository can't be used"), fix the file in the repository. Runs keep using the approved version meanwhile.
+
 ## [0.3.5] - 2026-10-21
 
 ### Changed
