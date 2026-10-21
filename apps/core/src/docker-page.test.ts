@@ -504,6 +504,7 @@ describe('inventory and ownership (Review Focus 3, 4)', () => {
     expect(byName.get(agent)).toMatchObject({
       status: 'running(2)',
       stale: false,
+      projectId: p.id,
       owner: {
         kind: 'agent',
         runId: live.id,
@@ -526,14 +527,17 @@ describe('inventory and ownership (Review Focus 3, 4)', () => {
     ]);
     expect(byName.get(reviewPreview)).toMatchObject({
       stale: false,
+      projectId: p.id,
       owner: { kind: 'preview', runId: review.id, live: false, inReview: true },
     });
     expect(byName.get(main)).toMatchObject({
       stale: false,
+      projectId: p.id,
       owner: { kind: 'main', projectId: p.id, projectName: 'Shop' },
     });
-    expect(byName.get(leftover)).toMatchObject({ stale: true, owner: { kind: 'orphan' } });
+    expect(byName.get(leftover)).toMatchObject({ stale: true, projectId: p.id, owner: { kind: 'orphan' } });
     expect(byName.get('emberline-main-00000000')).toMatchObject({ stale: true, owner: { kind: 'orphan' } });
+    expect(byName.get('emberline-main-00000000')?.projectId).toBeNull();
 
     // Stale is exactly what the sweep removes.
     const stale = o.projects.filter((x) => x.stale).map((x) => x.name);
@@ -555,6 +559,7 @@ describe('inventory and ownership (Review Focus 3, 4)', () => {
     expect(project).toMatchObject({
       name: shared,
       stale: false,
+      projectId: p.id,
       owner: { kind: 'agent', runId: successor.id, live: true },
     });
   });

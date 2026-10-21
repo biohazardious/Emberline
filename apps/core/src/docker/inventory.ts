@@ -250,6 +250,26 @@ export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerP
 }
 
 /**
+ * The Emberline project of a compose project, by its name (docker/engine.ts): Build & Verify's and
+ * the main preview's through the project, a run's own and its preview's through the run — any run
+ * still in the database, so a leftover of a known run keeps its project. Null when no project or
+ * run has the name.
+ */
+export function dockerProjectIdOf(name: string, facts: OwnershipFacts): string | null {
+  const known = (id: string | undefined): string | null => (id && facts.projects.some((p) => p.id === id) ? id : null);
+  const preview = name.endsWith('-preview');
+  if (name.startsWith('emberline-main-')) {
+    return known(
+      facts.projects.find((p) => (preview ? mainPreviewComposeProjectName(p.id) : mainComposeProjectName(p.id)) === name)?.id,
+    );
+  }
+  const newest = facts.runs
+    .filter((r) => (preview ? previewComposeProjectName(r.id) : composeProjectName(r.id, r.worktreePath)) === name)
+    .sort((a, b) => b.createdAt - a.createdAt)[0];
+  return known(newest?.projectId);
+}
+
+/**
  * The page's projects: Emberline's names from `compose ls` and from the containers' labels (either
  * listing may have failed), each with its containers, owner and whether the next sweep removes it.
  */
@@ -284,6 +304,7 @@ export function buildDockerProjects(input: {
         (a, b) => (a.service ?? '').localeCompare(b.service ?? '') || a.name.localeCompare(b.name),
       ),
       stale: owner.kind === 'orphan',
+      projectId: owner.kind === 'orphan' ? dockerProjectIdOf(name, input.facts) : owner.projectId,
     };
   });
   return {

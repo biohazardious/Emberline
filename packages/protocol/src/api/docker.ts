@@ -120,6 +120,8 @@ export const DockerProject = z.object({
   containers: z.array(DockerContainer),
   /** The next cleanup removes it (always true for an `orphan`, false otherwise). */
   stale: z.boolean(),
+  /** The Emberline project it belongs to; null for a compose project no project or run in Emberline has (shown only under "All projects"). */
+  projectId: z.string().nullable(),
 });
 export type DockerProject = z.infer<typeof DockerProject>;
 

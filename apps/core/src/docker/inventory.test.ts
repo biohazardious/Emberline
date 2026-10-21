@@ -4,6 +4,7 @@ import { composeProjectName, mainComposeProjectName, mainPreviewComposeProjectNa
 import {
   buildDockerProjects,
   composeProjectsInUse,
+  dockerProjectIdOf,
   type OwnershipFacts,
   type OwnershipRun,
   parseComposeLsRows,
@@ -316,6 +317,24 @@ describe('ownership', () => {
       expect(resolveDockerOwner(name, facts).kind === 'orphan', name).toBe(!inUse.has(name));
     }
   });
+  it('each compose name kind maps to its Emberline project (projectId)', () => {
+    const live = run({ id: 'aaaaaaaa-0000-0000-0000-000000000000' });
+    const gone = run({ id: 'bbbbbbbb-0000-0000-0000-000000000000', state: 'done', endedAt: 5, worktreeExists: false });
+    const facts = { runs: [live, gone], projects };
+    expect(dockerProjectIdOf(composeProjectName(live.id, live.worktreePath), facts)).toBe(projectId);
+    expect(dockerProjectIdOf(previewComposeProjectName(live.id), facts)).toBe(projectId);
+    expect(dockerProjectIdOf(mainComposeProjectName(projectId), facts)).toBe(projectId);
+    expect(dockerProjectIdOf(mainPreviewComposeProjectName(projectId), facts)).toBe(projectId);
+    // A leftover of a run still in the database keeps its project.
+    expect(resolveDockerOwner(composeProjectName(gone.id, gone.worktreePath), facts)).toEqual({ kind: 'orphan' });
+    expect(dockerProjectIdOf(composeProjectName(gone.id, gone.worktreePath), facts)).toBe(projectId);
+    // Unknown names: a deleted project's, a removed run's.
+    expect(dockerProjectIdOf('emberline-main-00000000', facts)).toBeNull();
+    expect(dockerProjectIdOf('emberline-cccccccc', facts)).toBeNull();
+    expect(dockerProjectIdOf('emberline-cccccccc-preview', facts)).toBeNull();
+    // A run whose project is gone has no project either.
+    expect(dockerProjectIdOf(composeProjectName(live.id, live.worktreePath), { runs: [live], projects: [] })).toBeNull();
+  });
 });
 
 describe('buildDockerProjects', () => {
@@ -348,10 +367,10 @@ describe('buildDockerProjects', () => {
       ]),
     );
     const out = buildDockerProjects({ ls, ps, facts });
-    expect(out.projects.map((p) => [p.name, p.status, p.containers.map((c) => c.service), p.stale])).toEqual([
-      ['emberline-1234abcd-preview', null, ['web'], true],
-      ['emberline-abcd1234', 'running(2)', ['db', 'web'], true],
-      ['emberline-main-0000aaaa', 'exited(1)', [], true],
+    expect(out.projects.map((p) => [p.name, p.status, p.containers.map((c) => c.service), p.stale, p.projectId])).toEqual([
+      ['emberline-1234abcd-preview', null, ['web'], true, null],
+      ['emberline-abcd1234', 'running(2)', ['db', 'web'], true, null],
+      ['emberline-main-0000aaaa', 'exited(1)', [], true, null],
     ]);
     expect(out.projectsError).toBeUndefined();
     expect(out.containersError).toBeUndefined();

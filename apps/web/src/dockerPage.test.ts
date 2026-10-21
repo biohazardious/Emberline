@@ -62,8 +62,13 @@ function container(over: Partial<DockerContainer> = {}): DockerContainer {
   };
 }
 
-function project(name: string, owner: DockerProjectOwner, containers: DockerContainer[] = []): DockerProject {
-  return { name, status: 'running(1)', owner, containers, stale: owner.kind === 'orphan' };
+function project(
+  name: string,
+  owner: DockerProjectOwner,
+  containers: DockerContainer[] = [],
+  projectId: string | null = 'projectId' in owner ? owner.projectId : null,
+): DockerProject {
+  return { name, status: 'running(1)', owner, containers, stale: owner.kind === 'orphan', projectId };
 }
 
 describe('groupDockerProjects', () => {
