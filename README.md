@@ -54,7 +54,7 @@ Building from source additionally needs `make` and `git`; nothing else is instal
 git clone https://github.com/biohazardious/Emberline.git
 cd emberline
 cp .env.example .env     # optional: bind address, port, time zone
-make up                  # build and start core + runner -> http://127.0.0.1:7420
+make up                  # build and start core, runner and the Docker engine -> http://127.0.0.1:7420
 make logs                # the first start prints a one-time setup token
 ```
 
@@ -93,7 +93,7 @@ Set these in `.env` (read by `compose.yaml`):
 | `EMBERLINE_PREVIEW_PORTS_RUNNER` | `4300-4324`    | Host ports for command previews (dev servers), published by the runner on `EMBERLINE_BIND`.                                                                                                                                       |
 | `EMBERLINE_PREVIEW_PORTS_DOCKER` | `4325-4349`    | Host ports for compose previews, published by the Docker engine. Keep the two ranges apart.                                                                                                                                       |
 | `EMBERLINE_PREVIEW_HOST`         | unset          | Base URL previews open on, such as `http://previews.lan` (a second name for this machine); unset uses the host name you opened Emberline by. A separate name keeps Emberline's session cookie away from previews ([SECURITY.md](SECURITY.md#preview-ports-and-the-session-cookie)). |
-| `EMBERLINE_DOCKER_ENGINE`        | `1`            | `0` turns the [Docker engine](#docker-engine) off; it is on by default. |
+| `EMBERLINE_DOCKER_ENGINE`        | `1`            | `0` turns the [Docker engine](#docker-engine) off; it is on by default. Only `0` or `1`. |
 | `EMBERLINE_DOCKER_HOST`          | `tcp://docker:2376` | Where core reaches the engine. Only change it for an engine of your own; `EMBERLINE_DOCKER_ENGINE=0` wins over it. |
 
 Core also understands the following variables. They are not passed through by `compose.yaml`; add them to the `core` service's `environment` if you need them:
@@ -166,11 +166,11 @@ Some projects only run in containers: their own compose file, a database, system
 EMBERLINE_DOCKER_ENGINE=0
 ```
 
-Core and the runner then run without Docker, and no engine container is created. Do this on a host that refuses privileged containers or overlayfs: there the `docker` service keeps restarting, the Dashboard shows "Docker engine: unreachable" with the reason, and everything else keeps working, but the wizard writes command previews instead of compose previews. Remove the line and run `make up` to turn it on again. The Dashboard shows "Docker engine: on (version)", "off", or "unreachable" with the reason.
+Core and the runner then run without Docker, and no engine container is created. Do this on a host that refuses privileged containers or overlayfs: there the `docker` service keeps restarting, the Dashboard shows "Docker engine: unreachable" with the reason, and everything else keeps working, but the wizard writes command previews instead of compose previews. Remove the line and run `make up` to turn it on again. The Dashboard shows "Docker engine: on (version)", "off", "unreachable" with the reason, or "not configured" when core was started from a compose file older than 0.3.5.
 
 **Stopping it.** `make down` stops the engine with the rest. To stop only the engine while the rest runs, use `docker compose stop docker` (remove its container with `docker compose rm -sf docker`); Emberline then shows it as unreachable until you start it again, so for good set `EMBERLINE_DOCKER_ENGINE=0`.
 
-**Upgrading from 0.3.4 or earlier.** The `COMPOSE_PROFILES=docker` and `EMBERLINE_DOCKER_HOST` lines in `.env` are not needed any more; leaving them does no harm. `make up-docker` is gone: `make up` does the same.
+**Upgrading from 0.3.4 or earlier.** With the published images, also download the current `deploy/compose.yaml`: the old file never starts the engine, and an update that only pulls new images (Portainer's "pull and redeploy", a NAS image update) keeps it, so Emberline then says that no Docker engine is configured. The `COMPOSE_PROFILES=docker` and `EMBERLINE_DOCKER_HOST` lines in `.env` are not needed any more; leaving them does no harm. `make up-docker` is gone: `make up` does the same.
 
 **What agents get.** While the engine answers, every run gets `DOCKER_HOST` and the client certificate variables, plus `EMBERLINE_COMPOSE_PROJECT` (`emberline-` and the first 8 characters of the run id). Its first prompt asks the agent to use that compose project, not to publish fixed host ports, and to stop what it started. A run that takes over another run's worktree keeps that compose project. `worktree.yml` setup and teardown commands and Run Build & Verify's setup get the same variables. All agents share this one engine.
 
@@ -256,7 +256,7 @@ Design decisions and the reasons behind them are in [docs/DESIGN.md](docs/DESIGN
 - **Metrics:** with `EMBERLINE_METRICS_TOKEN` set, `GET /metrics` exposes runs by state, tickets by column, scheduler queue and quota pause, runner connection, database size and HTTP responses.
 - **Backups:** `make backup` takes a consistent snapshot (`VACUUM INTO`, safe while running), keeps the newest `EMBERLINE_BACKUP_KEEP` in the data volume and copies it to `./backups/`. Core also snapshots the database before applying migrations.
 - **Logs:** structured JSON on stdout, `make logs`.
-- **Upgrades:** with the published images, change `EMBERLINE_VERSION` (or keep `latest`), then `docker compose pull && docker compose up -d`; from source, `git pull && make up`. Core snapshots the database before it applies migrations. Restarting the runner stops running agents, so upgrade when they are idle. See [CHANGELOG.md](CHANGELOG.md) for what changed.
+- **Upgrades:** with the published images, also download the current `deploy/compose.yaml` (a release may change it; 0.3.5 does), change `EMBERLINE_VERSION` (or keep `latest`), then `docker compose pull && docker compose up -d`; from source, `git pull && make up`. Core snapshots the database before it applies migrations. Restarting the runner stops running agents, so upgrade when they are idle. See [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Development
 
