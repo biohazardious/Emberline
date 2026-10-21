@@ -9,6 +9,7 @@ import type { AgentState } from '@emberline/adapter-sdk';
 import {
   CONTINUE_PROMPT,
   decoratePromptWithPersona,
+  headlessModeProblem,
   nextStateFromHook,
   PERSONA_CATALOG,
   type RateLimitInfo,
@@ -40,6 +41,7 @@ import {
   type GitPushResponse,
   type GitStageBody,
   type HookEnvelope,
+  type PermissionMode,
   PROVIDER_RUNTIME,
   type PruneWorktreeBody,
   PruneWorktreeBody as PruneWorktreeBodySchema,
@@ -963,6 +965,45 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /**
+   * Refuses (409 `headless_needs_auto`) a new run whose first lane is a headless CLI in a mode that
+   * would ask. Callers that change state before {@link enqueue} check first; a lane picked later (a
+   * fallback, a handoff) is checked when it spawns.
+   */
+  assertStartable(input: CreateRunBody, origin?: RunOrigin): void {
+    if (origin?.routes) return;
+    const body = CreateRunBodySchema.parse(input);
+    const { route, prompt } = this.startRoute(input, body, origin);
+    this.refuseHeadlessAsk(route.agent, body.permissionMode, prompt);
+  }
+
+  private refuseHeadlessAsk(agent: string, mode: PermissionMode, prompt: string): void {
+    const problem = headlessModeProblem(agent, mode, prompt.length > 0);
+    if (problem) throw conflict(problem, 'headless_needs_auto');
+  }
+
+  /** A new run's persona, lane chain, starting lane and prompt (without its route tag). */
+  private startRoute(
+    input: CreateRunBody,
+    body: ReturnType<typeof CreateRunBodySchema.parse>,
+    origin?: RunOrigin,
+  ): { persona: AgentPersona; routes: Route[]; routeIndex: number; route: Route; prompt: string } {
+    const persona = body.persona ?? 'coder';
+    const tag = parseRouteTag(body.prompt ?? '');
+    const explicitAgent = tag?.agent ?? input.agent;
+    const explicitModel = (body.model && body.model !== 'auto' ? body.model : undefined) ?? tag?.model;
+    // An agent picked by hand (no tag) runs only there.
+    const resolved = (): Route[] => {
+      const chain = resolveRunRoutes(this.db, persona, explicitAgent || explicitModel ? { agent: explicitAgent, model: explicitModel } : undefined);
+      return input.agent && !tag ? chain.slice(0, 1) : chain;
+    };
+    const routes = origin?.routes ?? resolved();
+    const routeIndex = origin?.routeIndex ?? 0;
+    const route = routes[routeIndex] ?? routes[0]!;
+    const prompt = (body.prompt ?? '').replaceAll(new RegExp(ROUTE_TAG.source, 'gi'), '').trim();
+    return { persona, routes, routeIndex, route, prompt };
+  }
+
+  /**
    * Prepares the worktree and records the run as `queued`. Nothing is spawned yet; the
    * scheduler calls {@link launch} once a slot and quota are available.
    */
@@ -970,6 +1011,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const body = CreateRunBodySchema.parse(input);
     const project = this.db.select().from(projects).where(eq(projects.id, body.projectId)).get();
     if (!project) throw notFound('no such project');
+    const { persona, routes, routeIndex, route, prompt } = this.startRoute(input, body, origin);
+    // Before the worktree exists, so a refused start leaves nothing behind.
+    if (!origin?.routes) this.refuseHeadlessAsk(route.agent, body.permissionMode, prompt);
     this.ptyd.get(); // fail fast (503) before touching git
 
     const id = randomUUID();
@@ -1007,20 +1051,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         ).catch(() => null)
       : null;
 
-    const persona = body.persona ?? 'coder';
-    const tag = parseRouteTag(body.prompt ?? '');
-    const explicitAgent = tag?.agent ?? input.agent;
-    const explicitModel = (body.model && body.model !== 'auto' ? body.model : undefined) ?? tag?.model;
-    // An agent picked by hand (no tag) runs only there.
-    const resolved = (): Route[] => {
-      const chain = resolveRunRoutes(this.db, persona, explicitAgent || explicitModel ? { agent: explicitAgent, model: explicitModel } : undefined);
-      return input.agent && !tag ? chain.slice(0, 1) : chain;
-    };
-
-    const routes = origin?.routes ?? resolved();
-    const routeIndex = origin?.routeIndex ?? 0;
-    const route = routes[routeIndex] ?? routes[0]!;
-    const prompt = (body.prompt ?? '').replaceAll(new RegExp(ROUTE_TAG.source, 'gi'), '').trim();
     const now = new Date();
     this.db
       .insert(runs)
@@ -1383,6 +1413,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           patch: { endedAt: new Date() },
         });
       }
+    }
+    // Enqueue refuses this for the first lane; a lane picked later (a fallback, a handoff) or a run
+    // from before that check would deny every command that needs approval, without telling anyone.
+    const headless = headlessModeProblem(row.agent, row.permissionMode as PermissionMode, Boolean(options.prompt));
+    if (headless) {
+      // A finished run's result stands; only this follow-up is refused.
+      if (row.state === 'done') throw conflict(headless, 'headless_needs_auto');
+      return this.record(row.id, {
+        source: 'system',
+        type: 'headless_needs_auto',
+        state: 'failed',
+        payload: { reason: 'headless_needs_auto', message: headless },
+        patch: { endedAt: row.endedAt ?? new Date() },
+      });
     }
     this.ptyd.get(); // fail fast (503) before the run is marked
     const hookToken = randomBytes(32).toString('base64url');

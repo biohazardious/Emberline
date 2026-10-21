@@ -9,6 +9,7 @@ import {
   type AgentId,
   type AgentModelId,
   type AgentPersona,
+  type CreateRunBody,
   type CreateTicketBody,
   CreateTicketBody as CreateTicketBodySchema,
   type FactoryRequestBody,
@@ -61,7 +62,7 @@ import { branchMergedBefore, pipelineOutcome, reviewUnblockPending, stillHeld } 
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
-import type { RunService } from '../runs/service.js';
+import type { RunOrigin, RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
 type TicketRow = typeof tickets.$inferSelect;
@@ -1791,6 +1792,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
     // Built before anything changes: a section that cannot be built refuses the start cleanly.
     const prompt = this.startPrompt(ticket, opts.extraPromptSection ?? '');
+    // So is a mode the run's agent cannot honour (before an idle run is replaced).
+    const request = this.runRequest(ticket, input, opts.unattended, prompt);
+    this.runs.assertStartable(request.body, request.origin);
     // A person starting it is its triage; an unattended start never is.
     if (opts.byPerson && !opts.unattended && ticket.external?.triage) {
       this.db.update(tickets).set({ externalTriage: false }).where(eq(tickets.id, id)).run();
@@ -1811,30 +1815,40 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     prompt = this.startPrompt(ticket, ''),
   ): Promise<{ ticket: Ticket; run: Run }> {
     const id = ticket.id;
-    const { permissionMode, persona } = StartTicketBodySchema.parse(input);
-    const effectivePersona = persona ?? ticket.persona;
-    const tag = parseRouteTag(ticket.body ?? '');
-    const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
-    const run = await this.scheduler.submit(
-      {
-        projectId: ticket.projectId,
-        prompt,
-        permissionMode,
-        persona: effectivePersona,
-        ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
-      },
-      {
-        ticketId: id,
-        ...(unattended ? { unattended: 'factory' as const } : {}),
-        branch: `emberline/${ticket.key.toLowerCase()}${slug ? `-${slug}` : ''}`,
-        title: `${ticket.key} ${ticket.title}`,
-      },
-    );
+    const request = this.runRequest(ticket, input, unattended, prompt);
+    const run = await this.scheduler.submit(request.body, request.origin);
     // A fresh run must signal again; the old completion would hand stale work to dependents. A
     // handoff successor or a resumed session continues the same work and does not come here.
     // moveToTop bumps updatedAt and broadcasts the ticket.
     if (ticket.completion) this.db.update(tickets).set({ completion: null }).where(eq(tickets.id, id)).run();
     return { ticket: this.moveToTop(id, 'in_progress'), run };
+  }
+
+  /** The run a ticket start submits. */
+  private runRequest(
+    ticket: Ticket,
+    input: StartTicketBody,
+    unattended: boolean | undefined,
+    prompt: string,
+  ): { body: CreateRunBody; origin: RunOrigin } {
+    const { permissionMode, persona } = StartTicketBodySchema.parse(input);
+    const tag = parseRouteTag(ticket.body ?? '');
+    const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
+    return {
+      body: {
+        projectId: ticket.projectId,
+        prompt,
+        permissionMode,
+        persona: persona ?? ticket.persona,
+        ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
+      },
+      origin: {
+        ticketId: ticket.id,
+        ...(unattended ? { unattended: 'factory' as const } : {}),
+        branch: `emberline/${ticket.key.toLowerCase()}${slug ? `-${slug}` : ''}`,
+        title: `${ticket.key} ${ticket.title}`,
+      },
+    };
   }
 
   /**

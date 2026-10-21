@@ -75,6 +75,7 @@ interface RunSeed {
   /** The hold note after the run's switch to done; null for none. */
   hold?: { type: string; payload: Record<string, unknown> } | null;
   completionTool?: boolean;
+  permissionMode?: 'default' | 'acceptEdits' | 'auto';
 }
 
 function seedRun(seed: RunSeed): string {
@@ -87,6 +88,8 @@ function seedRun(seed: RunSeed): string {
       projectId: 'p1',
       ticketId,
       agent: seed.agent ?? 'claude',
+      // A headless CLI (gemini) refuses a prompt in Ask, so it runs Autonomous.
+      permissionMode: seed.permissionMode ?? (seed.agent === 'gemini' ? 'auto' : 'default'),
       state: 'done',
       branch: seed.branch ?? null,
       worktreePath: seed.worktreePath ?? path.join(t.dir, '.worktrees', seed.id),
@@ -585,6 +588,16 @@ describe('delivering a recovery prompt', () => {
       const prompt = await freshPrompt('g3');
       expect(prompt).toContain('Your previous session on this task ended');
       expect(prompt).not.toContain(CONTINUE_PROMPT);
+    });
+
+    it('a finished run from before the headless check is not resumed in Accept edits, and keeps its result', async () => {
+      seedRun({ id: 'g4', agent: 'gemini', permissionMode: 'acceptEdits', ...worktree('g4', { 'new.js': 'x\n' }), hold: null });
+      const res = await post('/api/runs/g4/resume', { text: 'more' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
+      expect(res.json().message).toContain('Gemini runs without a terminal to answer in, so in Accept edits mode');
+      expect(t.runs.getRun('g4').state).toBe('done');
+      expect(existsSync(path.join(t.dir, 'args-g4'))).toBe(false);
     });
   });
 

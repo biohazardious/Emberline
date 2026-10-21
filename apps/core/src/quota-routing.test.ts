@@ -113,9 +113,14 @@ async function work(run: Run): Promise<string> {
   await hook(run.id, 'UserPromptSubmit', token);
   return token;
 }
-async function startTicket(title: string, persona = 'ui_ux'): Promise<{ ticketId: string; run: Run }> {
+/** Autonomous by default: Antigravity, the ui_ux lane, refuses Ask and Accept edits. */
+async function startTicket(
+  title: string,
+  persona = 'ui_ux',
+  body: object = { permissionMode: 'auto' },
+): Promise<{ ticketId: string; run: Run }> {
   const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title, status: 'ready', persona })).json();
-  const res = await api('POST', `/api/tickets/${ticket.id}/start`, {});
+  const res = await api('POST', `/api/tickets/${ticket.id}/start`, body);
   expect(res.statusCode).toBe(201);
   return { ticketId: ticket.id, run: res.json().run };
 }
@@ -166,7 +171,7 @@ describe('runs carry their route', () => {
         body: '[Preferred Agent: antigravity · Model: argon]\n\nDo the thing',
       })
     ).json();
-    const run: Run = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json().run;
+    const run: Run = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json().run;
     expect(run.agent).toBe('antigravity');
     expect(run.routes).toEqual([
       { agent: 'antigravity', model: 'argon', credential: 'login' },
@@ -190,7 +195,9 @@ describe('runs carry their route', () => {
   });
 
   it('a model-only request keeps the persona\'s first agent and the rest of its chain', async () => {
-    const run: Run = (await api('POST', '/api/runs', { projectId, persona: 'ui_ux', model: 'sonnet', prompt: 'hi' })).json();
+    const run: Run = (
+      await api('POST', '/api/runs', { projectId, persona: 'ui_ux', model: 'sonnet', prompt: 'hi', permissionMode: 'auto' })
+    ).json();
     expect(run.routes[0]!.agent).toBe('antigravity');
     expect(run.agent).toBe('antigravity');
     updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
@@ -811,3 +818,95 @@ describe('workspace status ignores handed-off runs', () => {
 });
 
 export { api, AGY_QUOTA, getRun, hook, scheduler, startTicket, waitFile, work };
+
+describe('headless agents refuse modes that would need to ask', () => {
+  const ACCEPT_EDITS_MESSAGE =
+    'Antigravity runs without a terminal to answer in, so in Accept edits mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
+
+  it('a ticket started in Accept edits on an Antigravity lane gets a 409 and no run, worktree or ticket move', async () => {
+    const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Landing', status: 'ready', persona: 'ui_ux' })).json();
+    const res = await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'acceptEdits' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
+    expect(t.db.select().from(runsTable).where(eq(runsTable.ticketId, ticket.id)).all()).toHaveLength(0);
+    expect((await api('GET', `/api/tickets/${ticket.id}`)).json().status).toBe('ready');
+    expect(existsSync(path.join(t.config.workspacesDir, '.worktrees', 'quota'))).toBe(false);
+
+    // Ask is refused the same way; Plan and Autonomous start.
+    const ask = await api('POST', `/api/tickets/${ticket.id}/start`, {});
+    expect(ask.statusCode).toBe(409);
+    expect(ask.json().message).toContain('in Ask mode');
+    const plan = await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'plan' });
+    expect(plan.statusCode).toBe(201);
+    expect(plan.json().run.agent).toBe('antigravity');
+  });
+
+  it('a run without a prompt opens Antigravity interactively in any mode', async () => {
+    const res = await api('POST', '/api/runs', { projectId, persona: 'ui_ux', permissionMode: 'acceptEdits' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().agent).toBe('antigravity');
+  });
+
+  it('a refused fresh attempt leaves the idle run it would replace alone', async () => {
+    const { ticketId, run } = await startTicket('Colour-blind cats');
+    t.db.update(runsTable).set({ state: 'waiting_input' }).where(eq(runsTable.id, run.id)).run();
+    await expect(
+      t.tickets.start(ticketId, { permissionMode: 'acceptEdits' }, { byPerson: true, replaceIdleRun: { ids: [run.id], reason: 'review_new_run' } }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'headless_needs_auto' });
+    expect(await getRun(run.id)).toMatchObject({ state: 'waiting_input', cancelled: false });
+    expect(t.db.select().from(runsTable).where(eq(runsTable.ticketId, ticketId)).all()).toHaveLength(1);
+  });
+
+  async function failsHeadless(runId: string): Promise<void> {
+    await expect.poll(async () => (await getRun(runId)).state, { timeout: 5_000 }).toBe('failed');
+    const detail = await getRun(runId);
+    expect(detail.agent).toBe('antigravity');
+    const event = detail.events.find((e) => e.type === 'headless_needs_auto');
+    expect(event?.payload).toEqual({ reason: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
+    // The CLI never started.
+    expect(existsSync(path.join(t.dir, `args-${runId}`))).toBe(false);
+  }
+
+  it('a quota handoff from Claude to Antigravity in Accept edits fails visibly instead of running', async () => {
+    updateFactorySettings(t.db, {
+      quotaPolicy: { inFlight: 'fallback' },
+      personaRoutes: {
+        coder: [
+          { agent: 'claude', model: 'opus', credential: 'login' },
+          { agent: 'antigravity', model: 'argon', credential: 'login' },
+        ],
+      },
+    });
+    const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Coder', status: 'ready', persona: 'coder' })).json();
+    const res = await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'acceptEdits' });
+    expect(res.statusCode).toBe(201);
+    const run: Run = res.json().run;
+    expect(run.agent).toBe('claude');
+    await hook(run.id, 'StopFailure', await work(run), {
+      error: 'rate_limit',
+      last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}`,
+    });
+    await expect.poll(async () => (await getRun(run.id)).handedOffTo, { timeout: 5_000 }).not.toBeNull();
+    await failsHeadless((await getRun(run.id)).handedOffTo ?? '');
+  });
+
+  it('a queued run bound to an Antigravity fallback in Accept edits fails visibly instead of running', async () => {
+    updateFactorySettings(t.db, {
+      quotaPolicy: { newRuns: 'fallback' },
+      personaRoutes: {
+        coder: [
+          { agent: 'claude', model: 'opus', credential: 'login' },
+          { agent: 'antigravity', model: 'argon', credential: 'login' },
+        ],
+      },
+    });
+    const first = await startTicket('First', 'coder');
+    await hook(first.run.id, 'StopFailure', await work(first.run), {
+      error: 'rate_limit',
+      last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}`,
+    });
+    const second = await startTicket('Second', 'coder', { permissionMode: 'acceptEdits' });
+    await failsHeadless(second.run.id);
+    expect((await getRun(second.run.id)).events.map((e) => e.type)).toContain('route_bound');
+  });
+});

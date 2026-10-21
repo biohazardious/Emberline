@@ -9,6 +9,7 @@ import {
   buildLaunchSpec,
   buildPlaywrightMcpConfig,
   buildSecondaryCliLaunchSpec,
+  headlessModeProblem,
   nextStateFromHook,
   PERSONA_CATALOG,
   RUNNER_ENVIRONMENT,
@@ -239,6 +240,42 @@ describe('stateAfterExit', () => {
     expect(stateAfterExit('working', 1)).toBe('failed');
     expect(stateAfterExit('starting', null)).toBe('failed');
     expect(stateAfterExit('done', 1)).toBe('done');
+  });
+});
+
+describe('headlessModeProblem', () => {
+  const names = { antigravity: 'Antigravity', copilot: 'Copilot', gemini: 'Gemini' } as const;
+  const labels = { default: 'Ask', acceptEdits: 'Accept edits' } as const;
+
+  for (const [agent, name] of Object.entries(names)) {
+    for (const [mode, label] of Object.entries(labels)) {
+      it(`${agent} with a prompt refuses ${mode}`, () => {
+        expect(headlessModeProblem(agent, mode as 'default' | 'acceptEdits', true)).toBe(
+          `${name} runs without a terminal to answer in, so in ${label} mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.`,
+        );
+      });
+    }
+    for (const mode of ['auto', 'bypassPermissions', 'plan'] as const) {
+      it(`${agent} allows ${mode}`, () => {
+        expect(headlessModeProblem(agent, mode, true)).toBeNull();
+      });
+    }
+    it(`${agent} without a prompt is interactive and may ask`, () => {
+      expect(headlessModeProblem(agent, 'default', false)).toBeNull();
+      expect(headlessModeProblem(agent, 'acceptEdits', false)).toBeNull();
+    });
+  }
+
+  it('an unset mode is Ask', () => {
+    expect(headlessModeProblem('gemini', undefined, true)).toContain('in Ask mode');
+  });
+
+  it('codex, aider and claude are unaffected', () => {
+    for (const agent of ['codex', 'aider', 'claude']) {
+      for (const mode of ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const) {
+        expect(headlessModeProblem(agent, mode, true)).toBeNull();
+      }
+    }
   });
 });
 

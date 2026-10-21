@@ -384,6 +384,29 @@ export function isAutonomousPermissionMode(mode: ClaudePermissionMode | undefine
   return mode === 'auto' || mode === 'bypassPermissions';
 }
 
+/** CLIs that run a prompt with `-p`: nobody can answer their approval questions. Names as the web shows them. */
+const HEADLESS_AGENT_NAMES: ReadonlyMap<string, string> = new Map([
+  ['antigravity', 'Antigravity'],
+  ['copilot', 'Copilot'],
+  ['gemini', 'Gemini'],
+]);
+/** The modes in which those CLIs would ask, with the permission picker's labels. */
+const ASKING_MODE_LABELS: ReadonlyMap<ClaudePermissionMode, string> = new Map([
+  ['default', 'Ask'],
+  ['acceptEdits', 'Accept edits'],
+]);
+
+/**
+ * Why `agent` cannot run a prompt in `mode`, or null. A headless CLI denies, silently, every action
+ * that needs approval; `plan` is read-only by request, and without a prompt the CLI runs interactively.
+ */
+export function headlessModeProblem(agent: string, mode: ClaudePermissionMode | undefined, hasPrompt: boolean): string | null {
+  const name = HEADLESS_AGENT_NAMES.get(agent);
+  const label = ASKING_MODE_LABELS.get(mode ?? 'default');
+  if (!hasPrompt || !name || !label) return null;
+  return `${name} runs without a terminal to answer in, so in ${label} mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.`;
+}
+
 /**
  * In `auto`/`bypassPermissions` the session starts unattended with pre-authorized Bash/Edit/Write
  * permissions and the autonomous non-interactive system prompt.
