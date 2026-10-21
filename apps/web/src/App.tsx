@@ -51,6 +51,7 @@ import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
 import { useTrackPageViews } from './hooks/navigation';
 import { setPresenceRun } from './hooks/eventHub';
 import { useAttention } from './hooks/useAttention';
+import { projectIdFromPath, resolveActiveProjectId, switchProjectPath } from './projectPaths';
 import { Dashboard } from './pages/Dashboard';
 import { Toasts, toastError, toastInfo } from './toast';
 
@@ -218,31 +219,26 @@ function Shell() {
     [],
   );
 
-  // Sync initial active project preference from server if local preference is missing or stale
+  // The server's stored choice, asked once when neither the URL nor this browser names a usable project.
+  const [serverActiveId, setServerActiveId] = useState<string | null | undefined>(undefined);
+  const askedServer = useRef(false);
+  const urlProjectId = projectIdFromPath(location);
+  // Any /projects/<id>/… page makes <id> the active project; a stale or missing stored id resolves to
+  // the server's choice (else the first project), and the result is stored so every view agrees.
   useEffect(() => {
-    const list = projects.data;
-    if (!list || list.length === 0) return;
-    if (activeProjectId && list.some((p) => p.id === activeProjectId)) return;
-
-    void api<ActiveProjectPreference>('/api/projects/active')
-      .then((pref) => {
-        const candidate = pref.activeProjectId && list.some((p) => p.id === pref.activeProjectId)
-          ? pref.activeProjectId
-          : list[0]?.id ?? null;
-        if (candidate) selectProject(candidate);
-      })
-      .catch(() => {
-        if (list[0]) selectProject(list[0].id);
-      });
-  }, [projects.data, activeProjectId, selectProject]);
-
-  // If the user navigates directly to /projects/:id/board|code|browser|roadmap, sync activeProjectId
-  useEffect(() => {
-    const match = /^\/projects\/([^/]+)\/(board|code|browser|roadmap)/.exec(location);
-    if (match?.[1] && match[1] !== activeProjectId) {
-      selectProject(match[1]);
+    const ids = projects.data?.map((p) => p.id);
+    if (!ids) return;
+    const next = resolveActiveProjectId(ids, { fromUrl: urlProjectId, stored: activeProjectId, server: serverActiveId });
+    if (next === undefined) {
+      if (askedServer.current) return;
+      askedServer.current = true;
+      void api<ActiveProjectPreference>('/api/projects/active')
+        .then((pref) => setServerActiveId(pref.activeProjectId ?? null))
+        .catch(() => setServerActiveId(null));
+      return;
     }
-  }, [location, activeProjectId, selectProject]);
+    if (next !== null && next !== activeProjectId) selectProject(next);
+  }, [projects.data, urlProjectId, activeProjectId, serverActiveId, selectProject]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -264,8 +260,8 @@ function Shell() {
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const activeProject = useMemo(
-    () => (activeProjectId ? projectById.get(activeProjectId) : undefined) ?? projects.data?.[0],
-    [activeProjectId, projectById, projects.data],
+    () => (activeProjectId ? projectById.get(activeProjectId) : undefined),
+    [activeProjectId, projectById],
   );
 
   // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
@@ -306,16 +302,9 @@ function Shell() {
     }
     const targetId = nextId || null;
     selectProject(targetId);
-    // When currently viewing a project board, roadmap, browser, or code explorer, switch directly to the new project's view!
-    if (targetId && /^\/projects\/[^/]+\/board/.test(location)) {
-      navigate(`/projects/${targetId}/board`);
-    } else if (targetId && /^\/projects\/[^/]+\/code/.test(location)) {
-      navigate(`/projects/${targetId}/code`);
-    } else if (targetId && /^\/projects\/[^/]+\/browser/.test(location)) {
-      navigate(`/projects/${targetId}/browser`);
-    } else if (targetId && /^\/projects\/[^/]+\/roadmap/.test(location)) {
-      navigate(`/projects/${targetId}/roadmap`);
-    }
+    // On any per-project page (board, roadmap, code, outputs, browser, settings, and later ones), open the same page of the new project.
+    const next = targetId ? switchProjectPath(location, targetId) : null;
+    if (next && next !== location) navigate(next);
   };
 
   const handleCleanupProjectWorktrees = async () => {
