@@ -869,8 +869,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const ingested = fromWorktree ?? fromMain;
     if (inherited.length > 0) this.runs.note(run.id, 'tickets_file_inherited', { files: [...new Set(inherited)] });
 
-    // Tickets this pass created from the run's tickets file: board work, even without a code change.
-    let importedTickets = 0;
     const draftDepth = (ticketRow?.depth ?? 0) + 1;
     const fSettingsForDepth = getFactorySettings(this.db);
     if (ingested && ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
@@ -912,7 +910,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           });
         }
       }
-      importedTickets = created.length;
+      // Board work, even without a code change: remembered on the run, so a later pass of it (a
+      // re-pass after a gate's prompt, finalization after a restart) does not hold it as empty.
+      if (created.length > 0) {
+        this.runs.note(run.id, 'tickets_imported', { count: created.length, tickets: created.map((c) => c.ticket.key) });
+      }
       this.applyDraftDependencies(run.id, run.projectId, created);
       if (ingested.autoDispatch) {
         this.chainOn(run.projectId);
@@ -995,12 +997,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     //     its branch is already in main, so the merge would find nothing and the ticket would reach
     //     Done empty. It is held for a person instead, its session closed like other holds', and the
     //     rest of the queue goes on. Left out: the Factory orchestrator and any run whose tickets file
-    //     created tickets now (board work, in a scratch file), a run working in the main workspace
-    //     itself, and a branch merged before (a fast-forward by hand puts its commits on main's line).
+    //     created tickets, in this pass or an earlier one (board work, in a scratch file), a run
+    //     working in the main workspace itself, and a branch merged before (a fast-forward by hand
+    //     puts its commits on main's line).
     if (
       ticketRow &&
       !isFactoryOrchestratorTicket &&
-      importedTickets === 0 &&
+      !this.runs.hasEvent(run.id, 'tickets_imported') &&
       run.worktreePath &&
       run.worktreePath !== projectRow.path &&
       !this.runs.latestCompletion(run.id) &&

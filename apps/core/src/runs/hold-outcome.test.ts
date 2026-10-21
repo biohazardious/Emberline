@@ -35,4 +35,8 @@ describe('pruning', () => {
     expect(decidePipelineOutcome(['no_changes'])).toBe('held');
     expect(currentHold([{ type: 'no_changes', payload: { autoFix: false } }])?.type).toBe('no_changes');
   });
+
+  it('keeps the tickets_imported note the no_changes check reads on a later pass', () => {
+    expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('tickets_imported');
+  });
 });

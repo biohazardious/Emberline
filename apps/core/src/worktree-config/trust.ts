@@ -115,7 +115,8 @@ async function branchBaseWorktreeYml(worktreePath: string, mainWorkspacePath: st
  * land: the run removed it (or never had one), left it as main has it or as it was where the branch
  * started (the merge keeps main's version then; a main whose file is unusable does not block runs
  * that do not touch it), or changed it into a valid file. Read from the working tree, which is what
- * the merge commits, and never through a link. Throws when git cannot read main's committed file.
+ * the merge commits, and never through a link. Main's committed file is read only when the run's
+ * file is invalid or unreadable; throws when git cannot read it then.
  */
 export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspacePath: string): Promise<string[] | null> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
@@ -131,15 +132,17 @@ export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspace
   }
   /** Committed and present, but itself unusable (a link, too large): nothing to compare. */
   const unusable = (read: HeadWorktreeYml | null) => read?.kind === 'present' && read.yml.content === null;
-  const main = await readHeadWorktreeYml(mainWorkspacePath);
   if (unreadable === null && content !== null) {
-    if (main.kind === 'present' && content === main.yml.content) return null;
+    // A valid file lands as it is: main's (and git reading it) only matter for an invalid one.
     const parsed = parseWorktreeYml(content);
     if (parsed.ok) return null;
+    const main = await readHeadWorktreeYml(mainWorkspacePath);
+    if (main.kind === 'present' && content === main.yml.content) return null;
     const base = await branchBaseWorktreeYml(worktreePath, mainWorkspacePath);
     return base?.kind === 'present' && content === base.yml.content ? null : parsed.errors;
   }
   // The run did not make an unusable file worse than main's or its starting point's.
+  const main = await readHeadWorktreeYml(mainWorkspacePath);
   if (unusable(main) || unusable(await branchBaseWorktreeYml(worktreePath, mainWorkspacePath))) return null;
   return [unreadable ?? `${rel} cannot be read`];
 }

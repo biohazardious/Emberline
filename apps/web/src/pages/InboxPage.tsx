@@ -4,9 +4,9 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../api';
 import {
   ATTENTION_LABELS,
+  attentionDetail,
   dismissable,
   groupAttention,
-  holdLabel,
   inboxHeading,
   type SeenMap,
   type TicketName,
@@ -57,8 +57,8 @@ function InboxItem({
   useNow(30_000);
   useEffect(() => () => clearPresenceRun(run.id, 'inbox'), [run.id]);
 
-  // Held detail is already the HOLD_LABELS label; fall back to the map for an unexpected raw key.
-  const detail = attention.detail === null ? null : holdLabel(attention.detail);
+  // Held detail is already the HOLD_LABELS label (the map covers an unexpected raw key); a failure's is its type.
+  const detail = attentionDetail(attention);
   const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
 
   const recovering = recoveryApplies(run);

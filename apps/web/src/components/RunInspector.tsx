@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { timeAgo } from '../time';
-import { WORKTREE_EVENT_LABELS } from '../worktreeEvents';
+import { EVENT_LABEL } from '../runEventLabels';
 import { HoldRecovery } from './HoldRecovery';
 import { HandoffMenu } from './QuotaLanes';
 import { BuildOutputsList, ExpandableText, FinalAnswer, LastScreen } from './RunOutcome';
@@ -217,43 +217,6 @@ export function RunFailureBanner({ run }: { run: Run }) {
     </div>
   );
 }
-
-const EVENT_LABEL: Record<string, string> = {
-  handed_off: 'handed off',
-  handoff_from: 'took over',
-  route_bound: 'fallback route',
-  route_skipped: 'route skipped',
-  handoff_failed: 'handoff failed',
-  rate_limit_failed: 'limit reached',
-  retry_scheduled: 'retry scheduled',
-  retry_gave_up: 'retry gave up',
-  dependencies_applied: 'planned order',
-  dependency_dropped: 'dependency dropped',
-  tickets_file_rejected: 'tickets file rejected',
-  tickets_file_inherited: 'tickets file from main skipped',
-  ticket_removed: 'ticket deleted',
-  tickets_file_duplicate: 'tickets file already imported',
-  conflict_resolution_requested: 'resolving merge conflict',
-  conflict_resolution_failed: 'conflict resolution failed',
-  factory_chain_paused: 'factory paused',
-  secret_guard_blocked: 'held: secret found',
-  slop_guard_blocked: 'held: slop check',
-  critic_blocked: 'held: code audit',
-  build_gate_failed: 'held: build failed',
-  build_gate_error: 'held: build gate error',
-  merge_failed: 'held: merge failed',
-  no_changes: 'held: no changes',
-  stall_detected: 'stalled',
-  waiting_input_timeout: 'stopped: nobody answered',
-  auto_nudged: 'nudged to continue',
-  ticket_complete: 'Completed',
-  completion_tool_ready: 'Completion tool available',
-  completion_accepted: 'Completion accepted',
-  completion_nudged: 'Asked to confirm completion',
-  completion_missing: 'Held: no completion signal',
-  completion_blocked: 'Held: blocked',
-  ...WORKTREE_EVENT_LABELS,
-};
 
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
 function handoffTarget(ev: RunEvent): string | undefined {

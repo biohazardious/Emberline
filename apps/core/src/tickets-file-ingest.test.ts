@@ -148,6 +148,13 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
     await expect.poll(() => eventTypes(second), { timeout: 10_000 }).toContain('tickets_file_duplicate');
     expect((await titles(project.id)).filter((x) => x.startsWith('Child'))).toEqual(['Child A', 'Child B']);
     expect(existsSync(path.join(second.worktreePath, TICKETS))).toBe(false);
+    // The tickets are the first run's: only it is credited with them. The second created nothing and
+    // changed nothing, so it is held for a person (no_changes) like any other empty run.
+    expect(await eventTypes(first)).toContain('tickets_imported');
+    expect(await eventTypes(first)).not.toContain('no_changes');
+    await expect.poll(() => eventTypes(second), { timeout: 10_000 }).toContain('no_changes');
+    expect(await eventTypes(second)).not.toContain('tickets_imported');
+    expect(await eventTypes(second)).not.toContain('merged_to_main');
   });
 
   it("a product owner's new tickets file is imported once and remembered", async () => {

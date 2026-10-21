@@ -55,6 +55,10 @@ describe('recoverErrorText', () => {
   it("keeps the server's message for route checks", () => {
     expect(recoverErrorText('lane_exhausted', 'Lane is out of quota')).toBe('Lane is out of quota');
   });
+  it("keeps the server's message when the successor's agent needs Autonomous mode", () => {
+    const message = 'Gemini runs without a terminal to answer in, so in Ask mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
+    expect(recoverErrorText('headless_needs_auto', message)).toBe(message);
+  });
 });
 
 describe('visibleSuggestions', () => {

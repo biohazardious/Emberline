@@ -243,7 +243,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
  * snapshot, the `queued` event (unattended origin, queued prompts), the completion signal, its
  * tool's check-in and the turn boundary it is checked against (`ticket_complete`,
  * `completion_tool_ready`, `UserPromptSubmit`), one-shot markers
- * (`auto_nudged`, `session_lost`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
+ * (`auto_nudged`, `session_lost`, `tickets_imported`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
  * HOLD_ENDING_EVENTS, `conflict_resolution_requested`), `pr_created`, the issue write-back records, and the watchdog outcomes.
  */
 export const PRUNE_PROTECTED_EVENT_TYPES = [
@@ -256,6 +256,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'UserPromptSubmit',
   'auto_nudged',
   'session_lost',
+  // Tickets the run's tickets file created: a later pass of a run without changes is not empty.
+  'tickets_imported',
   ...HOLD_EVENTS,
   ...HOLD_ENDING_EVENTS,
   // The person's merge past open blocking comments; kept like the merge note.

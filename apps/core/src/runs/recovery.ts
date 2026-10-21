@@ -16,7 +16,7 @@ export interface RecoveryInput {
   superseding: { key: string; files: number; of: number; done: boolean } | null;
   /** Open blocking review comments, one line each (review holds only). */
   reviewComments: string[];
-  /** Appended to every prompt: the completion reminder for an agent with the tool, else ''. */
+  /** Appended to every prompt: the completion reminder for an agent with the tool, else '' (it cannot signal completion). */
   completeAgain: string;
 }
 
@@ -287,15 +287,21 @@ export function buildRecovery(input: RecoveryInput): Recovery {
       return done(completionBlocked(input));
     case 'review_blocked':
       return done(reviewBlocked(input));
-    case 'no_changes':
+    case 'no_changes': {
+      // An agent without the completion tool (completeAgain is '') cannot register an explanation:
+      // its reply is the explanation, and a person marks the ticket done.
+      const canComplete = input.completeAgain !== '';
       return done({
-        why: 'the agent ended without changing anything or saying what it did',
+        why: canComplete ? 'the agent ended without changing anything or saying what it did' : 'the agent ended without changing anything',
         suggestions: [
           ask(
             'do_the_ticket',
             'Do the ticket',
             'Ask the agent to do the work, or to say why none is needed.',
-            "The ticket asks for changes, but you made none. Do the work it asks for, run the project's checks, commit, and finish. If the ticket really needs no change, explain why nothing is needed and finish.",
+            "The ticket asks for changes, but you made none. Do the work it asks for, run the project's checks, commit, and finish. " +
+              (canComplete
+                ? 'If the ticket really needs no change, explain why nothing is needed and finish.'
+                : 'If the ticket really needs no change, explain why in your reply; a person will mark the ticket done.'),
           ),
           // The person's Merge now: with nothing to merge it moves the ticket to Done.
           suggestion({
@@ -307,6 +313,7 @@ export function buildRecovery(input: RecoveryInput): Recovery {
           discard(input.ticketKey),
         ],
       });
+    }
     default:
       return done({ why: 'the ticket is held for a person', suggestions: [openReview()] });
   }

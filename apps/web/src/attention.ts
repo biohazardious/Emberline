@@ -1,4 +1,4 @@
-import { HOLD_LABELS, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
+import { HOLD_LABELS, type Run, type RunAttention, type RunAttentionReason, type Ticket } from '@emberline/protocol';
 
 /** Inbox group order: what blocks a run hardest comes first. */
 export const ATTENTION_ORDER: readonly RunAttentionReason[] = [
@@ -131,4 +131,15 @@ export const FLEET_SECTION_ORDER: readonly FleetSection[] = ['needs', 'review', 
 /** A hold's detail is normally already a label; raw keys map through HOLD_LABELS, anything else (agent text) stays as is. */
 export function holdLabel(detail: string): string {
   return Object.hasOwn(HOLD_LABELS, detail) ? HOLD_LABELS[detail]! : detail;
+}
+
+/** The failure type of a headless agent started outside Autonomous mode (core's `headless_needs_auto`). */
+const HEADLESS_NEEDS_AUTO =
+  'This agent runs without a terminal to answer in, so it needs Autonomous mode. Start it in Autonomous mode, or pick another agent.';
+
+/** The Inbox detail: a failure's type is shown as text for the headless refusal; holds via {@link holdLabel}. */
+export function attentionDetail(attention: Pick<RunAttention, 'reason' | 'detail'>): string | null {
+  if (attention.detail === null) return null;
+  if (attention.reason === 'failed' && attention.detail === 'headless_needs_auto') return HEADLESS_NEEDS_AUTO;
+  return holdLabel(attention.detail);
 }

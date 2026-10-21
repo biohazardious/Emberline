@@ -248,6 +248,18 @@ describe('GET /api/runs/:id/recovery', () => {
     expect(body!.suggestions[0]).toMatchObject({ id: 'answer_blockers', kind: 'prompt' });
     expect(await t.recovery.holdPrompt('r1')).toBeNull();
   });
+
+  it('no_changes: only an agent with the completion tool is asked to explain and finish', async () => {
+    seedRun({ id: 'r1', agent: 'codex', hold: { type: 'no_changes', payload: { autoFix: false } } });
+    seedRun({ id: 'r2', completionTool: true, hold: { type: 'no_changes', payload: { autoFix: false } } });
+    const codex = (await recovery('r1')).body!;
+    expect(codex.why).toBe('the agent ended without changing anything');
+    expect(codex.suggestions[0]!.prompt).toContain('explain why in your reply; a person will mark the ticket done.');
+    const claude = (await recovery('r2')).body!;
+    expect(claude.why).toBe('the agent ended without changing anything or saying what it did');
+    expect(claude.suggestions[0]!.prompt).toContain('explain why nothing is needed and finish.');
+    expect(claude.suggestions[0]!.prompt).toContain('ticket_complete');
+  });
 });
 
 describe('RecoveryService.deliveryFor', () => {

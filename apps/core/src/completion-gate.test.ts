@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { IssueSyncSettings, type Run, type RunDetail, type Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -1016,6 +1016,32 @@ describe('a run that changed nothing', () => {
     expect(titles).toContain('Follow-up');
   });
 
+  it('a later pass of a run whose tickets file created tickets earlier is not held either', async () => {
+    const { project, ticket, run } = await emptyFactoryTicket();
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+      JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Follow-up' }] }),
+    );
+    // Something else stops the first pass before the merge: an invalid worktree.yml the agent is asked to fix.
+    writeFileSync(path.join(run.worktreePath, '.emberline', 'worktree.yml'), 'version: 1\nchecks:\n  container: npm run test:container\n');
+    const passes = trackPipelines();
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('build_gate_failed');
+    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title);
+    expect(titles).toContain('Follow-up');
+
+    // The agent removes its change: the next pass finds no tickets file and no change, only the tickets made before.
+    rmSync(path.join(run.worktreePath, '.emberline', 'worktree.yml'));
+    await nextTurn(run);
+    await settled(passes, 2);
+    expect(await eventTypes(run)).not.toContain('no_changes');
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+  });
+
   /** The run's own commit, fast-forwarded into main by hand: its tip is now on main's first-parent line. */
   const fastForwarded = async () => {
     const made = await factoryTicket();
@@ -1262,6 +1288,29 @@ describe('the worktree config check before the merge', () => {
       '.emberline/worktree.yml could not be checked',
     );
     expect(await statusOf(ticket.id)).not.toBe('done');
+  });
+
+  it("a valid file of the run's own is not checked against main's: git failing to read main's does not hold it", async () => {
+    const { ticket, run } = await ymlTicket(VALID);
+    writeRunYml(run, 'version: 1\nchecks:\n  build: npm run build\n');
+    const oid = wgit(run.worktreePath, 'rev-parse', `main:${YML}`).trim();
+    setCommandExecutor(async (request) =>
+      request.args.includes('cat-file') && request.args.includes(oid)
+        ? { exitCode: 128, signal: null, stdout: '', stderr: `fatal: git cat-file ${oid}: bad file`, timedOut: false, truncated: false }
+        : localCommandExecutor(request),
+    );
+    try {
+      const passes = trackPipelines();
+      await begin(run);
+      await stop(run, { summary: 'added a build check' });
+      await settled(passes, 1);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    const types = await eventTypes(run);
+    expect(types).not.toContain('build_gate_error');
+    expect(types).not.toContain('build_gate_failed');
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
   });
 
   it('a run that deletes the file passes (Review Focus 5)', async () => {

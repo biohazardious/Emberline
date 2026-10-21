@@ -239,6 +239,17 @@ describe('buildRecovery: the other holds', () => {
     expect(r.suggestions[0]!.prompt).toContain('explain why nothing is needed');
   });
 
+  it('no_changes for an agent without the completion tool: no "saying what it did", the reply is the explanation', () => {
+    const r = buildRecovery(input('no_changes', { autoFix: false }, { completeAgain: '' }));
+    expect(r.why).toBe('the agent ended without changing anything');
+    expect(r.suggestions.map((s) => s.id)).toEqual(['do_the_ticket', 'merge_now', 'discard']);
+    const prompt = r.suggestions[0]!.prompt!;
+    expect(prompt).toMatch(/^The ticket asks for changes, but you made none\. Do the work it asks for/);
+    expect(prompt).toContain('explain why in your reply');
+    expect(prompt).toContain('a person will mark the ticket done');
+    expect(prompt).not.toContain('explain why nothing is needed and finish');
+  });
+
   it('a prompt without the completion tool ends with the prompt itself', () => {
     const r = buildRecovery(input('completion_missing', {}, { completeAgain: '' }));
     expect(r.suggestions[0]!.prompt!.endsWith('say what blocks you.')).toBe(true);

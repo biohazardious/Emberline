@@ -4,6 +4,7 @@ import {
   attentionCount,
   dismissable,
   fleetSection,
+  attentionDetail,
   groupAttention,
   holdLabel,
   inboxHeading,
@@ -159,6 +160,21 @@ describe('holdLabel', () => {
     expect(holdLabel('constructor')).toBe('constructor');
     expect(holdLabel('toString')).toBe('toString');
     expect(holdLabel('some agent text')).toBe('some agent text');
+  });
+});
+
+describe('attentionDetail', () => {
+  const at = (reason: RunAttention['reason'], detail: string | null): RunAttention => ({ ...attn(reason, 0, 'x'), detail });
+  it('says what a headless agent outside Autonomous mode needs instead of its failure code', () => {
+    const text = attentionDetail(at('failed', 'headless_needs_auto'));
+    expect(text).not.toContain('headless_needs_auto');
+    expect(text).toContain('Autonomous mode');
+  });
+  it('maps hold keys, keeps other failure types and agent text, and has nothing for no detail', () => {
+    expect(attentionDetail(at('held', 'no_changes'))).toBe('Finished without changes');
+    expect(attentionDetail(at('failed', 'agent_not_signed_in'))).toBe('agent_not_signed_in');
+    expect(attentionDetail(at('question', 'headless_needs_auto'))).toBe('headless_needs_auto');
+    expect(attentionDetail(at('failed', null))).toBeNull();
   });
 });
 
