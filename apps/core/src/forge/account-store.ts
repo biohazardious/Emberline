@@ -96,7 +96,7 @@ export function environmentAccounts(env: NodeJS.ProcessEnv = process.env): Forge
   const token = env.EMBERLINE_FORGE_TOKEN?.trim();
   if (!token) return [];
   const fixed = fixedProvider(env.EMBERLINE_FORGE_PROVIDER?.trim());
-  const apiUrl = env.EMBERLINE_FORGE_API_URL?.trim() || null;
+  const apiUrl = env.EMBERLINE_FORGE_API_URL?.trim().replace(/\/+$/, '') || null;
   const primary = apiUrl
     ? serverFromApiUrl(apiUrl, fixed)
     : { provider: fixed ?? 'github', serverUrl: 'https://github.com' };
@@ -122,7 +122,8 @@ export function environmentAccounts(env: NodeJS.ProcessEnv = process.env): Forge
     );
   for (const entry of (env.EMBERLINE_FORGE_ALLOWED_HOSTS ?? '').split(',')) {
     const host = entry.trim().toLowerCase();
-    if (!host || host === 'api.github.com') continue;
+    // A bare host (`git.example.com[:port]`); a URL written here is skipped, not misread.
+    if (!host || host.includes('/') || host === 'api.github.com') continue;
     const serverUrl = normalizeServerUrl(`https://${host}`);
     if (!serverUrl) continue;
     const provider = fixed ?? detectProviderByHost(host);
@@ -185,6 +186,22 @@ export function insertAccount(
     .values({ id, ...input, createdAt: now, updatedAt: now })
     .run();
   return { id, ...input, source: 'settings' };
+}
+
+/**
+ * The insert to use outside tests: one account per server host, counting environment accounts
+ * (the unique index is on `server_url`, which a sub-path would slip past). Null when the host is
+ * taken. The check and the insert are synchronous, so no other insert can come between them.
+ */
+export function insertAccountIfHostFree(
+  db: Db,
+  input: Omit<ForgeAccountRecord, 'id' | 'source'>,
+  env: NodeJS.ProcessEnv = process.env,
+  now = new Date(),
+): ForgeAccountRecord | null {
+  const host = serverHost(input.serverUrl);
+  if (listAccountRecords(db, env).some((a) => serverHost(a.serverUrl) === host)) return null;
+  return insertAccount(db, input, now);
 }
 
 export function updateAccount(

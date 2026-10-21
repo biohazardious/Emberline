@@ -13,7 +13,7 @@ import {
   deriveApiUrl,
   findAccountRecord,
   type ForgeAccountRecord,
-  insertAccount,
+  insertAccountIfHostFree,
   listAccountRecords,
   normalizeServerUrl,
   serverHost,
@@ -23,6 +23,9 @@ import {
 import { authHeaders, type FetchLike, forgeFetch, readJson } from './issues.js';
 
 export const TOKEN_REFUSED = 'The forge refused this token.';
+const PROVIDER_LABELS: Record<ForgeProvider, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
+/** Longer than any forge allows; a longer "name" is not a user. */
+const USERNAME_MAX = 200;
 const READ_ONLY = 'This account comes from EMBERLINE_FORGE_TOKEN; change it in the environment.';
 
 export function accountView(a: ForgeAccountRecord): ForgeAccount {
@@ -77,10 +80,14 @@ export class ForgeAccountsService {
     this.assertHostFree(host);
     const apiUrl = deriveApiUrl(provider, serverUrl);
     const username = await this.currentUser(provider, apiUrl, token, host);
-    // Another add for this host may have finished during the check; the re-check and the insert
-    // are synchronous, so nothing slips between them.
-    this.assertHostFree(host);
-    return accountView(insertAccount(this.db, { provider, serverUrl, apiUrl, username, token }));
+    // Another add for this host may have finished during the check: the insert checks again.
+    const created = insertAccountIfHostFree(
+      this.db,
+      { provider, serverUrl, apiUrl, username, token },
+      this.env,
+    );
+    if (!created) throw conflict(`An account for ${host} already exists.`);
+    return accountView(created);
   }
 
   private assertHostFree(host: string): void {
@@ -125,22 +132,51 @@ export class ForgeAccountsService {
     return accountView(this.record(id));
   }
 
-  /** GET <api>/user; 401/403 → "The forge refused this token." (400); never quotes the forge's body. */
+  /**
+   * GET <api>/user; 401/403 → "The forge refused this token." (400). Never quotes the forge's body:
+   * anything that is not a user (an HTML login page, `null`, no name) says the server URL is wrong.
+   */
   private async currentUser(
     provider: ForgeProvider,
     apiUrl: string,
     token: string,
     host: string,
   ): Promise<string> {
+    const notAForge = () =>
+      new HttpError(
+        502,
+        'forge_error',
+        `${host} did not answer like a ${PROVIDER_LABELS[provider]} server. Check the server URL.`,
+      );
     let res: Response;
     try {
       res = await forgeFetch(this.fetch, `${apiUrl}/user`, { headers: authHeaders(provider, token) });
     } catch (error) {
+      if (error instanceof HttpError && error.code === 'forge_timeout') throw error;
       const message = error instanceof Error ? error.message : String(error);
+      // forgeFetch follows only same-origin redirects; its own text names the remote and a removed setting.
+      if (message.startsWith('the forge redirected')) {
+        throw new HttpError(
+          502,
+          'forge_error',
+          `${host} sent the check to another address. Check the server URL.`,
+        );
+      }
       throw new HttpError(
         502,
         'forge_error',
         `Couldn't check the token with ${host}: ${message.split(token).join('[redacted]')}`,
+      );
+    }
+    if (
+      res.status === 429 ||
+      (res.status === 403 &&
+        (res.headers.has('retry-after') || res.headers.get('x-ratelimit-remaining') === '0'))
+    ) {
+      throw new HttpError(
+        429,
+        'forge_rate_limited',
+        `${host} is limiting requests right now. Try again in a few minutes.`,
       );
     }
     if (res.status === 401 || res.status === 403) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
@@ -150,15 +186,21 @@ export class ForgeAccountsService {
         'forge_error',
         `Couldn't check the token with ${host}: the forge answered ${res.status}.`,
       );
-    const data = await readJson<{ login?: unknown; username?: unknown }>(res);
+    let data: unknown;
+    try {
+      data = await readJson(res);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw notAForge();
+    }
+    const fields = data && typeof data === 'object' ? (data as { login?: unknown; username?: unknown }) : {};
     const name =
-      typeof data.login === 'string' ? data.login : typeof data.username === 'string' ? data.username : null;
-    if (!name)
-      throw new HttpError(
-        502,
-        'forge_error',
-        `Couldn't check the token with ${host}: the forge did not name the user.`,
-      );
+      typeof fields.login === 'string'
+        ? fields.login
+        : typeof fields.username === 'string'
+          ? fields.username
+          : null;
+    if (!name || name.length > USERNAME_MAX) throw notAForge();
     return name;
   }
 }

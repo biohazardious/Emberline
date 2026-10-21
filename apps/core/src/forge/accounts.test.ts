@@ -5,6 +5,7 @@ import {
   accountForRemote,
   deriveApiUrl,
   environmentAccounts,
+  insertAccountIfHostFree,
   normalizeServerUrl,
   serverFromApiUrl,
 } from './account-store.js';
@@ -202,7 +203,13 @@ describe('forge accounts API', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let bothWaiting!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      bothWaiting = resolve;
+    });
+    let calls = 0;
     t.forgeFetch.current = async () => {
+      if (++calls === 2) bothWaiting();
       await gate;
       return reply({ login: 'octo' });
     };
@@ -216,11 +223,67 @@ describe('forge accounts API', () => {
       serverUrl: 'https://git.example.com/sub',
       token: 'b',
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Both requests passed the first host check and wait at the forge before either inserts.
+    await waiting;
     release();
     const codes = (await Promise.all([first, second])).map((r) => r.statusCode).sort();
     expect(codes).toEqual([201, 409]);
     expect(t.db.select().from(forgeAccounts).all()).toHaveLength(1);
+  });
+
+  it('an answer that is not a forge user is a 502 naming the host, without the token or the body', async () => {
+    const answers = [
+      () =>
+        new Response('<!doctype html><title>Sign in</title>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        }),
+      () => reply(null),
+      () => reply({ id: 7, name: 'Octo' }),
+      () => reply({ login: 'x'.repeat(201) }),
+    ];
+    for (const next of answers) {
+      answer = next;
+      const res = await send('POST', '/api/forge/accounts', {
+        provider: 'gitea',
+        serverUrl: 'https://git.example.com',
+        token: 'gt-SECRET-3',
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({
+        error: 'forge_error',
+        message: 'git.example.com did not answer like a Gitea server. Check the server URL.',
+      });
+      expect(res.body).not.toContain('gt-SECRET-3');
+    }
+    expect(t.db.select().from(forgeAccounts).all()).toHaveLength(0);
+  });
+
+  it('a timeout stays a 504, a rate limit is not a refused token, a redirect elsewhere names the host', async () => {
+    const body = { provider: 'github', serverUrl: 'https://github.com', token: 'ghp_SECRET_4' };
+    t.forgeFetch.current = async () => {
+      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+    };
+    const timedOut = await send('POST', '/api/forge/accounts', body);
+    expect(timedOut.statusCode).toBe(504);
+    expect(timedOut.json().error).toBe('forge_timeout');
+    t.forgeFetch.current = async () =>
+      new Response('{"message":"secondary rate limit"}', { status: 403, headers: { 'retry-after': '60' } });
+    const limited = await send('POST', '/api/forge/accounts', body);
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toEqual({
+      error: 'forge_rate_limited',
+      message: 'github.com is limiting requests right now. Try again in a few minutes.',
+    });
+    t.forgeFetch.current = async () =>
+      new Response(null, { status: 302, headers: { location: 'https://login.example.org/sso' } });
+    const redirected = await send('POST', '/api/forge/accounts', body);
+    expect(redirected.statusCode).toBe(502);
+    expect(redirected.json()).toEqual({
+      error: 'forge_error',
+      message: 'github.com sent the check to another address. Check the server URL.',
+    });
+    expect(timedOut.body + limited.body + redirected.body).not.toContain('ghp_SECRET_4');
   });
 
   it('update: a blank token keeps the stored one without a call; a new token is checked first', async () => {
@@ -278,6 +341,18 @@ describe('environment accounts', () => {
       serverUrl: 'https://github.com',
     });
     expect(environmentAccounts({})).toEqual([]);
+    expect(
+      environmentAccounts({
+        EMBERLINE_FORGE_TOKEN: 'x',
+        EMBERLINE_FORGE_API_URL: 'https://gl.example.com/api/v4/',
+      })[0]?.apiUrl,
+    ).toBe('https://gl.example.com/api/v4');
+    expect(
+      environmentAccounts({
+        EMBERLINE_FORGE_TOKEN: 'x',
+        EMBERLINE_FORGE_ALLOWED_HOSTS: 'https://git.example.com',
+      }).map((a) => a.id),
+    ).toEqual(['env']);
     const t = await createTestApp();
     try {
       const svc = new ForgeAccountsService(t.db, async () => reply({ login: 'x' }), env);
@@ -314,6 +389,34 @@ describe('accountForRemote', () => {
       expect(accountForRemote(t.db, 'https://git.example.com:8443/a/b.git', {})).toBeNull();
       expect(accountForRemote(t.db, 'https://evil.example.org/a/b.git', {})).toBeNull();
       expect(accountForRemote(t.db, 'https://git.example.com.evil.org/a/b.git', {})).toBeNull();
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe('insertAccountIfHostFree', () => {
+  it('inserts only when no account (stored or environment) has the host', async () => {
+    const t = await createTestApp();
+    try {
+      const input = {
+        provider: 'gitea' as const,
+        apiUrl: 'https://h.example/api/v1',
+        username: null,
+        token: 't',
+      };
+      expect(insertAccountIfHostFree(t.db, { ...input, serverUrl: 'https://h.example' }, {})?.source).toBe(
+        'settings',
+      );
+      expect(insertAccountIfHostFree(t.db, { ...input, serverUrl: 'https://h.example/sub' }, {})).toBeNull();
+      expect(
+        insertAccountIfHostFree(
+          t.db,
+          { ...input, serverUrl: 'https://github.com' },
+          { EMBERLINE_FORGE_TOKEN: 'e' },
+        ),
+      ).toBeNull();
+      expect(t.db.select().from(forgeAccounts).all()).toHaveLength(1);
     } finally {
       await t.close();
     }
