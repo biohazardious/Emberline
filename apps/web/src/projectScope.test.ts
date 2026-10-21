@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ALL_PROJECTS_KEYS,
+  fleetBulkTitles,
   type FlagStorage,
   inScope,
   moreInOtherProjects,
@@ -71,5 +72,23 @@ describe('moreInOtherProjects', () => {
     expect(moreInOtherProjects(3)).toBe('3 more in other projects');
     expect(moreInOtherProjects(1)).toBe('1 more in other projects');
     expect(moreInOtherProjects(0)).toBeNull();
+  });
+});
+
+describe('fleetBulkTitles', () => {
+  it('the bulk buttons say which projects they act on', () => {
+    expect(fleetBulkTitles({ activeProjectId: 'a', all: false })).toEqual({
+      stopAll: 'Stop every running or queued session in this project',
+      cleanUp:
+        'Purge finished and failed sessions, close their exited terminals, and prune their temporary git worktrees in this project',
+    });
+    const everywhere = {
+      stopAll: 'Stop every running or queued session in all projects',
+      cleanUp:
+        'Purge finished and failed sessions, close their exited terminals, and prune their temporary git worktrees in all projects',
+    };
+    expect(fleetBulkTitles({ activeProjectId: 'a', all: true })).toEqual(everywhere);
+    // No active project yet: the views show (and the buttons act on) every project.
+    expect(fleetBulkTitles({ activeProjectId: null, all: false })).toEqual(everywhere);
   });
 });

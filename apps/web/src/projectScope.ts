@@ -66,3 +66,12 @@ export function outOfScope<T>(
 export function moreInOtherProjects(count: number): string | null {
   return count > 0 ? `${count} more in other projects` : null;
 }
+
+/** Tooltips of Fleet's Stop All Active and Clean up buttons: they act on the scope the list shows. */
+export function fleetBulkTitles(scope: Scope): { stopAll: string; cleanUp: string } {
+  const where = scope.all || !scope.activeProjectId ? 'in all projects' : 'in this project';
+  return {
+    stopAll: `Stop every running or queued session ${where}`,
+    cleanUp: `Purge finished and failed sessions, close their exited terminals, and prune their temporary git worktrees ${where}`,
+  };
+}

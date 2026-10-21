@@ -27,7 +27,7 @@ import {
 } from '../attention';
 import { AllProjectsToggle } from '../components/AllProjectsToggle';
 import { useAllProjects } from '../hooks/useAllProjects';
-import { inScope, moreInOtherProjects } from '../projectScope';
+import { fleetBulkTitles, inScope, moreInOtherProjects } from '../projectScope';
 import { keptWorktreesSummary } from '../gcSummary';
 import { api, errorMessage } from '../api';
 import { HandoffMenu } from '../components/QuotaLanes';
@@ -151,6 +151,7 @@ export function FleetPage({
     () => inScope(runs ?? [], (r) => r.projectId, { activeProjectId: activeProjectId ?? null, all }),
     [runs, activeProjectId, all],
   );
+  const bulkTitles = fleetBulkTitles({ activeProjectId: activeProjectId ?? null, all });
   /** The badge counts every project: say what the other projects add to Needs you. */
   const elsewhere = useMemo(
     () => (all ? 0 : needsElsewhere(runs ?? [], seen, activeProjectId)),
@@ -283,7 +284,7 @@ export function FleetPage({
               className="btn btn-sm btn-ghost danger"
               disabled={stoppingAll}
               onClick={() => void handleStopAllActive()}
-              title="Stop all currently running or queued sessions in this project"
+              title={bulkTitles.stopAll}
             >
               {stoppingAll ? (
                 'Stopping…'
@@ -305,7 +306,7 @@ export function FleetPage({
               style={{
                 borderColor: 'color-mix(in hsl, var(--ember-1) 45%, var(--border))',
               }}
-              title="Purge all finished/failed sessions, dispose exited PTY terminals, and prune their temporary git worktrees"
+              title={bulkTitles.cleanUp}
             >
               {gcBusy ? (
                 <>
