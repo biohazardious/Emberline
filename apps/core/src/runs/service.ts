@@ -547,7 +547,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /** Background teardown-then-prune jobs by worktree path, so a project delete can wait for them. */
   private readonly teardownJobs = new Map<string, Promise<void>>();
   private log?: RunServiceLogger;
-  /** The opt-in Docker engine sidecar; runs and worktree.yml commands use it while it answers. */
+  /**
+   * The Docker engine sidecar (on unless `EMBERLINE_DOCKER_ENGINE=0`); runs and worktree.yml commands use it while
+   * it answers.
+   */
   readonly docker: DockerEngine;
   /** Compose previews' background starts by run id (cancelled by a stop or a new start). */
   private readonly composeJobs = new Map<string, ComposeJob>();

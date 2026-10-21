@@ -178,7 +178,10 @@ export function Dashboard({
         </div>
       )}
       {dockerLine && (
-        <p className="muted dashboard-docker" title="Isolated Docker engine for agents and previews (compose profile docker)">
+        <p
+          className="muted dashboard-docker"
+          title="Isolated Docker engine for agents and previews (on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off)"
+        >
           {dockerLine}
         </p>
       )}
