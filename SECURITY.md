@@ -44,7 +44,7 @@ By default Emberline runs a Docker engine of its own (the `docker` service; `EMB
 
 ### Preview ports on every install
 
-The runner publishes the command-preview range `EMBERLINE_PREVIEW_PORTS_RUNNER` (default 4300-4324) on `EMBERLINE_BIND` on every install, with or without the Docker engine. With the default `127.0.0.1` only the Docker host reaches them. With `EMBERLINE_BIND=0.0.0.0`, every dev server a preview starts is reachable from your network without logging in to Emberline, so use a private interface, a firewall or a VPN, and don't preview anything you would not show to the network.
+By default 4300-4349 are published on `EMBERLINE_BIND`. The runner publishes the command-preview range `EMBERLINE_PREVIEW_PORTS_RUNNER` (default 4300-4324) on every install, and the Docker engine publishes the compose-preview range `EMBERLINE_PREVIEW_PORTS_DOCKER` (default 4325-4349) unless `EMBERLINE_DOCKER_ENGINE=0` turns it off. With the default `127.0.0.1` only the Docker host reaches them. With `EMBERLINE_BIND=0.0.0.0`, every dev server or compose service a preview starts is reachable from your network without logging in to Emberline, so use a private interface, a firewall or a VPN, and don't preview anything you would not show to the network.
 
 ### Preview ports and the session cookie
 

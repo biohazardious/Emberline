@@ -209,7 +209,7 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 - **Single admin account.** The first visitor needs the setup token from the server log, so nobody else on the network can claim a fresh instance.
 - **Two containers, two roles.** `core` (API and UI) runs no workspace processes and ships without git, ssh or build tools. Everything that runs in a workspace (agents, git, installs, builds, tests) runs in `runner`. Git commands ignore repository hooks and command-running config.
 - **The Docker engine is privileged, and on by default.** It runs rootless and never gets the host's Docker socket, and its API needs a client certificate, but the container itself is privileged, and anything that can start containers in it (every agent) can control all of it. See [Docker engine](#docker-engine).
-- **Preview ports are published.** The runner publishes 4300-4324 on `EMBERLINE_BIND` on every install; with `0.0.0.0` a running preview is open to your network without a login.
+- **Preview ports are published.** By default 4300-4349 are published on `EMBERLINE_BIND`: the runner publishes 4300-4324 on every install, and the Docker engine 4325-4349 unless `EMBERLINE_DOCKER_ENGINE=0`. With `0.0.0.0` a running preview is open to your network without a login.
 - **The runner is one trust domain.** All agents and terminals run as the same user and can read each other's workspaces and the provider logins in the runner's home. Don't run agents for projects you don't trust next to ones you do.
 - **Secrets are stored in plaintext** in the SQLite database in core's data volume. They are never sent back to the browser, but anyone with access to that volume or a backup can read them.
 
