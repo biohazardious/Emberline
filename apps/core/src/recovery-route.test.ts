@@ -341,7 +341,10 @@ describe('delivering a recovery prompt', () => {
       file,
       [
         '#!/bin/sh',
-        `printf '%s\\n' "$@" >> "${t.dir}/args-$EMBERLINE_RUN_ID"`,
+        // Written whole, then appended in one go: a reader never sees a half-written start.
+        `printf '%s\\n' "$@" > "${t.dir}/.args-$EMBERLINE_RUN_ID.$$"`,
+        `cat "${t.dir}/.args-$EMBERLINE_RUN_ID.$$" >> "${t.dir}/args-$EMBERLINE_RUN_ID"`,
+        `rm -f "${t.dir}/.args-$EMBERLINE_RUN_ID.$$"`,
         `printf %s "$EMBERLINE_HOOK_TOKEN" > "${t.dir}/.token-$EMBERLINE_RUN_ID"`,
         `mv "${t.dir}/.token-$EMBERLINE_RUN_ID" "${t.dir}/token-$EMBERLINE_RUN_ID"`,
         'read line',
@@ -369,7 +372,8 @@ describe('delivering a recovery prompt', () => {
   /** The arguments the fake CLI was started with for `runId` (every start appends). */
   async function argsOf(runId: string): Promise<string> {
     const file = path.join(t.dir, `args-${runId}`);
-    await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
+    // `>>` creates the file before the start's line lands in it.
+    await expect.poll(() => existsSync(file) && readFileSync(file, 'utf8').length > 0, { timeout: 5_000 }).toBe(true);
     return readFileSync(file, 'utf8');
   }
   /** The prompt of the run's latest `--resume <session>` start. */
