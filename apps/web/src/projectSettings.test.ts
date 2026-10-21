@@ -10,6 +10,7 @@ import {
   WORKTREE_EDIT_HINT,
   WORKTREE_SAVE_LABEL,
   worktreeBanner,
+  worktreeEditAvailable,
   worktreeEditorStart,
   worktreeSaveEnabled,
   worktreeSaveFailure,
@@ -171,5 +172,12 @@ describe('worktree.yml editor helpers', () => {
   it("the copy is the spec's", () => {
     expect(WORKTREE_SAVE_LABEL).toBe('Save and approve');
     expect(WORKTREE_EDIT_HINT).toBe('Saving commits the file to main and approves it. Runs use it from their next start.');
+  });
+});
+
+describe('worktreeEditAvailable', () => {
+  it('waits for the status so the editor starts from HEAD', () => {
+    expect(worktreeEditAvailable(undefined)).toBe(false);
+    expect(worktreeEditAvailable(status())).toBe(true);
   });
 });

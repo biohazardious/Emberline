@@ -34,6 +34,7 @@ export function WorktreeEditor({
   const [start, setStart] = useState(() => worktreeEditorStart(status));
   const [content, setContent] = useState(start.content);
   const [errors, setErrors] = useState<string[]>([]);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [validating, setValidating] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof worktreeSaveFailure> | null>(null);
@@ -46,11 +47,12 @@ export function WorktreeEditor({
         (res) => {
           if (stale) return;
           setErrors(res.errors);
+          setCheckError(null);
           setValidating(false);
         },
         (err: unknown) => {
           if (stale) return;
-          setErrors([errorMessage(err)]);
+          setCheckError(errorMessage(err));
           setValidating(false);
         },
       );
@@ -102,6 +104,7 @@ export function WorktreeEditor({
           filePath={`worktree-${project.id}-${start.baseSha256 ?? 'new'}`}
           theme={monacoTheme(themeMode)}
           value={content}
+          readOnly={busy}
           onChange={setContent}
         />
       </div>
@@ -111,6 +114,11 @@ export function WorktreeEditor({
             <li key={e}>{e}</li>
           ))}
         </ul>
+      )}
+      {checkError !== null && (
+        <p className="banner banner-error" role="alert">
+          Could not check the file: {checkError}
+        </p>
       )}
       {failure && (
         <div className="banner banner-error" role="alert">
@@ -134,7 +142,9 @@ export function WorktreeEditor({
         <button
           type="button"
           className="btn btn-primary btn-sm"
-          disabled={!worktreeSaveEnabled({ errors, validating, busy })}
+          disabled={
+            !worktreeSaveEnabled({ errors: checkError === null ? errors : [checkError], validating, busy })
+          }
           onClick={() => void save()}
         >
           {busy ? 'Saving…' : WORKTREE_SAVE_LABEL}

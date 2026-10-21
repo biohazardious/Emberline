@@ -11,6 +11,7 @@ import {
   type GateChoice,
   WORKTREE_EDIT_PARAM,
   type WorktreeBanner,
+  worktreeEditAvailable,
   worktreeBanner,
 } from '../projectSettings';
 import { WorktreeEditor } from './WorktreeEditor';
@@ -152,13 +153,13 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
         >
           {open ? 'Hide' : 'Review'}
         </button>
-        {bannerOffersEdit(banner) && !editing && (
+        {bannerOffersEdit(banner) && worktreeEditAvailable(status.data) && !editing && (
           <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
             Edit
           </button>
         )}
       </div>
-      {editing && <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />}
+      {editing && worktreeEditAvailable(status.data) && <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />}
       {open && !editing && <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />}
     </section>
   );
@@ -175,7 +176,7 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
   const search = useSearch();
   const openedFromLink = useRef(false);
   useEffect(() => {
-    if (openedFromLink.current || !status.data) return;
+    if (openedFromLink.current || !worktreeEditAvailable(status.data)) return;
     if (search.replace(/^\?/, '').split('&').includes(WORKTREE_EDIT_PARAM)) {
       openedFromLink.current = true;
       setEditing(true);
@@ -244,7 +245,7 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
       <div className="worktree-heading">
         <h3>worktree.yml</h3>
         {!editing && (
-          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+          <button type="button" className="btn btn-sm" disabled={!worktreeEditAvailable(status.data)} onClick={() => setEditing(true)}>
             Edit
           </button>
         )}
@@ -254,7 +255,7 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
           Couldn&apos;t refresh the worktree.yml status ({errorMessage(status.error)}); showing the last state.
         </p>
       )}
-      {editing ? (
+      {editing && worktreeEditAvailable(status.data) ? (
         <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />
       ) : (
         <>

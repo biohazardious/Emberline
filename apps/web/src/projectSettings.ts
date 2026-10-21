@@ -161,3 +161,8 @@ export function worktreeSaveFailure(err: unknown): { message: string; errors: st
 export function bannerOffersEdit(banner: WorktreeBanner | null): boolean {
   return banner?.kind === 'unusable';
 }
+
+/** Edit opens once HEAD's status has loaded: the editor's base is fixed when it opens. */
+export function worktreeEditAvailable(s: WorktreeConfigStatusResponse | undefined): boolean {
+  return s !== undefined;
+}
