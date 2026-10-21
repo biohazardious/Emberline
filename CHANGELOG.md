@@ -14,7 +14,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Upgrade notes
 
-- Only the core image changes; the runner image has no changes of its own and the compose file is unchanged, so running agents are not affected.
+- The compose file is unchanged. Only core has changes of its own, but updating with the published images (`docker compose pull && docker compose up -d`) also replaces the runner container, which stops running agents, so update when they are idle. From source, `make upgrade-core` updates core alone.
 - If the repository of an existing project already has an invalid `.emberline/worktree.yml` on main (Settings shows "worktree.yml in the repository can't be used"), fix the file in the repository. Runs keep using the approved version meanwhile.
 
 ## [0.3.5] - 2026-10-21
