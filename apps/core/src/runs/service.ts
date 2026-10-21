@@ -114,6 +114,7 @@ import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
+import { BROWSER_AGENT_WINDOW_MS, browserAgentProjects } from './browser-agents.js';
 import {
   effectiveFactorySettings,
   getFactorySettings,
@@ -1737,6 +1738,33 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       actions: actions.slice(0, 25),
       agentActive,
     };
+  }
+
+  /**
+   * Projects whose agent is using a browser now: a working run with a browser tool call in the last
+   * minute. The Live Browser follows an agent's tab only while exactly one project has one (core
+   * cannot tell which tab another project's agent drives in the shared Chromium).
+   */
+  browserAgentProjectIds(now = Date.now()): Set<string> {
+    const since = new Date(now - BROWSER_AGENT_WINDOW_MS);
+    const rows = this.db
+      .select({ projectId: runs.projectId, payload: runEvents.payload, ts: runEvents.ts })
+      .from(runEvents)
+      .innerJoin(runs, eq(runs.id, runEvents.runId))
+      .where(and(eq(runs.state, 'working'), eq(runEvents.type, 'PreToolUse'), gte(runEvents.ts, since)))
+      .all();
+    return browserAgentProjects(
+      rows.map((r) => {
+        const p = (r.payload ?? {}) as Record<string, unknown>;
+        return {
+          projectId: r.projectId,
+          toolName: typeof p.tool_name === 'string' ? p.tool_name : '',
+          detail: typeof p.tool_input_summary === 'string' ? p.tool_input_summary : '',
+          at: r.ts.getTime(),
+        };
+      }),
+      now,
+    );
   }
 
   /** Applies a hook forwarded by `emberline-hook`. The per-run token is the only credential. */

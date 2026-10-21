@@ -137,6 +137,30 @@ await step('demo is served sandboxed through a capability URL', async () => {
   assert.match(page.headers.get('content-security-policy') ?? '', /sandbox/);
 });
 
+await step('Live Browser keeps one tab per project', async () => {
+  const other = await api('POST', '/api/projects', { name: 'E2E Browser B', mode: 'wizard', appType: 'web_saas', description: 'second project', initGit: false, seedStarterTickets: false });
+  assert.equal(other.status, 201, other.text);
+  const b = other.json.project;
+  const viewport = async (id) => {
+    for (let i = 0; i < 20; i++) {
+      const res = await api('GET', `/api/projects/${id}/browser-viewport`);
+      assert.equal(res.status, 200, res.text);
+      if (res.json.source === 'cdp_live' && res.json.activeTabId) return res.json;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error('the runner browser did not answer');
+  };
+  const a1 = await viewport(project.id);
+  const b1 = await viewport(b.id);
+  assert.notEqual(a1.activeTabId, b1.activeTabId);
+  const nav = await api('POST', `/api/projects/${b.id}/browser-action`, { action: 'navigate', url: 'http://core:7420/api/health' });
+  assert.equal(nav.status, 200, nav.text);
+  const a2 = await viewport(project.id);
+  assert.equal(a2.activeTabId, a1.activeTabId);
+  assert.equal(a2.targetUrl, a1.targetUrl);
+  assert.deepEqual(a2.tabs.map((t) => t.id), [a1.activeTabId]);
+});
+
 await step('ticket changes are pushed over /api/events', async () => {
   const wsUrl = `${BASE.replace(/^http/, 'ws')}/api/events`;
   const origin = BASE;

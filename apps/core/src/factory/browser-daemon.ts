@@ -5,6 +5,7 @@ import path from 'node:path';
 import type {
   BrowserActionBody,
   BrowserAgentAction,
+  BrowserTabInfo,
   BrowserViewportSnapshot,
   ClaudeTokenBucket,
   ClaudeUsageTelemetry,
@@ -12,7 +13,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.4.0';
+export const BROWSER_DAEMON_VERSION = '1.5.0';
 
 /**
  * S17: the same rule the daemon applies before navigating (`normalizeNavigateUrl`), checked in core
@@ -73,7 +74,9 @@ try {
  * 1. Bridges `127.0.0.1:7420 -> core:7420` inside `runner` so `http://localhost:7420/...`
  *    works seamlessly inside Chromium and Playwright MCP.
  * 2. Launches and supervises a shared Chromium instance on `127.0.0.1:9222` (`1280x720`),
- *    and also detects any ephemeral Playwright Chromium instance on `127.0.0.1:9223`.
+ *    and also detects any ephemeral Playwright Chromium instance on `127.0.0.1:9223`. Each
+ *    project's Live Browser has its own tabs (labelled in `browser-tabs.json`); any other tab is
+ *    an agent's.
  * 3. Runs the built-in Live AI Playtest Bot (`start_playtest` / `stop_playtest`) so users and
  *    agents can watch an autonomous AI playtest games and web apps live in the browser.
  * 4. Exposes `/health`, `/state`, `/action`, and `/shutdown` over `/run/emberline/browser.sock`.
@@ -92,8 +95,12 @@ const EPHEMERAL_CDP_BASE = 'http://127.0.0.1:9223';
 const PROFILE_DIR = '/tmp/emberline-chrome-profile';
 const AGENT_EVENTS_FILE = '/run/emberline/agent-browser-events.jsonl';
 
-let selectedTabId = null;
-let knownTabIds = new Set();
+const TABS_FILE = SOCKET_PATH.replace(/[^/]+$/, 'browser-tabs.json');
+/** tab id -> project id: tabs the daemon opened for a project's Live Browser. Any other tab is an agent's. */
+const tabProjects = new Map(loadTabProjects());
+/** Which agent tab a following view shows: the newest one seen with a page loaded. */
+const agentFollow = { seen: new Set(), last: null };
+let playtestTabId = null;
 const consoleLogs = [];
 const daemonActions = [];
 let nextActionId = 900000;
@@ -103,7 +110,22 @@ let playtestTimer = null;
 let playtestEndsAt = 0;
 let playtestTickCount = 0;
 
-function pushDaemonAction(toolName, summary, persona = 'qa') {
+function loadTabProjects() {
+  try {
+    return Object.entries(JSON.parse(fs.readFileSync(TABS_FILE, 'utf8')));
+  } catch {
+    return [];
+  }
+}
+
+function saveTabProjects() {
+  try {
+    fs.writeFileSync(TABS_FILE + '.tmp', JSON.stringify(Object.fromEntries(tabProjects)));
+    fs.renameSync(TABS_FILE + '.tmp', TABS_FILE);
+  } catch {}
+}
+
+function pushDaemonAction(toolName, summary, persona = 'qa', tabId = null) {
   daemonActions.push({
     id: nextActionId++,
     runId: 'live-browser',
@@ -112,6 +134,7 @@ function pushDaemonAction(toolName, summary, persona = 'qa') {
     toolName,
     summary,
     timestamp: new Date().toISOString(),
+    tabId,
   });
   if (daemonActions.length > 40) {
     daemonActions.splice(0, daemonActions.length - 40);
@@ -145,13 +168,14 @@ function readHookEvents() {
   }
 }
 
-function pushConsole(level, text) {
+function pushConsole(level, text, tabId) {
   if (!text) return;
   const clean = String(text).slice(0, 600);
   consoleLogs.push({
     level: ['log', 'info', 'warn', 'error'].includes(level) ? level : 'log',
     text: clean,
     timestamp: new Date().toISOString(),
+    tabId,
   });
   if (consoleLogs.length > 60) {
     consoleLogs.splice(0, consoleLogs.length - 60);
@@ -267,17 +291,17 @@ function attachConsoleListener(tab) {
             .map((a) => a.value ?? a.description ?? '')
             .filter(Boolean)
             .join(' ');
-          pushConsole(type === 'warning' ? 'warn' : type, args);
+          pushConsole(type === 'warning' ? 'warn' : type, args, tab.id);
         } else if (msg.method === 'Runtime.exceptionThrown') {
           const desc =
             msg.params?.exceptionDetails?.exception?.description ||
             msg.params?.exceptionDetails?.text ||
             'Uncaught page error';
-          pushConsole('error', desc);
+          pushConsole('error', desc, tab.id);
         } else if (msg.method === 'Log.entryAdded') {
           const entry = msg.params?.entry;
           if (entry?.text) {
-            pushConsole(entry.level === 'warning' ? 'warn' : entry.level || 'info', entry.text);
+            pushConsole(entry.level === 'warning' ? 'warn' : entry.level || 'info', entry.text, tab.id);
           }
         }
       } catch {}
@@ -289,68 +313,82 @@ function attachConsoleListener(tab) {
   }
 }
 
-async function listPageTargets() {
-  // 1. Check if an agent's custom Playwright script is currently running a browser on :9223
-  try {
-    const ephRes = await fetch(EPHEMERAL_CDP_BASE + '/json/list', {
-      signal: AbortSignal.timeout(350),
-    });
-    if (ephRes.ok) {
-      const ephAll = await ephRes.json();
-      const ephPages = ephAll.filter(
-        (t) =>
-          t.type === 'page' &&
-          typeof t.url === 'string' &&
-          !t.url.startsWith('chrome://') &&
-          !t.url.startsWith('devtools://') &&
-          !t.url.startsWith('chrome-extension://'),
-      );
-      if (ephPages.length > 0) {
-        for (const p of ephPages) attachConsoleListener(p);
-        const real = ephPages.find((p) => p.url && p.url !== 'about:blank') || ephPages[0];
-        return { pages: ephPages, active: real, ephemeralActive: true, cdpBase: EPHEMERAL_CDP_BASE };
-      }
-    }
-  } catch {}
-
-  // 2. Otherwise use the persistent shared Chromium on :9222
-  const res = await fetch(CDP_BASE + '/json/list', { signal: AbortSignal.timeout(2000) });
-  const all = await res.json();
-  let pages = all.filter(
-    (t) =>
-      t.type === 'page' &&
-      typeof t.url === 'string' &&
-      !t.url.startsWith('chrome://') &&
-      !t.url.startsWith('devtools://') &&
-      !t.url.startsWith('chrome-extension://'),
+function isUserPage(t) {
+  return (
+    t.type === 'page' &&
+    typeof t.url === 'string' &&
+    !t.url.startsWith('chrome://') &&
+    !t.url.startsWith('devtools://') &&
+    !t.url.startsWith('chrome-extension://')
   );
+}
+
+/** An agent's own Playwright Chromium on :9223 (started through the preload hook), when one runs. */
+async function ephemeralPages() {
+  try {
+    const res = await fetch(EPHEMERAL_CDP_BASE + '/json/list', { signal: AbortSignal.timeout(350) });
+    if (!res.ok) return null;
+    const pages = (await res.json()).filter(isUserPage);
+    for (const p of pages) attachConsoleListener(p);
+    return pages.length > 0 ? pages : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The shared Chromium's pages (one blank agent tab is opened when none is left); labels of closed
+ * tabs are dropped. Only labels that existed before the list was asked for: a tab another request
+ * opens meanwhile is not in this list yet.
+ */
+async function sharedPages() {
+  const labelled = [...tabProjects.keys()];
+  const res = await fetch(CDP_BASE + '/json/list', { signal: AbortSignal.timeout(2000) });
+  let pages = (await res.json()).filter(isUserPage);
   if (pages.length === 0) {
-    const created = await fetch(CDP_BASE + '/json/new?about:blank', {
-      method: 'PUT',
-      signal: AbortSignal.timeout(2000),
-    });
-    if (created.ok) {
-      const t = await created.json();
-      pages = [t];
-    }
+    const created = await fetch(CDP_BASE + '/json/new?about:blank', { method: 'PUT', signal: AbortSignal.timeout(2000) });
+    if (created.ok) pages = [await created.json()];
   }
   for (const p of pages) attachConsoleListener(p);
-
-  for (const p of pages) {
-    if (!knownTabIds.has(p.id) && p.url && p.url !== 'about:blank') {
-      selectedTabId = p.id;
+  let changed = false;
+  for (const id of labelled) {
+    if (tabProjects.has(id) && !pages.some((p) => p.id === id)) {
+      tabProjects.delete(id);
+      changed = true;
     }
   }
-  knownTabIds = new Set(pages.map((p) => p.id));
+  if (changed) saveTabProjects();
+  return pages;
+}
 
-  let active = pages.find((p) => p.id === selectedTabId);
-  if ((!active || active.url === 'about:blank') && pages.some((p) => p.url && p.url !== 'about:blank')) {
-    active = pages.find((p) => p.url && p.url !== 'about:blank') || pages[0];
+function pickAgentTab(pages, labels, follow) {
+  const candidates = pages.filter((p) => !labels.has(p.id) && p.url && p.url !== 'about:blank');
+  for (const p of candidates) if (!follow.seen.has(p.id)) follow.last = p.id;
+  follow.seen = new Set(pages.map((p) => p.id));
+  return candidates.find((p) => p.id === follow.last) || candidates[0] || null;
+}
+
+function pickShownTab(pages, labels, follow, q) {
+  if (q.follow) {
+    const agent = pickAgentTab(pages, labels, follow);
+    if (agent) return { tab: agent, following: true };
   }
-  if (!active) active = pages[0];
-  if (active) selectedTabId = active.id;
+  const own = q.tabId ? pages.find((p) => p.id === q.tabId && labels.get(p.id) === q.projectId) : null;
+  return own ? { tab: own, following: false } : null;
+}
 
-  return { pages, active, ephemeralActive: false, cdpBase: CDP_BASE };
+/** What a request shows: while following, the agent's own Chromium (:9223) or its tab; else the project's tab; tab null when that tab is gone. */
+async function resolveShown(q) {
+  const pages = await sharedPages();
+  if (q.follow) {
+    const eph = await ephemeralPages();
+    if (eph) {
+      const tab = eph.find((p) => p.url && p.url !== 'about:blank') || eph[0];
+      return { pages, tab, following: true, ephemeral: true };
+    }
+  }
+  const shown = pickShownTab(pages, tabProjects, agentFollow, q);
+  return shown ? { pages, ...shown, ephemeral: false } : { pages, tab: null, following: false, ephemeral: false };
 }
 
 async function withCdpPage(tab, fn) {
@@ -415,7 +453,8 @@ function stopPlaytestLoop(reason = 'Stopped Live AI Playtest Bot') {
     clearInterval(playtestTimer);
     playtestTimer = null;
     playtestEndsAt = 0;
-    pushDaemonAction('ai_playtest_stop', reason);
+    pushDaemonAction('ai_playtest_stop', reason, 'qa', playtestTabId);
+    playtestTabId = null;
   }
 }
 
@@ -426,9 +465,12 @@ async function runPlaytestTick() {
   }
   playtestTickCount++;
   try {
-    const { active } = await listPageTargets();
-    if (!active) return;
-    await withCdpPage(active, async (call) => {
+    const tab = (await sharedPages()).find((p) => p.id === playtestTabId);
+    if (!tab) {
+      stopPlaytestLoop('Tab closed');
+      return;
+    }
+    await withCdpPage(tab, async (call) => {
       // 1. Evaluate smart DOM/Canvas helper inside the page
       const evalRes = await call(
         'Runtime.evaluate',
@@ -462,9 +504,9 @@ async function runPlaytestTick() {
 
       const info = evalRes?.result?.value;
       if (info?.action === 'clicked_button') {
-        pushDaemonAction('auto_interact_click', 'Clicked "' + info.label + '" button');
+        pushDaemonAction('auto_interact_click', 'Clicked "' + info.label + '" button', 'qa', playtestTabId);
       } else if (info?.action === 'enabled_autopilot') {
-        pushDaemonAction('auto_interact_autopilot', 'Activated Autopilot (' + info.label + ')');
+        pushDaemonAction('auto_interact_autopilot', 'Activated Autopilot (' + info.label + ')', 'qa', playtestTabId);
       }
 
       // 2. Dispatch Space key when interacting with an active page
@@ -489,20 +531,20 @@ async function runPlaytestTick() {
         });
         if (playtestTickCount % 8 === 0) {
           const scoreNote = info?.score ? ' · Metric: ' + info.score : '';
-          pushDaemonAction('auto_interact_key', 'Sent Space key' + scoreNote);
+          pushDaemonAction('auto_interact_key', 'Sent Space key' + scoreNote, 'qa', playtestTabId);
         }
       }
     });
   } catch {}
 }
 
-async function startPlaytestLoop(targetUrl) {
+async function startPlaytestLoop(tab, targetUrl) {
   stopPlaytestLoop();
   await ensureChromium();
-  let { active } = await listPageTargets();
-  if (active && targetUrl && (!active.url || active.url === 'about:blank')) {
+  playtestTabId = tab.id;
+  if (targetUrl && (!tab.url || tab.url === 'about:blank')) {
     const navUrl = normalizeNavigateUrl(targetUrl);
-    await withCdpPage(active, async (call) => {
+    await withCdpPage(tab, async (call) => {
       await call('Page.enable');
       await call('Page.navigate', { url: navUrl });
       await new Promise((r) => setTimeout(r, 500));
@@ -510,61 +552,44 @@ async function startPlaytestLoop(targetUrl) {
   }
   playtestEndsAt = Date.now() + 45_000;
   playtestTickCount = 0;
-  pushDaemonAction('auto_interact_start', 'Started Browser Auto-Interact session (45s)');
+  pushDaemonAction('auto_interact_start', 'Started Browser Auto-Interact session (45s)', 'qa', playtestTabId);
   await runPlaytestTick();
   playtestTimer = setInterval(() => {
     void runPlaytestTick();
   }, 260);
 }
 
-async function captureState(defaultUrl) {
+async function captureState(q) {
   const nowIso = new Date().toISOString();
   const ok = await ensureChromium();
   if (!ok) {
     return {
       available: false,
       source: 'none',
-      targetUrl: defaultUrl || null,
+      targetUrl: null,
       imageDataUrl: null,
       capturedAt: nowIso,
       message: 'Chromium could not be started inside runner.',
     };
   }
 
-  let { pages, active, ephemeralActive } = await listPageTargets();
-  if (!active) {
-    return {
-      available: false,
-      source: 'none',
-      targetUrl: defaultUrl || null,
-      imageDataUrl: null,
-      capturedAt: nowIso,
-      message: 'No active browser tab available.',
-    };
-  }
-
-  // Auto-open defaultUrl if all tabs are currently at about:blank
-  if (
-    !ephemeralActive &&
-    defaultUrl &&
-    pages.every((p) => !p.url || p.url === 'about:blank')
-  ) {
-    const navUrl = normalizeNavigateUrl(defaultUrl);
-    await withCdpPage(active, async (call) => {
-      await call('Page.enable');
-      await call('Page.navigate', { url: navUrl });
-      await new Promise((r) => setTimeout(r, 450));
-    }).catch(() => {});
-    const refreshed = await listPageTargets();
-    pages = refreshed.pages;
-    active = refreshed.active || active;
+  const { pages, tab, following, ephemeral } = await resolveShown(q);
+  const tabs = pages.map((p) => ({
+    id: p.id,
+    title: p.title || 'Untitled',
+    url: p.url,
+    active: Boolean(tab) && p.id === tab.id,
+    projectId: tabProjects.get(p.id) ?? null,
+  }));
+  if (!tab) {
+    return { available: false, source: 'none', targetUrl: null, imageDataUrl: null, capturedAt: nowIso, message: null, tabs, tabMissing: true };
   }
 
   let imageDataUrl = null;
-  let liveTitle = active.title || '';
-  let liveUrl = active.url || '';
+  let liveTitle = tab.title || '';
+  let liveUrl = tab.url || '';
 
-  await withCdpPage(active, async (call) => {
+  await withCdpPage(tab, async (call) => {
     await call('Page.enable');
     try {
       const evalRes = await call(
@@ -586,33 +611,33 @@ async function captureState(defaultUrl) {
     }
   }).catch(() => {});
 
-  const tabs = pages.map((p) => ({
-    id: p.id,
-    title: p.id === active.id ? liveTitle || p.title || 'Untitled' : p.title || 'Untitled',
-    url: p.id === active.id ? liveUrl || p.url : p.url,
-    active: p.id === active.id,
-  }));
+  const shownEntry = tabs.find((t) => t.id === tab.id);
+  if (shownEntry) {
+    shownEntry.title = liveTitle || shownEntry.title;
+    shownEntry.url = liveUrl || shownEntry.url;
+  }
 
-  const isPlaytestRunning = Boolean(playtestTimer && Date.now() < playtestEndsAt);
-  const hookEvents = readHookEvents();
-  const combinedDaemonActions = [...hookEvents, ...daemonActions].slice(-25).reverse();
+  const playtestHere = Boolean(playtestTimer && Date.now() < playtestEndsAt) && playtestTabId === tab.id;
 
   return {
     available: Boolean(imageDataUrl),
     source: 'cdp_live',
-    targetUrl: liveUrl || active.url || defaultUrl || null,
-    pageTitle: liveTitle || active.title || null,
-    activeTabId: active.id,
+    targetUrl: liveUrl || tab.url || null,
+    pageTitle: liveTitle || tab.title || null,
+    activeTabId: tab.id,
     tabs,
-    consoleLogs: consoleLogs.slice(-30),
-    agentActions: combinedDaemonActions,
-    agentActive: Boolean(ephemeralActive || isPlaytestRunning),
-    playtestActive: isPlaytestRunning,
+    consoleLogs: consoleLogs.filter((c) => c.tabId === tab.id).slice(-30).map(({ tabId, ...c }) => c),
+    agentActions: [...(following ? readHookEvents() : []), ...daemonActions.filter((a) => a.tabId === tab.id).map(({ tabId, ...a }) => a)]
+      .slice(-25)
+      .reverse(),
+    agentActive: Boolean(ephemeral || playtestHere),
+    playtestActive: playtestHere,
+    following,
     imageDataUrl,
     capturedAt: nowIso,
-    message: isPlaytestRunning
+    message: playtestHere
       ? '🤖 Browser Auto-Interact is active!'
-      : ephemeralActive
+      : ephemeral
         ? '⚡ Streaming Agent Playwright session (:9223) live!'
         : imageDataUrl
           ? 'Live Chromium CDP stream (1280×720) · Shared with Playwright MCP'
@@ -620,56 +645,72 @@ async function captureState(defaultUrl) {
   };
 }
 
-async function handleAction(body, defaultUrl) {
+async function handleAction(body, q) {
   await ensureChromium();
-  const { pages, active, cdpBase } = await listPageTargets();
   const action = body?.action;
 
-  if (action === 'start_playtest') {
-    await startPlaytestLoop(body.url || defaultUrl);
-    return captureState(defaultUrl);
+  if (action === 'open_tab' || action === 'new_tab') {
+    const url = normalizeNavigateUrl(body.url || q.defaultUrl || 'about:blank');
+    const res = await fetch(CDP_BASE + '/json/new?' + encodeURIComponent(url), { method: 'PUT' }).catch(() => null);
+    if (res && res.ok) {
+      const created = await res.json();
+      tabProjects.set(created.id, q.projectId);
+      saveTabProjects();
+      await new Promise((r) => setTimeout(r, 400));
+      return captureState({ ...q, tabId: created.id, follow: false });
+    }
+    return captureState(q);
+  }
+
+  if (action === 'close_project_tabs') {
+    for (const [id, owner] of [...tabProjects]) {
+      if (owner !== q.projectId) continue;
+      if (playtestTabId === id) stopPlaytestLoop('Project removed');
+      await fetch(CDP_BASE + '/json/close/' + encodeURIComponent(id)).catch(() => {});
+      tabProjects.delete(id);
+    }
+    saveTabProjects();
+    return { ok: true };
+  }
+
+  if (action === 'select_tab' && body.tabId) {
+    if (tabProjects.get(body.tabId) !== q.projectId) return captureState(q);
+    await fetch(CDP_BASE + '/json/activate/' + encodeURIComponent(body.tabId)).catch(() => {});
+    return captureState({ ...q, tabId: body.tabId, follow: false });
+  }
+
+  if (action === 'close_tab' && body.tabId) {
+    const own = [...tabProjects.values()].filter((p) => p === q.projectId).length;
+    if (tabProjects.get(body.tabId) === q.projectId && own > 1) {
+      if (playtestTabId === body.tabId) stopPlaytestLoop('Tab closed');
+      await fetch(CDP_BASE + '/json/close/' + encodeURIComponent(body.tabId)).catch(() => {});
+      tabProjects.delete(body.tabId);
+      saveTabProjects();
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return captureState(q);
   }
 
   if (action === 'stop_playtest') {
     stopPlaytestLoop('Stopped by user');
-    return captureState(defaultUrl);
+    return captureState(q);
   }
 
-  if (action === 'select_tab' && body.tabId) {
-    selectedTabId = body.tabId;
-    await fetch(cdpBase + '/json/activate/' + encodeURIComponent(body.tabId)).catch(() => {});
-    return captureState(defaultUrl);
+  const { tab, ephemeral } = await resolveShown(q);
+  if (!tab) return captureState(q);
+
+  if (action === 'start_playtest') {
+    // Auto-Interact runs on shared-Chromium tabs only, not in an agent's own Playwright Chromium.
+    if (!ephemeral) await startPlaytestLoop(tab, body.url || q.defaultUrl);
+    return captureState(q);
   }
 
-  if (action === 'new_tab') {
-    const url = normalizeNavigateUrl(body.url || defaultUrl || 'about:blank');
-    const res = await fetch(CDP_BASE + '/json/new?' + encodeURIComponent(url), { method: 'PUT' }).catch(() => null);
-    if (res && res.ok) {
-      const created = await res.json();
-      selectedTabId = created.id;
-      await new Promise((r) => setTimeout(r, 400));
-    }
-    return captureState(defaultUrl);
-  }
-
-  if (action === 'close_tab' && body.tabId) {
-    if (pages.length > 1) {
-      await fetch(cdpBase + '/json/close/' + encodeURIComponent(body.tabId)).catch(() => {});
-      if (selectedTabId === body.tabId) selectedTabId = null;
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    return captureState(defaultUrl);
-  }
-
-  const targetTab = (body.tabId && pages.find((p) => p.id === body.tabId)) || active;
-  if (!targetTab) return captureState(defaultUrl);
-
-  await withCdpPage(targetTab, async (call) => {
+  await withCdpPage(tab, async (call) => {
     await call('Page.enable');
     if (action === 'navigate') {
-      const url = normalizeNavigateUrl(body.url || defaultUrl || 'about:blank');
+      const url = normalizeNavigateUrl(body.url || q.defaultUrl || 'about:blank');
       await call('Page.navigate', { url });
-      pushDaemonAction('browser_navigate', 'Navigated to ' + url, 'coder');
+      pushDaemonAction('browser_navigate', 'Navigated to ' + url, 'coder', tab.id);
       await new Promise((r) => setTimeout(r, 450));
     } else if (action === 'reload') {
       await call('Page.reload', { ignoreCache: true });
@@ -757,7 +798,7 @@ async function handleAction(body, defaultUrl) {
     }
   }).catch(() => {});
 
-  return captureState(defaultUrl);
+  return captureState(q);
 }
 
 let cachedClaudeUsage = null;
@@ -907,6 +948,15 @@ async function getClaudeUsage(forceRefresh = false) {
 
 try { fs.rmSync(SOCKET_PATH, { force: true }); } catch {}
 
+function browserQuery(u) {
+  return {
+    projectId: u.searchParams.get('projectId') || '',
+    tabId: u.searchParams.get('tabId') || null,
+    follow: u.searchParams.get('follow') === '1',
+    defaultUrl: u.searchParams.get('defaultUrl') || null,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url || '/', 'http://localhost');
@@ -932,8 +982,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && u.pathname === '/state') {
-      const defaultUrl = u.searchParams.get('defaultUrl') || undefined;
-      const snap = await captureState(defaultUrl);
+      const snap = await captureState(browserQuery(u));
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(snap));
       return;
@@ -942,8 +991,7 @@ const server = http.createServer(async (req, res) => {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-      const defaultUrl = u.searchParams.get('defaultUrl') || undefined;
-      const snap = await handleAction(body, defaultUrl);
+      const snap = await handleAction(body, browserQuery(u));
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(snap));
       return;
@@ -1104,62 +1152,65 @@ export async function ensureRunnerBrowserDaemon(
   return ensuringPromise;
 }
 
-function mergeActions(
-  daemonList: BrowserAgentAction[] | undefined,
-  runList: BrowserAgentAction[] | undefined,
-): BrowserAgentAction[] {
-  const combined = [...(daemonList ?? []), ...(runList ?? [])];
+export interface RunnerBrowserQuery {
+  projectId: string;
+  tabId: string | null;
+  follow: boolean;
+  defaultUrl: string | null;
+}
+export type RunnerBrowserTab = BrowserTabInfo & { projectId: string | null };
+export type RunnerBrowserSnapshot = Omit<BrowserViewportSnapshot, 'tabs'> & {
+  tabs?: RunnerBrowserTab[];
+  tabMissing?: boolean;
+};
+export type RunnerBrowserActionBody =
+  | BrowserActionBody
+  | { action: 'open_tab'; url?: string }
+  | { action: 'close_project_tabs' };
+export interface RunnerBrowserDaemon {
+  state(q: RunnerBrowserQuery): Promise<RunnerBrowserSnapshot>;
+  action(body: RunnerBrowserActionBody, q: RunnerBrowserQuery): Promise<RunnerBrowserSnapshot>;
+}
+
+function browserQueryString(q: RunnerBrowserQuery): string {
+  const params = new URLSearchParams({ projectId: q.projectId });
+  if (q.tabId) params.set('tabId', q.tabId);
+  if (q.follow) params.set('follow', '1');
+  if (q.defaultUrl) params.set('defaultUrl', q.defaultUrl);
+  return `?${params.toString()}`;
+}
+
+/**
+ * The daemon, started (or restarted after a version change) when needed; null while the runner is
+ * away. With `start: false`, null unless it already listens.
+ */
+export async function runnerBrowserDaemon(
+  ptyd: PtydBridge,
+  socketDir: string,
+  opts: { start?: boolean } = {},
+): Promise<RunnerBrowserDaemon | null> {
+  if (opts.start === false && !existsSync(path.join(socketDir, 'browser.sock'))) return null;
+  const sock = await ensureRunnerBrowserDaemon(ptyd, socketDir);
+  if (!sock) return null;
+  return {
+    state: (q) => socketRequest<RunnerBrowserSnapshot>(sock, 'GET', `/state${browserQueryString(q)}`),
+    action: (body, q) =>
+      socketRequest<RunnerBrowserSnapshot>(sock, 'POST', `/action${browserQueryString(q)}`, body),
+  };
+}
+
+/** Adds the project's run activity (hook events) to a snapshot (what `mergeActions` did). */
+export function withRunActivity(
+  snap: BrowserViewportSnapshot,
+  runActions: BrowserAgentAction[],
+  runActive: boolean,
+): BrowserViewportSnapshot {
+  const combined = [...(snap.agentActions ?? []), ...runActions];
   combined.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  return combined.slice(0, 30);
-}
-
-export async function getRunnerBrowserState(params: {
-  ptyd: PtydBridge;
-  socketDir: string;
-  defaultUrl: string | null;
-  agentActions?: BrowserAgentAction[];
-  agentActive?: boolean;
-}): Promise<BrowserViewportSnapshot | null> {
-  const sock = await ensureRunnerBrowserDaemon(params.ptyd, params.socketDir);
-  if (!sock) return null;
-  try {
-    const query = params.defaultUrl
-      ? `?defaultUrl=${encodeURIComponent(params.defaultUrl)}`
-      : '';
-    const snap = await socketRequest<BrowserViewportSnapshot>(sock, 'GET', `/state${query}`);
-    return {
-      ...snap,
-      agentActions: mergeActions(snap.agentActions, params.agentActions),
-      agentActive: Boolean(snap.agentActive || params.agentActive),
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function performRunnerBrowserAction(params: {
-  ptyd: PtydBridge;
-  socketDir: string;
-  defaultUrl: string | null;
-  actionBody: BrowserActionBody;
-  agentActions?: BrowserAgentAction[];
-  agentActive?: boolean;
-}): Promise<BrowserViewportSnapshot | null> {
-  const sock = await ensureRunnerBrowserDaemon(params.ptyd, params.socketDir);
-  if (!sock) return null;
-  const query = params.defaultUrl
-    ? `?defaultUrl=${encodeURIComponent(params.defaultUrl)}`
-    : '';
-  const snap = await socketRequest<BrowserViewportSnapshot>(
-    sock,
-    'POST',
-    `/action${query}`,
-    params.actionBody,
-  );
   return {
     ...snap,
-    agentActions: mergeActions(snap.agentActions, params.agentActions),
-    agentActive: Boolean(snap.agentActive || params.agentActive),
+    agentActions: combined.slice(0, 30),
+    agentActive: Boolean(snap.agentActive || runActive),
   };
 }
 

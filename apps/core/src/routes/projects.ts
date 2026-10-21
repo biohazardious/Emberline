@@ -81,11 +81,12 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import {
-  getRunnerBrowserState,
   getRunnerClaudeUsage,
   isBrowsableUrl,
-  performRunnerBrowserAction,
+  runnerBrowserDaemon,
+  withRunActivity,
 } from '../factory/browser-daemon.js';
+import { ProjectBrowserTabs } from '../factory/project-browser-tabs.js';
 import {
   addRoadmapItem,
   addRoadmapMilestone,
@@ -183,6 +184,14 @@ export function registerProjectRoutes(
         set: { value: { activeProjectId } },
       })
       .run();
+  };
+  const browserTabs = new ProjectBrowserTabs((opts) =>
+    runnerBrowserDaemon(ptyd, path.dirname(config.ptydSocket), opts),
+  );
+  /** The Live Browser follows an agent's tab only while this project is the only one whose agent uses a browser. */
+  const followsAgent = (projectId: string): boolean => {
+    const ids = runs.browserAgentProjectIds();
+    return ids.size === 1 && ids.has(projectId);
   };
 
   app.get('/api/projects', async (): Promise<Project[]> =>
@@ -1104,14 +1113,8 @@ export function registerProjectRoutes(
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
       const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
-      const runnerSnap = await getRunnerBrowserState({
-        ptyd,
-        socketDir: path.dirname(config.ptydSocket),
-        defaultUrl: demoUrl,
-        agentActions,
-        agentActive,
-      });
-      if (runnerSnap) return runnerSnap;
+      const runnerSnap = await browserTabs.state(project.id, { defaultUrl: demoUrl, follow: followsAgent(project.id) });
+      if (runnerSnap) return withRunActivity(runnerSnap, agentActions, agentActive);
       const fallback = await captureBrowserViewportSnapshot({ targetUrl: demoUrl });
       return {
         ...fallback,
@@ -1132,15 +1135,11 @@ export function registerProjectRoutes(
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
       const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
-      const runnerSnap = await performRunnerBrowserAction({
-        ptyd,
-        socketDir: path.dirname(config.ptydSocket),
+      const runnerSnap = await browserTabs.action(project.id, body, {
         defaultUrl: demoUrl,
-        actionBody: body,
-        agentActions,
-        agentActive,
+        follow: followsAgent(project.id),
       });
-      if (runnerSnap) return runnerSnap;
+      if (runnerSnap) return withRunActivity(runnerSnap, agentActions, agentActive);
       const fallback = await captureBrowserViewportSnapshot({
         targetUrl: body.url ?? demoUrl,
       });
@@ -1322,6 +1321,7 @@ export function registerProjectRoutes(
           request.log.warn({ err, projectId }, 'removing the archived build outputs of a deleted project failed');
         });
         db.delete(projects).where(eq(projects.id, projectId)).run();
+        void browserTabs.forget(projectId).catch(() => undefined);
         tickets.forgetProject(projectId);
       } catch (err) {
         // The project stays: its main preview must not be treated as a deleted project's (now, or
