@@ -4,6 +4,30 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-20
+
+### Fixed
+
+- A ticket the factory held for you (for example "Merge failed") can be prompted and resumed again. Its run used to be stopped when the ticket was held, so a prompt, a Resume or an Inbox reply got "this run was stopped; start a new run". The run now only closes its session and continues where it left off when you send it something.
+- One-shot agents such as antigravity now get the automatic conflict fix too. They had already exited when the merge ran, so their merge conflicts always went to a person.
+- When main moves on after an agent resolved a merge conflict and the next merge conflicts again, the agent is asked to resolve it again instead of the ticket going straight to you: one attempt each time main has moved, at most 3 per run. A second conflict while main has not moved still goes to you.
+- Resume on a held ticket tells the agent what is wrong. It used to send a bare "Continue where you left off.", so the agent repeated its work and the ticket was held again for the same reason.
+
+### Added
+
+- Recovery suggestions for held tickets in the ticket drawer, the run dock and the Inbox: one line on why the ticket is held (for a failed merge, from a fresh comparison with main, naming the conflicting files) and up to three ways out, the best first. A suggested prompt opens prefilled and editable and goes to the agent with **Send** (in the Inbox it fills the reply box); the others are Discard (after a confirmation, moves the ticket to Done without merging), Merge now, Resolve by hand (the files and the git commands) and Open review. Discard and Merge now are in the ticket drawer; the dock and the Inbox link to the ticket instead. When another finished ticket already added the same files, Discard comes first ("EL-10 already added these files").
+- `GET /api/runs/:id/recovery` returns a held run's suggestions, and `POST /api/runs/:id/recover` sends a prompt to it, into its session or to a new run on the same branch, and says which.
+
+### Changed
+
+- The code audit's hold reads "Code audit asked for changes" (it was "Critic blocked").
+- Resuming a gemini, codex, copilot or aider run, which starts a new conversation, now always gives the agent the handoff context (the ticket, the worktree's state and its last answer) before your text. It used to get it only with a bare Resume.
+
+### Upgrade notes
+
+- Tickets held before the upgrade had their runs stopped. They continue in a new run on the same worktree and branch, with the same agent and model, when you use one of their suggestions; the ticket follows that run, and when it finishes its work is checked and merged as usual. A run you stopped yourself stays stopped: its suggested prompts can only be copied, and the ticket can be discarded or started again.
+- Only core changed: `make upgrade-core`, or with the published images `docker compose pull && docker compose up -d`. The runner does not need an update for this release.
+
 ## [0.3.3] - 2026-10-19
 
 ### Added
