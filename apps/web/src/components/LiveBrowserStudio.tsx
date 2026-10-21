@@ -31,7 +31,9 @@ import { api, errorMessage } from '../api';
 import {
   type PreviewLike,
   choosePrimaryView,
+  FOLLOW_AGENT,
   liveBrowserNote,
+  offersFollow,
   qaRequestPrompt,
   resolveRunnerBrowserUrl,
 } from '../containerPreview';
@@ -623,6 +625,19 @@ export function LiveBrowserStudio({
       {liveBrowserNote(snap) && (
         <p className="muted small browser-following-note" role="status">
           {liveBrowserNote(snap)}
+          {offersFollow(snap) && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={acting}
+                onClick={() => void sendAction({ action: 'follow_agent' })}
+              >
+                {FOLLOW_AGENT}
+              </button>
+            </>
+          )}
         </p>
       )}
 

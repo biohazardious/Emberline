@@ -458,6 +458,11 @@ export const BrowserViewportSnapshot = z.object({
    * project's tab.
    */
   following: z.boolean().optional(),
+  /**
+   * The project's agent is using a browser, but the view stays on the project's tab because the
+   * person chose it; the `follow_agent` action shows the agent's tab again.
+   */
+  canFollow: z.boolean().optional(),
   imageDataUrl: z.string().nullable(),
   capturedAt: z.string(),
   message: z.string().nullable(),
@@ -478,6 +483,7 @@ export const BrowserActionBody = z.object({
     'close_tab',
     'start_playtest',
     'stop_playtest',
+    'follow_agent',
   ]),
   url: z.string().optional(),
   tabId: z.string().optional(),

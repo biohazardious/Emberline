@@ -15,6 +15,11 @@ export interface BrowserTabOptions {
  */
 export class ProjectBrowserTabs {
   private readonly selected = new Map<string, string>();
+  /**
+   * Projects whose person chose their own tab while an agent was followed: the view stays on it
+   * until that agent session ends, the person asks to follow again, or the project is deleted.
+   */
+  private readonly pinnedToOwn = new Set<string>();
   private readonly lock = new KeyedMutex();
 
   constructor(private readonly daemon: (opts?: { start?: boolean }) => Promise<RunnerBrowserDaemon | null>) {}
@@ -27,8 +32,10 @@ export class ProjectBrowserTabs {
     return this.lock.run(projectId, async () => {
       const d = await this.daemon();
       if (!d) return null;
+      const follow = this.followNow(projectId, opts);
       try {
-        return projectView(projectId, await this.settle(d, projectId, opts, (q) => d.state(q)));
+        const snap = await this.settle(d, projectId, follow, (q) => d.state(q));
+        return projectView(projectId, snap, this.offersFollow(projectId, opts));
       } catch {
         return null; // as before: the route falls back to a headless capture
       }
@@ -47,10 +54,18 @@ export class ProjectBrowserTabs {
     return this.lock.run(projectId, async () => {
       const d = await this.daemon();
       if (!d) return null;
-      const snap = await this.settle(d, projectId, opts, (q) => d.action(body, q));
+      if (body.action === 'follow_agent') {
+        this.pinnedToOwn.delete(projectId);
+        const follow = this.followNow(projectId, opts);
+        return projectView(projectId, await this.settle(d, projectId, follow, (q) => d.state(q)), false);
+      }
+      const follow = this.followNow(projectId, opts);
+      const snap = await this.settle(d, projectId, follow, (q) => d.action(body, q));
       const shown = snap.tabs?.find((t) => t.id === snap.activeTabId);
-      if (!snap.following && shown?.projectId === projectId) this.selected.set(projectId, shown.id);
-      return projectView(projectId, snap);
+      const ownShown = !snap.following && shown?.projectId === projectId;
+      if (ownShown) this.selected.set(projectId, shown.id);
+      if (ownShown && follow.follow && CHOOSES_OWN_TAB.has(body.action)) this.pinnedToOwn.add(projectId);
+      return projectView(projectId, snap, this.offersFollow(projectId, opts));
     });
   }
 
@@ -58,6 +73,7 @@ export class ProjectBrowserTabs {
   forget(projectId: string): Promise<void> {
     return this.lock.run(projectId, async () => {
       this.selected.delete(projectId);
+      this.pinnedToOwn.delete(projectId);
       const d = await this.daemon({ start: false });
       if (d)
         await d.action(
@@ -65,6 +81,16 @@ export class ProjectBrowserTabs {
           query(projectId, null, { defaultUrl: null, follow: false }),
         );
     });
+  }
+
+  /** The options for this request: no following while the person keeps the project's own tab. */
+  private followNow(projectId: string, opts: BrowserTabOptions): BrowserTabOptions {
+    if (!opts.follow) this.pinnedToOwn.delete(projectId); // the agent session ended
+    return this.pinnedToOwn.has(projectId) ? { ...opts, follow: false } : opts;
+  }
+
+  private offersFollow(projectId: string, opts: BrowserTabOptions): boolean {
+    return opts.follow && this.pinnedToOwn.has(projectId);
   }
 
   /**
@@ -102,11 +128,19 @@ function query(projectId: string, tabId: string | null, opts: BrowserTabOptions)
   return { projectId, tabId, follow: opts.follow, defaultUrl: opts.defaultUrl };
 }
 
+/** Actions by which the person picks one of the project's own tabs (pins the view to it while following). */
+const CHOOSES_OWN_TAB = new Set<BrowserActionBody['action']>(['select_tab', 'new_tab', 'navigate']);
+
 /** What the project's Live Browser gets: only its own tabs, without the daemon's labels. */
-function projectView(projectId: string, snap: RunnerBrowserSnapshot): BrowserViewportSnapshot {
+function projectView(
+  projectId: string,
+  snap: RunnerBrowserSnapshot,
+  canFollow: boolean,
+): BrowserViewportSnapshot {
   const { tabs, tabMissing: _gone, ...rest } = snap;
   return {
     ...rest,
     tabs: (tabs ?? []).filter((t) => t.projectId === projectId).map(({ projectId: _p, ...t }) => t),
+    ...(canFollow ? { canFollow: true } : {}),
   };
 }

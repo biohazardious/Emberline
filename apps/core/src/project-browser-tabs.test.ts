@@ -192,6 +192,91 @@ describe('ProjectBrowserTabs', () => {
     expect((await tabs.state('A', opts(null)))?.activeTabId).toBe(a?.activeTabId);
   });
 
+  describe("the person's choice of the project's own tab while an agent is followed", () => {
+    const pinned = async () => {
+      const d = new FakeDaemon();
+      const tabs = new ProjectBrowserTabs(async () => d);
+      const own = await tabs.state('A', opts(null));
+      d.pages[0]!.url = 'http://core:7420/agent';
+      expect(await tabs.state('A', opts(null, true))).toMatchObject({
+        following: true,
+        activeTabId: 'start',
+      });
+      const chosen = await tabs.action(
+        'A',
+        { action: 'select_tab', tabId: own!.activeTabId! },
+        opts(null, true),
+      );
+      expect(chosen).toMatchObject({ following: false, activeTabId: own?.activeTabId, canFollow: true });
+      return { d, tabs, own: own!.activeTabId! };
+    };
+
+    it('later polls stay on the own tab and offer to follow', async () => {
+      const { tabs, own } = await pinned();
+      for (let i = 0; i < 3; i++) {
+        expect(await tabs.state('A', opts(null, true))).toMatchObject({
+          following: false,
+          activeTabId: own,
+          canFollow: true,
+        });
+      }
+    });
+
+    it('a new tab while following pins too', async () => {
+      const d = new FakeDaemon();
+      const tabs = new ProjectBrowserTabs(async () => d);
+      await tabs.state('A', opts(null));
+      d.pages[0]!.url = 'http://core:7420/agent';
+      const opened = await tabs.action(
+        'A',
+        { action: 'new_tab', url: 'http://core:7420/two' },
+        opts(null, true),
+      );
+      expect(opened).toMatchObject({ following: false, canFollow: true });
+      expect(await tabs.state('A', opts(null, true))).toMatchObject({
+        following: false,
+        activeTabId: opened?.activeTabId,
+      });
+    });
+
+    it('ends with the agent session: the next one is followed again', async () => {
+      const { tabs } = await pinned();
+      const quiet = await tabs.state('A', opts(null, false));
+      expect(quiet?.canFollow).toBeUndefined();
+      expect(await tabs.state('A', opts(null, true))).toMatchObject({
+        following: true,
+        activeTabId: 'start',
+      });
+    });
+
+    it('follow_agent follows again', async () => {
+      const { d, tabs } = await pinned();
+      expect(await tabs.action('A', { action: 'follow_agent' }, opts(null, true))).toMatchObject({
+        following: true,
+        activeTabId: 'start',
+      });
+      expect(d.performed).toEqual([]);
+      const next = await tabs.state('A', opts(null, true));
+      expect(next).toMatchObject({ following: true, activeTabId: 'start' });
+      expect(next?.canFollow).toBeUndefined();
+    });
+
+    it('a deleted project forgets the choice', async () => {
+      const { tabs } = await pinned();
+      await tabs.forget('A');
+      expect(await tabs.state('A', opts(null, true))).toMatchObject({ following: true });
+    });
+
+    it("another project's view is not pinned", async () => {
+      const { tabs } = await pinned();
+      await tabs.state('B', opts(null));
+      expect(await tabs.state('B', opts(null, true))).toMatchObject({
+        following: true,
+        activeTabId: 'start',
+      });
+    });
+  });
+
   it('null while the runner browser is unavailable; a failing state call is null too', async () => {
     expect(await new ProjectBrowserTabs(async () => null).state('A', opts(null))).toBeNull();
     const broken = new FakeDaemon();

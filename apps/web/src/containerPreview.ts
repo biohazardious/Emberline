@@ -205,7 +205,21 @@ export async function resolveRunnerBrowserUrl(
 export const LIVE_BROWSER_FOLLOWING_NOTE =
   "An agent of this project is using the browser, so this shows its tab. The project's own tab comes back when it stops.";
 
-/** The line above the viewport while the Live Browser follows an agent; null otherwise. */
-export function liveBrowserNote(snap: Pick<BrowserViewportSnapshot, 'following'> | null): string | null {
-  return snap?.following ? LIVE_BROWSER_FOLLOWING_NOTE : null;
+export const LIVE_BROWSER_CAN_FOLLOW_NOTE = 'An agent is using the browser.';
+export const FOLLOW_AGENT = 'Follow it';
+
+type FollowFields = Pick<BrowserViewportSnapshot, 'following' | 'canFollow'>;
+
+/**
+ * The line above the viewport while the Live Browser follows an agent, or while an agent uses the
+ * browser and the person stays on the project's tab; null otherwise.
+ */
+export function liveBrowserNote(snap: FollowFields | null): string | null {
+  if (snap?.following) return LIVE_BROWSER_FOLLOWING_NOTE;
+  return snap?.canFollow ? LIVE_BROWSER_CAN_FOLLOW_NOTE : null;
+}
+
+/** True when the note offers the "Follow it" button (the `follow_agent` action). */
+export function offersFollow(snap: FollowFields | null): boolean {
+  return Boolean(snap?.canFollow && !snap.following);
 }

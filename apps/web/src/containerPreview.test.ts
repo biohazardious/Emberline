@@ -9,6 +9,9 @@ import {
   framingRefusedText,
   framingView,
   liveBrowserNote,
+  LIVE_BROWSER_CAN_FOLLOW_NOTE,
+  FOLLOW_AGENT,
+  offersFollow,
   previewBadge,
   previewEmptyText,
   previewFrameMode,
@@ -353,5 +356,16 @@ describe('liveBrowserNote', () => {
     expect(liveBrowserNote({ following: false })).toBeNull();
     expect(liveBrowserNote({})).toBeNull();
     expect(liveBrowserNote(null)).toBeNull();
+  });
+
+  it('offers to follow the agent while the person stays on the project tab', () => {
+    expect(LIVE_BROWSER_CAN_FOLLOW_NOTE).toBe('An agent is using the browser.');
+    expect(FOLLOW_AGENT).toBe('Follow it');
+    expect(liveBrowserNote({ following: false, canFollow: true })).toBe(LIVE_BROWSER_CAN_FOLLOW_NOTE);
+    expect(offersFollow({ following: false, canFollow: true })).toBe(true);
+    expect(offersFollow({ following: true, canFollow: true })).toBe(false);
+    expect(offersFollow({ following: true })).toBe(false);
+    expect(offersFollow({})).toBe(false);
+    expect(offersFollow(null)).toBe(false);
   });
 });
