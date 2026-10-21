@@ -952,6 +952,21 @@ describe('editing worktree.yml from Project settings', () => {
     expect((await status(project.id)).approved).toBeNull();
   });
 
+  it('409 worktree_config_dirty for an untracked file even when the repository hides untracked files', async () => {
+    const project = await createProject();
+    gitIn(project)('config', 'status.showUntrackedFiles', 'no');
+    mkdirSync(path.join(project.path, '.emberline'));
+    const file = path.join(project.path, YML);
+    writeFileSync(file, 'version: 1\n# not committed yet\n');
+    const count = commitCount(project);
+    const res = await save(project.id, NEXT, null);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('worktree_config_dirty');
+    expect(readFileSync(file, 'utf8')).toBe('version: 1\n# not committed yet\n');
+    expect(commitCount(project)).toBe(count);
+    expect((await status(project.id)).approved).toBeNull();
+  });
+
   it('409 main_workspace_detached on a detached HEAD', async () => {
     const project = await createProject('version: 1\n');
     gitIn(project)('checkout', '-q', '--detach');
@@ -980,7 +995,7 @@ describe('editing worktree.yml from Project settings', () => {
     const count = commitCount(project);
     writeFileSync(path.join(project.path, '.git', 'index.lock'), '');
     const res = await save(project.id, NEXT, sha('version: 1\n'));
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBe(500);
     rmSync(path.join(project.path, '.git', 'index.lock'));
     expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe('version: 1\n');
     expect(readdirSync(path.join(project.path, '.emberline'))).toEqual(['worktree.yml']);
@@ -992,7 +1007,7 @@ describe('editing worktree.yml from Project settings', () => {
   it('a failed commit of a new file removes it again', async () => {
     const project = await createProject();
     writeFileSync(path.join(project.path, '.git', 'index.lock'), '');
-    expect((await save(project.id, NEXT, null)).statusCode).toBeGreaterThanOrEqual(400);
+    expect((await save(project.id, NEXT, null)).statusCode).toBe(500);
     rmSync(path.join(project.path, '.git', 'index.lock'));
     expect(existsSync(path.join(project.path, '.emberline'))).toBe(false);
     expect((await status(project.id)).approved).toBeNull();

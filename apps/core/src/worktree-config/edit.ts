@@ -139,9 +139,10 @@ export async function saveWorktreeConfig(
       );
     }
     const inRepo = { cwd: project.path };
-    // --ignored: an untracked file in an ignored .emberline/ is uncommitted work too.
+    // --ignored: an untracked file in an ignored .emberline/ is uncommitted work too; --untracked-files=all:
+    // the repository's status.showUntrackedFiles must not hide one.
     const dirty = (
-      await execGitFile(['status', '--porcelain', '--ignored', '--', rel], inRepo)
+      await execGitFile(['status', '--porcelain', '--ignored', '--untracked-files=all', '--', rel], inRepo)
     ).stdout.trim();
     if (dirty) {
       throw conflict(
