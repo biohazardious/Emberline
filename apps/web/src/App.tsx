@@ -970,6 +970,8 @@ function Shell() {
                   <InboxPage
                     runs={runs}
                     seen={attention.seen}
+                    activeProjectId={activeProject?.id ?? null}
+                    projectName={activeProject?.name}
                     onOpenRun={(id) => setInspectRunId(id)}
                     onDismiss={attention.dismiss}
                   />

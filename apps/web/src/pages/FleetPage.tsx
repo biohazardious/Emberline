@@ -23,9 +23,9 @@ import {
   fleetSection,
   isRunCompleted,
   needsElsewhere,
-  needsElsewhereHint,
   type SeenMap,
 } from '../attention';
+import { moreInOtherProjects } from '../projectScope';
 import { keptWorktreesSummary } from '../gcSummary';
 import { api, errorMessage } from '../api';
 import { HandoffMenu } from '../components/QuotaLanes';
@@ -475,7 +475,7 @@ export function FleetPage({
         <h2 className="fleet-section-head fleet-needs-elsewhere">
           {FLEET_SECTION_LABELS.needs} ·{' '}
           <Link href="/inbox" className="fleet-section-more">
-            {needsElsewhereHint(elsewhere, 0)} → Inbox
+            {moreInOtherProjects(elsewhere)} → Inbox
           </Link>
         </h2>
       )}
@@ -521,7 +521,7 @@ export function FleetPage({
                   {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
                   {section === 'needs' && elsewhere > 0 && (
                     <Link href="/inbox" className="muted small fleet-section-more">
-                      {needsElsewhereHint(elsewhere, list.length)}
+                      {moreInOtherProjects(elsewhere)}
                     </Link>
                   )}
                 </h2>

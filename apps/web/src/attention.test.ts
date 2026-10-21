@@ -9,11 +9,11 @@ import {
   holdLabel,
   inboxHeading,
   needsElsewhere,
-  needsElsewhereHint,
   pendingAttention,
   pruneSeen,
   ticketEventRecomputesAttention,
 } from './attention';
+import { moreInOtherProjects } from './projectScope';
 
 const NOW = Date.parse('2026-10-18T12:00:00.000Z');
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -203,18 +203,15 @@ describe('needsElsewhere', () => {
   });
 });
 
-describe('needsElsewhereHint', () => {
-  it('adds to a Needs you section, stands alone when the project has none, and is empty when nothing waits elsewhere', () => {
+describe('needs elsewhere line', () => {
+  it("counts other projects' pending runs for the spec's line", () => {
     const runs = [
       run('a', { projectId: 'p1', attention: attn('question', 5, 'a') }),
       run('b', { projectId: 'p2', attention: attn('held', 5, 'b') }),
     ];
-    // The project in view has nothing that needs you, the badge still counts 2.
     expect(needsElsewhere(runs, {}, 'p3')).toBe(2);
-    expect(needsElsewhereHint(2, 0)).toBe('2 in other projects');
-    expect(needsElsewhereHint(1, 3)).toBe('+1 in other projects');
-    expect(needsElsewhereHint(0, 0)).toBeNull();
-    expect(needsElsewhereHint(0, 2)).toBeNull();
+    expect(moreInOtherProjects(needsElsewhere(runs, {}, 'p3'))).toBe('2 more in other projects');
+    expect(moreInOtherProjects(needsElsewhere(runs, {}, null))).toBeNull();
   });
 });
 

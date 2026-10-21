@@ -8,15 +8,19 @@ import {
   dismissable,
   groupAttention,
   inboxHeading,
+  needsElsewhere,
   type SeenMap,
   type TicketName,
 } from '../attention';
+import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
 import { HoldRecovery } from '../components/HoldRecovery';
 import { deliveryNote, recoverErrorText, recoveryApplies } from '../holdRecovery';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
+import { useAllProjects } from '../hooks/useAllProjects';
 import { useApi } from '../hooks/useApi';
+import { inScope } from '../projectScope';
 import { ticketsQuery } from '../hooks/liveData';
 import { timeAgo, useNow } from '../time';
 import { toastInfo } from '../toast';
@@ -154,17 +158,28 @@ function InboxItem({
 export function InboxPage({
   runs,
   seen,
+  activeProjectId,
+  projectName,
   onOpenRun,
   onDismiss,
 }: {
   runs: Run[] | undefined;
   seen: SeenMap;
+  activeProjectId: string | null;
+  projectName?: string;
   onOpenRun: (runId: string) => void;
   onDismiss: (run: Run) => void;
 }) {
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
-  const groups = useMemo(() => groupAttention(runs ?? [], seen), [runs, seen]);
+  const [all, setAll] = useAllProjects('inbox');
+  const groups = useMemo(
+    () => groupAttention(inScope(runs ?? [], (r) => r.projectId, { activeProjectId, all }), seen),
+    [runs, seen, activeProjectId, all],
+  );
+  // The badges count every project; say what this view leaves out.
+  const elsewhere = all ? 0 : needsElsewhere(runs ?? [], seen, activeProjectId);
+  const scoped = Boolean(activeProjectId) && !all;
   // Ticket key and current title from the live tickets cache (the Board's), one read per project
   // that has a ticket run in the Inbox; ticket events keep it current.
   const ticketProjects = useMemo(
@@ -185,9 +200,12 @@ export function InboxPage({
         <div className="workspace-bar-title">
           <h1>Inbox</h1>
           <span className="muted small">
-            Runs that need you, across all projects · Alt+N opens the oldest
+            {scoped && projectName
+              ? `Runs that need you in ${projectName} · Alt+N opens the oldest in any project`
+              : 'Runs that need you, across all projects · Alt+N opens the oldest'}
           </span>
         </div>
+        {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
         {notificationsSupported() && permission === 'default' && (
           <button
             type="button"
@@ -198,9 +216,10 @@ export function InboxPage({
           </button>
         )}
       </header>
+      <MoreInOtherProjects count={elsewhere} onShow={() => setAll(true)} />
       {groups.length === 0 ? (
         <div className="empty">
-          <p>Nothing needs you right now.</p>
+          <p>{scoped ? 'Nothing in this project needs you right now.' : 'Nothing needs you right now.'}</p>
         </div>
       ) : (
         groups.map((group) => (

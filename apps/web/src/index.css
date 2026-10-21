@@ -4397,6 +4397,10 @@ dialog.cmd-dialog::backdrop {
   color: var(--muted);
 }
 
+.scope-more {
+  margin: 0 0 8px;
+}
+
 .fleet-section-more {
   margin-left: 0.6rem;
   font-weight: 400;

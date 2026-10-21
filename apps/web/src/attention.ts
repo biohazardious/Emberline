@@ -52,15 +52,6 @@ export function needsElsewhere(runs: readonly Run[], seen: SeenMap, projectId: s
 }
 
 /**
- * Fleet's note on what other projects add to Needs you: "+N …" next to the section's own runs,
- * "N …" on its own when the project in view has none; null when nothing waits elsewhere.
- */
-export function needsElsewhereHint(elsewhere: number, own: number): string | null {
-  if (elsewhere <= 0) return null;
-  return `${own > 0 ? '+' : ''}${elsewhere} in other projects`;
-}
-
-/**
  * Whether a pushed ticket must refresh the runs: a hold is attention only while its ticket is in
  * Review (core decides), and a ticket move emits no run event. True when the status changed, the
  * ticket is new, or its project's tickets are not cached (no way to tell); not for other edits.
