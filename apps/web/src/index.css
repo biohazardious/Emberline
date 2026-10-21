@@ -5747,8 +5747,3 @@ dialog.cmd-dialog::backdrop {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-
-.hold-recovery-note {
-  margin: 0;
-  color: var(--muted);
-}

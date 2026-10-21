@@ -456,7 +456,7 @@ export function RunInspector({
         {(tab === 'split' || tab === 'timeline' || !run.terminalId) && (
           <div className="dock-events-pane">
             <RunFailureBanner run={run} />
-            <HoldRecovery run={run} />
+            <HoldRecovery key={run.id} run={run} />
             <div className="dock-section-head">
               <span className="eyebrow">Hook & Activity Stream</span>
               <span className="muted small mono">{run.lastEvent ?? 'idle'}</span>

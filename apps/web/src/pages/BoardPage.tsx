@@ -1078,7 +1078,7 @@ function TicketDrawer({
           {run && <HandoffMenu run={run} />}
           {run && <AttemptChain run={run} />}
           {run && <RunFailureBanner run={run} />}
-          {run && <HoldRecovery run={run} onDiscard={onDiscard} onMerge={mergeRun} />}
+          {run && <HoldRecovery key={run.id} run={run} onDiscard={onDiscard} onMerge={mergeRun} />}
           {/* The Events tab shows these itself, next to the final answer. */}
           {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}
           {queued && (

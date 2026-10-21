@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
 import { copyText } from '../clipboard';
+import { toastInfo } from '../toast';
 import {
   deliveryNote,
   recoverErrorText,
@@ -22,7 +23,7 @@ interface Props {
   onMerge?: () => Promise<void> | void;
 }
 
-/** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). */
+/** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). Key it by run id. */
 export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge }: Props) {
   const client = useQueryClient();
   const applies = recoveryApplies(run);
@@ -35,7 +36,6 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [note, setNote] = useState<string>();
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState<string>();
 
@@ -53,7 +53,8 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
     setError(undefined);
     try {
       const res = await api<RecoverResponse>(`/api/runs/${run.id}/recover`, 'POST', { text: value });
-      setNote(deliveryNote(res.delivery));
+      // The run changes right after (no longer held, or handed off), so this block goes away: a toast stays.
+      toastInfo(`${deliveryNote(res.delivery)}.`);
       setOpenId(undefined);
       setText('');
       refetch();
@@ -217,11 +218,6 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
         <Link href={ticketHref} className="btn btn-sm btn-ghost">
           Open ticket
         </Link>
-      )}
-      {note && (
-        <p className="small hold-recovery-note" role="status">
-          {note}
-        </p>
       )}
       {error && (
         <div className="banner banner-error" role="alert">

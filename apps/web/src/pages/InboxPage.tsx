@@ -114,7 +114,7 @@ function InboxItem({
           )}
         </div>
       )}
-      {recovering && <HoldRecovery run={run} compact onFill={setText} />}
+      {recovering && <HoldRecovery key={run.id} run={run} compact onFill={setText} />}
       {REPLYABLE.has(attention.reason) && (
         <form className="inbox-reply" onSubmit={(e) => void send(e)}>
           <textarea
