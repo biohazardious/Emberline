@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { runProducedChanges } from './factory/merge.js';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
 import { commitWorktree } from './runs/git.js';
 
@@ -244,3 +245,56 @@ describe('Emberline commits never carry scratch files', () => {
   });
 });
 
+
+describe('runProducedChanges', () => {
+  const produced = (wt: string) => runProducedChanges(wt, main);
+
+  it('a fresh branch with nothing written: no changes', async () => {
+    expect(await produced(addWorktree('a'))).toBe(false);
+  });
+
+  it('a fresh branch after main moved on (another run merged): still no changes', async () => {
+    const a = addWorktree('a');
+    const b = addWorktree('b');
+    writeFileSync(path.join(b, 'feature-b.js'), 'b\n');
+    expect((await sync(b, 'T-2')).ok).toBe(true);
+    expect(await produced(a)).toBe(false);
+  });
+
+  it('an uncommitted new or edited file: changes', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    expect(await produced(a)).toBe(true);
+    const b = addWorktree('b');
+    writeFileSync(path.join(b, 'app.js'), 'line1\n');
+    expect(await produced(b)).toBe(true);
+  });
+
+  it("only Emberline's scratch files: no changes", async () => {
+    const a = addWorktree('a');
+    mkdirSync(path.join(a, '.emberline'), { recursive: true });
+    writeFileSync(path.join(a, '.emberline', 'new-tickets.json'), '{"tickets":[]}');
+    writeFileSync(path.join(a, '.emberline', 'cross-critic-1.json'), '{}');
+    expect(await produced(a)).toBe(false);
+  });
+
+  it('a commit of its own: changes', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    git(a, 'add', '-A');
+    git(a, 'commit', '-q', '-m', 'feat: a');
+    expect(await produced(a)).toBe(true);
+  });
+
+  it('its own commit already merged into main (--no-ff): still changes', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    expect((await sync(a, 'T-1')).ok).toBe(true);
+    expect(git(main, 'merge-base', '--is-ancestor', git(a, 'rev-parse', 'HEAD'), 'HEAD')).toBe('');
+    expect(await produced(a)).toBe(true);
+  });
+
+  it('a worktree that is gone is not checked', async () => {
+    expect(await runProducedChanges(path.join(dir, 'missing'), main)).toBe(true);
+  });
+});

@@ -242,6 +242,7 @@ const EVENT_LABEL: Record<string, string> = {
   build_gate_failed: 'held: build failed',
   build_gate_error: 'held: build gate error',
   merge_failed: 'held: merge failed',
+  no_changes: 'held: no changes',
   stall_detected: 'stalled',
   waiting_input_timeout: 'stopped: nobody answered',
   auto_nudged: 'nudged to continue',

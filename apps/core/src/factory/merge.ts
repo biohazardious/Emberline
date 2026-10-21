@@ -94,6 +94,29 @@ export function conflictResolutionPrompt(branch: string, conflicts: string[]): s
 }
 
 /**
+ * Whether a run left anything to merge: uncommitted changes in its worktree outside Emberline's
+ * scratch files, or a branch tip that is not on the main workspace's first-parent history. A branch
+ * that was never committed to still points at a commit of main's own line; one with commits of its
+ * own is reached by main only through a merge's second parent (merges are `--no-ff`), or not at all.
+ * So no base commit has to be stored, and older runs are judged the same way. True whenever it
+ * cannot tell: a worktree that is gone, or git failing.
+ */
+export async function runProducedChanges(worktreePath: string, mainWorkspacePath: string): Promise<boolean> {
+  if (!existsSync(worktreePath)) return true;
+  try {
+    const inWorktree = { cwd: worktreePath };
+    const status = await execGitFile(['status', '--porcelain', '--untracked-files=all', '--', '.', ...RUN_OUTPUT_EXCLUDES], inWorktree);
+    if (status.stdout.trim()) return true;
+    const tip = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
+    // Main's first-parent line down to where the branch started: the walk stops at the tip's parents.
+    const mainLine = await execGitFile(['rev-list', '--first-parent', 'HEAD', '--not', `${tip}^@`], { cwd: mainWorkspacePath });
+    return !gitLines(mainLine.stdout).includes(tip);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Integrates a run's worktree into the project's main workspace with git: the run's output is
  * committed on its own branch and merged (`--no-ff`) into the main checkout. Untracked and ignored
  * files in the main workspace (`.env`, virtualenvs, build output) are never touched, and work merged

@@ -16,6 +16,8 @@ export const HOLD_EVENTS: readonly string[] = [
   'completion_blocked',
   // Open blocking review comments: the person decides (no prompt to the agent).
   'review_blocked',
+  // The run changed nothing and did not say why: the person decides (no prompt to the agent).
+  'no_changes',
 ];
 /**
  * Run notes that end an earlier hold (TicketService.stillHeld): the work was merged (by the

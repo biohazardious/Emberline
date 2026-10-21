@@ -566,6 +566,7 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   completion_missing: 'No completion signal',
   completion_blocked: 'Blocked',
   review_blocked: 'Blocking review comments',
+  no_changes: 'Finished without changes',
 };
 
 /** One way out of a hold, best first (apps/core/src/runs/recovery.ts). */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './service.js';
+import { HOLD_EVENTS } from './hold-events.js';
 import { currentHold, decidePipelineOutcome, withoutUnblocked } from './hold-outcome.js';
 
 describe('review_unblocked ordering', () => {
@@ -26,5 +27,12 @@ describe('review_unblocked ordering', () => {
 describe('pruning', () => {
   it('keeps the override note', () => {
     expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('review_blocking_overridden');
+  });
+
+  it('no_changes is a hold, and pruning keeps it', () => {
+    expect(HOLD_EVENTS).toContain('no_changes');
+    expect(PRUNE_PROTECTED_EVENT_TYPES).toContain('no_changes');
+    expect(decidePipelineOutcome(['no_changes'])).toBe('held');
+    expect(currentHold([{ type: 'no_changes', payload: { autoFix: false } }])?.type).toBe('no_changes');
   });
 });

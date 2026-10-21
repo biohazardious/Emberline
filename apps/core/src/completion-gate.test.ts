@@ -925,3 +925,93 @@ describe('a person’s merge from the Board', () => {
     expect(await eventTypes(run)).not.toContain('merged_by_person');
   });
 });
+
+describe('a run that changed nothing', () => {
+  /** A factory ticket run whose agent writes nothing. */
+  async function emptyFactoryTicket(title = 'E') {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title, status: 'ready' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    return { project, ticket, run: runsFor(ticket.id)[0] as Run };
+  }
+  const asCodex = (run: Run) => t.db.update(runs).set({ agent: 'codex' }).where(eq(runs.id, run.id)).run();
+  const runDetail = async (run: Run) => (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+
+  it('a secondary CLI run without commits or a completion is held (no_changes), not merged or Done', async () => {
+    const { project, ticket, run } = await emptyFactoryTicket();
+    const passes = trackPipelines();
+    const mainBefore = wgit(project.path, 'rev-parse', 'HEAD').trim();
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await settled(passes, 1);
+    const types = await eventTypes(run);
+    expect(types).toContain('no_changes');
+    expect(types).not.toContain('merged_to_main');
+    expect(await eventPayload(run, 'no_changes')).toEqual({ autoFix: false });
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect(wgit(project.path, 'rev-parse', 'HEAD').trim()).toBe(mainBefore);
+    expect((await runDetail(run)).attention).toMatchObject({ reason: 'held', detail: 'Finished without changes' });
+    // The session is closed like other holds' (kept resumable), and a later dispatch leaves it held.
+    await expect.poll(async () => (await runDetail(run)).endedAt, { timeout: 5_000 }).not.toBeNull();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(passes).toHaveLength(1);
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  it('a Claude run without the completion gate and without changes is held too', async () => {
+    await api('PATCH', '/api/factory/settings', { requireCompletionSignal: false });
+    const { ticket, run } = await emptyFactoryTicket();
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run);
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('no_changes');
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  it('a completion summary explains an empty run: Done', async () => {
+    const { ticket, run } = await emptyFactoryTicket();
+    await begin(run);
+    await stop(run, { summary: 'Nothing to change: the page already has the link.' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('no_changes');
+  });
+
+  it('uncommitted output counts as a change: merged and Done', async () => {
+    const { project, ticket, run } = await emptyFactoryTicket();
+    writeFileSync(path.join(run.worktreePath, 'loose.txt'), 'loose\n');
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).toContain('merged_to_main');
+    expect(existsSync(path.join(project.path, 'loose.txt'))).toBe(true);
+  });
+
+  it('own commits a person already merged before the pipeline ran still reach Done', async () => {
+    const { project, ticket, run } = await factoryTicket();
+    await begin(run);
+    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json()).toMatchObject({ ok: true });
+    asCodex(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('no_changes');
+  });
+
+  it('the [Factory] orchestrator ticket (only a tickets file) is not held', async () => {
+    const project = await createProject();
+    const po = await createTicket(project.id, { title: '[Factory] Plan it', status: 'ready', persona: 'product_owner' });
+    const { run } = (await api('POST', `/api/tickets/${po.id}/start`, { persona: 'product_owner' })).json() as { run: Run };
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+      JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Child' }] }),
+    );
+    await begin(run);
+    asCodex(run);
+    await stop(run);
+    await expect.poll(() => statusOf(po.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('no_changes');
+  });
+});

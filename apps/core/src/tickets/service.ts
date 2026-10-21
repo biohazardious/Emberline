@@ -46,6 +46,7 @@ import {
   persistFactoryAttachments,
   runBranchBase,
   runCrossProviderCritic,
+  runProducedChanges,
   syncWorktreeToMainWorkspace,
   type TicketsFileHooks,
 } from '../factory/service.js';
@@ -970,6 +971,27 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       this.hasCompletionTool(run) &&
       !(await this.completionGatePasses(run))
     ) {
+      return;
+    }
+
+    // 1c. A run that changed nothing and did not say why (no completion of this turn) is not done:
+    //     its branch is already in main, so the merge would find nothing and the ticket would reach
+    //     Done empty. It is held for a person instead, its session closed like other holds', and the
+    //     rest of the queue goes on. The Factory orchestrator's output is its tickets file (a scratch
+    //     file), so it is left out; so is a run working in the main workspace itself.
+    if (
+      ticketRow &&
+      !isFactoryOrchestratorTicket &&
+      run.worktreePath &&
+      run.worktreePath !== projectRow.path &&
+      !this.runs.latestCompletion(run.id) &&
+      !(await runProducedChanges(run.worktreePath, projectRow.path))
+    ) {
+      this.runs.note(run.id, 'no_changes', { autoFix: false });
+      if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
+      if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
+        await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+      }
       return;
     }
 

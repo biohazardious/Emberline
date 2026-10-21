@@ -225,6 +225,20 @@ describe('buildRecovery: the other holds', () => {
     expect(buildRecovery(input('review_blocked', { count: 1 })).why).toBe('1 blocking review comment is open');
   });
 
+  it('no_changes: Do the ticket, Mark done anyway (merge), Discard', () => {
+    const r = buildRecovery(input('no_changes', { autoFix: false }));
+    expectWellFormed('no_changes', r);
+    expect(r.label).toBe('Finished without changes');
+    expect(r.why).toBe('the agent ended without changing anything or saying what it did');
+    expect(r.suggestions.map((s) => [s.kind, s.id, s.label])).toEqual([
+      ['prompt', 'do_the_ticket', 'Do the ticket'],
+      ['merge', 'merge_now', 'Mark done anyway'],
+      ['discard', 'discard', 'Discard this work'],
+    ]);
+    expect(r.suggestions[0]!.prompt).toMatch(/^The ticket asks for changes, but you made none\./);
+    expect(r.suggestions[0]!.prompt).toContain('explain why nothing is needed');
+  });
+
   it('a prompt without the completion tool ends with the prompt itself', () => {
     const r = buildRecovery(input('completion_missing', {}, { completeAgain: '' }));
     expect(r.suggestions[0]!.prompt!.endsWith('say what blocks you.')).toBe(true);

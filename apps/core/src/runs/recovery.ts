@@ -287,6 +287,26 @@ export function buildRecovery(input: RecoveryInput): Recovery {
       return done(completionBlocked(input));
     case 'review_blocked':
       return done(reviewBlocked(input));
+    case 'no_changes':
+      return done({
+        why: 'the agent ended without changing anything or saying what it did',
+        suggestions: [
+          ask(
+            'do_the_ticket',
+            'Do the ticket',
+            'Ask the agent to do the work, or to say why none is needed.',
+            "The ticket asks for changes, but you made none. Do the work it asks for, run the project's checks, commit, and finish. If the ticket really needs no change, explain why nothing is needed and finish.",
+          ),
+          // The person's Merge now: with nothing to merge it moves the ticket to Done.
+          suggestion({
+            id: 'merge_now',
+            kind: 'merge',
+            label: 'Mark done anyway',
+            detail: `Move ${input.ticketKey ?? 'the ticket'} to Done; there is nothing to merge.`,
+          }),
+          discard(input.ticketKey),
+        ],
+      });
     default:
       return done({ why: 'the ticket is held for a person', suggestions: [openReview()] });
   }

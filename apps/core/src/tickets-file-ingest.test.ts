@@ -138,6 +138,8 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
 
     const first = await startTicket(project.id, 'Plan one');
     writeTickets(first.worktreePath, content);
+    // A change of its own: a run that only wrote a tickets file would be held as changing nothing.
+    writeFileSync(path.join(first.worktreePath, 'plan-one.md'), 'plan one\n');
     await finishTurn(first);
     await expect.poll(() => titles(project.id), { timeout: 10_000 }).toEqual(expect.arrayContaining(['Child A', 'Child B']));
     await expect.poll(() => eventTypes(first), { timeout: 10_000 }).toContain('merged_to_main');
