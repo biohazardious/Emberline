@@ -469,3 +469,11 @@ describe('persona preview instructions', () => {
     expect(text.indexOf('$EMBERLINE_DEMO_URL')).toBeGreaterThan(text.indexOf('`preview` tool'));
   });
 });
+
+describe('architect follow-up tickets', () => {
+  it('the architect spawns follow-up tickets only when its ticket asks for them', () => {
+    const text = PERSONA_CATALOG.architect.systemPrompt;
+    expect(text).toContain('only when your ticket asks for them');
+    expect(text).not.toContain('You may also spawn follow-up specialist tickets');
+  });
+});

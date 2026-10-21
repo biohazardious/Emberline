@@ -5,6 +5,7 @@ describe('EVENT_LABEL', () => {
   it('labels the headless refusal, the tickets import and the worktree events', () => {
     expect(EVENT_LABEL.headless_needs_auto).toBe('failed: needs Autonomous mode');
     expect(EVENT_LABEL.tickets_imported).toBe('tickets imported');
+    expect(EVENT_LABEL.tickets_file_left_to_factory).toBe('Ticket plan left to the [Factory] ticket');
     expect(EVENT_LABEL.no_changes).toBe('held: no changes');
     expect(EVENT_LABEL.worktree_setup_failed).toBeTruthy();
   });

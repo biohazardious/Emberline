@@ -296,7 +296,7 @@ export function generateClaudeInstructions(name: string): string {
 1. **Always read \`PROJECT.md\` first** before planning or making changes. It is the living source of truth for product vision, tech stack, architectural layers, and milestones.
 2. **Respect your assigned Persona role** (Product Owner, Architect, UI/UX, Coder, DBA, QA, or Security) and adapt to the project's actual architecture (Full-Stack Web/Portal, Backend API, Multi-Agent Platform, Desktop/Mobile App, System/CLI Automation, or Embedded/IoT Firmware).
 3. **Self-Task Delegation (\`.emberline/new-tickets.json\`):**
-   - When acting as \`product_owner\` or \`architect\` (or whenever a request spans multiple architectural layers such as \`coder\` for backend/core/service/firmware logic, \`dba\` for database schemas & migrations, \`ui_ux\` for frontend views/desktop GUI/CLI UX, and \`qa\` for automated test & build verification), create delegated tickets by writing \`.emberline/new-tickets.json\`:
+   - The \`[Factory]\` ticket (\`product_owner\`) plans the project's work: it writes \`.emberline/new-tickets.json\` with the feature tickets. Any other ticket, an \`architect\` one included, writes tickets only when its own ticket asks for a follow-up (for example work that spans layers: \`coder\` for backend/core/service/firmware logic, \`dba\` for database schemas & migrations, \`ui_ux\` for frontend views/desktop GUI/CLI UX, \`qa\` for automated test & build verification), in this format:
    \`\`\`json
    {
      "autoDispatch": true,
@@ -444,6 +444,11 @@ export function worktreeParts(
 export const isEmptyWorktree = (parts: WorktreeYmlParts): boolean =>
   parts.setup.length === 0 && parts.services.length === 0 && Object.keys(parts.checks).length === 0;
 
+/** Choices are left to the agent and nothing was generated: the Bootstrap ticket writes the worktree commands itself. */
+export function bootstrapWritesWorktree(choices: ProjectChoices, preset: PresetDef | undefined): boolean {
+  return openDimensions(choices).length > 0 && isEmptyWorktree(worktreeParts(choices, preset));
+}
+
 /**
  * `.emberline/worktree.yml` from the commands the chosen options contribute: schema v1, or v2 with
  * a compose preview (see {@link worktreeParts}).
@@ -506,6 +511,8 @@ export interface WizardTicketContext {
   vision?: string;
   /** worktree.yml previews compose service `web` (see {@link previewsComposeService}). */
   composePreview?: boolean;
+  /** The [Factory] ticket will plan the feature tickets, so Bootstrap and Deploy must not. */
+  factoryPlans?: boolean;
 }
 
 export interface WizardTicketSpec {
@@ -530,6 +537,9 @@ const BOOTSTRAP_OPEN = [
   'Set up the project skeleton for the stack you choose, and make the setup, build, lint and test commands you write into `.emberline/worktree.yml` pass.',
   'Keep PROJECT.md accurate as you decide things; items marked "decided by agent" must be filled in.',
 ];
+
+export const FACTORY_PLANS_RULE =
+  'Do not write `.emberline/new-tickets.json`: the [Factory] ticket plans the feature tickets once this ticket is merged.';
 
 /** The vision is quoted in the ticket up to this many characters; PROJECT.md keeps the whole text. */
 const TICKET_VISION_MAX = 2000;
@@ -560,7 +570,7 @@ export function bootstrapTicket(ctx: WizardTicketContext): WizardTicketSpec {
   const stack = STACK_ORDER.map((id) => `- ${getDimension(id)?.label ?? id}: ${describeChoice(id, ctx.choices[id])}`);
   const emptyWorktree = isEmptyWorktree(worktreeParts(ctx.choices, ctx.preset));
   // From the final choices, not the preset: an Auto project the person filled in is a decided one.
-  const open = openDimensions(ctx.choices).length > 0 && emptyWorktree;
+  const open = bootstrapWritesWorktree(ctx.choices, ctx.preset);
   const steps = [...(ctx.preset?.bootstrap ?? []), ...(open ? BOOTSTRAP_OPEN : BOOTSTRAP_DECIDED)];
   const worktreeCriteria = open
     ? `- \`.emberline/worktree.yml\` has the real \`setup\` commands, the build, lint and test \`checks\` and the preview \`services\` entry for the chosen stack, ready for a person to approve in the project banner.
@@ -590,7 +600,7 @@ ${steps.map((x, i) => `${i + 1}. ${x}`).join('\n')}
 - The skeleton exists for the chosen stack and is committed.
 ${worktreeCriteria}
 - \`PROJECT.md\` lists the final stack, including everything marked "decided by the agent".
-`,
+${ctx.factoryPlans ? `\n## Rules\n\n- ${FACTORY_PLANS_RULE}\n` : ''}`,
   };
 }
 
@@ -622,7 +632,7 @@ Prepare **${ctx.name}** for deployment to: ${choice === 'agent' ? 'a target you 
 ## Rules
 
 - Emberline does not run the deploy; prepare it so a person can.
-- Put no credentials, tokens or private keys in the repository. Document the environment variables and where to set them instead.
+- Put no credentials, tokens or private keys in the repository. Document the environment variables and where to set them instead.${ctx.factoryPlans ? `\n- ${FACTORY_PLANS_RULE}` : ''}
 `,
   };
 }

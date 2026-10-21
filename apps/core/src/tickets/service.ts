@@ -28,7 +28,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
-import { readProjectSettings, writeProjectSettings } from '../db/project-settings.js';
+import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, settings, ticketDependencies, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
@@ -468,6 +468,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return seeded;
   }
 
+  /** A Bootstrap or Deploy ticket of a wizard project whose [Factory] ticket still exists and is not done: the factory plans. */
+  private leftToFactory(projectId: string, ticketId: string | undefined): boolean {
+    const roles = readWizardTickets(this.db, projectId);
+    if (!roles?.factory || !ticketId || (ticketId !== roles.bootstrap && ticketId !== roles.deploy)) return false;
+    const factory = this.db.select({ status: tickets.status }).from(tickets).where(eq(tickets.id, roles.factory)).get();
+    return factory !== undefined && factory.status !== 'done';
+  }
+
   private chainOn(projectId: string): void {
     if (this.autoChainProjects.has(projectId)) return;
     this.autoChainProjects.add(projectId);
@@ -871,7 +879,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     const draftDepth = (ticketRow?.depth ?? 0) + 1;
     const fSettingsForDepth = getFactorySettings(this.db);
-    if (ingested && ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
+    if (ingested && ingested.tickets.length > 0 && this.leftToFactory(projectId, ticketRow?.id)) {
+      this.runs.note(run.id, 'tickets_file_left_to_factory', { drafts: ingested.tickets.length });
+    } else if (ingested && ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
       // S16: agent tickets spawning agent tickets must not grow without bound.
       this.runs.note(run.id, 'ticket_depth_limit', {
         drafts: ingested.tickets.length,

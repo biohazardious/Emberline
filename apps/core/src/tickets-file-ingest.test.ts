@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readProjectSettings } from './db/project-settings.js';
+import { readProjectSettings, writeWizardTickets } from './db/project-settings.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /**
@@ -202,3 +202,78 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
   });
 });
 
+
+describe('wizard projects have one planner', { timeout: 30_000 }, () => {
+  async function wizardProject() {
+    const project = await createProject();
+    const factory = (
+      await api('POST', `/api/projects/${project.id}/tickets`, { title: '[Factory] Build it', status: 'ready', persona: 'product_owner' })
+    ).json() as Ticket;
+    return { project, factory };
+  }
+
+  async function runWithTicketsFile(projectId: string, title: string) {
+    const run = await startTicket(projectId, title, 'architect');
+    writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    return run;
+  }
+
+  it("Bootstrap's tickets file while [Factory] is open creates no tickets", async () => {
+    const { project, factory } = await wizardProject();
+    const run = await startTicket(project.id, 'Bootstrap: skeleton', 'architect');
+    writeWizardTickets(t.db, project.id, { bootstrap: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    await finishTurn(run);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_file_left_to_factory');
+    expect((await eventsOf(run)).find((e) => e.type === 'tickets_file_left_to_factory')?.payload).toEqual({ drafts: 2 });
+    expect(await eventTypes(run)).not.toContain('tickets_imported');
+    expect((await titles(project.id)).sort()).toEqual(['Bootstrap: skeleton', '[Factory] Build it'].sort());
+    expect(existsSync(path.join(run.worktreePath, TICKETS))).toBe(false);
+    // consumed and claimed: the same content written again by another run is a duplicate
+    expect(readProjectSettings(t.db, project.id).ingestedTicketFiles).toHaveLength(1);
+  });
+
+  it('the Deploy ticket is held to the same rule', async () => {
+    const { project, factory } = await wizardProject();
+    const run = await startTicket(project.id, 'Deploy: prepare', 'architect');
+    writeWizardTickets(t.db, project.id, { bootstrap: factory.id, deploy: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    await finishTurn(run);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_file_left_to_factory');
+    expect(await eventTypes(run)).not.toContain('tickets_imported');
+    expect((await titles(project.id)).sort()).toEqual(['Deploy: prepare', '[Factory] Build it'].sort());
+  });
+
+  it('after [Factory] is done the file is imported', async () => {
+    const { project, factory } = await wizardProject();
+    await api('PATCH', `/api/tickets/${factory.id}`, { status: 'done' });
+    const run = await startTicket(project.id, 'Bootstrap: skeleton', 'architect');
+    writeWizardTickets(t.db, project.id, { bootstrap: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    await finishTurn(run);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
+    expect(await eventTypes(run)).not.toContain('tickets_file_left_to_factory');
+  });
+
+  it('a deleted [Factory] ticket no longer blocks the import', async () => {
+    const { project, factory } = await wizardProject();
+    const run = await startTicket(project.id, 'Bootstrap: skeleton', 'architect');
+    writeWizardTickets(t.db, project.id, { bootstrap: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    expect((await api('DELETE', `/api/tickets/${factory.id}`)).statusCode).toBeLessThan(300);
+    writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    await finishTurn(run);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
+  });
+
+  it('a non-wizard architect ticket imports as before', async () => {
+    const project = await createProject();
+    const run = await runWithTicketsFile(project.id, 'Architect: plan');
+    await finishTurn(run);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
+  });
+});

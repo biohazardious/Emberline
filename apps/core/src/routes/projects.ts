@@ -74,7 +74,7 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
 import { execGitFile } from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { readImportSource, writeProjectSettings } from '../db/project-settings.js';
+import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import {
   getRunnerBrowserState,
@@ -324,6 +324,16 @@ export function registerProjectRoutes(
         const ticket = created.get(spec.key);
         const dependsOn = spec.dependsOn.flatMap((k) => created.get(k)?.key ?? []);
         if (ticket && dependsOn.length > 0) tickets.update(ticket.id, { dependsOn });
+      }
+      if (bootstrap) {
+        const deploy = created.get('deploy');
+        const factory = created.get('factory');
+        writeWizardTickets(db, project.id, {
+          bootstrap: bootstrap.id,
+          ...(deploy ? { deploy: deploy.id } : {}),
+          ...(factory ? { factory: factory.id } : {}),
+          bootstrapWritesWorktree: plan.bootstrapWritesWorktree,
+        });
       }
     } catch (err) {
       // The project is committed and registered: say so instead of failing a create that happened.

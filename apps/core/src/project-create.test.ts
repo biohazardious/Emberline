@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import type * as GitExec from './git-exec.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
-import { readProjectSettings } from './db/project-settings.js';
+import { readProjectSettings, readWizardTickets } from './db/project-settings.js';
 import { APP_TYPE_LABELS, generateProjectBlueprint, generateWorktreeYml } from './factory/blueprint.js';
 import { planNewProject } from './factory/project-plan.js';
 import { STARTERS } from './factory/starters.js';
@@ -676,5 +676,54 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
     expect(notConfigured).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
     expect(notConfigured).not.toContain('EMBERLINE_DOCKER_ENGINE=0 in .env');
     expect(note({ enabled: true, checked: true, available: false, version: null, error: 'refused' })).toContain('Until it answers');
+  });
+});
+
+describe('wizard ticket roles', () => {
+  const RULE =
+    'Do not write `.emberline/new-tickets.json`: the [Factory] ticket plans the feature tickets once this ticket is merged.';
+
+  it('stores Bootstrap and Deploy without a factory ticket when the factory does not start', async () => {
+    const { project } = (await create(WEB)).json() as CreateProjectResponse;
+    const list = ticketsOf(project.id);
+    const id = (prefix: string) => list.find((x) => x.title.startsWith(prefix))?.id;
+    expect(readWizardTickets(t.db, project.id)).toEqual({
+      bootstrap: id('Bootstrap'),
+      deploy: id('Deploy'),
+      bootstrapWritesWorktree: false,
+    });
+  });
+
+  it('stores the [Factory] ticket when the factory starts', async () => {
+    vi.spyOn(t.tickets, 'dispatchNextReadyTicket').mockResolvedValue([]);
+    const { project } = (await create({ ...WEB, startFactory: true })).json() as CreateProjectResponse;
+    const factory = ticketsOf(project.id).find((x) => x.title.startsWith('[Factory]'));
+    expect(factory).toBeDefined();
+    expect(readWizardTickets(t.db, project.id)?.factory).toBe(factory?.id);
+  });
+
+  it('has no deploy key when deploy is none', async () => {
+    const { project } = (await create(API)).json() as CreateProjectResponse;
+    expect(readWizardTickets(t.db, project.id)).not.toHaveProperty('deploy');
+  });
+
+  it('bootstrapWritesWorktree: Auto true, a decided preset false', async () => {
+    const auto = (await create(AUTO)).json() as CreateProjectResponse;
+    const fixed = (await create(STATIC)).json() as CreateProjectResponse;
+    expect(readWizardTickets(t.db, auto.project.id)?.bootstrapWritesWorktree).toBe(true);
+    expect(readWizardTickets(t.db, fixed.project.id)?.bootstrapWritesWorktree).toBe(false);
+  });
+
+  it('an old-payload project has no wizardTickets', async () => {
+    const res = await create({ name: 'Legacy', mode: 'wizard', appType: 'web_saas', description: 'old', seedStarterTickets: true });
+    const { project } = res.json() as CreateProjectResponse;
+    expect(readWizardTickets(t.db, project.id)).toBeNull();
+  });
+
+  it('Bootstrap and Deploy carry the factory-plans rule only when the factory starts with a vision', () => {
+    const on = planNewProject(CreateProjectBodySchema.parse({ ...WEB, startFactory: true }));
+    const off = planNewProject(CreateProjectBodySchema.parse(WEB));
+    expect(on.tickets.map((x) => x.body.includes(RULE))).toEqual([true, true]);
+    expect(off.tickets.some((x) => x.body.includes(RULE))).toBe(false);
   });
 });

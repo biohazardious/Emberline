@@ -1,5 +1,6 @@
 import { IssueSyncSettings, ProjectImportSource } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Db } from './index.js';
 import { projectSettings } from './schema.js';
 
@@ -38,4 +39,23 @@ export function writeIssueSync(db: Db, projectId: string, value: IssueSyncSettin
 export function readImportSource(db: Db, projectId: string): ProjectImportSource | null {
   const parsed = ProjectImportSource.safeParse(readProjectSettings(db, projectId).importSource);
   return parsed.success ? parsed.data : null;
+}
+
+/** Which tickets of a wizard project play which role. */
+export const WizardTickets = z.object({
+  bootstrap: z.string(),
+  deploy: z.string().optional(),
+  factory: z.string().optional(),
+  bootstrapWritesWorktree: z.boolean(),
+});
+export type WizardTickets = z.infer<typeof WizardTickets>;
+
+/** The wizard's ticket roles; null for projects created before 0.4.0 or not by the wizard (or a value that no longer parses). */
+export function readWizardTickets(db: Db, projectId: string): WizardTickets | null {
+  const parsed = WizardTickets.safeParse(readProjectSettings(db, projectId).wizardTickets);
+  return parsed.success ? parsed.data : null;
+}
+
+export function writeWizardTickets(db: Db, projectId: string, value: WizardTickets): void {
+  writeProjectSettings(db, projectId, { wizardTickets: value });
 }

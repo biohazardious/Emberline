@@ -452,5 +452,8 @@ describe('dependency-aware PO prompt', () => {
     expect(text).not.toContain('sequentially');
     expect(text).toContain('"ref"');
     expect(text).toContain('"dependsOn"');
+    expect(text).toContain('The `[Factory]` ticket (`product_owner`) plans the project');
+    expect(text).toContain('only when its own ticket asks for a follow-up');
+    expect(text).not.toContain('When acting as `product_owner` or `architect`');
   });
 });

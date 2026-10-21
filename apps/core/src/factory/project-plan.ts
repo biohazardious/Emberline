@@ -23,6 +23,7 @@ import {
 import { badRequest } from '../errors.js';
 import {
   bootstrapTicket,
+  bootstrapWritesWorktree,
   deployTicket,
   describeChoice,
   generateClaudeInstructions,
@@ -51,6 +52,8 @@ export interface ProjectPlan {
   vision: string;
   gates: ProjectGateOverrides;
   startFactory: boolean;
+  /** Bootstrap writes the worktree commands itself (see {@link bootstrapWritesWorktree}). */
+  bootstrapWritesWorktree: boolean;
   projectMd: string;
   claudeMd: string;
   worktreeYml: string;
@@ -148,7 +151,8 @@ export function planNewProject(
   });
   const starter = preset?.starter ? STARTERS[preset.starter]({ name: body.name, description: vision }) : {};
   const composePreview = previewsComposeService(choices, preset, { dockerEngine });
-  const ctx = { name: body.name, appType, choices, preset, vision, composePreview };
+  const startFactory = body.startFactory ?? true;
+  const ctx = { name: body.name, appType, choices, preset, vision, composePreview, factoryPlans: startFactory && vision.length > 0 };
   const tickets = [bootstrapTicket(ctx), deployTicket(ctx)].filter((x): x is WizardTicketSpec => x !== null);
 
   return {
@@ -158,7 +162,8 @@ export function planNewProject(
     techStack: techStackFromChoices(choices, versionPolicy),
     vision,
     gates: body.gates ?? {},
-    startFactory: body.startFactory ?? true,
+    startFactory,
+    bootstrapWritesWorktree: bootstrapWritesWorktree(choices, preset),
     projectMd,
     claudeMd: generateClaudeInstructions(body.name),
     worktreeYml: generateWorktreeYml(choices, preset, { dockerEngine }),
