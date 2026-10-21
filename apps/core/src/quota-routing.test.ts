@@ -841,6 +841,35 @@ describe('headless agents refuse modes that would need to ask', () => {
     expect(plan.json().run.agent).toBe('antigravity');
   });
 
+  it('a direct run in Accept edits on an Antigravity lane gets a 409 and leaves no run or worktree', async () => {
+    const res = await api('POST', '/api/runs', { projectId, persona: 'ui_ux', prompt: 'polish the header', permissionMode: 'acceptEdits' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
+    expect(t.db.select().from(runsTable).all()).toHaveLength(0);
+    expect(existsSync(path.join(t.config.workspacesDir, '.worktrees', 'quota'))).toBe(false);
+  });
+
+  it('a factory request in Accept edits led by an Antigravity persona leaves no ticket, run or auto-chain', async () => {
+    const res = await api('POST', `/api/projects/${projectId}/factory-request`, {
+      prompt: 'A landing page',
+      leadPersona: 'ui_ux',
+      permissionMode: 'acceptEdits',
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
+    expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+    expect(t.db.select().from(runsTable).all()).toHaveLength(0);
+    expect(t.tickets.isAutoChainActive(projectId)).toBe(false);
+    // A route tag in the request leads, as it does for the ticket it would create.
+    const tagged = await api('POST', `/api/projects/${projectId}/factory-request`, {
+      prompt: 'A landing page [Preferred Agent: antigravity · Model: argon]',
+      leadPersona: 'product_owner',
+      permissionMode: 'acceptEdits',
+    });
+    expect(tagged.statusCode).toBe(409);
+    expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+  });
+
   it('a run without a prompt opens Antigravity interactively in any mode', async () => {
     const res = await api('POST', '/api/runs', { projectId, persona: 'ui_ux', permissionMode: 'acceptEdits' });
     expect(res.statusCode).toBe(201);

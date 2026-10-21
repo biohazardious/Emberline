@@ -542,6 +542,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   async submitFactoryRequest(projectId: string, input: FactoryRequestBody): Promise<FactoryRequestResponse> {
     const projectRow = this.project(projectId);
     const body = FactoryRequestBodySchema.parse(input);
+    // Refused before anything is written (attachments, ticket, auto-chain). The lead run's route tag
+    // comes from the ticket body, which holds the request's text.
+    const tag = parseRouteTag(body.prompt);
+    this.runs.assertStartable({
+      projectId,
+      prompt: body.prompt,
+      permissionMode: body.permissionMode,
+      persona: body.leadPersona,
+      ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
+    });
     const attachmentContext =
       body.attachments && body.attachments.length > 0
         ? await persistFactoryAttachments(projectRow.path, body.attachments)
