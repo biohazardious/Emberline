@@ -68,6 +68,10 @@ import {
   type WorkspaceFileListResponse,
   WriteWorkspaceFileBody,
   type ProjectUsageResponse,
+  isEmberlineDirPath,
+  isWorktreeYmlPath,
+  WORKTREE_CONFIG_CODES,
+  WORKTREE_YML_EDIT_IN_SETTINGS,
 } from '@emberline/protocol';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
@@ -984,6 +988,9 @@ export function registerProjectRoutes(
     async (request): Promise<WorkspaceFileContentResponse> => {
       const body = WriteWorkspaceFileBody.parse(request.body);
       const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+      if (isWorktreeYmlPath(body.path)) {
+        throw conflict(WORKTREE_YML_EDIT_IN_SETTINGS, WORKTREE_CONFIG_CODES.editInSettings);
+      }
       try {
         return await writeWorkspaceFileContent(workspacePath, body.targetId, body.path, body.content);
       } catch (err) {
@@ -997,6 +1004,10 @@ export function registerProjectRoutes(
     async (request) => {
       const body = DeleteWorkspaceFileBody.parse(request.body);
       const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+      // Deleting .emberline would delete worktree.yml with it.
+      if (isWorktreeYmlPath(body.path) || isEmberlineDirPath(body.path)) {
+        throw conflict(WORKTREE_YML_EDIT_IN_SETTINGS, WORKTREE_CONFIG_CODES.editInSettings);
+      }
       try {
         await deleteWorkspaceFileEntry(workspacePath, body.path);
         return { ok: true };
@@ -1034,6 +1045,9 @@ export function registerProjectRoutes(
     async (request): Promise<UploadWorkspaceFilesResponse> => {
       const body = UploadWorkspaceFilesBody.parse(request.body);
       const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+      if (body.files.some((file) => isWorktreeYmlPath(file.path))) {
+        throw conflict(WORKTREE_YML_EDIT_IN_SETTINGS, WORKTREE_CONFIG_CODES.editInSettings);
+      }
       try {
         return await uploadWorkspaceFiles(workspacePath, body.targetId, body.files);
       } catch (err) {

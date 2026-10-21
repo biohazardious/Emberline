@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { WorktreeConfig, WORKTREE_CONFIG_LIMITS } from './worktree-config.js';
+import { MAX_WORKTREE_YML_BYTES } from './projects.js';
+import {
+  isEmberlineDirPath,
+  isWorktreeYmlPath,
+  SaveWorktreeConfigBody,
+  ValidateWorktreeConfigBody,
+  WorktreeConfig,
+  WORKTREE_CONFIG_LIMITS,
+} from './worktree-config.js';
 
 const SPEC_EXAMPLE = {
   version: 1,
@@ -128,5 +136,42 @@ describe('WorktreeConfig v2: compose services', () => {
   });
   it('rejects other versions', () => {
     expect(WorktreeConfig.safeParse({ version: 3 }).success).toBe(false);
+  });
+});
+
+describe('editing worktree.yml from Project settings', () => {
+  it('isWorktreeYmlPath normalizes the ways a client can name the file', () => {
+    for (const rel of [
+      '.emberline/worktree.yml',
+      './.emberline/worktree.yml',
+      '/.emberline//worktree.yml',
+      '.emberline\\worktree.yml',
+      'src/../.emberline/./worktree.yml',
+    ]) {
+      expect(isWorktreeYmlPath(rel), rel).toBe(true);
+    }
+    for (const rel of ['.emberline/worktree.yaml', 'x/.emberline/worktree.yml', '.emberline', 'worktree.yml']) {
+      expect(isWorktreeYmlPath(rel), rel).toBe(false);
+    }
+  });
+
+  it('isEmberlineDirPath names .emberline itself', () => {
+    for (const rel of ['.emberline', './.emberline/', '/.emberline', '.emberline\\']) {
+      expect(isEmberlineDirPath(rel), rel).toBe(true);
+    }
+    for (const rel of ['.emberline/worktree.yml', 'src/.emberline', '.emberlines']) {
+      expect(isEmberlineDirPath(rel), rel).toBe(false);
+    }
+  });
+
+  it('SaveWorktreeConfigBody caps the content at the worktree.yml size and wants a full sha or null', () => {
+    const sha = 'a'.repeat(64);
+    expect(SaveWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES), baseSha256: sha }).success).toBe(true);
+    expect(SaveWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1), baseSha256: sha }).success).toBe(false);
+    // The cap counts bytes: 2-byte characters reach it at half the length.
+    expect(SaveWorktreeConfigBody.safeParse({ content: 'é'.repeat(MAX_WORKTREE_YML_BYTES / 2 + 1), baseSha256: null }).success).toBe(false);
+    expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: 'a'.repeat(63) }).success).toBe(false);
+    expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: null }).success).toBe(true);
+    expect(ValidateWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1) }).success).toBe(false);
   });
 });

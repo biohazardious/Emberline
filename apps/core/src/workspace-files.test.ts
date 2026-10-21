@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   deleteWorkspaceFileEntry,
+  listWorkspaceFilesFlat,
   readWorkspaceFileContent,
   readWorkspaceFileRaw,
   uploadWorkspaceFiles,
@@ -61,5 +62,35 @@ describe('workspace file explorer containment', () => {
     await deleteWorkspaceFileEntry(root, 'link.txt');
     expect(existsSync(path.join(root, 'link.txt'))).toBe(false);
     expect(existsSync(path.join(outside, 'secret.txt'))).toBe(true);
+  });
+});
+
+describe('the explorer lists .emberline/worktree.yml and nothing else under .emberline', () => {
+  const paths = async () => (await listWorkspaceFilesFlat(root)).map((e) => `${e.kind}:${e.path}`);
+
+  it('lists the folder and worktree.yml, not the scratch files or a nested .emberline', async () => {
+    mkdirSync(path.join(root, '.emberline'));
+    writeFileSync(path.join(root, '.emberline', 'worktree.yml'), 'version: 1\n');
+    writeFileSync(path.join(root, '.emberline', 'new-tickets.json'), '[]');
+    mkdirSync(path.join(root, 'src', '.emberline'));
+    writeFileSync(path.join(root, 'src', '.emberline', 'worktree.yml'), 'version: 1\n');
+    const listed = await paths();
+    expect(listed).toContain('directory:.emberline');
+    expect(listed).toContain('file:.emberline/worktree.yml');
+    expect(listed.filter((p) => p.includes('.emberline'))).toEqual(['directory:.emberline', 'file:.emberline/worktree.yml']);
+    const entry = (await listWorkspaceFilesFlat(root)).find((e) => e.path === '.emberline/worktree.yml');
+    expect(entry).toMatchObject({ name: 'worktree.yml', kind: 'file', sizeBytes: 'version: 1\n'.length });
+  });
+
+  it('does not list a symlinked worktree.yml, a symlinked .emberline or a folder without the file', async () => {
+    mkdirSync(path.join(root, '.emberline'));
+    writeFileSync(path.join(root, '.emberline', 'new-tickets.json'), '[]');
+    expect((await paths()).some((p) => p.includes('.emberline'))).toBe(false);
+    symlinkSync(path.join(outside, 'secret.txt'), path.join(root, '.emberline', 'worktree.yml'));
+    expect((await paths()).some((p) => p.includes('.emberline'))).toBe(false);
+    rmSync(path.join(root, '.emberline'), { recursive: true });
+    writeFileSync(path.join(outside, 'worktree.yml'), 'version: 1\n');
+    symlinkSync(outside, path.join(root, '.emberline'));
+    expect((await paths()).some((p) => p.includes('.emberline'))).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { constants as fsConstants, existsSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  ADOPT_FILE_PATHS,
   type UploadWorkspaceFileItem,
   type UploadWorkspaceFilesResponse,
   type WorkspaceFileContentResponse,
@@ -174,6 +175,33 @@ async function resolveContainedWorkspaceFile(
 /** Creates or truncates without following a symlink swapped in after the containment check. */
 const WRITE_NO_FOLLOW = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
 
+/**
+ * The one file the explorer shows under `.emberline` (scratch files stay hidden): the folder and
+ * `worktree.yml` when that is a regular file, nothing otherwise (a link is never listed).
+ */
+async function worktreeYmlEntries(absRoot: string): Promise<WorkspaceFileEntry[]> {
+  const dirRel = path.dirname(ADOPT_FILE_PATHS.worktreeYml);
+  try {
+    const [dirStat, fileStat] = await Promise.all([
+      lstat(path.join(absRoot, dirRel)),
+      lstat(path.join(absRoot, ADOPT_FILE_PATHS.worktreeYml)),
+    ]);
+    if (!dirStat.isDirectory() || !fileStat.isFile()) return [];
+    return [
+      { path: dirRel, name: dirRel, kind: 'directory', sizeBytes: 0, mtime: dirStat.mtime.toISOString() },
+      {
+        path: ADOPT_FILE_PATHS.worktreeYml,
+        name: path.basename(ADOPT_FILE_PATHS.worktreeYml),
+        kind: 'file',
+        sizeBytes: fileStat.size,
+        mtime: fileStat.mtime.toISOString(),
+      },
+    ];
+  } catch {
+    return [];
+  }
+}
+
 export async function listWorkspaceFilesFlat(workspacePath: string): Promise<WorkspaceFileEntry[]> {
   if (!existsSync(workspacePath)) return [];
   const entries: WorkspaceFileEntry[] = [];
@@ -192,6 +220,10 @@ export async function listWorkspaceFilesFlat(workspacePath: string): Promise<Wor
       return a.name.localeCompare(b.name);
     });
     for (const item of items) {
+      if (dir === absRoot && item.name === '.emberline' && item.isDirectory()) {
+        entries.push(...(await worktreeYmlEntries(absRoot)));
+        continue;
+      }
       if (EXPLORER_IGNORED.has(item.name)) continue;
       const fullPath = path.join(dir, item.name);
       const relPath = path.relative(absRoot, fullPath);

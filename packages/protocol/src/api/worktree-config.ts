@@ -4,6 +4,7 @@
  * need the Docker engine). A v1 file stays valid unchanged.
  */
 import { z } from 'zod';
+import { ADOPT_FILE_PATHS, MAX_WORKTREE_YML_BYTES } from './projects.js';
 
 export const WORKTREE_CONFIG_LIMITS = {
   maxEntries: 20,
@@ -143,3 +144,56 @@ export const ApproveWorktreeConfigBody = z.union([
   z.object({ removal: z.literal(true) }).strict(),
 ]);
 export type ApproveWorktreeConfigBody = z.infer<typeof ApproveWorktreeConfigBody>;
+
+/** The explorer's answer for `.emberline/worktree.yml`: it is edited in Project settings only. */
+export const WORKTREE_YML_EDIT_IN_SETTINGS = 'Edit this file from Project settings so it is committed and approved.';
+
+/** `rel` as a repository path: `/` separators, no empty, `.` or resolved `..` segments. */
+function normalizedRepoPath(rel: string): string {
+  const parts: string[] = [];
+  for (const part of rel.replace(/\\/g, '/').split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+
+/** `rel` names the project's worktree.yml (backslashes, a leading `/` or `./`, `//` and `.` segments normalized). */
+export function isWorktreeYmlPath(rel: string): boolean {
+  return normalizedRepoPath(rel) === ADOPT_FILE_PATHS.worktreeYml;
+}
+
+/** `rel` is `.emberline` itself (deleting it would delete worktree.yml). */
+export function isEmberlineDirPath(rel: string): boolean {
+  return normalizedRepoPath(rel) === ADOPT_FILE_PATHS.worktreeYml.slice(0, ADOPT_FILE_PATHS.worktreeYml.lastIndexOf('/'));
+}
+
+/** Error codes of the worktree.yml editor's save. */
+export const WORKTREE_CONFIG_CODES = {
+  invalid: 'worktree_config_invalid',
+  changed: 'worktree_config_changed',
+  dirty: 'worktree_config_dirty',
+  detached: 'main_workspace_detached',
+  editInSettings: 'worktree_config_edit_in_settings',
+} as const;
+
+const WorktreeYmlContent = z.string().refine((s) => new TextEncoder().encode(s).length <= MAX_WORKTREE_YML_BYTES, {
+  message: `content is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`,
+});
+
+/** `POST /api/projects/:id/worktree-config/validate`: the editor's content, checked without saving. */
+export const ValidateWorktreeConfigBody = z.object({ content: WorktreeYmlContent }).strict();
+export type ValidateWorktreeConfigBody = z.infer<typeof ValidateWorktreeConfigBody>;
+/** The same errors the banner shows for HEAD's file; empty when the content is valid. */
+export const ValidateWorktreeConfigResponse = z.object({ errors: z.array(z.string()) });
+export type ValidateWorktreeConfigResponse = z.infer<typeof ValidateWorktreeConfigResponse>;
+
+/**
+ * `PUT /api/projects/:id/worktree-config`: commits `content` to the main workspace's branch and
+ * approves it. `baseSha256` is HEAD's file sha256 when the editor opened (null when there was none).
+ */
+export const SaveWorktreeConfigBody = z
+  .object({ content: WorktreeYmlContent, baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable() })
+  .strict();
+export type SaveWorktreeConfigBody = z.infer<typeof SaveWorktreeConfigBody>;

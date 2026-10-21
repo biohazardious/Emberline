@@ -79,12 +79,17 @@ export async function approveWorktreeConfig(
     throw conflict('.emberline/worktree.yml changed in HEAD since it was reviewed; review it again');
   }
   if (current.errors.length > 0) throw badRequest(`.emberline/worktree.yml is invalid: ${current.errors.join('; ')}`);
-  const approval = { content: current.head.content, sha256: sha256(current.head.content), approvedAt: new Date(), approvedBy: 'person' };
+  storeApproval(db, project.id, current.head.content, 'person');
+  return worktreeConfigStatus(db, project);
+}
+
+/** Records `content` as the project's approved worktree.yml (replacing any earlier approval). */
+export function storeApproval(db: Db, projectId: string, content: string, approvedBy: string): void {
+  const approval = { content, sha256: sha256(content), approvedAt: new Date(), approvedBy };
   db.insert(projectWorktreeConfig)
-    .values({ projectId: project.id, ...approval })
+    .values({ projectId, ...approval })
     .onConflictDoUpdate({ target: projectWorktreeConfig.projectId, set: approval })
     .run();
-  return worktreeConfigStatus(db, project);
 }
 
 /** Why a worktree file could not be opened safely, from {@link UnsafePathError}'s wording. */

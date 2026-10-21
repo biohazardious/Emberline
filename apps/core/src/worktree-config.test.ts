@@ -1,6 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import type { Run, Ticket, WorktreeConfigStatusResponse } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -838,5 +849,210 @@ describe('services and checks', () => {
     await t.app.inject({ method: 'POST', url: `/api/internal/runs/${run.id}/complete`, headers, payload: { summary: 'done' } });
     await hook(run.id, 'Stop', token);
     await expect.poll(() => (existsSync(log) ? readFileSync(log, 'utf8') : ''), { timeout: 10_000 }).toBe('build\nlint\ntest\n');
+  });
+});
+
+describe('editing worktree.yml from Project settings', () => {
+  const save = (projectId: string, content: string, baseSha256: string | null) =>
+    t.app.inject({
+      method: 'PUT',
+      url: `/api/projects/${projectId}/worktree-config`,
+      payload: { content, baseSha256 },
+      headers: { ...CSRF, cookie },
+    });
+  const NEXT = 'version: 1\nsetup:\n  - "true"\n';
+  const INVALID = 'version: 1\nchecks:\n  container: x\n';
+  const gitIn =
+    (project: { path: string }) =>
+    (...a: string[]) =>
+      execFileSync('git', ['-C', project.path, ...a], { encoding: 'utf8' }).trim();
+  const commitCount = (project: { path: string }) => gitIn(project)('rev-list', '--count', 'HEAD');
+
+  it('validate answers the banner errors', async () => {
+    const project = await createProject('version: 1\n');
+    const res = await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: INVALID });
+    expect(res.json()).toEqual({ errors: ['checks: Unrecognized key: "container" (allowed: build, lint, test)'] });
+    expect((await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: NEXT })).json()).toEqual({
+      errors: [],
+    });
+    expect((await api('POST', '/api/projects/nope/worktree-config/validate', { content: NEXT })).statusCode).toBe(404);
+  });
+
+  it('saves: one commit on main with only that path, approved, status unchanged', async () => {
+    const project = await createProject('version: 1\n');
+    writeFileSync(path.join(project.path, 'other.txt'), 'untouched\n'); // an unrelated untracked file stays out
+    const before = (await status(project.id)).head!.sha256;
+    const res = await save(project.id, NEXT, before);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ changed: false, approved: { content: NEXT, approvedBy: 'person' }, head: { content: NEXT } });
+    const git = gitIn(project);
+    expect(git('log', '-1', '--format=%s')).toBe('chore: edit .emberline/worktree.yml from project settings');
+    expect(git('log', '-1', '--format=%an <%ae>')).toBe('Emberline AI Factory <factory@emberline.local>');
+    expect(git('show', '--name-only', '--format=', 'HEAD')).toBe('.emberline/worktree.yml');
+    expect(git('status', '--porcelain', '--', 'other.txt')).toBe('?? other.txt');
+    expect(git('status', '--porcelain', '--', YML)).toBe('');
+    expect(readdirSync(path.join(project.path, '.emberline'))).toEqual(['worktree.yml']);
+  });
+
+  it('creates the file when HEAD has none (baseSha256 null)', async () => {
+    const project = await createProject();
+    expect((await status(project.id)).head).toBeNull();
+    const res = await save(project.id, NEXT, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ changed: false, approved: { content: NEXT, sha256: sha(NEXT) }, head: { content: NEXT } });
+    expect(gitIn(project)('show', `HEAD:${YML}`)).toBe(NEXT.trim());
+  });
+
+  it('400 worktree_config_invalid with errors; nothing committed', async () => {
+    const project = await createProject('version: 1\n');
+    const count = commitCount(project);
+    const res = await save(project.id, INVALID, (await status(project.id)).head!.sha256);
+    expect(res.statusCode).toBe(400);
+    const validate = await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: INVALID });
+    expect(res.json()).toMatchObject({ error: 'worktree_config_invalid', errors: validate.json().errors });
+    expect(commitCount(project)).toBe(count);
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe('version: 1\n');
+    expect((await status(project.id)).approved).toBeNull();
+  });
+
+  it('409 worktree_config_changed when HEAD moved since the editor opened', async () => {
+    const project = await createProject('version: 1\n');
+    const before = (await status(project.id)).head!.sha256;
+    const other = 'version: 1\nteardown:\n  - "true"\n';
+    commitYml(project, other);
+    const count = commitCount(project);
+    const res = await save(project.id, NEXT, before);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('worktree_config_changed');
+    expect(commitCount(project)).toBe(count);
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe(other);
+    // A file that appeared on main while the editor had none counts as a change too.
+    const fresh = await createProject(undefined, 'Fresh');
+    mkdirSync(path.join(fresh.path, '.emberline'));
+    commitYml(fresh, other);
+    expect((await save(fresh.id, NEXT, null)).json().error).toBe('worktree_config_changed');
+  });
+
+  it('409 worktree_config_dirty with uncommitted changes to the file', async () => {
+    const project = await createProject('version: 1\n');
+    const before = (await status(project.id)).head!.sha256;
+    const file = path.join(project.path, YML);
+    writeFileSync(file, 'version: 1\n# mine\n');
+    const res = await save(project.id, NEXT, before);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('worktree_config_dirty');
+    expect(readFileSync(file, 'utf8')).toBe('version: 1\n# mine\n');
+    // Staged only: the file on disk equals HEAD, the index does not.
+    gitIn(project)('add', YML);
+    writeFileSync(file, 'version: 1\n');
+    const staged = await save(project.id, NEXT, before);
+    expect(staged.statusCode).toBe(409);
+    expect(staged.json().error).toBe('worktree_config_dirty');
+    expect(gitIn(project)('diff', '--cached', '--name-only')).toBe(YML);
+    expect((await status(project.id)).approved).toBeNull();
+  });
+
+  it('409 main_workspace_detached on a detached HEAD', async () => {
+    const project = await createProject('version: 1\n');
+    gitIn(project)('checkout', '-q', '--detach');
+    const count = commitCount(project);
+    const res = await save(project.id, NEXT, (await status(project.id)).head!.sha256);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('main_workspace_detached');
+    expect(commitCount(project)).toBe(count);
+  });
+
+  it('content equal to HEAD commits nothing and only approves', async () => {
+    const project = await createProject('version: 1\n');
+    const count = commitCount(project);
+    const res = await save(project.id, 'version: 1\n', (await status(project.id)).head!.sha256);
+    expect(res.statusCode).toBe(200);
+    expect(commitCount(project)).toBe(count);
+    expect(res.json()).toMatchObject({
+      changed: false,
+      approved: { content: 'version: 1\n', sha256: sha('version: 1\n'), approvedBy: 'person' },
+    });
+  });
+
+  it('a failed commit restores the previous file and stores no approval', async () => {
+    const project = await createProject('version: 1\n');
+    const approved = (await approveHead(project.id)).approved;
+    const count = commitCount(project);
+    writeFileSync(path.join(project.path, '.git', 'index.lock'), '');
+    const res = await save(project.id, NEXT, sha('version: 1\n'));
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    rmSync(path.join(project.path, '.git', 'index.lock'));
+    expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe('version: 1\n');
+    expect(readdirSync(path.join(project.path, '.emberline'))).toEqual(['worktree.yml']);
+    expect(commitCount(project)).toBe(count);
+    expect(gitIn(project)('status', '--porcelain', '--', YML)).toBe('');
+    expect((await status(project.id)).approved).toEqual(approved);
+  });
+
+  it('a failed commit of a new file removes it again', async () => {
+    const project = await createProject();
+    writeFileSync(path.join(project.path, '.git', 'index.lock'), '');
+    expect((await save(project.id, NEXT, null)).statusCode).toBeGreaterThanOrEqual(400);
+    rmSync(path.join(project.path, '.git', 'index.lock'));
+    expect(existsSync(path.join(project.path, '.emberline'))).toBe(false);
+    expect((await status(project.id)).approved).toBeNull();
+  });
+
+  it('Review Focus 3: a symlinked worktree.yml in main is replaced by a regular file, never written through', async () => {
+    const outside = path.join(t.dir, 'outside.yml');
+    writeFileSync(outside, 'version: 1\n');
+    const project = await createProject();
+    mkdirSync(path.join(project.path, '.emberline'));
+    symlinkSync(outside, path.join(project.path, YML));
+    const git = gitIn(project);
+    git('add', YML);
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'link');
+    const before = await status(project.id);
+    expect(before).toMatchObject({ head: null, unusable: true });
+    const res = await save(project.id, NEXT, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ changed: false, unusable: false, head: { content: NEXT } });
+    expect(readFileSync(outside, 'utf8')).toBe('version: 1\n');
+    expect(lstatSync(path.join(project.path, YML)).isFile()).toBe(true);
+    expect(git('ls-tree', 'HEAD', '--', YML)).toMatch(/^100644 blob /);
+  });
+
+  it('Review Focus 3: a symlinked .emberline is refused and nothing is written outside the project', async () => {
+    const outsideDir = path.join(t.dir, 'outside-dir');
+    mkdirSync(outsideDir);
+    const project = await createProject();
+    symlinkSync(outsideDir, path.join(project.path, '.emberline'));
+    const git = gitIn(project);
+    git('add', '.emberline');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'link dir');
+    const count = commitCount(project);
+    const res = await save(project.id, NEXT, null);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/^cannot write into the repository safely: /);
+    expect(readdirSync(outsideDir)).toEqual([]);
+    expect(readlinkSync(path.join(project.path, '.emberline'))).toBe(outsideDir);
+    expect(commitCount(project)).toBe(count);
+    expect((await status(project.id)).approved).toBeNull();
+  });
+
+  it('Review Focus 4: a repository that ignores .emberline/ still commits the file and is unchanged afterwards', async () => {
+    const project = await createProject();
+    const git = gitIn(project);
+    writeFileSync(path.join(project.path, '.gitignore'), '.emberline/\n');
+    git('add', '.gitignore');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'ignore');
+    mkdirSync(path.join(project.path, '.emberline'));
+    writeFileSync(path.join(project.path, '.emberline', 'new-tickets.json'), '[]'); // ignored scratch, stays out
+    const res = await save(project.id, NEXT, null);
+    expect(res.statusCode).toBe(200);
+    expect(git('show', '--name-only', '--format=', 'HEAD')).toBe(YML);
+    const after = res.json() as WorktreeConfigStatusResponse;
+    expect(after).toMatchObject({ changed: false });
+    expect(after.approved!.sha256).toBe(after.head!.sha256);
+    // The file is tracked now: the next save works on it the same way.
+    const again = await save(project.id, setupYml('echo again'), after.head!.sha256);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ changed: false, head: { content: setupYml('echo again') } });
+    expect(existsSync(path.join(project.path, '.emberline', 'new-tickets.json'))).toBe(true);
   });
 });
