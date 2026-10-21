@@ -299,11 +299,12 @@ describe('cleanupLines', () => {
 
 describe('dockerErrorDetails', () => {
   it('adds the hint of an engine-off answer', () => {
+    const hint = 'The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`). Remove that line and restart to turn it on.';
     const e = new ApiRequestError(409, 'docker_off', 'The Docker engine is off', {
-      hint: 'The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`).',
+      hint,
     });
     expect(dockerErrorDetails(e)).toEqual({
-      message: 'The Docker engine is off (The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`).)',
+      message: `The Docker engine is off. ${hint}`,
       output: null,
     });
   });

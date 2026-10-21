@@ -17,6 +17,12 @@ describe('dockerEngineLine', () => {
     );
   });
 
+  it('does not double the full stop after an error that ends in one', () => {
+    expect(dockerEngineLine({ enabled: true, checked: true, available: false, version: null, error: 'refused.' })).toBe(
+      "Docker engine: unreachable — refused. If this host can't run it (privileged containers, overlay), set EMBERLINE_DOCKER_ENGINE=0.",
+    );
+  });
+
   it('says checking until the first probe answered', () => {
     expect(dockerEngineLine({ enabled: true, checked: false, available: false, version: null })).toBe('Docker engine: checking…');
   });

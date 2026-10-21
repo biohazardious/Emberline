@@ -408,8 +408,9 @@ describe('engine off', () => {
     ] as const) {
       const res = await api(method, url);
       expect(res.statusCode, url).toBe(409);
-      // Enabled but not answering: enabling it again would not help.
+      // Enabled but not answering: the message offers turning the engine off, no turn-on hint.
       expect(res.json().message, url).toContain('not reachable');
+      expect(res.json().message, url).toContain("set `EMBERLINE_DOCKER_ENGINE=0`");
       expect(res.json().hint, url).toBeUndefined();
     }
     expect(engine.calls).toEqual([]);

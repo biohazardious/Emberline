@@ -30,6 +30,7 @@ import {
   DOCKER_ENGINE_UNREACHABLE_HINT,
   type DockerEngine,
   mainPreviewComposeProjectName,
+  withHint,
 } from '../docker/engine.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -65,7 +66,7 @@ const NO_COMPOSE_SERVICE = 'the approved worktree.yml has no compose preview ser
 export function composeEngineOffMessage(serviceName: string, engineError: string | undefined): string {
   const base = `the preview service "${serviceName}" runs in Docker`;
   return engineError
-    ? `${base}, but the Docker engine is not reachable: ${engineError}. ${DOCKER_ENGINE_UNREACHABLE_HINT}`
+    ? withHint(`${base}, but the Docker engine is not reachable: ${engineError}`, DOCKER_ENGINE_UNREACHABLE_HINT)
     : `${base}. ${DOCKER_ENGINE_OFF_TEXT}`;
 }
 

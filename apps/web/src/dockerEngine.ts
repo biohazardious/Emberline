@@ -9,5 +9,6 @@ export function dockerEngineLine(docker: DockerEngineStatus | undefined): string
   if (!docker.enabled) return 'Docker engine: off';
   if (!docker.checked) return 'Docker engine: checking…';
   if (docker.available) return `Docker engine: on (${docker.version ?? 'unknown version'})`;
-  return `Docker engine: unreachable${docker.error ? ` — ${docker.error}` : ''}. ${UNREACHABLE_HINT}`;
+  const why = docker.error ? ` — ${docker.error.replace(/[\s.!?;:,]+$/, '')}` : '';
+  return `Docker engine: unreachable${why}. ${UNREACHABLE_HINT}`;
 }

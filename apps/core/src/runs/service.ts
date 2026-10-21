@@ -89,6 +89,7 @@ import {
   DockerEngine,
   mainComposeProjectName,
   previewComposeProjectName,
+  withHint,
 } from '../docker/engine.js';
 import {
   buildDockerProjects,
@@ -2610,10 +2611,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     await this.docker.ready();
     const env = this.docker.cliEnv();
-    // Enabled but not answering: enabling it would not help, so no hint.
+    // Enabled but not answering: no turn-on hint; the message carries the turn-off hint for hosts that cannot run it.
     if (!env.DOCKER_HOST) {
       const why = this.docker.status.error;
-      throw new HttpError(409, 'docker_off', `the Docker engine is not reachable${why ? `: ${why}` : ''}. ${DOCKER_ENGINE_UNREACHABLE_HINT}`);
+      throw new HttpError(409, 'docker_off', withHint(`the Docker engine is not reachable${why ? `: ${why}` : ''}`, DOCKER_ENGINE_UNREACHABLE_HINT));
     }
     return env;
   }

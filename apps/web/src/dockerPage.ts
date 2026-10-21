@@ -171,12 +171,12 @@ function pruneLine(cleanup: DockerCleanupState, ago: (iso: string) => string): s
   return ok;
 }
 
-/** An action's error: the message (with the engine-off hint) and the failed command's output, shown as text. */
+/** An action's error: the message (with the engine-off hint as its own sentence) and the failed command's output, shown as text. */
 export function dockerErrorDetails(error: unknown): { message: string; output: string | null } {
   if (error instanceof ApiRequestError) {
     const hint = typeof error.data.hint === 'string' ? error.data.hint : null;
     const output = typeof error.data.output === 'string' && error.data.output ? error.data.output : null;
-    return { message: hint ? `${error.message} (${hint})` : error.message, output };
+    return { message: hint ? `${error.message.replace(/[\s.!?;:,]+$/, '')}. ${hint}` : error.message, output };
   }
   return { message: errorMessage(error), output: null };
 }
