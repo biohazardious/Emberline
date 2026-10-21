@@ -41,6 +41,8 @@ import {
 import { conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { approvedPreviewService } from '../worktree-config/load.js';
+import { runnerPreviewUrl } from './browser-url.js';
+import type { PreviewFramingCache } from './preview-framing.js';
 import { previewUrl } from './preview-url.js';
 
 /** The project settings key of the main preview's state. */
@@ -102,6 +104,8 @@ export interface MainPreviewDeps {
   /** A free port of the docker range for this project's main preview, never one in `exclude`. Under {@link withPorts}. */
   allocatePort: (projectId: string, exclude: ReadonlySet<number>) => Promise<number>;
   timing: () => ComposePreviewTiming;
+  /** One framing probe per start of a preview. */
+  framing: PreviewFramingCache;
   log?: () => { warn: (obj: object, msg: string) => void } | undefined;
 }
 
@@ -169,11 +173,22 @@ export class MainPreviews {
       service: state.service ?? service?.compose.service ?? '',
       env: this.deps.docker.cliEnv(),
     });
-    if (engineRuns(engine)) return { ...base, status: 'running' };
+    if (engineRuns(engine)) {
+      if (!port) return { ...base, status: 'running' };
+      const startKey = `${state.startedAt}|${state.refreshedAt ?? ''}|${port}`;
+      const framing = await this.deps.framing.get(`main:${projectId}`, startKey, runnerPreviewUrl('compose', port, this.deps.config.dockerHost));
+      return { ...base, status: 'running', framing };
+    }
     // `starting` without a job here: a restart left it and the engine could not be asked yet.
     if (state.status === 'starting') return { ...base, status: 'failed', error: RESTARTED };
     const name = state.service ?? service?.compose.service;
     return { ...base, status: 'exited', error: name ? `the "${name}" container is not running` : 'the preview container is not running' };
+  }
+
+  /** Probes the running preview's headers again (the app may have changed since the last probe). */
+  async recheckFraming(projectId: string, requestHost?: string): Promise<MainPreviewStatus> {
+    this.deps.framing.forget(`main:${projectId}`);
+    return this.status(projectId, requestHost);
   }
 
   /**

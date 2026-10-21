@@ -128,7 +128,8 @@ import { auditWorktreeSlop } from '../factory/slop-guard.js';
 import { DemoTokens } from '../demo-token.js';
 import { agentDemoUrl } from '../factory/demo-target.js';
 import { AGENT_PREVIEW_COOLDOWN_MS, AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
-import { resolveBrowserUrl } from './browser-url.js';
+import { resolveBrowserUrl, runnerPreviewUrl } from './browser-url.js';
+import { PreviewFramingCache } from './preview-framing.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
   commitWorktree,
@@ -575,6 +576,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly agentPreviewStarts = new Map<string, number>();
   /** The container previews of projects' main workspaces; they share the preview port allocator. */
   readonly mainPreviews: MainPreviews;
+  /** Framing probes of the running previews (main and runs), one per start. */
+  readonly framing = new PreviewFramingCache();
   private dockerGcFirst?: NodeJS.Timeout;
   private dockerGcTimer?: NodeJS.Timeout;
   /** Unsubscribes the reconcile of interrupted main previews from the engine's changes (startReconciler). */
@@ -610,6 +613,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       withPorts: (fn) => this.previewPortLock.run('ports', fn),
       allocatePort: (projectId, exclude) => this.allocateMainPreviewPort(projectId, exclude),
       timing: () => this.composePreviewTiming,
+      framing: this.framing,
       log: () => this.log,
     });
     this.outputs = new BuildOutputArchive(db, config, { note: (runId, type, payload) => this.note(runId, type, payload) });
@@ -2855,7 +2859,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
       if (!this.docker.status.available) return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
       const state = await composeServiceStatus({ project: p.project ?? '', service: p.service ?? '', env: await this.dockerEnvFor(row) });
-      if (state === 'running' || state === 'starting' || state === 'unknown') return { ...base, status: 'running' };
+      if (state === 'running' || state === 'starting' || state === 'unknown') {
+        return { ...base, status: 'running', ...(await this.framingOf(id, lastPreview.id, 'compose', port)) };
+      }
       return { ...base, status: 'exited', error: `the "${p.service}" container is not running` };
     }
 
@@ -2870,7 +2876,29 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         // fallback to exited
       }
     }
-    return { ...idle, kind: 'command', status, terminalId, command, port, url, ...(typeof p.note === 'string' ? { note: p.note } : {}) };
+    return {
+      ...idle,
+      kind: 'command',
+      status,
+      terminalId,
+      command,
+      port,
+      url,
+      ...(typeof p.note === 'string' ? { note: p.note } : {}),
+      ...(status === 'running' ? await this.framingOf(id, lastPreview.id, 'command', port) : {}),
+    };
+  }
+
+  /** `{ framing }` of a running run preview (probed once per start), nothing without a port. */
+  private async framingOf(id: string, startEventId: number, kind: 'compose' | 'command', port: number | null) {
+    if (!port) return {};
+    return { framing: await this.framing.get(`run:${id}`, String(startEventId), runnerPreviewUrl(kind, port, this.config.dockerHost)) };
+  }
+
+  /** Probes the running preview's headers again. */
+  async recheckPreviewFraming(id: string, requestHost?: string): Promise<RunPreviewStatus> {
+    this.framing.forget(`run:${id}`);
+    return this.previewStatus(id, requestHost);
   }
 
   /** `source`: who started it, for the timeline (`hook`: the agent's `preview` tool). */

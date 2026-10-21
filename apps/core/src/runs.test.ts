@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { eq } from 'drizzle-orm';
 import { projects, runEvents, runs } from './db/schema.js';
+import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { worktreeHeadSha } from './runs/git.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -640,6 +641,30 @@ describe('runs', () => {
     const terminals = (await api('GET', '/api/terminals')).json() as { id: string }[];
     expect(terminals.some((x) => x.id === pa.terminalId)).toBe(false);
     expect(terminals.some((x) => x.id === pb.terminalId)).toBe(true);
+  });
+
+  it('a running command preview reports its framing, probed on the runner\'s localhost', async () => {
+    const probes: string[] = [];
+    setCommandExecutor(async (request: ExecRequest) => {
+      if (request.file === 'curl' && request.args.includes('-D')) {
+        probes.push(request.args.at(-1) ?? '');
+        return { exitCode: 0, signal: null, stdout: 'HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\n\r\n', stderr: '', timedOut: false, truncated: false };
+      }
+      return localCommandExecutor(request);
+    });
+    try {
+      const project = await createProject('Framing', true);
+      const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      const started = (await api('POST', `/api/runs/${run.id}/preview/start`, { command: 'sleep 30' })).json();
+      expect(started.status).toBe('running');
+      const status = (await api('GET', `/api/runs/${run.id}/preview`)).json();
+      expect(status.framing).toEqual({ state: 'refused', reason: 'X-Frame-Options: DENY' });
+      expect(probes).toEqual([`http://localhost:${started.port}/`]);
+      await api('POST', `/api/runs/${run.id}/preview/stop`);
+      expect((await api('GET', `/api/runs/${run.id}/preview`)).json().framing).toBeUndefined();
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
   });
 
   it('serves the terminal as plain text for fleet thumbnails', async () => {

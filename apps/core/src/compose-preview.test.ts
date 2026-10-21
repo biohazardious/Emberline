@@ -68,6 +68,10 @@ interface DockerCall {
 class FakeEngine {
   calls: DockerCall[] = [];
   curls: string[] = [];
+  /** URLs of the framing probes (`curl -D -`), kept apart from the readiness `curls`. */
+  probes: string[] = [];
+  /** published port → what the probe's curl prints (default: a plain 200). */
+  frameHeaders = new Map<number, string>();
   available = true;
   services = ['web', 'db'];
   /** project → service → state */
@@ -104,6 +108,11 @@ class FakeEngine {
   };
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
+    if (request.file === 'curl' && request.args.includes('-D')) {
+      const url = request.args.at(-1) ?? '';
+      this.probes.push(url);
+      return ok(this.frameHeaders.get(Number(new URL(url).port)) ?? 'HTTP/1.1 200 OK\r\n\r\n');
+    }
     if (request.file === 'curl') {
       const url = request.args.at(-1) ?? '';
       this.curls.push(url);
@@ -289,6 +298,26 @@ describe('compose previews (worktree.yml v2)', () => {
       await expect.poll(() => readdirSync(t.dir).includes('preview-env'), { timeout: 8_000 }).toBe(true);
       expect(engine.calls).toEqual([]);
       await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+    });
+  });
+
+  describe('framing', () => {
+    it('a running compose preview reports what its headers say, probed on the engine host', async () => {
+      await start('tcp://docker:2376');
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const res = await startPreview(run);
+      expect(res.statusCode).toBe(200);
+      const port = (await waitStatus(run, 'running')).port!;
+      expect((await preview(run)).framing).toEqual({ state: 'allowed', reason: null });
+      engine.frameHeaders.set(port, 'HTTP/1.1 200 OK\r\nContent-Security-Policy: frame-ancestors \'none\'\r\n\r\n');
+      expect((await preview(run)).framing?.state).toBe('allowed');
+      const again = await api('POST', `/api/runs/${run.id}/preview/framing`);
+      expect(again.statusCode).toBe(200);
+      expect((again.json() as RunPreviewStatus).framing).toEqual({ state: 'refused', reason: "Content-Security-Policy: frame-ancestors 'none'" });
+      expect(engine.probes).toEqual([`http://docker:${port}/`, `http://docker:${port}/`]);
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      expect((await preview(run)).framing).toBeUndefined();
     });
   });
 

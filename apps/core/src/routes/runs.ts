@@ -184,6 +184,11 @@ export function registerRunRoutes(app: FastifyInstance, runs: RunService, schedu
     async (request) => runs.stopPreview(request.params.id, request.host),
   );
 
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/preview/framing',
+    async (request) => runs.recheckPreviewFraming(request.params.id, request.host),
+  );
+
   app.post('/api/runs/gc', async (request) => {
     return runs.garbageCollect((request.body ?? {}) as never);
   });

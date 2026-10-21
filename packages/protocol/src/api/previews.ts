@@ -1,6 +1,13 @@
 /** API contracts: per-worktree preview environments (Phase 2.3). */
 import { z } from 'zod';
 
+/** Whether the preview's app lets the Live Browser frame it, from its response headers. */
+export const PreviewFraming = z.object({
+  state: z.enum(['allowed', 'refused', 'unknown']),
+  reason: z.string().nullable(),
+});
+export type PreviewFraming = z.infer<typeof PreviewFraming>;
+
 /**
  * A run's preview. `command` previews run a dev server in the runner (a terminal); `compose`
  * previews (worktree.yml v2) start a service of the project's compose file in the Docker engine,
@@ -21,6 +28,8 @@ export const RunPreviewStatus = z.object({
   logs: z.string().nullable(),
   /** Why the preview is not the configured one, e.g. "compose.yaml not found yet — previewing dev". */
   note: z.string().optional(),
+  /** Whether the app allows framing; present only while `status` is 'running'. */
+  framing: PreviewFraming.optional(),
 });
 export type RunPreviewStatus = z.infer<typeof RunPreviewStatus>;
 

@@ -663,6 +663,11 @@ export function registerProjectRoutes(
   );
 
   app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/preview/framing',
+    async (request): Promise<MainPreviewStatus> => runs.mainPreviews.recheckFraming(request.params.id, request.host),
+  );
+
+  app.post<{ Params: { id: string } }>(
     '/api/projects/:id/preview/start',
     async (request): Promise<MainPreviewStatus> => runs.mainPreviews.start(request.params.id, request.host),
   );

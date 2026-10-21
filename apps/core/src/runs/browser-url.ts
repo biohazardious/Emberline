@@ -16,6 +16,11 @@ import { agentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { detectDemoEntryRelPath } from '../factory/workspace-status.js';
 import type { MainPreviews } from './main-preview.js';
 
+/** Where the runner reaches a running preview: a compose one on the engine's name, a command one on its own localhost. */
+export function runnerPreviewUrl(kind: 'compose' | 'command', port: number, dockerHost: string | null | undefined): string {
+  return kind === 'compose' ? `http://${engineHostName(dockerHost ?? '')}:${port}/` : `http://localhost:${port}/`;
+}
+
 export interface BrowserUrlDeps {
   db: Db;
   config: Pick<CoreConfig, 'hookUrl' | 'dockerHost'>;
@@ -43,8 +48,7 @@ export async function resolveBrowserUrl(deps: BrowserUrlDeps, projectId: string,
     target === 'main' ? await deps.mainPreviews.status(project.id) : await deps.runPreviewStatus(target);
 
   if (preview.status === 'running' && preview.port) {
-    if (preview.kind === 'compose') return { url: `http://${engineHostName(deps.config.dockerHost ?? '')}:${preview.port}/`, kind: 'compose' };
-    return { url: `http://localhost:${preview.port}/`, kind: 'command' };
+    return { url: runnerPreviewUrl(preview.kind, preview.port, deps.config.dockerHost), kind: preview.kind };
   }
 
   const note =

@@ -61,6 +61,10 @@ class FakeEngine {
   available = true;
   calls: DockerCall[] = [];
   curls: string[] = [];
+  /** URLs of the framing probes (`curl -D -`), kept apart from the readiness `curls`. */
+  probes: string[] = [];
+  /** published port → what the probe's curl prints (default: a plain 200). */
+  frameHeaders = new Map<number, string>();
   /** project → service → state */
   projects = new Map<string, Map<string, string>>();
   /** published host port → project */
@@ -87,6 +91,11 @@ class FakeEngine {
   };
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
+    if (request.file === 'curl' && request.args.includes('-D')) {
+      const url = request.args.at(-1) ?? '';
+      this.probes.push(url);
+      return ok(this.frameHeaders.get(Number(new URL(url).port)) ?? 'HTTP/1.1 200 OK\r\n\r\n');
+    }
     if (request.file === 'curl') {
       const url = request.args.at(-1) ?? '';
       this.curls.push(url);
@@ -718,6 +727,50 @@ describe('the Docker page lists main previews and acts on them through the main 
     expect((await api('POST', `/api/docker/projects/${name}/stop`)).statusCode).toBe(200);
     expect(engine.downs()).toEqual([downArgs(name, false)]);
     expect(stored(p.id)).toBeUndefined();
+  });
+});
+
+describe('framing: whether the container preview allows being framed (Task 6)', () => {
+  const DENY = 'HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\n\r\n';
+  const ALLOW = 'HTTP/1.1 200 OK\r\n\r\n';
+
+  it("reads the app's headers once per start, and a recheck probes again", async () => {
+    await start();
+    const p = await createProject();
+    const running = await runningMain(p.id);
+    expect(running.framing).toEqual({ state: 'allowed', reason: null });
+    const port = running.port!;
+    // The probe of the first status call is cached: new headers show only after a recheck.
+    engine.frameHeaders.set(port, DENY);
+    expect((await mainPreview(p.id)).framing).toEqual({ state: 'allowed', reason: null });
+    expect(engine.probes).toEqual([`http://docker:${port}/`]);
+    const again = await api('POST', `/api/projects/${p.id}/preview/framing`);
+    expect(again.statusCode).toBe(200);
+    expect(MainPreviewStatus.parse(again.json()).framing).toEqual({ state: 'refused', reason: 'X-Frame-Options: DENY' });
+    expect(engine.probes).toHaveLength(2);
+    expect((await mainPreview(p.id)).framing?.state).toBe('refused');
+    expect(engine.probes).toHaveLength(2);
+    engine.frameHeaders.set(port, ALLOW);
+    expect((await api('POST', `/api/projects/${p.id}/preview/framing`)).json().framing.state).toBe('allowed');
+  });
+
+  it('a stopped preview has no framing, and a restart probes again', async () => {
+    await start();
+    const p = await createProject();
+    await runningMain(p.id);
+    expect(engine.probes).toHaveLength(1);
+    expect((await stopMain(p.id)).statusCode).toBe(200);
+    const stopped = await mainPreview(p.id);
+    expect(stopped.status).toBe('stopped');
+    expect(stopped.framing).toBeUndefined();
+    const restarted = await runningMain(p.id);
+    expect(restarted.framing).toEqual({ state: 'allowed', reason: null });
+    expect(engine.probes).toHaveLength(2);
+  });
+
+  it('an unknown project is 404', async () => {
+    await start();
+    expect((await api('POST', '/api/projects/nope/preview/framing')).statusCode).toBe(404);
   });
 });
 
