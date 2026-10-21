@@ -188,7 +188,10 @@ export function registerProjectRoutes(
   const browserTabs = new ProjectBrowserTabs((opts) =>
     runnerBrowserDaemon(ptyd, path.dirname(config.ptydSocket), opts),
   );
-  /** The Live Browser follows an agent's tab only while this project is the only one whose agent uses a browser. */
+  /**
+   * The Live Browser follows an agent's tab only while this project is the only one whose agent uses
+   * a browser.
+   */
   const followsAgent = (projectId: string): boolean => {
     const ids = runs.browserAgentProjectIds();
     return ids.size === 1 && ids.has(projectId);
@@ -1113,7 +1116,10 @@ export function registerProjectRoutes(
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
       const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
-      const runnerSnap = await browserTabs.state(project.id, { defaultUrl: demoUrl, follow: followsAgent(project.id) });
+      const runnerSnap = await browserTabs.state(project.id, {
+        defaultUrl: demoUrl,
+        follow: followsAgent(project.id),
+      });
       if (runnerSnap) return withRunActivity(runnerSnap, agentActions, agentActive);
       const fallback = await captureBrowserViewportSnapshot({ targetUrl: demoUrl });
       return {

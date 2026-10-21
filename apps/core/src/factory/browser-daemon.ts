@@ -101,6 +101,8 @@ const tabProjects = new Map(loadTabProjects());
 /** Which agent tab a following view shows: the newest one seen with a page loaded. */
 const agentFollow = { seen: new Set(), last: null };
 let playtestTabId = null;
+/** The project whose Live Browser started the Auto-Interact loop: only it can stop or replace it. */
+let playtestProjectId = null;
 const consoleLogs = [];
 const daemonActions = [];
 let nextActionId = 900000;
@@ -455,7 +457,13 @@ function stopPlaytestLoop(reason = 'Stopped Live AI Playtest Bot') {
     playtestEndsAt = 0;
     pushDaemonAction('ai_playtest_stop', reason, 'qa', playtestTabId);
     playtestTabId = null;
+    playtestProjectId = null;
   }
+}
+
+/** True while another project's Auto-Interact loop runs: one project's view never stops or replaces it. */
+function playtestHeldByOther(running, owner, projectId) {
+  return Boolean(running) && owner !== projectId;
 }
 
 async function runPlaytestTick() {
@@ -538,10 +546,11 @@ async function runPlaytestTick() {
   } catch {}
 }
 
-async function startPlaytestLoop(tab, targetUrl) {
+async function startPlaytestLoop(tab, targetUrl, projectId) {
   stopPlaytestLoop();
   await ensureChromium();
   playtestTabId = tab.id;
+  playtestProjectId = projectId;
   if (targetUrl && (!tab.url || tab.url === 'about:blank')) {
     const navUrl = normalizeNavigateUrl(targetUrl);
     await withCdpPage(tab, async (call) => {
@@ -669,8 +678,9 @@ async function handleAction(body, q) {
       await fetch(CDP_BASE + '/json/close/' + encodeURIComponent(id)).catch(() => {});
       tabProjects.delete(id);
     }
+    if (playtestProjectId === q.projectId) stopPlaytestLoop('Project removed');
     saveTabProjects();
-    return { ok: true };
+    return captureState(q);
   }
 
   if (action === 'select_tab' && body.tabId) {
@@ -680,6 +690,7 @@ async function handleAction(body, q) {
   }
 
   if (action === 'close_tab' && body.tabId) {
+    await sharedPages(); // drops labels of tabs closed by hand, so they are not counted below
     const own = [...tabProjects.values()].filter((p) => p === q.projectId).length;
     if (tabProjects.get(body.tabId) === q.projectId && own > 1) {
       if (playtestTabId === body.tabId) stopPlaytestLoop('Tab closed');
@@ -692,7 +703,9 @@ async function handleAction(body, q) {
   }
 
   if (action === 'stop_playtest') {
-    stopPlaytestLoop('Stopped by user');
+    if (!playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
+      stopPlaytestLoop('Stopped by user');
+    }
     return captureState(q);
   }
 
@@ -700,8 +713,11 @@ async function handleAction(body, q) {
   if (!tab) return captureState(q);
 
   if (action === 'start_playtest') {
+    if (playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
+      return { ...(await captureState(q)), message: 'Auto-Interact is running for another project.' };
+    }
     // Auto-Interact runs on shared-Chromium tabs only, not in an agent's own Playwright Chromium.
-    if (!ephemeral) await startPlaytestLoop(tab, body.url || q.defaultUrl);
+    if (!ephemeral) await startPlaytestLoop(tab, body.url || q.defaultUrl, q.projectId);
     return captureState(q);
   }
 

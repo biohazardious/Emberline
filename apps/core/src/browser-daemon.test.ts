@@ -136,3 +136,32 @@ describe('browser daemon tab labels', () => {
     expect(tabProjects.get('tb')).toBe('B');
   });
 });
+
+describe('browser daemon Auto-Interact per project', () => {
+  const src = /function playtestHeldByOther\(running, owner, projectId\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT);
+  const heldByOther = src
+    ? (new Function(`${src[0]}; return playtestHeldByOther;`)() as (
+        running: boolean,
+        owner: string | null,
+        projectId: string,
+      ) => boolean)
+    : null;
+
+  it("B's stop or start leaves A's running loop alone", () => {
+    expect(heldByOther).not.toBeNull();
+    expect(heldByOther!(true, 'A', 'B')).toBe(true);
+    expect(heldByOther!(true, 'A', 'A')).toBe(false);
+    expect(heldByOther!(false, 'A', 'B')).toBe(false);
+    expect(heldByOther!(false, null, 'B')).toBe(false);
+  });
+
+  it('stop_playtest and start_playtest ask before touching the loop', () => {
+    const handle = /async function handleAction\(body, q\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT)?.[0] ?? '';
+    const stop = /if \(action === 'stop_playtest'\) \{[\s\S]*?\n {2}\}/.exec(handle)?.[0] ?? '';
+    const start = /if \(action === 'start_playtest'\) \{[\s\S]*?\n {2}\}/.exec(handle)?.[0] ?? '';
+    for (const branch of [stop, start]) {
+      expect(branch.indexOf('playtestHeldByOther(')).toBeGreaterThan(-1);
+      expect(branch.indexOf('playtestHeldByOther(')).toBeLessThan(branch.search(/stopPlaytestLoop\(|startPlaytestLoop\(/));
+    }
+  });
+});

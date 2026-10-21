@@ -159,6 +159,9 @@ await step('Live Browser keeps one tab per project', async () => {
   assert.equal(a2.activeTabId, a1.activeTabId);
   assert.equal(a2.targetUrl, a1.targetUrl);
   assert.deepEqual(a2.tabs.map((t) => t.id), [a1.activeTabId]);
+  const removed = await api('DELETE', `/api/projects/${b.id}`);
+  assert.equal(removed.status, 200, removed.text);
+  assert.equal((await viewport(project.id)).activeTabId, a1.activeTabId);
 });
 
 await step('ticket changes are pushed over /api/events', async () => {

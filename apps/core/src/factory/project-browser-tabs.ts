@@ -19,7 +19,10 @@ export class ProjectBrowserTabs {
 
   constructor(private readonly daemon: (opts?: { start?: boolean }) => Promise<RunnerBrowserDaemon | null>) {}
 
-  /** The project's tab (opened at `defaultUrl` on first use, re-found or reopened when gone), or the agent's while following. Null when the runner browser is unavailable or does not answer. */
+  /**
+   * The project's tab (opened at `defaultUrl` on first use, re-found or reopened when gone), or the
+   * agent's while following. Null when the runner browser is unavailable or does not answer.
+   */
   state(projectId: string, opts: BrowserTabOptions): Promise<BrowserViewportSnapshot | null> {
     return this.lock.run(projectId, async () => {
       const d = await this.daemon();
@@ -32,7 +35,10 @@ export class ProjectBrowserTabs {
     });
   }
 
-  /** Performs a Live Browser action on the project's tab (or the followed agent tab). Null when the runner browser is unavailable; daemon errors propagate. */
+  /**
+   * Performs a Live Browser action on the project's tab (or the followed agent tab). Null when the
+   * runner browser is unavailable; daemon errors propagate.
+   */
   action(
     projectId: string,
     body: BrowserActionBody,
