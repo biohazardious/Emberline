@@ -84,9 +84,18 @@ export async function probeMerge(
     let stdout: string;
     try {
       stdout = (
-        await execGitFile(
-          ['-C', mainWorkspacePath, 'merge-tree', '--write-tree', '--name-only', '--messages', mainHead, branchHead],
-        )
+        await execGitFile([
+          '-C',
+          mainWorkspacePath,
+          '-c',
+          'core.quotePath=false',
+          'merge-tree',
+          '--write-tree',
+          '--name-only',
+          '--messages',
+          mainHead,
+          branchHead,
+        ])
       ).stdout;
     } catch (err) {
       // Exit code 1 means conflicts; the result is on stdout.
@@ -111,22 +120,40 @@ export function ticketKeyFromSubject(subject: string): string | null {
 /**
  * Which other ticket added the files that now conflict add/add? Returns the key that added the
  * most of them (and how many), or null. Whether that ticket is done is the caller's check.
+ * The adding commit is read along main's first parents, so a ticket merged as `Merge KEY (…)` is
+ * credited even when the agent's own commit names no key. `complete` is false when a lookup failed.
  */
-export async function findSuperseding(
+async function readSuperseding(
   mainWorkspacePath: string,
   mainBranch: string,
   conflicts: ConflictFile[],
   ownKey: string | null,
-): Promise<Superseding | null> {
+): Promise<{ found: Superseding | null; complete: boolean }> {
   const counts = new Map<string, number>();
+  let complete = true;
   for (const file of conflicts) {
     if (file.kind !== 'add/add') continue;
     let out: string;
     try {
       out = (
-        await execGitFile(['-C', mainWorkspacePath, 'log', '--diff-filter=A', '--format=%s', mainBranch, '--', file.path])
+        await execGitFile([
+          '-C',
+          mainWorkspacePath,
+          '-c',
+          'core.quotePath=false',
+          'log',
+          '--first-parent',
+          '--diff-merges=first-parent',
+          '--diff-filter=A',
+          '--no-patch',
+          '--format=%s',
+          mainBranch,
+          '--',
+          file.path,
+        ])
       ).stdout;
     } catch {
+      complete = false;
       continue;
     }
     const keys = new Set<string>();
@@ -138,12 +165,22 @@ export async function findSuperseding(
   }
   let best: Superseding | null = null;
   for (const [key, files] of counts) if (!best || files > best.files) best = { key, files };
-  return best;
+  return { found: best, complete };
+}
+
+/** {@link readSuperseding} without the completeness flag. */
+export async function findSuperseding(
+  mainWorkspacePath: string,
+  mainBranch: string,
+  conflicts: ConflictFile[],
+  ownKey: string | null,
+): Promise<Superseding | null> {
+  return (await readSuperseding(mainWorkspacePath, mainBranch, conflicts, ownKey)).found;
 }
 
 /**
  * {@link findSuperseding} for a probe's conflicts, read at the probe's main head and cached, so
- * repeated reads of the same heads run no `git log`.
+ * repeated reads of the same heads run no `git log` (a read with a failed lookup is not cached).
  */
 export async function supersedingFor(
   mainWorkspacePath: string,
@@ -157,7 +194,13 @@ export async function supersedingFor(
   if (added.length === 0) return null;
   const key = JSON.stringify([mainWorkspacePath, probe.mainHead, ownKey, added]);
   if (supersedingCache.has(key)) return supersedingCache.get(key) ?? null;
-  const found = await findSuperseding(mainWorkspacePath, probe.mainHead, probe.conflicts, ownKey);
-  remember(supersedingCache, key, found);
+  const { found, complete } = await readSuperseding(
+    mainWorkspacePath,
+    probe.mainHead,
+    probe.conflicts,
+    ownKey,
+  );
+  // A failed lookup is transient: cache only a complete answer.
+  if (complete) remember(supersedingCache, key, found);
   return found;
 }

@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as gitExec from '../git-exec.js';
-import { findSuperseding, parseMergeTree, probeMerge, ticketKeyFromSubject } from './merge-probe.js';
+import {
+  findSuperseding,
+  parseMergeTree,
+  probeMerge,
+  supersedingFor,
+  ticketKeyFromSubject,
+} from './merge-probe.js';
 
 vi.mock('../git-exec.js', async (orig) => {
   const actual = await orig<typeof gitExec>();
@@ -13,7 +19,10 @@ vi.mock('../git-exec.js', async (orig) => {
 
 let dir: string;
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
 const write = (name: string, body: string) => writeFileSync(path.join(dir, name), body);
 
 beforeEach(() => {
@@ -98,6 +107,15 @@ describe('probeMerge', () => {
     ]);
   });
 
+  it('reports non-ASCII paths verbatim, not octal-quoted', async () => {
+    branchAdding('b', 'EL-2', ['çiçek.ts']);
+    write('çiçek.ts', 'main\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'main adds it too');
+    const res = await probeMerge(dir, 'main', 'b');
+    expect(res.ok && res.conflicts).toEqual([{ path: 'çiçek.ts', kind: 'add/add' }]);
+  });
+
   it('fails softly when the branch is missing', async () => {
     const res = await probeMerge(dir, 'main', 'nope');
     expect(res.ok).toBe(false);
@@ -136,5 +154,49 @@ describe('findSuperseding', () => {
     mergeInto('el-11', 'EL-11');
     expect(await findSuperseding(dir, 'main', conflicts, 'EL-11')).toBeNull();
     expect(await findSuperseding(dir, 'main', [{ path: 'a.ts', kind: 'content' }], null)).toBeNull();
+  });
+
+  it('credits the merge commit when the agent committed without a ticket key', async () => {
+    git(dir, 'checkout', '-q', '-b', 'el-10', 'main');
+    for (const f of files) write(f, 'el-10\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'Add the game board');
+    git(dir, 'checkout', '-q', 'main');
+    mergeInto('el-10', 'EL-10');
+    expect(await findSuperseding(dir, 'main', conflicts, 'EL-11')).toEqual({ key: 'EL-10', files: 3 });
+  });
+
+  it('still reads feat(KEY) commits made directly on main', async () => {
+    for (const f of files) write(f, 'direct\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'feat(EL-10): factory run output');
+    expect(await findSuperseding(dir, 'main', conflicts, 'EL-11')).toEqual({ key: 'EL-10', files: 3 });
+  });
+
+  it('finds the adder of a non-ASCII path', async () => {
+    branchAdding('el-10', 'EL-10', ['çiçek.ts']);
+    mergeInto('el-10', 'EL-10');
+    const res = await findSuperseding(dir, 'main', [{ path: 'çiçek.ts', kind: 'add/add' }], 'EL-11');
+    expect(res).toEqual({ key: 'EL-10', files: 1 });
+  });
+});
+
+describe('supersedingFor', () => {
+  const files = ['a.ts', 'b.ts'];
+
+  it('does not cache a result read while a git log failed', async () => {
+    branchAdding('el-10', 'EL-10', files);
+    mergeInto('el-10', 'EL-10');
+    const mainHead = git(dir, 'rev-parse', 'main');
+    const probe = {
+      ok: true as const,
+      mainHead,
+      branchHead: mainHead,
+      conflicts: files.map((p) => ({ path: p, kind: 'add/add' })),
+    };
+    const spy = vi.mocked(gitExec.execGitFile);
+    spy.mockRejectedValueOnce(new Error('runner busy')).mockRejectedValueOnce(new Error('runner busy'));
+    expect(await supersedingFor(dir, probe, 'EL-11')).toBeNull();
+    expect(await supersedingFor(dir, probe, 'EL-11')).toEqual({ key: 'EL-10', files: 2 });
   });
 });
