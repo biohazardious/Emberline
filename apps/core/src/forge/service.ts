@@ -18,6 +18,8 @@ import { projects, runEvents, runs, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
+import { ForgeAccountsService } from './accounts.js';
+import { hostOf, sameForgeServer } from './hosts.js';
 import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
 
 const SETTINGS_KEY = 'forge.config';
@@ -128,37 +130,6 @@ export function parseForgeRemote(
   };
 }
 
-function hostOf(url: string | null | undefined): string | null {
-  if (!url?.trim()) return null;
-  const trimmed = url.trim();
-  try {
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
-      const parsed = new URL(trimmed);
-      // An ssh port never serves the API: `ssh://git@host:2222/…` trusts `host`.
-      return (parsed.protocol === 'ssh:' ? parsed.hostname : parsed.host).toLowerCase();
-    }
-  } catch {
-    return null;
-  }
-  // SCP-style SSH: git@host:owner/repo.git
-  return /^(?:[^@/]+@)?([^:/]+):/.exec(trimmed)?.[1]?.toLowerCase() ?? null;
-}
-
-/**
- * Whether two remotes of a repository name the same server. The port counts only when both are
- * http(s) URLs: an ssh remote on a custom port (`ssh://git@host:2222/…`, common for Gitea) and an
- * https URL on the same hostname are the same server.
- */
-function sameForgeServer(a: string, b: string): boolean {
-  const isHttp = (url: string) => /^https?:\/\//i.test(url.trim());
-  const hostA = hostOf(a);
-  const hostB = hostOf(b);
-  if (!hostA || !hostB) return false;
-  if (isHttp(a) && isHttp(b)) return hostA === hostB;
-  const hostname = (host: string) => host.replace(/:\d+$/, '');
-  return hostname(hostA) === hostname(hostB);
-}
-
 /**
  * The remote URL comes from the worktree's git config, which the agent can rewrite. The token is
  * only sent to the public GitHub API, the API URL the user configured, the host of the repo URL
@@ -203,6 +174,8 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   private readonly fetch: FetchLike;
   /** Issue reads and write-back, sharing this service's fetch. */
   readonly issues: IssuesClient;
+  /** Forge accounts (one per server host), sharing this service's fetch. */
+  readonly accounts: ForgeAccountsService;
 
   constructor(
     private readonly db: Db,
@@ -212,6 +185,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     super();
     this.fetch = options.fetch ?? ((url, init) => globalThis.fetch(url, init));
     this.issues = new IssuesClient({ fetch: this.fetch });
+    this.accounts = new ForgeAccountsService(db, this.fetch);
   }
 
   private readStored(): StoredForgeConfig {

@@ -9,6 +9,26 @@ export const settings = sqliteTable('settings', {
 });
 
 /**
+ * Forge accounts: one per server host. The token is stored like the other secrets (plaintext in
+ * the core DB) and never returned by the API.
+ */
+export const forgeAccounts = sqliteTable(
+  'forge_accounts',
+  {
+    id: text('id').primaryKey(),
+    provider: text('provider', { enum: ['github', 'gitlab', 'gitea'] }).notNull(),
+    /** Web origin (+ optional sub-path), normalised: `https://github.com`. */
+    serverUrl: text('server_url').notNull(),
+    apiUrl: text('api_url').notNull(),
+    username: text('username'),
+    token: text('token').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [uniqueIndex('forge_accounts_server_url_idx').on(t.serverUrl)],
+);
+
+/**
  * One row per paged attention occurrence (`Run.attention.occurrence`): a logged occurrence is never
  * paged again, across restarts too. Rows older than 30 days are pruned daily.
  */

@@ -20,6 +20,7 @@ import { registerCronRoutes } from './routes/cron.js';
 import { registerDockerRoutes } from './routes/docker.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerForgeRoutes } from './routes/forge.js';
+import { registerForgeAccountRoutes } from './routes/forge-accounts.js';
 import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
@@ -156,6 +157,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
+  registerForgeAccountRoutes(app, forge.accounts);
   registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);

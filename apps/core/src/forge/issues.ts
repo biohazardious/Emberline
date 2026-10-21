@@ -134,7 +134,7 @@ export interface IssuesClientOptions {
   now?: () => number;
 }
 
-function authHeaders(provider: ForgeProvider, token: string): Record<string, string> {
+export function authHeaders(provider: ForgeProvider, token: string): Record<string, string> {
   if (provider === 'gitlab') return { 'PRIVATE-TOKEN': token, 'User-Agent': 'Emberline-Core' };
   if (provider === 'gitea') return { Authorization: `token ${token}`, 'User-Agent': 'Emberline-Core' };
   return { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'User-Agent': 'Emberline-Core' };

@@ -1,11 +1,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CSRF_HEADER } from '@emberline/protocol';
+import { CSRF_HEADER, type ForgeProvider } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { type CoreConfig, DEFAULT_DOCKER_CERT_PATH, DEFAULT_PREVIEW_PORTS } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
 import { PostMergeJobs } from './factory/post-merge.js';
+import { deriveApiUrl, insertAccount, normalizeServerUrl } from './forge/account-store.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import type { FetchLike } from './forge/issues.js';
 import { ForgeService } from './forge/service.js';
@@ -133,4 +134,20 @@ export async function setupAndLogin(app: FastifyInstance, password = 'correct ho
   const cookie = res.cookies.find((c) => c.name === 'emberline_session');
   if (!cookie) throw new Error('no session cookie');
   return `${cookie.name}=${cookie.value}`;
+}
+
+/** A forge account without a forge call (tests); `apiUrl` defaults to the derived one. */
+export function seedForgeAccount(
+  db: OpenedDb['db'],
+  input: { provider: ForgeProvider; serverUrl: string; token: string; username?: string | null; apiUrl?: string },
+): string {
+  const serverUrl = normalizeServerUrl(input.serverUrl);
+  if (!serverUrl) throw new Error(`bad server URL ${input.serverUrl}`);
+  return insertAccount(db, {
+    provider: input.provider,
+    serverUrl,
+    apiUrl: input.apiUrl ?? deriveApiUrl(input.provider, serverUrl),
+    username: input.username ?? null,
+    token: input.token,
+  }).id;
 }
