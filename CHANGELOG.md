@@ -4,7 +4,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
-## [0.3.4] - 2026-10-20
+## [0.3.4] - 2026-10-21
 
 ### Fixed
 
