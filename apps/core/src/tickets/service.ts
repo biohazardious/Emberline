@@ -937,8 +937,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // A run an earlier pass left held stays a factory run: its next stop lifts the hold even when
     // the chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
-    // So does one whose review hold a person lifted since, until another outcome decides it, and a
-    // successor that took over a held run (`continued after a hold`): it carries that run's work on.
+    // So does one whose review hold a person lifted since, until another outcome decides it, and any
+    // successor of a held run (a `continued after a hold` one or any other handoff): it carries that
+    // run's work on.
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
