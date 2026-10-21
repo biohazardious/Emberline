@@ -18,6 +18,7 @@ import {
   type FactorySettings,
   type ForgeIssue,
   type ForgeProvider,
+  normalizeTicketRef,
   type Run,
   type StartTicketBody,
   StartTicketBody as StartTicketBodySchema,
@@ -52,7 +53,7 @@ import {
   type TicketsFileHooks,
 } from '../factory/service.js';
 import { mapIssueToTicket } from './issue-mapping.js';
-import { type Edge, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
+import { type Edge, normalizeTicketTitle, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
 import { clipText } from '../text/control-chars.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -890,7 +891,26 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       });
     } else if (ingested && ingested.tickets.length > 0) {
       const created: { draft: (typeof ingested.tickets)[number]; ticket: Ticket }[] = [];
+      // Open tickets by normalized title; a done ticket with the same title does not block a new one.
+      const byTitle = new Map<string, string>();
+      for (const r of this.db
+        .select({ key: tickets.key, title: tickets.title, status: tickets.status })
+        .from(tickets)
+        .where(eq(tickets.projectId, run.projectId))
+        .all()) {
+        const k = normalizeTicketTitle(r.title);
+        if (r.status !== 'done' && !byTitle.has(k)) byTitle.set(k, r.key);
+      }
+      const refKey = (ref: string) => normalizeTicketRef(ref) ?? ref.toLowerCase();
+      const skippedRefs = new Map<string, string>(); // skipped draft's ref -> key of the ticket that stands in for it
       for (const draft of ingested.tickets) {
+        const titleKey = normalizeTicketTitle(draft.title);
+        const existing = byTitle.get(titleKey);
+        if (existing) {
+          this.runs.note(run.id, 'ticket_draft_duplicate', { title: draft.title.slice(0, 200), existing });
+          if (draft.ref) skippedRefs.set(refKey(draft.ref), existing);
+          continue;
+        }
         let body = draft.body ?? '';
         if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
           const agentStr = draft.preferredAgent ?? 'claude';
@@ -912,6 +932,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             draftDepth,
           );
           created.push({ draft, ticket });
+          byTitle.set(titleKey, ticket.key);
         } catch (error) {
           // The drafts file is already consumed: skip the bad draft, keep the others.
           this.runs.note(run.id, 'ticket_draft_rejected', {
@@ -925,7 +946,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (created.length > 0) {
         this.runs.note(run.id, 'tickets_imported', { count: created.length, tickets: created.map((c) => c.ticket.key) });
       }
-      this.applyDraftDependencies(run.id, run.projectId, created);
+      const repointed = created.map((c) => ({
+        ...c,
+        draft: {
+          ...c.draft,
+          ...(c.draft.dependsOn ? { dependsOn: c.draft.dependsOn.map((d) => skippedRefs.get(refKey(d)) ?? d) } : {}),
+        },
+      }));
+      this.applyDraftDependencies(run.id, run.projectId, repointed);
       if (ingested.autoDispatch) {
         this.chainOn(run.projectId);
       }
@@ -1481,10 +1509,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (runId) this.runs.note(runId, type, payload);
     };
     try {
-      const batchIds = new Set(created.map((c) => c.ticket.id));
+      // Includes the batch's own tickets: a skipped draft's dependents point at an earlier draft's key.
       const projectKeys = new Map<string, string>();
       for (const r of this.db.select({ id: tickets.id, key: tickets.key }).from(tickets).where(eq(tickets.projectId, projectId)).all()) {
-        if (!batchIds.has(r.id)) projectKeys.set(r.key.toUpperCase(), r.id);
+        projectKeys.set(r.key.toUpperCase(), r.id);
       }
       const { edges, dropped } = resolveBatchDependencies(
         created.map(({ draft, ticket }) => ({

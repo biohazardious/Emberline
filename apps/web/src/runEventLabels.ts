@@ -17,6 +17,7 @@ export const EVENT_LABEL: Record<string, string> = {
   ticket_removed: 'ticket deleted',
   tickets_file_duplicate: 'tickets file already imported',
   tickets_imported: 'tickets imported',
+  ticket_draft_duplicate: 'duplicate ticket draft skipped',
   tickets_file_left_to_factory: 'Ticket plan left to the [Factory] ticket',
   conflict_resolution_requested: 'resolving merge conflict',
   conflict_resolution_failed: 'conflict resolution failed',

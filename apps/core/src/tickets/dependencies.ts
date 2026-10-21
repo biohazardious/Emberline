@@ -67,6 +67,11 @@ export function defaultTierEdges(batch: Pick<BatchTicket, 'id' | 'persona'>[]): 
   return edges;
 }
 
+/** Trimmed, lowercased, whitespace collapsed, trailing `.`/`:` removed: the key two drafts or tickets are "the same title" by. */
+export function normalizeTicketTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.:]+$/, '').trimEnd();
+}
+
 /**
  * Turns a batch's declared refs/keys into edges. Unknown and self references and edges that would
  * close a cycle (also through `existingEdges`) are dropped, as are repeated refs (the first wins);

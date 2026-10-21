@@ -277,3 +277,67 @@ describe('wizard projects have one planner', { timeout: 30_000 }, () => {
     await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
   });
 });
+
+describe('same-title drafts are skipped', { timeout: 30_000 }, () => {
+  const rawDrafts = (tickets: object[]) => JSON.stringify({ autoDispatch: false, tickets });
+
+  async function runWith(projectId: string, tickets: object[]) {
+    const run = await startTicket(projectId, 'Plan');
+    writeTickets(run.worktreePath, rawDrafts(tickets));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    await finishTurn(run);
+    return run;
+  }
+  const listTickets = async (projectId: string) => (await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[];
+
+  it('a draft with the title of an open ticket is skipped; its dependents depend on that ticket', async () => {
+    const project = await createProject();
+    const open = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'Core: booking store', status: 'ready' })).json() as Ticket;
+    const run = await runWith(project.id, [
+      { ref: 'core', title: '  core:   Booking store.' },
+      { ref: 'ui', title: 'UI: page', dependsOn: ['core'] },
+    ]);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
+    expect((await eventsOf(run)).find((e) => e.type === 'ticket_draft_duplicate')?.payload).toEqual({
+      title: 'core:   Booking store.',
+      existing: open.key,
+    });
+    const all = await listTickets(project.id);
+    expect(all.filter((x) => x.title.toLowerCase().includes('booking store'))).toHaveLength(1);
+    expect(all.find((x) => x.title === 'UI: page')?.dependsOn).toEqual([open.id]);
+  });
+
+  it('a done ticket with the same title does not block the draft', async () => {
+    const project = await createProject();
+    const old = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'Core: store', status: 'ready' })).json() as Ticket;
+    await api('PATCH', `/api/tickets/${old.id}`, { status: 'done' });
+    const run = await runWith(project.id, [{ title: 'Core: store' }]);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
+    expect(await eventTypes(run)).not.toContain('ticket_draft_duplicate');
+    expect((await titles(project.id)).filter((x) => x === 'Core: store')).toHaveLength(2);
+  });
+
+  it('a repeated title within one file keeps the first; dependents of the second depend on the first', async () => {
+    const project = await createProject();
+    const run = await runWith(project.id, [
+      { ref: 'a', title: 'Store' },
+      { ref: 'b', title: 'store' },
+      { ref: 'c', title: 'Page', dependsOn: ['b'] },
+    ]);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
+    const all = await listTickets(project.id);
+    const store = all.find((x) => x.title === 'Store')!;
+    expect(all.map((x) => x.title).filter((x) => x === 'Store' || x === 'store' || x === 'Page').sort()).toEqual(['Page', 'Store']);
+    expect(all.find((x) => x.title === 'Page')?.dependsOn).toEqual([store.id]);
+    const dups = (await eventsOf(run)).filter((e) => e.type === 'ticket_draft_duplicate');
+    expect(dups.map((e) => e.payload)).toEqual([{ title: 'store', existing: store.key }]);
+  });
+
+  it('when every draft is skipped there is no tickets_imported event', async () => {
+    const project = await createProject();
+    await api('POST', `/api/projects/${project.id}/tickets`, { title: 'Core: store', status: 'ready' });
+    const run = await runWith(project.id, [{ title: 'core: store' }]);
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('ticket_draft_duplicate');
+    expect(await eventTypes(run)).not.toContain('tickets_imported');
+  });
+});

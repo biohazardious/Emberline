@@ -1,6 +1,6 @@
 import { AgentTicketDraft, UpdateTicketBody } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { defaultTierEdges, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
+import { defaultTierEdges, normalizeTicketTitle, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
 
 const t = (id: string, persona: string, ref?: string, dependsOn?: string[]) => ({ id, key: id.toUpperCase(), persona: persona as never, ref, dependsOn });
 const keys = new Map([['MPG-38', 'old38']]);
@@ -142,5 +142,13 @@ describe('dependency protocol fields', () => {
   it('accepts dependsOn on ticket updates', () => {
     expect(UpdateTicketBody.parse({ dependsOn: ['MPG-1'] }).dependsOn).toEqual(['MPG-1']);
     expect(UpdateTicketBody.safeParse({ dependsOn: Array.from({ length: 21 }, (_, i) => `k${i}`) }).success).toBe(false);
+  });
+});
+
+describe('normalizeTicketTitle', () => {
+  it('trims, lowercases, collapses whitespace and drops trailing dots and colons', () => {
+    expect(normalizeTicketTitle('  Core:  Booking   store. ')).toBe('core: booking store');
+    expect(normalizeTicketTitle('Setup:')).toBe('setup');
+    expect(normalizeTicketTitle('A.:')).toBe('a');
   });
 });
