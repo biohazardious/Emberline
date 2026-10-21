@@ -253,6 +253,7 @@ describe('RecoveryService.deliveryFor', () => {
 
   it('session for a live run and for a resumable one', () => {
     mkdirSync(path.join(t.dir, '.worktrees', 'live'), { recursive: true });
+    mkdirSync(path.join(t.dir, '.worktrees', 'resumable'), { recursive: true });
     seedRun({ id: 'live', ended: false });
     seedRun({ id: 'resumable' });
     expect(delivery('live')).toBe('session');
@@ -311,6 +312,12 @@ describe('RecoveryService.deliveryFor', () => {
 
   it('none when the worktree is gone', () => {
     seedRun({ id: 'gone', stops: [legacyStop] });
+    expect(delivery('gone')).toBe('none');
+  });
+
+  it('none for a resumable run whose worktree is gone', () => {
+    seedRun({ id: 'gone' });
+    expect(t.runs.getRun('gone').resumable).toBe(true);
     expect(delivery('gone')).toBe('none');
   });
 
@@ -444,6 +451,14 @@ describe('delivering a recovery prompt', () => {
       const res = await recover('gone', 'go on');
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'worktree_missing' });
+    });
+
+    it('a resumable run whose worktree is gone: 409 worktree_missing, nothing started', async () => {
+      seedRun({ id: 'gone' });
+      const res = await recover('gone', 'go on');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'worktree_missing' });
+      expect(t.runs.getRun('gone').state).toBe('done');
     });
 
     it('a blocked run gets the answer the person wrote', async () => {

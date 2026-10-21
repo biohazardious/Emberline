@@ -98,9 +98,11 @@ export class RecoveryService {
   /**
    * How a prompt reaches an agent: its own session while it is live or resumable; a successor on
    * the same worktree for a held run whose only cancel was the pipeline's finished-step stop (from
-   * before held runs stayed resumable); otherwise not at all. A person's stop stays final.
+   * before held runs stayed resumable); otherwise (also without its worktree) not at all. A person's
+   * stop stays final.
    */
   deliveryFor(run: Run): RunRecovery['delivery'] {
+    if (!run.worktreePath || !existsSync(run.worktreePath)) return 'none';
     if ((!run.endedAt && !run.cancelled) || run.resumable) return 'session';
     return this.runs.continuesInSuccessor(run) ? 'successor' : 'none';
   }
