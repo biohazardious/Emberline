@@ -22,7 +22,6 @@ import {
   mainComposeProjectName,
   mainPreviewComposeProjectName,
   previewComposeProjectName,
-  withHint,
 } from './docker/engine.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -36,14 +35,6 @@ const dockerEnvLine = (project: string) => `tcp://docker:2376|1|${CERTS}|${proje
 const NO_DOCKER = 'unset|unset|unset|unset';
 /** What a client of the engine needs: its address and Emberline's client certificate (mTLS). */
 const CLIENT_ENV = { DOCKER_HOST: 'tcp://docker:2376', DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: CERTS };
-
-describe('withHint', () => {
-  it('joins with one full stop, also when the text already ends in punctuation', () => {
-    expect(withHint('boom', 'hint.')).toBe('boom. hint.');
-    expect(withHint('boom. ', 'hint.')).toBe('boom. hint.');
-    expect(withHint('boom...', 'hint.')).toBe('boom. hint.');
-  });
-});
 
 describe('config: Docker host and preview port ranges', () => {
   it('reads EMBERLINE_DOCKER_HOST; blank or unset is off', () => {

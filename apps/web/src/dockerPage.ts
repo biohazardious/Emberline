@@ -7,6 +7,7 @@ import type {
   DockerProjectOwner,
   DockerPublishedPort,
 } from '@emberline/protocol';
+import { withHint } from '@emberline/protocol';
 import { ApiRequestError, errorMessage } from './api';
 
 /** The Docker page's groups, in display order. */
@@ -176,7 +177,7 @@ export function dockerErrorDetails(error: unknown): { message: string; output: s
   if (error instanceof ApiRequestError) {
     const hint = typeof error.data.hint === 'string' ? error.data.hint : null;
     const output = typeof error.data.output === 'string' && error.data.output ? error.data.output : null;
-    return { message: hint ? `${error.message.replace(/[\s.!?;:,]+$/, '')}. ${hint}` : error.message, output };
+    return { message: hint ? withHint(error.message, hint) : error.message, output };
   }
   return { message: errorMessage(error), output: null };
 }

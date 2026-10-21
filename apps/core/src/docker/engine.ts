@@ -13,19 +13,6 @@ import { type CommandExecutor, execCommand } from '../command-exec.js';
 import { DEFAULT_DOCKER_CERT_PATH } from '../config.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
-/** What the user reads when the engine is switched off. */
-export const DOCKER_ENGINE_OFF_TEXT =
-  'The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`). Remove that line and restart to turn it on.';
-
-/** Added to an unreachable engine: a host that cannot run it can switch it off. */
-export const DOCKER_ENGINE_UNREACHABLE_HINT =
-  "If this host can't run it (privileged containers, overlay), set `EMBERLINE_DOCKER_ENGINE=0`.";
-
-/** `text. hint`, without a doubled full stop when `text` already ends in punctuation or space. */
-export function withHint(text: string, hint: string): string {
-  return `${text.replace(/[\s.!?;:,]+$/, '')}. ${hint}`;
-}
-
 export const DOCKER_PROBE_INTERVAL_MS = 60_000;
 /** A spawn right after boot waits this long at most for the first probe. */
 export const DOCKER_READY_TIMEOUT_MS = 10_000;

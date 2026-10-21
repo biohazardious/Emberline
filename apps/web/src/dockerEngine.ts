@@ -1,7 +1,4 @@
-import type { DockerEngineStatus } from '@emberline/protocol';
-
-/** Shown with an unreachable engine: a host that cannot run it can switch it off. */
-const UNREACHABLE_HINT = "If this host can't run it (privileged containers, overlay), set EMBERLINE_DOCKER_ENGINE=0.";
+import { DOCKER_ENGINE_UNREACHABLE_HINT, type DockerEngineStatus, withHint } from '@emberline/protocol';
 
 /** The Dashboard's quiet line about the Docker engine sidecar; null when core does not report it. */
 export function dockerEngineLine(docker: DockerEngineStatus | undefined): string | null {
@@ -9,6 +6,5 @@ export function dockerEngineLine(docker: DockerEngineStatus | undefined): string
   if (!docker.enabled) return 'Docker engine: off';
   if (!docker.checked) return 'Docker engine: checking…';
   if (docker.available) return `Docker engine: on (${docker.version ?? 'unknown version'})`;
-  const why = docker.error ? ` — ${docker.error.replace(/[\s.!?;:,]+$/, '')}` : '';
-  return `Docker engine: unreachable${why}. ${UNREACHABLE_HINT}`;
+  return withHint(`Docker engine: unreachable${docker.error ? ` — ${docker.error}` : ''}`, DOCKER_ENGINE_UNREACHABLE_HINT);
 }

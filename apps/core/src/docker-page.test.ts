@@ -8,6 +8,8 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   COMPOSE_SERVICE_NAME,
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
   DockerCleanupResponse,
   DockerOverview,
   DockerProjectActionResponse,
@@ -384,7 +386,7 @@ describe('engine off', () => {
     ] as const) {
       const res = await api(method, url);
       expect(res.statusCode, url).toBe(409);
-      expect(res.json().hint, url).toContain('EMBERLINE_DOCKER_ENGINE=0');
+      expect(res.json().hint, url).toBe(DOCKER_ENGINE_OFF_TEXT);
     }
     expect(engine.calls).toEqual([]);
   });
@@ -410,7 +412,7 @@ describe('engine off', () => {
       expect(res.statusCode, url).toBe(409);
       // Enabled but not answering: the message offers turning the engine off, no turn-on hint.
       expect(res.json().message, url).toContain('not reachable');
-      expect(res.json().message, url).toContain("set `EMBERLINE_DOCKER_ENGINE=0`");
+      expect(res.json().message, url).toContain(DOCKER_ENGINE_UNREACHABLE_HINT);
       expect(res.json().hint, url).toBeUndefined();
     }
     expect(engine.calls).toEqual([]);

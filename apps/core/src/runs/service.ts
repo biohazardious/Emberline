@@ -64,6 +64,9 @@ import {
   type TicketCompletion,
   isComposeService,
   type WorktreeComposeService,
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
+  withHint,
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
@@ -83,13 +86,10 @@ import {
 } from '../docker/compose-preview.js';
 import {
   composeProjectName,
-  DOCKER_ENGINE_OFF_TEXT,
-  DOCKER_ENGINE_UNREACHABLE_HINT,
   DOCKER_PROMPT_PARAGRAPH,
   DockerEngine,
   mainComposeProjectName,
   previewComposeProjectName,
-  withHint,
 } from '../docker/engine.js';
 import {
   buildDockerProjects,

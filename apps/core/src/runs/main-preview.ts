@@ -8,7 +8,14 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { isComposeService, type MainPreviewStatus, type WorktreeComposeService } from '@emberline/protocol';
+import {
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
+  isComposeService,
+  type MainPreviewStatus,
+  type WorktreeComposeService,
+  withHint,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { cancelCommand } from '../command-exec.js';
@@ -26,11 +33,8 @@ import {
   settlesWithin,
 } from '../docker/compose-preview.js';
 import {
-  DOCKER_ENGINE_OFF_TEXT,
-  DOCKER_ENGINE_UNREACHABLE_HINT,
   type DockerEngine,
   mainPreviewComposeProjectName,
-  withHint,
 } from '../docker/engine.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';

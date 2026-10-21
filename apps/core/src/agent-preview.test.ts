@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { AgentPreviewResponse, type Run, type RunDetail } from '@emberline/protocol';
+import { AgentPreviewResponse, DOCKER_ENGINE_OFF_TEXT, type Run, type RunDetail } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -371,7 +371,7 @@ describe('the preview tool endpoint: unavailable', () => {
     writeDemo(run.worktreePath, 'RUN');
     const answer = await previewOk(run.id);
     expect(answer.status).toBe('unavailable');
-    expect(answer.error).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
+    expect(answer.error).toContain(DOCKER_ENGINE_OFF_TEXT);
     expect(answer.kind).toBe('static');
     expect(demoTarget(answer.url!)).toEqual({ projectId: p.id, targetId: run.id });
     expect(engine.calls).toEqual([]);

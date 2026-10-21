@@ -1,8 +1,9 @@
-import type {
-  DockerCleanupState,
-  DockerContainer,
-  DockerProject,
-  DockerProjectOwner,
+import {
+  DOCKER_ENGINE_OFF_TEXT,
+  type DockerCleanupState,
+  type DockerContainer,
+  type DockerProject,
+  type DockerProjectOwner,
 } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import { ApiRequestError } from './api';
@@ -299,7 +300,7 @@ describe('cleanupLines', () => {
 
 describe('dockerErrorDetails', () => {
   it('adds the hint of an engine-off answer', () => {
-    const hint = 'The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`). Remove that line and restart to turn it on.';
+    const hint = DOCKER_ENGINE_OFF_TEXT;
     const e = new ApiRequestError(409, 'docker_off', 'The Docker engine is off', {
       hint,
     });
@@ -307,6 +308,11 @@ describe('dockerErrorDetails', () => {
       message: `The Docker engine is off. ${hint}`,
       output: null,
     });
+  });
+
+  it('puts the hint in its own sentence after a message that ends in a full stop', () => {
+    const e = new ApiRequestError(409, 'docker_off', 'The Docker engine is off.', { hint: DOCKER_ENGINE_OFF_TEXT });
+    expect(dockerErrorDetails(e).message).toBe(`The Docker engine is off. ${DOCKER_ENGINE_OFF_TEXT}`);
   });
 
   it('keeps the output of a failed down for display as text', () => {

@@ -1,11 +1,24 @@
 /**
- * API contracts: the Docker page. What Emberline runs in the opt-in Docker engine sidecar (only
+ * API contracts: the Docker page. What Emberline runs in the Docker engine sidecar (only
  * the compose projects whose names Emberline makes), its disk use and cleanup state, and the
  * actions a person takes on a project.
  */
 import { z } from 'zod';
 import { DockerEngineStatus } from './common.js';
 import { RunState } from './runs.js';
+
+/** What the user reads when the engine is switched off (core's 409 hint, the Docker page). */
+export const DOCKER_ENGINE_OFF_TEXT =
+  'The Docker engine is turned off (`EMBERLINE_DOCKER_ENGINE=0` in `.env`). Remove that line and restart to turn it on.';
+
+/** Added to an unreachable engine: a host that cannot run it can switch it off. */
+export const DOCKER_ENGINE_UNREACHABLE_HINT =
+  "If this host can't run it (privileged containers, overlay), set `EMBERLINE_DOCKER_ENGINE=0`.";
+
+/** `text. hint`, without a doubled full stop when `text` already ends in punctuation or space. */
+export function withHint(text: string, hint: string): string {
+  return `${text.replace(/[\s.!?;:,]+$/, '')}. ${hint}`;
+}
 
 export const DockerOwnerKind = z.enum(['agent', 'preview', 'main', 'orphan']);
 export type DockerOwnerKind = z.infer<typeof DockerOwnerKind>;

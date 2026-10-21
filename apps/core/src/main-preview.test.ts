@@ -6,7 +6,15 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { BrowserUrlResponse, DockerOverview, MainPreviewStatus, type Run, type RunPreviewStatus } from '@emberline/protocol';
+import {
+  BrowserUrlResponse,
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
+  DockerOverview,
+  MainPreviewStatus,
+  type Run,
+  type RunPreviewStatus,
+} from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -253,10 +261,10 @@ describe('without a container preview for main (Review Focus 5)', () => {
     const p = await createProject();
     const status = await mainPreview(p.id);
     expect(status).toMatchObject({ runId: null, targetId: 'main', status: 'stopped', kind: 'compose', port: null, url: null });
-    expect(status.unavailable).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
+    expect(status.unavailable).toContain(DOCKER_ENGINE_OFF_TEXT);
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
+    expect(res.json().message).toContain(DOCKER_ENGINE_OFF_TEXT);
     expect(res.json().message).not.toContain('COMPOSE_PROFILES');
     expect(engine.calls).toEqual([]);
     expect(stored(p.id)).toBeUndefined();
@@ -268,7 +276,7 @@ describe('without a container preview for main (Review Focus 5)', () => {
     const p = await createProject();
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toContain("set `EMBERLINE_DOCKER_ENGINE=0`");
+    expect(res.json().message).toContain(DOCKER_ENGINE_UNREACHABLE_HINT);
     expect(engine.calls).toEqual([]);
   });
 

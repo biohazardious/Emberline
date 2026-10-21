@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { Run, RunPreviewStatus } from '@emberline/protocol';
+import { DOCKER_ENGINE_OFF_TEXT, DOCKER_ENGINE_UNREACHABLE_HINT, type Run, type RunPreviewStatus } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -229,7 +229,7 @@ describe('compose previews (worktree.yml v2)', () => {
       expect(await preview(run)).toMatchObject({ status: 'stopped', kind: 'compose', detectedCommand: 'docker compose up web (compose.yaml, port 80)' });
       const res = await startPreview(run);
       expect(res.statusCode).toBe(409);
-      expect(res.json().message).toContain('`EMBERLINE_DOCKER_ENGINE=0` in `.env`');
+      expect(res.json().message).toContain(DOCKER_ENGINE_OFF_TEXT);
       expect(engine.calls).toEqual([]);
       expect((await preview(run)).status).toBe('stopped');
     });
@@ -241,7 +241,7 @@ describe('compose previews (worktree.yml v2)', () => {
       const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
       const res = await startPreview(run);
       expect(res.statusCode).toBe(409);
-      expect(res.json().message).toContain("set `EMBERLINE_DOCKER_ENGINE=0`");
+      expect(res.json().message).toContain(DOCKER_ENGINE_UNREACHABLE_HINT);
       expect(engine.calls).toEqual([]);
     });
 
