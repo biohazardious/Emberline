@@ -4,6 +4,26 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-21
+
+### Changed
+
+- The isolated Docker engine for agents and compose previews is on by default: `make up` and `docker compose up -d` start it without any change to `.env`. `EMBERLINE_DOCKER_ENGINE=0` in `.env` turns it off; then no engine container is created, and Emberline treats the engine as off even when `EMBERLINE_DOCKER_HOST` is still set. Where Emberline used to say "enable the Docker engine (COMPOSE_PROFILES=docker)", it now says that the engine is turned off and how to turn it on again. When the engine does not answer, the Dashboard and the Docker page add that a host which cannot run it (privileged containers, overlay) can set `EMBERLINE_DOCKER_ENGINE=0`.
+- `make up-docker` is removed: `make up` starts the engine.
+- The runner no longer receives `EMBERLINE_DOCKER_HOST`; nothing in the runner read it. Agents still get `DOCKER_HOST` from core for each run.
+
+### Upgrade notes
+
+- **Installs that never turned the engine on get it with this upgrade:** a new container, `docker`, that runs privileged (a rootless Docker-in-Docker; see "Docker engine" in the README and SECURITY.md). If you do not want it, add `EMBERLINE_DOCKER_ENGINE=0` to `.env` before you upgrade.
+- The first start pulls `docker:29.8.2-dind-rootless` (a few hundred MB) and creates two volumes: `docker-data` (the engine's images, containers and volumes) and `docker-certs` (its certificates).
+- The engine publishes the compose preview ports 4325-4349 (`EMBERLINE_PREVIEW_PORTS_DOCKER`) on `EMBERLINE_BIND`. If another program on the host uses one of them, only the engine does not start: core and the runner keep running, and the Dashboard shows the engine as unreachable. Set `EMBERLINE_PREVIEW_PORTS_DOCKER` to a free range, or turn the engine off.
+- On ZFS (TrueNAS, for example) the engine needs OpenZFS 2.2 or later. On older ZFS it keeps restarting and the Dashboard shows it as unreachable; turn it off there.
+- Once the engine answers, agents get `DOCKER_HOST` and a compose project of their own, and the new-project wizard writes a compose preview (a `version: 2` `worktree.yml`) for the Docker Compose deploy target instead of a command preview.
+- The cleanup sweeps run in the engine: every 30 minutes Emberline removes leftover `emberline-…` compose projects of runs that are gone, and once a day it deletes dangling images and build cache older than 72 hours. Compose projects with other names are never touched.
+- To turn the engine off, add `EMBERLINE_DOCKER_ENGINE=0` to `.env` and run `make up` (with the published images, `docker compose up -d`). Remove the line and run it again to turn the engine back on.
+- If you had turned the engine on before, the `COMPOSE_PROFILES=docker` and `EMBERLINE_DOCKER_HOST` lines in `.env` are not needed any more. They do no harm if they stay; you can delete them.
+- Update the whole stack, not only core: from source `git pull && make up`; with the published images, download the new `deploy/compose.yaml` (the old file keeps the engine behind its profile), then `docker compose pull && docker compose up -d`. `make upgrade-core` restarts only core, which would then look for an engine that was never started. The runner image has no changes of its own in this release, but compose recreates the runner because its settings changed (it no longer gets `EMBERLINE_DOCKER_HOST`), and that stops running agents, so upgrade when they are idle.
+
 ## [0.3.4] - 2026-10-21
 
 ### Fixed
@@ -298,7 +318,9 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/biohazardious/emberline/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/biohazardious/emberline/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/biohazardious/emberline/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/biohazardious/emberline/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/biohazardious/emberline/compare/v0.3.0...v0.3.1
