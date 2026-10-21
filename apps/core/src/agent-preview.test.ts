@@ -365,7 +365,7 @@ describe('the preview tool endpoint: compose', () => {
 
 describe('the preview tool endpoint: unavailable', () => {
   it('engine off: unavailable with the hint, not an error status; the static build of the run is the URL', async () => {
-    await start(null);
+    await start(null, { dockerEngineSwitchedOff: true });
     const p = await createProject();
     const run = await runWithToken(p.id);
     writeDemo(run.worktreePath, 'RUN');

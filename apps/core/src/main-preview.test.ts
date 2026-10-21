@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   BrowserUrlResponse,
+  DOCKER_ENGINE_NOT_CONFIGURED_TEXT,
   DOCKER_ENGINE_OFF_TEXT,
   DOCKER_ENGINE_UNREACHABLE_HINT,
   DockerOverview,
@@ -257,7 +258,7 @@ const browserUrl = async (projectId: string, target: string) => {
 
 describe('without a container preview for main (Review Focus 5)', () => {
   it('engine off: the status says why, start is 409 with the hint, and no docker command runs', async () => {
-    await start(null);
+    await start(null, { dockerEngineSwitchedOff: true });
     const p = await createProject();
     const status = await mainPreview(p.id);
     expect(status).toMatchObject({ runId: null, targetId: 'main', status: 'stopped', kind: 'compose', port: null, url: null });
@@ -268,6 +269,16 @@ describe('without a container preview for main (Review Focus 5)', () => {
     expect(res.json().message).not.toContain('COMPOSE_PROFILES');
     expect(engine.calls).toEqual([]);
     expect(stored(p.id)).toBeUndefined();
+  });
+
+  it('no engine configured (an old compose file): the status and the 409 say so, not "turned off"', async () => {
+    await start(null);
+    const p = await createProject();
+    expect((await mainPreview(p.id)).unavailable).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
+    const res = await startMain(p.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
+    expect(res.json().message).not.toContain(DOCKER_ENGINE_OFF_TEXT);
   });
 
   it('an unreachable engine is the same 409', async () => {

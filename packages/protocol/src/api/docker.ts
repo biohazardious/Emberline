@@ -11,6 +11,21 @@ import { RunState } from './runs.js';
 export const DOCKER_ENGINE_OFF_TEXT =
   'The Docker engine is turned off (EMBERLINE_DOCKER_ENGINE=0 in .env). Remove that line and restart to turn it on.';
 
+/**
+ * What the user reads when core has no engine host and nobody switched it off: a compose file older
+ * than 0.3.5 (an image update that kept the old file), or dev.
+ */
+export const DOCKER_ENGINE_NOT_CONFIGURED_TEXT =
+  'No Docker engine is configured. With the published images, use the current deploy/compose.yaml (0.3.5 or later), which starts it.';
+
+/** An enabled engine whose first probe has not answered yet. */
+export const DOCKER_ENGINE_NOT_ANSWERED_TEXT = 'The Docker engine has not answered yet; try again in a moment.';
+
+/** Why a disabled engine is off, by its reason (an older core without one, or none, reads as not configured). */
+export function dockerEngineOffText(engine: DockerEngineStatus | undefined): string {
+  return engine?.reason === 'switched_off' ? DOCKER_ENGINE_OFF_TEXT : DOCKER_ENGINE_NOT_CONFIGURED_TEXT;
+}
+
 /** Added to an unreachable engine: a host that cannot run it can switch it off. */
 export const DOCKER_ENGINE_UNREACHABLE_HINT =
   "If this host can't run it (privileged containers, overlay), set EMBERLINE_DOCKER_ENGINE=0.";

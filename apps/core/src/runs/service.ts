@@ -64,8 +64,9 @@ import {
   type TicketCompletion,
   isComposeService,
   type WorktreeComposeService,
-  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_NOT_ANSWERED_TEXT,
   DOCKER_ENGINE_UNREACHABLE_HINT,
+  dockerEngineOffText,
   withHint,
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
@@ -588,7 +589,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     docker?: DockerEngine,
   ) {
     super();
-    this.docker = docker ?? new DockerEngine(config.dockerHost, { certPath: config.dockerCertPath, cwd: config.workspacesDir });
+    this.docker =
+      docker ??
+      new DockerEngine(config.dockerHost, {
+        certPath: config.dockerCertPath,
+        cwd: config.workspacesDir,
+        switchedOff: config.dockerEngineSwitchedOff,
+      });
     this.setMaxListeners(0); // one listener per open UI socket
     this.demoTokens = new DemoTokens(db);
     this.mainPreviews = new MainPreviews({
@@ -2608,14 +2615,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private async dockerPageEnv(name: string | null): Promise<Record<string, string>> {
     if (name !== null && !isEmberlineComposeProject(name)) throw badRequest('not a compose project Emberline made');
     if (!this.docker.host) {
+      // Switched off (EMBERLINE_DOCKER_ENGINE=0) or not configured (an old compose file): the hint says which.
       throw new HttpError(409, 'docker_off', 'the Docker engine is off', {
-        hint: DOCKER_ENGINE_OFF_TEXT,
+        hint: dockerEngineOffText(this.docker.status),
       });
     }
     await this.docker.ready();
     const env = this.docker.cliEnv();
     // Enabled but not answering: no turn-on hint; the message carries the turn-off hint for hosts that cannot run it.
     if (!env.DOCKER_HOST) {
+      if (!this.docker.status.checked) throw new HttpError(409, 'docker_off', DOCKER_ENGINE_NOT_ANSWERED_TEXT);
       const why = this.docker.status.error;
       throw new HttpError(409, 'docker_off', withHint(`the Docker engine is not reachable${why ? `: ${why}` : ''}`, DOCKER_ENGINE_UNREACHABLE_HINT));
     }
@@ -2911,7 +2920,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   ): Promise<RunPreviewStatus> {
     await this.docker.ready();
     if (!this.docker.status.available || !this.config.dockerHost) {
-      throw conflict(composeEngineOffMessage(service.name, this.docker.status.error));
+      throw conflict(composeEngineOffMessage(service.name, this.docker.status));
     }
     await this.stopRunningPreview(row);
     const env = await this.dockerEnvFor(row);

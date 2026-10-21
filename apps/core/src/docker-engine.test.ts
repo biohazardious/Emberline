@@ -52,6 +52,13 @@ describe('config: Docker host and preview port ranges', () => {
     expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '1' }).dockerHost).toBeUndefined();
   });
 
+  it('remembers that EMBERLINE_DOCKER_ENGINE=0 switched it off, apart from a missing host', () => {
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: ' 0 ' }).dockerEngineSwitchedOff).toBe(true);
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: 'tcp://docker:2376' }).dockerEngineSwitchedOff).toBe(true);
+    expect(loadConfig({}).dockerEngineSwitchedOff).toBe(false);
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '1' }).dockerEngineSwitchedOff).toBe(false);
+  });
+
   it('reads the client certificate directory, by default the runner\'s read-only mount', () => {
     expect(loadConfig({}).dockerCertPath).toBe('/run/emberline-docker-certs');
     expect(loadConfig({ EMBERLINE_DOCKER_CERT_PATH: ' /certs/client ' }).dockerCertPath).toBe('/certs/client');
@@ -120,12 +127,18 @@ describe('DockerEngine probe', () => {
   it('is off without a host and never runs the CLI', async () => {
     const exec = vi.fn<CommandExecutor>();
     const engine = new DockerEngine(undefined, { exec });
-    expect(await engine.probe()).toEqual({ enabled: false, checked: false, available: false, version: null });
+    expect(await engine.probe()).toEqual({ enabled: false, checked: false, available: false, version: null, reason: 'not_configured' });
     await engine.ready(); // nothing to wait for
     engine.start();
     engine.stop();
     expect(exec).not.toHaveBeenCalled();
     expect(engine.runEnv('emberline-ab12cd34')).toEqual({});
+  });
+
+  it('says why it is off: switched off, or no host configured; an enabled engine has no reason', () => {
+    expect(new DockerEngine(undefined, { switchedOff: true }).status.reason).toBe('switched_off');
+    expect(new DockerEngine(undefined).status.reason).toBe('not_configured');
+    expect(new DockerEngine('tcp://docker:2376').status.reason).toBeUndefined();
   });
 
   it('runs `docker version` in the runner with the client certificate and caches the server version', async () => {
@@ -314,7 +327,7 @@ describe('Docker engine in core: /api/system, run env, first prompt, worktree.ym
   it('off: /api/system says so, and runs get neither the variables nor the paragraph', async () => {
     await start(undefined);
     const system: SystemStatus = (await api('GET', '/api/system')).json();
-    expect(system.docker).toEqual({ enabled: false, checked: false, available: false, version: null });
+    expect(system.docker).toEqual({ enabled: false, checked: false, available: false, version: null, reason: 'not_configured' });
     const project = await gitProject();
     const { prompt, docker } = await startRun(project.id);
     expect(docker).toBe(NO_DOCKER);

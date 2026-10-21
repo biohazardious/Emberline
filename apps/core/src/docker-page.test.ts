@@ -8,6 +8,8 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   COMPOSE_SERVICE_NAME,
+  DOCKER_ENGINE_NOT_ANSWERED_TEXT,
+  DOCKER_ENGINE_NOT_CONFIGURED_TEXT,
   DOCKER_ENGINE_OFF_TEXT,
   DOCKER_ENGINE_UNREACHABLE_HINT,
   DockerCleanupResponse,
@@ -222,8 +224,8 @@ afterEach(async () => {
   await t.close();
 });
 
-async function start(dockerHost: string | null = 'tcp://docker:2376') {
-  t = await createTestApp(dockerHost ? { dockerHost } : {});
+async function start(dockerHost: string | null = 'tcp://docker:2376', dockerEngineSwitchedOff = false) {
+  t = await createTestApp({ ...(dockerHost ? { dockerHost } : {}), ...(dockerEngineSwitchedOff ? { dockerEngineSwitchedOff } : {}) });
   // An agent that stays alive: a live run stays live for the whole test.
   const fake = path.join(t.dir, 'fake-claude.sh');
   writeFileSync(fake, '#!/bin/sh\nexec sleep 60\n');
@@ -370,10 +372,39 @@ describe('auth and names (Review Focus 1)', () => {
 });
 
 describe('engine off', () => {
+  const ACTIONS = [
+    ['POST', '/api/docker/projects/emberline-abcd1234/stop'],
+    ['POST', '/api/docker/projects/emberline-abcd1234/remove'],
+    ['GET', '/api/docker/projects/emberline-abcd1234/logs'],
+    ['POST', '/api/docker/cleanup'],
+  ] as const;
+
+  it('switched off (EMBERLINE_DOCKER_ENGINE=0): the reason and the turn-on hint', async () => {
+    await start(null, true);
+    expect((await overview()).engine).toMatchObject({ enabled: false, reason: 'switched_off' });
+    for (const [method, url] of ACTIONS) {
+      const res = await api(method, url);
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json().hint, url).toBe(DOCKER_ENGINE_OFF_TEXT);
+    }
+  });
+
+  it('enabled but not answered yet: 409 that says so, never "turned off"', async () => {
+    await start();
+    // The first probe never answers within the wait.
+    t.runs.docker.ready = async () => undefined;
+    for (const [method, url] of ACTIONS) {
+      const res = await api(method, url);
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json().message, url).toContain(DOCKER_ENGINE_NOT_ANSWERED_TEXT);
+      expect(res.json().message, url).not.toContain('turned off');
+    }
+  });
+
   it('lists nothing with enabled=false; actions are 409 with the hint; no docker command', async () => {
     await start(null);
     expect(await overview()).toMatchObject({
-      engine: { enabled: false, available: false },
+      engine: { enabled: false, available: false, reason: 'not_configured' },
       disk: { rows: [] },
       cleanup: { lastSweepAt: null, lastSweepRemoved: [], lastPruneAt: null, lastPruneOkAt: null, sweeping: false },
       projects: [],
@@ -386,7 +417,8 @@ describe('engine off', () => {
     ] as const) {
       const res = await api(method, url);
       expect(res.statusCode, url).toBe(409);
-      expect(res.json().hint, url).toBe(DOCKER_ENGINE_OFF_TEXT);
+      // No host and nobody switched it off: an old compose file, not a line in .env.
+      expect(res.json().hint, url).toBe(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
     }
     expect(engine.calls).toEqual([]);
   });

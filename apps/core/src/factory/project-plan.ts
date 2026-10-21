@@ -5,6 +5,8 @@
  */
 import {
   type CreateProjectBody,
+  type DockerEngineStatus,
+  dockerEngineOffText,
   findOption,
   getPreset,
   type PresetDef,
@@ -95,15 +97,24 @@ export function techStackFromChoices(choices: ProjectChoices, versionPolicy?: st
   };
 }
 
-/** The summary's note when a Docker Compose project gets a command preview because the engine is off. */
+/** The summary's note when a Docker Compose project gets a command preview because the engine is on but does not answer. */
 export const ENABLE_DOCKER_NOTE =
   'The deploy target is Docker Compose: previewing the container needs the Docker engine, which is on by default (EMBERLINE_DOCKER_ENGINE=0 turns it off). Until it answers, the preview runs the dev command.';
 
+/** The summary's note for a Docker Compose project without a container preview; an engine that is not on says why. */
+export function dockerComposeNote(engine: DockerEngineStatus | undefined): string {
+  if (engine?.enabled) return ENABLE_DOCKER_NOTE;
+  return `The deploy target is Docker Compose: previewing the container needs the Docker engine, so the preview runs the dev command. ${dockerEngineOffText(engine)}`;
+}
+
 /**
  * `dockerEngine`: the Docker engine answers right now. A Docker Compose deploy target then previews
- * its container (worktree.yml v2); otherwise the summary says how to get that.
+ * its container (worktree.yml v2); otherwise the summary says how to get that, by `engine`'s state.
  */
-export function planNewProject(body: ProjectCreateInput, { dockerEngine = false }: { dockerEngine?: boolean } = {}): ProjectPlan {
+export function planNewProject(
+  body: ProjectCreateInput,
+  { dockerEngine = false, engine }: { dockerEngine?: boolean; engine?: DockerEngineStatus } = {},
+): ProjectPlan {
   const preset = body.presetId === undefined ? undefined : getPreset(body.presetId);
   if (body.presetId !== undefined && !preset) throw badRequest(`unknown preset "${body.presetId}"`);
   if (preset && body.appType !== 'custom' && body.appType !== preset.type) {
@@ -151,7 +162,7 @@ export function planNewProject(body: ProjectCreateInput, { dockerEngine = false 
     projectMd,
     claudeMd: generateClaudeInstructions(body.name),
     worktreeYml: generateWorktreeYml(choices, preset, { dockerEngine }),
-    notes: !composePreview && choices.deploy === 'docker-compose' ? [ENABLE_DOCKER_NOTE] : [],
+    notes: !composePreview && choices.deploy === 'docker-compose' ? [dockerComposeNote(engine)] : [],
     starter,
     tickets,
   };

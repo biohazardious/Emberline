@@ -5,7 +5,14 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { DOCKER_ENGINE_OFF_TEXT, DOCKER_ENGINE_UNREACHABLE_HINT, type Run, type RunPreviewStatus } from '@emberline/protocol';
+import {
+  DOCKER_ENGINE_NOT_ANSWERED_TEXT,
+  DOCKER_ENGINE_NOT_CONFIGURED_TEXT,
+  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_UNREACHABLE_HINT,
+  type Run,
+  type RunPreviewStatus,
+} from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -223,7 +230,7 @@ describe('compose previews (worktree.yml v2)', () => {
 
   describe('engine off (Review Focus 2)', () => {
     it('a compose preview answers 409 with the hint and runs no docker command', async () => {
-      await start(undefined);
+      await start(undefined, { dockerEngineSwitchedOff: true });
       const p = await project();
       const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
       expect(await preview(run)).toMatchObject({ status: 'stopped', kind: 'compose', detectedCommand: 'docker compose up web (compose.yaml, port 80)' });
@@ -232,6 +239,28 @@ describe('compose previews (worktree.yml v2)', () => {
       expect(res.json().message).toContain(DOCKER_ENGINE_OFF_TEXT);
       expect(engine.calls).toEqual([]);
       expect((await preview(run)).status).toBe('stopped');
+    });
+
+    it('no engine configured: the 409 points at the current compose file, not at a line in .env', async () => {
+      await start(undefined);
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const res = await startPreview(run);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
+      expect(res.json().message).not.toContain(DOCKER_ENGINE_OFF_TEXT);
+    });
+
+    it('an enabled engine that has not answered yet: the 409 says so, never "turned off"', async () => {
+      await start('tcp://docker:2376');
+      t.runs.docker.ready = async () => undefined;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const res = await startPreview(run);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain(DOCKER_ENGINE_NOT_ANSWERED_TEXT);
+      expect(res.json().message).not.toContain('turned off');
+      expect(engine.calls).toEqual([]);
     });
 
     it('an unreachable engine is the same 409', async () => {

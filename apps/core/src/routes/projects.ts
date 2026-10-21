@@ -25,6 +25,7 @@ import {
   DeleteWorkspaceFileBody,
   DispatchRoadmapItemsBody,
   type DispatchRoadmapItemsResponse,
+  type DockerEngineStatus,
   FactoryRequestBody,
   type FactoryRequestResponse,
   type FactorySettings,
@@ -217,15 +218,19 @@ export function registerProjectRoutes(
   /** Slugs a wizard create is writing right now. */
   const creating = new Set<string>();
 
-  /** Whether the Docker engine answers (bounded wait right after boot): the wizard previews compose then. */
-  const dockerEngine = async (): Promise<boolean> => {
+  /**
+   * Whether the Docker engine answers (bounded wait right after boot): the wizard previews compose
+   * then; otherwise its note says why from `engine`.
+   */
+  const dockerEngine = async (): Promise<{ dockerEngine: boolean; engine: DockerEngineStatus }> => {
     await runs.docker.ready();
-    return runs.docker.status.available;
+    const engine = runs.docker.status;
+    return { dockerEngine: engine.available, engine };
   };
 
   /** What creating a new project would write and create. No side effects. */
   app.post('/api/projects/preview', async (request): Promise<ProjectPreviewResponse> => {
-    const plan = planNewProject(ProjectPreviewBody.parse(request.body), { dockerEngine: await dockerEngine() });
+    const plan = planNewProject(ProjectPreviewBody.parse(request.body), await dockerEngine());
     return {
       projectMd: plan.projectMd,
       claudeMd: plan.claudeMd,
@@ -244,7 +249,7 @@ export function registerProjectRoutes(
     reply: FastifyReply,
     log: FastifyBaseLogger,
   ): Promise<CreateProjectResponse> {
-    const plan = planNewProject(body, { dockerEngine: await dockerEngine() });
+    const plan = planNewProject(body, await dockerEngine());
     const projectPath = path.join(config.workspacesDir, slug);
     if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
       throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);

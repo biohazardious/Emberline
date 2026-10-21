@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from 'node:path';
 import {
   type CreateProjectBody,
+  CreateProjectBody as CreateProjectBodySchema,
   type CreateProjectResponse,
+  DOCKER_ENGINE_NOT_CONFIGURED_TEXT,
+  DOCKER_ENGINE_OFF_TEXT,
+  type DockerEngineStatus,
   type ProjectPreviewResponse,
   findOption,
   getPreset,
@@ -18,6 +22,7 @@ import type * as GitExec from './git-exec.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
 import { APP_TYPE_LABELS, generateProjectBlueprint, generateWorktreeYml } from './factory/blueprint.js';
+import { planNewProject } from './factory/project-plan.js';
 import { STARTERS } from './factory/starters.js';
 import { parseWorktreeYml } from './worktree-config/load.js';
 import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -654,9 +659,22 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
   });
 
   it('with Docker off the summary notes it only for the Docker Compose deploy target', async () => {
-    expect(((await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse).notes.join(' ')).toContain(
-      'previewing the container needs the Docker engine',
-    );
+    const notes = ((await preview(COMPOSE_WEB)).json() as ProjectPreviewResponse).notes.join(' ');
+    expect(notes).toContain('previewing the container needs the Docker engine');
+    // No host and nobody switched it off: an old compose file, not a line in .env.
+    expect(notes).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
     expect(((await preview(STATIC)).json() as ProjectPreviewResponse).notes).toEqual([]);
+  });
+
+  it('the summary note says why the engine is missing, and waits for it only while it is on', () => {
+    const off = { enabled: false, checked: false, available: false, version: null } as const;
+    const note = (engine: DockerEngineStatus) => planNewProject(CreateProjectBodySchema.parse(COMPOSE_WEB), { engine }).notes.join(' ');
+    const switchedOff = note({ ...off, reason: 'switched_off' });
+    expect(switchedOff).toContain(DOCKER_ENGINE_OFF_TEXT);
+    expect(switchedOff).not.toContain('Until it answers');
+    const notConfigured = note({ ...off, reason: 'not_configured' });
+    expect(notConfigured).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
+    expect(notConfigured).not.toContain('EMBERLINE_DOCKER_ENGINE=0 in .env');
+    expect(note({ enabled: true, checked: true, available: false, version: null, error: 'refused' })).toContain('Until it answers');
   });
 });

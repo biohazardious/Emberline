@@ -9,8 +9,10 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
-  DOCKER_ENGINE_OFF_TEXT,
+  DOCKER_ENGINE_NOT_ANSWERED_TEXT,
   DOCKER_ENGINE_UNREACHABLE_HINT,
+  type DockerEngineStatus,
+  dockerEngineOffText,
   isComposeService,
   type MainPreviewStatus,
   type WorktreeComposeService,
@@ -66,12 +68,18 @@ const RESTARTED = 'Emberline restarted before the preview was ready; start it ag
 /** Why main has no container preview service; the start's 409 says the same. */
 const NO_COMPOSE_SERVICE = 'the approved worktree.yml has no compose preview service, so main has no container preview';
 
-/** The 409 of a compose preview without the engine (run previews say the same). */
-export function composeEngineOffMessage(serviceName: string, engineError: string | undefined): string {
+/**
+ * The 409 of a compose preview without the engine (run previews say the same): why it is off
+ * (switched off, or not configured), not answered yet, or unreachable with the turn-off hint.
+ */
+export function composeEngineOffMessage(serviceName: string, engine: DockerEngineStatus): string {
   const base = `the preview service "${serviceName}" runs in Docker`;
-  return engineError
-    ? withHint(`${base}, but the Docker engine is not reachable: ${engineError}`, DOCKER_ENGINE_UNREACHABLE_HINT)
-    : `${base}. ${DOCKER_ENGINE_OFF_TEXT}`;
+  if (!engine.enabled) return `${base}. ${dockerEngineOffText(engine)}`;
+  if (!engine.checked) return `${base}. ${DOCKER_ENGINE_NOT_ANSWERED_TEXT}`;
+  return withHint(
+    `${base}, but the Docker engine is not reachable${engine.error ? `: ${engine.error}` : ''}`,
+    DOCKER_ENGINE_UNREACHABLE_HINT,
+  );
 }
 
 /** How a compose preview shows where the command box is: what Emberline runs for it. */
@@ -194,7 +202,7 @@ export class MainPreviews {
       }
       await this.deps.docker.ready();
       if (!this.deps.docker.status.available || !this.deps.config.dockerHost) {
-        throw conflict(composeEngineOffMessage(service.name, this.deps.docker.status.error));
+        throw conflict(composeEngineOffMessage(service.name, this.deps.docker.status));
       }
       if (!existsSync(path.join(project.path, service.compose.file))) {
         throw conflict(missingComposeFile(service.compose.file), 'compose_file_missing');
@@ -472,7 +480,7 @@ export class MainPreviews {
     if (!service) return NO_COMPOSE_SERVICE;
     if (this.deps.config.dockerHost) await this.deps.docker.ready();
     if (!this.deps.docker.status.available || !this.deps.config.dockerHost) {
-      return composeEngineOffMessage(service.name, this.deps.docker.status.error);
+      return composeEngineOffMessage(service.name, this.deps.docker.status);
     }
     if (!existsSync(path.join(mainPath, service.compose.file))) return missingComposeFile(service.compose.file);
     return null;

@@ -32,6 +32,11 @@ export const DockerEngineStatus = z.object({
   version: z.string().nullable(),
   /** Why an enabled engine is unavailable (CLI output, one line). */
   error: z.string().optional(),
+  /**
+   * Why the engine is not enabled; absent while it is. `switched_off`: `EMBERLINE_DOCKER_ENGINE=0`.
+   * `not_configured`: core has no `EMBERLINE_DOCKER_HOST` (a compose file older than 0.3.5, or dev).
+   */
+  reason: z.enum(['switched_off', 'not_configured']).optional(),
 });
 export type DockerEngineStatus = z.infer<typeof DockerEngineStatus>;
 

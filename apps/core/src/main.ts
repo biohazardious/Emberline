@@ -23,6 +23,7 @@ let logDocker: (status: DockerEngine['status']) => void = () => undefined;
 const docker = new DockerEngine(config.dockerHost, {
   certPath: config.dockerCertPath,
   cwd: config.workspacesDir,
+  switchedOff: config.dockerEngineSwitchedOff,
   onChange: (status) => logDocker(status),
 });
 const runs = new RunService(db, config, ptyd, docker);

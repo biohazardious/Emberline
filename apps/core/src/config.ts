@@ -57,6 +57,11 @@ export interface CoreConfig {
    */
   dockerHost?: string;
   /**
+   * `EMBERLINE_DOCKER_ENGINE=0`: the user switched the engine off. Without it, a missing host means
+   * no engine is configured (a compose file older than 0.3.5, or dev); the texts tell the two apart.
+   */
+  dockerEngineSwitchedOff?: boolean;
+  /**
    * Directory in the runner with the engine's client certificate (`ca.pem`, `cert.pem`, `key.pem`),
    * mounted read-only from the engine's `docker-client-certs` volume; sent as `DOCKER_CERT_PATH`.
    */
@@ -118,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
     dockerHost: env.EMBERLINE_DOCKER_ENGINE?.trim() === '0' ? undefined : env.EMBERLINE_DOCKER_HOST?.trim() || undefined,
+    dockerEngineSwitchedOff: env.EMBERLINE_DOCKER_ENGINE?.trim() === '0',
     dockerCertPath: env.EMBERLINE_DOCKER_CERT_PATH?.trim() || DEFAULT_DOCKER_CERT_PATH,
     previewPorts: {
       runner: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_RUNNER ?? '') ?? DEFAULT_PREVIEW_PORTS.runner,

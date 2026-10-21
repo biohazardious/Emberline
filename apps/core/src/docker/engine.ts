@@ -76,6 +76,8 @@ export interface DockerEngineOptions {
   cwd?: string;
   /** Called when `available`, `version` or `error` changed after a probe. */
   onChange?: (status: DockerEngineStatus) => void;
+  /** Without a host: `EMBERLINE_DOCKER_ENGINE=0` switched it off (else no engine is configured). */
+  switchedOff?: boolean;
 }
 
 export class DockerEngine {
@@ -89,7 +91,9 @@ export class DockerEngine {
     readonly host: string | undefined,
     private readonly options: DockerEngineOptions = {},
   ) {
-    this.current = { enabled: Boolean(host), checked: false, available: false, version: null };
+    this.current = host
+      ? { enabled: true, checked: false, available: false, version: null }
+      : { enabled: false, checked: false, available: false, version: null, reason: options.switchedOff ? 'switched_off' : 'not_configured' };
   }
 
   /**
