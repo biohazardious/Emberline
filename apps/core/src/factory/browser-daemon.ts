@@ -103,8 +103,12 @@ const agentFollow = { seen: new Set(), last: null };
 let playtestTabId = null;
 /** The project whose Live Browser started the Auto-Interact loop: only it can stop or replace it. */
 let playtestProjectId = null;
-const consoleLogs = [];
-const daemonActions = [];
+/** tab id -> its newest console lines (60 per tab): a chatty page never pushes out another tab's. */
+const consoleByTab = new Map();
+/** tab id -> its newest Auto-Interact and navigation actions (40 per tab). */
+const actionsByTab = new Map();
+/** Tabs of an agent's own Playwright Chromium (:9223) last seen: their buffers are kept too. */
+let ephemeralTabIds = new Set();
 let nextActionId = 900000;
 const attachedTabs = new Set();
 let launchingBrowser = null;
@@ -127,20 +131,36 @@ function saveTabProjects() {
   } catch {}
 }
 
-function pushDaemonAction(toolName, summary, persona = 'qa', tabId = null) {
-  daemonActions.push({
-    id: nextActionId++,
-    runId: 'live-browser',
-    runTitle: 'Live Browser AI Bot',
-    persona,
-    toolName,
-    summary,
-    timestamp: new Date().toISOString(),
-    tabId,
-  });
-  if (daemonActions.length > 40) {
-    daemonActions.splice(0, daemonActions.length - 40);
+function pushCapped(buffers, tabId, entry, cap) {
+  let list = buffers.get(tabId);
+  if (!list) {
+    list = [];
+    buffers.set(tabId, list);
   }
+  list.push(entry);
+  if (list.length > cap) list.splice(0, list.length - cap);
+}
+
+/** Drops the buffers of tabs that are gone: only those that existed before the tab list was asked for. */
+function pruneTabBuffers(buffers, before, live) {
+  for (const id of before) if (!live.has(id)) buffers.delete(id);
+}
+
+function pushDaemonAction(toolName, summary, persona = 'qa', tabId = null) {
+  pushCapped(
+    actionsByTab,
+    tabId,
+    {
+      id: nextActionId++,
+      runId: 'live-browser',
+      runTitle: 'Live Browser AI Bot',
+      persona,
+      toolName,
+      summary,
+      timestamp: new Date().toISOString(),
+    },
+    40,
+  );
 }
 
 function readHookEvents() {
@@ -173,18 +193,34 @@ function readHookEvents() {
 function pushConsole(level, text, tabId) {
   if (!text) return;
   const clean = String(text).slice(0, 600);
-  consoleLogs.push({
-    level: ['log', 'info', 'warn', 'error'].includes(level) ? level : 'log',
-    text: clean,
-    timestamp: new Date().toISOString(),
+  pushCapped(
+    consoleByTab,
     tabId,
-  });
-  if (consoleLogs.length > 60) {
-    consoleLogs.splice(0, consoleLogs.length - 60);
-  }
+    {
+      level: ['log', 'info', 'warn', 'error'].includes(level) ? level : 'log',
+      text: clean,
+      timestamp: new Date().toISOString(),
+    },
+    60,
+  );
 }
 
-// 1. Bridge 127.0.0.1:7420 -> core:7420 inside runner if port 7420 is free
+/**
+ * Listens on \`port\`, retrying for a bounded time while the port is taken: after a version bump the
+ * old daemon (asked to shut down) may still hold it for a moment.
+ */
+function listenWithRetry(server, port, host, tries, delayMs) {
+  let left = tries;
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE' && left > 0) {
+      left--;
+      setTimeout(() => server.listen(port, host), delayMs);
+    }
+  });
+  server.listen(port, host);
+}
+
+// 1. Bridge 127.0.0.1:7420 -> core:7420 inside runner (waits up to 10 s for an old daemon to let go)
 try {
   const bridge = net.createServer((client) => {
     const upstream = net.connect(7420, 'core');
@@ -193,8 +229,7 @@ try {
     client.on('error', () => upstream.destroy());
     upstream.on('error', () => client.destroy());
   });
-  bridge.on('error', () => {});
-  bridge.listen(7420, '127.0.0.1');
+  listenWithRetry(bridge, 7420, '127.0.0.1', 40, 250);
 } catch {}
 
 async function isCdpAlive(baseUrl = CDP_BASE, timeoutMs = 1200) {
@@ -332,8 +367,10 @@ async function ephemeralPages() {
     if (!res.ok) return null;
     const pages = (await res.json()).filter(isUserPage);
     for (const p of pages) attachConsoleListener(p);
+    ephemeralTabIds = new Set(pages.map((p) => p.id));
     return pages.length > 0 ? pages : null;
   } catch {
+    ephemeralTabIds = new Set();
     return null;
   }
 }
@@ -345,6 +382,7 @@ async function ephemeralPages() {
  */
 async function sharedPages() {
   const labelled = [...tabProjects.keys()];
+  const buffered = { console: [...consoleByTab.keys()], actions: [...actionsByTab.keys()] };
   const res = await fetch(CDP_BASE + '/json/list', { signal: AbortSignal.timeout(2000) });
   let pages = (await res.json()).filter(isUserPage);
   if (pages.length === 0) {
@@ -360,6 +398,9 @@ async function sharedPages() {
     }
   }
   if (changed) saveTabProjects();
+  const live = new Set([...pages.map((p) => p.id), ...ephemeralTabIds]);
+  pruneTabBuffers(consoleByTab, buffered.console, live);
+  pruneTabBuffers(actionsByTab, buffered.actions, live);
   return pages;
 }
 
@@ -635,8 +676,8 @@ async function captureState(q) {
     pageTitle: liveTitle || tab.title || null,
     activeTabId: tab.id,
     tabs,
-    consoleLogs: consoleLogs.filter((c) => c.tabId === tab.id).slice(-30).map(({ tabId, ...c }) => c),
-    agentActions: [...(following ? readHookEvents() : []), ...daemonActions.filter((a) => a.tabId === tab.id).map(({ tabId, ...a }) => a)]
+    consoleLogs: (consoleByTab.get(tab.id) || []).slice(-30),
+    agentActions: [...(following ? readHookEvents() : []), ...(actionsByTab.get(tab.id) || [])]
       .slice(-25)
       .reverse(),
     agentActive: Boolean(ephemeral || playtestHere),

@@ -1,3 +1,4 @@
+import net, { type AddressInfo, type Server } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { BROWSER_DAEMON_SCRIPT, BROWSER_DAEMON_VERSION, isBrowsableUrl } from './factory/browser-daemon.js';
 
@@ -94,14 +95,28 @@ function loadSharedPages(env: {
   const body = [
     src(/function isUserPage\(t\) \{[\s\S]*?\n\}/, 'isUserPage'),
     src(/async function sharedPages\(\) \{[\s\S]*?\n\}/, 'sharedPages'),
+    src(/function pruneTabBuffers\(buffers, before, live\) \{[\s\S]*?\n\}/, 'pruneTabBuffers'),
     'return sharedPages;',
   ].join('\n');
-  return new Function('fetch', 'tabProjects', 'CDP_BASE', 'attachConsoleListener', 'saveTabProjects', body)(
+  return new Function(
+    'fetch',
+    'tabProjects',
+    'CDP_BASE',
+    'attachConsoleListener',
+    'saveTabProjects',
+    'consoleByTab',
+    'actionsByTab',
+    'ephemeralTabIds',
+    body,
+  )(
     env.fetch,
     env.tabProjects,
     'http://cdp',
     () => undefined,
     () => undefined,
+    new Map(),
+    new Map(),
+    new Set(),
   ) as () => Promise<{ id: string }[]>;
 }
 
@@ -163,5 +178,88 @@ describe('browser daemon Auto-Interact per project', () => {
       expect(branch.indexOf('playtestHeldByOther(')).toBeGreaterThan(-1);
       expect(branch.indexOf('playtestHeldByOther(')).toBeLessThan(branch.search(/stopPlaytestLoop\(|startPlaytestLoop\(/));
     }
+  });
+});
+
+/** Daemon functions by name from the script source (a function ends with `}` at column 0). */
+function daemonSource(name: string): string {
+  const m = new RegExp(`function ${name}\\(([^)]*)\\) \\{[\\s\\S]*?\\n\\}`).exec(BROWSER_DAEMON_SCRIPT);
+  if (!m) throw new Error(`${name} not found in the daemon script`);
+  return m[0];
+}
+
+describe('browser daemon console and actions per tab', () => {
+  type Entry = { text?: string; summary?: string };
+  const load = () => {
+    const consoleByTab = new Map<string, Entry[]>();
+    const actionsByTab = new Map<string | null, Entry[]>();
+    const fns = new Function(
+      'consoleByTab',
+      'actionsByTab',
+      `let nextActionId = 1;\n${daemonSource('pushCapped')}\n${daemonSource('pushConsole')}\n${daemonSource('pushDaemonAction')}\n${daemonSource('pruneTabBuffers')}\nreturn { pushConsole, pushDaemonAction, pruneTabBuffers };`,
+    )(consoleByTab, actionsByTab) as {
+      pushConsole: (level: string, text: string, tabId: string) => void;
+      pushDaemonAction: (toolName: string, summary: string, persona: string, tabId: string) => void;
+      pruneTabBuffers: (buffers: Map<string, unknown>, before: string[], live: Set<string>) => void;
+    };
+    return { ...fns, consoleByTab, actionsByTab };
+  };
+
+  it("a chatty tab does not push out another tab's console lines or actions", () => {
+    const { pushConsole, pushDaemonAction, consoleByTab, actionsByTab } = load();
+    pushConsole('log', 'B says hi', 'tb');
+    pushDaemonAction('auto_interact_click', 'B clicked', 'qa', 'tb');
+    for (let i = 0; i < 100; i++) {
+      pushConsole('log', `A line ${i}`, 'ta');
+      pushDaemonAction('auto_interact_key', `A key ${i}`, 'qa', 'ta');
+    }
+    expect(consoleByTab.get('tb')?.map((e) => e.text)).toEqual(['B says hi']);
+    expect(actionsByTab.get('tb')?.map((e) => e.summary)).toEqual(['B clicked']);
+    expect(consoleByTab.get('ta')).toHaveLength(60);
+    expect(consoleByTab.get('ta')?.at(-1)?.text).toBe('A line 99');
+    expect(actionsByTab.get('ta')).toHaveLength(40);
+  });
+
+  it('drops the buffers of closed tabs, but not of a tab opened while the list was on its way', () => {
+    const { pruneTabBuffers } = load();
+    const buffers = new Map<string, unknown>([['ta', []], ['gone', []], ['new', []]]);
+    pruneTabBuffers(buffers, ['ta', 'gone'], new Set(['ta']));
+    expect([...buffers.keys()]).toEqual(['ta', 'new']);
+  });
+
+  it('the shown tab reads its own buffers', () => {
+    const capture = daemonSource('captureState');
+    expect(capture).toContain('consoleByTab.get(tab.id)');
+    expect(capture).toContain('actionsByTab.get(tab.id)');
+    expect(BROWSER_DAEMON_SCRIPT).not.toMatch(/const consoleLogs = \[\]|const daemonActions = \[\]/);
+  });
+});
+
+describe('browser daemon localhost:7420 bridge across a daemon upgrade', () => {
+  it('binds once the old daemon has let go of the port', async () => {
+    const listenWithRetry = new Function(`${daemonSource('listenWithRetry')}; return listenWithRetry;`)() as (
+      server: Server,
+      port: number,
+      host: string,
+      tries: number,
+      delayMs: number,
+    ) => void;
+    const old = net.createServer();
+    await new Promise<void>((r) => old.listen(0, '127.0.0.1', r));
+    const port = (old.address() as AddressInfo).port;
+    const bridge = net.createServer();
+    const bound = new Promise<void>((r) => bridge.once('listening', r));
+    listenWithRetry(bridge, port, '127.0.0.1', 40, 25);
+    // The old daemon exits a little later.
+    await new Promise((r) => setTimeout(r, 120));
+    expect(bridge.listening).toBe(false);
+    await new Promise<void>((r) => old.close(() => r()));
+    await bound;
+    expect(bridge.listening).toBe(true);
+    await new Promise<void>((r) => bridge.close(() => r()));
+  });
+
+  it('the bridge is bound through it, with a bounded wait', () => {
+    expect(BROWSER_DAEMON_SCRIPT).toMatch(/listenWithRetry\(bridge, 7420, '127\.0\.0\.1', \d+, \d+\)/);
   });
 });
