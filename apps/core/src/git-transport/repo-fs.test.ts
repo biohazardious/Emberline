@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitTransportError } from './http.js';
 import { RepoFs, type RepoFsOptions } from './repo-fs.js';
@@ -121,5 +122,44 @@ describe('RepoFs', () => {
     ).rejects.toThrow();
     expect(existsSync(path.join(gitdir, 'objects', 'pack', `pack-${SHA}.pack`))).toBe(false);
     expect(() => fs.assertClean()).toThrow(/more than Emberline's limit of 1/);
+  });
+
+  it('the read cap is for the whole operation, not per file', async () => {
+    const fs = await open({ maxReadBytes: 30 }); // HEAD is 21 bytes
+    await fs.client.promises.readFile(`${fs.gitdir}/HEAD`);
+    await expect(fs.client.promises.readFile(`${fs.gitdir}/HEAD`)).rejects.toThrow();
+    expect(() => fs.assertClean()).toThrow(/larger than/);
+  });
+
+  it('a loose object larger than the object limit is refused before it is inflated', async () => {
+    const dir = path.join(gitdir, 'objects', 'ab');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'c'.repeat(38)), deflateSync(Buffer.from(`blob ${2 * 1024 * 1024}\0x`)));
+    const fs = await open({ operation: 'push', objectLimits: { maxObjectBytes: 1024 * 1024 } });
+    await expect(fs.client.promises.readFile(`${fs.gitdir}/objects/ab/${'c'.repeat(38)}`)).rejects.toThrow();
+    expect(() => fs.assertClean()).toThrow(
+      'A file in this push is larger than 1 MB. Push it from a terminal instead.',
+    );
+  });
+
+  it('a FIFO in place of a file is refused without blocking', async () => {
+    rmSync(path.join(gitdir, 'HEAD'));
+    execFileSync('mkfifo', [path.join(gitdir, 'HEAD')]);
+    const fs = await open();
+    await expect(fs.client.promises.readFile(`${fs.gitdir}/HEAD`)).rejects.toThrow();
+  });
+
+  it('a project folder swapped for a link to another repository after open is refused, nothing written there', async () => {
+    const fs = await open();
+    const other = path.join(base, 'other');
+    execFileSync('git', ['init', '-q', other]);
+    mkdirSync(path.join(other, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+    renameSync(repo, path.join(base, 'p-old'));
+    symlinkSync(other, repo);
+    await expect(
+      fs.client.promises.writeFile(`${fs.gitdir}/refs/remotes/origin/main`, `${SHA}\n`, 'utf8'),
+    ).rejects.toThrow();
+    expect(existsSync(path.join(other, '.git', 'refs', 'remotes', 'origin', 'main'))).toBe(false);
+    expect(() => fs.assertClean()).toThrow(GitTransportError);
   });
 });

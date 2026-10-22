@@ -68,6 +68,8 @@ export function startAccountClone(input: {
         say('The clone has no commit (empty repository?).');
         return;
       }
+      // A project removed meanwhile: no 10-minute checkout for DELETE to wait on.
+      if (job.controller.signal.aborted) throw new Error('cancelled');
       say(`Checking out ${defaultBranch}…`);
       await execGitFile(
         ['-C', input.target, 'checkout', '-q', '-B', defaultBranch, '--track', `origin/${defaultBranch}`],

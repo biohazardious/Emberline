@@ -12,6 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,34 @@ import { accountClonesIdle } from './import-clone.js';
 import { fetchBranchRef, pushBranchRef, remoteBranches } from './transport.js';
 
 const TOKEN = 'transport-secret-token';
+const MB = 1024 * 1024;
+/** The pako that isomorphic-git inflates every object with (its own copy, resolved from its folder). */
+const requireHere = createRequire(import.meta.url);
+const pako = createRequire(requireHere.resolve('isomorphic-git'))('pako') as {
+  inflate: (data: Uint8Array) => Uint8Array;
+  Inflate: { prototype: { push: (...args: unknown[]) => boolean } };
+};
+/** Spies on isomorphic-git's inflates; returns the largest output any of them produced so far. */
+function watchInflates(): () => number {
+  const whole = vi.spyOn(pako, 'inflate');
+  const streamed = vi.spyOn(pako.Inflate.prototype, 'push');
+  return () =>
+    Math.max(
+      0,
+      ...whole.mock.results.map((r) => (r.type === 'return' ? (r.value as Uint8Array).length : 0)),
+      ...streamed.mock.contexts.map((c) => (c as { strm: { total_out: number } }).strm.total_out),
+    );
+}
+/** A blob of `mb` MB of zero bytes, written by real git (its loose object is a few hundred KB). */
+const zeroBlob = (dir: string, mb: number) =>
+  execFileSync('sh', ['-c', `head -c ${mb}M /dev/zero | git -C "$0" hash-object -w --stdin`, dir], {
+    encoding: 'utf8',
+  }).trim();
+/** Commits `oid` as big.bin on top of HEAD of the checked-out branch in `dir`. */
+const commitBlob = (dir: string, oid: string) => {
+  gitIn(dir, 'update-index', '--add', '--cacheinfo', `100644,${oid},big.bin`);
+  gitIn(dir, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'big');
+};
 let t: TestApp;
 let a: FakeForge;
 let b: FakeForge;
@@ -232,6 +261,16 @@ describe('run branch push', () => {
     expectNoCredentialInRunner();
   });
 
+  it("pushes the run's own branch, never another one the worktree was switched to", async () => {
+    const wt = setupRun();
+    gitIn(wt, 'checkout', '-q', '-b', 'production');
+    await expect(pushWorktreeBranch(wt, 'emberline/run-1', 'main', account())).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(gitIn(a.bare('alice', 'app'), 'for-each-ref', '--format=%(refname)')).toBe('');
+    expect(a.seen).toEqual([]);
+  });
+
   it('a non-fast-forward is rejected before anything is sent, never forced', async () => {
     gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');
     const remoteMain = remoteMovesOn('elsewhere');
@@ -398,5 +437,55 @@ describe('import clone', () => {
     expect(spawned).toHaveLength(1);
     expect(spawned[0]).not.toHaveProperty('env');
     expectNoCredentialInRunner(spawned);
+  });
+});
+
+describe('object sizes bound what core inflates', () => {
+  it("an agent's commit with a 200 MB file (a small loose object) is refused before it is inflated", async () => {
+    commitBlob(repo, zeroBlob(repo, 200));
+    const largest = watchInflates();
+    await expect(pushBranchRef({ ...target(), branch: 'main' })).rejects.toMatchObject({
+      code: 'too_large',
+      message: 'A file in this push is larger than 64 MB. Push it from a terminal instead.',
+    });
+    expect(largest()).toBeLessThanOrEqual(64 * MB);
+    expect(a.seen.filter((r) => r.method === 'POST')).toEqual([]);
+  });
+
+  it('the same file inside a pack of the repository is refused too', async () => {
+    commitBlob(repo, zeroBlob(repo, 200));
+    gitIn(repo, 'repack', '-adq');
+    const largest = watchInflates();
+    await expect(pushBranchRef({ ...target(), branch: 'main' })).rejects.toMatchObject({ code: 'too_large' });
+    expect(largest()).toBeLessThanOrEqual(64 * MB);
+  });
+
+  it('a remote pack with a 200 MB file is refused before it is unpacked, and nothing is stored', async () => {
+    const elsewhere = path.join(t.dir, 'elsewhere');
+    execFileSync('git', ['clone', '-q', a.bare('alice', 'app'), elsewhere]);
+    commit(elsewhere, 'x.txt');
+    commitBlob(elsewhere, zeroBlob(elsewhere, 200));
+    gitIn(elsewhere, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+    const largest = watchInflates();
+    await expect(fetchBranchRef({ ...target(), branch: 'main' })).rejects.toMatchObject({
+      code: 'too_large',
+      message: 'A file in this fetch is larger than 64 MB. Fetch it from a terminal instead.',
+    });
+    expect(largest()).toBeLessThanOrEqual(64 * MB);
+    expect(readdirSync(path.join(repo, '.git', 'objects', 'pack'))).toEqual([]);
+    expect(existsSync(path.join(repo, '.git', 'refs', 'remotes', 'origin', 'main'))).toBe(false);
+  });
+
+  it('a 60 MB file still goes both ways', async () => {
+    commitBlob(repo, zeroBlob(repo, 60));
+    expect(await pushBranchRef({ ...target(), branch: 'main' })).toBe('pushed');
+    expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
+      gitIn(repo, 'rev-parse', 'HEAD'),
+    );
+    const other = path.join(t.dir, 'other');
+    mkdirSync(other);
+    gitIn(other, 'init', '-q', '-b', 'main');
+    await fetchBranchRef({ ...target(), repoRoot: other, branch: 'main' });
+    expect(gitIn(other, 'cat-file', '-s', 'refs/remotes/origin/main:big.bin')).toBe(String(60 * MB));
   });
 });

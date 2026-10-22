@@ -86,13 +86,6 @@ export function redirectTarget(from: URL, location: string, credential: GitHttpC
   return urlUnderServer(next, credential.serverUrl) ? next : null;
 }
 
-/** `url` is `base` or below it, by path segment, on the same origin. */
-function under(url: URL, base: URL): boolean {
-  if (url.origin !== base.origin || url.username || url.password) return false;
-  const prefix = base.pathname.replace(/\/+$/, '');
-  return url.pathname === prefix || url.pathname.startsWith(`${prefix}/`);
-}
-
 async function collectBody(body: GitHttpRequest['body'], max: number): Promise<Buffer> {
   if (!body) return Buffer.alloc(0);
   const parts: Buffer[] = [];
@@ -148,6 +141,8 @@ export function createGitHttp(options: {
   const httpAgent = new http.Agent({ keepAlive: true });
   const httpsAgent = new https.Agent({ keepAlive: true });
 
+  /** The idle-limit error of a response whose socket went quiet (its body then breaks off). */
+  const idleOf = new WeakMap<http.IncomingMessage, () => GitTransportError | null>();
   const send = (url: URL, method: string, headers: Record<string, string>, body: Buffer) =>
     new Promise<http.IncomingMessage>((resolve, reject) => {
       if (signal.aborted) return reject(stopped());
@@ -162,10 +157,15 @@ export function createGitHttp(options: {
         signal,
         timeout: limits.idleTimeoutMs,
       });
-      req.on('timeout', () =>
-        req.destroy(new GitTransportError('timeout', `${url.host} stopped answering.`)),
-      );
-      req.on('response', resolve);
+      let idle: GitTransportError | null = null;
+      req.on('timeout', () => {
+        idle = new GitTransportError('timeout', `${url.host} stopped answering.`);
+        req.destroy(idle);
+      });
+      req.on('response', (res) => {
+        idleOf.set(res, () => idle);
+        resolve(res);
+      });
       req.on('error', (error) => {
         if (error instanceof GitTransportError) reject(error);
         else if (signal.aborted) reject(stopped());
@@ -197,6 +197,8 @@ export function createGitHttp(options: {
       }
     } catch (error) {
       if (error instanceof GitTransportError) throw error;
+      const stalled = idleOf.get(res)?.();
+      if (stalled) throw stalled;
       throw signal.aborted
         ? stopped()
         : new GitTransportError('network', `The connection to ${host} broke off.`);
@@ -211,7 +213,8 @@ export function createGitHttp(options: {
     } catch {
       throw new GitTransportError('url_refused', 'isomorphic-git asked for a URL that does not parse.');
     }
-    if (!under(url, base)) {
+    // The repository URL itself is the base: same origin, at or below its path by segment.
+    if (!urlUnderServer(url, base.href)) {
       throw new GitTransportError(
         'url_refused',
         `Emberline sends this account's requests only to ${base.origin}${base.pathname}.`,

@@ -1,9 +1,13 @@
+import { execFile } from 'node:child_process';
 import { createServer, type RequestListener, type Server } from 'node:http';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { basicAuthValue, type GitHttpCredential } from '../git-credentials.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import { createGitHttp } from './http.js';
 
+const execFileAsync = promisify(execFile);
 const TOKEN = 'http-secret-token';
 let a: FakeForge;
 let b: FakeForge;
@@ -66,31 +70,70 @@ describe('createGitHttp', () => {
     expect(b.seen).toEqual([]);
   });
 
-  it('ignores proxy variables', async () => {
-    const keys = [
-      'HTTP_PROXY',
-      'http_proxy',
-      'HTTPS_PROXY',
-      'https_proxy',
-      'ALL_PROXY',
-      'NODE_USE_ENV_PROXY',
-    ] as const;
-    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    for (const k of keys) process.env[k] = k === 'NODE_USE_ENV_PROXY' ? '1' : b.url;
-    const client = createGitHttp({ remoteUrl: `${a.url}/alice/app.git`, credential: cred() });
-    try {
-      expect(
-        (await client.request({ url: `${a.url}/alice/app.git/info/refs?service=git-upload-pack` }))
-          .statusCode,
-      ).toBe(200);
-      expect(b.seen).toEqual([]);
-    } finally {
+  it('ignores proxy variables that Node itself honours (a process started with them)', async () => {
+    const proxied: string[] = [];
+    const proxy = await listen((req, res) => {
+      proxied.push(req.url ?? '');
+      res.writeHead(502).end();
+    });
+    // Node reads proxy variables once, at start: only a fresh process shows whether they would apply.
+    const script = `
+      const http = await import('node:http');
+      const { createGitHttp } = await import(process.env.EMB_MODULE);
+      const url = process.env.EMB_URL;
+      const viaGlobal = await new Promise((resolve, reject) =>
+        http.get(url, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject));
+      const client = createGitHttp({ remoteUrl: process.env.EMB_REPO, credential: JSON.parse(process.env.EMB_CRED) });
+      const own = await client.request({ url });
       client.close();
-      for (const k of keys) {
-        if (saved[k] === undefined) delete process.env[k];
-        else process.env[k] = saved[k];
-      }
-    }
+      console.log(JSON.stringify({ viaGlobal, own: own.statusCode }));
+    `;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_USE_ENV_PROXY: '1',
+      HTTP_PROXY: proxy,
+      http_proxy: proxy,
+      HTTPS_PROXY: proxy,
+      https_proxy: proxy,
+      ALL_PROXY: proxy,
+      NODE_NO_WARNINGS: '1',
+      EMB_MODULE: pathToFileURL(fileURLToPath(new URL('./http.ts', import.meta.url))).href,
+      EMB_URL: `${a.url}/alice/app.git/info/refs?service=git-upload-pack`,
+      EMB_REPO: `${a.url}/alice/app.git`,
+      EMB_CRED: JSON.stringify(cred()),
+    };
+    delete env.NO_PROXY;
+    delete env.no_proxy;
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', script],
+      {
+        env,
+        timeout: 30_000,
+      },
+    );
+    // The variables are live in that process: Node's global agent went through the proxy...
+    expect(JSON.parse(stdout.trim().split('\n').at(-1)!)).toEqual({ viaGlobal: 502, own: 200 });
+    expect(proxied).toEqual([`${a.url}/alice/app.git/info/refs?service=git-upload-pack`]);
+    // ...and the transport's request did not; it reached the forge with the account.
+    expect(a.seen.filter((r) => r.authorization === `Basic ${basicAuthValue(cred())}`)).toHaveLength(1);
+    expect(b.seen).toEqual([]);
+  });
+
+  it('a server that stops sending in the middle of a response hits the idle limit', async () => {
+    const stalls = await listen((_req, res) => {
+      res.writeHead(200);
+      res.write(Buffer.alloc(1024));
+    });
+    const client = createGitHttp({
+      remoteUrl: `${stalls}/a/b.git`,
+      credential: { serverUrl: stalls, username: 'u', token: 'T' },
+      limits: { idleTimeoutMs: 200, totalTimeoutMs: 10_000 },
+    });
+    await expect(client.request({ url: `${stalls}/a/b.git/info/refs` })).rejects.toMatchObject({
+      code: 'timeout',
+    });
+    client.close();
   });
 
   it('stops at the response cap and at the time limit', async () => {

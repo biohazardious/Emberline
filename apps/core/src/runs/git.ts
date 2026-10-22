@@ -17,7 +17,7 @@ import type {
   RunFileDiff,
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { unstageScratchFiles } from '../factory/merge.js';
+import { unstageScratchFiles, withMainWorkspaceLock } from '../factory/merge.js';
 import type { GitHttpCredential } from '../git-credentials.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
 import { describeTransportError, pushBranchRef } from '../git-transport/transport.js';
@@ -690,15 +690,22 @@ export async function pushWorktreeBranch(
   const branchToPush = targetBranch;
 
   if (account) {
+    // The account pushes the run's own branch only: an agent may have switched its worktree.
+    if (branch && currentBranch && currentBranch !== branch) {
+      throw conflict(`refusing to push: the run's worktree is on "${currentBranch}", not on its branch "${branch}"`);
+    }
     let result: 'pushed' | 'rejected';
     try {
-      result = await pushBranchRef({
-        url: account.url,
-        credential: account.credential,
-        workspacesDir: account.workspacesDir,
-        repoRoot: account.mainPath,
-        branch: branchToPush,
-      });
+      // It writes refs/remotes/origin/<branch> in the main repository.
+      result = await withMainWorkspaceLock(account.mainPath, () =>
+        pushBranchRef({
+          url: account.url,
+          credential: account.credential,
+          workspacesDir: account.workspacesDir,
+          repoRoot: account.mainPath,
+          branch: branchToPush,
+        }),
+      );
     } catch (error) {
       throw conflict(`git push failed: ${describeTransportError(error, account.credential)}`);
     }

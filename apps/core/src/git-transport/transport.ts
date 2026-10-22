@@ -131,6 +131,7 @@ export async function pushBranchRef(t: RepoTarget & { branch: string }): Promise
     repoRoot: t.repoRoot,
     config: transportConfig(`+${ref}:${tracking}`),
     refs: [tracking],
+    operation: 'push',
   });
   await repo.preflight([ref, tracking]);
   const oid = await git.resolveRef({ fs: repo.client, gitdir: repo.gitdir, ref }).catch(() => null);
@@ -160,6 +161,7 @@ export async function pushBranchRef(t: RepoTarget & { branch: string }): Promise
     repo.assertClean();
     return 'pushed';
   } catch (error) {
+    await repo.rollbackRefs();
     repo.assertClean();
     const mapped = toTransportError(error, t);
     if (mapped.code === 'rejected') return 'rejected';
@@ -177,6 +179,7 @@ export async function fetchBranchRef(t: RepoTarget & { branch: string }): Promis
     repoRoot: t.repoRoot,
     config: transportConfig(`+${ref}:${tracking}`),
     refs: [tracking],
+    operation: 'fetch',
   });
   await repo.preflight([ref, tracking]);
   const http = createGitHttp({
@@ -206,6 +209,7 @@ export async function fetchBranchRef(t: RepoTarget & { branch: string }): Promis
         `${new URL(t.url).host} has no branch ${t.branch} (the repository is empty).`,
       );
   } catch (error) {
+    await repo.rollbackRefs();
     repo.assertClean();
     throw toTransportError(error, t);
   } finally {
@@ -222,6 +226,7 @@ export async function fetchForClone(
     config: transportConfig('+refs/heads/*:refs/remotes/origin/*'),
     refs: [],
     refPrefixes: ['refs/remotes/origin/', 'refs/tags/'],
+    operation: 'clone',
   });
   await repo.preflight([]);
   const http = createGitHttp({
@@ -254,6 +259,7 @@ export async function fetchForClone(
     }
     return { defaultBranch: head };
   } catch (error) {
+    await repo.rollbackRefs();
     repo.assertClean();
     throw toTransportError(error, t);
   } finally {

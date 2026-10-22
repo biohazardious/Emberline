@@ -5,7 +5,10 @@
  *   a plain directory; every path is checked to stay inside `.git`, and every component is
  *   lstat-ed: a symbolic link anywhere is refused, never followed;
  * - reads go through a verified descriptor (`openVerifiedFile`: O_NOFOLLOW, `/proc/self/fd` must
- *   name the expected path), with a size cap;
+ *   name the expected path), with a cap on what one operation reads; a directory a write goes into
+ *   must still be exactly `.git/<dir>` (its real path, re-checked each time);
+ * - every loose object and pack isomorphic-git reads or receives is checked first (object-limits.ts),
+ *   so nothing it inflates is larger than MAX_OBJECT_BYTES or adds up past MAX_INFLATED_BYTES;
  * - `.git/config` is never read: the operation's own config is served instead (no pushurl,
  *   insteadOf, proxy, corsProxy, helpers, askPass or submodules can take effect);
  * - writes are limited to loose objects, packs (object count capped) and the refs the operation
@@ -18,11 +21,13 @@
  * created or a temp file renamed into place is addressed by path right after its directory was
  * verified. An agent that swaps that directory for a link inside that window can make core create
  * an empty directory, or place a loose object, a pack or a ref file (content from the remote or a
- * commit id), inside the link's target. Reads are not affected.
+ * commit id), inside the link's target. File contents read are not affected (verified descriptors);
+ * a directory listing is: the same swap between the check and the `readdir` shows isomorphic-git
+ * the names in the link's target, though every file it then opens is verified again.
  */
 import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import { lstat, mkdir, readdir, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { PromiseFsClient } from 'isomorphic-git';
 import {
@@ -33,9 +38,11 @@ import {
   UnsafePathError,
 } from '../outputs/safe-fs.js';
 import { GitTransportError } from './http.js';
+import { ObjectBudget, type ObjectLimits, type ObjectOperation } from './object-limits.js';
 
 const MB = 1024 * 1024;
 const PACK_FILE = /^objects\/pack\/pack-[0-9a-f]{40}\.(?:pack|idx)$/;
+const PACK_DATA = /^objects\/pack\/pack-[0-9a-f]{40}\.pack$/;
 const LOOSE_OBJECT = /^objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/;
 const OBJECT_DIR = /^objects(?:\/pack|\/[0-9a-f]{2})?$/;
 const REF_SEGMENT = /^(?![.-])(?!.*\.lock$)[A-Za-z0-9._@+-]+$/;
@@ -62,8 +69,12 @@ export interface RepoFsOptions {
   refs: string[];
   /** ...or below these prefixes (each ends in `/`): the import clone's `refs/remotes/origin/`, `refs/tags/`. */
   refPrefixes?: string[];
+  /** What one operation reads from `.git` in all (default 1 GB). */
   maxReadBytes?: number;
   maxPackObjects?: number;
+  /** Names the operation in size refusals (default 'fetch'). */
+  operation?: ObjectOperation;
+  objectLimits?: Partial<ObjectLimits>;
 }
 
 type Code = 'ENOENT' | 'EACCES';
@@ -76,6 +87,12 @@ export class RepoFs {
   private failure: GitTransportError | null = null;
   private readonly maxReadBytes: number;
   private readonly maxPackObjects: number;
+  private readonly objects: ObjectBudget;
+  private bytesRead = 0;
+  /** What each ref this operation wrote held before (null: it did not exist). */
+  private readonly refUndo = new Map<string, Buffer | null>();
+  /** Loose objects already counted toward the budget (each read is still checked). */
+  private readonly countedLoose = new Set<string>();
 
   private constructor(
     readonly gitdir: string,
@@ -83,6 +100,7 @@ export class RepoFs {
   ) {
     this.maxReadBytes = options.maxReadBytes ?? 1024 * MB;
     this.maxPackObjects = options.maxPackObjects ?? 5_000_000;
+    this.objects = new ObjectBudget(options.operation ?? 'fetch', options.objectLimits);
     this.client = {
       promises: {
         readFile: this.readFile,
@@ -154,6 +172,25 @@ export class RepoFs {
     this.assertClean();
   }
 
+  /**
+   * After a failed operation, the refs it wrote go back to what they held (isomorphic-git's fetch
+   * updates refs/remotes before it stores the pack, so a refused pack would leave them dangling).
+   */
+  async rollbackRefs(): Promise<void> {
+    for (const [rel, previous] of [...this.refUndo].reverse()) {
+      try {
+        if (previous) await this.writeFile(path.join(this.gitdir, rel), previous);
+        else {
+          const dir = path.posix.dirname(rel);
+          await unlink(path.join(await this.verifiedDir(dir, 'EACCES'), path.posix.basename(rel)));
+        }
+      } catch {
+        // Best effort: the operation fails either way.
+      }
+    }
+    this.refUndo.clear();
+  }
+
   /** Fails the operation for any refusal or cap that was hit, also one isomorphic-git swallowed. */
   assertClean(): void {
     if (this.violations.length > 0) {
@@ -223,14 +260,17 @@ export class RepoFs {
   /** The real path of a `.git` directory, which must be exactly `.git/<rel>`. */
   private async verifiedDir(rel: string, code: Code): Promise<string> {
     const abs = rel === '' || rel === '.' ? this.gitdir : path.join(this.gitdir, rel);
+    let real: string;
     try {
-      const real = await realDirUnder(this.gitdir, abs);
-      if (!real) throw fsError('ENOENT', `no directory .git/${rel}`);
-      return real;
+      real = await realpath(abs);
     } catch (error) {
-      if (error instanceof UnsafePathError) this.refuse(rel, 'a path that resolves elsewhere', code);
+      if (isMissing(error)) throw fsError('ENOENT', `no directory .git/${rel}`);
       throw error;
     }
+    // this.gitdir is a real path since open(): a link anywhere on the way, also a project folder
+    // swapped for one later, makes the real path differ.
+    if (real !== abs) this.refuse(rel, 'a path that resolves elsewhere', code);
+    return real;
   }
 
   private mayWrite(rel: string): boolean {
@@ -252,7 +292,8 @@ export class RepoFs {
     );
   }
 
-  private checkPack(bytes: Buffer): void {
+  /** A received pack: its object count, then every entry's size (before isomorphic-git unpacks it). */
+  private async checkPack(bytes: Buffer): Promise<void> {
     if (bytes.length < 12 || bytes.toString('latin1', 0, 4) !== 'PACK') {
       this.fail(new GitTransportError('protocol', 'The server sent something that is not a git pack.'));
     }
@@ -264,6 +305,17 @@ export class RepoFs {
           `The server's pack has ${count} objects, more than Emberline's limit of ${this.maxPackObjects}.`,
         ),
       );
+    }
+    await this.checkObjects(() => this.objects.checkReceivedPack(bytes));
+  }
+
+  /** Runs an object-size check; a refusal fails the operation (also when isomorphic-git swallows it). */
+  private async checkObjects(check: () => Promise<void>): Promise<void> {
+    try {
+      await check();
+    } catch (error) {
+      if (error instanceof GitTransportError) this.fail(error);
+      throw error;
     }
   }
 
@@ -278,6 +330,20 @@ export class RepoFs {
       await this.walk('config', 'ENOENT');
       return encoding ? this.options.config : Buffer.from(this.options.config);
     }
+    const bytes = await this.readVerified(rel);
+    if (LOOSE_OBJECT.test(rel)) {
+      const count = !this.countedLoose.has(rel);
+      await this.checkObjects(() => this.objects.checkLoose(bytes, { count }));
+      this.countedLoose.add(rel);
+    } else if (PACK_DATA.test(rel)) {
+      const idx = await this.readVerified(rel.replace(/pack$/, 'idx'));
+      await this.checkObjects(() => this.objects.checkStoredPack(bytes, idx));
+    }
+    return encoding ? bytes.toString(encoding) : bytes;
+  };
+
+  /** A file in `.git` through a verified descriptor, counted toward the operation's read cap. */
+  private async readVerified(rel: string): Promise<Buffer> {
     const st = await this.walk(rel, 'ENOENT');
     if (!st?.isFile()) throw fsError('ENOENT', `no file at .git/${rel}`);
     const abs = path.join(this.gitdir, rel);
@@ -289,14 +355,15 @@ export class RepoFs {
       throw error;
     }
     try {
-      if (opened.size > this.maxReadBytes) {
+      if (this.bytesRead + opened.size > this.maxReadBytes) {
         this.fail(
           new GitTransportError(
             'too_large',
-            `.git/${rel} is larger than ${Math.round(this.maxReadBytes / MB)} MB; Emberline's git transport stops there.`,
+            `Reading .git/${rel} makes this operation larger than ${Math.round(this.maxReadBytes / MB)} MB; Emberline's git transport stops there.`,
           ),
         );
       }
+      this.bytesRead += opened.size;
       const data = Buffer.alloc(opened.size);
       let pos = 0;
       while (pos < data.length) {
@@ -304,19 +371,25 @@ export class RepoFs {
         if (bytesRead === 0) break;
         pos += bytesRead;
       }
-      const bytes = data.subarray(0, pos);
-      return encoding ? bytes.toString(encoding) : bytes;
+      return data.subarray(0, pos);
     } finally {
       await opened.handle.close();
     }
-  };
+  }
 
   private readonly writeFile = async (p: unknown, data: unknown): Promise<void> => {
     if (typeof p !== 'string') throw fsError('EINVAL', 'no path');
     const rel = this.rel(p, 'EACCES');
     if (!this.mayWrite(rel)) this.refuse(rel, 'a write outside what this operation updates', 'EACCES');
-    const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data as Uint8Array);
-    if (rel.endsWith('.pack')) this.checkPack(bytes);
+    const bytes =
+      typeof data === 'string'
+        ? Buffer.from(data, 'utf8')
+        : Buffer.from(
+            (data as Uint8Array).buffer,
+            (data as Uint8Array).byteOffset,
+            (data as Uint8Array).byteLength,
+          );
+    if (rel.endsWith('.pack')) await this.checkPack(bytes);
     const dir = path.posix.dirname(rel);
     const parent = await this.walk(dir, 'EACCES');
     // Missing: isomorphic-git creates the directory and writes again.
@@ -330,6 +403,9 @@ export class RepoFs {
         existing.isSymbolicLink() ? 'a symbolic link' : 'something that is not a file',
         'EACCES',
       );
+    if (!rel.startsWith('objects/') && !this.refUndo.has(rel)) {
+      this.refUndo.set(rel, existing ? await this.readVerified(rel) : null);
+    }
     const tmp = `.emberline-${randomUUID()}.tmp`;
     let handle;
     try {
