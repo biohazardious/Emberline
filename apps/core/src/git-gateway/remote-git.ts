@@ -1,12 +1,15 @@
 /**
  * Emberline's own git with a forge account, run by the runner's hardened git (no credentials)
  * against a capability URL of the gateway. The capability URL is only the explicit URL argument of
- * that one command; nothing is written to `.git/config`; submodules are never recursed into; only
- * the gateway's scheme is allowed; no redirect, proxy or credential helper applies.
+ * that one command (for the import clone, a command-scope `insteadOf` for the real URL); nothing is
+ * written to `.git/config`; submodules are never recursed into; only the gateway's scheme is
+ * allowed; no redirect, proxy or credential helper applies.
  */
+import { withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
-import type { GitGateway } from './gateway.js';
+import { CAPABILITY_ROUTE_PREFIX, type GitGateway } from './gateway.js';
+import { GitGatewayError } from './upstream.js';
 
 const MINUTE = 60_000;
 
@@ -42,11 +45,12 @@ const grant = (r: AccountRemote, extra: Partial<Parameters<GitGateway['issue']>[
   ...extra,
 });
 
-export async function accountRemoteBranches(
+/** The remote's branches with their commits (`ls-remote --heads`). */
+async function remoteHeads(
   r: AccountRemote,
   cwd: string,
   branch?: string,
-): Promise<string[]> {
+): Promise<{ name: string; oid: string }[]> {
   // ls-remote never recurses into submodules (it has no such option).
   const out = await r.gateway.run(
     grant(r),
@@ -67,9 +71,26 @@ export async function accountRemoteBranches(
   );
   return out
     .split('\n')
-    .map((line) => line.split('\t')[1]?.trim() ?? '')
-    .filter((ref) => ref.startsWith('refs/heads/'))
-    .map((ref) => ref.slice('refs/heads/'.length));
+    .map((line) => line.split('\t'))
+    .filter(([oid, ref]) => oid && ref?.trim().startsWith('refs/heads/'))
+    .map(([oid, ref]) => ({ name: ref!.trim().slice('refs/heads/'.length), oid: oid!.trim() }));
+}
+
+export async function accountRemoteBranches(
+  r: AccountRemote,
+  cwd: string,
+  branch?: string,
+): Promise<string[]> {
+  return (await remoteHeads(r, cwd, branch)).map((head) => head.name);
+}
+
+/** The commit the remote's branch names now, or null when the remote has no such branch. */
+export async function accountRemoteHead(
+  r: AccountRemote,
+  cwd: string,
+  branch: string,
+): Promise<string | null> {
+  return (await remoteHeads(r, cwd, branch)).find((head) => head.name === branch)?.oid ?? null;
 }
 
 /** Updates only refs/remotes/origin/<branch> (explicit refspec, `--refmap=`). */
@@ -92,7 +113,63 @@ export async function accountFetchBranch(r: AccountRemote, repoPath: string, bra
   );
 }
 
-/** Pushes the commit refs/heads/<branch> names now, to the same ref: never forced; the gateway lets only that ref and that commit through. */
+/** Whether `cwd`'s object store has the commit (the runner's git, no network). */
+async function hasCommit(cwd: string, oid: string): Promise<boolean> {
+  return execGitFile(['cat-file', '-e', `${oid}^{commit}`], { cwd }).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** Fetches a remote branch's objects without updating any ref (no destination, `--refmap=`, no FETCH_HEAD). */
+async function fetchBranchObjects(r: AccountRemote, repoPath: string, branch: string): Promise<void> {
+  await r.gateway.run(grant(r), (url) =>
+    execGitFile(
+      [
+        ...gatewayGitArgs(r.gateway),
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        '--no-recurse-submodules',
+        '--refmap=',
+        '--',
+        url,
+        `refs/heads/${branch}`,
+      ],
+      { cwd: repoPath, timeout: 10 * MINUTE },
+    ),
+  );
+}
+
+/** Exit code 1 of `merge-base --is-ancestor` is "no"; anything else is a failure. */
+async function isAncestor(cwd: string, ancestor: string, commit: string): Promise<boolean> {
+  try {
+    await execGitFile(['merge-base', '--is-ancestor', ancestor, commit], { cwd });
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return false;
+    throw error;
+  }
+}
+
+/** The forge's own reason for refusing (a hook, a protected branch): its first `remote:` line, else git's. */
+function forgeRefusal(out: string): string | null {
+  const porcelain = /^!\t\S+\t\[remote (?:rejected|failure)\] \((.*)\)$/m.exec(out);
+  if (!porcelain) return null;
+  const remote = out
+    .split('\n')
+    .map((line) => /^remote: (?:error: )?(.*)$/.exec(line.trim())?.[1]?.trim() ?? '')
+    .find(Boolean);
+  return remote || porcelain[1]!;
+}
+
+/**
+ * Pushes the commit refs/heads/<branch> names now, to the same ref, only as a fast-forward:
+ * - the remote branch's commit is read first (ls-remote through the gateway), fetched if missing;
+ * - a branch that is not a descendant of it is `'rejected'` before any push;
+ * - the push capability is bound to that old commit and the new one, so the forge updates the ref
+ *   only if it still holds what was checked (no force, whatever the runner's git sends).
+ */
 export async function accountPushBranch(
   r: AccountRemote,
   repoPath: string,
@@ -102,47 +179,86 @@ export async function accountPushBranch(
   const newOid = (
     await execGitFile(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: repoPath })
   ).stdout.trim();
-  return r.gateway.run(grant(r, { service: 'git-receive-pack', push: { ref, newOid } }), async (url) => {
-    try {
-      await execGitFile(
-        [
-          ...gatewayGitArgs(r.gateway),
-          'push',
-          '--porcelain',
-          '--no-recurse-submodules',
-          '--',
-          url,
-          `${newOid}:${ref}`,
-        ],
-        { cwd: repoPath, timeout: 10 * MINUTE },
-      );
-      return 'pushed' as const;
-    } catch (error) {
-      const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
-      if (/^!\s/m.test(out) || /\[rejected\]|non-fast-forward|fetch first/.test(out))
-        return 'rejected' as const;
-      throw error;
-    }
-  });
+  const remoteOid = await accountRemoteHead(r, repoPath, branch);
+  if (remoteOid === newOid) return 'pushed';
+  if (remoteOid) {
+    if (!(await hasCommit(repoPath, remoteOid))) await fetchBranchObjects(r, repoPath, branch);
+    // Still missing: the remote moved on since; not a fast-forward of what was checked.
+    if (!(await hasCommit(repoPath, remoteOid)) || !(await isAncestor(repoPath, remoteOid, newOid)))
+      return 'rejected';
+  }
+  const oldOid = remoteOid ?? '0'.repeat(newOid.length);
+  return r.gateway.run(
+    grant(r, { service: 'git-receive-pack', push: { ref, newOid, oldOid } }),
+    async (url) => {
+      try {
+        await execGitFile(
+          [
+            ...gatewayGitArgs(r.gateway),
+            'push',
+            '--porcelain',
+            '--no-recurse-submodules',
+            '--',
+            url,
+            `${newOid}:${ref}`,
+          ],
+          { cwd: repoPath, timeout: 10 * MINUTE },
+        );
+        return 'pushed' as const;
+      } catch (error) {
+        const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
+        const refusal = forgeRefusal(out);
+        if (refusal) throw new GitGatewayError('git_failed', `The forge refused the push: ${refusal}`);
+        if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected' as const;
+        throw error;
+      }
+    },
+  );
 }
 
-/** The import clone's PTY command: a capability for 60 minutes (first use within 2), tracked until import-status sees the clone end. */
+/**
+ * The import clone's PTY command: a capability for 60 minutes (first use within 2), tracked until
+ * import-status sees the clone end. git clones the real URL, which a command-scope `insteadOf`
+ * points at the capability URL: `.git/config` gets the real URL as origin, never the capability.
+ */
 export function accountCloneArgs(r: AccountRemote, target: string): string[] {
   const { capability, url } = r.gateway.issue(grant(r, { firstUseMs: 2 * MINUTE, operationMs: 60 * MINUTE }));
   r.gateway.trackClone(r.projectId, capability);
-  return [...gatewayGitArgs(r.gateway), 'clone', '--progress', '--no-recurse-submodules', '--', url, target];
+  return [
+    ...gatewayGitArgs(r.gateway),
+    '-c',
+    `url.${url}.insteadOf=${r.url}`,
+    'clone',
+    '--progress',
+    '--no-recurse-submodules',
+    '--',
+    r.url,
+    target,
+  ];
 }
 
-/** The clone ended: release the capability, and (once) point origin at the real URL. Returns why the gateway refused, if it did. */
+/**
+ * The clone ended: release its capability (if this core still tracks it) and, whenever origin still
+ * names a gateway URL (an older clone, a restart), point it at the real URL; a failed repair throws
+ * and the next poll tries again. Returns why the gateway refused, if it did.
+ */
 export async function finishAccountClone(
   gateway: GitGateway,
   project: { id: string; path: string; repoUrl: string | null },
   cloned: boolean,
 ): Promise<string | null> {
   const ended = gateway.endClone(project.id);
-  if (!ended) return null;
-  if (ended.first && cloned && project.repoUrl) {
-    await execGitFile(['-C', project.path, 'remote', 'set-url', '--', 'origin', project.repoUrl]);
+  const repoUrl = project.repoUrl;
+  if (cloned && repoUrl) {
+    await withMainWorkspaceLock(project.path, async () => {
+      const origin = await execGitFile(['-C', project.path, 'remote', 'get-url', 'origin']).then(
+        (res) => res.stdout.trim(),
+        () => '',
+      );
+      if (origin.includes(CAPABILITY_ROUTE_PREFIX)) {
+        await execGitFile(['-C', project.path, 'remote', 'set-url', '--', 'origin', repoUrl]);
+      }
+    });
   }
-  return ended.outcome?.message ?? null;
+  return ended?.outcome?.message ?? null;
 }

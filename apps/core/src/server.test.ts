@@ -77,6 +77,12 @@ describe('host allow-list (DNS rebinding)', () => {
     },
   );
 
+  it("lets the git gateway URL's host through", async () => {
+    t = await createTestApp({ hookUrl: 'http://core:7420', gitGatewayUrl: 'http://emberline-core:7420' });
+    expect((await t.app.inject({ url: '/api/health', headers: { host: 'emberline-core:7420' } })).statusCode).toBe(200);
+    expect((await t.app.inject({ url: '/api/health', headers: { host: 'other-core:7420' } })).statusCode).toBe(421);
+  });
+
   it('allows names from EMBERLINE_ALLOWED_HOSTS and "*" disables the check', async () => {
     t = await createTestApp({ allowedHosts: ['emberline.lan'] });
     expect((await t.app.inject({ url: '/api/health', headers: { host: 'Emberline.LAN:8080' } })).statusCode).toBe(200);

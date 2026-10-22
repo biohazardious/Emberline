@@ -249,10 +249,13 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
 
 function hostAllowList(config: CoreConfig): (host: string) => boolean {
   const names = new Set(['localhost', ...config.allowedHosts]);
-  try {
-    names.add(normalizeHostName(new URL(config.hookUrl).host));
-  } catch {
-    // an unparsable hook URL adds nothing
+  // The runner reaches core by the hook URL's name and, for the git gateway, by that URL's name.
+  for (const url of [config.hookUrl, config.gitGatewayUrl]) {
+    try {
+      if (url) names.add(normalizeHostName(new URL(url).host));
+    } catch {
+      // an unparsable URL adds nothing
+    }
   }
   const any = names.has('*');
   return (host) => {

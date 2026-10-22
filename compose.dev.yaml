@@ -55,6 +55,8 @@ services:
       EMBERLINE_DATA_DIR: /data
       EMBERLINE_WORKSPACES_DIR: /workspaces
       EMBERLINE_HOOK_URL: http://core:7420
+      # The dev runner is the `ptyd` service: only it may use the git gateway.
+      EMBERLINE_RUNNER_HOSTS: ptyd
     ports:
       - "127.0.0.1:7420:7420"
     depends_on: *after-install

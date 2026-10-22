@@ -1,17 +1,20 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { Writable } from 'node:stream';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { basicAuthValue, type GitHttpCredential } from '../git-credentials.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
+import { execGitFile } from '../git-exec.js';
 import { GitGateway } from './gateway.js';
 import {
   accountFetchBranch,
+  gatewayGitArgs,
   accountPushBranch,
   accountRemoteBranches,
   type AccountRemote,
@@ -167,13 +170,14 @@ describe('the git gateway', () => {
       [`${head} ${head} refs/heads/main\0 report-status\n`, `${'0'.repeat(40)} ${head} refs/heads/extra\n`],
       [`${head} ${'0'.repeat(40)} refs/heads/main\0 report-status\n`],
       [`${head} ${'c'.repeat(40)} refs/heads/main\0 report-status\n`],
+      [`${'d'.repeat(40)} ${head} refs/heads/main\0 report-status\n`], // another old value
     ]) {
       const grant = gateway.issue({
         projectId: 'p1',
         upstreamUrl: `${a.url}/alice/app.git`,
         credential: cred(),
         service: 'git-receive-pack',
-        push: { ref: 'refs/heads/main', newOid: head },
+        push: { ref: 'refs/heads/main', newOid: head, oldOid: head },
       });
       const res = await fetch(`${grant.url}/git-receive-pack`, {
         method: 'POST',
@@ -196,10 +200,19 @@ describe('the git gateway', () => {
     for (const [method, suffix] of [
       ['GET', '/objects/info/packs'],
       ['GET', '/HEAD'],
-      ['PUT', '/info/refs?service=git-upload-pack'],
-      ['DELETE', ''],
     ] as const) {
       expect((await fetch(`${grant.url}${suffix}`, { method })).status, `${method} ${suffix}`).toBe(404);
+    }
+    // Other methods, WebDAV ones too, get 405 from the same silent route; HEAD never becomes a forge request.
+    for (const [method, suffix] of [
+      ['PUT', '/info/refs?service=git-upload-pack'],
+      ['DELETE', ''],
+      ['PROPFIND', '/info/refs'],
+      ['MKCOL', '/x'],
+      ['HEAD', '/info/refs?service=git-upload-pack'],
+      ['OPTIONS', '/info/refs'],
+    ] as const) {
+      expect((await fetch(`${grant.url}${suffix}`, { method })).status, `${method} ${suffix}`).toBe(405);
     }
     // A POST that is not a git request body (another content type, none) is refused, not forwarded.
     for (const headers of [
@@ -265,8 +278,9 @@ describe('the git gateway', () => {
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
       gitIn(repo, 'rev-parse', 'HEAD'),
     );
-    // The probe never reached the forge: one advertisement and one push.
-    expect(a.seen.map((r) => r.method)).toEqual(['GET', 'POST']);
+    // The probe never reached the forge: one push POST (after the planning ls-remote and the advertisement).
+    expect(a.seen.filter((r) => r.path.endsWith('/git-receive-pack'))).toHaveLength(1);
+    expect(posts(a)).toHaveLength(1);
     expect(gateway.size).toBe(0);
   });
 
@@ -280,6 +294,237 @@ describe('the git gateway', () => {
     await expect(accountPushBranch(remote(), repo, 'main')).rejects.toMatchObject({
       code: 'too_large',
       message: 'This git operation moved more than 512 bytes; Emberline stopped it.',
+    });
+  });
+});
+
+describe('the git gateway, one push and its limits', () => {
+  const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, '0')}${line}`;
+  const ZERO = '0'.repeat(40);
+  const RECEIVE = { 'content-type': 'application/x-git-receive-pack-request' };
+  const receivePosts = () =>
+    a.seen.filter((r) => r.method === 'POST' && r.path.endsWith('/git-receive-pack'));
+  const pushGrant = (newOid: string, oldOid = ZERO) =>
+    gateway.issue({
+      projectId: 'p1',
+      upstreamUrl: `${a.url}/alice/app.git`,
+      credential: cred(),
+      service: 'git-receive-pack',
+      push: { ref: 'refs/heads/main', newOid, oldOid },
+    });
+
+  it('a push capability carries one push: a second list or probe on it is refused before the forge', async () => {
+    const head = gitIn(repo, 'rev-parse', 'HEAD');
+    const grant = pushGrant(head);
+    // Async: the gateway answers in this same process.
+    await promisify(execFile)('git', [
+      '-C',
+      repo,
+      ...gatewayGitArgs(gateway),
+      'push',
+      '-q',
+      '--',
+      grant.url,
+      `${head}:refs/heads/main`,
+    ]);
+    expect(receivePosts()).toHaveLength(1);
+    for (const body of [`${pkt(`${ZERO} ${head} refs/heads/main\0 report-status\n`)}0000`, '0000']) {
+      const res = await fetch(`${grant.url}/git-receive-pack`, { method: 'POST', headers: RECEIVE, body });
+      expect(res.status).toBe(403);
+      expect(await res.text()).toContain('This push was already sent.');
+    }
+    expect(receivePosts()).toHaveLength(1);
+    gateway.release(grant.capability);
+  });
+
+  it('a probe while a push is in flight is refused; release ends the push that never sent its list', async () => {
+    const head = gitIn(repo, 'rev-parse', 'HEAD');
+    const grant = pushGrant(head);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(pkt(`${ZERO} ${head} refs/heads/main\0 report-status\n`).slice(0, 30)),
+        );
+      },
+    });
+    const inFlight = fetch(`${grant.url}/git-receive-pack`, {
+      method: 'POST',
+      headers: RECEIVE,
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    await new Promise((r) => setTimeout(r, 150));
+    const probe = await fetch(`${grant.url}/git-receive-pack`, {
+      method: 'POST',
+      headers: RECEIVE,
+      body: '0000',
+    });
+    expect(probe.status).toBe(403);
+    gateway.release(grant.capability);
+    expect((await inFlight).status).toBe(403);
+    expect(receivePosts()).toEqual([]);
+  });
+
+  it('a command list that does not arrive within the idle limit is refused', async () => {
+    gateway.dispose();
+    await app.close();
+    await startGateway(['localhost'], { idleTimeoutMs: 200 });
+    const head = gitIn(repo, 'rev-parse', 'HEAD');
+    const grant = pushGrant(head);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('00'));
+      },
+    });
+    const started = Date.now();
+    const res = await fetch(`${grant.url}/git-receive-pack`, {
+      method: 'POST',
+      headers: RECEIVE,
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    expect(res.status).toBe(403);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(gateway.release(grant.capability)).toEqual({
+      code: 'ref_refused',
+      message: 'The push request did not send its command list in time.',
+    });
+  });
+
+  it('a compressed push body is refused before the forge', async () => {
+    const head = gitIn(repo, 'rev-parse', 'HEAD');
+    const grant = pushGrant(head);
+    const res = await fetch(`${grant.url}/git-receive-pack`, {
+      method: 'POST',
+      headers: { ...RECEIVE, 'content-encoding': 'gzip' },
+      body: `${pkt(`${ZERO} ${head} refs/heads/main\0 report-status\n`)}0000`,
+    });
+    expect(res.status).toBe(403);
+    expect(gateway.release(grant.capability)).toEqual({
+      code: 'ref_refused',
+      message: 'A compressed push request is not accepted.',
+    });
+    expect(posts(a)).toEqual([]);
+  });
+
+  it('request 101 on one capability gets 429', async () => {
+    const grant = gateway.issue({
+      projectId: 'p1',
+      upstreamUrl: `${a.url}/alice/app.git`,
+      credential: cred(),
+      service: 'git-upload-pack',
+    });
+    for (let batch = 0; batch < 10; batch++) {
+      const statuses = await Promise.all(
+        Array.from({ length: 10 }, async () => {
+          const res = await fetch(`${grant.url}/info/refs?service=git-upload-pack`);
+          await res.arrayBuffer();
+          return res.status;
+        }),
+      );
+      expect(statuses.every((s) => s === 200)).toBe(true);
+    }
+    const seen = a.seen.length;
+    expect((await fetch(`${grant.url}/info/refs?service=git-upload-pack`)).status).toBe(429);
+    expect(a.seen.length).toBe(seen);
+    gateway.release(grant.capability);
+  });
+
+  it('a capability that runs out of time mid-command keeps the reason', async () => {
+    const error = await gateway
+      .run(
+        {
+          projectId: 'p1',
+          upstreamUrl: `${a.url}/alice/app.git`,
+          credential: cred(),
+          service: 'git-upload-pack',
+          operationMs: 200,
+        },
+        async (url) => {
+          await new Promise((r) => setTimeout(r, 300));
+          return execGitFile([...gatewayGitArgs(gateway), 'ls-remote', '--', url], { cwd: repo });
+        },
+      )
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: 'timeout',
+      message: 'This git operation ran out of time; Emberline stopped it.',
+    });
+  });
+
+  it('a push is planned from the remote branch: fast-forward passes, a diverged or unrelated branch is rejected and the remote keeps its commits', async () => {
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed'); // new branch: planned from the zero id
+    commit(repo, 'b.txt');
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed'); // fast-forward
+    expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
+      gitIn(repo, 'rev-parse', 'HEAD'),
+    );
+    // Someone else pushes; our branch diverges (the remote commit is not even here yet).
+    const elsewhere = path.join(dir, 'elsewhere');
+    execFileSync('git', ['clone', '-q', a.bare('alice', 'app'), elsewhere]);
+    commit(elsewhere, 'theirs.txt');
+    gitIn(elsewhere, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+    const theirs = gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main');
+    commit(repo, 'ours.txt');
+    const pushes = receivePosts().length;
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    // An unrelated history (what a force push would put there) is rejected the same way.
+    gitIn(repo, 'checkout', '-q', '--orphan', 'other');
+    commit(repo, 'orphan.txt');
+    gitIn(repo, 'branch', '-f', 'main', 'HEAD');
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(theirs);
+    expect(receivePosts()).toHaveLength(pushes);
+    expect(gateway.size).toBe(0);
+  });
+
+  it('a forged old value on a planned push never reaches the forge, and a force push of another commit is refused', async () => {
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');
+    const remoteHead = gitIn(repo, 'rev-parse', 'HEAD');
+    commit(repo, 'next.txt');
+    const planned = gitIn(repo, 'rev-parse', 'HEAD');
+    const grant = pushGrant(planned, remoteHead);
+    const forged = await fetch(`${grant.url}/git-receive-pack`, {
+      method: 'POST',
+      headers: RECEIVE,
+      body: `${pkt(`${'e'.repeat(40)} ${planned} refs/heads/main\0 report-status\n`)}0000`,
+    });
+    expect(forged.status).toBe(403);
+    gateway.release(grant.capability);
+    // A hostile git with a capability for the planned commit forces an unrelated one.
+    gitIn(repo, 'checkout', '-q', '--orphan', 'other');
+    commit(repo, 'orphan.txt');
+    const orphan = gitIn(repo, 'rev-parse', 'HEAD');
+    const second = pushGrant(planned, remoteHead);
+    await expect(
+      promisify(execFile)('git', [
+        '-C',
+        repo,
+        ...gatewayGitArgs(gateway),
+        'push',
+        '-q',
+        '--force',
+        '--',
+        second.url,
+        `${orphan}:refs/heads/main`,
+      ]),
+    ).rejects.toThrow();
+    expect(gateway.release(second.capability)).toMatchObject({ code: 'ref_refused' });
+    expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(remoteHead);
+    expect(receivePosts()).toEqual([]);
+  });
+
+  it('a forge that refuses the push (a hook, a protected branch) says why, not "the remote has commits"', async () => {
+    const hook = path.join(a.bare('alice', 'app'), 'hooks', 'pre-receive');
+    writeFileSync(
+      hook,
+      '#!/bin/sh\necho "GH006: Protected branch update failed for refs/heads/main." >&2\nexit 1\n',
+    );
+    chmodSync(hook, 0o755);
+    const error = await accountPushBranch(remote(), repo, 'main').catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: 'git_failed',
+      message: 'The forge refused the push: GH006: Protected branch update failed for refs/heads/main.',
     });
   });
 });

@@ -14,7 +14,7 @@ const B = 'b'.repeat(40);
 const Z = '0'.repeat(40);
 const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, '0')}${line}`;
 const list = (...lines: string[]) => Buffer.from(`${lines.map(pkt).join('')}0000PACK....`, 'latin1');
-const plan = { ref: 'refs/heads/emberline/run-1', newOid: B };
+const plan = { ref: 'refs/heads/emberline/run-1', newOid: B, oldOid: A };
 
 describe('the receive-pack command list', () => {
   it('one update of the planned ref to the planned commit passes, and the body is forwarded unchanged', async () => {
@@ -123,6 +123,44 @@ describe('the receive-pack command list', () => {
     await expect(readPushCommands(Readable.from([long]), plan)).rejects.toMatchObject({
       code: 'ref_refused',
       message: 'The push request has no command list Emberline can read.',
+    });
+  });
+
+  it('the old value is bound too: only from the commit Emberline checked, or only a create for a new branch', async () => {
+    // Fast-forward from the checked commit passes; any other old value (a force over other commits) does not.
+    expect(() => checkPush([{ oldOid: A, newOid: B, ref: plan.ref }], plan)).not.toThrow();
+    const C = 'c'.repeat(40);
+    await expect(
+      readPushCommands(Readable.from([list(`${C} ${B} refs/heads/emberline/run-1\0 report-status\n`)]), plan),
+    ).rejects.toMatchObject({
+      code: 'ref_refused',
+      message:
+        'This push may update refs/heads/emberline/run-1 only from the commit Emberline checked (aaaaaaaaaaaa).',
+    });
+    await expect(
+      readPushCommands(Readable.from([list(`${Z} ${B} refs/heads/emberline/run-1\0 report-status\n`)]), plan),
+    ).rejects.toMatchObject({
+      code: 'ref_refused',
+    });
+    // A new branch: the plan's old value is the zero id, and only a create passes.
+    const create = { ...plan, oldOid: Z };
+    expect(() => checkPush([{ oldOid: Z, newOid: B, ref: plan.ref }], create)).not.toThrow();
+    expect(() => checkPush([{ oldOid: A, newOid: B, ref: plan.ref }], create)).toThrow(
+      'This push may only create refs/heads/emberline/run-1; the forge already has it.',
+    );
+  });
+
+  it('a stop signal ends the wait for a command list', async () => {
+    const stop = new AbortController();
+    const source = new Readable({ read() {} });
+    source.push(
+      Buffer.from(pkt(`${A} ${B} refs/heads/emberline/run-1\0 report-status\n`).slice(0, 30), 'latin1'),
+    );
+    const reading = readPushRequest(source, plan, stop.signal);
+    stop.abort();
+    await expect(reading).rejects.toMatchObject({
+      code: 'ref_refused',
+      message: 'The push request did not send its command list in time.',
     });
   });
 });

@@ -266,4 +266,50 @@ describe('import clone', () => {
     expect(t.runs.gitGateway.size).toBe(0);
     expectAgentsSeeNoToken(spawned);
   });
+
+  it('the capability never reaches .git/config: origin is the real URL as soon as the clone ends', async () => {
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');
+    const { project } = (await create(appUrl(), 'Private App')).json();
+    await clone;
+    expect(exitCode).toBe(0);
+    // No import-status poll yet (core may have restarted): .git/config already names the real URL.
+    expect(gitIn(project.path, 'remote', 'get-url', 'origin')).toBe(appUrl());
+    expect(readFileSync(path.join(project.path, '.git', 'config'), 'utf8')).not.toContain(
+      '/api/internal/git/',
+    );
+  });
+
+  it('an origin left on a capability URL is repaired on the next poll even after a restart, and a failed repair is retried', async () => {
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');
+    const { project } = (await create(appUrl(), 'Private App')).json();
+    await clone;
+    // What an earlier version left behind; core restarted since, so it tracks no clone.
+    gitIn(
+      project.path,
+      'remote',
+      'set-url',
+      'origin',
+      `${t.runs.gitGateway.baseUrl}/api/internal/git/${'x'.repeat(43)}`,
+    );
+    t.runs.gitGateway.forgetClone(project.id);
+    let failed = false;
+    setCommandExecutor(async (request) => {
+      if (!failed && request.args.includes('set-url')) {
+        failed = true;
+        throw new Error('runner restarting');
+      }
+      return localCommandExecutor(request);
+    });
+    const first = await t.app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/import-status`,
+      headers: { cookie },
+    });
+    expect(first.statusCode).toBe(500);
+    expect(failed).toBe(true);
+    expect(await importStatus(project.id)).toMatchObject({ status: 'ready' });
+    expect(gitIn(project.path, 'remote', 'get-url', 'origin')).toBe(appUrl());
+  });
 });

@@ -1,7 +1,7 @@
 /**
  * The only git data core reads: the pkt-line command list at the start of a receive-pack request
  * (`<old> <new> <ref>\0<caps>`, …, flush). A push through the gateway may update exactly the planned
- * ref to exactly the planned commit; no deletes, no other or extra refs, no shallow or signed
+ * ref from exactly the commit Emberline checked to exactly the planned commit; no deletes, no other or extra refs, no shallow or signed
  * pushes, and only the capabilities git itself needs (no push options, which forge hooks act on).
  * The pack after the flush is forwarded unread.
  */
@@ -16,6 +16,12 @@ export interface PushCommand {
 export interface PushPlan {
   ref: string;
   newOid: string;
+  /**
+   * What the forge's ref holds now, as Emberline read it before checking that `newOid` is a
+   * fast-forward of it; the zero id (same length) for a branch the forge does not have yet. The forge
+   * applies the update only if the ref still holds it, so the push can never discard commits.
+   */
+  oldOid: string;
 }
 
 export const MAX_COMMAND_LIST_BYTES = 64 * 1024;
@@ -71,6 +77,13 @@ export function checkPush(commands: PushCommand[], plan: PushPlan): void {
       `This push may set ${plan.ref} only to the commit Emberline planned (${plan.newOid.slice(0, 12)}).`,
     );
   }
+  if (only.oldOid !== plan.oldOid) {
+    throw refused(
+      /^0+$/.test(plan.oldOid)
+        ? `This push may only create ${plan.ref}; the forge already has it.`
+        : `This push may update ${plan.ref} only from the commit Emberline checked (${plan.oldOid.slice(0, 12)}).`,
+    );
+  }
 }
 
 /** git's auth probe before a large push (remote-curl's `probe_rpc`): a body that is a lone flush. */
@@ -79,16 +92,24 @@ export const PUSH_PROBE = Symbol('push probe');
 /**
  * Reads the command list off a receive-pack body and checks it. Returns the whole body (unchanged)
  * as a stream, or {@link PUSH_PROBE} for a body that is only a flush (no command, nothing after it).
+ * `signal` (release, a time limit) ends the wait for the command list.
  */
 export async function readPushRequest(
   source: Readable,
   plan: PushPlan,
+  signal?: AbortSignal,
 ): Promise<Readable | typeof PUSH_PROBE> {
   const it = source[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
+  const late = () => refused('The push request did not send its command list in time.');
+  const stopped = new Promise<never>((_resolve, reject) => {
+    if (signal?.aborted) reject(late());
+    signal?.addEventListener('abort', () => reject(late()), { once: true });
+  });
+  stopped.catch(() => undefined);
   let head = Buffer.alloc(0);
   let ended = false;
   const more = async (): Promise<boolean> => {
-    const next = await it.next();
+    const next = await Promise.race([it.next(), stopped]);
     if (next.done) {
       ended = true;
       return false;

@@ -11,7 +11,7 @@
  * it reads only the receive-pack command list (receive-pack.ts).
  */
 import { randomBytes } from 'node:crypto';
-import type http from 'node:http';
+import http from 'node:http';
 import { pipeline, Readable, Transform } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ContainerAddresses } from '../auth/container-addresses.js';
@@ -45,11 +45,21 @@ interface Capability extends GatewayGrant {
   bytes: number;
   controller: AbortController;
   outcome: GatewayOutcome | null;
+  /** Set when it ran out of time: it no longer works, but `release` still reports why. */
+  expiredAt: number | null;
 }
 
 const MINUTE = 60_000;
 const GB = 1024 ** 3;
 const MAX_REQUESTS = 100;
+/** How long an expired capability's outcome waits for its `release` before it is dropped. */
+const EXPIRED_KEPT_MS = 10 * MINUTE;
+const TIMED_OUT: GatewayOutcome = {
+  code: 'timeout',
+  message: 'This git operation ran out of time; Emberline stopped it.',
+};
+/** Every method Node parses (CONNECT never reaches a route): the ones git does not use get a silent 405. */
+const OTHER_METHODS = http.METHODS.filter((m) => m !== 'CONNECT' && m !== 'GET' && m !== 'POST');
 export const CAPABILITY_ROUTE_PREFIX = '/api/internal/git/';
 const PASSED_RESPONSE_HEADERS = ['content-type', 'cache-control', 'expires', 'pragma', 'content-encoding'];
 
@@ -117,7 +127,9 @@ export class GitGateway {
   }
 
   get size(): number {
-    return this.caps.size;
+    let live = 0;
+    for (const cap of this.caps.values()) if (cap.expiredAt === null) live++;
+    return live;
   }
 
   issue(grant: GatewayGrant): { capability: string; url: string } {
@@ -142,6 +154,7 @@ export class GitGateway {
       bytes: 0,
       controller: new AbortController(),
       outcome: null,
+      expiredAt: null,
     });
     return { capability, url: `${this.baseUrl}${CAPABILITY_ROUTE_PREFIX}${capability}` };
   }
@@ -158,10 +171,12 @@ export class GitGateway {
   /** One runner git command with a fresh capability, released when it ends; failures become one plain GitGatewayError. */
   async run<T>(grant: GatewayGrant, command: (url: string) => Promise<T>): Promise<T> {
     const { capability, url } = this.issue(grant);
+    // Held here: the outcome stays readable even if the capability expires while git runs.
+    const record = this.caps.get(capability)!;
     try {
       return await command(url);
     } catch (error) {
-      const outcome = this.caps.get(capability)?.outcome;
+      const outcome = record.outcome;
       throw outcome
         ? new GitGatewayError(outcome.code, outcome.message)
         : new GitGatewayError('git_failed', describeGitError(error, grant.credential));
@@ -191,14 +206,18 @@ export class GitGateway {
   }
 
   register(app: FastifyInstance): void {
+    // Methods Fastify does not route by default (PROPFIND, MKCOL, …) would reach its logged 404.
+    for (const method of OTHER_METHODS) {
+      if (!app.supportedMethods.includes(method)) app.addHttpMethod(method);
+    }
     void app.register(async (scope) => {
       // Smart HTTP bodies stay streams: nothing buffers or parses them here.
       scope.addContentTypeParser(
         ['application/x-git-upload-pack-request', 'application/x-git-receive-pack-request'],
         (_request, payload, done) => done(null, payload),
       );
-      // The path holds the capability: these routes log nothing.
-      const options = { logLevel: 'silent' as const };
+      // The path holds the capability: these routes log nothing. HEAD is never sent on to the forge.
+      const options = { logLevel: 'silent' as const, exposeHeadRoute: false };
       scope.get(`${CAPABILITY_ROUTE_PREFIX}:capability/info/refs`, options, (request, reply) =>
         this.handle(request as GitRequest, reply, 'advertise'),
       );
@@ -208,10 +227,20 @@ export class GitGateway {
       scope.post(`${CAPABILITY_ROUTE_PREFIX}:capability/git-receive-pack`, options, (request, reply) =>
         this.handle(request as GitRequest, reply, 'git-receive-pack'),
       );
-      // Any other path or method under the prefix (dumb HTTP, a typo): the same 404, and no request log with its URL.
-      scope.all(`${CAPABILITY_ROUTE_PREFIX}*`, options, (_request, reply) =>
-        plain(reply, 404, 'No such git operation (it ended or expired).'),
-      );
+      // Any other path (dumb HTTP, a typo): the same 404; any other method: 405. No request log with the URL.
+      scope.route({
+        ...options,
+        method: ['GET', 'POST'],
+        url: `${CAPABILITY_ROUTE_PREFIX}*`,
+        handler: (_request, reply) => plain(reply, 404, 'No such git operation (it ended or expired).'),
+      });
+      scope.route({
+        ...options,
+        method: OTHER_METHODS,
+        url: `${CAPABILITY_ROUTE_PREFIX}*`,
+        handler: (_request, reply) =>
+          plain(reply.header('allow', 'GET, POST'), 405, 'The git gateway answers only GET and POST.'),
+      });
     });
   }
 
@@ -223,19 +252,25 @@ export class GitGateway {
   }
 
   private sweep(): void {
-    for (const capability of [...this.caps.keys()]) this.live(capability);
+    const now = Date.now();
+    for (const [capability, cap] of [...this.caps]) {
+      if (cap.expiredAt !== null && now > cap.expiredAt + EXPIRED_KEPT_MS) this.caps.delete(capability);
+      else this.live(capability);
+    }
   }
 
-  /** The capability if it may still be used; an expired one is released. */
+  /** The capability if it may still be used. One past its time stops working and keeps why until released. */
   private live(capability: string): Capability | null {
     const cap = this.caps.get(capability);
-    if (!cap) return null;
+    if (!cap || cap.expiredAt !== null) return null;
     const now = Date.now();
     if (
       now > cap.createdAt + cap.operationMs ||
       (cap.usedAt === null && now > cap.createdAt + cap.firstUseMs)
     ) {
-      this.release(capability);
+      cap.expiredAt = now;
+      cap.outcome ??= TIMED_OUT;
+      cap.controller.abort();
       return null;
     }
     return cap;
@@ -307,6 +342,10 @@ export class GitGateway {
       cap.controller.signal,
       AbortSignal.timeout(Math.max(1, cap.createdAt + cap.operationMs - Date.now())),
     ]);
+    // Out of time (not released): say so, whatever the stream it cut says.
+    signal.addEventListener('abort', () => {
+      if (!cap.controller.signal.aborted) cap.outcome ??= TIMED_OUT;
+    });
     const agent = request.headers['user-agent'];
     const headers: Record<string, string> = {
       'user-agent':
@@ -329,11 +368,18 @@ export class GitGateway {
           return this.refuse(cap, reply, 403, 'ref_refused', 'A compressed push request is not accepted.');
         let pushed: Readable | typeof PUSH_PROBE;
         try {
-          // Nothing reaches the forge before the command list passed.
-          pushed = await readPushRequest(source, cap.push!);
+          // Nothing reaches the forge before the command list passed; a list that does not come in
+          // the idle limit, or a release, ends the wait.
+          pushed = await readPushRequest(
+            source,
+            cap.push!,
+            AbortSignal.any([signal, AbortSignal.timeout(this.idleTimeoutMs)]),
+          );
         } catch (error) {
           const message =
             error instanceof GitGatewayError ? error.message : 'The push request could not be read.';
+          // The rest of the body is not read: close the connection after the answer.
+          reply.header('connection', 'close');
           return this.refuse(cap, reply, 403, 'ref_refused', message);
         }
         if (pushed === PUSH_PROBE) {
