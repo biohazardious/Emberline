@@ -7,6 +7,7 @@ import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type { Db } from '../db/index.js';
+import { remoteUrlForDisplay } from '../forge/hosts.js';
 import { installSecretsKey, isSealed, openWith, SecretsKeyError, sealWith } from './box.js';
 import { SECRET_SETTINGS } from './fields.js';
 import { loadSecretsKey } from './key.js';
@@ -37,6 +38,10 @@ function mapSettingRow(row: { key: string; value: string }, f: Fn): unknown {
   return SECRET_SETTINGS[row.key]!(value, f);
 }
 
+/**
+ * Limit: a pre-0.5 plaintext secret that itself starts with `enc:v1:` counts as sealed, so start
+ * then needs a key that opens it (in practice no real token has that prefix).
+ */
 export function hasSealedSecrets(sqlite: Sqlite): boolean {
   let found = false;
   const note: Fn = (s) => {
@@ -63,9 +68,17 @@ export function assertSecretsReadable(sqlite: Sqlite, key: Buffer): void {
   for (const row of forgeTokenRows(sqlite)) open('forge_accounts')(row.token);
 }
 
-/** Seals every plaintext secret in one transaction; a crash leaves each value plaintext or sealed. */
-export function encryptStoredSecrets(sqlite: Sqlite, key: Buffer): { encrypted: number } {
+/**
+ * Seals every plaintext secret in one transaction; a crash leaves each value plaintext or sealed.
+ * The same transaction strips credentials (`user:token@`, a query) from stored repository URLs that
+ * older versions accepted; an ssh user name stays.
+ */
+export function encryptStoredSecrets(
+  sqlite: Sqlite,
+  key: Buffer,
+): { encrypted: number; cleanedRepoUrls: number } {
   let encrypted = 0;
+  let cleanedRepoUrls = 0;
   const seal: Fn = (s) => {
     if (isSealed(s)) return s;
     encrypted += 1;
@@ -86,17 +99,30 @@ export function encryptStoredSecrets(sqlite: Sqlite, key: Buffer): { encrypted: 
       for (const row of forgeTokenRows(sqlite)) {
         if (!isSealed(row.token)) setToken.run(seal(row.token), row.id);
       }
+      const setRepoUrl = sqlite.prepare('update projects set repo_url = ? where id = ?');
+      const repoRows = sqlite
+        .prepare('select id, repo_url from projects where repo_url is not null')
+        .all() as {
+        id: string;
+        repo_url: string;
+      }[];
+      for (const row of repoRows) {
+        const shown = remoteUrlForDisplay(row.repo_url);
+        if (!shown.hadCredentials) continue;
+        setRepoUrl.run(shown.url, row.id);
+        cleanedRepoUrls += 1;
+      }
     })();
   } finally {
     sqlite.pragma(`secure_delete = ${Number(secureDelete)}`);
   }
-  if (encrypted > 0) {
+  if (encrypted + cleanedRepoUrls > 0) {
     // The old pages still hold the plaintext: fold the WAL in, rebuild the file, fold again.
     sqlite.pragma('wal_checkpoint(TRUNCATE)');
     sqlite.exec('VACUUM');
     sqlite.pragma('wal_checkpoint(TRUNCATE)');
   }
-  return { encrypted };
+  return { encrypted, cleanedRepoUrls };
 }
 
 /** Snapshots written before `before` (migration .bak files, `make backup` copies): they hold plaintext. */
@@ -120,18 +146,26 @@ function plaintextSnapshots(dataDir: string, before: number): string[] {
 export function startSecrets(
   db: Db,
   o: { env: NodeJS.ProcessEnv; dataDir: string },
-): { source: 'env' | 'file' | 'created'; file: string; encrypted: number; plaintextSnapshots: string[] } {
+): {
+  source: 'env' | 'file' | 'created';
+  file: string;
+  encrypted: number;
+  cleanedRepoUrls: number;
+  plaintextSnapshots: string[];
+} {
   const startedAt = Date.now();
   const sqlite = db.$client;
   // A key file is created only for a database that holds no sealed value yet.
   const loaded = loadSecretsKey({ env: o.env, dataDir: o.dataDir, allowCreate: !hasSealedSecrets(sqlite) });
   assertSecretsReadable(sqlite, loaded.key);
   installSecretsKey(loaded.key);
-  const { encrypted } = encryptStoredSecrets(sqlite, loaded.key);
+  // Only after the key is durably on disk (key.ts) and proven: from here on data is written.
+  const { encrypted, cleanedRepoUrls } = encryptStoredSecrets(sqlite, loaded.key);
   return {
     source: loaded.source,
     file: loaded.file,
     encrypted,
-    plaintextSnapshots: encrypted > 0 ? plaintextSnapshots(o.dataDir, startedAt) : [],
+    cleanedRepoUrls,
+    plaintextSnapshots: encrypted + cleanedRepoUrls > 0 ? plaintextSnapshots(o.dataDir, startedAt) : [],
   };
 }

@@ -166,4 +166,52 @@ describe('secrets at start', () => {
     expect(JSON.stringify(raw.prepare('select * from settings').all())).toBe(before);
     o.close();
   });
+  it('strips credentials from stored repository URLs in the same pass, keeping ssh user names', () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'emberline.db');
+    let o = openDb(file);
+    const put = o.db.$client.prepare(
+      'insert into projects (id, name, slug, repo_url, path, created_at) values (?, ?, ?, ?, ?, 0)',
+    );
+    const urls: Record<string, string | null> = {
+      a: 'https://x-access-token:ghp_CANARY8@github.com/o/a.git',
+      b: 'http://oauth2:glpat-CANARY9@git.lan/o/b.git',
+      c: 'git@github.com:o/c.git',
+      d: 'ssh://git@host:2222/o/d.git',
+      e: 'https://github.com/o/e.git',
+      f: null,
+    };
+    for (const [id, url] of Object.entries(urls)) put.run(id, id, id, url, `/w/${id}`);
+    const repoUrls = () =>
+      Object.fromEntries(
+        (
+          o.db.$client.prepare('select id, repo_url from projects order by id').all() as {
+            id: string;
+            repo_url: string | null;
+          }[]
+        ).map((r) => [r.id, r.repo_url]),
+      );
+    const first = startSecrets(o.db, { env: {}, dataDir: dir });
+    expect(first.cleanedRepoUrls).toBe(2);
+    expect(repoUrls()).toEqual({
+      ...urls,
+      a: 'https://github.com/o/a.git',
+      b: 'http://git.lan/o/b.git',
+    });
+    expect(startSecrets(o.db, { env: {}, dataDir: dir }).cleanedRepoUrls).toBe(0);
+    o.close();
+    expect(readFileSync(file).includes('CANARY')).toBe(false);
+    o = openDb(file);
+    o.close();
+  });
+
+  it('a non-secret setting that merely contains the prefix does not block creating the key', () => {
+    const dir = tempDir();
+    const o = openDb(path.join(dir, 'emberline.db'));
+    o.db.$client
+      .prepare('insert into settings(key, value) values (?, ?)')
+      .run('ui.note', JSON.stringify('enc:v1:hello'));
+    expect(startSecrets(o.db, { env: {}, dataDir: dir }).source).toBe('created');
+    o.close();
+  });
 });

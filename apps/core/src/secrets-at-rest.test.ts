@@ -48,7 +48,23 @@ describe('secrets at rest', () => {
     });
     expect(updates.statusCode).toBe(200);
 
-    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'CANARY5' });
+    const accountId = seedForgeAccount(t.db, {
+      provider: 'github',
+      serverUrl: 'https://github.com',
+      token: 'CANARY4',
+    });
+    t.forgeFetch.current = async () =>
+      new Response(JSON.stringify({ login: 'octo' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    const account = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/forge/accounts/${accountId}`,
+      headers,
+      payload: { token: 'CANARY5' },
+    });
+    expect(account.statusCode).toBe(200);
 
     const demoToken = new DemoTokens(t.db).mint({ projectId: 'p1', targetId: 'main' }, 60_000);
     const demoSecret = getSetting<string>(t.db, 'demo.tokenSecret')!;

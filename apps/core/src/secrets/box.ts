@@ -35,6 +35,11 @@ export function installedSecretsKey(): Buffer {
 
 export const isSealed = (v: string): boolean => v.startsWith(SEALED_PREFIX);
 
+/**
+ * No associated data: the threat is a read of the volume or a backup. Someone who can write the
+ * database could move a sealed value to another field, but could equally redirect plaintext URLs;
+ * a v2 format would bind each value to its place (`settings:<key>:<path>`, `forge_accounts:<id>`).
+ */
 export function sealWith(key: Buffer, plain: string): string {
   const iv = randomBytes(NONCE_BYTES);
   const c = createCipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES });

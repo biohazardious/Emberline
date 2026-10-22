@@ -52,6 +52,9 @@ if (secrets.source === 'created') {
   app.log.info(`secrets: created ${secrets.file}; back it up separately from the database`);
 }
 if (secrets.encrypted > 0) app.log.info(`secrets: encrypted ${secrets.encrypted} stored secrets`);
+if (secrets.cleanedRepoUrls > 0) {
+  app.log.info(`secrets: removed credentials from ${secrets.cleanedRepoUrls} stored repository URLs`);
+}
 if (secrets.plaintextSnapshots.length > 0) {
   app.log.warn(
     `secrets: these snapshots from before this start still hold secrets in plaintext; delete them once you no longer need to roll back: ${secrets.plaintextSnapshots.join(', ')}`,

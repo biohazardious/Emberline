@@ -1,10 +1,19 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SecretsKeyError } from './box.js';
-import { loadSecretsKey } from './key.js';
+import { createKeyFile, loadSecretsKey } from './key.js';
 
 let dir: string;
 beforeEach(() => {
@@ -84,5 +93,34 @@ describe('loadSecretsKey', () => {
   it('never creates a key when it may not', () => {
     expect(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: false })).toThrow(SecretsKeyError);
     expect(existsSync(keyFile())).toBe(false);
+  });
+  it('publishes a new key through a synced temp file and leaves nothing else behind', () => {
+    const created = loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true });
+    expect(readdirSync(dir)).toEqual(['secrets.key']);
+    expect(Buffer.from(readFileSync(keyFile(), 'utf8').trim(), 'base64').equals(created.key)).toBe(true);
+  });
+
+  it('ignores and removes a partial temp file from a crash, never reading it as the key', () => {
+    writeFileSync(path.join(dir, 'secrets.key.tmp'), 'part');
+    expect(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: false })).toThrow(SecretsKeyError);
+    const created = loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true });
+    expect(created.source).toBe('created');
+    expect(created.key).toHaveLength(32);
+    expect(readdirSync(dir)).toEqual(['secrets.key']);
+  });
+
+  it('never replaces an existing key file', () => {
+    const existing = `${randomBytes(32).toString('base64')}\n`;
+    writeFileSync(keyFile(), existing, { mode: 0o600 });
+    expect(() => createKeyFile(keyFile(), randomBytes(32))).toThrow();
+    expect(readFileSync(keyFile(), 'utf8')).toBe(existing);
+    expect(readdirSync(dir)).toEqual(['secrets.key']);
+  });
+
+  it('a key path it cannot read (a directory a bind mount left) is the clear error naming the file', () => {
+    mkdirSync(keyFile());
+    const error = thrown(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true }));
+    expect(error).toBeInstanceOf(SecretsKeyError);
+    expect((error as SecretsKeyError).detail).toContain(keyFile());
   });
 });
