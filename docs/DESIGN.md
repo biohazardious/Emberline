@@ -130,7 +130,7 @@ Ticket columns are `backlog`, `ready`, `in_progress`, `review` and `done`. A tic
 ### 3.8 Authentication
 
 - A single admin account. The password is set during first-run setup, which requires a one-time setup token printed to the server log, and is hashed with argon2id.
-- HTTP-only session cookies (`Secure` and `__Host-` prefixed over HTTPS). Mutating API calls need a custom CSRF header and a matching `Origin`. Revoking sessions also closes their WebSockets.
+- HTTP-only session cookies (`Secure` and `__Host-` prefixed over HTTPS). Each sign-in also issues a per-login key (only its hash is stored in `sessions`), kept in the browser's local storage. Mutating API calls send it as the CSRF header, with a matching `Origin`; WebSocket upgrades send it as a subprotocol. The cookie alone authorises only GET reads. A new sign-in revokes the browser's older session. Revoking sessions also closes their WebSockets.
 - Emberline does not terminate TLS. Remote access is expected through a VPN or a TLS reverse proxy.
 
 ### 3.9 Repository layout
