@@ -34,6 +34,9 @@ RUN groupmod -n node ubuntu \
   && usermod -l node -d /home/node -m ubuntu \
   && mkdir -p /home/node /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/npm/lib /opt/ai-tools/pipx \
   && chown -R node:node /home/node /opt/ai-tools
+# apt: retry flaky mirrors (Launchpad answered 503s) and never wait forever on a dead connection.
+RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' \
+    > /etc/apt/apt.conf.d/80-emberline-retries
 
 # ---------------------------------------------------------------------------
 # base: Node 24 LTS + pnpm + native C++ toolchain (node-pty & better-sqlite3)
@@ -150,33 +153,84 @@ FROM runtime AS runner
 # webkit2gtk/GTK/clang/ninja for Tauri and Flutter Linux builds, and the runtime libraries of
 # Espressif's ESP32 QEMU (`emberline-sdk install esp-qemu`). Agents have no root to add these later.
 #
-# Chromium (open source, not Google Chrome) for the agents' headless browser. Ubuntu ships it only
-# as a snap, which cannot run in a container, so it comes from the xtradeb PPA (Launchpad builds of
-# the upstream source, kept current, amd64 and arm64). apt pinning takes nothing else from the PPA.
-ARG XTRADEB_SIGNER_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
-  && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${XTRADEB_SIGNER_FINGERPRINT}" \
-    -o /usr/share/keyrings/xtradeb-apps.asc \
-  && . /etc/os-release \
-  && printf 'Types: deb\nURIs: https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/xtradeb-apps.asc\n' "$VERSION_CODENAME" \
-    > /etc/apt/sources.list.d/xtradeb-apps.sources \
-  && printf 'Package: *\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: -1\n\nPackage: chromium chromium-common chromium-sandbox chromium-l10n\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: 700\n' \
-    > /etc/apt/preferences.d/xtradeb-chromium \
-  && apt-get update \
   && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
     bash less procps openssh-client \
     build-essential pkg-config cmake \
     golang-go rustc cargo \
     python3-pip python3-venv python3-pytest pipx \
-    ripgrep fd-find sqlite3 curl wget jq zip unzip xz-utils \
+    ripgrep fd-find sqlite3 wget jq zip unzip xz-utils \
     xvfb xauth \
     libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev libdbus-1-dev libxdo-dev file \
     clang ninja-build libgtk-3-dev \
     libsdl2-2.0-0 libslirp0 \
-    chromium fonts-liberation \
-  && chromium --version \
+    fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
+# Chromium (open source, not Google Chrome) for the agents' headless browser. Ubuntu ships it only as a
+# snap (cannot run in a container), so it comes from the xtradeb PPA; apt pinning takes nothing else from
+# it. When Launchpad fails after retries, Playwright's pinned Chromium build (Chrome for Testing, checksum
+# taken at pin time) is used instead. CHROMIUM_SOURCE=ppa|playwright forces one source (to test each path).
+# The build cache keeps whichever source won until this layer is rebuilt.
+ARG XTRADEB_SIGNER_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
+ARG CHROMIUM_SOURCE=auto
+ARG PLAYWRIGHT_CHROMIUM_VERSION=155.0.8059.12
+ARG PLAYWRIGHT_CHROMIUM_SHA256_AMD64=a24546e0e6c763bf864861ce50498f38783663e24cd2af2a16798c25dc3a9489
+ARG PLAYWRIGHT_CHROMIUM_SHA256_ARM64=bf94336ee2e3edb1279da28a74a744958ba10741e5994351610bc19028482b0b
+RUN set -eu; \
+  case "$CHROMIUM_SOURCE" in auto|ppa|playwright) ;; *) echo "CHROMIUM_SOURCE must be auto, ppa or playwright" >&2; exit 1 ;; esac; \
+  retry() { n=1; until "$@"; do \
+      [ "$n" -ge 4 ] && return 1; \
+      echo "chromium: attempt $n of 4 failed, retrying in $((n * 20))s" >&2; sleep $((n * 20)); n=$((n + 1)); \
+    done; }; \
+  drop_chromium() { apt-get purge -y chromium chromium-common chromium-sandbox chromium-l10n >/dev/null 2>&1 || true; }; \
+  real_chromium() { \
+    v="$(dpkg-query -W -f='${Version}' chromium 2>/dev/null)" || return 1; \
+    case "$v" in *snap*) echo "chromium: $v is Ubuntu's snap stub, not the PPA build" >&2; return 1 ;; esac; \
+    chromium --version 2>/dev/null | grep -Eq '^Chromium [0-9]+\.'; }; \
+  ppa_attempt() { \
+    drop_chromium; \
+    curl -fsSL --connect-timeout 20 --max-time 120 \
+      "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${XTRADEB_SIGNER_FINGERPRINT}" \
+      -o /usr/share/keyrings/xtradeb-apps.asc \
+    && apt-get update --error-on=any \
+    && apt-get install -y --no-install-recommends chromium \
+    && real_chromium; }; \
+  playwright_install() { \
+    rm -f /etc/apt/sources.list.d/xtradeb-apps.sources /etc/apt/preferences.d/xtradeb-chromium; drop_chromium; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) plat=linux64; sha="$PLAYWRIGHT_CHROMIUM_SHA256_AMD64" ;; \
+      arm64) plat=linux-arm64; sha="$PLAYWRIGHT_CHROMIUM_SHA256_ARM64" ;; \
+      *) echo "no Playwright Chromium for $(dpkg --print-architecture)" >&2; return 1 ;; \
+    esac; \
+    [ -n "$sha" ] || { echo "chromium: no pinned sha256 for chrome-$plat.zip" >&2; return 1; }; \
+    retry apt-get update || return 1; \
+    apt-get install -y --no-install-recommends unzip libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxkbcommon0 \
+      libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libatspi2.0-0t64 libdbus-1-3 || return 1; \
+    tmp="$(mktemp -d)"; \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 900 -o "$tmp/chrome.zip" \
+      "https://cdn.playwright.dev/builds/cft/${PLAYWRIGHT_CHROMIUM_VERSION}/${plat}/chrome-${plat}.zip" || return 1; \
+    echo "$sha  $tmp/chrome.zip" | sha256sum -c - || return 1; \
+    rm -rf /opt/chromium && mkdir -p /opt/chromium && unzip -q "$tmp/chrome.zip" -d /opt/chromium || return 1; \
+    rm -rf "$tmp"; \
+    ln -sf "/opt/chromium/chrome-${plat}/chrome" /usr/bin/chromium; \
+    if ldd "/opt/chromium/chrome-${plat}/chrome" | grep 'not found' >&2; then return 1; fi; }; \
+  src=; \
+  if [ "$CHROMIUM_SOURCE" != playwright ]; then \
+    . /etc/os-release; \
+    printf 'Types: deb\nURIs: https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/xtradeb-apps.asc\n' "$VERSION_CODENAME" \
+      > /etc/apt/sources.list.d/xtradeb-apps.sources; \
+    printf 'Package: *\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: -1\n\nPackage: chromium chromium-common chromium-sandbox chromium-l10n\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: 700\n' \
+      > /etc/apt/preferences.d/xtradeb-chromium; \
+    if retry ppa_attempt; then src=ppa; \
+    elif [ "$CHROMIUM_SOURCE" = ppa ]; then echo "chromium: the PPA failed 4 times (CHROMIUM_SOURCE=ppa)" >&2; exit 1; \
+    else echo "chromium: the PPA failed 4 times; using Playwright's pinned build" >&2; fi; \
+  fi; \
+  if [ -z "$src" ]; then playwright_install || exit 1; src=playwright; fi; \
+  mkdir -p /opt/emberline && echo "$src" > /opt/emberline/chromium-source; \
+  rm -rf /var/lib/apt/lists/*; \
+  echo "chromium source: $src"; \
+  chromium --version
 # Headless browser MCP server wired by adapter-claude (`playwright-mcp`). Installed into /usr/local,
 # not the runner-tools volume, so it is versioned with the image and cannot be shadowed by a stale volume.
 ARG PLAYWRIGHT_MCP_VERSION=0.0.83
