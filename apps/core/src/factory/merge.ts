@@ -63,6 +63,24 @@ async function resetScratchFilesToHead(cwd: string): Promise<void> {
 /** One merge into a main workspace at a time (parallel runs finish independently). */
 const mainWorkspaceLock = new KeyedMutex();
 
+/** Newest last: the merge commits Emberline made in each main workspace since core started. */
+const mergeCommits = new Map<string, string[]>();
+const MERGE_COMMITS_KEPT = 200;
+
+function recordMergeCommit(mainWorkspacePath: string, oid: string): void {
+  const key = path.resolve(mainWorkspacePath);
+  const list = [...(mergeCommits.get(key) ?? []), oid].slice(-MERGE_COMMITS_KEPT);
+  mergeCommits.set(key, list);
+}
+
+/** Whether `oid` (a full id) is a merge commit Emberline made in this main workspace (recorded under its lock). */
+export function isEmberlineMergeCommit(mainWorkspacePath: string, oid: string): boolean {
+  return mergeCommits.get(path.resolve(mainWorkspacePath))?.includes(oid) ?? false;
+}
+
+/** A merge's outcome inside core: the response plus the merge commit's full id (merge notes carry it). */
+export type SyncWorktreeResult = SyncWorktreeResponse & { commitOid: string | null };
+
 /** Runs `fn` while no merge (or other locked change) touches this main workspace. */
 export function withMainWorkspaceLock<T>(mainWorkspacePath: string, fn: () => Promise<T>): Promise<T> {
   return mainWorkspaceLock.run(path.resolve(mainWorkspacePath), fn);
@@ -132,14 +150,15 @@ export async function syncWorktreeToMainWorkspace(params: {
   branch?: string | null;
   /** Called once there is something to merge (not for work already in main); may throw to refuse. */
   beforeMerge?: () => void;
-}): Promise<SyncWorktreeResponse> {
+}): Promise<SyncWorktreeResult> {
   const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
   const label = ticketKey ?? runId.slice(0, 8);
-  const result = (ok: boolean, summary: string, extra: Partial<SyncWorktreeResponse> = {}): SyncWorktreeResponse => ({
+  const result = (ok: boolean, summary: string, extra: Partial<SyncWorktreeResult> = {}): SyncWorktreeResult => ({
     ok,
     runId,
     filesSynced: 0,
     commitSha: null,
+    commitOid: null,
     conflicts: [],
     alreadyMerged: false,
     summary,
@@ -228,9 +247,13 @@ export async function syncWorktreeToMainWorkspace(params: {
 
     const changed = gitLines((await execGitFile(['diff', '--name-only', before, 'HEAD'], inMain)).stdout);
     const commitSha = await shortHead();
+    // Recorded before the lock is released: a push queued behind a later merge knows its commit.
+    const commitOid = (await execGitFile(['rev-parse', 'HEAD'], inMain)).stdout.trim() || null;
+    if (commitOid) recordMergeCommit(mainWorkspacePath, commitOid);
     return result(true, `Merged ${changed.length} changed files from ${label} (${branch}) into the main workspace${commitSha ? ` (commit ${commitSha})` : ''}.`, {
       filesSynced: changed.length,
       commitSha,
+      commitOid,
     });
   });
 }

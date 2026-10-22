@@ -11,7 +11,7 @@ import type { Db } from '../db/index.js';
 import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { withMainWorkspaceLock } from '../factory/merge.js';
+import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.js';
 import { accountForRemote, gitCredentialForRemote } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { parseForgeRemote } from '../forge/service.js';
@@ -27,7 +27,6 @@ import {
   originUrls,
   pushBranch,
   type RemoteAccess,
-  resolveCommit,
   setOrigin,
   shortGitError,
   validateRepositoryUrl,
@@ -50,6 +49,8 @@ const parse = <T>(
   if (!r.success) throw badRequest(r.error.issues.map((i) => i.message).join('; '));
   return r.data;
 };
+/** A full commit id (SHA-1 or SHA-256), never an abbreviation. */
+const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const remoteErrorText = (error: unknown) =>
   error instanceof HttpError ? error.message : shortGitError(error);
 
@@ -160,9 +161,13 @@ export class RepositoryService {
     const body = parse(ConnectRepositoryBody, raw);
     const { url, host } = validateRepositoryUrl(body.url);
     const ws = await this.workspace(projectId);
+    // Refused before the remote is contacted; checked again under the lock when origin is set.
+    const { fetch: current } = await originUrls(ws.path);
+    if (current && current !== url && !body.replace) throw this.originExists(current);
+    const access = this.accessFor(projectId, url); // an unchecked account keeps its own error
     try {
       // Readable before anything changes; an empty repository answers with no branches.
-      await listRemoteBranches(ws.path, this.accessFor(projectId, url));
+      await listRemoteBranches(ws.path, access);
     } catch (error) {
       throw new HttpError(
         409,
@@ -193,23 +198,26 @@ export class RepositoryService {
 
   /** A person's click: the tip of the default branch, which must be the branch checked out. */
   async pushMain(projectId: string): Promise<RepositoryStatus> {
-    const result = await this.push(projectId, { mergeSha: undefined });
+    const result = await this.push(projectId, { mergeOid: undefined });
     if (result === 'rejected') throw new HttpError(409, 'main_diverged', DIVERGED_MESSAGE);
     writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
     return this.status(projectId);
   }
 
   /**
-   * Keep main pushed after a merge: only the commit that merge made (`mergeSha`, the note's short
-   * sha), and only while the default branch still names it; anything else is not Emberline's.
+   * Keep main pushed after a merge: only the commit that merge made (`mergeOid`, its full id), and
+   * only while the default branch still names it. A tip that is a later Emberline merge is left to
+   * that merge's own push (no failure); any other tip is not Emberline's and is never published.
    */
   async pushMainQuietly(
     projectId: string,
-    mergeSha: string | null,
+    mergeOid: string | null,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     let reason: string;
     try {
-      if ((await this.push(projectId, { mergeSha })) === 'pushed') {
+      const result = await this.push(projectId, { mergeOid });
+      if (result === 'superseded') return { ok: true };
+      if (result === 'pushed') {
         writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
         return { ok: true };
       }
@@ -236,24 +244,30 @@ export class RepositoryService {
    * Push one commit of the default branch, then read origin again (inside the same lock) so status
    * shows the result without a network call. The branch and its commit are read under the lock, and
    * exactly that commit is pushed, whatever the ref names by the time git runs.
-   * `mergeSha` undefined: a person's Push main (the tip, with the default branch checked out);
-   * otherwise Keep main pushed (the merge's commit, only while it is still the tip).
+   * `mergeOid` undefined: a person's Push main (the tip, with the default branch checked out);
+   * otherwise Keep main pushed (the merge's commit, only while it is still the tip; `superseded`:
+   * the tip is a later Emberline merge, whose own push publishes it).
    */
   private async push(
     projectId: string,
-    { mergeSha }: { mergeSha: string | null | undefined },
-  ): Promise<'pushed' | 'rejected'> {
+    { mergeOid }: { mergeOid: string | null | undefined },
+  ): Promise<'pushed' | 'rejected' | 'superseded'> {
     return withMainWorkspaceLock(this.project(projectId).path, async () => {
       const ws = await this.workspace(projectId);
       const tip = await branchTip(ws.path, ws.defaultBranch);
-      if (mergeSha === undefined) {
+      if (mergeOid === undefined) {
         if (ws.branch !== ws.defaultBranch) {
           throw conflict(`The main workspace is on ${ws.branch}, not ${ws.defaultBranch}.`, 'branch_differs');
         }
         if (!tip) throw conflict('Main has no commits yet.', 'no_commits');
       } else {
-        const merge = mergeSha ? await resolveCommit(ws.path, mergeSha) : null;
-        if (!merge || tip?.sha !== merge) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+        // A full id compared as is: a prefix is never resolved (an agent can plant a commit that matches it).
+        const full = mergeOid !== null && FULL_OID.test(mergeOid) ? mergeOid : null;
+        if (!full || !tip) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+        if (tip.sha !== full) {
+          if (isEmberlineMergeCommit(ws.path, tip.sha)) return 'superseded';
+          throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+        }
       }
       const access = await this.access(projectId, ws.path);
       const result = await pushBranch(ws.path, access, ws.defaultBranch, tip!.sha);

@@ -142,6 +142,29 @@ describe('connect', () => {
     expect(replaced.json().originUrl).toBe(`${forge.url}/alice/other.git`);
   });
 
+  it('another origin without replace is refused before the remote is contacted', async () => {
+    forge.bare('alice', 'app');
+    await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: `${forge.url}/alice/app.git`,
+    });
+    const before = forge.seen.length;
+    const again = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: `${forge.url}/alice/other.git`,
+    });
+    expect(again.json().error).toBe('origin_exists');
+    expect(forge.seen.length).toBe(before);
+  });
+
+  it('an account that is not checked yet keeps its own error code', async () => {
+    forge.bare('alice', 'app');
+    updateAccount(t.db, accountId, { username: null });
+    const res = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: `${forge.url}/alice/app.git`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('forge_account_unchecked');
+  });
+
   it('a remote on a host without an account is read without credentials', async () => {
     const other = await startFakeForge({ token: 'x' });
     try {
@@ -347,6 +370,21 @@ describe('create', () => {
     expect(res.statusCode).toBe(200);
     expect(forge.seen.some((r) => r.method === 'POST' && r.path === '/api/v1/user/repos')).toBe(true);
     expect(res.json().originUrl).toBe(`${forge.url}/alice/mine.git`);
+  });
+
+  it("a forge's repository path that is not owner/name is not used for origin", async () => {
+    t.forgeFetch.current = async (url, init) => {
+      const res = await globalThis.fetch(url, init);
+      if (init?.method !== 'POST') return res;
+      return new Response(JSON.stringify({ full_name: 'alice/odd?x=1#y' }), { status: 201 });
+    };
+    const res = await send('POST', `/api/projects/${projectId}/repository/create`, {
+      accountId,
+      owner: 'alice',
+      name: 'odd',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().originUrl).toBe(`${forge.url}/alice/odd.git`);
   });
 
   it('a forge that cannot be reached is a forge error without the token', async () => {

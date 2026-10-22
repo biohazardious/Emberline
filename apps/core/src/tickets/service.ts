@@ -1389,7 +1389,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ticketKey,
       runId: run.id,
       branch: run.branch,
-    }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[], commitSha: null }));
+    }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[], commitSha: null, commitOid: null }));
     const head = res.ok ? null : await mainHead(mainWorkspacePath);
     const autoFix =
       !res.ok &&
@@ -1400,6 +1400,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       summary: res.summary,
       // The merge commit in main (the issue write-back quotes it).
       ...(res.ok && res.commitSha ? { commitSha: res.commitSha } : {}),
+      // Its full id: Keep main pushed publishes only this exact commit.
+      ...(res.ok && res.commitOid ? { commitOid: res.commitOid } : {}),
       ...(res.conflicts.length > 0 ? { conflicts: res.conflicts } : {}),
       ...(autoFix ? { autoFix } : {}),
     });

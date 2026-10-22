@@ -221,7 +221,9 @@ export class ForgeAccountsService {
     const data = await readJson<Record<string, unknown>>(res).catch(() => ({}) as Record<string, unknown>);
     if (res.ok) {
       const fullPath = account.provider === 'gitlab' ? data.path_with_namespace : data.full_name;
-      return { fullPath: typeof fullPath === 'string' && fullPath ? fullPath : `${input.owner}/${input.name}` };
+      // Only a plain owner[/group…]/name path becomes part of origin; anything else falls back to what was asked for.
+      const plain = typeof fullPath === 'string' && /^[\w.-]+(\/[\w.-]+)+$/.test(fullPath) && !/(^|\/)\.+(\/|$)/.test(fullPath);
+      return { fullPath: plain ? fullPath : `${input.owner}/${input.name}` };
     }
     const text = JSON.stringify(data).split(account.token).join('[redacted]');
     if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);

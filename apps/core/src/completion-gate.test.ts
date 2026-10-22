@@ -877,7 +877,13 @@ describe('a person’s merge from the Board', () => {
     const merged = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
     expect(merged.json()).toMatchObject({ ok: true });
     const sha = wgit(project.path, 'rev-parse', '--short', 'HEAD').trim();
-    expect(await eventPayload(run, 'merged_by_person')).toEqual({ commitSha: sha });
+    // The short sha for display and the issue write-back; the full id for Keep main pushed.
+    expect(await eventPayload(run, 'merged_by_person')).toEqual({
+      commitSha: sha,
+      commitOid: wgit(project.path, 'rev-parse', 'HEAD').trim(),
+    });
+    // The response keeps its shape: the full id stays in core.
+    expect(merged.json()).not.toHaveProperty('commitOid');
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect((await api('PATCH', `/api/tickets/${ticket.id}`, { status: 'done' })).statusCode).toBe(200);
     await expect.poll(() => seen.filter((c) => c.method !== 'GET').length, { timeout: 5_000 }).toBe(3);

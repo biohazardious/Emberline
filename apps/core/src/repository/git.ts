@@ -13,6 +13,7 @@ export const MAIN_MOVED_MESSAGE =
   'Main moved outside Emberline since the merge; push it from Project settings → Repository.';
 export const DIVERGED_MESSAGE =
   "The remote's main has commits this project doesn't have. Pull them in from a terminal, then push again.";
+const CREDENTIALS_IN_URL = 'Remove the user name and token from the URL; Emberline uses the forge account.';
 const BAD_URL =
   'Enter a repository URL such as https://github.com/you/app.git or git@github.com:you/app.git.';
 
@@ -38,9 +39,11 @@ export function validateRepositoryUrl(raw: string): {
   host: string;
   transport: 'https' | 'http' | 'ssh';
 } {
-  const url = raw.trim();
+  // The scheme lower-case: git and parseForgeRemote only know `https://`, not `HTTPS://`.
+  const url = raw.trim().replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, (scheme) => scheme.toLowerCase());
+  // `<transport>::<address>` is git's remote-helper form (ext::, fd::); `[::1]` in a host is not.
   // eslint-disable-next-line no-control-regex
-  if (!url || url.startsWith('-') || /[\s\u0000-\u001f]/.test(url) || url.includes('::'))
+  if (!url || url.startsWith('-') || /[\s\u0000-\u001f]/.test(url) || /^[A-Za-z0-9+.-]*::/.test(url))
     throw badRequest(BAD_URL);
   let transport: 'https' | 'http' | 'ssh';
   if (/^https?:\/\//i.test(url)) {
@@ -50,10 +53,14 @@ export function validateRepositoryUrl(raw: string): {
     } catch {
       throw badRequest(BAD_URL);
     }
-    if (parsed.username || parsed.password)
-      throw badRequest('Remove the user name and token from the URL; Emberline uses the forge account.');
+    if (parsed.username || parsed.password) throw badRequest(CREDENTIALS_IN_URL);
+    // A query or fragment can carry a token (`?private_token=`) and is no part of a repository's address.
+    if (parsed.search || parsed.hash) throw badRequest(BAD_URL);
     transport = parsed.protocol === 'http:' ? 'http' : 'https';
-  } else if (/^ssh:\/\//i.test(url) || /^[^/:]+@?[^/:]*:[^/]/.test(url)) {
+  } else if (/^ssh:\/\//.test(url) || /^[^/:]+@?[^/:]*:[^/]/.test(url)) {
+    // A password in an ssh URL (`ssh://user:pw@host`, `user:pw@host:path`) is a credential too.
+    if (/^ssh:\/\/[^/@]*:[^/@]*@/.test(url) || /^[^/@]*:[^/@]*@/.test(url))
+      throw badRequest(CREDENTIALS_IN_URL);
     transport = 'ssh';
   } else {
     throw badRequest(BAD_URL);
@@ -100,24 +107,6 @@ export async function branchTip(
   );
   const [sha, shortSha, subject] = out.split('\0');
   return sha && shortSha ? { sha, shortSha, subject: subject ?? '' } : null;
-}
-
-/**
- * The full commit id a merge note's (short) sha names; null when it names none, or more than one
- * object (an ambiguous prefix is never guessed).
- */
-export async function resolveCommit(mainPath: string, sha: string): Promise<string | null> {
-  if (!/^[0-9a-f]{4,64}$/.test(sha)) return null;
-  const full = await realGit(['rev-parse', '--verify', '--quiet', sha], mainPath).then(
-    (r) => r.stdout.trim(),
-    () => '',
-  );
-  if (!full) return null;
-  const type = await realGit(['cat-file', '-t', full], mainPath).then(
-    (r) => r.stdout.trim(),
-    () => '',
-  );
-  return type === 'commit' ? full : null;
 }
 
 export async function originUrls(mainPath: string): Promise<{ fetch: string | null; push: string | null }> {
@@ -176,9 +165,9 @@ export async function aheadBehind(
   branch: string,
 ): Promise<{ ahead: number; behind: number }> {
   const out = (
-    await execGitFile(
+    await realGit(
       ['rev-list', '--left-right', '--count', `refs/heads/${branch}...refs/remotes/origin/${branch}`],
-      { cwd: mainPath },
+      mainPath,
     )
   ).stdout;
   const [ahead, behind] = out.trim().split(/\s+/).map(Number);
@@ -224,8 +213,9 @@ export async function pushBranch(
       result = 'pushed';
     } catch (error) {
       const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
-      if (/^!\s/m.test(out) || /\[rejected\]|Updates were rejected|non-fast-forward|fetch first/.test(out))
-        return 'rejected';
+      // Only a non-fast-forward is "the remote has commits main doesn't"; a `[remote rejected]` (a hook,
+      // a protected branch) is a failed push with git's reason.
+      if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
       throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error)}`);
     }
   }

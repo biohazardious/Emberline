@@ -663,13 +663,19 @@ export function registerProjectRoutes(
       // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that
       // was already in main is no new merge (its sha would be main's HEAD, not this merge).
       if (result.ok && !result.alreadyMerged && blocking > 0) runs.note(run.id, 'review_blocking_overridden', { count: blocking });
-      if (result.ok && !result.alreadyMerged && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
+      if (result.ok && !result.alreadyMerged && ticket) {
+        runs.note(run.id, 'merged_by_person', {
+          ...(result.commitSha ? { commitSha: result.commitSha } : {}),
+          ...(result.commitOid ? { commitOid: result.commitOid } : {}),
+        });
+      }
       // Without a ticket there is no merge note: main's rebuild, preview refresh and push are asked for here.
       else if (result.ok && !result.alreadyMerged) {
         postMerge.enqueue(project.id);
-        mainPush.enqueue(project.id, run.id, result.commitSha);
+        mainPush.enqueue(project.id, run.id, result.commitOid);
       }
-      return result;
+      const { commitOid: _commitOid, ...response } = result;
+      return response;
     },
   );
 

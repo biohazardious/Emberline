@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
+import { syncWorktreeToMainWorkspace } from '../factory/merge.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   CSRF,
@@ -27,8 +29,29 @@ const commit = (dir: string, file: string) => {
   git(dir, 'add', file);
   git(dir, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', file);
 };
-/** A merge note as the pipeline and Merge now write it: the merge commit's short sha. */
-const merged = () => ({ commitSha: git(projectPath, 'rev-parse', '--short', 'HEAD') });
+/** A merge note as the pipeline and Merge now write it: the merge commit's short sha and full id. */
+const merged = () => ({
+  commitSha: git(projectPath, 'rev-parse', '--short', 'HEAD'),
+  commitOid: git(projectPath, 'rev-parse', 'HEAD'),
+});
+const addRun = (id: string, worktreePath: string, branch: string) => {
+  const now = new Date();
+  t.db
+    .insert(runs)
+    .values({
+      id,
+      projectId,
+      agent: 'claude',
+      state: 'done',
+      worktreePath,
+      branch,
+      hookTokenHash: 'h',
+      stateChangedAt: now,
+      createdAt: now,
+      title: 'T',
+    })
+    .run();
+};
 const remoteMain = () =>
   git(forge.bare('alice', 'app'), 'rev-parse', '--verify', '--quiet', 'refs/heads/main');
 const notes = (runId: string) =>
@@ -143,5 +166,72 @@ describe('keep main pushed', () => {
     await t.mainPush.idle();
     expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
     expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+  });
+
+  it('a note with only the short sha is never pushed automatically', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    t.runs.note('r1', 'merged_to_main', { commitSha: git(projectPath, 'rev-parse', '--short', 'HEAD') });
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+  });
+
+  it("an agent's commit with the merge's short prefix (core.abbrev=4) is never published", async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    git(projectPath, 'config', 'core.abbrev', '4');
+    commit(projectPath, 'merge.txt'); // the merge Emberline made
+    const merge = merged();
+    expect(merge.commitSha).toHaveLength(4);
+    // The agent: commit X with the same prefix, main moved to X, the merge's loose object removed.
+    const tree = git(projectPath, 'rev-parse', 'HEAD^{tree}');
+    const parent = git(projectPath, 'rev-parse', 'HEAD~1');
+    let body = '';
+    let sha = '';
+    for (let n = 0; ; n++) {
+      body = `tree ${tree}\nparent ${parent}\nauthor evil <e@e> 1700000000 +0000\ncommitter evil <e@e> 1700000000 +0000\n\nevil ${n}\n`;
+      sha = createHash('sha1')
+        .update(`commit ${Buffer.byteLength(body)}\0${body}`)
+        .digest('hex');
+      if (sha.startsWith(merge.commitSha)) break;
+    }
+    execFileSync('git', ['-C', projectPath, 'hash-object', '-t', 'commit', '-w', '--stdin'], { input: body });
+    git(projectPath, 'update-ref', 'refs/heads/main', sha);
+    rmSync(path.join(projectPath, '.git', 'objects', merge.commitOid.slice(0, 2), merge.commitOid.slice(2)));
+    t.runs.note('r1', 'merged_to_main', merge);
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+  });
+
+  it('parallel merges: the earlier one is not reported as moved, and the remote ends at the later one', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const worktree = (id: string) => {
+      const dir = path.join(t.dir, `wt-${id}`);
+      git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir);
+      commit(dir, `${id}.txt`);
+      addRun(id, dir, `emberline/${id}`);
+      return dir;
+    };
+    const merge = (id: string, dir: string) =>
+      syncWorktreeToMainWorkspace({
+        worktreePath: dir,
+        mainWorkspacePath: projectPath,
+        ticketKey: null,
+        runId: id,
+        branch: `emberline/${id}`,
+      });
+    const a = worktree('ra');
+    const b = worktree('rb');
+    const resA = await merge('ra', a);
+    const mergingB = merge('rb', b); // takes the main-workspace lock before A's push can
+    // As the pipeline notes a merge (tickets/service.ts): the short sha and the full id.
+    t.runs.note('ra', 'merged_to_main', { commitSha: resA.commitSha, commitOid: resA.commitOid });
+    const resB = await mergingB;
+    t.runs.note('rb', 'merged_to_main', { commitSha: resB.commitSha, commitOid: resB.commitOid });
+    await t.mainPush.idle();
+    expect(notes('ra')).toEqual([]);
+    expect(notes('rb')).toEqual([]);
+    expect(remoteMain()).toBe(git(projectPath, 'rev-parse', 'HEAD'));
+    expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
   });
 });

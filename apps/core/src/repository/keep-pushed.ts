@@ -11,10 +11,10 @@ import { MERGE_NOTES } from '../factory/post-merge.js';
 import type { RunService } from '../runs/service.js';
 import type { RepositoryService } from './service.js';
 
-/** A merge into main: its run (the failure note goes there) and the commit it made (the note's short sha). */
+/** A merge into main: its run (the failure note goes there) and the full id of the commit it made. */
 interface Merge {
   runId: string | null;
-  commitSha: string | null;
+  commitOid: string | null;
 }
 
 interface Job {
@@ -50,10 +50,10 @@ export class KeepMainPushed {
     await this.idle();
   }
 
-  /** A merge into main landed; `commitSha` is the commit it made (only that commit is ever pushed). */
-  enqueue(projectId: string, runId: string | null, commitSha: string | null): void {
+  /** A merge into main landed; `commitOid` is the full id of the commit it made (only that commit is ever pushed). */
+  enqueue(projectId: string, runId: string | null, commitOid: string | null): void {
     if (this.stopped) return;
-    const merge: Merge = { runId, commitSha };
+    const merge: Merge = { runId, commitOid };
     const job = this.jobs.get(projectId);
     if (job) {
       job.next = merge;
@@ -70,8 +70,9 @@ export class KeepMainPushed {
 
   private readonly onNote = (run: Run, type: string, payload?: unknown): void => {
     if (!MERGE_NOTES.includes(type)) return;
-    const commitSha = (payload as { commitSha?: unknown } | undefined)?.commitSha;
-    this.enqueue(run.projectId, run.id, typeof commitSha === 'string' ? commitSha : null);
+    // Only the full id: a short sha (older notes) is never resolved, so it is never pushed automatically.
+    const commitOid = (payload as { commitOid?: unknown } | undefined)?.commitOid;
+    this.enqueue(run.projectId, run.id, typeof commitOid === 'string' ? commitOid : null);
   };
 
   private async drain(projectId: string, job: Job): Promise<void> {
@@ -79,13 +80,17 @@ export class KeepMainPushed {
     await Promise.resolve();
     try {
       while (job.next !== undefined && !this.stopped) {
-        const { runId, commitSha } = job.next;
+        const { runId, commitOid } = job.next;
         job.next = undefined;
         if (!readRepositorySettings(this.db, projectId).keepMainPushed) continue;
-        const res = await this.repository.pushMainQuietly(projectId, commitSha);
+        const res = await this.repository.pushMainQuietly(projectId, commitOid);
         if (!res.ok) {
           this.log(`keep main pushed: project ${projectId}: ${res.reason}`);
-          if (runId) this.runs.note(runId, 'main_push_failed', { reason: res.reason });
+          try {
+            if (runId) this.runs.note(runId, 'main_push_failed', { reason: res.reason });
+          } catch {
+            // the run went away: a merge queued meanwhile is still pushed
+          }
         }
       }
     } catch (error) {
