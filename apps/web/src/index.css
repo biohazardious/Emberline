@@ -5006,6 +5006,23 @@ dialog.cmd-dialog::backdrop {
   white-space: pre;
 }
 
+.container-preview-setup {
+  margin: 16px 0;
+}
+
+.container-preview-setup-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.container-preview-setup-fields label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 .worktree-editor {
   height: 360px;
   border: 1px solid var(--border);

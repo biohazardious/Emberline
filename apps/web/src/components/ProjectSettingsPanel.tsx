@@ -14,6 +14,7 @@ import {
   worktreeEditAvailable,
   worktreeBanner,
 } from '../projectSettings';
+import { ContainerPreviewBox } from './ContainerPreviewBox';
 import { RepositoryPanel } from './RepositoryPanel';
 import { WorktreeEditor } from './WorktreeEditor';
 
@@ -244,6 +245,7 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
           ))}
         </ul>
       )}
+      <ContainerPreviewBox project={project} />
       <div className="worktree-heading">
         <h3>worktree.yml</h3>
         {!editing && (
