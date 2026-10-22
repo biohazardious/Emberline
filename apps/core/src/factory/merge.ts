@@ -81,9 +81,15 @@ export function isEmberlineMergeCommit(mainWorkspacePath: string, oid: string): 
 /**
  * A merge's outcome inside core: the response plus the merge commit's full id (merge notes carry
  * it), set only when that commit is verifiably the merge Emberline made; `commitUnverified`: the
- * merge succeeded but main's commit could not be verified (another process moved main meanwhile).
+ * merge succeeded but main's commit could not be verified (another process moved main meanwhile);
+ * `mainHead`: for a merge that failed, the commit main was at when it tried (read under the merge
+ * lock, so a change queued behind it is not mistaken for it), else null.
  */
-export type SyncWorktreeResult = SyncWorktreeResponse & { commitOid: string | null; commitUnverified: boolean };
+export type SyncWorktreeResult = SyncWorktreeResponse & {
+  commitOid: string | null;
+  commitUnverified: boolean;
+  mainHead: string | null;
+};
 
 /**
  * The commit main names now, if it is exactly the merge Emberline just made: parents `[before, tip]`
@@ -190,6 +196,7 @@ export async function syncWorktreeToMainWorkspace(params: {
     commitSha: null,
     commitOid: null,
     commitUnverified: false,
+    mainHead: null,
     conflicts: [],
     alreadyMerged: false,
     summary,
@@ -273,6 +280,7 @@ export async function syncWorktreeToMainWorkspace(params: {
       return result(false, `Could not merge ${label} into the main workspace (${detail}); it was left unchanged.`, {
         conflicts,
         commitSha: await shortHead(),
+        mainHead: before,
       });
     }
 

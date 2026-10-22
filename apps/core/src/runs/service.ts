@@ -71,7 +71,7 @@ import {
   dockerEngineOffText,
   withHint,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
 import { composeDownArgs, composeLogsArgs, engineHostName, isEmberlineComposeProject } from '../docker/compose.js';
 import {
@@ -155,7 +155,8 @@ import {
   worktreeHasUnmergedCommits,
   worktreeHeadSha,
 } from './git.js';
-import { buildHandoffPrompt, type HandoffPromptInput, summarizeRecentTools } from './handoff.js';
+import { buildHandoffPrompt, type HandoffPromptInput, successorPrompt, summarizeRecentTools } from './handoff.js';
+import { latestDoneEventId } from './hold-outcome.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 import { providerAdapter } from './providers.js';
 import { detectPreviewCommand } from './preview-command.js';
@@ -173,7 +174,7 @@ import {
   unignoredSecretsNote,
 } from '../worktree-config/lifecycle.js';
 import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
-import { parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
+import { currentRoute as routeOfRow, parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -216,6 +217,12 @@ interface RunServiceEvents {
   rateLimited: [run: Run, info: RateLimitInfo | undefined];
   /** {@link RunService.note} added an informational event to the run's timeline. */
   note: [run: Run, type: string, payload: unknown];
+  /**
+   * {@link RunService.sendPrompt} typed a prompt into the live session and the run has not changed
+   * state since: the agent is about to take it. Not emitted when the CLI took it and stopped again
+   * before the prompt was recorded; those state changes decided (`run` events) then.
+   */
+  prompted: [run: Run];
 }
 
 /** Extra context when a run is started for a ticket or specialized background job. */
@@ -387,6 +394,8 @@ const STALL_SCREEN_LINES = 50;
  * gate follow-ups) is read as the next turn. A rate-limited turn has ended on its limit.
  */
 const IDLE_STATES: ReadonlySet<string> = new Set<RunState>(['waiting_input', 'done', 'rate_limited']);
+/** 409 `session_closing`: a one-shot CLI finished its turn and is exiting; a prompt respawns it once gone. */
+const SESSION_CLOSING = 'the agent is closing its session; try again in a moment';
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -545,6 +554,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     { head: string | null; reason: KeptWorktreeReason; checkedAt: number }
   >();
   private readonly handoffLock = new KeyedMutex();
+  /** Per run: typing a prompt into its session (and recording it) and closing the session never interleave. */
+  private readonly sessionLock = new KeyedMutex();
   private readonly demoTokens: DemoTokens;
   /** Archived build outputs; passes run when a run ends a turn or fails, and before any worktree prune. */
   readonly outputs: BuildOutputArchive;
@@ -877,12 +888,51 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /**
    * Closes the session of a run the pipeline held for a person: the run ends but stays resumable
-   * (not cancelled), so a later prompt respawns the agent. No-op when the run already ended.
+   * (not cancelled), so a later prompt respawns the agent. No-op when the run already ended, and when
+   * its turn is no longer the finished one: a person prompted it since (typed, or already taken by
+   * the CLI), so the agent is about to work again.
    */
   async closeHeldSession(id: string): Promise<Run> {
-    const row = this.row(id);
-    if (row.endedAt || !row.ptydSessionId) return this.withAttention([toRun(row)])[0] as Run;
-    return this.closeIdleSession(id, row.ptydSessionId, { reason: 'held' });
+    return this.sessionLock.run(id, async () => {
+      const row = this.row(id);
+      const promptedSince = this.promptSentSince(id, latestDoneEventId(this.db, id));
+      if (row.endedAt || !row.ptydSessionId || row.state !== 'done' || promptedSince) return this.getRun(id);
+      return this.closeIdleSession(id, row.ptydSessionId, { reason: 'held' });
+    });
+  }
+
+  /**
+   * When the newest prompt typed into the run's session after the event `afterId` was sent; such a
+   * prompt's `UserPromptSubmit` hook may not have arrived yet. Undefined when there is none.
+   */
+  private promptSentSince(runId: string, afterId: number | undefined): Date | undefined {
+    return this.db
+      .select({ ts: runEvents.ts })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'prompt_sent'), gt(runEvents.id, afterId ?? 0)))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get()?.ts;
+  }
+
+  /** Id of the run's latest state change (an event records `state` only when it changed it). */
+  private latestStateEventId(runId: string): number | undefined {
+    return this.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), isNotNull(runEvents.state)))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get()?.id;
+  }
+
+  /**
+   * Whether the run's CLI exits once its turn is done: a headless CLI (not Claude Code) started with
+   * a prompt (`-p`, `exec`, `--message`), as every respawn is. Text typed into it is lost.
+   */
+  private exitsAfterTurn(row: RunRow): boolean {
+    if (providerAdapter(row.agent).claudeNative) return false;
+    return row.prompt.trim() !== '' || this.hasEvent(row.id, 'respawning');
   }
 
   getTelemetry(id: string): RunTelemetry {
@@ -984,6 +1034,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /** Plain run (no slot/quota checks); `queued` until {@link launch}. The scheduler owns dispatch. */
   getRun(id: string): Run {
     return this.withAttention([toRun(this.row(id))])[0] as Run;
+  }
+
+  /** The route the run uses now (a legacy run's model comes from its prompt's route tag). */
+  currentRoute(id: string): Route {
+    return routeOfRow(this.row(id));
   }
 
   /**
@@ -1190,18 +1245,27 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * gone. The run counts as `starting` until the agent's next hook arrives.
    */
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
-    const row = this.row(id);
+    let row = this.row(id);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
     if (row.handedOffTo) throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
     if (this.settingUp.has(id)) throw conflict('the worktree is still being set up; the agent starts once setup is done');
     // A pending automatic retry is taken now (by the scheduler or the user's own resume).
     if (row.autoRetryAt) this.db.update(runs).set({ autoRetryAt: null }).where(eq(runs.id, id)).run();
     if (row.state === 'queued') return this.launch(id);
+    row = await this.afterOneShotExit(row);
     if (row.ptydSessionId && !row.endedAt) {
       // Typed into a CLI that is starting or mid-turn, it would be taken as part of that turn (R9).
       if (!IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; continue it once it is waiting`);
-      await this.typePrompt(row.ptydSessionId, text);
-      return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
+      if (this.exitsAfterTurn(row)) throw conflict(SESSION_CLOSING, 'session_closing');
+      const live = await this.sessionLock.run(id, async () => {
+        const current = this.row(id);
+        // A held run's close got there first: the agent is respawned below instead.
+        if (!current.ptydSessionId || current.endedAt) return null;
+        await this.typePrompt(current.ptydSessionId, text);
+        return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
+      });
+      if (live) return live;
+      row = this.row(id);
     }
     const mode = PROVIDER_RUNTIME[row.agent as AgentId]?.resumeMode ?? 'session';
     if (!row.agentSessionId && mode === 'session') {
@@ -1259,7 +1323,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       routeIndex = routes.length - 1;
     }
     const context = buildHandoffPrompt(await this.handoffContext(row, opts.reason, false));
-    const prompt = opts.extraPrompt?.trim() ? `${context}\n\n${opts.extraPrompt.trim()}` : context;
+    // Within the run prompt limit: the person's text whole, the context shortened (400 when it cannot fit).
+    const prompt = successorPrompt(context, opts.extraPrompt?.trim() ?? '');
+    // A person's handoff to a headless lane that would ask is refused before the run is retired; an
+    // automatic one is checked when the successor spawns, as before (no mode is raised).
+    if (opts.source === 'user') this.refuseHeadlessAsk(route.agent, row.permissionMode as PermissionMode, prompt);
     // A stop or a resume may have landed while the context was built: re-read before creating the
     // successor, so no orphan successor is left and the kill below reaches the current terminal.
     const current = this.row(id);
@@ -2061,13 +2129,32 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * idle CLI instead, so they never land in the middle of a turn (R9).
    */
   async sendPrompt(id: string, text: string, opts: { automatic?: boolean } = {}): Promise<Run> {
-    const row = this.row(id);
-    if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
-    if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
-    if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
-    if (opts.automatic && !IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; not interrupting it`);
-    await this.typePrompt(row.ptydSessionId, text);
-    return this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
+    // Typed and recorded before a held run's close looks at the session (closeHeldSession, the idle sweep).
+    return this.sessionLock.run(id, async () => {
+      const row = this.row(id);
+      if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
+      if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
+      // A one-shot CLI exits after its turn: typed into it, the prompt would be lost with no one told.
+      if (this.exitsAfterTurn(row)) throw conflict(SESSION_CLOSING, 'session_closing');
+      if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
+      if (opts.automatic && !IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; not interrupting it`);
+      const stateBefore = this.latestStateEventId(id);
+      await this.typePrompt(row.ptydSessionId, text);
+      const run = this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
+      // The CLI may already have taken the prompt and stopped again: its state changes decided then.
+      if (this.latestStateEventId(id) === stateBefore) this.emit('prompted', run);
+      return run;
+    });
+  }
+
+  /**
+   * The run, re-read after a reconcile when its CLI is a one-shot one whose session is still open: it
+   * may have finished its turn and be about to exit. Once its exit is noted, a prompt respawns it.
+   */
+  private async afterOneShotExit(row: RunRow): Promise<RunRow> {
+    if (!row.ptydSessionId || row.endedAt || !this.exitsAfterTurn(row)) return row;
+    await this.reconcile();
+    return this.row(row.id);
   }
 
   /**
@@ -2085,10 +2172,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * `claude --resume` when the process has ended.
    */
   async prompt(id: string, text: string, opts: { automatic?: boolean } = {}): Promise<Run> {
-    const row = this.row(id);
+    let row = this.row(id);
     if (row.state === 'queued') throw conflict('the agent has not started yet; it is queued');
     // Also while it respawns for a resume: a second resume would start another agent.
     if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
+    row = await this.afterOneShotExit(row);
     if (row.ptydSessionId && !row.endedAt) return this.sendPrompt(id, text, opts);
     if (!row.agentSessionId) throw conflict('no agent session to continue; start a new run');
     return this.resume(id, text);
@@ -3614,8 +3702,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // so it never lingers as a zombie process in Fleet Multiplexer.
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
           if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl && !this.pipelineBusyRuns.has(row.id)) {
-            await this.closeIdleSession(row.id, row.ptydSessionId);
-            byId.delete(row.ptydSessionId);
+            const sessionId = row.ptydSessionId;
+            // Re-read under the session lock: a prompt typed meanwhile (its hook not here yet) restarts
+            // the idle time.
+            const closed = await this.sessionLock.run(row.id, async () => {
+              const current = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
+              if (!current || current.endedAt || current.ptydSessionId !== sessionId || current.state !== 'done') {
+                return false;
+              }
+              const prompted = this.promptSentSince(row.id, latestDoneEventId(this.db, row.id));
+              const idleSince = Math.max(current.stateChangedAt.getTime(), prompted?.getTime() ?? 0);
+              if (nowMs - idleSince <= idleTtl) return false;
+              await this.closeIdleSession(row.id, sessionId);
+              return true;
+            });
+            if (closed) byId.delete(sessionId);
           }
           continue;
         }

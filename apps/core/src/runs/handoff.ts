@@ -1,3 +1,7 @@
+import { RUN_PROMPT_MAX } from '@emberline/protocol';
+import { HttpError } from '../errors.js';
+import { clipText } from '../text/control-chars.js';
+
 /** The prompt a run continues with after another session stopped (quota handoff or a fresh resume). */
 export interface HandoffPromptInput {
   ticket: { key: string; title: string; body: string } | null;
@@ -52,4 +56,25 @@ export function buildHandoffPrompt(input: HandoffPromptInput): string {
     'Check the current state of the files first, keep the work that is already done, do not redo finished steps, and complete the task.',
   );
   return parts.join('\n\n');
+}
+
+/** The least of the handoff context a successor's prompt keeps next to a person's text. */
+const MIN_CONTEXT = 2_000;
+
+/**
+ * A successor's prompt within `max` (the run prompt limit): the handoff context, then the person's
+ * text whole; the context is shortened to the room left. 400 `prompt_too_long` when the text would
+ * leave the context less than {@link MIN_CONTEXT} characters.
+ */
+export function successorPrompt(context: string, extra: string, max = RUN_PROMPT_MAX): string {
+  if (!extra) return clipText(context, max);
+  const room = max - extra.length - 2;
+  if (room < MIN_CONTEXT) {
+    throw new HttpError(
+      400,
+      'prompt_too_long',
+      `The prompt is too long to send with the run's handoff context. Keep it under ${max - MIN_CONTEXT - 2} characters.`,
+    );
+  }
+  return `${clipText(context, room)}\n\n${extra}`;
 }

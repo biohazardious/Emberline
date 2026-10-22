@@ -706,7 +706,7 @@ export function registerProjectRoutes(
         postMerge.enqueue(project.id);
         mainPush.enqueue(project.id, run.id, result.commitOid, result.commitUnverified);
       }
-      const { commitOid: _commitOid, commitUnverified: _commitUnverified, ...response } = result;
+      const { commitOid: _commitOid, commitUnverified: _commitUnverified, mainHead: _mainHead, ...response } = result;
       return response;
     },
   );

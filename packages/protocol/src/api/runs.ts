@@ -2,6 +2,9 @@
 import { z } from 'zod';
 import { AgentPersona, PermissionMode } from './projects.js';
 
+/** A run's prompt limit (CreateRunBody): a ticket prompt with its context, a successor's with the handoff context. */
+export const RUN_PROMPT_MAX = 20_000;
+
 /**
  * Mirrors `AgentState` in @emberline/adapter-sdk. `queued` waits for a free slot (and quota);
  * `rate_limited` waits for the usage window to reset.
@@ -606,7 +609,7 @@ export const RunRecovery = z.object({
 export type RunRecovery = z.infer<typeof RunRecovery>;
 
 /** `POST /api/runs/:id/recover`: the prompt to deliver. */
-export const RecoverRequest = z.object({ text: z.string().trim().min(1).max(20_000) });
+export const RecoverRequest = z.object({ text: z.string().trim().min(1).max(RUN_PROMPT_MAX) });
 export type RecoverRequest = z.input<typeof RecoverRequest>;
 
 export const Run = z.object({
@@ -672,7 +675,7 @@ export const CreateRunBody = z.object({
   agent: AgentId.default('claude'),
   model: AgentModelId.default('auto'),
   persona: AgentPersona.default('coder'),
-  prompt: z.string().trim().max(20_000).default(''),
+  prompt: z.string().trim().max(RUN_PROMPT_MAX).default(''),
   permissionMode: PermissionMode.default('default'),
 });
 export type CreateRunBody = z.input<typeof CreateRunBody>;

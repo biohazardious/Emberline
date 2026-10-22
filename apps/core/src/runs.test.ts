@@ -961,6 +961,107 @@ describe('runs', () => {
       expect(res.statusCode).toBe(200);
       expect(t.runs.getRun(run.id)).toMatchObject({ endedAt: null, cancelled: false });
     });
+
+    it('a held close leaves a session a person prompted meanwhile', async () => {
+      const { run, token } = await working('Held close, prompted');
+      await hook(run.id, 'Stop', token);
+      await hook(run.id, 'UserPromptSubmit', token, { prompt: 'wait, also do X' });
+      await t.runs.closeHeldSession(run.id);
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'working', endedAt: null });
+      expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('idle_session_closed');
+    });
+
+    it('a held close leaves a session whose typed prompt has not reached the agent yet', async () => {
+      const { run, token } = await working('Held close, typed');
+      await hook(run.id, 'Stop', token);
+      // The prompt is typed and recorded; the CLI's UserPromptSubmit hook has not arrived.
+      await t.runs.sendPrompt(run.id, 'one more thing');
+      await t.runs.closeHeldSession(run.id);
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'done', endedAt: null });
+      expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('idle_session_closed');
+    });
+
+    it('a held close waits for a prompt being typed, then leaves the session open', async () => {
+      const { run, token } = await working('Held close, typing');
+      await hook(run.id, 'Stop', token);
+      const typing = t.runs.sendPrompt(run.id, 'one more thing');
+      const closing = t.runs.closeHeldSession(run.id);
+      await Promise.all([typing, closing]);
+      expect(t.runs.getRun(run.id).endedAt).toBeNull();
+      expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('idle_session_closed');
+    });
+
+    it('the idle sweep leaves a finished session whose typed prompt has not reached the agent yet', async () => {
+      const { run, token } = await working('Idle close, typed');
+      await hook(run.id, 'Stop', token);
+      // A prompt typed into the CLI (this stand-in would exit on it, so it is only recorded).
+      t.db.insert(runEvents).values({ runId: run.id, ts: new Date(), source: 'user', type: 'prompt_sent', payload: { length: 14 } }).run();
+      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) }).where(eq(runs.id, run.id)).run();
+      await t.runs.reconcile();
+      expect(t.runs.getRun(run.id).endedAt).toBeNull();
+      expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('idle_session_closed');
+    });
+
+    it('does not type into a one-shot CLI that finished its turn and is about to exit', async () => {
+      const project = await createProject('One-shot closing', false);
+      const now = new Date();
+      t.db
+        .insert(runs)
+        .values({
+          id: 'gem-1',
+          projectId: project.id,
+          agent: 'gemini',
+          permissionMode: 'auto',
+          state: 'done',
+          prompt: 'do it',
+          worktreePath: project.path,
+          hookTokenHash: 'h',
+          ptydSessionId: 'pty-x',
+          stateChangedAt: now,
+          createdAt: now,
+          endedAt: null,
+        })
+        .run();
+      const write = vi.spyOn(t.ptyd.get(), 'write');
+      await expect(t.runs.sendPrompt('gem-1', 'fix', { automatic: true })).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'session_closing',
+        message: 'the agent is closing its session; try again in a moment',
+      });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it('a prompt to a one-shot CLI whose process has exited notes the exit and respawns it', async () => {
+      process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+      try {
+        const project = await createProject('One-shot exited', true);
+        const now = new Date();
+        t.db
+          .insert(runs)
+          .values({
+            id: 'gem-2',
+            projectId: project.id,
+            agent: 'gemini',
+            permissionMode: 'auto',
+            state: 'done',
+            prompt: 'do it',
+            worktreePath: project.path,
+            hookTokenHash: 'h',
+            agentSessionId: 'gemini-gem-2',
+            ptydSessionId: 'pty-gone',
+            stateChangedAt: now,
+            createdAt: now,
+            endedAt: null,
+          })
+          .run();
+        const run = await t.runs.prompt('gem-2', 'fix', { automatic: true });
+        expect(run).toMatchObject({ state: 'starting', endedAt: null });
+        expect(t.runs.get('gem-2').events.map((e) => e.type)).toContain('respawning');
+        await tokenFor('gem-2');
+      } finally {
+        delete process.env.EMBERLINE_GEMINI_COMMAND;
+      }
+    });
   });
 
   describe('idle close and the completion pipeline', () => {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { IssueSyncSettings, type Run, type RunDetail, type Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { writeIssueSync, writeWizardTickets } from './db/project-settings.js';
 import { projects, runs, tickets } from './db/schema.js';
@@ -523,7 +523,9 @@ describe('gate re-prompts and the completion tool', () => {
     const { run } = await sloppyTicket();
     const passes = trackPipelines();
     await begin(run);
-    t.db.update(runs).set({ agent: 'codex' }).where(eq(runs.id, run.id)).run();
+    // An interactive codex session (started without a prompt) takes typed text; a one-shot `codex exec`
+    // exits after its turn and gets the request when it is respawned.
+    t.db.update(runs).set({ agent: 'codex', prompt: '' }).where(eq(runs.id, run.id)).run();
     await stop(run);
     await settled(passes, 1);
     expect(await eventTypes(run)).toContain('slop_guard_blocked');
@@ -655,6 +657,37 @@ describe('the ticket completion and a new run', () => {
     await complete(run, { summary: 'kept' });
     await t.tickets.prompt(ticket.id, 'one more thing');
     expect(((await api('GET', `/api/tickets/${ticket.id}`)).json() as Ticket).completion).toMatchObject({ summary: 'kept' });
+  });
+
+  it('a prompt the CLI answered before it was recorded leaves the ticket in Review', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'By hand' });
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    const token = await begin(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('review');
+    // The CLI takes the typed prompt, works and stops again before the prompt is recorded.
+    vi.spyOn(t.ptyd.get(), 'write')
+      .mockImplementationOnce(async () => {
+        await hook(run.id, 'UserPromptSubmit', token);
+        await hook(run.id, 'Stop', token);
+        return {};
+      })
+      .mockResolvedValue({});
+    await t.runs.sendPrompt(run.id, 'one more thing');
+    expect(t.runs.getRun(run.id).state).toBe('done');
+    expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  it('a prompt the CLI has not answered yet moves the ticket back to In progress', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'By hand' });
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    await begin(run);
+    await stop(run);
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('review');
+    await t.runs.sendPrompt(run.id, 'one more thing');
+    expect(await statusOf(ticket.id)).toBe('in_progress');
   });
 });
 
@@ -1034,6 +1067,8 @@ describe('a run that changed nothing', () => {
     const passes = trackPipelines();
     await begin(run);
     asCodex(run);
+    // Interactive (started without a prompt), so the request to fix the file is typed into its session.
+    t.db.update(runs).set({ prompt: '' }).where(eq(runs.id, run.id)).run();
     await stop(run);
     await settled(passes, 1);
     expect(await eventTypes(run)).toContain('build_gate_failed');
@@ -1236,6 +1271,46 @@ describe('the worktree config check before the merge', () => {
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
     expect(await eventTypes(run)).not.toContain('build_gate_failed');
     expect(mainHas(project, 'A.txt')).toBe(true);
+  });
+
+  it('an invalid main file checked out with CRLF (eol=crlf) does not block a run that leaves it alone', async () => {
+    const project = await createProject();
+    mkdirSync(path.join(project.path, '.emberline'), { recursive: true });
+    writeFileSync(path.join(project.path, '.gitattributes'), '*.yml text eol=crlf\n');
+    writeFileSync(path.join(project.path, YML), INVALID);
+    wgit(project.path, '-c', 'core.safecrlf=false', 'add', '-A');
+    wgit(project.path, 'commit', '-q', '-m', 'crlf yml');
+    const ticket = await createTicket(project.id, { title: 'Y', status: 'ready' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(ticket.id)[0] as Run;
+    expect(readFileSync(path.join(run.worktreePath, YML), 'utf8')).toContain('\r\n');
+    writeFileSync(path.join(run.worktreePath, 'A.txt'), 'A\n');
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'A');
+    await begin(run);
+    await stop(run, { summary: 'did A' });
+    await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
+    expect(await eventTypes(run)).not.toContain('build_gate_failed');
+    expect(mainHas(project, 'A.txt')).toBe(true);
+  });
+
+  it('a run that rewrites an invalid CRLF main file into another invalid one is still held', async () => {
+    const project = await createProject();
+    mkdirSync(path.join(project.path, '.emberline'), { recursive: true });
+    writeFileSync(path.join(project.path, '.gitattributes'), '*.yml text eol=crlf\n');
+    writeFileSync(path.join(project.path, YML), INVALID);
+    wgit(project.path, '-c', 'core.safecrlf=false', 'add', '-A');
+    wgit(project.path, 'commit', '-q', '-m', 'crlf yml');
+    const ticket = await createTicket(project.id, { title: 'Y', status: 'ready' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(ticket.id)[0] as Run;
+    writeRunYml(run, 'version: 1\r\nchecks:\r\n  e2e: npm run e2e\r\n');
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'changed the checks' });
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('build_gate_failed');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
   });
 
   it('a file the run inherited unchanged passes after main fixed it meanwhile (the merge keeps main\'s)', async () => {

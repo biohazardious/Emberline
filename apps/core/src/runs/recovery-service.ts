@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import type { RecoverResponse, Route, Run, RunRecovery } from '@emberline/protocol';
+import type { RecoverResponse, Run, RunRecovery } from '@emberline/protocol';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projects, reviewComments, tickets } from '../db/schema.js';
@@ -120,7 +120,7 @@ export class RecoveryService {
       const delivery = this.deliveryFor(run);
       if (delivery === 'session') return { delivery, run: await this.runs.prompt(run.id, text, { automatic: false }) };
       if (delivery === 'none') throw this.refusal(run);
-      const route = { agent: run.agent, model: run.model ?? 'auto', credential: run.credential } as Route;
+      const route = this.runs.currentRoute(run.id);
       this.scheduler.assertRouteOpen(route);
       const successor = await this.runs.handOff(run.id, route, {
         reason: CONTINUED_AFTER_HOLD,

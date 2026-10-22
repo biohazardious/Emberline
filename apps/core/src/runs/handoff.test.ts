@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHandoffPrompt, summarizeRecentTools } from './handoff.js';
+import { buildHandoffPrompt, successorPrompt, summarizeRecentTools } from './handoff.js';
 
 const base = {
   ticket: { key: 'MPG-28', title: 'Accessibility pass', body: 'Colour-blind safe cats.' },
@@ -51,5 +51,25 @@ describe('recent tool summary', () => {
 
   it('is empty when no entry has a detail', () => {
     expect(summarizeRecentTools([{ name: 'Edit', detail: '' }, { name: 'Write', detail: '' }])).toEqual([]);
+  });
+});
+
+describe('successor prompt', () => {
+  it('keeps the person\'s text whole and shortens the context to fit the run prompt limit', () => {
+    const text = successorPrompt('c'.repeat(15_000), 'x'.repeat(10_000));
+    expect(text.length).toBeLessThanOrEqual(20_000);
+    expect(text.endsWith(`\n\n${'x'.repeat(10_000)}`)).toBe(true);
+    expect(text.startsWith('c')).toBe(true);
+  });
+
+  it('is the context alone without the person\'s text, within the limit', () => {
+    expect(successorPrompt('context', '')).toBe('context');
+    expect(successorPrompt('c'.repeat(25_000), '').length).toBeLessThanOrEqual(20_000);
+  });
+
+  it('refuses text that leaves no room for the context', () => {
+    expect(() => successorPrompt('c', 'y'.repeat(19_000))).toThrow(
+      expect.objectContaining({ statusCode: 400, code: 'prompt_too_long' }),
+    );
   });
 });

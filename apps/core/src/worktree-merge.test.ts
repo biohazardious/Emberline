@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runProducedChanges } from './factory/merge.js';
+import { runProducedChanges, withMainWorkspaceLock } from './factory/merge.js';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
 import { commitWorktree } from './runs/git.js';
 
@@ -81,6 +81,27 @@ describe('syncWorktreeToMainWorkspace (git merge)', () => {
     expect(git(main, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(main, 'status', '--porcelain')).toBe('');
     expect(readFileSync(path.join(main, 'app.js'), 'utf8')).toContain('from-a');
+  });
+
+  it("reports main's head as the merge saw it, not after a queued change", async () => {
+    const a = addWorktree('a');
+    const b = addWorktree('b');
+    writeFileSync(path.join(a, 'app.js'), 'line1\nfrom-a\nline3\n');
+    writeFileSync(path.join(b, 'app.js'), 'line1\nfrom-b\nline3\n');
+    expect((await sync(a, 'T-1')).ok).toBe(true);
+    const head = git(main, 'rev-parse', 'HEAD');
+    const pending = sync(b, 'T-2');
+    // Queued behind the merge's lock: it moves main right after the merge gives up.
+    const queued = withMainWorkspaceLock(main, async () => {
+      writeFileSync(path.join(main, 'z.txt'), 'z\n');
+      git(main, 'add', '-A');
+      git(main, 'commit', '-q', '-m', 'later');
+    });
+    const res = await pending;
+    await queued;
+    expect(res.ok).toBe(false);
+    expect(res.mainHead).toBe(head);
+    expect(git(main, 'rev-parse', 'HEAD')).not.toBe(head);
   });
 
   it('keeps edits made directly in the main workspace', async () => {

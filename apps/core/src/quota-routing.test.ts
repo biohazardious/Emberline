@@ -363,6 +363,9 @@ describe('handoff', () => {
 
   it('a resume while the handoff prompt is being built wins: 409, no successor, the run keeps working', async () => {
     const { run, ticketId } = await stopped();
+    // An interactive session (started without a prompt) takes the typed continue; a one-shot `-p` one
+    // is refused while it exits (session_closing) and respawned once it has.
+    t.db.update(runsTable).set({ prompt: '' }).where(eq(runsTable.id, run.id)).run();
     const gate = holdHandoffContext();
     const pending = t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
     await expect.poll(gate.reached).toBe(true);

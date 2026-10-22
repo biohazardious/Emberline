@@ -27,12 +27,18 @@ export function recoverErrorText(code: string, message: string): string {
     case 'no_session':
       return NO_PROMPT;
     default:
-      // Route checks (the successor's lane is out of quota, its agent needs Autonomous mode) explain
-      // themselves; any other code is "cannot deliver".
+      // Route checks (the successor's lane is out of quota, its agent needs Autonomous mode), a prompt
+      // too long to go with a successor's handoff context and a one-shot agent still closing its
+      // session explain themselves; any other code is "cannot deliver".
       return MESSAGE_CODES.has(code) && message ? message : NO_PROMPT;
   }
 }
-const MESSAGE_CODES: ReadonlySet<string> = new Set(['lane_exhausted', 'headless_needs_auto']);
+const MESSAGE_CODES: ReadonlySet<string> = new Set([
+  'lane_exhausted',
+  'headless_needs_auto',
+  'prompt_too_long',
+  'session_closing',
+]);
 
 /** A suggestion as offered here; `onTicket`: done on the ticket (a link to it), not here. */
 export type VisibleSuggestion = RecoverySuggestion & { onTicket: boolean };

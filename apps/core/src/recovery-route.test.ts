@@ -451,6 +451,56 @@ describe('delivering a recovery prompt', () => {
       expect(git(main, 'log', '--format=%s', '-1')).toMatch(/EL-2/);
     });
 
+    it('a successor two handoffs from the held run still runs the pipeline', async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
+      const s1 = ((await recover('el-2', 'merge main and finish')).json() as RecoverResponse).run;
+      t.db.update(runs).set({ state: 'rate_limited' }).where(eq(runs.id, s1.id)).run();
+      const s2 = await t.runs.handOff(
+        s1.id,
+        { agent: 'claude', model: 'auto', credential: 'login' },
+        { reason: 'quota', source: 'system', automatic: true },
+      );
+      const pipeline = t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
+      await pipeline.handleRunCompleted(t.runs.get(s2.id));
+      expect(t.runs.get(s2.id).events.map((e) => e.type)).toContain('merged_to_main');
+    });
+
+    it('a long prompt still reaches a successor: the handoff context is shortened, the text kept whole', async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
+      // A long ticket: the handoff context alone is several thousand characters.
+      t.db.update(tickets).set({ body: 'b'.repeat(5_000) }).where(eq(tickets.id, 'tk-EL-2')).run();
+      const text = 'y'.repeat(17_000);
+      const res = await recover('el-2', text);
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as RecoverResponse;
+      expect(body.delivery).toBe('successor');
+      const prompt = t.db.select({ prompt: runs.prompt }).from(runs).where(eq(runs.id, body.run.id)).get()!.prompt;
+      expect(prompt.length).toBeLessThanOrEqual(20_000);
+      expect(prompt.endsWith(`\n\n${text}`)).toBe(true);
+      expect(prompt).toContain('continued after a hold');
+    });
+
+    it('a prompt too long to go with the handoff context: 400 prompt_too_long, nothing handed off', async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
+      t.db.update(tickets).set({ body: 'b'.repeat(5_000) }).where(eq(tickets.id, 'tk-EL-2')).run();
+      const res = await recover('el-2', 'y'.repeat(19_000));
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'prompt_too_long' });
+      expect(successorsOf('el-2')).toHaveLength(0);
+      expect(t.runs.getRun('el-2').handedOffTo).toBeNull();
+    });
+
+    it('a legacy run keeps the model its route tag names in the successor', async () => {
+      const wt = worktree('el-2', { 'new.js': 'x\n' });
+      seedRun({ id: 'el-2', ...wt, stops: [legacyStop, exitNoted] });
+      t.db.update(runs).set({ model: null, prompt: '[Preferred Agent: claude · Model: opus] EL-2' }).where(eq(runs.id, 'el-2')).run();
+      const body = (await recover('el-2', 'go on')).json() as RecoverResponse;
+      expect(body.run.model).toBe('opus');
+    });
+
     it('a run a person stopped stays stopped: 409 run_stopped_by_you, and Resume stays 409', async () => {
       const wt = worktree('user', { 'new.js': 'x\n' });
       seedRun({ id: 'user', ...wt, stops: [{ source: 'user' }] });
@@ -610,6 +660,25 @@ describe('delivering a recovery prompt', () => {
       expect(res.json().message).toContain('Gemini runs without a terminal to answer in, so in Accept edits mode');
       expect(t.runs.getRun('g4').state).toBe('done');
       expect(existsSync(path.join(t.dir, 'args-g4'))).toBe(false);
+    });
+
+    it('a held headless run in Accept edits is refused before anything is handed off', async () => {
+      seedRun({ id: 'g5', agent: 'gemini', permissionMode: 'acceptEdits', ...worktree('g5', { 'n.js': 'x\n' }), stops: [legacyStop, exitNoted] });
+      const res = await post('/api/runs/g5/recover', { text: 'go on' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
+      expect(successorsOf('g5')).toHaveLength(0);
+      expect(t.runs.getRun('g5').handedOffTo).toBeNull();
+    });
+
+    it("a person's handoff of a run in Accept edits to a headless lane is refused before anything is handed off", async () => {
+      seedRun({ id: 'c6', permissionMode: 'acceptEdits', ...worktree('c6', { 'n.js': 'x\n' }), hold: null });
+      t.db.update(runs).set({ state: 'failed' }).where(eq(runs.id, 'c6')).run();
+      const res = await post('/api/runs/c6/handoff', { route: { agent: 'gemini', model: 'auto', credential: 'login' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
+      expect(successorsOf('c6')).toHaveLength(0);
+      expect(t.runs.getRun('c6')).toMatchObject({ state: 'failed', handedOffTo: null });
     });
   });
 

@@ -174,6 +174,19 @@ export function handoffChain(db: Db, runId: string): string[] {
   return chain;
 }
 
+/**
+ * Whether the run carries on held work: the nearest run it took over from (by handoff, any number
+ * of steps back) whose pipeline decided anything decided `held`. Runs between them that never got
+ * that far (a quota handoff of a successor, for example) pass the work on unchanged.
+ */
+export function continuesHeldWork(db: Db, runId: string): boolean {
+  for (const id of handoffChain(db, runId).slice(1)) {
+    const outcome = pipelineOutcome(db, id);
+    if (outcome !== null) return outcome === 'held';
+  }
+  return false;
+}
+
 /** Notes by which a run's branch landed in main: the pipeline's merge, or a person's. Protected from pruning (HOLD_ENDING_EVENTS). */
 const MERGE_NOTES = ['merged_to_main', 'merged_by_person'];
 

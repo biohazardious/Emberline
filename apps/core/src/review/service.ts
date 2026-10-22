@@ -6,6 +6,7 @@ import {
   type RequestChangesResponse,
   type ReviewComment,
   type Run,
+  RUN_PROMPT_MAX,
   type RunReviewState,
   UpdateReviewCommentBody,
 } from '@emberline/protocol';
@@ -75,8 +76,6 @@ export interface ReviewServiceOptions {
   completionHint?: (run: Run) => string;
 }
 
-/** The prompt limit of a run (CreateRunBody / TicketPromptBody). */
-const PROMPT_MAX = 20_000;
 /** Longest handoff chain followed when settling comments. */
 const CHAIN_MAX = 20;
 /**
@@ -427,7 +426,7 @@ export class ReviewService {
     const comments = await this.batch(run);
     if (comments.length === 0 && !note) throw badRequest('nothing to send: add a comment or a note');
     const text = `${sameRunPrompt(note, comments)}${this.completionHint(run)}`;
-    if (text.length > PROMPT_MAX) throw badRequest('too much feedback in one round — resolve or split');
+    if (text.length > RUN_PROMPT_MAX) throw badRequest('too much feedback in one round — resolve or split');
     // Taken before the send: the agent's next turn must start after it to count as addressing these.
     const sentAt = new Date();
     let prompted: Run;

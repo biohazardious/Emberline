@@ -99,19 +99,63 @@ function unsafeReason(rel: string, error: UnsafePathError): string {
   return `${rel} is not a regular file`;
 }
 
-/**
- * `.emberline/worktree.yml` where the run's branch started: its merge-base with main's HEAD, read
- * from the run worktree (they share the objects). Null when git cannot tell.
- */
-async function branchBaseWorktreeYml(worktreePath: string, mainWorkspacePath: string): Promise<HeadWorktreeYml | null> {
+const OID = /^[0-9a-f]{40,64}$/;
+
+/** The commit main's HEAD names; null when git cannot tell. */
+async function mainHeadCommit(mainWorkspacePath: string): Promise<string | null> {
   try {
-    const mainHead = (await execGitFile(['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: mainWorkspacePath })).stdout.trim();
-    const base = (await execGitFile(['merge-base', 'HEAD', mainHead], { cwd: worktreePath })).stdout.trim();
-    if (!/^[0-9a-f]{40,64}$/.test(base)) return null;
-    const read = await readHeadWorktreeYml(worktreePath, base);
-    return read.kind === 'unknown' ? null : read;
+    const inMain = { cwd: mainWorkspacePath };
+    const head = (await execGitFile(['rev-parse', '--verify', 'HEAD^{commit}'], inMain)).stdout.trim();
+    return OID.test(head) ? head : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Where the run's branch started: its merge-base with main's HEAD (`mainHead`), read in the run
+ * worktree (they share the objects). Null when git cannot tell.
+ */
+async function branchBase(worktreePath: string, mainHead: string): Promise<string | null> {
+  try {
+    const base = (await execGitFile(['merge-base', 'HEAD', mainHead], { cwd: worktreePath })).stdout.trim();
+    return OID.test(base) ? base : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `.emberline/worktree.yml` where the run's branch started (see {@link branchBase}), with that
+ * commit. Null when git cannot tell.
+ */
+async function branchBaseWorktreeYml(
+  worktreePath: string,
+  mainHead: string | null,
+): Promise<{ commit: string; read: HeadWorktreeYml } | null> {
+  const commit = mainHead ? await branchBase(worktreePath, mainHead) : null;
+  if (!commit) return null;
+  try {
+    const read = await readHeadWorktreeYml(worktreePath, commit);
+    return read.kind === 'unknown' ? null : { commit, read };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the worktree's file (its working tree, uncommitted changes included) is the file at
+ * `rev`, as git compares them: a checkout's line-ending conversion (`eol=crlf`, autocrlf) is no
+ * change. Only for a file `rev` has (git does not compare an untracked one). False when they differ
+ * or git cannot tell.
+ */
+async function sameAs(worktreePath: string, rev: string, rel: string): Promise<boolean> {
+  try {
+    await execGitFile(['diff', '--quiet', '--no-ext-diff', '--no-textconv', rev, '--', rel], { cwd: worktreePath });
+    return true;
+  } catch {
+    // Exit code 1: they differ; anything else: git could not compare them.
+    return false;
   }
 }
 
@@ -119,9 +163,10 @@ async function branchBaseWorktreeYml(worktreePath: string, mainWorkspacePath: st
  * Why a run worktree's `.emberline/worktree.yml` could not be used once merged, or null when it may
  * land: the run removed it (or never had one), left it as main has it or as it was where the branch
  * started (the merge keeps main's version then; a main whose file is unusable does not block runs
- * that do not touch it), or changed it into a valid file. Read from the working tree, which is what
- * the merge commits, and never through a link. Main's committed file is read only when the run's
- * file is invalid or unreadable; throws when git cannot read it then.
+ * that do not touch it; git decides whether it was touched), or changed it into a valid file. Read
+ * from the working tree, which is what the merge commits, and never through a link. Main's
+ * committed file is read only when the run's file is invalid or unreadable; throws when git cannot
+ * read it then.
  */
 export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspacePath: string): Promise<string[] | null> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
@@ -141,14 +186,20 @@ export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspace
     // A valid file lands as it is: main's (and git reading it) only matter for an invalid one.
     const parsed = parseWorktreeYml(content);
     if (parsed.ok) return null;
-    const main = await readHeadWorktreeYml(mainWorkspacePath);
-    if (main.kind === 'present' && content === main.yml.content) return null;
-    const base = await branchBaseWorktreeYml(worktreePath, mainWorkspacePath);
-    return base?.kind === 'present' && content === base.yml.content ? null : parsed.errors;
+    // Untouched by the run: as main has it, or as it was where the branch started. Git compares (a
+    // checkout's line-ending conversion is no change); when it cannot tell, the file counts as touched.
+    const head = await mainHeadCommit(mainWorkspacePath);
+    const untouched = async (rev: string | null, read: HeadWorktreeYml | null) =>
+      read?.kind === 'present' &&
+      (content === read.yml.content || (rev !== null && (await sameAs(worktreePath, rev, rel))));
+    if (await untouched(head, await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD'))) return null;
+    const base = await branchBaseWorktreeYml(worktreePath, head);
+    return base && (await untouched(base.commit, base.read)) ? null : parsed.errors;
   }
   // The run did not make an unusable file worse than main's or its starting point's.
-  const main = await readHeadWorktreeYml(mainWorkspacePath);
-  if (unusable(main) || unusable(await branchBaseWorktreeYml(worktreePath, mainWorkspacePath))) return null;
+  const head = await mainHeadCommit(mainWorkspacePath);
+  const main = await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD');
+  if (unusable(main) || unusable((await branchBaseWorktreeYml(worktreePath, head))?.read ?? null)) return null;
   return [unreadable ?? `${rel} cannot be read`];
 }
 

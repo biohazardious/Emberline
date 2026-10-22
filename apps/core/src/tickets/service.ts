@@ -20,6 +20,7 @@ import {
   type ForgeProvider,
   normalizeTicketRef,
   type Run,
+  RUN_PROMPT_MAX,
   type StartTicketBody,
   StartTicketBody as StartTicketBodySchema,
   type Ticket,
@@ -44,7 +45,6 @@ import {
   committedWithContent,
   ingestAgentTicketsFile,
   mainWorkspaceBranch,
-  mainHead,
   persistFactoryAttachments,
   runBranchBase,
   runCrossProviderCritic,
@@ -59,7 +59,13 @@ import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-c
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
 import { openBlockingCount } from '../review/blocking.js';
-import { branchMergedBefore, pipelineOutcome, reviewUnblockPending, stillHeld } from '../runs/hold-outcome.js';
+import {
+  branchMergedBefore,
+  continuesHeldWork,
+  pipelineOutcome,
+  reviewUnblockPending,
+  stillHeld,
+} from '../runs/hold-outcome.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
@@ -223,9 +229,6 @@ const COMPLETE_AGAIN = 'When finished, call `ticket_complete` again.';
 export const COMPLETION_NUDGE =
   'You stopped without calling `ticket_complete`. If the ticket is finished, call it now with a summary and handoff. If something blocks you, call it with `blockers`. If you need an answer from a person, ask the question plainly and stop.';
 
-/** CreateRunBody's prompt limit: a ticket prompt plus its dependency context must stay within it. */
-const RUN_PROMPT_MAX = 20_000;
-
 /** Automatic conflict-resolution requests one run gets; each needs main to have moved since the last. */
 export const CONFLICT_ATTEMPT_CAP = 3;
 
@@ -279,10 +282,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
       if (run.handedOffTo) return;
-      if (run.ticketId) {
-        if (stateChanged) this.followRun(run.ticketId, run.state);
-        else if (run.lastEvent === 'prompt_sent') this.followRun(run.ticketId, 'working');
-      }
+      if (run.ticketId && stateChanged) this.followRun(run.ticketId, run.state);
       if (
         stateChanged &&
         run.state === 'waiting_input' &&
@@ -311,6 +311,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ) {
         this.ticketRunFailed(run, run.projectId);
       }
+    });
+    // A prompt typed into the agent's session that it has not answered yet: the ticket is worked on
+    // again. One the CLI took and finished before it was recorded changed the state, which decided.
+    runs.on('prompted', (run) => {
+      if (!run.handedOffTo && run.ticketId && !run.cancelled) this.followRun(run.ticketId, 'working');
     });
     // RunService stored the agent's completion on the ticket: show it on the Board right away.
     runs.on('note', (run, type) => {
@@ -997,8 +1002,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // A run an earlier pass left held stays a factory run: its next stop lifts the hold even when
     // the chain ended meanwhile (a dispatch with an empty queue does not count a held, `done` run).
     // So does one whose review hold a person lifted since, until another outcome decides it, and any
-    // successor of a held run (a `continued after a hold` one or any other handoff): it carries that
-    // run's work on.
+    // successor of a held run (a `continued after a hold` one or any other handoff, also several
+    // handoffs on): it carries that run's work on.
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
@@ -1006,9 +1011,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       isFactoryOrchestratorTicket ||
       hasFactoryPipeline ||
       (ticketRow?.status !== 'done' &&
-        (this.stillHeld(run.id) ||
-          reviewUnblockPending(this.db, run.id) ||
-          (run.predecessorRunId !== null && this.pipelineOutcome(run.predecessorRunId) === 'held')));
+        (this.stillHeld(run.id) || reviewUnblockPending(this.db, run.id) || continuesHeldWork(this.db, run.id)));
     if (!isFactoryRun) return;
 
     // The gates, the merge and Done apply to every factory-looking run, but only the factory itself
@@ -1389,8 +1392,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ticketKey,
       runId: run.id,
       branch: run.branch,
-    }).catch((error: unknown) => ({ ok: false, summary: (error as Error).message, conflicts: [] as string[], commitSha: null, commitOid: null, commitUnverified: false }));
-    const head = res.ok ? null : await mainHead(mainWorkspacePath);
+    }).catch((error: unknown) => ({
+      ok: false,
+      summary: (error as Error).message,
+      conflicts: [] as string[],
+      commitSha: null,
+      commitOid: null,
+      commitUnverified: false,
+      mainHead: null,
+    }));
+    // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.
+    const head = res.ok ? null : res.mainHead;
     const autoFix =
       !res.ok &&
       res.conflicts.length > 0 &&
