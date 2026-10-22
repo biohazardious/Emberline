@@ -261,6 +261,8 @@ interface LegacyForgeConfig {
   provider?: unknown;
   apiUrl?: unknown;
   token?: unknown;
+  /** Set once the token could not be matched to one server. */
+  unmatched?: unknown;
 }
 
 const readLegacy = (db: Db): LegacyForgeConfig | null => {
@@ -269,10 +271,15 @@ const readLegacy = (db: Db): LegacyForgeConfig | null => {
 };
 const legacyToken = (cfg: LegacyForgeConfig | null) => (typeof cfg?.token === 'string' ? cfg.token.trim() : '');
 
-/** The servers projects were set up with (https only: the old token never went over plain http to them). */
-function projectServers(db: Db): { servers: Set<string>; plainHttp: boolean } {
+/**
+ * The servers projects were set up with (https only: the old token never went over plain http to
+ * them). `unusable` is set when a project's address gives no server name; the token is then not
+ * guessed.
+ */
+function projectServers(db: Db): { servers: Set<string>; plainHttp: boolean; unusable: boolean } {
   const servers = new Set<string>();
   let plainHttp = false;
+  let unusable = false;
   for (const { repoUrl } of db.select({ repoUrl: projects.repoUrl }).from(projects).all()) {
     if (!repoUrl?.trim()) continue;
     const url = repoUrl.trim();
@@ -281,39 +288,66 @@ function projectServers(db: Db): { servers: Set<string>; plainHttp: boolean } {
       continue;
     }
     const host = /^https:\/\//i.test(url) ? hostOf(url) : hostOf(url)?.replace(/:\d+$/, '');
-    if (host) servers.add(`https://${host}`);
+    const server = host ? normalizeServerUrl(`https://${host}`) : null;
+    if (server) servers.add(server);
+    else unusable = true;
   }
-  return { servers, plainHttp };
+  return { servers, plainHttp, unusable };
+}
+
+/** Where the old token belongs, or null when that cannot be told from the stored settings. */
+function legacyTarget(
+  db: Db,
+  cfg: LegacyForgeConfig,
+  apiUrl: string | null,
+): { provider: ForgeProvider; serverUrl: string } | null {
+  const fixed = fixedProvider(typeof cfg.provider === 'string' ? cfg.provider : undefined);
+  if (apiUrl) {
+    let url: URL;
+    try {
+      url = new URL(apiUrl);
+    } catch {
+      return null;
+    }
+    if (url.username || url.password) return null;
+    // As before the upgrade: a fixed provider, else the host name (not the API path) says which.
+    return serverFromApiUrl(apiUrl, fixed ?? detectProviderByHost(url.hostname));
+  }
+  const { servers, plainHttp, unusable } = projectServers(db);
+  if (plainHttp || unusable) return null;
+  if (servers.size === 1) {
+    const serverUrl = [...servers][0]!;
+    return { provider: fixed ?? detectProviderByHost(new URL(serverUrl).hostname), serverUrl };
+  }
+  if (servers.size === 0 && fixed !== 'gitea') {
+    return fixed === 'gitlab'
+      ? { provider: 'gitlab', serverUrl: 'https://gitlab.com' }
+      : { provider: 'github', serverUrl: 'https://github.com' };
+  }
+  return null;
 }
 
 /**
  * Once per start: the old global token becomes an account for its host, then is cleared (so a
  * removed account does not come back). An account stored for the host is kept. Environment accounts
- * are ignored: a stored account for the same host wins over them.
+ * are ignored: a stored account for the same host wins over them. A token that could not be matched
+ * is marked so; later starts never guess again (projects may have changed) until it is forgotten.
  */
 export function migrateLegacyForgeToken(db: Db): 'none' | 'migrated' | 'unmatched' {
   const cfg = readLegacy(db);
   const token = legacyToken(cfg);
   if (!cfg || !token) return 'none';
-  const fixed = fixedProvider(typeof cfg.provider === 'string' ? cfg.provider : undefined);
+  if (cfg.unmatched === true) return 'unmatched';
   const apiUrl =
     typeof cfg.apiUrl === 'string' && cfg.apiUrl.trim() ? cfg.apiUrl.trim().replace(/\/+$/, '') : null;
-  let target: { provider: ForgeProvider; serverUrl: string } | null = null;
-  if (apiUrl) {
-    target = serverFromApiUrl(apiUrl, fixed);
-  } else {
-    const { servers, plainHttp } = projectServers(db);
-    if (servers.size === 1 && !plainHttp) {
-      const serverUrl = [...servers][0]!;
-      target = { provider: fixed ?? detectProviderByHost(new URL(serverUrl).hostname), serverUrl };
-    } else if (servers.size === 0 && !plainHttp && fixed !== 'gitea') {
-      target =
-        fixed === 'gitlab'
-          ? { provider: 'gitlab', serverUrl: 'https://gitlab.com' }
-          : { provider: 'github', serverUrl: 'https://github.com' };
-    }
+  const target = legacyTarget(db, cfg, apiUrl);
+  if (!target) {
+    db.update(settings)
+      .set({ value: { ...cfg, unmatched: true } })
+      .where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY))
+      .run();
+    return 'unmatched';
   }
-  if (!target) return 'unmatched';
   insertAccountIfHostFree(
     db,
     {
@@ -338,7 +372,7 @@ export function forgetLegacyToken(db: Db): void {
   const cfg = readLegacy(db);
   if (!cfg) return;
   db.update(settings)
-    .set({ value: { ...cfg, token: null } })
+    .set({ value: { ...cfg, token: null, unmatched: false } })
     .where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY))
     .run();
 }

@@ -52,6 +52,8 @@ export async function createTestApp(
   overrides: Partial<CoreConfig> = {},
   schedulerOptions: Partial<SchedulerOptions> = {},
   ticketOptions: Partial<TicketServiceOptions> = {},
+  /** Runs on the fresh DB before core starts (what an earlier version left behind). */
+  beforeStart?: (db: OpenedDb['db']) => void,
 ): Promise<TestApp> {
   const dir = mkdtempSync(path.join(tmpdir(), 'core-'));
   const config: CoreConfig = {
@@ -78,6 +80,7 @@ export async function createTestApp(
     ...overrides,
   };
   const opened: OpenedDb = openDb(':memory:');
+  beforeStart?.(opened.db);
   const ptyd = new PtydBridge(config.ptydSocket);
   const runs = new RunService(opened.db, config, ptyd);
   // No periodic ticks in tests: event-driven kicks plus explicit tick() calls.

@@ -28,11 +28,11 @@ function timeoutError(): HttpError {
 export const FORGE_REDIRECT_HOPS = 3;
 
 function redirectError(location: string | null): HttpError {
-  if (!location) return new HttpError(502, 'forge_error', 'the forge redirected without a Location; set the Forge API URL');
+  if (!location) return new HttpError(502, 'forge_error', 'the forge redirected without a Location; check Settings → Forge accounts');
   return new HttpError(
     502,
     'forge_error',
-    `the forge redirected to ${location.slice(0, 300)} — has the repository moved? update the remote, or set the Forge API URL`,
+    `the forge redirected to ${location.slice(0, 300)} — has the repository moved? update the remote, or check Settings → Forge accounts`,
   );
 }
 

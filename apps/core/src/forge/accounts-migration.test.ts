@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { forgeAccounts, projects, runs, settings } from '../db/schema.js';
 import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from '../test-utils.js';
@@ -8,6 +9,8 @@ import {
   legacyTokenUnmatched,
   migrateLegacyForgeToken,
 } from './account-store.js';
+import { ForgeAccountsService } from './accounts.js';
+import type { Db } from '../db/index.js';
 import { ForgeService } from './service.js';
 
 let t: TestApp;
@@ -47,9 +50,39 @@ describe('migrateLegacyForgeToken', () => {
   it.each([
     [
       'an API URL names the server',
-      { provider: 'auto', apiUrl: 'https://git.example.com/api/v1', token: 'T' },
+      { provider: 'auto', apiUrl: 'https://gitea.example.com/api/v1', token: 'T' },
       [],
-      ['gitea', 'https://git.example.com', 'https://git.example.com/api/v1', 'T'],
+      ['gitea', 'https://gitea.example.com', 'https://gitea.example.com/api/v1', 'T'],
+    ],
+    [
+      'auto keeps the provider the host name gave before the upgrade, not the API path',
+      { provider: 'auto', apiUrl: 'https://git.corp.example/api/v1', token: 'T' },
+      [],
+      ['github', 'https://git.corp.example', 'https://git.corp.example/api/v1', 'T'],
+    ],
+    [
+      'an explicit provider wins over the host name',
+      { provider: 'gitea', apiUrl: 'https://git.corp.example/api/v1', token: 'T' },
+      [],
+      ['gitea', 'https://git.corp.example', 'https://git.corp.example/api/v1', 'T'],
+    ],
+    [
+      'GitHub Enterprise API URL',
+      { provider: 'auto', apiUrl: 'https://ghe.example.com/api/v3', token: 'T' },
+      [],
+      ['github', 'https://ghe.example.com', 'https://ghe.example.com/api/v3', 'T'],
+    ],
+    [
+      'an ssh project on a custom port is its https host',
+      { provider: 'auto', apiUrl: null, token: 'T' },
+      ['ssh://git@gitea.example.com:2222/a/b.git'],
+      ['gitea', 'https://gitea.example.com', 'https://gitea.example.com/api/v1', 'T'],
+    ],
+    [
+      'a fixed github provider on a single non-github project host',
+      { provider: 'github', apiUrl: null, token: 'T' },
+      ['https://git.example.com/a/b.git'],
+      ['github', 'https://git.example.com', 'https://git.example.com/api/v3', 'T'],
     ],
     [
       'a confirmed http API URL stays http',
@@ -91,6 +124,11 @@ describe('migrateLegacyForgeToken', () => {
       ],
       [{ provider: 'gitea', apiUrl: null, token: 'T' }, []],
       [{ provider: 'auto', apiUrl: null, token: 'T' }, ['http://gitea.lan:3000/x/y.git']],
+      // An address no server name can be made from must not stop core, nor be replaced by a guess.
+      [{ provider: 'auto', apiUrl: null, token: 'T' }, ['git@[fe80::1]:a/b.git']],
+      [{ provider: 'auto', apiUrl: null, token: 'T' }, ['git@a|b:x/y.git']],
+      // An API URL with user info is never copied into an account.
+      [{ provider: 'auto', apiUrl: 'https://u:p@git.example.com/api/v1', token: 'T' }, []],
     ] as const) {
       t.db.delete(projects).run();
       urls.forEach((url, i) => project(`p${i}`, url));
@@ -112,6 +150,63 @@ describe('migrateLegacyForgeToken', () => {
     t.db.delete(forgeAccounts).run();
     expect(migrateLegacyForgeToken(t.db)).toBe('none');
     expect(accounts()).toEqual([]);
+  });
+});
+
+describe('an unmatched token is decided once', () => {
+  it('later starts do not re-derive it when the projects change; nothing is sent', async () => {
+    project('a', 'https://github.com/x/y.git');
+    project('b', 'https://gitlab.com/x/y.git');
+    legacy({ provider: 'auto', apiUrl: null, token: 'T-secret' });
+    const urls: string[] = [];
+    t.forgeFetch.current = async (url) => {
+      urls.push(String(url));
+      return new Response('{}', { status: 401 });
+    };
+    expect(migrateLegacyForgeToken(t.db)).toBe('unmatched');
+    t.db.delete(projects).where(eq(projects.id, 'a')).run();
+    expect(migrateLegacyForgeToken(t.db)).toBe('unmatched');
+    await t.forge.accounts.fillMissingUsernames(() => undefined);
+    expect(accounts()).toEqual([]);
+    expect(urls).toEqual([]);
+    expect(legacyTokenUnmatched(t.db)).toBe(true);
+    forgetLegacyToken(t.db);
+    expect(legacyTokenUnmatched(t.db)).toBe(false);
+    expect(migrateLegacyForgeToken(t.db)).toBe('none');
+  });
+});
+
+describe('start-up', () => {
+  it('buildServer runs the migration', async () => {
+    const t2 = await createTestApp({}, {}, {}, (db) =>
+      db
+        .insert(settings)
+        .values({ key: LEGACY_FORGE_SETTINGS_KEY, value: { provider: 'auto', apiUrl: null, token: 'T' } })
+        .run(),
+    );
+    try {
+      expect(
+        t2.db
+          .select()
+          .from(forgeAccounts)
+          .all()
+          .map((a) => [a.serverUrl, a.token]),
+      ).toEqual([['https://github.com', 'T']]);
+    } finally {
+      await t2.close();
+    }
+  });
+
+  it('a failing migration is logged without the token and never stops the start', async () => {
+    const boom = {
+      select: () => {
+        throw new Error('disk gone');
+      },
+    } as unknown as Db;
+    const logs: string[] = [];
+    await new ForgeAccountsService(boom, globalThis.fetch).start((m) => logs.push(m));
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('disk gone');
   });
 });
 
@@ -188,6 +283,28 @@ describe('migration details', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(t.forge.accounts.list().legacyTokenUnmatched).toBe(false);
+  });
+});
+
+describe('account views and sub-path servers', () => {
+  it('an API URL with user info is never listed', () => {
+    const env = {
+      EMBERLINE_FORGE_TOKEN: 'e',
+      EMBERLINE_FORGE_API_URL: 'https://u:pw@git.example.com/api/v3',
+    };
+    const list = new ForgeAccountsService(t.db, globalThis.fetch, env).list();
+    expect(JSON.stringify(list)).not.toMatch(/u:pw|pw@/);
+    expect(list.accounts[0]?.apiUrl).toBe('https://git.example.com/api/v3');
+  });
+
+  it('a server under a sub-path does not double the path', async () => {
+    project('s1', 'https://host.example/gitea/acme/widget.git');
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: 'https://host.example/gitea', token: 'tok' });
+    const target = await new ForgeService(t.db, t.runs).projectRemote('s1');
+    expect(target.remote).toMatchObject({
+      repoPath: 'acme/widget',
+      apiBaseUrl: 'https://host.example/gitea/api/v1',
+    });
   });
 });
 

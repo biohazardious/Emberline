@@ -16,6 +16,7 @@ import {
   insertAccountIfHostFree,
   legacyTokenUnmatched,
   listAccountRecords,
+  migrateLegacyForgeToken,
   normalizeServerUrl,
   serverHost,
   setEnvironmentUsername,
@@ -29,12 +30,25 @@ const PROVIDER_LABELS: Record<ForgeProvider, string> = { github: 'GitHub', gitla
 const USERNAME_MAX = 200;
 const READ_ONLY = 'This account comes from EMBERLINE_FORGE_TOKEN; change it in the environment.';
 
+/** A URL as the person may see it: user info (a token pasted into the address) never leaves core. */
+function withoutUserInfo(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (!url.username && !url.password) return raw;
+    url.username = '';
+    url.password = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return raw.replace(/\/\/[^/@]*@/, '//');
+  }
+}
+
 export function accountView(a: ForgeAccountRecord): ForgeAccount {
   return {
     id: a.id,
     provider: a.provider,
     serverUrl: a.serverUrl,
-    apiUrl: a.apiUrl,
+    apiUrl: withoutUserInfo(a.apiUrl),
     username: a.username,
     tokenConfigured: Boolean(a.token),
     scopesHint: FORGE_SCOPE_HINTS[a.provider],
@@ -59,6 +73,20 @@ export class ForgeAccountsService {
       accounts: listAccountRecords(this.db, this.env).map(accountView),
       legacyTokenUnmatched: legacyTokenUnmatched(this.db),
     };
+  }
+
+  /** Start: migrate the old token, then fill usernames. Never throws: a failure is logged (no token) and the start goes on. */
+  async start(log: (message: string) => void): Promise<void> {
+    try {
+      if (migrateLegacyForgeToken(this.db) === 'unmatched') {
+        log(
+          'forge: the earlier forge token could not be matched to one server; add it again in Settings → Forge accounts',
+        );
+      }
+    } catch (error) {
+      log(`forge: could not move the earlier forge token into an account: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await this.fillMissingUsernames(log).catch(() => undefined);
   }
 
   /** Start-up: stored accounts without a username (migrated) are checked once; failures are only logged. */

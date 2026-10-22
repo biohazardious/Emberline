@@ -124,6 +124,12 @@ export function noAccountMessage(host: string): string {
   return `Add a forge account for ${host} in Settings → Forge accounts.`;
 }
 
+/** A server under a sub-path (`https://host/gitea`) has it in every remote's path: it is not part of the repository's. */
+function repoPathUnder(serverUrl: string, repoPath: string): string {
+  const prefix = new URL(serverUrl).pathname.replace(/^\/+|\/+$/g, '');
+  return prefix && repoPath.startsWith(`${prefix}/`) ? repoPath.slice(prefix.length + 1) : repoPath;
+}
+
 /** The remote as seen through an account: provider and API from the account, web URLs on its server. */
 function viaAccount(
   remoteUrl: string,
@@ -133,7 +139,15 @@ function viaAccount(
 ): ParsedForgeRemote | null {
   const parsed = parseForgeRemote(remoteUrl);
   if (!parsed) return null;
-  return parseForgeRemote(`${account.serverUrl}/${parsed.repoPath}.git`, account.provider, account.apiUrl, baseBranch, headBranch);
+  const via = parseForgeRemote(
+    `${account.serverUrl}/${repoPathUnder(account.serverUrl, parsed.repoPath)}.git`,
+    account.provider,
+    account.apiUrl,
+    baseBranch,
+    headBranch,
+  );
+  // The web URLs keep the server's sub-path; the API addresses the repository without it.
+  return via && { ...via, repoPath: repoPathUnder(account.serverUrl, via.repoPath) };
 }
 
 export interface ForgeServiceOptions {
@@ -196,7 +210,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   /**
    * The forge repo and token for a project, for issue calls. The remote is `origin` of the main
    * workspace, falling back to the project's repo URL. Throws 409 with a hint when the token or the
-   * remote is missing, or the host is not trusted with the token.
+   * remote is missing, or no forge account has the remote's host.
    */
   async projectRemote(projectId: string): Promise<ForgeTarget> {
     const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
@@ -210,7 +224,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     if (project.repoUrl?.trim()) {
       const declared = parseForgeRemote(project.repoUrl);
       if (!declared) throw conflict(`unable to parse the project's repository URL: ${project.repoUrl}`);
-      if (!sameForgeServer(project.repoUrl, remoteUrl) || declared.repoPath.toLowerCase() !== remote.repoPath.toLowerCase()) {
+      if (!sameForgeServer(project.repoUrl, remoteUrl) || repoPathUnder(account.serverUrl, declared.repoPath).toLowerCase() !== remote.repoPath.toLowerCase()) {
         throw conflict('origin points at a different repository than the project');
       }
     }

@@ -524,7 +524,7 @@ describe('forge fetch hardening', () => {
       statusCode: 502,
       code: 'forge_error',
       message:
-        'the forge redirected to https://evil.example.org/x — has the repository moved? update the remote, or set the Forge API URL',
+        'the forge redirected to https://evil.example.org/x — has the repository moved? update the remote, or check Settings → Forge accounts',
     });
     expect(calls).toHaveLength(1);
   });
