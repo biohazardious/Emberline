@@ -736,8 +736,10 @@ function TicketDrawer({
   onMove: (status: TicketStatus) => void;
   /** Moves the ticket to Done without merging its branch. */
   onDiscard: () => Promise<void>;
-  /** Accepts the ticket: merges its run's branch into main, then moves it to Done (dependents start). */
-  /** `force`: merge past open blocking comments (Merge anyway). */
+  /**
+   * Accepts the ticket: merges its run's branch into main, then moves it to Done (dependents start).
+   * `force`: merge past open blocking comments (Merge anyway).
+   */
   onAccept: (opts?: { force?: boolean }) => Promise<void>;
 }) {
   const [title, setTitle] = useState(ticket.title);
@@ -757,7 +759,7 @@ function TicketDrawer({
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   // The step a failed Mark done offers here, as the page's dialogs do.
-  const [mergeNext, setMergeNext] = useState<MergeNext>(null);
+  const [mergeNext, setMergeNext] = useState<{ next: MergeNext; status: TicketStatus } | null>(null);
   // The footer's merge failures show here, in the drawer, not in the page banners behind its backdrop.
   const markDone = async (opts?: { force?: boolean }) => {
     setBusy('done');
@@ -768,7 +770,7 @@ function TicketDrawer({
     } catch (e) {
       const failure = drawerFailure(e);
       setError(failure.text);
-      setMergeNext(failure.next);
+      setMergeNext(failure.next ? { next: failure.next, status: ticket.status } : null);
     } finally {
       setBusy(undefined);
     }
@@ -1316,9 +1318,10 @@ function TicketDrawer({
             {error}
           </p>
         )}
-        {error && mergeNext && (
+        {/* Only while the ticket is still where the failure happened: a move elsewhere retires the step. */}
+        {error && mergeNext && mergeNext.status === ticket.status && (
           <div className="actions">
-            {mergeNext === 'merge_anyway' ? (
+            {mergeNext.next === 'merge_anyway' ? (
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
