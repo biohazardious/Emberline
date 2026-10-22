@@ -155,7 +155,7 @@ FROM runtime AS runner
 #
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    ca-certificates curl \
+    ca-certificates curl gnupg \
     bash less procps openssh-client \
     build-essential pkg-config cmake \
     golang-go rustc cargo \
@@ -169,7 +169,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 # Chromium (open source, not Google Chrome) for the agents' headless browser. Ubuntu ships it only as a
 # snap (cannot run in a container), so it comes from the xtradeb PPA; apt pinning takes nothing else from
-# it. When Launchpad fails after retries, Playwright's pinned Chromium build (Chrome for Testing, checksum
+# it. The PPA key is fetched by its fingerprint and checked against it after the download. When Launchpad fails after retries, Playwright's pinned Chromium build (Chrome for Testing, checksum
 # taken at pin time) is used instead. CHROMIUM_SOURCE=ppa|playwright forces one source (to test each path).
 # The build cache keeps whichever source won until this layer is rebuilt.
 ARG XTRADEB_SIGNER_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
@@ -188,11 +188,18 @@ RUN set -eu; \
     v="$(dpkg-query -W -f='${Version}' chromium 2>/dev/null)" || return 1; \
     case "$v" in *snap*) echo "chromium: $v is Ubuntu's snap stub, not the PPA build" >&2; return 1 ;; esac; \
     chromium --version 2>/dev/null | grep -Eq '^Chromium [0-9]+\.'; }; \
+  ppa_key_ok() { \
+    home="$(mktemp -d)"; \
+    GNUPGHOME="$home" gpg --batch --show-keys --with-colons /usr/share/keyrings/xtradeb-apps.asc 2>/dev/null \
+      | awk -F: -v want="$XTRADEB_SIGNER_FINGERPRINT" '$1 == "pub" { keys++ } $1 == "fpr" && $10 == want { found = 1 } END { exit !(keys == 1 && found) }'; \
+    ok=$?; rm -rf "$home"; \
+    [ "$ok" -eq 0 ] || { echo "chromium: the PPA key from the keyserver is not $XTRADEB_SIGNER_FINGERPRINT" >&2; rm -f /usr/share/keyrings/xtradeb-apps.asc; return 1; }; }; \
   ppa_attempt() { \
     drop_chromium; \
     curl -fsSL --connect-timeout 20 --max-time 120 \
       "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${XTRADEB_SIGNER_FINGERPRINT}" \
       -o /usr/share/keyrings/xtradeb-apps.asc \
+    && ppa_key_ok \
     && apt-get update --error-on=any \
     && apt-get install -y --no-install-recommends chromium \
     && real_chromium; }; \
@@ -204,7 +211,7 @@ RUN set -eu; \
       *) echo "no Playwright Chromium for $(dpkg --print-architecture)" >&2; return 1 ;; \
     esac; \
     [ -n "$sha" ] || { echo "chromium: no pinned sha256 for chrome-$plat.zip" >&2; return 1; }; \
-    retry apt-get update || return 1; \
+    retry apt-get update --error-on=any || return 1; \
     apt-get install -y --no-install-recommends unzip libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxkbcommon0 \
       libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libatspi2.0-0t64 libdbus-1-3 \
       libglib2.0-0t64 libx11-6 libxcb1 libxext6 || { echo "chromium: installing the runtime libraries failed" >&2; return 1; }; \
