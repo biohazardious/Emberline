@@ -118,10 +118,10 @@ ENV EMBERLINE_TOOLS_DIR=/opt/ai-tools \
 FROM ubuntu_node AS core
 # Core holds the database, tokens and API keys and executes nothing from a workspace: git, builds,
 # tests and agent CLIs all run in the runner via ptyd (apps/core/src/command-exec.ts).
-# With a forge account the runner's git goes through core's git gateway (/api/internal/git/), which adds the
-# token and streams the data; of a push it reads only the command list (branch and commit), and core
-# still runs no git and parses no git objects. So the image
-# carries no git, ssh, compilers or language toolchains, and nothing from /opt/ai-tools is on PATH.
+# With a forge account the runner's git goes through core's git gateway (/api/internal/git/),
+# which adds the token and streams the data; of a push it reads only the command list (branch and
+# commit), and core still runs no git and parses no git objects. So the image carries no git, ssh,
+# compilers or language toolchains, and nothing from /opt/ai-tools is on PATH.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -241,8 +241,9 @@ RUN npm install -g --prefix /usr/local --no-fund --no-audit @playwright/mcp@${PL
   && test -x /usr/local/bin/playwright-mcp
 # Docker CLI with the compose and buildx plugins, for the isolated engine (compose service
 # `docker`, on by default). The runner has no daemon and never sees the host's socket: core sets
-# DOCKER_HOST per run while the sidecar answers. Static binaries at exact versions; change a version together with its
-# checksums (docker/compose and docker/buildx publish theirs; the CLI tarball's were taken at pin time).
+# DOCKER_HOST per run while the sidecar answers. Static binaries at exact versions; change a
+# version together with its checksums (docker/compose and docker/buildx publish theirs; the CLI
+# tarball's were taken at pin time).
 # Compose >= 2.24 is required for `!override` (compose previews); compose v5 builds through buildx.
 ARG DOCKER_CLI_VERSION=29.8.2
 ARG DOCKER_COMPOSE_VERSION=5.6.0

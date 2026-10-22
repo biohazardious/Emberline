@@ -16,6 +16,9 @@ import { dockerEngineLine, dockerEngineOffState } from '../dockerEngine';
 import {
   actionsFor,
   cleanupLines,
+  cleanupScopeHint,
+  DOCKER_CLEANUP_SCOPE_HINT,
+  dockerEmptyText,
   cleanupResultText,
   confirmText,
   containerStateTone,
@@ -301,8 +304,10 @@ function EngineCard({
   data,
   onStart,
   onCleaned,
+  scoped,
 }: {
   data: DockerOverview;
+  scoped: boolean;
   onStart: () => void;
   onCleaned: () => Promise<void>;
 }) {
@@ -337,6 +342,7 @@ function EngineCard({
         <button
           type="button"
           className="btn btn-sm"
+          title={DOCKER_CLEANUP_SCOPE_HINT}
           disabled={sweeping || !data.engine.available}
           onClick={() => void cleanUp()}
         >
@@ -344,6 +350,7 @@ function EngineCard({
           {sweeping ? 'Cleaning up…' : 'Clean up now'}
         </button>
       </div>
+      {cleanupScopeHint(scoped) && <p className="muted small">{cleanupScopeHint(scoped)}</p>}
       <p className="muted small">
         {lines.sweep} {lines.prune}
       </p>
@@ -383,11 +390,16 @@ function EngineCard({
   );
 }
 
-export function DockerPage({ activeProjectId }: { activeProjectId: string | null }) {
+export function DockerPage({
+  activeProjectId,
+  projects,
+}: {
+  activeProjectId: string | null;
+  projects?: Project[];
+}) {
   const { data, error: loadError, loading, refresh } = useApi<DockerOverview>('/api/docker', 10_000);
   const [all, setAll] = useAllProjects('docker');
-  const projectsList = useApi<Project[]>('/api/projects', 15_000);
-  const names = useMemo(() => new Map((projectsList.data ?? []).map((p) => [p.id, p.name])), [projectsList.data]);
+  const names = useMemo(() => new Map((projects ?? []).map((p) => [p.id, p.name])), [projects]);
   const [done, setDone] = useState<DockerDone | null>(null);
   const statusLine = useRef<HTMLParagraphElement>(null);
 
@@ -448,7 +460,7 @@ export function DockerPage({ activeProjectId }: { activeProjectId: string | null
 
       {data && enabled && (
         <>
-          <EngineCard data={data} onStart={clearDone} onCleaned={refresh} />
+          <EngineCard data={data} onStart={clearDone} onCleaned={refresh} scoped={scoped} />
 
           {done && doneStillCurrent(done, data.projects) && (
             <p ref={statusLine} className="small docker-done" role="status" tabIndex={-1}>
@@ -464,12 +476,8 @@ export function DockerPage({ activeProjectId }: { activeProjectId: string | null
 
           <MoreInOtherProjects count={hidden} onShow={() => setAll(true)} />
 
-          {!data.error && groups.length === 0 && (
-            <p className="muted">
-              {scoped
-                ? 'This project runs no compose projects in the engine right now.'
-                : 'Emberline runs no compose projects in the engine right now.'}
-            </p>
+          {groups.length === 0 && dockerEmptyText(data, scoped) && (
+            <p className="muted">{dockerEmptyText(data, scoped)}</p>
           )}
 
           {groups.map((group) => (

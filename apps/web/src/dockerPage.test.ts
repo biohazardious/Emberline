@@ -2,6 +2,7 @@ import {
   DOCKER_ENGINE_OFF_TEXT,
   type DockerCleanupState,
   type DockerContainer,
+  type DockerOverview,
   type DockerProject,
   type DockerProjectOwner,
 } from '@emberline/protocol';
@@ -21,6 +22,9 @@ import {
   actionsFor,
   doneStillCurrent,
   dockerProjectLabel,
+  dockerEmptyText,
+  cleanupScopeHint,
+  DOCKER_CLEANUP_SCOPE_HINT,
   portLink,
   projectServices,
   projectStatusTone,
@@ -398,5 +402,35 @@ describe('Docker scope', () => {
     ]);
     expect(outOfScope(list, (p) => p.projectId, { activeProjectId: 'p1', all: false })).toBe(2);
     expect(inScope(list, (p) => p.projectId, { activeProjectId: 'p1', all: true })).toHaveLength(3);
+  });
+});
+
+describe('dockerEmptyText', () => {
+  const base = {
+    engine: { enabled: true, available: true },
+    disk: { rows: [] },
+    cleanup: { sweeping: false },
+    projects: [],
+  } as unknown as DockerOverview;
+
+  it('says nothing when the engine did not answer', () => {
+    expect(dockerEmptyText({ ...base, error: 'x' }, false)).toBeNull();
+  });
+  it('says nothing when neither listing worked', () => {
+    expect(dockerEmptyText({ ...base, projectsError: 'a', containersError: 'b' }, false)).toBeNull();
+  });
+  it('says the unscoped or the scoped sentence for empty listings', () => {
+    expect(dockerEmptyText(base, false)).toBe('Emberline runs no compose projects in the engine right now.');
+    expect(dockerEmptyText(base, true)).toBe('This project runs no compose projects in the engine right now.');
+  });
+});
+
+describe('cleanupScopeHint', () => {
+  it('explains that Clean up acts on the whole engine, only when scoped', () => {
+    expect(cleanupScopeHint(true)).toBe(
+      'Clean up now works on the whole engine, not only on this project: it removes the leftovers of every project, and untagged images and build cache older than 72 hours.',
+    );
+    expect(cleanupScopeHint(true)).toBe(DOCKER_CLEANUP_SCOPE_HINT);
+    expect(cleanupScopeHint(false)).toBeNull();
   });
 });

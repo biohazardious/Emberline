@@ -992,7 +992,7 @@ function Shell() {
               </Route>
               <Route path="/docker">
                 <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                  <DockerPage activeProjectId={activeProject?.id ?? null} />
+                  <DockerPage activeProjectId={activeProject?.id ?? null} projects={projects.data} />
                 </Suspense>
               </Route>
               <Route path="/fleet">

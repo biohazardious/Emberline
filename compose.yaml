@@ -32,7 +32,7 @@ services:
       # Host path of the workspaces bind mount, only to show where build outputs are on the host.
       EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES_HOST_DIR:-${PWD}/workspaces}
       # The Docker engine (service `docker`) is on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off
-      # (core then gives agents no Docker, even if a host is set).
+      # (core then gives agents no Docker, unless EMBERLINE_DOCKER_HOST names an engine of your own).
       EMBERLINE_DOCKER_ENGINE: ${EMBERLINE_DOCKER_ENGINE:-1}
       EMBERLINE_DOCKER_HOST: ${EMBERLINE_DOCKER_HOST:-tcp://docker:2376}
       # Where the runner has the engine's client certificate (core passes it to the CLI there).

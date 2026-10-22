@@ -2,6 +2,7 @@ import type {
   DockerCleanupResponse,
   DockerCleanupState,
   DockerContainerState,
+  DockerOverview,
   DockerOwnerKind,
   DockerProject,
   DockerProjectOwner,
@@ -38,17 +39,34 @@ function groupOf(owner: DockerProjectOwner): DockerOwnerKind {
   return owner.kind === 'main' && owner.preview ? 'preview' : owner.kind;
 }
 
-/** The projects by owner kind, in `DOCKER_GROUPS` order; empty groups are left out. */
 /** The project a card names under "All projects": the project's name, "No project" for none (or a name not loaded yet). */
 export function dockerProjectLabel(projectId: string | null, names: ReadonlyMap<string, string>): string {
   return (projectId && names.get(projectId)) || 'No project';
 }
 
+/** The projects by owner kind, in `DOCKER_GROUPS` order; empty groups are left out. */
 export function groupDockerProjects(projects: DockerProject[]): DockerGroup[] {
   return DOCKER_GROUPS.map((g) => ({
     ...g,
     projects: projects.filter((p) => groupOf(p.owner) === g.kind),
   })).filter((g) => g.projects.length > 0);
+}
+
+/** The sentence for a page with nothing listed; null when the engine or both listings failed, so "runs nothing" is never claimed without a list. */
+export function dockerEmptyText(data: DockerOverview, scoped: boolean): string | null {
+  if (data.error) return null;
+  if (data.projectsError && data.containersError) return null;
+  return scoped
+    ? 'This project runs no compose projects in the engine right now.'
+    : 'Emberline runs no compose projects in the engine right now.';
+}
+
+export const DOCKER_CLEANUP_SCOPE_HINT =
+  'Clean up now works on the whole engine, not only on this project: it removes the leftovers of every project, and untagged images and build cache older than 72 hours.';
+
+/** The note under "Clean up now" while the page lists one project only. */
+export function cleanupScopeHint(scoped: boolean): string | null {
+  return scoped ? DOCKER_CLEANUP_SCOPE_HINT : null;
 }
 
 type RunOwner = Extract<DockerProjectOwner, { kind: 'agent' | 'preview' }>;

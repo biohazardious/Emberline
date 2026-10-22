@@ -66,7 +66,8 @@ down: ## Stop core + runner + the Docker engine
 logs: ## Follow logs
 	$(PROD) logs -f
 
-upgrade-core: ## Rebuild/restart core only; running agents in the runner are untouched
+upgrade-core: ## Rebuild/restart core only (and create the Docker engine if it has no container yet); running agents are untouched
+	@[ -n "$$($(PROD) ps -aq docker)" ] || $(PROD) up -d --no-deps docker
 	$(PROD) up -d --build --no-deps core
 
 reset-password: ## Forgot the admin password: clear it, restart core, then use the setup token from the log
