@@ -11,9 +11,15 @@ import { MERGE_NOTES } from '../factory/post-merge.js';
 import type { RunService } from '../runs/service.js';
 import type { RepositoryService } from './service.js';
 
+/** A merge into main: its run (the failure note goes there) and the commit it made (the note's short sha). */
+interface Merge {
+  runId: string | null;
+  commitSha: string | null;
+}
+
 interface Job {
-  /** The run of the latest merge that is not pushed yet (its note gets a failure); undefined: none waiting. */
-  next: string | null | undefined;
+  /** The latest merge that is not pushed yet; undefined: none waiting. */
+  next: Merge | undefined;
   done: Promise<void>;
 }
 
@@ -44,14 +50,16 @@ export class KeepMainPushed {
     await this.idle();
   }
 
-  enqueue(projectId: string, runId: string | null): void {
+  /** A merge into main landed; `commitSha` is the commit it made (only that commit is ever pushed). */
+  enqueue(projectId: string, runId: string | null, commitSha: string | null): void {
     if (this.stopped) return;
+    const merge: Merge = { runId, commitSha };
     const job = this.jobs.get(projectId);
     if (job) {
-      job.next = runId;
+      job.next = merge;
       return;
     }
-    const fresh: Job = { next: runId, done: Promise.resolve() };
+    const fresh: Job = { next: merge, done: Promise.resolve() };
     this.jobs.set(projectId, fresh);
     fresh.done = this.drain(projectId, fresh);
   }
@@ -60,8 +68,10 @@ export class KeepMainPushed {
     while (this.jobs.size > 0) await Promise.all([...this.jobs.values()].map((j) => j.done));
   }
 
-  private readonly onNote = (run: Run, type: string): void => {
-    if (MERGE_NOTES.includes(type)) this.enqueue(run.projectId, run.id);
+  private readonly onNote = (run: Run, type: string, payload?: unknown): void => {
+    if (!MERGE_NOTES.includes(type)) return;
+    const commitSha = (payload as { commitSha?: unknown } | undefined)?.commitSha;
+    this.enqueue(run.projectId, run.id, typeof commitSha === 'string' ? commitSha : null);
   };
 
   private async drain(projectId: string, job: Job): Promise<void> {
@@ -69,10 +79,10 @@ export class KeepMainPushed {
     await Promise.resolve();
     try {
       while (job.next !== undefined && !this.stopped) {
-        const runId = job.next;
+        const { runId, commitSha } = job.next;
         job.next = undefined;
         if (!readRepositorySettings(this.db, projectId).keepMainPushed) continue;
-        const res = await this.repository.pushMainQuietly(projectId);
+        const res = await this.repository.pushMainQuietly(projectId, commitSha);
         if (!res.ok) {
           this.log(`keep main pushed: project ${projectId}: ${res.reason}`);
           if (runId) this.runs.note(runId, 'main_push_failed', { reason: res.reason });

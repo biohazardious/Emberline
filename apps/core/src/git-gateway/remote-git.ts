@@ -178,7 +178,8 @@ function forgeRefusal(out: string): string | null {
 }
 
 /**
- * Pushes the commit refs/heads/<branch> names now, to the same ref, only as a fast-forward:
+ * Pushes `oid` (default: the commit refs/heads/<branch> names now) to that ref, only as a
+ * fast-forward, never with tags:
  * - the remote branch's commit is read first (ls-remote through the gateway), fetched if missing;
  * - a branch that is not a descendant of it is `'rejected'` before any push;
  * - the push capability is bound to that old commit and the new one, so the forge updates the ref
@@ -188,6 +189,7 @@ export async function accountPushBranch(
   r: AccountRemote,
   repoPath: string,
   branch: string,
+  oid?: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
   // A shallow repository's history is cut off (`.git/shallow`): it cannot show a fast-forward.
@@ -198,7 +200,7 @@ export async function accountPushBranch(
     );
   }
   const newOid = (
-    await planGit(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], repoPath)
+    await planGit(['rev-parse', '--verify', '--quiet', `${oid ?? ref}^{commit}`], repoPath)
   ).stdout.trim();
   const remoteOid = await accountRemoteHead(r, repoPath, branch);
   if (remoteOid === newOid) return 'pushed';
@@ -218,6 +220,7 @@ export async function accountPushBranch(
             'push',
             '--porcelain',
             '--no-recurse-submodules',
+            '--no-follow-tags',
             '--',
             url,
             `${newOid}:${ref}`,

@@ -17,8 +17,12 @@ export const RepositoryStatus = z.object({
   isGitRepo: z.boolean(),
   /** The branch checked out in the main workspace (what runs merge into); null when detached. */
   branch: z.string().nullable(),
-  /** False: the branch has no commit yet. */
+  /** projects.defaultBranch: what Push main and Keep main pushed publish, and what is compared with origin. */
+  defaultBranch: z.string(),
+  /** False: the default branch has no commit yet. */
   hasCommits: z.boolean(),
+  /** The commit the default branch names now: what Push main would publish. Null before the first commit. */
+  mainTip: z.object({ sha: z.string(), shortSha: z.string(), subject: z.string() }).nullable(),
   originUrl: z.string().nullable(),
   /** `host[:port]` for http(s) remotes, the host name for ssh. */
   originHost: z.string().nullable(),

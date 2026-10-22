@@ -13,7 +13,7 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
-import { DIVERGED_MESSAGE } from './git.js';
+import { DIVERGED_MESSAGE, MAIN_MOVED_MESSAGE } from './git.js';
 
 let t: TestApp;
 let cookie: string;
@@ -27,6 +27,8 @@ const commit = (dir: string, file: string) => {
   git(dir, 'add', file);
   git(dir, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', file);
 };
+/** A merge note as the pipeline and Merge now write it: the merge commit's short sha. */
+const merged = () => ({ commitSha: git(projectPath, 'rev-parse', '--short', 'HEAD') });
 const remoteMain = () =>
   git(forge.bare('alice', 'app'), 'rev-parse', '--verify', '--quiet', 'refs/heads/main');
 const notes = (runId: string) =>
@@ -85,21 +87,21 @@ describe('keep main pushed', () => {
 
   it('on: each merge note pushes main', async () => {
     writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
-    t.runs.note('r1', 'merged_to_main', {});
+    t.runs.note('r1', 'merged_to_main', merged());
     await t.mainPush.idle();
     expect(remoteMain()).toBe(git(projectPath, 'rev-parse', 'HEAD'));
   });
 
   it('failure is noted and never throws; a later success clears it', async () => {
     writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
-    t.runs.note('r1', 'merged_to_main', {});
+    t.runs.note('r1', 'merged_to_main', merged());
     await t.mainPush.idle();
     const elsewhere = path.join(t.dir, 'elsewhere');
     execFileSync('git', ['clone', '-q', forge.bare('alice', 'app'), elsewhere]);
     commit(elsewhere, 'theirs.txt');
     git(elsewhere, 'push', '-q', 'origin', 'main');
     commit(projectPath, 'ours.txt');
-    expect(() => t.runs.note('r1', 'merged_by_person', {})).not.toThrow();
+    expect(() => t.runs.note('r1', 'merged_by_person', merged())).not.toThrow();
     await t.mainPush.idle();
     expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: DIVERGED_MESSAGE }]);
     expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBe(DIVERGED_MESSAGE);
@@ -108,7 +110,7 @@ describe('keep main pushed', () => {
     // The fake needs auth: pull straight from the bare directory.
     git(projectPath, 'pull', '-q', '--ff-only', forge.bare('alice', 'app'), 'main');
     commit(projectPath, 'again.txt');
-    t.runs.note('r1', 'merged_to_main', {});
+    t.runs.note('r1', 'merged_to_main', merged());
     await t.mainPush.idle();
     expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
   });
@@ -116,11 +118,30 @@ describe('keep main pushed', () => {
   it('an unreachable origin is noted with a reason that has no token', async () => {
     writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
     await forge.close();
-    t.runs.note('r1', 'merged_to_main', {});
+    t.runs.note('r1', 'merged_to_main', merged());
     await t.mainPush.idle();
     const [note] = notes('r1');
     expect(note).toBeDefined();
     expect(JSON.stringify(note!.payload)).not.toContain('kp-token');
     forge = await startFakeForge({ token: 'kp-token' }); // afterEach closes it
+  });
+
+  it('main moved outside Emberline after the merge: nothing is pushed and the failure is noted', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const merge = merged();
+    commit(projectPath, 'agent.txt'); // an agent moves refs/heads/main after the merge
+    t.runs.note('r1', 'merged_to_main', merge);
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+    expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBe(MAIN_MOVED_MESSAGE);
+  });
+
+  it('a merge note without its commit pushes nothing', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    t.runs.note('r1', 'merged_to_main', {});
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
   });
 });

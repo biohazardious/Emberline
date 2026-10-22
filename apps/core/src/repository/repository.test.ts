@@ -281,6 +281,41 @@ describe('push main', () => {
     );
     expect((await send('GET', '/api/projects/nope/repository')).statusCode).toBe(404);
   });
+
+  it("status names the default branch's tip, which is what Push main publishes", async () => {
+    commit(projectPath, 'tip.txt');
+    expect(await status()).toMatchObject({
+      defaultBranch: 'main',
+      mainTip: {
+        sha: git(projectPath, 'rev-parse', 'HEAD'),
+        shortSha: git(projectPath, 'rev-parse', '--short', 'HEAD'),
+        subject: 'tip.txt',
+      },
+    });
+  });
+
+  it('another branch checked out in the main workspace is refused; the remote is unchanged', async () => {
+    git(projectPath, 'checkout', '-q', '-b', 'side');
+    commit(projectPath, 'side.txt');
+    const res = await send('POST', `/api/projects/${projectId}/repository/push-main`);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'branch_differs',
+      message: 'The main workspace is on side, not main.',
+    });
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+  });
+
+  it('tags are never pushed, even with push.followTags in the repository config', async () => {
+    git(projectPath, 'config', 'push.followTags', 'true');
+    git(projectPath, '-c', 'user.name=t', '-c', 'user.email=t@e', 'tag', '-a', '-m', 'v1', 'v1');
+    const res = await send('POST', `/api/projects/${projectId}/repository/push-main`);
+    expect(res.statusCode).toBe(200);
+    expect(git(forge.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
+      git(projectPath, 'rev-parse', 'HEAD'),
+    );
+    expect(git(forge.bare('alice', 'app'), 'tag', '--list')).toBe('');
+  });
 });
 
 describe('create', () => {

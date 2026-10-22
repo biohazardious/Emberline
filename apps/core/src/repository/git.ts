@@ -9,6 +9,8 @@ import {
   accountRemoteBranches,
 } from '../git-gateway/remote-git.js';
 
+export const MAIN_MOVED_MESSAGE =
+  'Main moved outside Emberline since the merge; push it from Project settings → Repository.';
 export const DIVERGED_MESSAGE =
   "The remote's main has commits this project doesn't have. Pull them in from a terminal, then push again.";
 const BAD_URL =
@@ -71,6 +73,51 @@ export async function mainBranchState(
     () => ({ stdout: '' }),
   );
   return { branch: ref.stdout.trim() || null, hasCommits: Boolean(head.stdout.trim()) };
+}
+
+/**
+ * Git that reads only the real objects: no replace refs, no `info/grafts`, no commit-graph (agents
+ * can write all three in the shared repository to make a commit look like another).
+ */
+const REAL_OBJECTS_ENV = { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' };
+const realGit = (args: string[], cwd: string) =>
+  execGitFile(['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false', ...args], {
+    cwd,
+    env: REAL_OBJECTS_ENV,
+  });
+
+/** The commit `refs/heads/<branch>` names now, with its subject; null when the branch has no commit. */
+export async function branchTip(
+  mainPath: string,
+  branch: string,
+): Promise<{ sha: string; shortSha: string; subject: string } | null> {
+  const out = await realGit(
+    ['log', '-1', '--no-show-signature', '--format=%H%x00%h%x00%s', `refs/heads/${branch}`, '--'],
+    mainPath,
+  ).then(
+    (r) => r.stdout.trim(),
+    () => '',
+  );
+  const [sha, shortSha, subject] = out.split('\0');
+  return sha && shortSha ? { sha, shortSha, subject: subject ?? '' } : null;
+}
+
+/**
+ * The full commit id a merge note's (short) sha names; null when it names none, or more than one
+ * object (an ambiguous prefix is never guessed).
+ */
+export async function resolveCommit(mainPath: string, sha: string): Promise<string | null> {
+  if (!/^[0-9a-f]{4,64}$/.test(sha)) return null;
+  const full = await realGit(['rev-parse', '--verify', '--quiet', sha], mainPath).then(
+    (r) => r.stdout.trim(),
+    () => '',
+  );
+  if (!full) return null;
+  const type = await realGit(['cat-file', '-t', full], mainPath).then(
+    (r) => r.stdout.trim(),
+    () => '',
+  );
+  return type === 'commit' ? full : null;
 }
 
 export async function originUrls(mainPath: string): Promise<{ fetch: string | null; push: string | null }> {
@@ -138,17 +185,21 @@ export async function aheadBehind(
   return { ahead: ahead ?? 0, behind: behind ?? 0 };
 }
 
-/** Pushes `refs/heads/<branch>` to the same name at the access URL: never forced; the first push sets upstream. */
+/**
+ * Pushes `oid` (read by the caller under the main-workspace lock) to `refs/heads/<branch>` at the
+ * access URL: never forced, never tags; the first push sets upstream.
+ */
 export async function pushBranch(
   mainPath: string,
   access: RemoteAccess,
   branch: string,
+  oid: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
   let result: 'pushed' | 'rejected';
   if (access.account) {
     try {
-      result = await accountPushBranch(access.account, mainPath, branch);
+      result = await accountPushBranch(access.account, mainPath, branch, oid);
     } catch (error) {
       throw new HttpError(
         409,
@@ -157,13 +208,17 @@ export async function pushBranch(
       );
     }
   } else {
-    // The commit the branch names now (the caller holds the main-workspace lock), pushed to the same ref.
-    const oid = (
-      await execGitFile(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: mainPath })
-    ).stdout.trim();
     try {
       await execGitFile(
-        ['push', '--porcelain', '--no-recurse-submodules', '--', access.url, `${oid}:${ref}`],
+        [
+          'push',
+          '--porcelain',
+          '--no-recurse-submodules',
+          '--no-follow-tags',
+          '--',
+          access.url,
+          `${oid}:${ref}`,
+        ],
         { cwd: mainPath, timeout: 60_000 },
       );
       result = 'pushed';

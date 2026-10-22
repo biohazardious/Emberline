@@ -667,7 +667,7 @@ export function registerProjectRoutes(
       // Without a ticket there is no merge note: main's rebuild, preview refresh and push are asked for here.
       else if (result.ok && !result.alreadyMerged) {
         postMerge.enqueue(project.id);
-        mainPush.enqueue(project.id, run.id);
+        mainPush.enqueue(project.id, run.id, result.commitSha);
       }
       return result;
     },

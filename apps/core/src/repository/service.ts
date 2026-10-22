@@ -18,13 +18,16 @@ import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway } from '../git-gateway/gateway.js';
 import {
   aheadBehind,
+  branchTip,
   DIVERGED_MESSAGE,
   fetchBranch,
   listRemoteBranches,
+  MAIN_MOVED_MESSAGE,
   mainBranchState,
   originUrls,
   pushBranch,
   type RemoteAccess,
+  resolveCommit,
   setOrigin,
   shortGitError,
   validateRepositoryUrl,
@@ -63,24 +66,34 @@ export class RepositoryService {
     return row;
   }
 
-  /** A main workspace the repository actions may change: a git repository on a branch. */
-  private async workspace(projectId: string): Promise<{ path: string; branch: string; hasCommits: boolean }> {
+  /**
+   * A main workspace the repository actions may change: a git repository on a branch. `branch` is
+   * what is checked out; `defaultBranch` (projects.defaultBranch) is what is read and pushed.
+   */
+  private async workspace(
+    projectId: string,
+  ): Promise<{ path: string; branch: string; defaultBranch: string }> {
     const row = this.project(projectId);
     if (!(await isGitRepo(row.path)))
       throw conflict('The project folder is not a git repository.', 'not_git_repo');
-    const { branch, hasCommits } = await mainBranchState(row.path);
+    const { branch } = await mainBranchState(row.path);
     if (!branch) throw conflict('The main workspace is not on a branch (detached HEAD).', 'detached_head');
-    return { path: row.path, branch, hasCommits };
+    return { path: row.path, branch, defaultBranch: row.defaultBranch };
   }
 
-  /** Local only (no network): origin from the main workspace, main against refs/remotes/origin/<branch> as the last read of origin left it. */
+  /**
+   * Local only (no network): origin from the main workspace, the default branch's tip, and that
+   * branch against refs/remotes/origin/<default> as the last read of origin left it.
+   */
   async status(projectId: string): Promise<RepositoryStatus> {
     const row = this.project(projectId);
     const settings = readRepositorySettings(this.db, projectId);
     const base: RepositoryStatus = {
       isGitRepo: false,
       branch: null,
+      defaultBranch: row.defaultBranch,
       hasCommits: false,
+      mainTip: null,
       originUrl: null,
       originHost: null,
       transport: null,
@@ -95,9 +108,12 @@ export class RepositoryService {
       lastMainPushError: settings.lastMainPushError,
     };
     if (!(await isGitRepo(row.path))) return base;
-    const { branch, hasCommits } = await mainBranchState(row.path);
+    const { branch } = await mainBranchState(row.path);
+    const main = row.defaultBranch;
+    const mainTip = await branchTip(row.path, main);
+    const hasCommits = mainTip !== null;
     const { fetch: origin } = await originUrls(row.path);
-    const withRepo: RepositoryStatus = { ...base, isGitRepo: true, branch, hasCommits };
+    const withRepo: RepositoryStatus = { ...base, isGitRepo: true, branch, hasCommits, mainTip };
     if (!origin) return withRepo;
     const account = accountForRemote(this.db, origin);
     const transport = /^https:/i.test(origin) ? 'https' : /^http:/i.test(origin) ? 'http' : 'ssh';
@@ -117,15 +133,14 @@ export class RepositoryService {
       connected: row.repoUrl === origin,
       mainState: 'unknown',
     };
-    if (!branch) return { ...withOrigin, remoteError: 'The main workspace is not on a branch.' };
     const check = settings.lastRemoteCheck;
-    if (!check || check.url !== origin || check.branch !== branch) return withOrigin; // not read since origin was set
+    if (!check || check.url !== origin || check.branch !== main) return withOrigin; // not read since origin was set
     const checked: RepositoryStatus = { ...withOrigin, checkedAt: check.at };
     if (check.error) return { ...checked, remoteError: check.error };
     if (!check.published) return { ...checked, mainState: 'unpublished' };
     if (!hasCommits) return { ...checked, mainState: 'behind', ahead: 0, behind: null };
     try {
-      const { ahead, behind } = await aheadBehind(row.path, branch);
+      const { ahead, behind } = await aheadBehind(row.path, main);
       const mainState = ahead && behind ? 'diverged' : ahead ? 'ahead' : behind ? 'behind' : 'up_to_date';
       return { ...checked, mainState, ahead, behind };
     } catch {
@@ -136,7 +151,7 @@ export class RepositoryService {
   async refresh(projectId: string): Promise<RepositoryStatus> {
     const ws = await this.workspace(projectId);
     await withMainWorkspaceLock(ws.path, async () =>
-      this.readRemote(projectId, ws, await this.access(projectId, ws.path)),
+      this.readRemote(projectId, ws.path, ws.defaultBranch, await this.access(projectId, ws.path)),
     );
     return this.status(projectId);
   }
@@ -176,17 +191,25 @@ export class RepositoryService {
     return this.refresh(projectId);
   }
 
+  /** A person's click: the tip of the default branch, which must be the branch checked out. */
   async pushMain(projectId: string): Promise<RepositoryStatus> {
-    const result = await this.push(projectId);
+    const result = await this.push(projectId, { mergeSha: undefined });
     if (result === 'rejected') throw new HttpError(409, 'main_diverged', DIVERGED_MESSAGE);
     writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
     return this.status(projectId);
   }
 
-  async pushMainQuietly(projectId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  /**
+   * Keep main pushed after a merge: only the commit that merge made (`mergeSha`, the note's short
+   * sha), and only while the default branch still names it; anything else is not Emberline's.
+   */
+  async pushMainQuietly(
+    projectId: string,
+    mergeSha: string | null,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
     let reason: string;
     try {
-      if ((await this.push(projectId)) === 'pushed') {
+      if ((await this.push(projectId, { mergeSha })) === 'pushed') {
         writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
         return { ok: true };
       }
@@ -209,15 +232,32 @@ export class RepositoryService {
     return this.status(projectId);
   }
 
-  /** Push, then read origin again (inside the same lock) so status shows the result without a network call. */
-  private async push(projectId: string): Promise<'pushed' | 'rejected'> {
+  /**
+   * Push one commit of the default branch, then read origin again (inside the same lock) so status
+   * shows the result without a network call. The branch and its commit are read under the lock, and
+   * exactly that commit is pushed, whatever the ref names by the time git runs.
+   * `mergeSha` undefined: a person's Push main (the tip, with the default branch checked out);
+   * otherwise Keep main pushed (the merge's commit, only while it is still the tip).
+   */
+  private async push(
+    projectId: string,
+    { mergeSha }: { mergeSha: string | null | undefined },
+  ): Promise<'pushed' | 'rejected'> {
     return withMainWorkspaceLock(this.project(projectId).path, async () => {
-      // The branch and its commit are read under the lock: what is pushed is what main names now.
       const ws = await this.workspace(projectId);
-      if (!ws.hasCommits) throw conflict('Main has no commits yet.', 'no_commits');
+      const tip = await branchTip(ws.path, ws.defaultBranch);
+      if (mergeSha === undefined) {
+        if (ws.branch !== ws.defaultBranch) {
+          throw conflict(`The main workspace is on ${ws.branch}, not ${ws.defaultBranch}.`, 'branch_differs');
+        }
+        if (!tip) throw conflict('Main has no commits yet.', 'no_commits');
+      } else {
+        const merge = mergeSha ? await resolveCommit(ws.path, mergeSha) : null;
+        if (!merge || tip?.sha !== merge) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+      }
       const access = await this.access(projectId, ws.path);
-      const result = await pushBranch(ws.path, access, ws.branch);
-      await this.readRemote(projectId, ws, access);
+      const result = await pushBranch(ws.path, access, ws.defaultBranch, tip!.sha);
+      await this.readRemote(projectId, ws.path, ws.defaultBranch, access);
       return result;
     });
   }
@@ -249,19 +289,20 @@ export class RepositoryService {
   /** ls-remote, then the fetch of the branch when the remote has it; never throws, the result (or why it failed) is kept. */
   private async readRemote(
     projectId: string,
-    ws: { path: string; branch: string },
+    mainPath: string,
+    branch: string,
     access: RemoteAccess,
   ): Promise<void> {
     const at = new Date().toISOString();
     let check: RemoteCheck;
     try {
-      const published = (await listRemoteBranches(ws.path, access, ws.branch)).includes(ws.branch);
-      if (published) await fetchBranch(ws.path, access, ws.branch);
-      check = { url: access.url, branch: ws.branch, at, published, error: null };
+      const published = (await listRemoteBranches(mainPath, access, branch)).includes(branch);
+      if (published) await fetchBranch(mainPath, access, branch);
+      check = { url: access.url, branch, at, published, error: null };
     } catch (error) {
       const reason =
         error instanceof HttpError ? error.message : describeGitError(error, access.account?.credential);
-      check = { url: access.url, branch: ws.branch, at, published: false, error: reason };
+      check = { url: access.url, branch, at, published: false, error: reason };
     }
     try {
       writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
