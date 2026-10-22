@@ -139,6 +139,7 @@ import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BO
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
+import { validateRepositoryUrl } from '../repository/git.js';
 import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
@@ -453,6 +454,9 @@ export function registerProjectRoutes(
     if (body.repoUrl) {
       if (existsSync(projectPath)) throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
       const credential = gitCredentialForRemote(db, body.repoUrl);
+      // With an account the URL must be one Connect accepts (no query or fragment), so both entry
+      // points bind capabilities to, and store, the same URL shapes.
+      if (credential) validateRepositoryUrl(body.repoUrl);
       // With a forge account the PTY's git clones from a one-time gateway URL: the token stays in core.
       const args = credential
         ? accountCloneArgs({ gateway: runs.gitGateway, projectId: id, url: body.repoUrl, credential }, projectPath)

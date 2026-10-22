@@ -23,7 +23,10 @@ export const RepositoryStatus = z.object({
   hasCommits: z.boolean(),
   /** The commit the default branch names now: what Push main would publish. Null before the first commit. */
   mainTip: z.object({ sha: z.string(), shortSha: z.string(), subject: z.string() }).nullable(),
+  /** origin without user info, query or fragment (an ssh URL keeps its user): never a token. */
   originUrl: z.string().nullable(),
+  /** origin as configured has a user name, token, query or fragment in it (not returned). */
+  originHasCredentials: z.boolean(),
   /** `host[:port]` for http(s) remotes, the host name for ssh. */
   originHost: z.string().nullable(),
   /** ssh remotes use the runner's own keys; only http(s) remotes get account credentials (in core). */

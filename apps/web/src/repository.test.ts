@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { ApiRequestError } from './api';
 import {
   accountText,
+  connectPrefill,
   existingOrigin,
+  originCredentialsText,
   lastPushText,
   mainStateText,
   mainTipText,
@@ -26,6 +28,7 @@ const base: RepositoryStatus = {
   behind: 0,
   remoteError: null,
   checkedAt: '2026-10-22T10:00:00.000Z',
+  originHasCredentials: false,
   keepMainPushed: false,
   lastMainPushError: null,
 };
@@ -114,5 +117,23 @@ describe('existingOrigin', () => {
     ).toBe('https://a/b.git');
     expect(existingOrigin(new ApiRequestError(409, 'conflict', 'x'))).toBeNull();
     expect(existingOrigin(new Error('x'))).toBeNull();
+  });
+});
+
+describe('an origin with a user name or token in it', () => {
+  it('says so, and Connect offers the clean URL core returned', () => {
+    const withToken = { ...base, originHasCredentials: true };
+    expect(originCredentialsText(withToken)).toBe(
+      'The remote URL contains a user name or token. Connect the clean URL to use the forge account instead.',
+    );
+    expect(originCredentialsText(base)).toBeNull();
+    expect(connectPrefill(withToken)).toBe('https://git.example.com/al/app.git');
+    expect(connectPrefill({ ...withToken, connected: false })).toBe('https://git.example.com/al/app.git');
+  });
+
+  it('Connect offers an origin set outside Emberline, and nothing once it is connected and clean', () => {
+    expect(connectPrefill({ ...base, connected: false })).toBe('https://git.example.com/al/app.git');
+    expect(connectPrefill(base)).toBeNull();
+    expect(connectPrefill({ ...base, originUrl: null, connected: false })).toBeNull();
   });
 });

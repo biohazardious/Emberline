@@ -73,6 +73,7 @@ describe('repository status', () => {
       connected: false,
       mainState: 'no_remote',
       checkedAt: null,
+      originHasCredentials: false,
       keepMainPushed: false,
       lastMainPushError: null,
     });
@@ -338,6 +339,42 @@ describe('push main', () => {
       git(projectPath, 'rev-parse', 'HEAD'),
     );
     expect(git(forge.bare('alice', 'app'), 'tag', '--list')).toBe('');
+  });
+});
+
+describe('an origin set by hand with a token in it', () => {
+  it('status, origin_exists and origin_differs show the URL without it', async () => {
+    const secret = 'ghp_handsetsecret';
+    git(
+      projectPath,
+      'remote',
+      'add',
+      'origin',
+      `https://x-access-token:${secret}@github.example/o/r.git?private_token=${secret}`,
+    );
+    const s = await status();
+    expect(s).toMatchObject({
+      originUrl: 'https://github.example/o/r.git',
+      originHasCredentials: true,
+      connected: false,
+    });
+    forge.bare('alice', 'app');
+    const exists = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: `${forge.url}/alice/app.git`,
+    });
+    expect(exists.json()).toMatchObject({ error: 'origin_exists', origin: 'https://github.example/o/r.git' });
+    const differs = await send('POST', `/api/projects/${projectId}/repository/push-main`);
+    expect(differs.json().error).toBe('origin_differs');
+    const refreshed = await send('POST', `/api/projects/${projectId}/repository/refresh`);
+    for (const res of [exists, differs, refreshed]) expect(res.body).not.toContain(secret);
+    expect(JSON.stringify(s)).not.toContain(secret);
+    // Connecting the clean URL (after the confirm) replaces the origin, and its token with it.
+    const replaced = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: `${forge.url}/alice/app.git`,
+      replace: true,
+    });
+    expect(replaced.json()).toMatchObject({ originHasCredentials: false, connected: true });
+    expect(readFileSync(path.join(projectPath, '.git', 'config'), 'utf8')).not.toContain(secret);
   });
 });
 

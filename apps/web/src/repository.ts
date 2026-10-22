@@ -63,3 +63,16 @@ export function existingOrigin(error: unknown): string | null {
   if (!(error instanceof ApiRequestError) || error.code !== 'origin_exists') return null;
   return typeof error.data.origin === 'string' ? error.data.origin : null;
 }
+
+/** origin as configured holds a user name or token (core returns it without them). */
+export function originCredentialsText(s: RepositoryStatus): string | null {
+  return s.originHasCredentials
+    ? 'The remote URL contains a user name or token. Connect the clean URL to use the forge account instead.'
+    : null;
+}
+
+/** What Connect offers: an origin set outside Emberline, or the clean URL of one holding a token. */
+export function connectPrefill(s: RepositoryStatus): string | null {
+  if (!s.originUrl) return null;
+  return !s.connected || s.originHasCredentials ? s.originUrl : null;
+}

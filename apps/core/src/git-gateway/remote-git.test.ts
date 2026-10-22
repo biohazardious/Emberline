@@ -230,6 +230,15 @@ describe('import clone', () => {
       await t.app.inject({ method: 'GET', url: `/api/projects/${id}/import-status`, headers: { cookie } })
     ).json();
 
+  it('with an account, a URL Connect would refuse is refused before anything runs', async () => {
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+    for (const [i, url] of [`${appUrl()}?x=1`, `${appUrl()}#frag`].entries()) {
+      const res = await create(url, `Odd ${i}`);
+      expect(res.statusCode, res.body).toBe(400);
+    }
+    expect(spawned).toEqual([]);
+  });
+
   it('with an account: the PTY clones from a capability URL, then origin is the real URL and the capability is gone', async () => {
     seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
     gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');

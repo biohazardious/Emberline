@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
-import { pushBranch, validateRepositoryUrl } from './git.js';
+import { pushBranch, remoteUrlForDisplay, validateRepositoryUrl } from './git.js';
 
 let dir: string;
 const git = (cwd: string, ...args: string[]) =>
@@ -84,5 +84,44 @@ describe('pushBranch without an account: refusals', () => {
     );
     expect(error).toBeInstanceOf(HttpError);
     expect((error as HttpError).code).toBe('push_failed');
+  });
+});
+
+describe('remoteUrlForDisplay', () => {
+  it('drops user info, query and fragment from http(s) URLs and says it did', () => {
+    expect(remoteUrlForDisplay('https://x-access-token:ghp_secret@github.com/o/r.git')).toEqual({
+      url: 'https://github.com/o/r.git',
+      hadCredentials: true,
+    });
+    expect(remoteUrlForDisplay('https://tok@git.example.com:8443/o/r.git?private_token=s#f')).toEqual({
+      url: 'https://git.example.com:8443/o/r.git',
+      hadCredentials: true,
+    });
+  });
+
+  it('keeps an ssh user (it picks the key, it is no secret) but drops an ssh password', () => {
+    expect(remoteUrlForDisplay('ssh://git:pw@host:2222/o/r.git')).toEqual({
+      url: 'ssh://git@host:2222/o/r.git',
+      hadCredentials: true,
+    });
+    expect(remoteUrlForDisplay('ssh://git@host/o/r.git')).toEqual({
+      url: 'ssh://git@host/o/r.git',
+      hadCredentials: false,
+    });
+    expect(remoteUrlForDisplay('git:pw@host:o/r.git')).toEqual({
+      url: 'git@host:o/r.git',
+      hadCredentials: true,
+    });
+    expect(remoteUrlForDisplay('git@host:o/r.git')).toEqual({
+      url: 'git@host:o/r.git',
+      hadCredentials: false,
+    });
+  });
+
+  it('leaves a clean URL exactly as it is', () => {
+    expect(remoteUrlForDisplay('https://GitHub.com/o/r.git')).toEqual({
+      url: 'https://GitHub.com/o/r.git',
+      hadCredentials: false,
+    });
   });
 });

@@ -12,10 +12,12 @@ import { FORGE_ACCOUNTS_HREF, PROVIDER_LABEL, accountHost } from '../forgeAccoun
 import { useApi } from '../hooks/useApi';
 import {
   accountText,
+  connectPrefill,
   existingOrigin,
   lastPushText,
   mainStateText,
   mainTipText,
+  originCredentialsText,
   pushMainBlocked,
 } from '../repository';
 
@@ -38,11 +40,12 @@ export function RepositoryPanel({ project }: { project: Project }) {
   useEffect(() => {
     if (!accountId && accounts.data?.accounts[0]) setAccountId(accounts.data.accounts[0].id);
   }, [accountId, accounts.data]);
-  const unconnectedOrigin = s && s.originUrl && !s.connected ? s.originUrl : null;
+  const offeredOrigin = s ? connectPrefill(s) : null;
   useEffect(() => {
-    // An origin set outside Emberline: offer it in Connect, which is what lets Emberline use it.
-    if (unconnectedOrigin) setUrl((current) => current || unconnectedOrigin);
-  }, [unconnectedOrigin]);
+    // An origin set outside Emberline (or its clean URL, when it holds a token): offer it in
+    // Connect, which is what lets Emberline use it with the forge account.
+    if (offeredOrigin) setUrl((current) => current || offeredOrigin);
+  }, [offeredOrigin]);
   useEffect(() => {
     if (!accountId) return;
     let live = true;
@@ -104,6 +107,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
   const account = s ? accountText(s) : null;
   const blocked = s ? pushMainBlocked(s) : 'Loading…';
   const lastPush = s ? lastPushText(s) : null;
+  const credentials = s ? originCredentialsText(s) : null;
   const tip = s ? mainTipText(s) : null;
 
   return (
@@ -146,6 +150,11 @@ export function RepositoryPanel({ project }: { project: Project }) {
             </>
           )}
         </dl>
+      )}
+      {credentials && (
+        <p className="banner banner-warn" role="alert">
+          {credentials}
+        </p>
       )}
       {lastPush && (
         <p className="banner banner-warn" role="alert">

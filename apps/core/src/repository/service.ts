@@ -28,6 +28,7 @@ import {
   originUrls,
   pushBranch,
   type RemoteAccess,
+  remoteUrlForDisplay,
   setOrigin,
   shortGitError,
   validateRepositoryUrl,
@@ -97,6 +98,7 @@ export class RepositoryService {
       hasCommits: false,
       mainTip: null,
       originUrl: null,
+      originHasCredentials: false,
       originHost: null,
       transport: null,
       account: null,
@@ -118,10 +120,13 @@ export class RepositoryService {
     const withRepo: RepositoryStatus = { ...base, isGitRepo: true, branch, hasCommits, mainTip };
     if (!origin) return withRepo;
     const account = accountForRemote(this.db, origin);
+    // A token someone put into origin by hand is never returned.
+    const shown = remoteUrlForDisplay(origin);
     const transport = /^https:/i.test(origin) ? 'https' : /^http:/i.test(origin) ? 'http' : 'ssh';
     const withOrigin: RepositoryStatus = {
       ...withRepo,
-      originUrl: origin,
+      originUrl: shown.url,
+      originHasCredentials: shown.hadCredentials,
       originHost: parseForgeRemote(origin)?.host ?? null,
       transport,
       account: account
@@ -297,7 +302,7 @@ export class RepositoryService {
     }
     if (this.project(projectId).repoUrl !== fetch) {
       throw conflict(
-        `origin (${fetch}) is not the repository connected for this project. Connect it under "Connect an existing repository" first.`,
+        `origin (${remoteUrlForDisplay(fetch).url}) is not the repository connected for this project. Connect it under "Connect an existing repository" first.`,
         'origin_differs',
       );
     }
@@ -329,9 +334,11 @@ export class RepositoryService {
     }
   }
 
+  /** Names origin without user info, query or fragment: a token set by hand in it is never echoed. */
   private originExists(current: string): HttpError {
-    return new HttpError(409, 'origin_exists', `This project already has origin ${current}. Replace it?`, {
-      origin: current,
+    const shown = remoteUrlForDisplay(current).url;
+    return new HttpError(409, 'origin_exists', `This project already has origin ${shown}. Replace it?`, {
+      origin: shown,
     });
   }
 
