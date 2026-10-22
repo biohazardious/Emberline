@@ -486,10 +486,13 @@ export function registerProjectRoutes(
       if (creating.has(slug)) throw conflict(`a project with slug "${slug}" is being created`, PROJECT_CONFLICT.beingCreated);
       creating.add(slug);
       try {
-        // Refused before the disk is touched.
+        // Refused before the disk is touched. Once decoded, the parsed body and the request body drop
+        // their `materials` (the base64 strings, up to 40 MB), so before the first await nothing here
+        // references them; the decoded Buffers go to createNewProject.
         const decoded = decodeMaterials(body.materials ?? []);
-        (request.body as { materials?: unknown }).materials = undefined; // the request's base64 (up to 40 MB) is not needed past here
-        return await createNewProject({ ...body, materials: undefined }, decoded, slug, reply, request.log);
+        body.materials = undefined;
+        (request.body as { materials?: unknown }).materials = undefined;
+        return await createNewProject(body, decoded, slug, reply, request.log);
       } finally {
         creating.delete(slug);
       }
