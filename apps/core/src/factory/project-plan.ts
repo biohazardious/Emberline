@@ -13,6 +13,7 @@ import {
   type ProjectAppType,
   type ProjectChoices,
   type ProjectGateOverrides,
+  type ProjectMaterialInfo,
   type ProjectTechStack,
   STACK_DIMENSION_IDS,
   type StackChoice,
@@ -36,6 +37,15 @@ import { factoryTicketTitle } from './orchestration.js';
 import { STARTERS } from './starters.js';
 
 export type ProjectCreateInput = ReturnType<typeof CreateProjectBody.parse>;
+/**
+ * The plan's input: the create body with each file's name, type and decoded size (the preview sends
+ * exactly that). A parsed create body (files still carrying `dataBase64`, no size) is accepted too,
+ * so callers and tests that pass `CreateProjectBody.parse(...)` straight in keep compiling; the plan
+ * only ever reads the sizes of entries that have one.
+ */
+export type ProjectPlanInput = Omit<ProjectCreateInput, 'materials'> & {
+  materials?: readonly (ProjectMaterialInfo | NonNullable<ProjectCreateInput['materials']>[number])[];
+};
 
 export interface PlannedTicket {
   key: 'bootstrap' | 'deploy' | 'factory';
@@ -115,7 +125,7 @@ export function dockerComposeNote(engine: DockerEngineStatus | undefined): strin
  * its container (worktree.yml v2); otherwise the summary says how to get that, by `engine`'s state.
  */
 export function planNewProject(
-  body: ProjectCreateInput,
+  body: ProjectPlanInput,
   { dockerEngine = false, engine }: { dockerEngine?: boolean; engine?: DockerEngineStatus } = {},
 ): ProjectPlan {
   const preset = body.presetId === undefined ? undefined : getPreset(body.presetId);

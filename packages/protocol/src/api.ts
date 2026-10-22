@@ -1,5 +1,6 @@
 /** Public REST + WebSocket API contracts shared by core and web, one module per area. */
 export * from './api/common.js';
+export * from './api/project-materials.js';
 export * from './api/auth.js';
 export * from './api/projects.js';
 export * from './api/terminals.js';

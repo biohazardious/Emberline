@@ -133,9 +133,16 @@ import {
   writeWorkspaceFileContent,
 } from '../factory/service.js';
 import { inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
+import { decodeMaterials } from '../factory/materials.js';
 import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
 import { DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
-import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BODY_LIMIT } from '../security-headers.js';
+import {
+  contentDisposition,
+  EDITOR_BODY_LIMIT,
+  PROJECT_CREATE_BODY_LIMIT,
+  UNTRUSTED_CONTENT_CSP,
+  UPLOAD_BODY_LIMIT,
+} from '../security-headers.js';
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
@@ -259,6 +266,7 @@ export function registerProjectRoutes(
       tickets: plannedTickets(plan),
       gates: plan.gates,
       notes: plan.notes,
+      materials: [],
     };
   });
 
@@ -269,7 +277,12 @@ export function registerProjectRoutes(
     reply: FastifyReply,
     log: FastifyBaseLogger,
   ): Promise<CreateProjectResponse> {
-    const plan = planNewProject(body, await dockerEngine());
+    // Refused before the disk is touched; the plan gets the decoded sizes, as the preview sends them.
+    const decoded = decodeMaterials(body.materials ?? []);
+    const plan = planNewProject(
+      { ...body, materials: decoded.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes })) },
+      await dockerEngine(),
+    );
     const projectPath = path.join(config.workspacesDir, slug);
     if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
       throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
@@ -425,12 +438,15 @@ export function registerProjectRoutes(
     return { project, terminalId: null };
   }
 
-  app.post('/api/projects', async (request, reply): Promise<CreateProjectResponse> => {
+  app.post('/api/projects', { bodyLimit: PROJECT_CREATE_BODY_LIMIT }, async (request, reply): Promise<CreateProjectResponse> => {
     const body = CreateProjectBody.parse(request.body);
     const slug = slugify(body.name);
     if (!slug) throw badRequest('name must contain at least one letter or digit');
     if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
       throw conflict(`a project with slug "${slug}" already exists`, PROJECT_CONFLICT.nameTaken);
+    }
+    if (!isWizardCreate(body) && ((body.materials?.length ?? 0) > 0 || (body.referenceUrls?.length ?? 0) > 0)) {
+      throw badRequest('Reference files and links are only accepted when the wizard creates a new project.');
     }
     if (body.source === 'import_folder' && body.folder !== undefined) {
       return importFolderProject(body, body.folder, slug, reply);

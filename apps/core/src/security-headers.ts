@@ -1,8 +1,11 @@
+import { base64Length, MATERIALS_MAX_TOTAL_BYTES } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { hostNameOf } from './runs/preview-url.js';
 
 /** Default request body cap; routes that accept uploads raise it per route. */
 export const DEFAULT_BODY_LIMIT = 1024 * 1024;
+/** `POST /api/projects`: the wizard's reference files (30 MB as base64) plus room for the rest of the body. */
+export const PROJECT_CREATE_BODY_LIMIT = base64Length(MATERIALS_MAX_TOTAL_BYTES) + 2 * DEFAULT_BODY_LIMIT;
 /** Upload routes (base64 attachments and workspace uploads). */
 export const UPLOAD_BODY_LIMIT = 128 * 1024 * 1024;
 /** Editor saves: up to 2M characters, which can be ~4x that in UTF-8 plus JSON escaping. */

@@ -1,6 +1,14 @@
 /** API contracts: projects & AI factory metadata. */
 import { z } from 'zod';
 import { GitBranchName } from './common.js';
+import {
+  MATERIALS_MAX_FILES,
+  PlannedMaterialSummary,
+  ProjectMaterialInfo,
+  ProjectMaterialInput,
+  REFERENCE_URLS_MAX,
+  ReferenceUrl,
+} from './project-materials.js';
 import { ProjectChoices } from '../presets/types.js';
 
 /** Specialized AI Coding Factory agent personas. */
@@ -117,15 +125,18 @@ const CreateProjectFields = z.object({
   vision: z.string().trim().max(4000).optional(),
   /** `import_folder`: name of a direct child of the workspaces directory. */
   folder: FolderName.optional(),
+  /** Wizard (new project) only: files committed to docs/reference/ and links listed in PROJECT.md. */
+  materials: z.array(ProjectMaterialInput).max(MATERIALS_MAX_FILES).optional(),
+  referenceUrls: z.array(ReferenceUrl).max(REFERENCE_URLS_MAX).optional(),
 });
 
-export const CreateProjectBody = CreateProjectFields.refine(
-  (b) => b.source !== 'import_folder' || b.folder !== undefined,
-  { path: ['folder'], message: 'folder is required for import_folder' },
-).refine((b) => b.source !== 'import_url' || b.repoUrl !== undefined, {
-  path: ['repoUrl'],
-  message: 'repoUrl is required for import_url',
-});
+type SourceFields = { source?: ProjectSource; folder?: string; repoUrl?: string };
+const hasFolder = (b: SourceFields) => b.source !== 'import_folder' || b.folder !== undefined;
+const hasRepoUrl = (b: SourceFields) => b.source !== 'import_url' || b.repoUrl !== undefined;
+const FOLDER_RULE = { path: ['folder'], message: 'folder is required for import_folder' };
+const REPO_URL_RULE = { path: ['repoUrl'], message: 'repoUrl is required for import_url' };
+
+export const CreateProjectBody = CreateProjectFields.refine(hasFolder, FOLDER_RULE).refine(hasRepoUrl, REPO_URL_RULE);
 export type CreateProjectBody = z.input<typeof CreateProjectBody>;
 
 /** `error` codes of a 409 from `POST /api/projects` that the wizard tells apart. */
@@ -147,9 +158,13 @@ export const CreateProjectResponse = z.object({
 });
 export type CreateProjectResponse = z.infer<typeof CreateProjectResponse>;
 
-/** `POST /api/projects/preview` takes the creation body and writes nothing. */
-export const ProjectPreviewBody = CreateProjectBody;
-export type ProjectPreviewBody = CreateProjectBody;
+/** `POST /api/projects/preview` takes the creation body with each file's name, type and size instead of its bytes. Writes nothing. */
+export const ProjectPreviewBody = CreateProjectFields.extend({
+  materials: z.array(ProjectMaterialInfo).max(MATERIALS_MAX_FILES).optional(),
+})
+  .refine(hasFolder, FOLDER_RULE)
+  .refine(hasRepoUrl, REPO_URL_RULE);
+export type ProjectPreviewBody = z.input<typeof ProjectPreviewBody>;
 
 export const ProjectPreviewResponse = z.object({
   projectMd: z.string(),
@@ -169,6 +184,8 @@ export const ProjectPreviewResponse = z.object({
   gates: ProjectGateOverrides,
   /** Notes for the summary, e.g. that the Docker engine would preview the container. */
   notes: z.array(z.string()),
+  /** Where each file of the body's `materials` is committed, in the body's order. */
+  materials: z.array(PlannedMaterialSummary).default([]),
 });
 export type ProjectPreviewResponse = z.infer<typeof ProjectPreviewResponse>;
 

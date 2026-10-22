@@ -10,6 +10,11 @@ import {
 } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
 
+/** Safe characters only (`[A-Za-z0-9._-]`), runs of others become one `-`, no leading/trailing `-`. */
+export function sanitizeAttachmentName(name: string, fallback: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || fallback;
+}
+
 export async function persistFactoryAttachments(
   workspacePath: string,
   attachments: readonly FactoryAttachmentInput[],
@@ -23,7 +28,7 @@ export async function persistFactoryAttachments(
 
   for (let i = 0; i < attachments.length; i += 1) {
     const att = attachments[i]!;
-    const safeName = att.name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || `file-${i + 1}`;
+    const safeName = sanitizeAttachmentName(att.name, `file-${i + 1}`);
     const storedName = `${ts}-${i + 1}-${safeName}`;
     const absPath = path.join(attachDir, storedName);
 
