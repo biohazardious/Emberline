@@ -5,6 +5,7 @@ import type { RepositoryStatus, Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
+import { unavailable } from '../errors.js';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { updateAccount } from '../forge/account-store.js';
@@ -404,6 +405,19 @@ describe('push main', () => {
       expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.url).toBe(newUrl);
     } finally {
       release();
+      setCommandExecutor(localCommandExecutor);
+    }
+  });
+
+  it('a runner that is not reachable is said so, never read as a detached HEAD', async () => {
+    setCommandExecutor(async () => {
+      throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+    });
+    try {
+      const res = await send('POST', `/api/projects/${projectId}/repository/push-main`);
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe('ptyd_unavailable');
+    } finally {
       setCommandExecutor(localCommandExecutor);
     }
   });

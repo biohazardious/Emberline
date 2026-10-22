@@ -149,7 +149,22 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   postMerge.registerPostMergeStep('refresh main preview', ({ projectId }) => deps.runs.mainPreviews.refresh(projectId));
   postMerge.start();
   mainPush.start();
+  // Stored pushes (from before a restart, or kept while the runner was away) run once core listens
+  // and the runner is connected, and again on each reconnect.
+  let listening = false;
+  const resumeMainPushes = () => {
+    if (listening && deps.ptyd.status === 'connected') mainPush.resumePending();
+  };
+  const onPtydStatus = (status: string) => {
+    if (status === 'connected') resumeMainPushes();
+  };
+  deps.ptyd.on('status', onPtydStatus);
+  app.addHook('onListen', async () => {
+    listening = true;
+    resumeMainPushes();
+  });
   app.addHook('onClose', async () => {
+    deps.ptyd.off('status', onPtydStatus);
     cron.stop();
     notifications.stop();
     review.stop();

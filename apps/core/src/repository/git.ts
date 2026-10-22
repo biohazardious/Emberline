@@ -1,3 +1,4 @@
+import { isRunnerUnavailable } from '../command-exec.js';
 import { badRequest, HttpError } from '../errors.js';
 import { remoteUrlForDisplay } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
@@ -76,14 +77,22 @@ export function validateRepositoryUrl(raw: string): {
   return { url, host: remote.host, transport };
 }
 
+/** A failed git command reads as `fallback`; a runner that could not run it is thrown, never read as an answer. */
+const unlessRunnerUnavailable =
+  <T>(fallback: T) =>
+  (error: unknown): T => {
+    if (isRunnerUnavailable(error)) throw error;
+    return fallback;
+  };
+
 export async function mainBranchState(
   mainPath: string,
 ): Promise<{ branch: string | null; hasCommits: boolean }> {
   const ref = await execGitFile(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: mainPath }).catch(
-    () => ({ stdout: '' }),
+    unlessRunnerUnavailable({ stdout: '' }),
   );
   const head = await execGitFile(['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: mainPath }).catch(
-    () => ({ stdout: '' }),
+    unlessRunnerUnavailable({ stdout: '' }),
   );
   return { branch: ref.stdout.trim() || null, hasCommits: Boolean(head.stdout.trim()) };
 }
@@ -107,10 +116,7 @@ export async function branchTip(
   const out = await realGit(
     ['log', '-1', '--no-show-signature', '--format=%H%x00%h%x00%s', `refs/heads/${branch}`, '--'],
     mainPath,
-  ).then(
-    (r) => r.stdout.trim(),
-    () => '',
-  );
+  ).then((r) => r.stdout.trim(), unlessRunnerUnavailable(''));
   const [sha, shortSha, subject] = out.split('\0');
   return sha && shortSha ? { sha, shortSha, subject: subject ?? '' } : null;
 }
@@ -119,13 +125,14 @@ export async function branchTip(
 export async function isAncestorCommit(mainPath: string, ancestor: string, commit: string): Promise<boolean> {
   return realGit(['merge-base', '--is-ancestor', ancestor, commit], mainPath).then(
     () => true,
-    () => false,
+    unlessRunnerUnavailable(false),
   );
 }
 
 export async function originUrls(mainPath: string): Promise<{ fetch: string | null; push: string | null }> {
   const read = async (args: string[]) =>
-    (await execGitFile(args, { cwd: mainPath }).catch(() => ({ stdout: '' }))).stdout.trim() || null;
+    (await execGitFile(args, { cwd: mainPath }).catch(unlessRunnerUnavailable({ stdout: '' }))).stdout.trim() ||
+    null;
   return {
     fetch: await read(['remote', 'get-url', 'origin']),
     push: await read(['remote', 'get-url', '--push', 'origin']),
@@ -178,7 +185,7 @@ export async function remoteBranchHead(
 const hasRealCommit = (cwd: string, oid: string) =>
   realGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(
     () => true,
-    () => false,
+    unlessRunnerUnavailable(false),
   );
 
 /**
@@ -194,8 +201,13 @@ export async function fetchBranchObjects(
   if (await hasRealCommit(mainPath, oid)) return;
   if (access.account) await accountFetchBranchObjects(access.account, mainPath, branch);
   else
+    // Only the real objects, as on the account path: no replace refs, grafts or commit-graph.
     await execGitFile(
       [
+        '-c',
+        'core.commitGraph=false',
+        '-c',
+        'core.useReplaceRefs=false',
         '-c',
         'fetch.writeCommitGraph=false',
         '-c',
@@ -209,7 +221,7 @@ export async function fetchBranchObjects(
         access.url,
         `refs/heads/${branch}`,
       ],
-      { cwd: mainPath, timeout: 30_000 },
+      { cwd: mainPath, timeout: 30_000, env: REAL_OBJECTS_ENV },
     );
   // The remote moved on between ls-remote and the fetch.
   if (!(await hasRealCommit(mainPath, oid)))
@@ -253,6 +265,7 @@ export async function pushBranch(
     try {
       return await accountPushBranch(access.account, mainPath, branch, oid);
     } catch (error) {
+      if (isRunnerUnavailable(error)) throw error; // not a failed push: the runner could not run it
       throw new HttpError(
         409,
         'push_failed',
@@ -275,6 +288,7 @@ export async function pushBranch(
       );
       return 'pushed';
     } catch (error) {
+      if (isRunnerUnavailable(error)) throw error;
       const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
       // Only a non-fast-forward is "the remote has commits main doesn't"; a `[remote rejected]` (a hook,
       // a protected branch) is a failed push with git's reason.
@@ -291,7 +305,7 @@ export async function pushBranch(
 export async function setUpstream(mainPath: string, branch: string): Promise<void> {
   const current = await execGitFile(['config', '--get', `branch.${branch}.remote`], { cwd: mainPath }).then(
     (r) => r.stdout.trim(),
-    () => '',
+    unlessRunnerUnavailable(''),
   );
   if (current) return;
   await execGitFile(['config', `branch.${branch}.remote`, 'origin'], { cwd: mainPath });

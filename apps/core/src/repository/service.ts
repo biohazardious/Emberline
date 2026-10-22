@@ -8,6 +8,7 @@ import {
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
+import { isRunnerUnavailable } from '../command-exec.js';
 import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
@@ -250,7 +251,7 @@ export class RepositoryService {
   async pushMainQuietly(
     projectId: string,
     mergeOid: string | null,
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<{ ok: true } | { ok: false; reason: string; runnerUnavailable?: true }> {
     let reason: string;
     try {
       const result = await this.push(projectId, { mergeOid });
@@ -261,6 +262,8 @@ export class RepositoryService {
       }
       reason = DIVERGED_MESSAGE;
     } catch (error) {
+      // Nothing was decided: the push is tried again once the runner is back.
+      if (isRunnerUnavailable(error)) return { ok: false, reason: remoteErrorText(error), runnerUnavailable: true };
       reason = remoteErrorText(error);
     }
     try {
@@ -310,7 +313,11 @@ export class RepositoryService {
             if (isEmberlineMergeCommit(ws.path, tip.sha) && (await isAncestorCommit(ws.path, full, tip.sha)))
               return 'superseded' as const;
             // The merge went into the branch checked out instead (it never was on the default branch).
-            if (ws.branch !== ws.defaultBranch && (await isAncestorCommit(ws.path, full, `refs/heads/${ws.branch}`)))
+            if (
+              ws.branch !== ws.defaultBranch &&
+              (await isAncestorCommit(ws.path, full, `refs/heads/${ws.branch}`)) &&
+              !(await isAncestorCommit(ws.path, full, `refs/heads/${ws.defaultBranch}`))
+            )
               throw conflict(
                 `The merge went into ${ws.branch}, which is checked out in the main workspace; Keep main pushed pushes only ${ws.defaultBranch}.`,
                 'merged_elsewhere',
@@ -387,6 +394,7 @@ export class RepositoryService {
       if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
       check = { url: ws.access.url, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
+      if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
       const reason =
         error instanceof HttpError ? error.message : describeGitError(error, ws.access.account?.credential);
@@ -394,7 +402,14 @@ export class RepositoryService {
     }
     await withMainWorkspaceLock(ws.path, async () => {
       if (!(await this.originStill(projectId, ws))) return; // origin changed meanwhile: its own read counts
-      if (remoteOid) await setRemoteTracking(ws.path, branch, remoteOid);
+      if (remoteOid) {
+        try {
+          await setRemoteTracking(ws.path, branch, remoteOid);
+        } catch (error) {
+          if (isRunnerUnavailable(error)) throw error;
+          check = { ...check, published: false, error: describeGitError(error, ws.access.account?.credential) };
+        }
+      }
       try {
         writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
       } catch {

@@ -2,8 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { rmSync, watch, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { localCommandExecutor, ptydCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
+import { unavailable } from '../errors.js';
 import { runEvents, runs } from '../db/schema.js';
 import { syncWorktreeToMainWorkspace } from '../factory/merge.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
@@ -302,6 +305,7 @@ describe('keep main pushed', () => {
     expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
     const next = new KeepMainPushed(t.db, t.runs, t.repository);
     next.start();
+    next.resumePending(); // as server.ts does once core listens and the runner is connected
     await next.idle();
     expect(remoteMain()).toBe(m.commitOid);
     expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
@@ -315,6 +319,7 @@ describe('keep main pushed', () => {
     commit(projectPath, 'agent.txt');
     const next = new KeepMainPushed(t.db, t.runs, t.repository);
     next.start();
+    next.resumePending(); // as server.ts does once core listens and the runner is connected
     await next.idle();
     expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
     expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
@@ -335,5 +340,86 @@ describe('keep main pushed', () => {
           'The merge went into side, which is checked out in the main workspace; Keep main pushed pushes only main.',
       },
     ]);
+  });
+
+  it('a merge into main, then a branch checked out from it and main moved on: main moved, not "went into"', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const res = await merge('m1', worktree('m1'));
+    git(projectPath, 'checkout', '-q', '-b', 'side');
+    // Someone commits on main outside Emberline (main is not checked out).
+    const outside = git(projectPath, '-c', 'user.name=o', '-c', 'user.email=o@e', 'commit-tree', `${res.commitOid!}^{tree}`, '-p', res.commitOid!, '-m', 'outside');
+    git(projectPath, 'update-ref', 'refs/heads/main', outside);
+    noteMerge('m1', res);
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('m1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+  });
+
+  describe('the runner is not reachable', () => {
+    /** A push stored before a restart, as `enqueue` writes it. */
+    const stored = (commitOid: string) =>
+      writeRepositorySettings(t.db, projectId, {
+        keepMainPushed: true,
+        pendingMainPush: { id: 'p1', runId: 'r1', commitOid, unverified: false, queuedAt: new Date().toISOString() },
+      });
+    const nothingRecorded = () => {
+      expect(readRepositorySettings(t.db, projectId).pendingMainPush?.id).toBe('p1');
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+      expect(notes('r1')).toEqual([]);
+      expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    };
+    let ptydServer: PtydServer | undefined;
+    afterEach(async () => {
+      setCommandExecutor(localCommandExecutor);
+      await ptydServer?.close();
+      ptydServer = undefined;
+    });
+
+    it('a restart before the runner connects keeps the stored push and records nothing', async () => {
+      stored(merged().commitOid);
+      await t.mainPush.stop();
+      setCommandExecutor(ptydCommandExecutor(t.ptyd)); // as in production: git runs in the runner
+      const next = new KeepMainPushed(t.db, t.runs, t.repository);
+      next.start();
+      next.resumePending();
+      await next.idle();
+      nothingRecorded();
+      await next.stop();
+    });
+
+    it('the stored push runs once core listens and the runner connects', async () => {
+      const m = merged();
+      stored(m.commitOid);
+      setCommandExecutor(ptydCommandExecutor(t.ptyd));
+      ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+      await ptydServer.listen();
+      t.ptyd.start(); // core already listens (the git gateway)
+      await t.ptyd.waitUntilConnected();
+      for (let i = 0; i < 200 && readRepositorySettings(t.db, projectId).pendingMainPush; i++)
+        await new Promise((r) => setTimeout(r, 50));
+      await t.mainPush.idle();
+      expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+      expect(remoteMain()).toBe(m.commitOid);
+      expect(notes('r1')).toEqual([]);
+    });
+
+    it('the runner going away during the push keeps it for the next connection', async () => {
+      const m = merged();
+      setCommandExecutor(async (request) => {
+        if (request.args.includes('push')) throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+        return localCommandExecutor(request);
+      });
+      writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+      t.runs.note('r1', 'merged_to_main', m);
+      await t.mainPush.idle();
+      expect(readRepositorySettings(t.db, projectId).pendingMainPush?.commitOid).toBe(m.commitOid);
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+      expect(notes('r1')).toEqual([]);
+      setCommandExecutor(localCommandExecutor);
+      t.mainPush.resumePending();
+      await t.mainPush.idle();
+      expect(remoteMain()).toBe(m.commitOid);
+      expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+    });
   });
 });

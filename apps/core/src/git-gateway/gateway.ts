@@ -198,7 +198,7 @@ export class GitGateway {
       const outcome = record.outcome;
       throw outcome
         ? new GitGatewayError(outcome.code, outcome.message)
-        : new GitGatewayError('git_failed', describeGitError(error, grant.credential));
+        : new GitGatewayError('git_failed', describeGitError(error, grant.credential), { cause: error });
     } finally {
       this.release(capability);
     }

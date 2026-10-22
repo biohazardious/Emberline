@@ -41,7 +41,15 @@ export class KeepMainPushed {
     if (this.started) return;
     this.started = true;
     this.runs.on('note', this.onNote);
-    // Merges noted before a restart: each project's pending push (only its recorded commit is ever pushed).
+  }
+
+  /**
+   * Runs each project's stored push: one noted before a restart, or kept while the runner was away
+   * (only its recorded commit is ever pushed). Called once core listens and the runner is connected
+   * (git runs in the runner, and with an account it reaches the forge through core's gateway).
+   */
+  resumePending(): void {
+    if (!this.started || this.stopped) return;
     for (const { id } of this.db.select({ id: projects.id }).from(projects).all()) {
       if (readRepositorySettings(this.db, id).pendingMainPush) this.kick(id);
     }
@@ -120,6 +128,11 @@ export class KeepMainPushed {
         const res = pending.unverified
           ? this.unverified(projectId)
           : await this.repository.pushMainQuietly(projectId, pending.commitOid);
+        if (!res.ok && 'runnerUnavailable' in res) {
+          // Kept as it is: the next runner connection runs it (resumePending).
+          this.log(`keep main pushed: project ${projectId}: waiting for the runner (${res.reason})`);
+          break;
+        }
         // A merge noted meanwhile replaced it (and set `again`): that one runs next.
         this.clear(projectId, pending.id);
         if (!res.ok) {

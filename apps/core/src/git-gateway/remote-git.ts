@@ -5,6 +5,7 @@
  * written to `.git/config`; submodules are never recursed into; only the gateway's scheme is
  * allowed; no redirect, proxy or credential helper applies.
  */
+import { isRunnerUnavailable } from '../command-exec.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
@@ -109,7 +110,10 @@ const planGit = (args: string[], cwd: string) =>
 async function hasCommit(cwd: string, oid: string): Promise<boolean> {
   return planGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(
     () => true,
-    () => false,
+    (error: unknown) => {
+      if (isRunnerUnavailable(error)) throw error; // not "missing": the runner could not look
+      return false;
+    },
   );
 }
 

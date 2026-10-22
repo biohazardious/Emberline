@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { MAX_EXEC_OUTPUT_BYTES, PTYD_MIN_PROTOCOL_VERSION, type PtydResult } from '@emberline/protocol';
-import { unavailable } from './errors.js';
+import { PtydClientError } from '@emberline/ptyd/client';
+import { HttpError, unavailable } from './errors.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 
 /**
@@ -88,7 +89,10 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
     // ptyd enforces the timeout; this only guards against a reply that never comes.
     let timer: NodeJS.Timeout | undefined;
     const guard = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`runner exec of ${request.file} did not answer`)), timeoutMs + 15_000);
+      timer = setTimeout(
+        () => reject(unavailable('ptyd_unavailable', `runner exec of ${request.file} did not answer`)),
+        timeoutMs + 15_000,
+      );
     });
     try {
       return await Promise.race([call, guard]);
@@ -176,6 +180,19 @@ export const localCommandExecutor: CommandExecutor = (request) =>
     });
     child.on('close', finish);
   });
+
+/**
+ * Whether a command failed because the runner could not run it (not reachable, too old, the
+ * connection dropped or never answered), not because the command itself failed. Follows `cause`.
+ */
+export function isRunnerUnavailable(error: unknown): boolean {
+  for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (e instanceof HttpError && e.statusCode === 503 && (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated'))
+      return true;
+    if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) return true;
+  }
+  return false;
+}
 
 /** Error shaped like `execFile`'s: carries the exit code and both output streams. */
 export class CommandFailedError extends Error {

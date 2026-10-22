@@ -28,8 +28,9 @@ export class GitGatewayError extends Error {
   constructor(
     readonly code: GitGatewayErrorCode,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'GitGatewayError';
   }
 }
