@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ANCHOR_HOLD_MS,
   anchorHoldActive,
+  anchorResizeTargets,
   anchorScrollDue,
   choiceForService,
   containerPreviewBoxShown,
@@ -201,5 +202,30 @@ describe('anchorHoldActive', () => {
     expect(anchorHoldActive({ ...v, elapsedMs: ANCHOR_HOLD_MS })).toBe(false);
     expect(anchorHoldActive({ ...v, userScrolled: true })).toBe(false);
     expect(anchorHoldActive({ ...v, hash: '' })).toBe(false);
+  });
+});
+
+describe('anchorResizeTargets', () => {
+  const el = (name: string) => ({ name }) as unknown as Element;
+  it("observes the scroll container's children (the page that grows) and the box's parent", () => {
+    const page = el('page');
+    const banner = el('banner');
+    const parent = el('parent');
+    const box = {
+      parentElement: parent,
+      closest: (selector: string) => (selector === '.content' ? { children: [banner, page] } : null),
+    } as unknown as Element;
+    expect(anchorResizeTargets(box)).toEqual([banner, page, parent]);
+  });
+
+  it('outside the app shell only the parent, and nothing twice', () => {
+    const parent = el('parent');
+    const lone = { parentElement: parent, closest: () => null } as unknown as Element;
+    expect(anchorResizeTargets(lone)).toEqual([parent]);
+    const direct = {
+      parentElement: parent,
+      closest: () => ({ children: [parent] }),
+    } as unknown as Element;
+    expect(anchorResizeTargets(direct)).toEqual([parent]);
   });
 });

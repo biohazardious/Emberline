@@ -399,6 +399,9 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   }, [fileList.data, tabs.length, activePath, openFile]);
 
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
+  // Computed once per render: the note under a worktree.yml tab.
+  const worktreeNote =
+    activeTab && isWorktreeYmlPath(activeTab.path) ? worktreeYmlExplorerNote(targetId) : null;
 
   const saveActiveFile = useCallback(async () => {
     if (!activeTab || activeTab.binary || isWorktreeYmlPath(activeTab.path)) return;
@@ -1217,14 +1220,14 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  {isWorktreeYmlPath(activeTab.path) && (
+                  {worktreeNote && (
                     <p
                       className="muted small worktree-readonly-note"
                       style={{ margin: 0, padding: '6px 12px' }}
                     >
-                      {worktreeYmlExplorerNote(targetId).text}{' '}
+                      {worktreeNote.text}{' '}
                       <Link href={`/projects/${projectId}/settings?${WORKTREE_EDIT_PARAM}`}>
-                        {worktreeYmlExplorerNote(targetId).link}
+                        {worktreeNote.link}
                       </Link>
                     </p>
                   )}

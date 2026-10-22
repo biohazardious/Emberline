@@ -70,14 +70,8 @@ async function optionsWithStatus(
 ): Promise<{ options: ContainerPreviewOptionsResponse; status: WorktreeConfigStatusResponse | null }> {
   const preview = approvedPreviewService(deps.db, project.id);
   const commandPreview = preview !== null && !isComposeService(preview);
-  const hidden = (reason: string) => ({
-    options: {
-      available: false,
-      reason,
-      file: null,
-      services: [],
-      commandPreview,
-    } as ContainerPreviewOptionsResponse,
+  const hidden = (reason: string): { options: ContainerPreviewOptionsResponse; status: null } => ({
+    options: { available: false, reason, file: null, services: [], commandPreview },
     status: null,
   });
   await deps.docker.ready();

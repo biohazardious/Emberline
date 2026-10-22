@@ -142,3 +142,13 @@ export function anchorHoldActive(v: {
 }): boolean {
   return !v.userScrolled && v.elapsedMs < ANCHOR_HOLD_MS && v.hash === `#${v.anchor}`;
 }
+
+/**
+ * What grows while the settings page loads: the children of the app's scroll container `.content`
+ * (it scrolls, so its own size never changes, like `document.body`), and the box's parent.
+ */
+export function anchorResizeTargets(box: Element): Element[] {
+  const targets = new Set<Element>(Array.from(box.closest('.content')?.children ?? []));
+  if (box.parentElement) targets.add(box.parentElement);
+  return [...targets];
+}

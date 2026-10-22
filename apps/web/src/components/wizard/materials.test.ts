@@ -81,6 +81,12 @@ describe('addMaterials', () => {
       'A file whose name is only spaces cannot be added. Rename it, then add it again.',
     ]);
   });
+  it('takes a name with spaces around it (only a name of spaces alone is refused)', () => {
+    const { added, problems } = addMaterials([], [{ file: blob(1, 'image/png'), name: ' a.png ' }], id);
+    expect(problems).toEqual([]);
+    expect(added).toHaveLength(1);
+    expect(added[0]!.kind).toBe('image');
+  });
   it('holds the count, per-file and total caps', () => {
     const current = Array.from({ length: 19 }, (_, i) =>
       material(`f${i}`, MB, 'application/octet-stream', 'other'),

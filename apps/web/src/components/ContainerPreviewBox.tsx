@@ -15,6 +15,7 @@ import {
   type ContainerPreviewDraft,
   USE_CONTAINER_PREVIEW_LABEL,
   anchorHoldActive,
+  anchorResizeTargets,
   anchorScrollDue,
   choiceForService,
   containerPreviewBoxShown,
@@ -104,8 +105,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
       el.scrollIntoView({ block: 'start' });
     });
     for (const e of userEvents) window.addEventListener(e, onUser, { passive: true });
-    observer.observe(document.body);
-    if (el.parentElement) observer.observe(el.parentElement);
+    for (const target of anchorResizeTargets(el)) observer.observe(target);
     holdStop.current = stop;
     setTimeout(() => holdStop.current === stop && stop(), ANCHOR_HOLD_MS);
   }, [shown, fetching]);

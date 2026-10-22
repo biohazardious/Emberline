@@ -141,11 +141,9 @@ export function WorktreeEditor({
               ))}
             </ul>
           )}
-          {failure.reload && reloadWarned && (
-            <p className="small" role="status">
-              {WORKTREE_RELOAD_WARNING}
-            </p>
-          )}
+          <p className="small" role="status">
+            {failure.reload && reloadWarned ? WORKTREE_RELOAD_WARNING : ''}
+          </p>
           {failure.reload && (
             <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void reload()}>
               {reloadWarned ? WORKTREE_RELOAD_DISCARD_LABEL : 'Reload'}
