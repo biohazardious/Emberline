@@ -704,6 +704,18 @@ function TicketDrawer({
   const setViewTab = (view: DrawerView) => setViewParam(view === defaultView ? null : view);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  // The footer's merge failures show here, in the drawer, not in the page banners behind its backdrop.
+  const markDone = async () => {
+    setBusy('done');
+    setError(undefined);
+    try {
+      await onAccept();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(undefined);
+    }
+  };
   const [depError, setDepError] = useState<string>();
   const [confirmStart, setConfirmStart] = useState(armStart > 0);
   useEffect(() => {
@@ -1208,7 +1220,7 @@ function TicketDrawer({
             Delete
           </button>
           {ticket.status !== 'done' && (
-            <button id="drawer-done" className="btn btn-sm" disabled={!!busy} onClick={() => onMove('done')}>
+            <button id="drawer-done" className="btn btn-sm" disabled={!!busy} onClick={() => void markDone()}>
               Mark done ✓
             </button>
           )}

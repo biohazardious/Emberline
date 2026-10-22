@@ -238,7 +238,7 @@ export async function mainMoversFor(
   if (paths.length === 0) return [];
   const key = JSON.stringify([mainWorkspacePath, probe.mainHead, probe.branchHead, ownKey, paths]);
   const hit = moversCache.get(key);
-  if (hit) return hit;
+  if (hit) return [...hit];
   let out: string;
   try {
     out = (
@@ -266,5 +266,5 @@ export async function mainMoversFor(
   }
   const movers = [...keys];
   remember(moversCache, key, movers);
-  return movers;
+  return [...movers];
 }

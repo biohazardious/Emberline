@@ -1560,6 +1560,10 @@ describe('the worktree config check before the merge', () => {
     await nextTurn(run, { summary: 'still mine' });
     await settled(passes, 2);
     await settled(restartedPasses, 1);
+    // Exactly one note says the agent was asked, whichever service decided (the prompt itself may or may not be delivered).
+    const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+    const asked = detail.events.filter((e) => e.type === 'build_gate_failed').map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    expect(asked.filter(Boolean)).toHaveLength(1);
     expect(checkPrompts(run)).toBe(1);
   });
 });

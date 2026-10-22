@@ -229,7 +229,7 @@ export type RequestChangesBody = z.input<typeof RequestChangesBody>;
 /**
  * `run` is the run that got the feedback (the new one for target `new`); `sent` counts the comments
  * included. A 409 for target `same` carries `canStartNew: true` when the run can no longer take a
- * prompt but its ticket can start a new run.
+ * prompt but its ticket can start a new run, and `needsAutonomous: true` when that is a headless agent in a mode that cannot ask (a new run may then be started in Autonomous mode by choice).
  */
 export interface RequestChangesResponse {
   run: Run;
