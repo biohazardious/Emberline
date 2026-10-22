@@ -160,7 +160,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   });
 
   installErrorHandler(app);
-  installSecurityHeaders(app);
+  installSecurityHeaders(app, deps.config.previewPorts);
   await app.register(cookie);
   // Browsers offer `emberline` plus `emberline.key.<key>` (the per-login key, see auth/plugin.ts);
   // only `emberline` is echoed, so the key never comes back in a response.

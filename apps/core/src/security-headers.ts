@@ -1,5 +1,6 @@
 import { base64Length, MATERIALS_MAX_TOTAL_BYTES } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
+import type { CoreConfig } from './config.js';
 import { hostNameOf } from './runs/preview-url.js';
 
 /** Default request body cap; routes that accept uploads raise it per route. */
@@ -15,7 +16,7 @@ export const EDITOR_BODY_LIMIT = 16 * 1024 * 1024;
  * Policy for the web UI. Monaco injects `<style>` elements and runs its workers from blob URLs;
  * the Inter / JetBrains Mono web fonts come from Google Fonts;
  * the demo and artifact iframes are same-origin but sandboxed by their own response CSP.
- * {@link appCsp} adds the host of the container previews to `frame-src`.
+ * {@link appCsp} adds the container previews' host and ports to `frame-src`.
  */
 export const APP_CSP = [
   "default-src 'self'",
@@ -32,37 +33,65 @@ export const APP_CSP = [
   "object-src 'none'",
 ].join('; ');
 
+/** Above this many preview ports, `frame-src` names the preview host on any port instead of each port. */
+export const MAX_LISTED_PREVIEW_PORTS = 100;
+
+/** Every preview port of both ranges, sorted and once each; null when there are more than {@link MAX_LISTED_PREVIEW_PORTS}. */
+export function previewPortList(ports: CoreConfig['previewPorts']): number[] | null {
+  const all = new Set<number>();
+  for (const range of [ports.runner, ports.docker]) {
+    for (let port = range.first; port <= range.last; port++) {
+      all.add(port);
+      if (all.size > MAX_LISTED_PREVIEW_PORTS) return null;
+    }
+  }
+  return [...all].sort((a, b) => a - b);
+}
+
 /**
- * Where the browser opens previews, as a CSP source on any port: `EMBERLINE_PREVIEW_HOST`'s host,
- * else the host the page was requested on (the same rule as `previewUrl`). Null when neither is a
- * plain http(s) host name, so nothing malformed reaches the policy.
+ * Where the browser opens previews, as CSP sources: `EMBERLINE_PREVIEW_HOST`'s host, else the host
+ * the page was requested on (the same rule as `previewUrl`), on each preview port (any port above
+ * {@link MAX_LISTED_PREVIEW_PORTS}). A CSP host source cannot name an IPv6 literal, so that host gets
+ * its scheme (`http:`; the preview panel says so). Empty when neither is a plain http(s) host, so
+ * nothing malformed reaches the policy.
  */
-export function previewFrameSource(hostHeader: string | undefined, override = process.env.EMBERLINE_PREVIEW_HOST): string | null {
+export function previewFrameSources(
+  hostHeader: string | undefined,
+  ports: CoreConfig['previewPorts'],
+  override = process.env.EMBERLINE_PREVIEW_HOST,
+): string[] {
+  const host = previewHost(hostHeader, override);
+  if (!host) return [];
+  if (host.name.startsWith('[')) return [host.protocol];
+  const list = previewPortList(ports);
+  if (!list) return [`${host.protocol}//${host.name}:*`];
+  return list.map((port) => `${host.protocol}//${host.name}:${port}`);
+}
+
+/** The scheme and host name previews open on; null when it is not a plain http(s) host. */
+function previewHost(hostHeader: string | undefined, override: string | undefined): { protocol: string; name: string } | null {
   const base = override?.trim();
   if (base) {
     try {
       const url = new URL(base);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-      return hostSource(url.protocol, hostNameOf(url.hostname));
+      const name = hostNameOf(url.hostname);
+      return name ? { protocol: url.protocol, name } : null;
     } catch {
       return null;
     }
   }
-  return hostSource('http:', hostNameOf(hostHeader));
-}
-
-/** `scheme//name:*`; null for no name or an IPv6 literal, which CSP host sources cannot express. */
-function hostSource(protocol: string, name: string | null): string | null {
-  return name && !name.startsWith('[') ? `${protocol}//${name}:*` : null;
+  const name = hostNameOf(hostHeader);
+  return name ? { protocol: 'http:', name } : null;
 }
 
 /**
- * The web UI's policy for one request: {@link APP_CSP}, with the container previews' host in
- * `frame-src` so Preview & Build can show a preview, which answers on its own port.
+ * The web UI's policy for one request: {@link APP_CSP}, with the container previews' host and ports
+ * in `frame-src` so Preview & Build can show a preview, which answers on its own port.
  */
-export function appCsp(hostHeader: string | undefined): string {
-  const preview = previewFrameSource(hostHeader);
-  return preview ? APP_CSP.replace("frame-src 'self'", `frame-src 'self' ${preview}`) : APP_CSP;
+export function appCsp(hostHeader: string | undefined, ports: CoreConfig['previewPorts']): string {
+  const sources = previewFrameSources(hostHeader, ports);
+  return sources.length > 0 ? APP_CSP.replace("frame-src 'self'", `frame-src 'self' ${sources.join(' ')}`) : APP_CSP;
 }
 
 /**
@@ -73,7 +102,7 @@ export function appCsp(hostHeader: string | undefined): string {
 export const UNTRUSTED_CONTENT_CSP =
   'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock';
 
-export function installSecurityHeaders(app: FastifyInstance): void {
+export function installSecurityHeaders(app: FastifyInstance, ports: CoreConfig['previewPorts']): void {
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'same-origin');
@@ -81,7 +110,7 @@ export function installSecurityHeaders(app: FastifyInstance): void {
       const type = String(reply.getHeader('content-type') ?? '');
       if (type.startsWith('text/html')) {
         // request.host: allow-listed by the auth hook, and the forwarded host behind a trusted proxy.
-        reply.header('content-security-policy', appCsp(request.host));
+        reply.header('content-security-policy', appCsp(request.host, ports));
         reply.header('x-frame-options', 'SAMEORIGIN');
       }
     }

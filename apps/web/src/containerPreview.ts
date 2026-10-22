@@ -95,14 +95,20 @@ export function previewEmptyText(p: PreviewLike, label: string): string {
   }
 }
 
+/** Shown above a preview on an IPv6 address: core's frame policy then allows any http(s) origin. */
+export const IPV6_FRAME_NOTE =
+  "Emberline is open on an IPv6 address, which a browser's frame policy cannot name, so previews can be framed from any address. Open Emberline by its host name to limit that to the preview ports.";
+
 /**
  * Whether the preview can show in a frame: an https page cannot frame a plain-http preview (mixed
- * content), so it opens in a new tab instead.
+ * content), so it opens in a new tab instead. A preview on an IPv6 address is framed with
+ * {@link IPV6_FRAME_NOTE}.
  */
 export function previewFrameMode(pageProtocol: string, url: string): { frame: boolean; note: string | null } {
   if (pageProtocol === 'https:' && url.startsWith('http:')) {
     return { frame: false, note: 'The preview is plain HTTP and this page is HTTPS, so it opens in a new tab.' };
   }
+  if (/^https?:\/\/\[/.test(url)) return { frame: true, note: IPV6_FRAME_NOTE };
   return { frame: true, note: null };
 }
 

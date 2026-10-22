@@ -30,6 +30,7 @@ import {
   CLEANUP_DOWN,
   type ComposePreviewTiming,
   composeDown,
+  composeProjectGone,
   composeServiceStatus,
   runComposePreview,
   settlesWithin,
@@ -66,6 +67,9 @@ type MainPreviewState = z.infer<typeof MainPreviewState>;
 
 /** A start core did not see end (it restarted meanwhile) whose service never came up. */
 const RESTARTED = 'Emberline restarted before the preview was ready; start it again';
+
+/** A stored `running` whose compose project has no container left (an engine reset, or removed outside Emberline). */
+const VANISHED = "the preview's containers are gone (the Docker engine was reset or they were removed); start it again";
 
 /** Why main has no container preview service; the start's 409 says the same. */
 const NO_COMPOSE_SERVICE = 'the approved worktree.yml has no compose preview service, so main has no container preview';
@@ -133,9 +137,10 @@ export class MainPreviews {
 
   /**
    * The status as the engine reports it. A start that core did not see end (it restarted) is
-   * reconciled first, under the project's lock; nothing else changes the stored state.
+   * reconciled first, and a `running` whose containers vanished is released, both under the
+   * project's lock (`held`: the caller holds it already); nothing else changes the stored state.
    */
-  async status(projectId: string, requestHost?: string): Promise<MainPreviewStatus> {
+  async status(projectId: string, requestHost?: string, held = false): Promise<MainPreviewStatus> {
     const project = this.project(projectId);
     if (this.interrupted(projectId)) await this.lock.run(projectId, () => this.reconcileHeld(projectId));
     const service = this.composeService(projectId);
@@ -181,6 +186,12 @@ export class MainPreviews {
     }
     // `starting` without a job here: a restart left it and the engine could not be asked yet.
     if (state.status === 'starting') return { ...base, status: 'failed', error: RESTARTED };
+    if (
+      state.status === 'running' &&
+      (held ? await this.releaseVanishedHeld(projectId) : await this.lock.run(projectId, () => this.releaseVanishedHeld(projectId)))
+    ) {
+      return { ...base, status: 'failed', error: VANISHED, logs: null };
+    }
     const name = state.service ?? service?.compose.service;
     return { ...base, status: 'exited', error: name ? `the "${name}" container is not running` : 'the preview container is not running' };
   }
@@ -192,13 +203,18 @@ export class MainPreviews {
   }
 
   /**
-   * At boot: reconciles every project's start that core did not see end. Each runs under its
-   * project's lock and is idempotent, like the lazy one in {@link status} and {@link refresh}.
+   * At boot and whenever the engine answers again: reconciles every project's start that core did
+   * not see end, and releases every `running` whose containers vanished (an engine reset), which
+   * frees its port. Each runs under its project's lock and is idempotent, like the lazy ones in
+   * {@link status} and {@link refresh}.
    */
   async reconcileInterrupted(): Promise<void> {
     for (const row of this.deps.db.select({ projectId: projectSettings.projectId }).from(projectSettings).all()) {
-      if (!this.interrupted(row.projectId)) continue;
-      await this.lock.run(row.projectId, () => this.reconcileHeld(row.projectId)).catch(() => undefined);
+      if (this.interrupted(row.projectId)) {
+        await this.lock.run(row.projectId, () => this.reconcileHeld(row.projectId)).catch(() => undefined);
+      } else if (this.read(row.projectId)?.status === 'running') {
+        await this.lock.run(row.projectId, () => this.releaseVanishedHeld(row.projectId)).catch(() => undefined);
+      }
     }
   }
 
@@ -273,7 +289,8 @@ export class MainPreviews {
         await this.reconcileHeld(projectId);
         const state = this.read(projectId);
         if (state?.status !== 'running' || !state.port || this.jobs.has(projectId)) return null;
-        if ((await this.status(projectId)).status !== 'running') return null;
+        // Under the lock already (KeyedMutex is not re-entrant).
+        if ((await this.status(projectId, undefined, true)).status !== 'running') return null;
         const project = this.project(projectId);
         const service = this.composeService(projectId);
         if (!service || !existsSync(path.join(project.path, service.compose.file))) {
@@ -489,6 +506,25 @@ export class MainPreviews {
     const down = await composeDown(project, env);
     if (!down.ok) this.deps.log?.()?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down after a restart failed');
     this.write(projectId, { ...state, status: 'failed', error: RESTARTED, logs: null });
+  }
+
+  /**
+   * A stored `running` with no container left (`ps --all` lists none): taken down (the networks a
+   * reset left) and `failed`, which frees its port. Exited containers, a start or refresh still
+   * going, or an engine that does not answer change nothing. Callers hold the project's lock.
+   */
+  private async releaseVanishedHeld(projectId: string): Promise<boolean> {
+    const state = this.read(projectId);
+    if (state?.status !== 'running' || this.jobs.has(projectId)) return false;
+    await this.deps.docker.ready();
+    const env = this.deps.docker.cliEnv();
+    if (!env.DOCKER_HOST) return false;
+    const project = mainPreviewComposeProjectName(projectId);
+    if ((await composeProjectGone(project, env)) !== true) return false;
+    const down = await composeDown(project, env);
+    if (!down.ok) this.deps.log?.()?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down after its containers vanished failed');
+    this.write(projectId, { ...state, status: 'failed', error: VANISHED, logs: null });
+    return true;
   }
 
   private async unavailableReason(mainPath: string, service: WorktreeComposeService | null): Promise<string | null> {

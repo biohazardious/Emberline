@@ -2,6 +2,7 @@ import type { BrowserUrlResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   FRAMING_UNKNOWN_NOTE,
+  IPV6_FRAME_NOTE,
   LIVE_BROWSER_FOLLOWING_NOTE,
   OPEN_IN_NEW_TAB,
   type PreviewLike,
@@ -165,6 +166,14 @@ describe('preview frame', () => {
 
   it('frames an https preview anywhere', () => {
     expect(previewFrameMode('https:', 'https://previews.lan:4325')).toEqual({ frame: true, note: null });
+  });
+
+  it('frames a preview on an IPv6 address with a note (the frame policy cannot name it, so it allows any address)', () => {
+    expect(previewFrameMode('http:', 'http://[fd00::5]:4325')).toEqual({ frame: true, note: IPV6_FRAME_NOTE });
+    expect(previewFrameMode('https:', 'https://[fd00::5]:4325')).toEqual({ frame: true, note: IPV6_FRAME_NOTE });
+    expect(IPV6_FRAME_NOTE).toBe(
+      "Emberline is open on an IPv6 address, which a browser's frame policy cannot name, so previews can be framed from any address. Open Emberline by its host name to limit that to the preview ports.",
+    );
   });
 });
 

@@ -10,6 +10,7 @@ import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
 import { SecretsKeyError } from './secrets/box.js';
 import { startSecrets } from './secrets/startup.js';
+import { previewPortList } from './security-headers.js';
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { TicketService } from './tickets/service.js';
@@ -75,6 +76,12 @@ if (previewPortRangesOverlap(config.previewPorts)) {
   app.log.warn(
     { runner: config.previewPorts.runner, docker: config.previewPorts.docker },
     'EMBERLINE_PREVIEW_PORTS_RUNNER and EMBERLINE_PREVIEW_PORTS_DOCKER overlap: the runner and the docker engine cannot both publish them',
+  );
+}
+if (previewPortList(config.previewPorts) === null) {
+  app.log.warn(
+    { runner: config.previewPorts.runner, docker: config.previewPorts.docker },
+    'More than 100 preview ports are configured, so the frame policy allows every port on the preview host.',
   );
 }
 logDocker = (status) => {

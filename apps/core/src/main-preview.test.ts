@@ -463,15 +463,55 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     return restarted.mainPreviews.status(projectId);
   };
 
-  it('a running preview reads running while its container runs, exited once it is gone; its port stays reserved until stopped', async () => {
-    await start('tcp://docker:2376', { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4326 } } });
+  const VANISHED = "the preview's containers are gone (the Docker engine was reset or they were removed); start it again";
+  const twoDockerPorts = { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4326 } } };
+
+  it('a running preview whose containers vanished is taken down and failed, which frees its port', async () => {
+    await start('tcp://docker:2376', twoDockerPorts);
     const p = await createProject();
     const port = (await runningMain(p.id)).port!;
     expect(await restartedStatus(p.id)).toMatchObject({ status: 'running', port });
-    engine.projects.delete(mainPreviewComposeProjectName(p.id));
+    const name = mainPreviewComposeProjectName(p.id);
+    engine.projects.delete(name);
+    expect(await restartedStatus(p.id)).toMatchObject({ status: 'failed', error: VANISHED });
+    expect(stored(p.id)?.status).toBe('failed');
+    // Taken down once (the networks an engine reset left behind).
+    expect(engine.downs()).toEqual([downArgs(name, false)]);
+    // Both ports of the range are free for run previews.
+    const a = await t.runs.enqueue({ projectId: p.id, prompt: 'a' });
+    const b = await t.runs.enqueue({ projectId: p.id, prompt: 'b' });
+    expect([(await runningRunPreview(a)).port, (await runningRunPreview(b)).port].sort()).toEqual([4325, 4326]);
+  });
+
+  it('a running preview whose container exited reads exited and keeps its port', async () => {
+    await start('tcp://docker:2376', { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } } });
+    const p = await createProject();
+    const port = (await runningMain(p.id)).port!;
+    engine.add(mainPreviewComposeProjectName(p.id), { web: 'exited' });
     expect(await restartedStatus(p.id)).toMatchObject({ status: 'exited', port, error: 'the "web" container is not running' });
+    expect(stored(p.id)?.status).toBe('running');
+    expect(engine.downs()).toEqual([]);
     const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
-    expect((await runningRunPreview(run)).port).not.toBe(port);
+    const refused = await api('POST', `/api/runs/${run.id}/preview/start`);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().message).toContain('no free preview port');
+  });
+
+  it('a running preview while the engine does not answer reads exited and keeps its port', async () => {
+    await start('tcp://docker:2376', twoDockerPorts);
+    const p = await createProject();
+    const port = (await runningMain(p.id)).port!;
+    engine.available = false;
+    const docker = new DockerEngine(t.config.dockerHost, { cwd: t.config.workspacesDir });
+    await docker.probe();
+    const restarted = new RunService(t.db, t.config, t.ptyd, docker);
+    try {
+      expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'exited', port, error: 'the Docker engine is not reachable' });
+      expect(stored(p.id)?.status).toBe('running');
+      expect(engine.downs()).toEqual([]);
+    } finally {
+      restarted.dispose();
+    }
   });
 
   const fastTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20, stopSettleMs: 300, cancelRetryMs: 50 };
@@ -561,12 +601,40 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     }
   });
 
+  it('an engine reset under a running preview is caught when the engine answers again: failed, port free', async () => {
+    await start();
+    const p = await createProject();
+    await runningMain(p.id);
+    const docker = new DockerEngine(t.config.dockerHost, { cwd: t.config.workspacesDir });
+    const restarted = new RunService(t.db, t.config, t.ptyd, docker);
+    restarted.composePreviewTiming = fastTiming;
+    try {
+      restarted.startReconciler();
+      // Settle the boot pass: the preview runs, so it changes nothing.
+      await restarted.mainPreviews.reconcileInterrupted();
+      expect(stored(p.id)?.status).toBe('running');
+      engine.available = false;
+      await docker.probe();
+      // The reset: the engine comes back without the preview's containers.
+      engine.projects.delete(mainPreviewComposeProjectName(p.id));
+      engine.available = true;
+      await docker.probe();
+      await expect.poll(() => stored(p.id)?.status, { timeout: 5_000 }).toBe('failed');
+      expect(stored(p.id)).toMatchObject({ error: VANISHED });
+      expect(engine.downs()).toEqual([downArgs(mainPreviewComposeProjectName(p.id), false)]);
+      expect(t.runs.mainPreviews.reservedPorts().size).toBe(0);
+    } finally {
+      restarted.dispose();
+    }
+  });
+
   it("a stored preview whose service is not known any more says so without printing 'undefined'", async () => {
     await start();
     const p = await createProject('Bare', { yml: null });
     writeProjectSettings(t.db, p.id, { mainPreview: { status: 'running', port: 4330, startedAt: new Date().toISOString() } });
     const status = await mainPreview(p.id);
-    expect(status).toMatchObject({ status: 'exited', error: 'the preview container is not running' });
+    // No container at all: the vanished case.
+    expect(status).toMatchObject({ status: 'failed', error: VANISHED });
     expect(status.error).not.toContain('undefined');
   });
 });

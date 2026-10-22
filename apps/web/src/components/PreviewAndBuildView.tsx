@@ -296,6 +296,7 @@ function ContainerPreview({
         </div>
       ) : status.status === 'running' && status.url ? (
         <>
+          {frameMode?.note && <p className="muted small container-preview-note">{frameMode.note}</p>}
           {framing === 'unknown' && <p className="muted small container-preview-note">{FRAMING_UNKNOWN_NOTE}</p>}
           <iframe
             key={nonce}

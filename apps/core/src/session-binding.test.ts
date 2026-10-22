@@ -417,6 +417,7 @@ describe('container addresses', () => {
         return a ?? [];
       },
       refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
     });
     await addresses.refresh();
     expect(await addresses.has('172.18.0.3')).toBe(true);
@@ -433,6 +434,69 @@ describe('container addresses', () => {
     await addresses.refresh();
     expect(await addresses.has('172.18.0.5')).toBe(true);
     addresses.stop();
+  });
+
+  /** A lookup that answers from `answers` (an Error is thrown, an unknown host resolves to nothing). */
+  const lookupFrom = (answers: Record<string, string[] | Error>) => async (host: string) => {
+    const a = answers[host];
+    if (a instanceof Error) throw a;
+    return a ?? [];
+  };
+
+  it('drops a host that no longer resolves (ENOTFOUND) and keeps one on a temporary failure', async () => {
+    const answers: Record<string, string[] | Error> = { runner: ['172.18.0.5'], docker: ['172.18.0.9'] };
+    const c = new ContainerAddresses(['runner', 'docker'], {
+      lookup: lookupFrom(answers),
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+    });
+    await c.refresh();
+    expect(await c.has('172.18.0.9')).toBe(true);
+    answers.docker = Object.assign(new Error('getaddrinfo ENOTFOUND docker'), { code: 'ENOTFOUND' });
+    answers.runner = Object.assign(new Error('getaddrinfo EAI_AGAIN runner'), { code: 'EAI_AGAIN' });
+    await c.refresh();
+    expect(await c.has('172.18.0.9')).toBe(false);
+    expect(await c.has('172.18.0.5')).toBe(true);
+    c.stop();
+  });
+
+  it("accepts only answers on core's own networks (a LAN host named docker is ignored)", async () => {
+    const c = new ContainerAddresses(['runner', 'docker'], {
+      lookup: lookupFrom({ docker: ['192.168.1.20'], runner: ['172.18.0.3', '8.8.8.8'] }),
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+    });
+    await c.refresh();
+    expect(await c.has('192.168.1.20')).toBe(false);
+    expect(await c.has('8.8.8.8')).toBe(false);
+    expect(await c.has('172.18.0.3')).toBe(true);
+    c.stop();
+  });
+
+  it('accepts loopback answers', async () => {
+    const c = new ContainerAddresses(['localhost'], {
+      lookup: lookupFrom({ localhost: ['127.0.0.1', '::1'] }),
+      refreshMs: 0,
+      localNetworks: () => [],
+    });
+    await c.refresh();
+    expect(await c.has('127.0.0.1')).toBe(true);
+    expect(await c.has('::ffff:127.0.0.1')).toBe(true);
+    expect(await c.has('::1')).toBe(true);
+    c.stop();
+  });
+
+  it('accepts a private IPv6 answer on an IPv6 network of core and nothing public', async () => {
+    const c = new ContainerAddresses(['runner'], {
+      lookup: lookupFrom({ runner: ['fd00:dead::5', '2001:db8::5', 'fd99::1'] }),
+      refreshMs: 0,
+      localNetworks: () => ['fd00:dead::/64', '2001:db8::/64'],
+    });
+    await c.refresh();
+    expect(await c.has('fd00:dead::5')).toBe(true);
+    expect(await c.has('2001:db8::5')).toBe(false);
+    expect(await c.has('fd99::1')).toBe(false);
+    c.stop();
   });
 
   it('defaults to the compose service names and can be set', () => {

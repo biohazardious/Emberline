@@ -149,6 +149,13 @@ export async function composeServiceStatus(
   return composeServiceState(parseComposePs(ps.result!.stdout), target.service);
 }
 
+/** Whether the compose project has no container at all (`ps --all` lists none); null when compose could not answer. */
+export async function composeProjectGone(project: string, env: Record<string, string>): Promise<boolean | null> {
+  const ps = await run(composePsArgs(project), NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
+  if (!ps.ok) return null;
+  return parseComposePs(ps.result!.stdout).length === 0;
+}
+
 /**
  * `down --remove-orphans` (stop: volumes and images stay), or with `-v` and `--rmi local` (cleanup).
  * Never throws; `exitCode` is null when compose did not exit by itself (timeout, could not run).

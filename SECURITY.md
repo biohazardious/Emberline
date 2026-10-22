@@ -59,6 +59,8 @@ Since 0.3.3 Emberline does two things against a replayed cookie:
 
 **Full isolation (opt-in).** Set `EMBERLINE_PREVIEW_HOST` (in `.env`) to a host name other than the one you open Emberline by. For example, open Emberline as `http://emberline.lan:7420` and set `EMBERLINE_PREVIEW_HOST=http://previews.lan`, with both names pointing at the same machine. Previews then live on another host name and never receive Emberline's cookie.
 
+Previews may be framed only from the configured preview ports on the preview host; when Emberline is opened on an IPv6 address, the policy allows any http(s) origin (the preview iframe stays sandboxed).
+
 ### Recommended setup
 
 - Keep the default `127.0.0.1` bind and reach Emberline through Tailscale, WireGuard or a TLS reverse proxy (set `EMBERLINE_TRUST_PROXY=true` behind a proxy).

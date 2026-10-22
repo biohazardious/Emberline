@@ -639,7 +639,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.cancelOrphanedSetups(this.failOrphanedSpawns());
     this.timer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
     this.timer.unref();
-    // Main previews whose start a restart cut short: running if the engine has them, else down and failed.
+    // Main previews whose start a restart cut short: running if the engine has them, else down and failed;
+    // and those stored running whose containers vanished (an engine reset): down and failed, port free.
     // A pass the engine was down for is left alone, so it runs again whenever the engine turns available.
     void this.mainPreviews.reconcileInterrupted().catch(() => undefined);
     this.offDockerChange ??= this.docker.addChangeListener((status) => {

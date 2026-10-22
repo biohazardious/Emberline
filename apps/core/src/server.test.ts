@@ -4,7 +4,7 @@ import path from 'node:path';
 import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { loadConfig, parseAllowedHosts } from './config.js';
+import { type CoreConfig, DEFAULT_PREVIEW_PORTS, loadConfig, parseAllowedHosts } from './config.js';
 import {
   authHeaders,
   CSRF,
@@ -15,7 +15,7 @@ import {
   type TestApp,
   wsProtocols,
 } from './test-utils.js';
-import { appCsp } from './security-headers.js';
+import { appCsp, previewPortList } from './security-headers.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -160,7 +160,11 @@ describe('hardening', () => {
     }
   });
 
-  it('lets the web UI frame previews on its own host only, on any port', async () => {
+  /** `http://<h>:<port>` for every port from `from` to `to`, space-separated. */
+  const portSources = (h: string, from = 4300, to = 4349) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `http://${h}:${from + i}`).join(' ');
+
+  it('lets the web UI frame previews on its own host only, only on the preview ports', async () => {
     const webDir = mkdtempSync(path.join(tmpdir(), 'web-'));
     writeFileSync(path.join(webDir, 'index.html'), '<h1>ember</h1>');
     const saved = process.env.EMBERLINE_PREVIEW_HOST;
@@ -171,17 +175,45 @@ describe('hardening', () => {
         const page = await t!.app.inject({ url: '/', headers: { host } });
         return /frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1];
       };
-      expect(await frameSrc('192.168.1.16:7420')).toBe("'self' http://192.168.1.16:*");
-      expect(await frameSrc('localhost:7497')).toBe("'self' http://localhost:*");
-      // CSP host sources cannot name an IPv6 literal: no preview source then.
-      expect(await frameSrc('[::1]:7420')).toBe("'self'");
+      expect(await frameSrc('192.168.1.16:7420')).toBe(`'self' ${portSources('192.168.1.16')}`);
+      expect(await frameSrc('localhost:7497')).toBe(`'self' ${portSources('localhost')}`);
+      // CSP host sources cannot name an IPv6 literal: the scheme source instead (the panel says so).
+      expect(await frameSrc('[::1]:7420')).toBe("'self' http:");
       // A malformed Host never reaches the policy.
-      expect(appCsp("evil; script-src 'unsafe-inline'")).toContain("frame-src 'self';");
-      expect(appCsp(undefined)).toContain("frame-src 'self';");
+      expect(appCsp("evil; script-src 'unsafe-inline'", DEFAULT_PREVIEW_PORTS)).toContain("frame-src 'self';");
+      expect(appCsp(undefined, DEFAULT_PREVIEW_PORTS)).toContain("frame-src 'self';");
       process.env.EMBERLINE_PREVIEW_HOST = 'http://previews.lan/';
-      expect(await frameSrc('192.168.1.16:7420')).toBe("'self' http://previews.lan:*");
+      expect(await frameSrc('192.168.1.16:7420')).toBe(`'self' ${portSources('previews.lan')}`);
       process.env.EMBERLINE_PREVIEW_HOST = 'javascript:alert(1)';
       expect(await frameSrc('192.168.1.16:7420')).toBe("'self'");
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
+      else process.env.EMBERLINE_PREVIEW_HOST = saved;
+      rmSync(webDir, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the configured preview ranges once each, and falls back to any port above 100 ports', async () => {
+    const webDir = mkdtempSync(path.join(tmpdir(), 'web-'));
+    writeFileSync(path.join(webDir, 'index.html'), '<h1>ember</h1>');
+    const saved = process.env.EMBERLINE_PREVIEW_HOST;
+    try {
+      delete process.env.EMBERLINE_PREVIEW_HOST;
+      const frameSrc = async (previewPorts: CoreConfig['previewPorts']) => {
+        t = await createTestApp({ webDir, previewPorts, allowedHosts: ['h'] });
+        const page = await t.app.inject({ url: '/', headers: { host: 'h:7420' } });
+        await t.close();
+        t = undefined;
+        return /frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1];
+      };
+      expect(await frameSrc({ runner: { first: 4300, last: 4301 }, docker: { first: 4325, last: 4325 } })).toBe(
+        "'self' http://h:4300 http://h:4301 http://h:4325",
+      );
+      expect(await frameSrc({ runner: { first: 4300, last: 5300 }, docker: { first: 5400, last: 5400 } })).toBe("'self' http://h:*");
+      // Exactly 100 ports are still listed; overlapping ranges count each port once.
+      expect(previewPortList({ runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4399 } })).toHaveLength(100);
+      expect(previewPortList({ runner: { first: 4300, last: 4302 }, docker: { first: 4301, last: 4303 } })).toEqual([4300, 4301, 4302, 4303]);
+      expect(previewPortList({ runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4400 } })).toBeNull();
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
@@ -198,7 +230,7 @@ describe('hardening', () => {
       t = await createTestApp({ webDir, trustProxy: true, allowedHosts: ['emberline.lan'] });
       const page = await t.app.inject({ url: '/', headers: { host: '127.0.0.1:7420', 'x-forwarded-host': 'emberline.lan' } });
       expect(/frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1]).toBe(
-        "'self' http://emberline.lan:*",
+        `'self' ${portSources('emberline.lan')}`,
       );
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
