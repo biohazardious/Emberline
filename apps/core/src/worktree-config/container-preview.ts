@@ -1,20 +1,31 @@
 /**
  * Project settings → Container preview: whether a project can switch its preview to a service of
- * HEAD's compose file (spec §2), and (Task 3) the worktree.yml it would save.
+ * HEAD's compose file (spec §2), the worktree.yml it would save, its diff, and the switch.
  */
 import {
+  CONTAINER_PREVIEW_CODES,
+  type ContainerPreviewChoice,
+  type ContainerPreviewDiffResponse,
   type ContainerPreviewOptionsResponse,
   DOCKER_ENGINE_NOT_ANSWERED_TEXT,
   DOCKER_ENGINE_UNREACHABLE_HINT,
   type DockerEngineStatus,
   dockerEngineOffText,
   isComposeService,
+  MAX_WORKTREE_YML_BYTES,
+  type UseContainerPreviewBody,
+  WORKTREE_CONFIG_CODES,
+  type WorktreeConfigStatusResponse,
   withHint,
 } from '@emberline/protocol';
+import { isMap, isSeq, parseDocument, type YAMLSeq } from 'yaml';
 import type { Db } from '../db/index.js';
 import type { ComposeConfigReader } from '../docker/compose-config.js';
 import { findHeadComposeFile } from '../docker/compose-config.js';
 import type { DockerEngine } from '../docker/engine.js';
+import { conflict, HttpError } from '../errors.js';
+import { unifiedDiff } from './diff.js';
+import { saveWorktreeConfig, worktreeYmlErrors } from './edit.js';
 import { approvedPreviewService } from './load.js';
 import { worktreeConfigStatus } from './trust.js';
 
@@ -75,4 +86,131 @@ export async function containerPreviewOptions(
   return read.ok
     ? { available: true, reason: null, file, services: read.services, commandPreview }
     : { available: false, reason: read.reason, file, services: [], commandPreview };
+}
+
+export const CONTAINER_PREVIEW_CHANGED_TEXT =
+  '.emberline/worktree.yml changed on main since the preview was shown. Reload to see the current version.';
+const ENTRY = 'container';
+
+/** `container`, else `container-2`, `container-3`, … (the first name not taken). */
+export function containerEntryName(taken: ReadonlySet<string>): string {
+  if (!taken.has(ENTRY)) return ENTRY;
+  for (let n = 2; ; n++) if (!taken.has(`${ENTRY}-${n}`)) return `${ENTRY}-${n}`;
+}
+
+/**
+ * The approved worktree.yml with the container preview: version 2, the old preview service kept with
+ * `preview: false`, a new compose entry with `preview: true` appended. Comments, order and the other
+ * scalars stay as they were. `approved` null or blank: a new file with only the entry.
+ */
+export function withContainerPreview(
+  approved: string | null,
+  ref: { file: string; service: string; port: number },
+): string {
+  const doc = parseDocument(approved?.trim() ? approved : 'version: 1\n');
+  doc.set('version', 2);
+  let services = doc.get('services', true);
+  if (!isSeq(services)) {
+    services = doc.createNode([]);
+    doc.set('services', services);
+  }
+  const seq = services as YAMLSeq;
+  seq.flow = false;
+  const taken = new Set<string>();
+  for (const item of seq.items) {
+    if (!isMap(item)) continue;
+    const name = item.get('name');
+    if (typeof name === 'string') taken.add(name);
+    if (item.get('preview') === true) item.set('preview', false);
+  }
+  seq.add(
+    doc.createNode({
+      name: containerEntryName(taken),
+      compose: { file: ref.file, service: ref.service, port: ref.port },
+      preview: true,
+    }),
+  );
+  // lineWidth 0: a long command is never folded onto a second line. A list item at column 0 can only
+  // be a top-level key's unindented list (the root is a map): keep that style for every list.
+  return doc.toString({ lineWidth: 0, indentSeq: !/^-(?:[ \t]|$)/m.test(approved ?? '') });
+}
+
+/** The checks the diff and the save share; throws the 409/400 the person reads. */
+async function plan(
+  deps: ContainerPreviewDeps,
+  project: { id: string; path: string },
+  choice: ContainerPreviewChoice,
+) {
+  const options = await containerPreviewOptions(deps, project);
+  if (!options.available) {
+    throw conflict(
+      options.reason ?? 'The container preview cannot be set up now.',
+      CONTAINER_PREVIEW_CODES.unavailable,
+    );
+  }
+  if (options.file !== choice.file) {
+    throw conflict(
+      `HEAD's compose file is now ${options.file}. Reload to see it.`,
+      CONTAINER_PREVIEW_CODES.unavailable,
+    );
+  }
+  if (!options.services.some((s) => s.name === choice.service)) {
+    throw new HttpError(
+      400,
+      CONTAINER_PREVIEW_CODES.unknownService,
+      `"${choice.service}" is not a service in ${choice.file}.`,
+    );
+  }
+  const status = await worktreeConfigStatus(deps.db, project);
+  const approved = status.approved?.content ?? null;
+  const content = withContainerPreview(approved, choice);
+  const errors = worktreeYmlErrors(content);
+  if (new TextEncoder().encode(content).length > MAX_WORKTREE_YML_BYTES) {
+    errors.push(`content is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`);
+  }
+  if (errors.length > 0) {
+    throw new HttpError(
+      400,
+      WORKTREE_CONFIG_CODES.invalid,
+      'worktree.yml with the container preview would not be valid',
+      { errors },
+    );
+  }
+  // Not changed (checked by the options): HEAD's file is the approved one, or neither exists.
+  return { approved, content, baseSha256: status.head?.sha256 ?? null };
+}
+
+/** The worktree.yml the switch would save, its diff from the approved one and the base a save starts from. */
+export async function containerPreviewDiff(
+  deps: ContainerPreviewDeps,
+  project: { id: string; path: string },
+  choice: ContainerPreviewChoice,
+): Promise<ContainerPreviewDiffResponse> {
+  const { approved, content, baseSha256 } = await plan(deps, project, choice);
+  return {
+    content,
+    diff: unifiedDiff(approved ?? '', content, { before: 'approved', after: 'with the container preview' }),
+    baseSha256,
+  };
+}
+
+/** Spec §2: validate → commit on main `chore: preview the <service> container from <file>` → approve (edit.ts, under the main-workspace lock). */
+export async function applyContainerPreview(
+  deps: ContainerPreviewDeps,
+  project: { id: string; path: string },
+  body: UseContainerPreviewBody,
+): Promise<WorktreeConfigStatusResponse> {
+  const { content, baseSha256 } = await plan(deps, project, body);
+  if (baseSha256 !== body.baseSha256)
+    throw conflict(CONTAINER_PREVIEW_CHANGED_TEXT, WORKTREE_CONFIG_CODES.changed);
+  // The options refused unless HEAD's file is the approved one, so HEAD's sha256 is the approval's (or both null).
+  return saveWorktreeConfig(
+    deps.db,
+    project,
+    { content, baseSha256: body.baseSha256 },
+    {
+      message: `chore: preview the ${body.service} container from ${body.file}`,
+      approvedSha256: body.baseSha256,
+    },
+  );
 }

@@ -1070,4 +1070,15 @@ describe('editing worktree.yml from Project settings', () => {
     expect(again.json()).toMatchObject({ changed: false, head: { content: setupYml('echo again') } });
     expect(existsSync(path.join(project.path, '.emberline', 'new-tickets.json'))).toBe(true);
   });
+
+  it('a save that names the approval it started from refuses when the approval changed', async () => {
+    const project = await createProject('version: 1\n');
+    await approveHead(project.id);
+    const head = (await status(project.id)).head!.sha256;
+    const { saveWorktreeConfig } = await import('./worktree-config/edit.js');
+    await expect(
+      saveWorktreeConfig(t.db, project, { content: NEXT, baseSha256: head }, { approvedSha256: 'f'.repeat(64), message: 'chore: x' }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'worktree_config_changed' });
+    expect(gitIn(project)('log', '-1', '--format=%s')).toBe('init');
+  });
 });

@@ -379,3 +379,102 @@ describe('GET /api/projects/:id/container-preview', () => {
     expect((await api('GET', '/api/projects/nope/container-preview')).statusCode).toBe(404);
   });
 });
+
+describe('switching the preview to the container', () => {
+  const diff = (id: string, body: object) => api('POST', `/api/projects/${id}/container-preview/diff`, body);
+  const use = (id: string, body: object) => api('POST', `/api/projects/${id}/container-preview`, body);
+  const CHOICE = { file: 'compose.yaml', service: 'web', port: 8080 };
+
+  it('the diff shows the change from the approved content and the base to save from', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const res = await diff(p.id, CHOICE);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.diff).toContain('-version: 1');
+    expect(body.diff).toContain('+version: 2');
+    expect(body.diff).toContain('+    preview: false');
+    expect(body.diff).toContain('+  - name: container');
+    const status = (
+      await api('GET', `/api/projects/${p.id}/worktree-config`)
+    ).json() as WorktreeConfigStatusResponse;
+    expect(body.baseSha256).toBe(status.head!.sha256);
+  });
+
+  it('saves: one commit on main with the spec message and only worktree.yml, approved; the box goes away', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const { content, baseSha256 } = (await diff(p.id, CHOICE)).json();
+    const res = await use(p.id, { ...CHOICE, baseSha256 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      changed: false,
+      approved: { content, approvedBy: 'person' },
+      head: { content },
+    });
+    expect(p.git('log', '-1', '--format=%s')).toBe('chore: preview the web container from compose.yaml');
+    expect(p.git('show', '--name-only', '--format=', 'HEAD')).toBe(YML);
+    expect(await options(p.id)).toMatchObject({
+      file: null,
+      reason: ALREADY_CONTAINER_PREVIEW_TEXT,
+      commandPreview: false,
+    });
+  });
+
+  it('creates worktree.yml for a project without one', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE });
+    const { baseSha256 } = (await diff(p.id, CHOICE)).json();
+    expect(baseSha256).toBeNull();
+    expect((await use(p.id, { ...CHOICE, baseSha256 })).statusCode).toBe(200);
+    expect(p.git('show', `HEAD:${YML}`)).toContain('name: container');
+  });
+
+  it('400 for a service that is not in the file; nothing committed', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const count = p.git('rev-list', '--count', 'HEAD');
+    const res = await use(p.id, { ...CHOICE, service: 'api', baseSha256: null });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: 'container_preview_unknown_service',
+      message: '"api" is not a service in compose.yaml.',
+    });
+    expect(p.git('rev-list', '--count', 'HEAD')).toBe(count);
+  });
+
+  it('POST refuses while HEAD differs from the approval (Review Focus 1)', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const { baseSha256 } = (await diff(p.id, CHOICE)).json();
+    writeFileSync(path.join(p.path, YML), `${V1}teardown:\n  - "true"\n`);
+    commitAll(p, 'agent: change worktree.yml');
+    const res = await use(p.id, { ...CHOICE, baseSha256 });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'container_preview_unavailable',
+      message: WORKTREE_YML_NOT_APPROVED_TEXT,
+    });
+    expect(p.git('log', '-1', '--format=%s')).toBe('agent: change worktree.yml');
+  });
+
+  it('409 worktree_config_changed when the base is not the one the diff gave', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const res = await use(p.id, { ...CHOICE, baseSha256: 'f'.repeat(64) });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('worktree_config_changed');
+  });
+
+  it('409 worktree_config_dirty and main_workspace_detached come through from the save', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const { baseSha256 } = (await diff(p.id, CHOICE)).json();
+    writeFileSync(path.join(p.path, YML), `${V1}# mine\n`);
+    expect((await use(p.id, { ...CHOICE, baseSha256 })).json().error).toBe('worktree_config_dirty');
+    p.git('checkout', '-q', '--', YML);
+    p.git('checkout', '-q', '--detach');
+    expect((await use(p.id, { ...CHOICE, baseSha256 })).json().error).toBe('main_workspace_detached');
+  });
+
+  it('409 container_preview_unavailable when the engine went away', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const { baseSha256 } = (await diff(p.id, CHOICE)).json();
+    engine.up = false;
+    await t.runs.docker.probe();
+    expect((await use(p.id, { ...CHOICE, baseSha256 })).json().error).toBe('container_preview_unavailable');
+  });
+});

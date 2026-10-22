@@ -1,5 +1,11 @@
 /** Project settings → Container preview (worktree-config/container-preview.ts). */
-import type { ContainerPreviewOptionsResponse } from '@emberline/protocol';
+import {
+  ContainerPreviewChoice,
+  type ContainerPreviewDiffResponse,
+  type ContainerPreviewOptionsResponse,
+  UseContainerPreviewBody,
+  type WorktreeConfigStatusResponse,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { projects } from '../db/schema.js';
@@ -7,7 +13,11 @@ import { ComposeConfigReader } from '../docker/compose-config.js';
 import { notFound } from '../errors.js';
 import { assertNotCloning } from '../factory/project-import.js';
 import type { CoreDeps } from '../server.js';
-import { containerPreviewOptions } from '../worktree-config/container-preview.js';
+import {
+  applyContainerPreview,
+  containerPreviewDiff,
+  containerPreviewOptions,
+} from '../worktree-config/container-preview.js';
 
 export function registerContainerPreviewRoutes(app: FastifyInstance, { db, ptyd, runs }: CoreDeps): void {
   const deps = { db, docker: runs.docker, reader: new ComposeConfigReader() };
@@ -24,6 +34,28 @@ export function registerContainerPreviewRoutes(app: FastifyInstance, { db, ptyd,
       const project = projectOr404(request.params.id);
       await assertNotCloning(ptyd, project.id);
       return containerPreviewOptions(deps, project);
+    },
+  );
+
+  /** The worktree.yml the switch would save and its diff from the approved one. Nothing is written. */
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/container-preview/diff',
+    async (request): Promise<ContainerPreviewDiffResponse> => {
+      const project = projectOr404(request.params.id);
+      const body = ContainerPreviewChoice.parse(request.body ?? {});
+      await assertNotCloning(ptyd, project.id);
+      return containerPreviewDiff(deps, project, body);
+    },
+  );
+
+  /** Switches the preview to the container: commits worktree.yml on main and approves it (0.4.0 save path). */
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/container-preview',
+    async (request): Promise<WorktreeConfigStatusResponse> => {
+      const project = projectOr404(request.params.id);
+      const body = UseContainerPreviewBody.parse(request.body ?? {});
+      await assertNotCloning(ptyd, project.id);
+      return applyContainerPreview(deps, project, body);
     },
   );
 }
