@@ -4,9 +4,18 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-23
+
+A fix for held tickets whose merge failed for another reason than conflicts.
+
 ### Fixed
 
 - A merge that failed for another reason than conflicts (for example a file in the main workspace that the runner cannot write) said "The branch merges cleanly into main now" and offered **Merge now**, which failed the same way. The held ticket now names git's reason and offers **Try the merge again**; when the reason is "Permission denied" it says to give the file back to the runner's user (uid 1000). The run's event list also shows why a merge failed.
+
+### Upgrade notes
+
+- The compose file is unchanged. Only core (with the web app) has changes of its own, but updating with the published images (`docker compose pull && docker compose up -d`) also replaces the runner container, which stops running agents, so update when they are idle. From source, `make upgrade-core` updates core alone.
+- Nothing else to do: no migration, and existing settings keep working.
 
 ## [0.5.1] - 2026-10-22
 
@@ -447,7 +456,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/biohazardious/emberline/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/biohazardious/emberline/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/biohazardious/emberline/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/biohazardious/emberline/compare/v0.3.6...v0.4.0
