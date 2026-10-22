@@ -26,6 +26,7 @@ import {
   type WorkspaceFolder,
 } from '@emberline/protocol';
 import type { GateChoice } from '../../projectSettings';
+import { parseReferenceUrls, type WizardMaterial } from './materials';
 
 export type WizardSource = 'preset' | 'blank' | 'import_url' | 'import_folder';
 export type StepId = 'start' | 'type' | 'repo' | 'import' | 'stack' | 'factory' | 'summary';
@@ -45,6 +46,14 @@ export interface WizardState {
   presetId: string | null;
   vision: string;
   referenceDocs: string;
+  /** Reference files in memory; never in the draft. */
+  materials: WizardMaterial[];
+  /** Links, one per line with an optional note (kept in the draft). */
+  referenceUrlsText: string;
+  /** Core's refusal of a file (e.g. a type mismatch), shown next to the area. */
+  materialsError: string | null;
+  /** File names from a restored draft; the area asks to add them again. */
+  materialsNotKept: string[];
   choices: ProjectChoices;
   /** Dimensions the person changed; type and preset changes keep them. */
   dirty: StackDimensionId[];
@@ -61,7 +70,7 @@ export interface WizardState {
   approveWorktreeYml: boolean;
 }
 
-type TextField = 'name' | 'vision' | 'referenceDocs' | 'defaultBranch' | 'versionPolicy' | 'repoUrl' | 'folder';
+type TextField = 'name' | 'vision' | 'referenceDocs' | 'referenceUrlsText' | 'defaultBranch' | 'versionPolicy' | 'repoUrl' | 'folder';
 
 export type WizardAction =
   | { type: 'source'; source: WizardSource }
@@ -73,6 +82,9 @@ export type WizardAction =
   | { type: 'gate'; key: ProjectGateKey; choice: GateChoice }
   | { type: 'go'; step: StepId }
   | { type: 'nameError'; message: string | null }
+  | { type: 'materialsAdded'; materials: WizardMaterial[] }
+  | { type: 'materialRemoved'; id: string }
+  | { type: 'materialsError'; message: string | null }
   | { type: 'importCreated'; projectId: string }
   | { type: 'importCancelled' }
   | { type: 'detected'; detect: ProjectDetectResponse }
@@ -92,6 +104,10 @@ export function initialWizardState(): WizardState {
     presetId: null,
     vision: '',
     referenceDocs: '',
+    materials: [],
+    referenceUrlsText: '',
+    materialsError: null,
+    materialsNotKept: [],
     choices: {},
     dirty: [],
     defaultBranch: 'main',
@@ -184,7 +200,7 @@ export function stepProblem(s: WizardState, step: StepId): string | null {
       if (!s.appType) return 'Choose a project type.';
       const preset = s.presetId ? getPreset(s.presetId) : undefined;
       if (!preset || preset.type !== s.appType) return 'Choose a preset for this type.';
-      return visionProblem(s);
+      return visionProblem(s) ?? parseReferenceUrls(s.referenceUrlsText).problems[0] ?? null;
     }
     case 'repo':
       // In the order the step shows its fields.
@@ -402,6 +418,12 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
       if (a.source === 'preset' && s.presetId === 'custom-blank') return { ...next, appType: null, presetId: null };
       return next;
     }
+    case 'materialsAdded':
+      return { ...s, materials: [...s.materials, ...a.materials], materialsError: null };
+    case 'materialRemoved':
+      return { ...s, materials: s.materials.filter((m) => m.id !== a.id), materialsError: null };
+    case 'materialsError':
+      return { ...s, materialsError: a.message };
     case 'field': {
       if (a.field === 'startFactory') return { ...s, startFactory: a.value };
       if (a.field === 'name') return { ...s, name: a.value, nameError: null };

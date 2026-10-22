@@ -566,3 +566,29 @@ describe('worktreeYmlImportNote', () => {
     expect(worktreeYmlImportNote(base({ detect: detectResponse(), write: [] }))).toBeNull();
   });
 });
+
+describe('reference material state', () => {
+  const typed = (): WizardState => {
+    let s = wizardReducer(initialWizardState(), { type: 'source', source: 'preset' });
+    s = wizardReducer(s, { type: 'field', field: 'name', value: 'Shop' });
+    s = wizardReducer(s, { type: 'appType', appType: 'static_site' });
+    return wizardReducer(s, { type: 'field', field: 'vision', value: 'A shop for handmade mugs and plates.' });
+  };
+  const m = { id: 'm1', file: new Blob(['x']), name: 'a.png', sizeBytes: 1, mimeType: 'image/png', kind: 'image' as const };
+
+  it('adds and removes files; a core error is cleared by either', () => {
+    let s = wizardReducer(typed(), { type: 'materialsError', message: 'a.png is not a PNG file.' });
+    s = wizardReducer(s, { type: 'materialsAdded', materials: [m] });
+    expect(s.materials).toEqual([m]);
+    expect(s.materialsError).toBeNull();
+    s = wizardReducer(s, { type: 'materialsError', message: 'x' });
+    s = wizardReducer(s, { type: 'materialRemoved', id: 'm1' });
+    expect(s.materials).toEqual([]);
+    expect(s.materialsError).toBeNull();
+  });
+  it('a bad link line keeps the Type step from being valid', () => {
+    const s = wizardReducer(typed(), { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example\nnot a link' });
+    expect(stepProblem(s, 'type')).toBe('Line 2: Use a link that starts with http:// or https://.');
+    expect(stepProblem(wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example note' }), 'type')).toBeNull();
+  });
+});

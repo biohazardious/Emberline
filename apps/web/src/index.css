@@ -5406,6 +5406,74 @@ dialog.cmd-dialog::backdrop {
   opacity: 0;
 }
 
+.wizard-materials-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.wizard-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.wizard-drop.dragging {
+  border-color: var(--ember-2);
+}
+
+.wizard-materials {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wizard-material {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+
+.wizard-material-thumb,
+.wizard-material-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+}
+
+.wizard-material-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Long names wrap instead of scrolling the page sideways at 390 px. */
+.wizard-material-name {
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.wizard-material-errors {
+  margin: 0;
+  padding-left: 18px;
+}
+
+#wizard-materials:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
 /* Stack rows: label above the control on phones, beside it from 640 px. */
 .wizard-dims {
   display: grid;

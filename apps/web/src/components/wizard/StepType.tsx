@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { type ChangeEvent, type Dispatch, useState } from 'react';
 import { errorMessage } from '../../api';
+import { ReferenceMaterial } from './ReferenceMaterial';
 import { nameProblem, type WizardAction, type WizardState } from './wizardLogic';
 
 const ICONS: Record<string, LucideIcon> = { Bot, Building, Cpu, FileText, Gamepad2, Globe, Layers, Package, Smartphone, Terminal, Zap };
@@ -67,6 +68,13 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
   const required = visionRequired(state.presetId, state.choices);
   const visionLength = state.vision.trim().length;
   const [fileError, setFileError] = useState<string | null>(null);
+  const hasMaterial =
+    state.referenceDocs.trim() !== '' ||
+    state.materials.length > 0 ||
+    state.referenceUrlsText.trim() !== '' ||
+    state.materialsError !== null ||
+    state.materialsNotKept.length > 0;
+  const [materialOpen, setMaterialOpen] = useState(hasMaterial);
 
   const attach = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = [...(e.target.files ?? [])];
@@ -172,8 +180,8 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
         </div>
       </div>
 
-      <details className="wizard-details">
-        <summary>Reference docs (optional)</summary>
+      <details className="wizard-details" open={materialOpen} onToggle={(e) => setMaterialOpen(e.currentTarget.open)}>
+        <summary>Reference material (optional)</summary>
         <div className="field">
           <label htmlFor="wizard-ref-docs">Reference material for the agents</label>
           <textarea
@@ -206,6 +214,7 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
             </p>
           )}
         </div>
+        <ReferenceMaterial state={state} dispatch={dispatch} />
       </details>
     </div>
   );
