@@ -8,6 +8,7 @@ import {
   commentsOffDiff,
   escapeDraft,
   glyphHoverText,
+  mergeNowFailure,
   requestTargets,
   reviewBlockedCount,
   worktreeMissing,
@@ -188,6 +189,18 @@ describe('a person merge of a run whose worktree is gone', () => {
     expect(worktreeMissing(new ApiRequestError(409, 'worktree_missing', 'x'))).toEqual({ ticketId: null });
     expect(worktreeMissing(new ApiRequestError(409, 'review_blocked', 'x'))).toBeNull();
     expect(worktreeMissing(new Error('boom'))).toBeNull();
+  });
+});
+
+describe('mergeNowFailure', () => {
+  it('words each refusal of a merge from the ticket drawer, naming the ticket', () => {
+    expect(mergeNowFailure(new ApiRequestError(409, 'review_blocked', 'x', { blocking: 2 }), 'EL-3')).toBe(
+      '2 blocking comments are open on EL-3, so it was not merged. Resolve them in Review first.',
+    );
+    expect(mergeNowFailure(new ApiRequestError(409, 'worktree_missing', 'x', { ticketId: 't1' }), 'EL-3')).toBe(
+      "The worktree of EL-3's run is gone and its work isn't in main. Nothing was merged.",
+    );
+    expect(mergeNowFailure(new Error('boom'), 'EL-3')).toBe('Not merged: boom');
   });
 });
 

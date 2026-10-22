@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deliveryNote,
   recoverErrorText,
+  recoveryHeading,
   recoveryApplies,
   sentenceCase,
   visibleSuggestions,
@@ -110,5 +111,13 @@ describe('recoveryApplies', () => {
     expect(recoveryApplies({ attention: { reason: 'blocked' } } as never)).toBe(true);
     expect(recoveryApplies({ attention: { reason: 'question' } } as never)).toBe(false);
     expect(recoveryApplies({ attention: null } as never)).toBe(false);
+  });
+});
+
+describe('recoveryHeading', () => {
+  it('drops the hold label in the compact Inbox row and keeps it elsewhere', () => {
+    expect(recoveryHeading(rec(['prompt']), true).label).toBeNull();
+    expect(recoveryHeading(rec(['prompt']), false).label).toBe('Merge failed');
+    expect(recoveryHeading(rec(['prompt']), true).why).toBe('Main moved.');
   });
 });

@@ -9,7 +9,7 @@ import {
   deliveryNote,
   recoverErrorText,
   recoveryApplies,
-  sentenceCase,
+  recoveryHeading,
   visibleSuggestions,
 } from '../holdRecovery';
 
@@ -120,11 +120,13 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
     );
   };
 
+  const heading = recoveryHeading(rec, compact);
+
   return (
     <section className="hold-recovery" aria-label="Held run">
       <div className="hold-recovery-head">
-        <strong>{rec.label}</strong>
-        <span className="muted small">{sentenceCase(rec.why)}</span>
+        {heading.label !== null && <strong>{heading.label}</strong>}
+        <span className="muted small">{heading.why}</span>
       </div>
       {!canDeliver && <p className="muted small hold-recovery-none">{recoverErrorText('no_session', '')}</p>}
       <ul className="hold-recovery-list">

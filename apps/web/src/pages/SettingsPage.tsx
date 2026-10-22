@@ -616,7 +616,7 @@ export function SettingsPage({
                   <FlaskConical className="icon" aria-hidden /> Self-Healing Build, Lint &amp; Unit Test Gate (Auto-Verify &amp; Auto-Fix)
                 </strong>
                 <div className="muted small">
-                  When a specialist finishes a run, automatically run the project&apos;s <code>build</code>/<code>typecheck</code>, <code>lint</code>, and <code>test</code> suites (`CI=true`). If any check fails, resume the agent with the exact compiler/linter/test failure output to self-heal before advancing.
+                  When a specialist finishes a run, automatically run the project&apos;s <code>build</code>/<code>typecheck</code>, <code>lint</code>, and <code>test</code> suites (`CI=true`). If any check fails, resume the agent with the exact compiler/linter/test failure output to self-heal before advancing. It also asks the agent once to fix an invalid .emberline/worktree.yml or to add an Auto Bootstrap&apos;s missing commands; when it is off, such runs wait for you in Review.
                 </div>
               </div>
             </label>

@@ -11,7 +11,7 @@ import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import { blockingMessage, reviewBlockedCount, worktreeMissing } from '../reviewComments';
+import { blockingMessage, mergeNowFailure, reviewBlockedCount, worktreeMissing } from '../reviewComments';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { IssueImportDialog } from '../components/IssueImportDialog';
 import { issueHref } from '../issueImport';
@@ -154,8 +154,12 @@ export function BoardPage({ projectId }: { projectId: string }) {
     return grouped;
   }, [tickets]);
 
-  /** `force` merges past open blocking feedback; `skipMerge` moves to Done without a merge. */
-  const move = async (ticket: Ticket, target: DropTarget, { force = false, skipMerge = false } = {}) => {
+  /**
+   * `force` merges past open blocking feedback; `skipMerge` moves to Done without a merge. `inDrawer`
+   * (the ticket drawer's own buttons) throws a failure instead of putting it in the page's banners,
+   * so the drawer's recovery block shows it next to the button that was pressed.
+   */
+  const move = async (ticket: Ticket, target: DropTarget, { force = false, skipMerge = false, inDrawer = false } = {}) => {
     const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
@@ -183,11 +187,13 @@ export function BoardPage({ projectId }: { projectId: string }) {
           ...(force ? { force: true } : {}),
         });
         if (!sync.ok) {
+          if (inDrawer) throw new Error(sync.summary);
           setError(sync.summary);
           return;
         }
         toastInfo(sync.summary);
       } catch (e) {
+        if (inDrawer) throw new Error(mergeNowFailure(e, ticket.key));
         // Never mark a ticket done after a merge that did not happen.
         const blocking = reviewBlockedCount(e);
         if (blocking !== null) {
@@ -216,6 +222,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
       }
     } catch (e) {
       patchLocal(ticket);
+      if (inDrawer) throw e;
       setError(errorMessage(e));
     }
   };
@@ -452,8 +459,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
           onMove={(status) => {
             if (status !== open.status) void move(open, { status, beforeId: null });
           }}
-          onDiscard={() => move(open, { status: 'done', beforeId: null }, { skipMerge: true })}
-          onAccept={() => move(open, { status: 'done', beforeId: null })}
+          onDiscard={() => move(open, { status: 'done', beforeId: null }, { skipMerge: true, inDrawer: true })}
+          onAccept={() => move(open, { status: 'done', beforeId: null }, { inDrawer: true })}
         />
       )}
 

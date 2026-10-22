@@ -1,5 +1,5 @@
 import type { ReviewComment, ReviewCommentPriority, Run, RunReviewState } from '@emberline/protocol';
-import { ApiRequestError } from './api';
+import { ApiRequestError, errorMessage } from './api';
 
 export const PRIORITY_ORDER: readonly ReviewCommentPriority[] = ['blocking', 'important', 'suggestion'];
 
@@ -147,6 +147,14 @@ export function worktreeMissing(error: unknown): { ticketId: string | null } | n
   if (!(error instanceof ApiRequestError)) return null;
   if (error.status !== 409 || error.code !== 'worktree_missing') return null;
   return { ticketId: typeof error.data.ticketId === 'string' ? error.data.ticketId : null };
+}
+
+/** Why a merge from the ticket drawer (Mark done, Accept) did not happen, as one sentence for the recovery block. */
+export function mergeNowFailure(error: unknown, ticketKey: string): string {
+  const blocking = reviewBlockedCount(error);
+  if (blocking !== null) return `${blockingMessage(blocking)} on ${ticketKey}, so it was not merged. Resolve them in Review first.`;
+  if (worktreeMissing(error)) return `The worktree of ${ticketKey}'s run is gone and its work isn't in main. Nothing was merged.`;
+  return `Not merged: ${errorMessage(error)}`;
 }
 
 /** Markdown characters a hover would render; escaped so a comment body shows as typed. */

@@ -1,4 +1,4 @@
-import type { ReviewComment } from '@emberline/protocol';
+import type { PermissionMode, ReviewComment } from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ApiRequestError, errorMessage } from '../../api';
@@ -13,7 +13,7 @@ interface Props {
   /** Where it can send (`new` only for a ticket run). */
   targets: Target[];
   /** Resolves when the send worked; a rejection keeps the dialog open with the message. */
-  onSend: (note: string, target: Target) => Promise<void>;
+  onSend: (note: string, target: Target, permissionMode?: PermissionMode) => Promise<void>;
   onClose: () => void;
 }
 
@@ -23,6 +23,8 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [canStartNew, setCanStartNew] = useState(false);
+  // The agent cannot ask for approvals in this run's mode: a new run can start in Autonomous mode, if the person chooses it.
+  const [needsAutonomous, setNeedsAutonomous] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   // Escape (or a click outside) on a typed note asks first instead of dropping it.
@@ -57,14 +59,17 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const send = async (chosen: Target) => {
+  const send = async (chosen: Target, permissionMode?: PermissionMode) => {
     setBusy(true);
     setError(null);
     try {
-      await onSend(note.trim(), chosen);
+      await onSend(note.trim(), chosen, permissionMode);
     } catch (e) {
       setError(errorMessage(e));
       setCanStartNew(chosen === 'same' && e instanceof ApiRequestError && e.data.canStartNew === true);
+      setNeedsAutonomous(
+        e instanceof ApiRequestError && !permissionMode && (e.data.needsAutonomous === true || (chosen === 'new' && e.code === 'headless_needs_auto')),
+      );
     } finally {
       setBusy(false);
     }
@@ -136,13 +141,22 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
         {error && (
           <div className="banner banner-error" role="alert">
             {error}
-            {canStartNew && (
+            {needsAutonomous ? (
               <>
                 {' '}
-                <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void send('new')}>
-                  Start a new run instead
+                <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void send('new', 'auto')}>
+                  Start a new run in Autonomous mode
                 </button>
               </>
+            ) : (
+              canStartNew && (
+                <>
+                  {' '}
+                  <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void send('new')}>
+                    Start a new run instead
+                  </button>
+                </>
+              )
             )}
           </div>
         )}

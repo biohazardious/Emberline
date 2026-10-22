@@ -19,6 +19,7 @@ import type {
   DiffScope,
   GitCommitResponse,
   GitPushResponse,
+  PermissionMode,
   Run,
   RunArtifact,
   RunDiffSummary,
@@ -394,10 +395,11 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       .catch((e: unknown) => setError(errorMessage(e)));
   };
 
-  const handleRequestChanges = async (note: string, target: 'same' | 'new') => {
+  const handleRequestChanges = async (note: string, target: 'same' | 'new', permissionMode?: PermissionMode) => {
     const res = await api<{ run: Run; sent: number }>(`/api/runs/${run.id}/review/request-changes`, 'POST', {
       note,
       target,
+      ...(permissionMode ? { permissionMode } : {}),
     });
     setRequestOpen(false);
     await refreshReview();
