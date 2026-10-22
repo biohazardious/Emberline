@@ -10,6 +10,8 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import type * as Files from './factory/files.js';
+import type * as Materials from './factory/materials.js';
+import { PROJECT_CREATE_BODY_LIMIT } from './security-headers.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /** Makes the n-th `writeNewWorkspaceFile` call fail while set (0 = never). */
@@ -26,6 +28,23 @@ vi.mock('./factory/files.js', async (importOriginal) => {
   };
 });
 
+/** Makes the next `writeMaterials` call reject with this error while set. */
+const materialsFail = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock('./factory/materials.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof Materials>();
+  return {
+    ...actual,
+    writeMaterials: (async (...args) => {
+      const err = materialsFail.next;
+      if (err) {
+        materialsFail.next = null;
+        throw err;
+      }
+      return actual.writeMaterials(...args);
+    }) as typeof actual.writeMaterials,
+  };
+});
+
 let t: TestApp;
 let headers: Record<string, string>;
 beforeEach(async () => {
@@ -36,6 +55,7 @@ beforeEach(async () => {
 afterEach(async () => {
   writes.failOn = 0;
   writes.count = 0;
+  materialsFail.next = null;
   vi.restoreAllMocks();
   await t.close();
 });
@@ -132,6 +152,17 @@ describe('wizard materials: checks before anything is written', () => {
   );
 });
 
+it('a write error with a code is a plain 500 and leaves no folder', async () => {
+  materialsFail.next = Object.assign(new Error('no space'), { code: 'ENOSPC' });
+  const res = await create(STATIC);
+  expect(res.statusCode).toBe(500);
+  expect(res.json()).toMatchObject({
+    error: 'project_write_failed',
+    message: 'The project folder could not be written (ENOSPC). Nothing was created.',
+  });
+  expect(existsSync(projectDir())).toBe(false);
+});
+
 describe('body limit', () => {
   const big = 'a'.repeat(2 * 1024 * 1024);
   it('only POST /api/projects takes more than 1 MB', async () => {
@@ -151,6 +182,20 @@ describe('body limit', () => {
       payload: { projectId: big },
     });
     expect(other.statusCode).toBe(413);
+  });
+
+  it('POST /api/projects refuses one byte over PROJECT_CREATE_BODY_LIMIT with 413', async () => {
+    const head = '{"name":"x","source":"new","vision":"';
+    const pad = (n: number) => head + 'a'.repeat(n - head.length - 2) + '"}';
+    const send = (n: number) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        headers: { ...headers, 'content-type': 'application/json' },
+        payload: pad(n),
+      });
+    expect((await send(PROJECT_CREATE_BODY_LIMIT + 1)).statusCode).toBe(413);
+    expect((await send(PROJECT_CREATE_BODY_LIMIT)).statusCode).toBe(400); // accepted as a body; the schema refuses the vision
   });
 });
 

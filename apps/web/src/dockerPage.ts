@@ -52,10 +52,10 @@ export function groupDockerProjects(projects: DockerProject[]): DockerGroup[] {
   })).filter((g) => g.projects.length > 0);
 }
 
-/** The sentence for a page with nothing listed; null when the engine or both listings failed, so "runs nothing" is never claimed without a list. */
+/** The sentence for a page with nothing listed; null when the engine or either listing failed, so "runs nothing" is never claimed without a list. */
 export function dockerEmptyText(data: DockerOverview, scoped: boolean): string | null {
   if (data.error) return null;
-  if (data.projectsError && data.containersError) return null;
+  if (data.projectsError || data.containersError) return null;
   return scoped
     ? 'This project runs no compose projects in the engine right now.'
     : 'Emberline runs no compose projects in the engine right now.';

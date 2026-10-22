@@ -16,17 +16,17 @@ import { dockerEngineLine, dockerEngineOffState } from '../dockerEngine';
 import {
   actionsFor,
   cleanupLines,
-  cleanupScopeHint,
-  DOCKER_CLEANUP_SCOPE_HINT,
-  dockerEmptyText,
   cleanupResultText,
+  cleanupScopeHint,
   confirmText,
   containerStateTone,
+  DOCKER_CLEANUP_SCOPE_HINT,
   type DockerAction,
   type DockerDone,
-  doneStillCurrent,
-  dockerProjectLabel,
+  dockerEmptyText,
   dockerErrorDetails,
+  dockerProjectLabel,
+  doneStillCurrent,
   groupDockerProjects,
   ownerBadges,
   ownerSummary,
@@ -316,6 +316,7 @@ function EngineCard({
   const [error, setError] = useState<ErrorDetails | null>(null);
   const lines = cleanupLines(data.cleanup, timeAgo);
   const sweeping = cleaning || data.cleanup.sweeping;
+  const scopeHint = cleanupScopeHint(scoped);
 
   async function cleanUp() {
     setCleaning(true);
@@ -350,7 +351,8 @@ function EngineCard({
           {sweeping ? 'Cleaning up…' : 'Clean up now'}
         </button>
       </div>
-      {cleanupScopeHint(scoped) && <p className="muted small">{cleanupScopeHint(scoped)}</p>}
+      {!data.engine.available && <p className="muted small">Clean up now needs a running engine.</p>}
+      {scopeHint && <p className="muted small">{scopeHint}</p>}
       <p className="muted small">
         {lines.sweep} {lines.prune}
       </p>

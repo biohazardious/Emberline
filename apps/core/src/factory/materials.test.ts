@@ -71,6 +71,11 @@ describe('magic bytes', () => {
     expect(matchesDeclaredType('application/pdf', Buffer.concat([Buffer.alloc(1000, 32), PDF]))).toBe(true);
     expect(matchesDeclaredType('application/pdf', Buffer.concat([Buffer.alloc(1024, 32), PDF]))).toBe(false);
   });
+  it('a PDF header that ends past byte 1024 still counts when it starts inside it', () => {
+    const header = Buffer.concat([Buffer.alloc(1023), Buffer.from('%PDF-1.7')]);
+    expect(matchesDeclaredType('application/pdf', header)).toBe(true);
+    expect(matchesDeclaredType('application/pdf', Buffer.alloc(1024))).toBe(false);
+  });
   it('SVG and other files are not checked by content', () => {
     expect(matchesDeclaredType('image/svg+xml', Buffer.from('anything'))).toBe(true);
     expect(matchesDeclaredType('application/octet-stream', Buffer.from('anything'))).toBe(true);

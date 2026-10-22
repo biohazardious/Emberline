@@ -18,7 +18,7 @@ import {
   type WorktreeConfigStatusResponse,
   withHint,
 } from '@emberline/protocol';
-import { isMap, isSeq, parseDocument, type YAMLSeq } from 'yaml';
+import { isMap, isScalar, isSeq, parseDocument, type YAMLSeq } from 'yaml';
 import type { Db } from '../db/index.js';
 import type { ComposeConfigReader } from '../docker/compose-config.js';
 import { findHeadComposeFile } from '../docker/compose-config.js';
@@ -60,14 +60,19 @@ export async function containerPreviewOptions(
   deps: ContainerPreviewDeps,
   project: { id: string; path: string },
 ): Promise<ContainerPreviewOptionsResponse> {
+  return (await optionsWithStatus(deps, project)).options;
+}
+
+/** The options and the worktree.yml status they were decided from (null when they were decided before reading it). */
+async function optionsWithStatus(
+  deps: ContainerPreviewDeps,
+  project: { id: string; path: string },
+): Promise<{ options: ContainerPreviewOptionsResponse; status: WorktreeConfigStatusResponse | null }> {
   const preview = approvedPreviewService(deps.db, project.id);
   const commandPreview = preview !== null && !isComposeService(preview);
-  const hidden = (reason: string): ContainerPreviewOptionsResponse => ({
-    available: false,
-    reason,
-    file: null,
-    services: [],
-    commandPreview,
+  const hidden = (reason: string) => ({
+    options: { available: false, reason, file: null, services: [], commandPreview } as ContainerPreviewOptionsResponse,
+    status: null,
   });
   await deps.docker.ready();
   const engine = deps.docker.status;
@@ -80,12 +85,16 @@ export async function containerPreviewOptions(
   const status = await worktreeConfigStatus(deps.db, project);
   if (status.headError) return hidden(`git could not read the main workspace's HEAD: ${status.headError}`);
   if (status.changed || status.unusable) {
-    return { available: false, reason: WORKTREE_YML_NOT_APPROVED_TEXT, file, services: [], commandPreview };
+    return {
+      options: { available: false, reason: WORKTREE_YML_NOT_APPROVED_TEXT, file, services: [], commandPreview },
+      status,
+    };
   }
   const read = await deps.reader.read(project.id, project.path, head.entry);
-  return read.ok
+  const options: ContainerPreviewOptionsResponse = read.ok
     ? { available: true, reason: null, file, services: read.services, commandPreview }
     : { available: false, reason: read.reason, file, services: [], commandPreview };
+  return { options, status };
 }
 
 export const CONTAINER_PREVIEW_CHANGED_TEXT =
@@ -109,9 +118,14 @@ export function withContainerPreview(
 ): string {
   const doc = parseDocument(approved?.trim() ? approved : 'version: 1\n');
   doc.set('version', 2);
-  let services = doc.get('services', true);
+  const old = doc.get('services', true);
+  let services = old;
   if (!isSeq(services)) {
     services = doc.createNode([]);
+    if (isScalar(old)) {
+      (services as YAMLSeq).commentBefore = old.commentBefore;
+      (services as YAMLSeq).comment = old.comment;
+    }
     doc.set('services', services);
   }
   const seq = services as YAMLSeq;
@@ -147,8 +161,8 @@ async function plan(
   project: { id: string; path: string },
   choice: ContainerPreviewChoice,
 ) {
-  const options = await containerPreviewOptions(deps, project);
-  if (!options.available) {
+  const { options, status } = await optionsWithStatus(deps, project);
+  if (!options.available || !status) {
     throw conflict(
       options.reason ?? 'The container preview cannot be set up now.',
       CONTAINER_PREVIEW_CODES.unavailable,
@@ -167,7 +181,6 @@ async function plan(
       `"${choice.service}" is not a service in ${choice.file}.`,
     );
   }
-  const status = await worktreeConfigStatus(deps.db, project);
   const approved = status.approved?.content ?? null;
   const content = withContainerPreview(approved, choice);
   const errors = worktreeYmlErrors(content);
@@ -182,7 +195,7 @@ async function plan(
       { errors },
     );
   }
-  // Not changed (checked by the options): HEAD's file is the approved one, or neither exists.
+  // The options refused unless HEAD's worktree.yml is the approved one (or neither exists); this is the status they decided from.
   return { approved, content, baseSha256: status.head?.sha256 ?? null };
 }
 

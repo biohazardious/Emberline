@@ -19,6 +19,10 @@ const WIZARD_V1 = [
 ].join('\n');
 
 describe('withContainerPreview', () => {
+  it('keeps a comment under an empty services key', () => {
+    expect(withContainerPreview('version: 1\nservices:\n  # none yet\n', REF)).toContain('# none yet');
+  });
+
   it('keeps setup, checks and services, demotes the old preview and adds the container entry', () => {
     const out = withContainerPreview(WIZARD_V1, REF);
     const parsed = parseWorktreeYml(out);

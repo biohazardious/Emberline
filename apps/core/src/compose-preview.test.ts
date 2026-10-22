@@ -727,6 +727,24 @@ describe('compose previews (worktree.yml v2)', () => {
         await api('POST', `/api/runs/${run.id}/preview/stop`, {});
       });
 
+      it('without a command service, a package.json dev script is previewed instead', async () => {
+        await start('tcp://docker:2376');
+        const p = await project(
+          'version: 2\nservices:\n  - name: container\n    compose: { service: web, port: 80 }\n    preview: true\n',
+        );
+        const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        rmSync(path.join(run.worktreePath, 'compose.yaml'));
+        writeFileSync(path.join(run.worktreePath, 'package.json'), '{"scripts":{"dev":"sleep 30"}}');
+        const res = await startPreview(run);
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ kind: 'command', status: 'running' });
+        expect((res.json() as RunPreviewStatus).note).toBe(
+          'compose.yaml not found yet — previewing the detected dev command',
+        );
+        expect(engine.composeCalls('up')).toEqual([]);
+        await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      });
+
       it('without a command service it fails clearly', async () => {
         await start('tcp://docker:2376');
         const p = await project();

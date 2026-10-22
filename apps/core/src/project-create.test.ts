@@ -671,8 +671,14 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
 
   it('no generated file or ticket sets container_name or a fixed host port, for every preset, engine on or off', () => {
     const containerName = /container_name\s*:/;
-    // A compose ports item that fixes a host port: `- "8080:80"`, `- 127.0.0.1:8080:80`.
-    const hostPort = /^\s*-\s*["']?(?:[\d.]+:)?\d{1,5}:\d{1,5}["']?\s*$/m;
+    // A compose ports item that fixes a host port, in the three ways compose spells it.
+    const hostPorts = [
+      /^\s*-\s*["']?(?:[\d.]+:)?\d{1,5}:\d{1,5}["']?\s*$/m, // - "8080:80"
+      /^\s*published\s*:\s*["']?\d{1,5}/m, // long syntax
+      /ports\s*:\s*\[[^\]]*?(?:[\d.]+:)?\d{1,5}:\d{1,5}/m, // ports: ["8080:80"]
+    ];
+    const samples = ['    - "8080:80"', '        published: 8080', 'ports: ["8080:80"]'];
+    hostPorts.forEach((re, i) => expect(samples[i], `host-port pattern ${i} matches its sample`).toMatch(re));
     for (const preset of PRESETS) {
       for (const dockerEngine of [true, false]) {
         const plan = planNewProject(
@@ -686,10 +692,10 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
           }),
           { dockerEngine },
         );
-        const texts = [plan.projectMd, plan.claudeMd, plan.worktreeYml, ...Object.values(plan.starter), ...plan.tickets.map((x) => x.body)];
+        const texts = [plan.projectMd, plan.claudeMd, plan.worktreeYml, ...Object.values(plan.starter), ...plan.tickets.map((x) => x.body), ...plan.notes];
         for (const text of texts) {
           expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(containerName);
-          expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(hostPort);
+          for (const re of hostPorts) expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(re);
         }
       }
     }

@@ -296,12 +296,12 @@ export function registerProjectRoutes(
   /** Preset-driven creation: files, git commit, approved worktree.yml, gates, then the tickets. */
   async function createNewProject(
     body: ReturnType<typeof CreateProjectBody.parse>,
+    decoded: ReturnType<typeof decodeMaterials>,
     slug: string,
     reply: FastifyReply,
     log: FastifyBaseLogger,
   ): Promise<CreateProjectResponse> {
-    // Refused before the disk is touched; the plan gets the decoded sizes, as the preview sends them.
-    const decoded = decodeMaterials(body.materials ?? []);
+    // The plan gets the decoded sizes, as the preview sends them.
     const plan = planNewProject(
       { ...body, materials: decoded.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes })) },
       await dockerEngine(),
@@ -363,6 +363,10 @@ export function registerProjectRoutes(
       });
     } catch (err) {
       await rm(projectPath, { recursive: true, force: true }).catch(() => undefined);
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code && /^E[A-Z]+$/.test(code)) {
+        throw new HttpError(500, 'project_write_failed', `The project folder could not be written (${code}). Nothing was created.`);
+      }
       throw err;
     }
     const project: Project = { ...projectResponse(row), importSource: 'new' };
@@ -482,7 +486,10 @@ export function registerProjectRoutes(
       if (creating.has(slug)) throw conflict(`a project with slug "${slug}" is being created`, PROJECT_CONFLICT.beingCreated);
       creating.add(slug);
       try {
-        return await createNewProject(body, slug, reply, request.log);
+        // Refused before the disk is touched.
+        const decoded = decodeMaterials(body.materials ?? []);
+        (request.body as { materials?: unknown }).materials = undefined; // the request's base64 (up to 40 MB) is not needed past here
+        return await createNewProject({ ...body, materials: undefined }, decoded, slug, reply, request.log);
       } finally {
         creating.delete(slug);
       }

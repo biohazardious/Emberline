@@ -610,18 +610,21 @@ ${ctx.factoryPlans ? `\n## Rules\n\n- ${FACTORY_PLANS_RULE}\n` : ''}`,
   };
 }
 
+/** Docker Compose always gets the step; worktree.yml has the `container` entry only while the engine answered at creation. */
+export function containerPreviewStep(choice: unknown, composePreview: boolean | undefined, port: number): string {
+  if (choice !== 'docker-compose') return '';
+  if (composePreview) {
+    return `\n4. **Container preview**: Emberline previews the container: the \`${COMPOSE_PREVIEW_ENTRY}\` entry in \`.emberline/worktree.yml\` starts service \`web\` of \`compose.yaml\` in its Docker engine and publishes container port ${port}. Give \`compose.yaml\` a \`web\` service that serves the app on that port (fixed host ports are dropped for the preview), or change the entry.`;
+  }
+  return `\n4. **Container preview**: Make \`compose.yaml\` ready for a container preview: a \`web\` service that serves the app on container port ${port}, no \`container_name\`, no fixed host ports (Emberline publishes the port itself). Emberline offers to switch the preview to it in Project settings once its Docker engine is on.`;
+}
+
 export function deployTicket(ctx: WizardTicketContext): WizardTicketSpec | null {
   const choice = ctx.choices.deploy;
   if (choice === undefined || choice === 'none') return null;
   const target = describeChoice('deploy', choice).replace(/\.$/, '');
   const port = ctx.preset?.composePort ?? WIZARD_COMPOSE_PORT;
-  /** Docker Compose always gets the step; worktree.yml has the `container` entry only while the engine answered at creation. */
-  const containerStep =
-    choice !== 'docker-compose'
-      ? ''
-      : ctx.composePreview
-        ? `\n4. **Container preview**: Emberline previews the container: the \`${COMPOSE_PREVIEW_ENTRY}\` entry in \`.emberline/worktree.yml\` starts service \`web\` of \`compose.yaml\` in its Docker engine and publishes container port ${port}. Give \`compose.yaml\` a \`web\` service that serves the app on that port (fixed host ports are dropped for the preview), or change the entry.`
-        : `\n4. **Container preview**: Make \`compose.yaml\` ready for a container preview: a \`web\` service that serves the app on container port ${port}, no \`container_name\`, no fixed host ports (Emberline publishes the port itself). Emberline offers to switch the preview to it in Project settings once its Docker engine is on.`;
+  const containerStep = containerPreviewStep(choice, ctx.composePreview, port);
   return {
     key: 'deploy',
     title: `Deploy: prepare ${typeof choice === 'string' && choice !== 'agent' ? target : 'the deploy target'}`,

@@ -3091,10 +3091,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         }
         // A wizard project before its Deploy ticket added the compose file: preview the dev command.
         const instead = loadApprovedWorktreeConfig(this.db, row.projectId)?.config.services.find((s) => s.command !== undefined);
-        if (!instead?.command) {
-          throw conflict(`${service.compose.file} not found in this worktree, and worktree.yml has no command service to preview instead`);
+        const command = instead?.command ?? detectPreviewCommand(row.worktreePath);
+        if (!command) {
+          throw conflict(`${service.compose.file} not found in this worktree, and there is no command to preview instead`);
         }
-        fallback = { command: instead.command, note: `${service.compose.file} not found yet — previewing ${instead.name}` };
+        fallback = { command, note: `${service.compose.file} not found yet — previewing ${instead?.name ?? 'the detected dev command'}` };
       }
 
       // Stop any existing preview first (a terminal, or a compose project from an earlier approval).

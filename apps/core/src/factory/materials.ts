@@ -37,8 +37,8 @@ const SIGNATURES: Record<string, (b: Uint8Array) => boolean> = {
   'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
   'image/gif': (b) => ['GIF87a', 'GIF89a'].includes(ascii(b, 0, 6)),
   'image/webp': (b) => ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 12) === 'WEBP',
-  // Readers accept the header anywhere in the first 1024 bytes.
-  'application/pdf': (b) => Buffer.from(b.subarray(0, 1024)).includes('%PDF-'),
+  // Readers accept the header starting anywhere in the first 1024 bytes (it may end 4 bytes later).
+  'application/pdf': (b) => Buffer.from(b.subarray(0, 1024 + 4)).includes('%PDF-'),
 };
 
 /** Images and PDFs must start like their declared type; SVG and other files are not checked. */

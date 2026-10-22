@@ -423,6 +423,30 @@ describe('switching the preview to the container', () => {
     expect(body.baseSha256).toBe(status.head!.sha256);
   });
 
+  it("409 when the chosen file is not HEAD's compose file; nothing committed", async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    const count = p.git('rev-list', '--count', 'HEAD');
+    const res = await use(p.id, { ...CHOICE, file: 'docker-compose.yml', baseSha256: null });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'container_preview_unavailable',
+      message: "HEAD's compose file is now compose.yaml. Reload to see it.",
+    });
+    expect(p.git('rev-list', '--count', 'HEAD')).toBe(count);
+  });
+
+  it('the diff refuses an unknown service (400) and an unavailable preview (409)', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
+    expect((await diff(p.id, { ...CHOICE, service: 'api' })).json()).toMatchObject({
+      error: 'container_preview_unknown_service',
+    });
+    engine.up = false;
+    await t.runs.docker.probe();
+    const res = await diff(p.id, CHOICE);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('container_preview_unavailable');
+  });
+
   it('saves: one commit on main with the spec message and only worktree.yml, approved; the box goes away', async () => {
     const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
     const { content, baseSha256 } = (await diff(p.id, CHOICE)).json();

@@ -419,6 +419,10 @@ describe('dockerEmptyText', () => {
   it('says nothing when neither listing worked', () => {
     expect(dockerEmptyText({ ...base, projectsError: 'a', containersError: 'b' }, false)).toBeNull();
   });
+  it('says nothing when only one listing failed', () => {
+    expect(dockerEmptyText({ ...base, projectsError: 'a' }, false)).toBeNull();
+    expect(dockerEmptyText({ ...base, containersError: 'b' }, true)).toBeNull();
+  });
   it('says the unscoped or the scoped sentence for empty listings', () => {
     expect(dockerEmptyText(base, false)).toBe('Emberline runs no compose projects in the engine right now.');
     expect(dockerEmptyText(base, true)).toBe('This project runs no compose projects in the engine right now.');

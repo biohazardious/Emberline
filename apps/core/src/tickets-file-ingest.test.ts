@@ -1,78 +1,40 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
-import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readProjectSettings, writeWizardTickets } from './db/project-settings.js';
-import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { type AgentHarness, startAgentHarness, wgit } from './test-agent-harness.js';
+import type { TestApp } from './test-utils.js';
 
 /**
  * The tickets-file loop: a `.emberline/new-tickets.json` that reached main was copied into every
  * new run's worktree and imported again by each run's pipeline.
  */
 
+let h: AgentHarness;
 let t: TestApp;
-let ptydServer: PtydServer;
-let cookie: string;
 
 const TICKETS = '.emberline/new-tickets.json';
 
-/** Claude stand-in that stays alive (a run that exits early is not merged like a finished one). */
-function writeLivingClaude(dir: string): string {
-  const file = path.join(dir, 'living-claude.sh');
-  writeFileSync(
-    file,
-    [
-      '#!/bin/sh',
-      `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
-      `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
-      'echo "fake claude ready"',
-      'while read line; do :; done',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
-  return file;
-}
-
 beforeEach(async () => {
-  t = await createTestApp();
-  t.config.claudeCommand = writeLivingClaude(t.dir);
-  ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
-  await ptydServer.listen();
-  t.ptyd.start();
-  await t.ptyd.waitUntilConnected();
-  cookie = await setupAndLogin(t.app);
+  h = await startAgentHarness();
+  t = h.t;
 });
 
 afterEach(async () => {
-  await ptydServer.close();
-  await t.close();
+  await h.close();
 });
 
-const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
-
-const hook = (runId: string, event: string, token: string, payload: object = {}) =>
-  t.app.inject({
-    method: 'POST',
-    url: '/api/internal/hooks',
-    headers: { authorization: `Bearer ${token}` },
-    payload: { runId, event, receivedAt: new Date().toISOString(), payload },
-  });
-
-const wgit = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], { encoding: 'utf8' }).trim();
+const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) => h.api(method, url, payload);
+const hook = (runId: string, event: string, token: string, payload: object = {}) => h.hook(runId, event, token, payload);
+const waitFile = (name: string) => h.waitFile(name);
 
 async function createProject() {
-  const { project } = (await api('POST', '/api/projects', { name: 'Loop Project', initGit: false })).json();
-  wgit(project.path, 'init', '-q', '-b', 'main');
-  wgit(project.path, 'commit', '-q', '--allow-empty', '-m', 'init');
+  const project = await h.gitProject();
   // No dispatch of created tickets; the chain flag makes each finished run a factory run (gates + merge).
   await api('PATCH', '/api/factory/settings', { autoPickupReady: false });
   t.tickets.setAutoChain(project.id, true);
-  return project as { id: string; path: string };
+  return project;
 }
 
 const draftsFile = (titles: string[]) => JSON.stringify({ autoDispatch: false, tickets: titles.map((title) => ({ title })) });
@@ -86,12 +48,6 @@ const titles = async (projectId: string) =>
   ((await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[]).map((x) => x.title);
 const eventsOf = async (run: Run) => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events;
 const eventTypes = async (run: Run) => (await eventsOf(run)).map((e) => e.type);
-
-async function waitFile(name: string): Promise<string> {
-  const file = path.join(t.dir, name);
-  await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
-  return readFileSync(file, 'utf8');
-}
 
 async function startTicket(projectId: string, title: string, persona?: string): Promise<Run> {
   const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title, status: 'ready', persona })).json() as Ticket;

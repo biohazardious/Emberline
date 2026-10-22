@@ -31,7 +31,7 @@ export interface CopyLimits {
   maxEntries: number;
   maxBytes: number;
 }
-export const COPY_LIMITS: CopyLimits = { maxEntries: COPY_MAX_FILES, maxBytes: COPY_MAX_BYTES };
+export const COPY_LIMITS: Readonly<CopyLimits> = Object.freeze({ maxEntries: COPY_MAX_FILES, maxBytes: COPY_MAX_BYTES });
 export const TEARDOWN_TIMEOUT_MS = 2 * 60_000;
 /** Output kept from a failed setup command (event and prompt prefix). */
 export const SETUP_TAIL_CHARS = 2000;
