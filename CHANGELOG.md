@@ -7,10 +7,12 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Added
 
 - `EMBERLINE_FORGET_SECRETS=1`: for a database restored without its secrets key. Core clears the stored secrets the current key cannot read instead of refusing to start, keeps a snapshot of the database first (`emberline.db.pre-forget-secrets-*.bak`) and logs which secrets it cleared, never their values. Enter them again, then remove the variable.
+- `EMBERLINE_CONTAINER_NETWORKS`: comma-separated CIDR ranges (IPv4 and IPv6) that container trust accepts besides the private ranges, for Docker address pools such as 100.64/10 or public IPv6. An address must still be on one of core's own networks. Entries that are not CIDR ranges are logged at start and ignored.
 
 ### Fixed
 
 - The first start creates `/data/secrets.key` on volumes without hard links, such as SMB/CIFS mounts.
+- After a runner restart, forge-account git works again within seconds instead of being refused for up to a minute.
 
 ## [0.5.0] - 2026-10-22
 

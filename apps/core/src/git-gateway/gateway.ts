@@ -142,6 +142,10 @@ export class GitGateway {
       maxBytes?: number;
       idleTimeoutMs?: number;
       lookup?: (host: string) => Promise<string[]>;
+      /** Core's own networks (tests); see ContainerAddressesOptions.localNetworks. */
+      localNetworks?: () => string[];
+      /** EMBERLINE_CONTAINER_NETWORKS. */
+      containerNetworks?: readonly string[];
     },
   ) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -300,8 +304,13 @@ export class GitGateway {
   }
 
   private fromRunner(ip: string | undefined): Promise<boolean> {
-    this.addresses ??= new ContainerAddresses(this.options.runnerHosts, { lookup: this.options.lookup });
-    return this.addresses.has(ip);
+    this.addresses ??= new ContainerAddresses(this.options.runnerHosts, {
+      lookup: this.options.lookup,
+      localNetworks: this.options.localNetworks,
+      containerNetworks: this.options.containerNetworks,
+    });
+    // A miss resolves the runner's name again (rate-limited): a runner restart must not lock git out for a minute.
+    return this.addresses.hasOrRefresh(ip);
   }
 
   private refuse(

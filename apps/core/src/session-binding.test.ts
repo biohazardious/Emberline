@@ -7,7 +7,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { ContainerAddresses } from './auth/container-addresses.js';
+import { ContainerAddresses, MISS_REFRESH_MS } from './auth/container-addresses.js';
 import { loadConfig } from './config.js';
 import { runs, sessions } from './db/schema.js';
 import {
@@ -488,6 +488,60 @@ describe('container addresses', () => {
     return a ?? [];
   };
 
+  it('EMBERLINE_CONTAINER_NETWORKS widens the private ranges, never past core’s own networks', async () => {
+    const c = new ContainerAddresses(['runner', 'docker'], {
+      lookup: lookupFrom({ runner: ['100.64.3.5', '2001:db8:1::5'], docker: ['100.65.0.9'] }),
+      refreshMs: 0,
+      localNetworks: () => ['100.64.3.0/24', '2001:db8:1::/64'],
+      containerNetworks: ['100.64.0.0/10', '2001:db8::/32'],
+    });
+    await c.refresh();
+    expect(await c.has('100.64.3.5')).toBe(true);
+    expect(await c.has('2001:db8:1::5')).toBe(true);
+    expect(await c.has('100.65.0.9')).toBe(false); // in a listed range, but not on core's networks
+    c.stop();
+  });
+
+  it('without EMBERLINE_CONTAINER_NETWORKS a 100.64/10 answer is no container (as before)', async () => {
+    const c = new ContainerAddresses(['runner'], {
+      lookup: lookupFrom({ runner: ['100.64.3.5'] }),
+      refreshMs: 0,
+      localNetworks: () => ['100.64.3.0/24'],
+    });
+    await c.refresh();
+    expect(await c.has('100.64.3.5')).toBe(false);
+    c.stop();
+  });
+
+  it('the gateway path resolves again on a miss, at most once per 5 s; the cookie path never does', async () => {
+    let now = 1_000_000;
+    let lookups = 0;
+    const answers: Record<string, string[] | Error> = { runner: ['172.18.0.3'] };
+    const c = new ContainerAddresses(['runner'], {
+      lookup: async (host) => {
+        lookups += 1;
+        return lookupFrom(answers)(host);
+      },
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+      now: () => now,
+    });
+    await c.refresh();
+    expect(lookups).toBe(1);
+    answers.runner = ['172.18.0.7']; // the runner restarted with a new address
+    expect(await c.has('172.18.0.7')).toBe(false); // cookie path: no lookup
+    expect(await c.hasOrRefresh('172.18.0.7')).toBe(false); // within 5 s of the last resolution
+    expect(lookups).toBe(1);
+    now += MISS_REFRESH_MS;
+    expect(await c.hasOrRefresh('172.18.0.7')).toBe(true);
+    expect(lookups).toBe(2);
+    // A stranger hammering the gateway right after costs no lookup.
+    expect(await c.hasOrRefresh('172.18.0.99')).toBe(false);
+    expect(await c.hasOrRefresh('172.18.0.99')).toBe(false);
+    expect(lookups).toBe(2);
+    c.stop();
+  });
+
   it('drops a host that no longer resolves (ENOTFOUND) and keeps one on a temporary failure', async () => {
     const answers: Record<string, string[] | Error> = { runner: ['172.18.0.5'], docker: ['172.18.0.9'] };
     const c = new ContainerAddresses(['runner', 'docker'], {
@@ -570,5 +624,12 @@ describe('container addresses', () => {
       'engine',
     ]);
     expect(loadConfig({ EMBERLINE_CONTAINER_HOSTS: '' }).containerHosts).toEqual([]);
+  });
+
+  it('EMBERLINE_CONTAINER_NETWORKS keeps the CIDR ranges and drops the rest', () => {
+    expect(loadConfig({}).containerNetworks).toEqual([]);
+    expect(
+      loadConfig({ EMBERLINE_CONTAINER_NETWORKS: '100.64.0.0/10, nope, 2001:db8::/32,' }).containerNetworks,
+    ).toEqual(['100.64.0.0/10', '2001:db8::/32']);
   });
 });

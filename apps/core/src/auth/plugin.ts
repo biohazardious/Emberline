@@ -110,7 +110,9 @@ export function registerAuth(
   // Cookies ignore ports: a browser sends the session cookie to every preview server on Emberline's
   // host, where agent-written code runs and could replay it to core (from the runner over
   // http://core:7420, or from the engine). The direct peer decides, whatever a proxy header says.
-  const containers = new ContainerAddresses(config.containerHosts ?? []);
+  const containers = new ContainerAddresses(config.containerHosts ?? [], {
+    containerNetworks: config.containerNetworks ?? [],
+  });
   app.addHook('onClose', async () => containers.stop());
   const bindIp = config.sessionBindIp ?? true;
 

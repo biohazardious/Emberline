@@ -236,7 +236,11 @@ describe('the git gateway', () => {
   it('only the runner may use it', async () => {
     gateway.dispose();
     await app.close();
-    await startGateway(['runner.invalid'], { lookup: async () => ['10.255.255.1'] });
+    // 10.255.255.1 is the runner and on one of core's networks, so the runner check itself refuses 127.0.0.1.
+    await startGateway(['runner.invalid'], {
+      lookup: async () => ['10.255.255.1'],
+      localNetworks: () => ['10.255.255.0/24'],
+    });
     const grant = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,

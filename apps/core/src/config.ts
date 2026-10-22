@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import path from 'node:path';
+import { parseCidrList } from './auth/cidr.js';
 import { engineHostName } from './docker/compose.js';
 
 export interface CoreConfig {
@@ -31,6 +32,8 @@ export interface CoreConfig {
   containerHosts?: string[];
   /** Compose service names of the runner; only their addresses may use the git gateway. EMBERLINE_RUNNER_HOSTS, comma list. */
   runnerHosts?: string[];
+  /** EMBERLINE_CONTAINER_NETWORKS: extra CIDR ranges container trust accepts (auth/cidr.ts); invalid entries dropped. */
+  containerNetworks?: string[];
   logLevel: string;
   /** Core base URL as reachable from the runner (hooks post here). */
   hookUrl: string;
@@ -141,6 +144,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
       .split(',')
       .map((h) => h.trim())
       .filter(Boolean),
+    containerNetworks: parseCidrList(env.EMBERLINE_CONTAINER_NETWORKS ?? '').valid,
     logLevel: env.EMBERLINE_LOG_LEVEL ?? 'info',
     hookUrl: env.EMBERLINE_HOOK_URL ?? `http://127.0.0.1:${port}`,
     gitGatewayUrl: env.EMBERLINE_GIT_GATEWAY_URL?.trim() || undefined,

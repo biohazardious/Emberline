@@ -2,6 +2,7 @@
  * Core entrypoint. Configuration comes from EMBERLINE_* env vars (see config.ts).
  */
 import path from 'node:path';
+import { parseCidrList } from './auth/cidr.js';
 import {
   ptydCommandCanceller,
   ptydCommandExecutor,
@@ -78,6 +79,13 @@ if (ignoredHosts.length > 0) {
   app.log.warn(
     { ignored: ignoredHosts },
     'EMBERLINE_ALLOWED_HOSTS: ignoring entries that are not host names',
+  );
+}
+const { invalid: invalidNetworks } = parseCidrList(process.env.EMBERLINE_CONTAINER_NETWORKS ?? '');
+if (invalidNetworks.length > 0) {
+  app.log.warn(
+    { ignored: invalidNetworks },
+    'EMBERLINE_CONTAINER_NETWORKS: ignoring entries that are not CIDR ranges (like 100.64.0.0/10)',
   );
 }
 const invalidPorts = invalidPreviewPortVars(process.env);
