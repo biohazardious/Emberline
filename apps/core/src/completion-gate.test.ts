@@ -10,7 +10,7 @@ import { writeIssueSync, writeWizardTickets } from './db/project-settings.js';
 import { projects, runs, tickets } from './db/schema.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   DEPENDENCY_BLOCK_MAX,
   DEPENDENCY_SECTION_MAX,
@@ -754,7 +754,7 @@ describe('issue write-back in the pipeline', () => {
       .where(eq(tickets.id, made.ticket.id))
       .run();
     writeIssueSync(t.db, made.project.id, IssueSyncSettings.parse({ closeOnDone: true, ...settings }));
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     return made;
   }
 
@@ -802,7 +802,7 @@ describe('issue triage', () => {
   it('auto-pickup never starts an untrusted label-sync import; once a person moves it to Ready it dispatches', async () => {
     const project = await createProject('Triage Project');
     t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, project.id)).run();
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     const issue = {
       id: 9001,
       number: 1,
@@ -857,7 +857,7 @@ describe('a person’s merge from the Board', () => {
     };
     const project = await createProject('Person Merge');
     t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, project.id)).run();
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     writeIssueSync(t.db, project.id, IssueSyncSettings.parse({ closeOnDone: true }));
     const ticket = await createTicket(project.id, { title: 'Hand work', status: 'backlog' });
     t.db

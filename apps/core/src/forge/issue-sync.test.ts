@@ -7,7 +7,7 @@ import { issueTombstones, projects, runEvents, runs, tickets } from '../db/schem
 import { HOLD_ENDING_EVENTS } from '../runs/hold-events.js';
 import { stillHeld } from '../runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from '../runs/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from '../test-utils.js';
+import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from '../test-utils.js';
 import { ISSUE_SYNC_INTERVAL_MS, IssueSyncService, SYNC_TICK_REQUEST_CAP } from './issue-sync.js';
 
 interface Call {
@@ -136,7 +136,7 @@ beforeEach(async () => {
   failClose = false;
   clock = T0;
   logs = [];
-  t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+  seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
   installForge();
   sync = newSync();
 });

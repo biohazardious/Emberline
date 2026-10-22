@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncResponse, IssueSyncSettings, Ticket } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { projects, tickets } from './db/schema.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { forgeAccounts, projects, tickets } from './db/schema.js';
+import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -66,7 +66,7 @@ beforeEach(async () => {
     .insert(projects)
     .values({ id: 'p1', name: 'Demo Project', slug: 'demo-project', repoUrl: 'https://github.com/acme/widget.git', path: dir, createdAt: new Date() })
     .run();
-  t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+  seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
   installForge();
 });
 
@@ -109,12 +109,12 @@ describe('GET /api/projects/:id/issues', () => {
   });
 
   it('409 with a hint without a token, 404 for an unknown project, 400 for a bad query', async () => {
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: null });
+    t.db.delete(forgeAccounts).run();
     const res = await get('/api/projects/p1/issues');
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toMatch(/token/i);
+    expect(res.json().message).toMatch(/Add a forge account for github\.com in Settings → Forge accounts\./);
     expect((await get('/api/projects/nope/issues')).statusCode).toBe(404);
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     expect((await get('/api/projects/p1/issues?state=bogus')).statusCode).toBe(400);
   });
 });
@@ -255,16 +255,16 @@ describe('POST /api/projects/:id/issues/import', () => {
   });
 
   it('409 without a token or when the trust check fails', async () => {
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: null });
+    t.db.delete(forgeAccounts).run();
     expect((await post('/api/projects/p1/issues/import', sel(1))).statusCode).toBe(409);
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     // An origin the agent pointed at another host is not sent the token.
     execFileSync('git', ['-C', `${t.dir}/proj`, 'init', '-q', '-b', 'main']);
     execFileSync('git', ['-C', `${t.dir}/proj`, 'remote', 'add', 'origin', 'https://evil.example.org/acme/widget.git']);
     t.db.update(projects).set({ repoUrl: null }).where(eq(projects.id, 'p1')).run();
     const res = await post('/api/projects/p1/issues/import', sel(1));
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toMatch(/not trusted/);
+    expect(res.json().message).toMatch(/Add a forge account for evil\.example\.org in Settings → Forge accounts\./);
     expect(seen).toEqual([]);
   });
 });
@@ -306,12 +306,12 @@ describe('issue-sync settings', () => {
 
   it('409 "connect the forge first" when enabling without a usable remote; nothing is stored', async () => {
     // No token.
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: null });
+    t.db.delete(forgeAccounts).run();
     const noToken = await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
     expect(noToken.statusCode).toBe(409);
-    expect(noToken.json().message).toMatch(/^connect the forge first: .*token/i);
+    expect(noToken.json().message).toMatch(/^connect the forge first: Add a forge account for github\.com/);
     // No remote at all.
-    t.forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'secret' });
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     t.db.update(projects).set({ repoUrl: null }).where(eq(projects.id, 'p1')).run();
     const noRemote = await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
     expect(noRemote.statusCode).toBe(409);

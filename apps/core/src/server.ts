@@ -10,6 +10,7 @@ import { CronService } from './cron/service.js';
 import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
 import { PostMergeJobs } from './factory/post-merge.js';
+import { migrateLegacyForgeToken } from './forge/account-store.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
@@ -76,6 +77,12 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   deps.runs.setLogger(app.log);
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, { presence, log: (message, err) => app.log.error({ err }, message) });
   const forge = deps.forge ?? new ForgeService(deps.db, deps.runs);
+  if (migrateLegacyForgeToken(deps.db) === 'unmatched') {
+    app.log.warn(
+      'forge: the earlier forge token could not be matched to one server; add it again in Settings → Forge accounts',
+    );
+  }
+  void forge.accounts.fillMissingUsernames((message) => app.log.warn(message)).catch(() => undefined);
   const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);
   const updates = new UpdateService(deps.db, { version: VERSION });
   const issueSync =
@@ -159,7 +166,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerSchedulerRoutes(app, deps.scheduler);
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
-  registerForgeAccountRoutes(app, forge.accounts);
+  registerForgeAccountRoutes(app, forge.accounts, deps.db);
   registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);

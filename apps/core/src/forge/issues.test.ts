@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ForgeProvider } from '@emberline/protocol';
 import { projects, runs } from '../db/schema.js';
-import { createTestApp, type TestApp } from '../test-utils.js';
+import { createTestApp, seedForgeAccount, type TestApp } from '../test-utils.js';
 import { IssuesClient, RateLimitError } from './issues.js';
 import { ForgeService, type ParsedForgeRemote, parseForgeRemote } from './service.js';
 
@@ -330,13 +331,13 @@ describe('ForgeService.projectRemote', () => {
     }
     t.db.insert(projects).values({ id, name: id, slug: id, repoUrl, path: dir, createdAt: new Date() }).run();
   }
-  const configure = (forge: ForgeService, token: string | null, apiUrl: string | null = null) =>
-    forge.updateSettings({ provider: 'auto', apiUrl, token });
+  const account = (provider: ForgeProvider, serverUrl: string, apiUrl?: string) =>
+    seedForgeAccount(t.db, { provider, serverUrl, token: 'secret', username: 'al', apiUrl });
 
   it('reads origin from the main workspace and returns remote plus token', async () => {
     addProject('p1', null, 'git@github.com:acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
+    account('github', 'https://github.com');
     const target = await forge.projectRemote('p1');
     expect(target.token).toBe('secret');
     expect(target.remote).toMatchObject({ provider: 'github', repoPath: 'acme/widget' });
@@ -345,17 +346,17 @@ describe('ForgeService.projectRemote', () => {
   it('falls back to projects.repoUrl when the workspace has no origin', async () => {
     addProject('p2', 'https://gitlab.example.com/g/s/app.git', '');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
+    account('gitlab', 'https://gitlab.example.com');
     const target = await forge.projectRemote('p2');
     expect(target.remote).toMatchObject({ provider: 'gitlab', repoPath: 'g/s/app' });
   });
 
-  it('409 with a hint when the token or the remote is missing', async () => {
+  it('409 with a hint when the account or the remote is missing', async () => {
     addProject('p3', null, 'git@github.com:acme/widget.git');
     addProject('p4', null, '');
     const forge = new ForgeService(t.db, t.runs);
-    await expect(forge.projectRemote('p3')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/token/i) });
-    configure(forge, 'secret');
+    await expect(forge.projectRemote('p3')).rejects.toMatchObject({ statusCode: 409, message: 'Add a forge account for github.com in Settings → Forge accounts.' });
+    account('github', 'https://github.com');
     await expect(forge.projectRemote('p4')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/remote/i) });
     await expect(forge.projectRemote('nope')).rejects.toMatchObject({ statusCode: 404 });
   });
@@ -363,15 +364,18 @@ describe('ForgeService.projectRemote', () => {
   it('applies the trust check to an untrusted host', async () => {
     addProject('p5', null, 'https://evil.example.org/acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
-    // origin host differs from projects.repoUrl (null), so it is not trusted.
-    await expect(forge.projectRemote('p5')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/not trusted/i) });
+    account('github', 'https://github.com');
+    // No account has the origin's host, so the token is not sent there.
+    await expect(forge.projectRemote('p5')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Add a forge account for evil.example.org in Settings → Forge accounts.',
+    });
   });
 
   it('409 when origin points at another repository than projects.repoUrl', async () => {
     addProject('p6', 'https://github.com/acme/widget.git', 'git@github.com:acme/other.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
+    account('github', 'https://github.com');
     await expect(forge.projectRemote('p6')).rejects.toMatchObject({
       statusCode: 409,
       message: 'origin points at a different repository than the project',
@@ -382,7 +386,8 @@ describe('ForgeService.projectRemote', () => {
     addProject('p8', 'not a url', 'git@github.com:acme/widget.git');
     addProject('p9', 'https://git.example.com:8443/acme/widget.git', 'https://git.example.com/acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
+    account('github', 'https://github.com');
+    account('github', 'https://git.example.com');
     await expect(forge.projectRemote('p8')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/repository URL/) });
     await expect(forge.projectRemote('p9')).rejects.toMatchObject({ statusCode: 409 });
   });
@@ -392,7 +397,7 @@ describe('ForgeService.projectRemote', () => {
     addProject('p11', 'https://git.example.com:8443/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
     addProject('p12', 'https://git.example.com/acme/widget.git', 'ssh://git@other.example.com:2222/acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret', 'https://git.example.com/api/v1');
+    account('gitea', 'https://git.example.com', 'https://git.example.com/api/v1');
     const target = await forge.projectRemote('p10');
     expect(target.remote).toMatchObject({ host: 'git.example.com', repoPath: 'acme/widget' });
     expect((await forge.projectRemote('p11')).remote.repoPath).toBe('acme/widget');
@@ -402,7 +407,7 @@ describe('ForgeService.projectRemote', () => {
   it('trusts the host of an ssh repoUrl on a custom port without an API URL', async () => {
     addProject('p13', 'ssh://git@git.example.com:2222/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
+    account('github', 'https://git.example.com');
     const target = await forge.projectRemote('p13');
     expect(target.remote.apiBaseUrl).toBe('https://git.example.com/api/v3');
   });
@@ -410,7 +415,7 @@ describe('ForgeService.projectRemote', () => {
   it('accepts origin matching repoUrl across URL styles and case', async () => {
     addProject('p7', 'https://github.com/Acme/Widget', 'git@github.com:acme/widget.git');
     const forge = new ForgeService(t.db, t.runs);
-    configure(forge, 'secret');
+    account('github', 'https://github.com');
     expect((await forge.projectRemote('p7')).remote.repoPath).toBe('acme/widget');
   });
 });
@@ -450,7 +455,7 @@ describe('ForgeService pull requests through a redirect', () => {
         return json({ number: 7, title: 'T', html_url: 'https://github.com/acme/new/pull/7', state: 'open', head: { sha: 'abc' } }, { status: 201 });
       }) as typeof fetch;
       const forge = new ForgeService(t.db, t.runs, { fetch: fn });
-      forge.updateSettings({ provider: 'auto', apiUrl: null, token: 'tok' });
+      seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'tok' });
       const now = new Date();
       t.db.insert(projects).values({ id: 'p1', name: 'p1', slug: 'p1', repoUrl: 'https://github.com/acme/old.git', path: `${t.dir}/none`, createdAt: now }).run();
       t.db

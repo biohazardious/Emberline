@@ -7,28 +7,18 @@ import {
   type ForgeProvider,
   type ForgeProviderPreference,
   type ForgePullRequest,
-  type ForgeSettings,
   type RunForgeStatus,
-  type UpdateForgeSettingsBody,
-  UpdateForgeSettingsBody as UpdateForgeSettingsBodySchema,
 } from '@emberline/protocol';
 import { desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, runEvents, runs, settings } from '../db/schema.js';
+import { projects, runEvents, runs } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
 import { ForgeAccountsService } from './accounts.js';
-import { hostOf, sameForgeServer } from './hosts.js';
+import { type ForgeAccountRecord, accountForRemote } from './account-store.js';
+import { sameForgeServer } from './hosts.js';
 import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
-
-const SETTINGS_KEY = 'forge.config';
-
-interface StoredForgeConfig {
-  provider: ForgeProviderPreference;
-  apiUrl: string | null;
-  token: string | null;
-}
 
 export interface ParsedForgeRemote {
   provider: ForgeProvider;
@@ -130,34 +120,20 @@ export function parseForgeRemote(
   };
 }
 
-/**
- * The remote URL comes from the worktree's git config, which the agent can rewrite. The token is
- * only sent to the public GitHub API, the API URL the user configured, the host of the repo URL
- * the project was cloned from, or hosts listed in EMBERLINE_FORGE_ALLOWED_HOSTS.
- */
-export function assertTrustedForgeApi(
-  remote: ParsedForgeRemote,
-  trust: { apiUrl: string | null; projectRepoUrl: string | null },
-): void {
-  const apiHost = hostOf(remote.apiBaseUrl);
-  const configuredHost = hostOf(trust.apiUrl);
-  const repoHost = hostOf(trust.projectRepoUrl);
-  const extra = (process.env.EMBERLINE_FORGE_ALLOWED_HOSTS ?? '')
-    .split(',')
-    .map((h) => h.trim().toLowerCase())
-    .filter(Boolean);
-  const trusted = new Set<string>(['api.github.com', ...extra]);
-  if (configuredHost) trusted.add(configuredHost);
-  if (repoHost) trusted.add(repoHost);
-  if (!apiHost || !trusted.has(apiHost)) {
-    throw conflict(
-      `forge API host ${apiHost ?? remote.apiBaseUrl} is not trusted for your token; set the Forge API URL in settings`,
-    );
-  }
-  // Plain HTTP is only acceptable when the user configured that exact API URL themselves.
-  if (remote.apiBaseUrl.startsWith('http://') && apiHost !== configuredHost) {
-    throw conflict('refusing to send the forge token over plain HTTP; set an https Forge API URL in settings');
-  }
+export function noAccountMessage(host: string): string {
+  return `Add a forge account for ${host} in Settings → Forge accounts.`;
+}
+
+/** The remote as seen through an account: provider and API from the account, web URLs on its server. */
+function viaAccount(
+  remoteUrl: string,
+  account: ForgeAccountRecord,
+  baseBranch: string,
+  headBranch: string | null,
+): ParsedForgeRemote | null {
+  const parsed = parseForgeRemote(remoteUrl);
+  if (!parsed) return null;
+  return parseForgeRemote(`${account.serverUrl}/${parsed.repoPath}.git`, account.provider, account.apiUrl, baseBranch, headBranch);
 }
 
 export interface ForgeServiceOptions {
@@ -188,59 +164,20 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     this.accounts = new ForgeAccountsService(db, this.fetch);
   }
 
-  private readStored(): StoredForgeConfig {
-    const row = this.db.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).get();
-    const envProvider = process.env.EMBERLINE_FORGE_PROVIDER?.trim();
-    const defaultProvider: ForgeProviderPreference =
-      envProvider === 'github' || envProvider === 'gitlab' || envProvider === 'gitea' ? envProvider : 'auto';
-    const defaults: StoredForgeConfig = {
-      provider: defaultProvider,
-      apiUrl: process.env.EMBERLINE_FORGE_API_URL?.trim() || null,
-      token: process.env.EMBERLINE_FORGE_TOKEN?.trim() || null,
-    };
-    if (!row || typeof row.value !== 'object' || row.value === null) return defaults;
-    const raw = row.value as Partial<StoredForgeConfig>;
-    return {
-      provider:
-        raw.provider === 'github' || raw.provider === 'gitlab' || raw.provider === 'gitea' || raw.provider === 'auto'
-          ? raw.provider
-          : defaults.provider,
-      apiUrl: raw.apiUrl !== undefined ? raw.apiUrl : defaults.apiUrl,
-      token: raw.token !== undefined ? raw.token : defaults.token,
-    };
-  }
-
-  getSettings(): ForgeSettings {
-    const stored = this.readStored();
-    return {
-      provider: stored.provider,
-      apiUrl: stored.apiUrl,
-      tokenConfigured: Boolean(stored.token),
-    };
-  }
-
-  updateSettings(rawBody: unknown): ForgeSettings {
-    const parsed = UpdateForgeSettingsBodySchema.safeParse(rawBody);
-    if (!parsed.success) {
-      throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
-    }
-    const current = this.readStored();
-    const body: UpdateForgeSettingsBody = parsed.data;
-    const next: StoredForgeConfig = {
-      provider: body.provider ?? current.provider,
-      apiUrl: body.apiUrl !== undefined ? (body.apiUrl?.trim() || null) : current.apiUrl,
-      token: body.token !== undefined ? (body.token?.trim() || null) : current.token,
-    };
-    this.db
-      .insert(settings)
-      .values({ key: SETTINGS_KEY, value: next })
-      .onConflictDoUpdate({ target: settings.key, set: { value: next } })
-      .run();
-    return {
-      provider: next.provider,
-      apiUrl: next.apiUrl,
-      tokenConfigured: Boolean(next.token),
-    };
+  /**
+   * Account and remote for a REST call: the account of the remote's host (the token goes only to
+   * that account's API); 409 when the remote does not parse or no account has its host.
+   */
+  private target(
+    remoteUrl: string,
+    baseBranch: string,
+    headBranch: string | null,
+  ): { account: ForgeAccountRecord; remote: ParsedForgeRemote } {
+    const parsed = parseForgeRemote(remoteUrl);
+    if (!parsed) throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
+    const account = accountForRemote(this.db, remoteUrl);
+    if (!account) throw conflict(noAccountMessage(parsed.host), 'forge_account_missing');
+    return { account, remote: viaAccount(remoteUrl, account, baseBranch, headBranch)! };
   }
 
   private async detectRemoteUrl(worktreePath: string, projectPath: string, fallbackRepoUrl: string | null): Promise<string | null> {
@@ -264,17 +201,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   async projectRemote(projectId: string): Promise<ForgeTarget> {
     const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
     if (!project) throw notFound('no such project');
-    const stored = this.readStored();
-    if (!stored.token) {
-      throw conflict('Forge Personal Access Token is not configured. Add a token in Forge Settings first.');
-    }
     const remoteUrl = await this.detectRemoteUrl('', project.path, project.repoUrl);
     if (!remoteUrl) {
       throw conflict('git remote "origin" is not configured for this project; add a remote or set its repository URL');
     }
-    const remote = parseForgeRemote(remoteUrl, stored.provider, stored.apiUrl, project.defaultBranch);
-    if (!remote) throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
-    assertTrustedForgeApi(remote, { apiUrl: stored.apiUrl, projectRepoUrl: project.repoUrl });
+    const { account, remote } = this.target(remoteUrl, project.defaultBranch, null);
     // The agent can rewrite origin: it must still name the repository the project was set up with.
     if (project.repoUrl?.trim()) {
       const declared = parseForgeRemote(project.repoUrl);
@@ -283,7 +214,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
         throw conflict('origin points at a different repository than the project');
       }
     }
-    return { remote, token: stored.token };
+    return { remote, token: account.token };
   }
 
   private recordedPullRequest(runId: string): ForgePullRequest | null {
@@ -316,23 +247,17 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     if (!run) throw notFound('no such run');
     const project = this.db.select().from(projects).where(eq(projects.id, run.projectId)).get();
     const baseBranch = project?.defaultBranch ?? 'main';
-    const stored = this.readStored();
     const remoteUrl = await this.detectRemoteUrl(run.worktreePath, project?.path ?? '', project?.repoUrl ?? null);
+    const account = remoteUrl ? accountForRemote(this.db, remoteUrl) : null;
     const parsed = remoteUrl
-      ? parseForgeRemote(remoteUrl, stored.provider, stored.apiUrl, baseBranch, run.branch)
+      ? account
+        ? viaAccount(remoteUrl, account, baseBranch, run.branch)
+        : parseForgeRemote(remoteUrl, 'auto', null, baseBranch, run.branch)
       : null;
 
     let pullRequest = this.recordedPullRequest(runId);
-    const trusted = (remote: ParsedForgeRemote) => {
-      try {
-        assertTrustedForgeApi(remote, { apiUrl: stored.apiUrl, projectRepoUrl: project?.repoUrl ?? null });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    if (pullRequest && parsed && stored.token && trusted(parsed)) {
-      const refreshed = await this.refreshPullRequest(parsed, stored.token, pullRequest).catch(() => null);
+    if (pullRequest && parsed && account) {
+      const refreshed = await this.refreshPullRequest(parsed, account.token, pullRequest).catch(() => null);
       if (refreshed) pullRequest = refreshed;
     }
 
@@ -343,7 +268,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       branch: run.branch,
       baseBranch,
       compareUrl: parsed?.compareUrl ?? null,
-      tokenConfigured: Boolean(stored.token),
+      tokenConfigured: Boolean(account),
       pullRequest,
     };
   }
@@ -360,20 +285,12 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
 
     const project = this.db.select().from(projects).where(eq(projects.id, run.projectId)).get();
     const baseBranch = body.baseBranch?.trim() || project?.defaultBranch || 'main';
-    const stored = this.readStored();
-    if (!stored.token) {
-      throw conflict('Forge Personal Access Token is not configured. Add a token in Forge Settings first.');
-    }
 
     const remoteUrl = await this.detectRemoteUrl(run.worktreePath, project?.path ?? '', project?.repoUrl ?? null);
     if (!remoteUrl) {
       throw conflict('git remote "origin" is not configured for this repository');
     }
-    const parsed = parseForgeRemote(remoteUrl, stored.provider, stored.apiUrl, baseBranch, run.branch);
-    if (!parsed) {
-      throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
-    }
-    assertTrustedForgeApi(parsed, { apiUrl: stored.apiUrl, projectRepoUrl: project?.repoUrl ?? null });
+    const { account, remote: parsed } = this.target(remoteUrl, baseBranch, run.branch);
 
     if (body.pushFirst) {
       try {
@@ -387,7 +304,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     const title = body.title?.trim() || run.title || `Changes from ${run.branch}`;
     const prBody = body.body ?? `Automated pull request created from Emberline run \`${run.id}\` (\`${run.branch}\`).`;
 
-    const pr = await this.createPrOnForge(parsed, stored.token, {
+    const pr = await this.createPrOnForge(parsed, account.token, {
       title,
       body: prBody,
       headBranch: run.branch,

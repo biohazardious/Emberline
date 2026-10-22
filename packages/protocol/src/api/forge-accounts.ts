@@ -30,7 +30,11 @@ export const ForgeAccount = z.object({
 });
 export type ForgeAccount = z.infer<typeof ForgeAccount>;
 
-export const ForgeAccountsResponse = z.object({ accounts: z.array(ForgeAccount) });
+export const ForgeAccountsResponse = z.object({
+  accounts: z.array(ForgeAccount),
+  /** An earlier global token could not be matched to one server; add it again as an account. */
+  legacyTokenUnmatched: z.boolean(),
+});
 export type ForgeAccountsResponse = z.infer<typeof ForgeAccountsResponse>;
 
 export const CreateForgeAccountBody = z.object({

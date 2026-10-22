@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ForgeProvider } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { forgeAccounts } from '../db/schema.js';
+import { forgeAccounts, projects, settings } from '../db/schema.js';
 import { conflict } from '../errors.js';
 import { type GitHttpCredential, urlUnderServer } from '../git-credentials.js';
 import { hostOf, sameForgeServer } from './hosts.js';
@@ -253,4 +253,92 @@ export function updateAccount(
 
 export function deleteAccount(db: Db, id: string): void {
   db.delete(forgeAccounts).where(eq(forgeAccounts.id, id)).run();
+}
+
+export const LEGACY_FORGE_SETTINGS_KEY = 'forge.config';
+
+interface LegacyForgeConfig {
+  provider?: unknown;
+  apiUrl?: unknown;
+  token?: unknown;
+}
+
+const readLegacy = (db: Db): LegacyForgeConfig | null => {
+  const row = db.select().from(settings).where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY)).get();
+  return row && typeof row.value === 'object' && row.value !== null ? (row.value as LegacyForgeConfig) : null;
+};
+const legacyToken = (cfg: LegacyForgeConfig | null) => (typeof cfg?.token === 'string' ? cfg.token.trim() : '');
+
+/** The servers projects were set up with (https only: the old token never went over plain http to them). */
+function projectServers(db: Db): { servers: Set<string>; plainHttp: boolean } {
+  const servers = new Set<string>();
+  let plainHttp = false;
+  for (const { repoUrl } of db.select({ repoUrl: projects.repoUrl }).from(projects).all()) {
+    if (!repoUrl?.trim()) continue;
+    const url = repoUrl.trim();
+    if (/^http:\/\//i.test(url)) {
+      plainHttp = true;
+      continue;
+    }
+    const host = /^https:\/\//i.test(url) ? hostOf(url) : hostOf(url)?.replace(/:\d+$/, '');
+    if (host) servers.add(`https://${host}`);
+  }
+  return { servers, plainHttp };
+}
+
+/**
+ * Once per start: the old global token becomes an account for its host, then is cleared (so a
+ * removed account does not come back). An account stored for the host is kept. Environment accounts
+ * are ignored: a stored account for the same host wins over them.
+ */
+export function migrateLegacyForgeToken(db: Db): 'none' | 'migrated' | 'unmatched' {
+  const cfg = readLegacy(db);
+  const token = legacyToken(cfg);
+  if (!cfg || !token) return 'none';
+  const fixed = fixedProvider(typeof cfg.provider === 'string' ? cfg.provider : undefined);
+  const apiUrl =
+    typeof cfg.apiUrl === 'string' && cfg.apiUrl.trim() ? cfg.apiUrl.trim().replace(/\/+$/, '') : null;
+  let target: { provider: ForgeProvider; serverUrl: string } | null = null;
+  if (apiUrl) {
+    target = serverFromApiUrl(apiUrl, fixed);
+  } else {
+    const { servers, plainHttp } = projectServers(db);
+    if (servers.size === 1 && !plainHttp) {
+      const serverUrl = [...servers][0]!;
+      target = { provider: fixed ?? detectProviderByHost(new URL(serverUrl).hostname), serverUrl };
+    } else if (servers.size === 0 && !plainHttp && fixed !== 'gitea') {
+      target =
+        fixed === 'gitlab'
+          ? { provider: 'gitlab', serverUrl: 'https://gitlab.com' }
+          : { provider: 'github', serverUrl: 'https://github.com' };
+    }
+  }
+  if (!target) return 'unmatched';
+  insertAccountIfHostFree(
+    db,
+    {
+      provider: target.provider,
+      serverUrl: target.serverUrl,
+      apiUrl: apiUrl ?? deriveApiUrl(target.provider, target.serverUrl),
+      username: null,
+      token,
+    },
+    {},
+  );
+  forgetLegacyToken(db);
+  return 'migrated';
+}
+
+/** True while forge.config still holds a token (the migration could not match it to one server). */
+export function legacyTokenUnmatched(db: Db): boolean {
+  return Boolean(legacyToken(readLegacy(db)));
+}
+
+export function forgetLegacyToken(db: Db): void {
+  const cfg = readLegacy(db);
+  if (!cfg) return;
+  db.update(settings)
+    .set({ value: { ...cfg, token: null } })
+    .where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY))
+    .run();
 }

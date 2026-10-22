@@ -1,8 +1,14 @@
 import type { ForgeAccount, ForgeAccountsResponse } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
+import type { Db } from '../db/index.js';
+import { forgetLegacyToken } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
 
-export function registerForgeAccountRoutes(app: FastifyInstance, accounts: ForgeAccountsService): void {
+export function registerForgeAccountRoutes(
+  app: FastifyInstance,
+  accounts: ForgeAccountsService,
+  db: Db,
+): void {
   app.get('/api/forge/accounts', async (): Promise<ForgeAccountsResponse> => accounts.list());
   app.post('/api/forge/accounts', async (request, reply): Promise<ForgeAccount> => {
     const created = await accounts.create(request.body);
@@ -20,4 +26,8 @@ export function registerForgeAccountRoutes(app: FastifyInstance, accounts: Forge
     '/api/forge/accounts/:id/check',
     async (request): Promise<ForgeAccount> => accounts.check(request.params.id),
   );
+  app.delete('/api/forge/legacy-token', async () => {
+    forgetLegacyToken(db);
+    return { ok: true };
+  });
 }

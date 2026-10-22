@@ -14,6 +14,7 @@ import {
   findAccountRecord,
   type ForgeAccountRecord,
   insertAccountIfHostFree,
+  legacyTokenUnmatched,
   listAccountRecords,
   normalizeServerUrl,
   serverHost,
@@ -54,7 +55,25 @@ export class ForgeAccountsService {
   ) {}
 
   list(): ForgeAccountsResponse {
-    return { accounts: listAccountRecords(this.db, this.env).map(accountView) };
+    return {
+      accounts: listAccountRecords(this.db, this.env).map(accountView),
+      legacyTokenUnmatched: legacyTokenUnmatched(this.db),
+    };
+  }
+
+  /** Start-up: stored accounts without a username (migrated) are checked once; failures are only logged. */
+  async fillMissingUsernames(log: (message: string) => void): Promise<void> {
+    for (const account of listAccountRecords(this.db, this.env).filter(
+      (a) => a.source === 'settings' && !a.username,
+    )) {
+      try {
+        await this.check(account.id);
+      } catch (error) {
+        log(
+          `forge: could not check the account for ${serverHost(account.serverUrl)}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   record(id: string): ForgeAccountRecord {

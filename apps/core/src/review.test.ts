@@ -15,7 +15,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeNextCronDate } from './cron/service.js';
 import { parseForgeRemote } from './forge/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -330,8 +330,10 @@ describe('M6 review, git commit/push, and artifacts', () => {
     });
 
     const { createServer } = await import('node:http');
+    const prAuthorization: (string | undefined)[] = [];
     const server = createServer((req, res) => {
       if (req.method === 'POST' && req.url === '/repos/acme/widget/pulls') {
+        prAuthorization.push(req.headers.authorization);
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -361,21 +363,11 @@ describe('M6 review, git commit/push, and artifacts', () => {
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
       execFileSync('git', ['-C', run.worktreePath, 'remote', 'set-url', 'origin', 'git@github.com:acme/widget.git']);
 
-      const patchForge = await t.app.inject({
-        method: 'PATCH',
-        url: '/api/forge',
-        headers: { ...CSRF, cookie },
-        payload: {
-          provider: 'github',
-          apiUrl: apiBase,
-          token: 'ghp_test_token_123',
-        },
-      });
-      expect(patchForge.statusCode).toBe(200);
-      expect(patchForge.json()).toEqual({
+      seedForgeAccount(t.db, {
         provider: 'github',
+        serverUrl: 'https://github.com',
+        token: 'ghp_test_token_123',
         apiUrl: apiBase,
-        tokenConfigured: true,
       });
 
       const statusBefore: RunForgeStatus = (await api('GET', `/api/runs/${run.id}/forge`)).json();
@@ -400,6 +392,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
         state: 'open',
         ciStatus: 'success',
       });
+      expect(prAuthorization).toEqual(['Bearer ghp_test_token_123']);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -420,17 +413,11 @@ describe('M6 review, git commit/push, and artifacts', () => {
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
       // A prompt-injected agent repoints origin at a server it controls.
       execFileSync('git', ['-C', run.worktreePath, 'remote', 'set-url', 'origin', `http://127.0.0.1:${port}/acme/widget.git`]);
-      const patchForge = await t.app.inject({
-        method: 'PATCH',
-        url: '/api/forge',
-        headers: { ...CSRF, cookie },
-        payload: { provider: 'auto', apiUrl: null, token: 'ghp_secret_token' },
-      });
-      expect(patchForge.statusCode).toBe(200);
+      seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'ghp_secret_token' });
 
       const createPrRes = await api('POST', `/api/runs/${run.id}/forge/pr`, { pushFirst: false });
       expect(createPrRes.statusCode).toBe(409);
-      expect(createPrRes.json().message).toMatch(/not trusted/i);
+      expect(createPrRes.json().message).toBe(`Add a forge account for 127.0.0.1:${port} in Settings → Forge accounts.`);
       expect(seen).toHaveLength(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
