@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CSRF_HEADER, type ForgeProvider } from '@emberline/protocol';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { type CoreConfig, DEFAULT_DOCKER_CERT_PATH, DEFAULT_PREVIEW_PORTS } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
 import { PostMergeJobs } from './factory/post-merge.js';
@@ -60,6 +60,8 @@ export async function createTestApp(
   ticketOptions: Partial<TicketServiceOptions> = {},
   /** Runs on the fresh DB before core starts (what an earlier version left behind). */
   beforeStart?: (db: OpenedDb['db']) => void,
+  /** Fastify options for the server (a test logger). */
+  fastifyOptions: FastifyServerOptions = {},
 ): Promise<TestApp> {
   const dir = mkdtempSync(path.join(tmpdir(), 'core-'));
   const config: CoreConfig = {
@@ -120,7 +122,7 @@ export async function createTestApp(
     recovery,
     repository,
     mainPush,
-  });
+  }, fastifyOptions);
   return {
     app,
     config,

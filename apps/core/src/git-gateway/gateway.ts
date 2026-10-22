@@ -67,6 +67,23 @@ export function redactCapabilityUrls(text: string): string {
   return text.replace(/\/api\/internal\/git\/[A-Za-z0-9_-]{20,}/g, '/api/internal/git/[capability]');
 }
 
+/**
+ * A request URL as it may be logged. Git sends the gateway's own spelling, which its routes keep out
+ * of the log (`logLevel: 'silent'`); any other spelling (`/API/…`, `/api//…`, `internal%2Fgit`)
+ * misses those routes, so the segment after `internal/git/` is redacted here whatever its case,
+ * slashes or percent-encoding. Other URLs are returned as they are.
+ */
+export function requestUrlForLog(url: string): string {
+  let decoded = url;
+  for (let i = 0; i < 3; i++) {
+    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+    if (next === decoded) break;
+    decoded = next;
+  }
+  const capability = /internal[/\\]+git[/\\]+[^/\\?#]+/gi;
+  return capability.test(decoded) ? decoded.replace(capability, 'internal/git/[capability]') : url;
+}
+
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */
 export function describeGitError(error: unknown, credential?: GitHttpCredential | null): string {
   let text: string;

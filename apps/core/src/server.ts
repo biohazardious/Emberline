@@ -3,7 +3,7 @@ import { API_VERSION, type HealthResponse, PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTO
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import { registerAuth } from './auth/plugin.js';
 import type { CoreConfig } from './config.js';
 import { CronService } from './cron/service.js';
@@ -11,6 +11,7 @@ import type { Db } from './db/index.js';
 import { installErrorHandler } from './errors.js';
 import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
+import { requestUrlForLog } from './git-gateway/gateway.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
@@ -70,12 +71,29 @@ export interface CoreDeps {
   mainPush?: KeepMainPushed;
 }
 
+/** Fastify's request serializer, with a git gateway capability in the URL redacted (see `requestUrlForLog`). */
+const requestLogSerializer = (req: FastifyRequest) => ({
+  method: req.method,
+  url: requestUrlForLog(req.url),
+  host: req.host,
+  remoteAddress: req.ip,
+  remotePort: req.socket?.remotePort,
+});
+
+/** The logger options with that serializer (an explicit `logger: false` stays off). */
+function withRequestRedaction(logger: FastifyServerOptions['logger']): FastifyServerOptions['logger'] {
+  if (!logger) return logger;
+  const options = logger === true ? {} : logger;
+  return { ...options, serializers: { ...options.serializers, req: requestLogSerializer } };
+}
+
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     bodyLimit: DEFAULT_BODY_LIMIT,
     // Demo capability tokens travel as a path parameter.
     routerOptions: { maxParamLength: 512 },
     ...fastifyOptions,
+    logger: withRequestRedaction(fastifyOptions.logger),
     trustProxy: deps.config.trustProxy,
   });
   const startedAt = Date.now();
