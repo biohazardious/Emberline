@@ -20,6 +20,7 @@ import {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound, unavailable } from '../errors.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
+import { accountCloneStatus } from '../git-transport/import-clone.js';
 import { createExclusiveFile, isMissing, openFileUnder, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { parseWorktreeYml } from '../worktree-config/load.js';
@@ -150,6 +151,7 @@ function latestClone<T extends { meta: Record<string, string>; createdAt: string
 
 /** Refuses detection and adopt while the project's clone is still writing the folder. Starts no process. */
 export async function assertNotCloning(ptyd: PtydBridge, projectId: string): Promise<void> {
+  if (accountCloneStatus(projectId)?.status === 'cloning') throw conflict('the repository is still being cloned');
   let sessions;
   try {
     sessions = (await ptyd.get().list()).sessions;
@@ -166,6 +168,15 @@ export async function assertNotCloning(ptyd: PtydBridge, projectId: string): Pro
  * is judged by its folder alone.
  */
 export async function importStatus(ptyd: PtydBridge, project: Project): Promise<ImportStatusResponse> {
+  // A clone with a forge account runs in core (git-transport/import-clone.ts): no terminal.
+  const account = accountCloneStatus(project.id);
+  if (account) {
+    if (account.status === 'cloning') return { status: 'cloning', exitCode: null, terminalId: null, tail: account.tail };
+    if (account.status === 'ready' && (await hasHeadCommit(project.path))) {
+      return { status: 'ready', exitCode: 0, terminalId: null, tail: account.tail };
+    }
+    return { status: 'failed', exitCode: null, terminalId: null, tail: account.tail };
+  }
   let sessions;
   try {
     sessions = (await ptyd.get().list()).sessions;

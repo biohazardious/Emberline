@@ -2163,9 +2163,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async push(id: string): Promise<GitPushResponse> {
     const row = this.row(id);
-    const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), (url) =>
-      gitCredentialForRemote(this.db, url),
-    );
+    const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
+    // The account goes only to the project's own repository URL, never to an origin an agent set.
+    const credential = project?.repoUrl ? gitCredentialForRemote(this.db, project.repoUrl) : null;
+    const account =
+      credential && project?.repoUrl
+        ? { mainPath: project.path, url: project.repoUrl, credential, workspacesDir: this.config.workspacesDir }
+        : null;
+    const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), account);
     this.record(id, {
       source: 'user',
       type: 'pushed',

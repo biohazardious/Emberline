@@ -80,7 +80,9 @@ import { projects, projectSettings, projectWorktreeConfig, settings } from '../d
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
-import { credentialPtyEnvForRemote } from '../forge/account-store.js';
+import { gitCredentialForRemote } from '../forge/account-store.js';
+import type { GitHttpCredential } from '../git-credentials.js';
+import { cancelAccountClone, startAccountClone } from '../git-transport/import-clone.js';
 import {
   getRunnerClaudeUsage,
   isBrowsableUrl,
@@ -447,18 +449,22 @@ export function registerProjectRoutes(
     const id = randomUUID();
     const projectPath = path.join(config.workspacesDir, slug);
     let terminalId: string | null = null;
+    let cloneCredential: GitHttpCredential | null = null;
 
     if (body.repoUrl) {
       if (existsSync(projectPath)) throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
-      // Clone inside the runner; an account for the URL's host gives this session (only) its credentials. The UI can watch it live.
-      const session = await ptyd.get().spawn({
-        file: 'git',
-        args: ['clone', '--progress', '--', body.repoUrl, projectPath],
-        cwd: config.workspacesDir,
-        env: credentialPtyEnvForRemote(db, body.repoUrl),
-        meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
-      });
-      terminalId = session.id;
+      // With a forge account the token stays in core: core fetches, the runner checks out (below).
+      cloneCredential = gitCredentialForRemote(db, body.repoUrl);
+      if (!cloneCredential) {
+        // Public or SSH: clone inside the runner with its own keys; the UI can watch it live.
+        const session = await ptyd.get().spawn({
+          file: 'git',
+          args: ['clone', '--progress', '--', body.repoUrl, projectPath],
+          cwd: config.workspacesDir,
+          meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
+        });
+        terminalId = session.id;
+      }
     } else {
       // Never write blueprint files or `git init` into someone's existing folder.
       if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
@@ -508,6 +514,15 @@ export function registerProjectRoutes(
       tx.insert(projects).values(row).run();
       tx.insert(projectSettings).values({ projectId: id, settings: { importSource } }).run();
     });
+    if (body.repoUrl && cloneCredential) {
+      startAccountClone({
+        projectId: id,
+        url: body.repoUrl,
+        target: projectPath,
+        workspacesDir: config.workspacesDir,
+        credential: cloneCredential,
+      });
+    }
     const project: Project = { ...toProject(row), importSource };
 
     saveActiveProjectId(project.id);
@@ -1283,6 +1298,7 @@ export function registerProjectRoutes(
       if (!row) throw notFound('no such project');
 
       tickets.setAutoChain(projectId, false);
+      await cancelAccountClone(projectId);
       // Live runs stop first (a run in setup gets its setup command killed): a teardown must not
       // take services down under a working agent.
       for (const run of runs.list()) {

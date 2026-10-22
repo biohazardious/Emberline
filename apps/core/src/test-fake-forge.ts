@@ -55,6 +55,7 @@ function backend(
     },
   });
   req.pipe(child.stdin);
+  child.stdin.on('error', () => undefined); // http-backend may exit before reading everything
   const out: Buffer[] = [];
   child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
   child.on('close', () => {
@@ -160,7 +161,12 @@ export async function startFakeForge(
       const create =
         req.method === 'POST' ? /^\/api\/v1\/(?:user|orgs\/([^/]+))\/repos$/.exec(url.pathname) : null;
       if (create) {
-        const body = JSON.parse(await readBody(req)) as { name: string };
+        let body: { name: string };
+        try {
+          body = JSON.parse(await readBody(req)) as { name: string };
+        } catch {
+          return json(res, 400, { message: 'invalid JSON' });
+        }
         const owner = create[1] ?? username;
         if (!forge.canCreate)
           return json(res, 403, {

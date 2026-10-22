@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { forgeAccounts } from '../db/schema.js';
 import { conflict } from '../errors.js';
-import { credentialPtyEnv, type GitHttpCredential } from '../git-credentials.js';
+import { type GitHttpCredential, urlUnderServer } from '../git-credentials.js';
 import { hostOf, sameForgeServer } from './hosts.js';
 
 export interface ForgeAccountRecord {
@@ -184,14 +184,6 @@ const BASIC_USER: Record<ForgeProvider, string | null> = {
   gitea: null,
 };
 
-/** Same scheme, host and port as the server, and a path at or below its path (by segment). */
-function underServer(url: URL, serverUrl: string): boolean {
-  const server = new URL(serverUrl);
-  if (url.origin !== server.origin) return false;
-  const base = server.pathname.replace(/\/+$/, '');
-  return base === '' || url.pathname === base || url.pathname.startsWith(`${base}/`);
-}
-
 /** Credentials for one git call to an http(s) remote under an account's server; null otherwise (ssh, other host). */
 export function gitCredentialForRemote(
   db: Db,
@@ -205,7 +197,9 @@ export function gitCredentialForRemote(
     return null; // scp-style ssh, a path
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  const account = listAccountRecords(db, env).find((a) => underServer(url, a.serverUrl));
+  // A URL that carries its own user name or token never gets the account's.
+  if (url.username || url.password) return null;
+  const account = listAccountRecords(db, env).find((a) => urlUnderServer(url, a.serverUrl));
   if (!account) return null;
   const username = BASIC_USER[account.provider] ?? account.username;
   if (!username) {
@@ -215,12 +209,6 @@ export function gitCredentialForRemote(
     );
   }
   return { serverUrl: account.serverUrl, username, token: account.token };
-}
-
-/** The import clone's extra PTY env: `credentialPtyEnv` for a matching account, else `{}`. */
-export function credentialPtyEnvForRemote(db: Db, remoteUrl: string): Record<string, string> {
-  const credential = gitCredentialForRemote(db, remoteUrl);
-  return credential ? credentialPtyEnv(credential) : {};
 }
 
 export function insertAccount(

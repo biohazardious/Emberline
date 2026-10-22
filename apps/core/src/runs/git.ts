@@ -20,6 +20,7 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
 import type { GitHttpCredential } from '../git-credentials.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
+import { describeTransportError, pushBranchRef } from '../git-transport/transport.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
 
@@ -664,11 +665,19 @@ export async function commitWorktree(
   }
 }
 
+/** A run push with a forge account: core's transport, from the main repository, to the project's own URL. */
+export interface AccountPush {
+  mainPath: string;
+  url: string;
+  credential: GitHttpCredential;
+  workspacesDir: string;
+}
+
 export async function pushWorktreeBranch(
   worktreePath: string,
   branch: string | null,
   defaultBranch: string,
-  credentialFor?: (remoteUrl: string) => GitHttpCredential | null,
+  account?: AccountPush | null,
 ): Promise<GitPushResponse> {
   if (!existsSync(path.join(worktreePath, '.git'))) throw conflict('project is not a git repository');
   const currentBranch = (await git(worktreePath, ['branch', '--show-current']).catch(() => '')).trim();
@@ -680,16 +689,39 @@ export async function pushWorktreeBranch(
   }
   const branchToPush = targetBranch;
 
+  if (account) {
+    let result: 'pushed' | 'rejected';
+    try {
+      result = await pushBranchRef({
+        url: account.url,
+        credential: account.credential,
+        workspacesDir: account.workspacesDir,
+        repoRoot: account.mainPath,
+        branch: branchToPush,
+      });
+    } catch (error) {
+      throw conflict(`git push failed: ${describeTransportError(error, account.credential)}`);
+    }
+    if (result === 'rejected') {
+      throw conflict(`git push failed: the remote ${branchToPush} has commits this run doesn't have`);
+    }
+    // What `push -u` wrote before: the runner's git, no network, no credentials.
+    await git(worktreePath, ['config', `branch.${branchToPush}.remote`, 'origin']).catch(() => undefined);
+    await git(worktreePath, ['config', `branch.${branchToPush}.merge`, `refs/heads/${branchToPush}`]).catch(
+      () => undefined,
+    );
+    return { branch: branchToPush, remote: 'origin', output: `Pushed ${branchToPush} to ${account.url}` };
+  }
+
   const remoteUrl = await git(worktreePath, ['remote', 'get-url', 'origin']).catch(() => '');
   if (!remoteUrl) {
     throw conflict('no "origin" remote is configured for this repository');
   }
-  const credential = credentialFor?.(remoteUrl.trim()) ?? null;
 
   try {
     const { stdout, stderr } = await execGitFile(
       ['-C', worktreePath, 'push', '--porcelain', '-u', 'origin', `refs/heads/${branchToPush}:refs/heads/${branchToPush}`],
-      { timeout: 60_000, credential },
+      { timeout: 60_000 },
     );
     return {
       branch: branchToPush,

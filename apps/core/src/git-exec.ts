@@ -1,5 +1,4 @@
 import { execCommand, execFileChecked } from './command-exec.js';
-import { credentialGitEnv, GitCommandError, type GitHttpCredential, redactCredential } from './git-credentials.js';
 
 /**
  * Core runs git inside repositories that agents control: worktrees share the main repo's
@@ -34,9 +33,6 @@ export const HARDENED_GIT_ARGS: readonly string[] = Object.entries(OVERRIDES).fl
 const BLOCKED_CONFIG_KEY =
   /^(diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|include\.path|includeif\..+\.path|remote\..+\.(uploadpack|receivepack|vcs)|url\..+\.(insteadof|pushinsteadof)|core\.(gitproxy|alternaterefscommand)|gpg\.program|gpg\..+\.program)$/i;
 
-/** With credentials, repo config must not steer the HTTP connection (proxy, TLS, per-URL overrides). */
-const CREDENTIAL_BLOCKED_KEY = /^(http\..+|remote\..+\.proxy)$/i;
-
 /** Hardening variables for every git process; nothing else from core's environment is forwarded. */
 export function hardenedGitEnv(): Record<string, string> {
   return {
@@ -48,20 +44,14 @@ export function hardenedGitEnv(): Record<string, string> {
 }
 
 export class UnsafeGitConfigError extends Error {
-  constructor(
-    readonly keys: string[],
-    message = `refusing to run git: repository config sets command-executing keys (${keys.join(', ')})`,
-  ) {
-    super(message);
+  constructor(readonly keys: string[]) {
+    super(`refusing to run git: repository config sets command-executing keys (${keys.join(', ')})`);
     this.name = 'UnsafeGitConfigError';
   }
 }
 
-/**
- * Throws when the repository config (including files it includes) sets a blocked key; with
- * `credential`, also when it sets keys that steer the HTTP connection (`http.*`, `remote.*.proxy`).
- */
-export async function assertSafeGitConfig(cwd: string, opts: { credential?: boolean } = {}): Promise<void> {
+/** Throws when the repository config (including files it includes) sets a blocked key. */
+export async function assertSafeGitConfig(cwd: string): Promise<void> {
   const res = await execCommand({
     file: 'git',
     args: ['-C', cwd, 'config', '--list', '--name-only'],
@@ -74,21 +64,11 @@ export async function assertSafeGitConfig(cwd: string, opts: { credential?: bool
     // means config git cannot parse, e.g. an include pointing at a non-config file. Fail closed.
     throw new UnsafeGitConfigError([res.stderr.trim().split('\n')[0] || 'unreadable config']);
   }
-  const keys = res.stdout
+  const blocked = res.stdout
     .split('\n')
-    .map((k) => k.trim())
-    .filter(Boolean);
-  const blocked = keys.filter((k) => BLOCKED_CONFIG_KEY.test(k));
+    .map((key) => key.trim())
+    .filter((key) => key && BLOCKED_CONFIG_KEY.test(key));
   if (blocked.length > 0) throw new UnsafeGitConfigError([...new Set(blocked)]);
-  if (opts.credential) {
-    const steering = [...new Set(keys.filter((key) => CREDENTIAL_BLOCKED_KEY.test(key)))];
-    if (steering.length > 0) {
-      throw new UnsafeGitConfigError(
-        steering,
-        `The repository's git config sets ${steering.join(', ')}. Emberline sends forge credentials only without them; remove them with "git config --unset".`,
-      );
-    }
-  }
 }
 
 export interface RunGitOptions {
@@ -113,8 +93,6 @@ export interface ExecGitOptions {
   maxBuffer?: number;
   /** Extra `GIT_*` variables (other keys are dropped); hardening variables always win. */
   env?: Record<string, string | undefined>;
-  /** An account's credentials for this one call (http(s) remotes under its server only). */
-  credential?: GitHttpCredential | null;
 }
 
 function repoDirOf(args: string[], options: ExecGitOptions): string {
@@ -145,31 +123,15 @@ export async function execGitFile(
   options: ExecGitOptions & { encoding?: 'buffer' } = {},
 ): Promise<{ stdout: string | Buffer; stderr: string }> {
   const repo = repoDirOf(args, options);
-  const credential = options.credential ?? null;
-  await assertSafeGitConfig(repo, { credential: Boolean(credential) });
-  let result: { stdout: string; stderr: string };
-  try {
-    result = await execFileChecked({
-      file: 'git',
-      args: [...HARDENED_GIT_ARGS, ...args],
-      cwd: options.cwd ?? '/',
-      // Credential variables come after the GIT_* filter; hardening variables still win.
-      env: { ...gitVariables(options.env), ...(credential ? credentialGitEnv(credential) : {}), ...hardenedGitEnv() },
-      timeoutMs: options.timeout ?? 30_000,
-      maxOutputBytes: options.maxBuffer,
-      encoding: options.encoding === 'buffer' ? 'base64' : 'utf8',
-    });
-  } catch (error) {
-    if (!credential) throw error;
-    const e = error as { message?: string; code?: unknown; stdout?: string; stderr?: string };
-    // Never the original: CommandFailedError keeps the request, whose env holds the header.
-    throw new GitCommandError(
-      redactCredential(e.message ?? 'git failed', credential),
-      typeof e.code === 'number' ? e.code : null,
-      redactCredential(e.stdout ?? '', credential),
-      redactCredential(e.stderr ?? '', credential),
-    );
-  }
-  const stderr = redactCredential(result.stderr, credential);
-  return { stdout: options.encoding === 'buffer' ? Buffer.from(result.stdout, 'base64') : result.stdout, stderr };
+  await assertSafeGitConfig(repo);
+  const { stdout, stderr } = await execFileChecked({
+    file: 'git',
+    args: [...HARDENED_GIT_ARGS, ...args],
+    cwd: options.cwd ?? '/',
+    env: { ...gitVariables(options.env), ...hardenedGitEnv() },
+    timeoutMs: options.timeout ?? 30_000,
+    maxOutputBytes: options.maxBuffer,
+    encoding: options.encoding === 'buffer' ? 'base64' : 'utf8',
+  });
+  return { stdout: options.encoding === 'buffer' ? Buffer.from(stdout, 'base64') : stdout, stderr };
 }
