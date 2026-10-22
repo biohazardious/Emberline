@@ -38,6 +38,13 @@ export function parsePort(text: string): number | null {
   return port >= 1 && port <= 65535 ? port : null;
 }
 
+export const PORT_PROBLEM = 'Enter a port from 1 to 65535.';
+
+/** Why the typed port cannot be used, or null when it can. */
+export function portProblem(text: string): string | null {
+  return parsePort(text) === null ? PORT_PROBLEM : null;
+}
+
 export function containerPreviewSaveEnabled(v: {
   draft: ContainerPreviewDraft | null;
   diffReady: boolean;

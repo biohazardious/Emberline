@@ -20,6 +20,7 @@ import {
   declaredPortsLine,
   defaultContainerPreviewChoice,
   parsePort,
+  portProblem,
 } from '../containerPreviewSetup';
 import { useApi } from '../hooks/useApi';
 import { WORKTREE_EDIT_HINT, worktreeSaveFailure } from '../projectSettings';
@@ -34,7 +35,9 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
   const shown = containerPreviewBoxShown(data);
   const [draft, setDraft] = useState<ContainerPreviewDraft | null>(null);
   const [portText, setPortText] = useState('');
-  const [diff, setDiff] = useState<ContainerPreviewDiffResponse | null>(null);
+  const [diffState, setDiffState] = useState<{ for: string; value: ContainerPreviewDiffResponse } | null>(
+    null,
+  );
   const [diffError, setDiffError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof worktreeSaveFailure> | null>(null);
@@ -59,14 +62,17 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
   const file = data?.available ? data.file : null;
   const service = draft?.service ?? null;
   const port = draft?.port ?? null;
+  const pickKey = file && service && port !== null ? `${file}\n${service}\n${port}` : null;
+  // A diff counts only for the pick it was made for, so a stale one is never shown or saved.
+  const diff = diffState && diffState.for === pickKey ? diffState.value : null;
   useEffect(() => {
-    setDiff(null);
+    setDiffState(null);
     setDiffError(null);
     if (!file || !service || port === null) return;
     let stale = false;
     const timer = setTimeout(() => {
       api<ContainerPreviewDiffResponse>(`${optionsUrl}/diff`, 'POST', { file, service, port }).then(
-        (next) => !stale && setDiff(next),
+        (next) => !stale && setDiffState({ for: `${file}\n${service}\n${port}`, value: next }),
         (err: unknown) => !stale && setDiffError(errorMessage(err)),
       );
     }, CONTAINER_PREVIEW_DIFF_DELAY_MS);
@@ -104,6 +110,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
   };
 
   if (!shown || !data?.file) return null;
+  const problem = portProblem(portText);
   const ports = data.services.find((s) => s.name === service)?.ports ?? [];
   return (
     <section
@@ -115,7 +122,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
       <h3 id="container-preview-title">{CONTAINER_PREVIEW_TITLE}</h3>
       <p className="muted">{containerPreviewIntro(data.file)}</p>
       {!data.available ? (
-        <p className="banner banner-warn" role="status">
+        <p className="banner banner-warn" role="alert">
           {data.reason}
         </p>
       ) : (
@@ -146,6 +153,8 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
                 className="input"
                 inputMode="numeric"
                 list="container-preview-ports"
+                aria-invalid={problem !== null}
+                aria-describedby={problem ? 'container-preview-port-problem' : 'container-preview-declared'}
                 value={portText}
                 disabled={busy}
                 onChange={(e) => {
@@ -160,16 +169,30 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
               </datalist>
             </label>
           </div>
-          {service && <p className="muted small">{declaredPortsLine(service, ports)}</p>}
-          {diffError && (
-            <p className="banner banner-error" role="alert">
-              {diffError}
+          {problem && (
+            <p id="container-preview-port-problem" className="banner banner-warn" role="alert">
+              {problem}
             </p>
           )}
+          {service && (
+            <p id="container-preview-declared" className="muted small">
+              {declaredPortsLine(service, ports)}
+            </p>
+          )}
+          {diffError && (
+            <div className="banner banner-error" role="alert">
+              <p>{diffError}</p>
+              <button type="button" className="btn btn-sm" onClick={() => void reload()}>
+                Reload
+              </button>
+            </div>
+          )}
           {diff && (
-            <pre className="worktree-review-diff mono" tabIndex={0} aria-label="Changes to worktree.yml">
-              {diff.diff}
-            </pre>
+            <div role="region" aria-label="Changes to worktree.yml">
+              <pre className="worktree-review-diff mono" tabIndex={0}>
+                {diff.diff}
+              </pre>
+            </div>
           )}
           {failure && (
             <div className="banner banner-error" role="alert">

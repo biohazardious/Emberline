@@ -8,6 +8,7 @@ import {
   declaredPortsLine,
   defaultContainerPreviewChoice,
   parsePort,
+  portProblem,
 } from './containerPreviewSetup';
 
 const off = { available: false, reason: 'x', file: null, services: [], commandPreview: true };
@@ -91,5 +92,13 @@ describe('copy', () => {
     expect(declaredPortsLine('web', [8080, 9229])).toBe('web declares ports 8080, 9229.');
     expect(declaredPortsLine('job', [])).toBe('job declares no port. Enter the one its app listens on.');
     expect(containerPreviewSettingsHref('p1')).toBe('/projects/p1/settings#container-preview');
+  });
+});
+
+describe('portProblem', () => {
+  it('names why the port cannot be used, and is silent for a good one', () => {
+    expect(portProblem('8080')).toBeNull();
+    for (const bad of ['', '0', '65536', '80.5', 'abc'])
+      expect(portProblem(bad)).toBe('Enter a port from 1 to 65535.');
   });
 });
