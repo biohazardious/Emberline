@@ -7,6 +7,7 @@ import {
   gateChoice,
   gateChoices,
   gateUpdate,
+  refreshWorktreeConfigViews,
   WORKTREE_EDIT_HINT,
   WORKTREE_SAVE_LABEL,
   worktreeBanner,
@@ -179,5 +180,16 @@ describe('worktreeEditAvailable', () => {
   it('waits for the status so the editor starts from HEAD', () => {
     expect(worktreeEditAvailable(undefined)).toBe(false);
     expect(worktreeEditAvailable(status())).toBe(true);
+  });
+});
+
+describe('refreshWorktreeConfigViews', () => {
+  it('refetches the container preview answer and the repository block of that project', async () => {
+    const keys: unknown[] = [];
+    await refreshWorktreeConfigViews({ invalidateQueries: async ({ queryKey }) => void keys.push(queryKey) }, 'p1');
+    expect(keys).toEqual([
+      ['api', '/api/projects/p1/container-preview'],
+      ['api', '/api/projects/p1/repository'],
+    ]);
   });
 });

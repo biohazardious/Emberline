@@ -73,4 +73,16 @@ describe('withContainerPreview', () => {
       worktreeYmlErrors(withContainerPreview(`version: 1\nservices:\n${services}`, REF)).join(' '),
     ).toMatch(/services/);
   });
+
+  it('keeps a short flow list as written', () => {
+    const out = withContainerPreview('version: 1\nsetup: [npm ci]\n', REF);
+    expect(out).toContain('setup: [npm ci]\n');
+  });
+
+  it('keeps CRLF line endings', () => {
+    const out = withContainerPreview(WIZARD_V1.replace(/\n/g, '\r\n'), REF);
+    expect(out.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
+    expect(out.match(/\n/g)?.length).toBe(out.match(/\r\n/g)?.length);
+    expect(worktreeYmlErrors(out)).toEqual([]);
+  });
 });

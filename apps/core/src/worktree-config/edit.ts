@@ -32,6 +32,8 @@ export interface SaveWorktreeConfigOptions {
   message?: string;
   /** Checked under the lock: the approval the content was built from (null = none); 409 changed otherwise. */
   approvedSha256?: string | null;
+  /** The 409 text when HEAD's file moved since the base (default names the editor). */
+  changedText?: string;
 }
 
 /** Why `content` cannot be used as worktree.yml (the banner's wording); empty when it can. */
@@ -158,7 +160,8 @@ export async function saveWorktreeConfig(
     const headContent = head.kind === 'present' ? head.yml.content : null;
     if (headSha !== body.baseSha256) {
       throw conflict(
-        '.emberline/worktree.yml changed on main since the editor opened. Reload to edit the current version.',
+        opts.changedText ??
+          '.emberline/worktree.yml changed on main since the editor opened. Reload to edit the current version.',
         WORKTREE_CONFIG_CODES.changed,
       );
     }

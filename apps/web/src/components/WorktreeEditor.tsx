@@ -12,6 +12,7 @@ import {
   WORKTREE_EDIT_HINT,
   WORKTREE_SAVE_LABEL,
   WORKTREE_VALIDATE_DELAY_MS,
+  refreshWorktreeConfigViews,
   worktreeEditorStart,
   worktreeSaveEnabled,
   worktreeSaveFailure,
@@ -72,6 +73,7 @@ export function WorktreeEditor({
         baseSha256: start.baseSha256,
       });
       queryClient.setQueryData(['api', statusUrl], saved);
+      await refreshWorktreeConfigViews(queryClient, project.id);
       onClose();
     } catch (err) {
       setFailure(worktreeSaveFailure(err));

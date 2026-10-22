@@ -1,4 +1,5 @@
 import type { Project, ProjectSettingsResponse, WorktreeConfigStatusResponse } from '@emberline/protocol';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearch } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -8,6 +9,7 @@ import {
   bannerOffersEdit,
   gateChoices,
   gateUpdate,
+  refreshWorktreeConfigViews,
   type GateChoice,
   WORKTREE_EDIT_PARAM,
   type WorktreeBanner,
@@ -28,6 +30,7 @@ function WorktreeReviewBody({
   banner: WorktreeBanner;
   onDone: () => Promise<void>;
 }) {
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fullFileShown, setFullFileShown] = useState(false);
@@ -40,6 +43,7 @@ function WorktreeReviewBody({
     try {
       await api(`/api/projects/${project.id}/worktree-config/approve`, 'POST', banner.approveBody);
       await onDone();
+      await refreshWorktreeConfigViews(queryClient, project.id);
     } catch (err) {
       setError(errorMessage(err));
     } finally {

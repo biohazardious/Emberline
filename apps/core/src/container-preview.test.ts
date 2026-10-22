@@ -439,6 +439,14 @@ describe('switching the preview to the container', () => {
     expect(p.git('rev-list', '--count', 'HEAD')).toBe(count);
   });
 
+  it('400 with the schema words when the file already has 20 services', async () => {
+    const many = Array.from({ length: 20 }, (_, i) => `  - name: s${i}\n    command: "true"\n`).join('');
+    const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: `version: 1\nservices:\n${many}` });
+    const res = await diff(p.id, CHOICE);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().errors.join(' ')).toMatch(/services/);
+  });
+
   it('POST refuses while HEAD differs from the approval (Review Focus 1)', async () => {
     const p = await createProject({ 'compose.yaml': COMPOSE, [YML]: V1 });
     const { baseSha256 } = (await diff(p.id, CHOICE)).json();

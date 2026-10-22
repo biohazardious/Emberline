@@ -4,9 +4,9 @@ import type {
   Project,
   WorktreeConfigStatusResponse,
 } from '@emberline/protocol';
-import { useQueryClient } from '@tanstack/react-query';
+import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, errorMessage } from '../api';
+import { api } from '../api';
 import {
   CONTAINER_PREVIEW_ANCHOR,
   CONTAINER_PREVIEW_DIFF_DELAY_MS,
@@ -23,7 +23,7 @@ import {
   portProblem,
 } from '../containerPreviewSetup';
 import { useApi } from '../hooks/useApi';
-import { WORKTREE_EDIT_HINT, worktreeSaveFailure } from '../projectSettings';
+import { WORKTREE_EDIT_HINT, refreshWorktreeConfigViews, worktreeSaveFailure } from '../projectSettings';
 
 /** Spec §2: pick a compose service and port, see the worktree.yml diff, then commit + approve it. */
 export function ContainerPreviewBox({ project }: { project: Project }) {
@@ -38,7 +38,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
   const [diffState, setDiffState] = useState<{ for: string; value: ContainerPreviewDiffResponse } | null>(
     null,
   );
-  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffError, setDiffError] = useState<ReturnType<typeof worktreeSaveFailure> | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof worktreeSaveFailure> | null>(null);
   const [reloads, setReloads] = useState(0);
@@ -53,10 +53,15 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
     setPortText(next?.port != null ? String(next.port) : '');
   }, [data, draft]);
 
+  // Scroll to the box once, after the page's first loads settle: content above it still grows until then.
+  const fetching = useIsFetching();
+  const scrolled = useRef(false);
   useEffect(() => {
-    if (shown && window.location.hash === `#${CONTAINER_PREVIEW_ANCHOR}`)
-      box.current?.scrollIntoView({ block: 'start' });
-  }, [shown]);
+    if (scrolled.current || !shown || fetching > 0 || window.location.hash !== `#${CONTAINER_PREVIEW_ANCHOR}`)
+      return;
+    scrolled.current = true;
+    box.current?.scrollIntoView({ block: 'start' });
+  }, [shown, fetching]);
 
   // The diff follows the choice, a moment after the last change.
   const file = data?.available ? data.file : null;
@@ -73,7 +78,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
     const timer = setTimeout(() => {
       api<ContainerPreviewDiffResponse>(`${optionsUrl}/diff`, 'POST', { file, service, port }).then(
         (next) => !stale && setDiffState({ for: `${file}\n${service}\n${port}`, value: next }),
-        (err: unknown) => !stale && setDiffError(errorMessage(err)),
+        (err: unknown) => !stale && setDiffError(worktreeSaveFailure(err)),
       );
     }, CONTAINER_PREVIEW_DIFF_DELAY_MS);
     return () => {
@@ -95,6 +100,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
       });
       queryClient.setQueryData(['api', statusUrl], saved);
       await options.refresh(); // file becomes null: the box goes away
+      await refreshWorktreeConfigViews(queryClient, project.id);
     } catch (err) {
       setFailure(worktreeSaveFailure(err));
     } finally {
@@ -181,10 +187,19 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
           )}
           {diffError && (
             <div className="banner banner-error" role="alert">
-              <p>{diffError}</p>
-              <button type="button" className="btn btn-sm" onClick={() => void reload()}>
-                Reload
-              </button>
+              <p>{diffError.message}</p>
+              {diffError.errors.length > 0 && (
+                <ul>
+                  {diffError.errors.map((e) => (
+                    <li key={e}>{e}</li>
+                  ))}
+                </ul>
+              )}
+              {diffError.reload && (
+                <button type="button" className="btn btn-sm" onClick={() => void reload()}>
+                  Reload
+                </button>
+              )}
             </div>
           )}
           {diff && (

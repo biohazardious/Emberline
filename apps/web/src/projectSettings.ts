@@ -166,3 +166,18 @@ export function bannerOffersEdit(banner: WorktreeBanner | null): boolean {
 export function worktreeEditAvailable(s: WorktreeConfigStatusResponse | undefined): boolean {
   return s !== undefined;
 }
+
+/**
+ * After worktree.yml changed (approve, editor save, container preview): the answers that depend on the
+ * approved file refetch now instead of at their next poll (the Container preview box, the Preview &
+ * Build hint, the Repository block's ahead count).
+ */
+export async function refreshWorktreeConfigViews(
+  client: { invalidateQueries: (filters: { queryKey: unknown[] }) => Promise<unknown> },
+  projectId: string,
+): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ['api', `/api/projects/${projectId}/container-preview`] }),
+    client.invalidateQueries({ queryKey: ['api', `/api/projects/${projectId}/repository`] }),
+  ]);
+}

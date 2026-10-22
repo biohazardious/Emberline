@@ -132,7 +132,13 @@ export function withContainerPreview(
   );
   // lineWidth 0: a long command is never folded onto a second line. A list item at column 0 can only
   // be a top-level key's unindented list (the root is a map): keep that style for every list.
-  return doc.toString({ lineWidth: 0, indentSeq: !/^-(?:[ \t]|$)/m.test(approved ?? '') });
+  const out = doc.toString({
+    lineWidth: 0,
+    flowCollectionPadding: false,
+    indentSeq: !/^-(?:[ \t]|$)/m.test(approved ?? ''),
+  });
+  // A CRLF file stays CRLF, so the diff shows only the real change.
+  return approved?.includes('\r\n') ? out.replace(/\r?\n/g, '\r\n') : out;
 }
 
 /** The checks the diff and the save share; throws the 409/400 the person reads. */
@@ -211,6 +217,7 @@ export async function applyContainerPreview(
     {
       message: `chore: preview the ${body.service} container from ${body.file}`,
       approvedSha256: body.baseSha256,
+      changedText: CONTAINER_PREVIEW_CHANGED_TEXT,
     },
   );
 }
