@@ -206,15 +206,18 @@ RUN set -eu; \
     [ -n "$sha" ] || { echo "chromium: no pinned sha256 for chrome-$plat.zip" >&2; return 1; }; \
     retry apt-get update || return 1; \
     apt-get install -y --no-install-recommends unzip libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxkbcommon0 \
-      libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libatspi2.0-0t64 libdbus-1-3 || return 1; \
-    tmp="$(mktemp -d)"; \
-    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 900 -o "$tmp/chrome.zip" \
-      "https://cdn.playwright.dev/builds/cft/${PLAYWRIGHT_CHROMIUM_VERSION}/${plat}/chrome-${plat}.zip" || return 1; \
-    echo "$sha  $tmp/chrome.zip" | sha256sum -c - || return 1; \
-    rm -rf /opt/chromium && mkdir -p /opt/chromium && unzip -q "$tmp/chrome.zip" -d /opt/chromium || return 1; \
+      libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libatspi2.0-0t64 libdbus-1-3 \
+      libglib2.0-0t64 libx11-6 libxcb1 libxext6 || { echo "chromium: installing the runtime libraries failed" >&2; return 1; }; \
+    tmp="$(mktemp -d)" || { echo "chromium: mktemp failed" >&2; return 1; }; \
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-all-errors --connect-timeout 20 --max-time 900 -o "$tmp/chrome.zip" \
+      "https://cdn.playwright.dev/builds/cft/${PLAYWRIGHT_CHROMIUM_VERSION}/${plat}/chrome-${plat}.zip" \
+      || { echo "chromium: downloading chrome-${plat}.zip failed" >&2; return 1; }; \
+    echo "$sha  $tmp/chrome.zip" | sha256sum -c - || { echo "chromium: sha256 mismatch for chrome-${plat}.zip" >&2; return 1; }; \
+    rm -rf /opt/chromium && mkdir -p /opt/chromium && unzip -q "$tmp/chrome.zip" -d /opt/chromium \
+      || { echo "chromium: unpacking chrome-${plat}.zip failed" >&2; return 1; }; \
     rm -rf "$tmp"; \
-    ln -sf "/opt/chromium/chrome-${plat}/chrome" /usr/bin/chromium; \
-    if ldd "/opt/chromium/chrome-${plat}/chrome" | grep 'not found' >&2; then return 1; fi; }; \
+    ln -sf "/opt/chromium/chrome-${plat}/chrome" /usr/bin/chromium || return 1; \
+    if ldd "/opt/chromium/chrome-${plat}/chrome" | grep 'not found' >&2; then echo "chromium: missing shared libraries (see above)" >&2; return 1; fi; }; \
   src=; \
   if [ "$CHROMIUM_SOURCE" != playwright ]; then \
     . /etc/os-release; \
