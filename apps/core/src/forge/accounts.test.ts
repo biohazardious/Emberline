@@ -3,6 +3,8 @@ import { forgeAccounts } from '../db/schema.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from '../test-utils.js';
 import {
   accountForRemote,
+  credentialAccountForRemote,
+  gitCredentialForRemote,
   deriveApiUrl,
   environmentAccounts,
   insertAccountIfHostFree,
@@ -651,6 +653,52 @@ describe('environment account usernames', () => {
       else process.env.EMBERLINE_FORGE_TOKEN = saved;
       await a.close();
       await b.close();
+    }
+  });
+});
+
+describe('accounts without a token', () => {
+  it('REST: 409 naming the host when only a token-less account matches; a token unchanged', async () => {
+    const t = await createTestApp();
+    try {
+      const { seedForgeAccount } = await import('../test-utils.js');
+      seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: '' });
+      seedForgeAccount(t.db, { provider: 'gitlab', serverUrl: 'https://gitlab.example.com', token: 'gl' });
+      expect(() => credentialAccountForRemote(t.db, 'https://github.com/a/b.git', {})).toThrow(
+        'The account for github.com has no token. Enter the token again in Settings → Forge accounts.',
+      );
+      expect(credentialAccountForRemote(t.db, 'https://gitlab.example.com/a/b.git', {})?.token).toBe('gl');
+      // The listing still shows the account.
+      expect(accountForRemote(t.db, 'https://github.com/a/b.git', {})?.token).toBe('');
+    } finally {
+      await t.close();
+    }
+  });
+  it('an environment account for the same host wins over a token-less stored one', async () => {
+    const t = await createTestApp();
+    try {
+      const { seedForgeAccount } = await import('../test-utils.js');
+      seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: '' });
+      const env = { EMBERLINE_FORGE_TOKEN: 'envtok' };
+      expect(credentialAccountForRemote(t.db, 'https://github.com/a/b.git', env)).toMatchObject({
+        source: 'environment',
+        token: 'envtok',
+      });
+      expect(gitCredentialForRemote(t.db, 'https://github.com/a/b.git', env)?.token).toBe('envtok');
+    } finally {
+      await t.close();
+    }
+  });
+  it('git credentials: the same 409', async () => {
+    const t = await createTestApp();
+    try {
+      const { seedForgeAccount } = await import('../test-utils.js');
+      seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: '' });
+      expect(() => gitCredentialForRemote(t.db, 'https://github.com/a/b.git', {})).toThrow(
+        'The account for github.com has no token. Enter the token again in Settings → Forge accounts.',
+      );
+    } finally {
+      await t.close();
     }
   });
 });

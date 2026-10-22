@@ -168,6 +168,39 @@ export function listAccountRecords(db: Db, env: NodeJS.ProcessEnv = process.env)
   ];
 }
 
+/**
+ * Accounts that can authenticate: a stored account without a token (cleared by
+ * EMBERLINE_FORGET_SECRETS) is skipped, and does not hide an environment account of its host.
+ */
+function listUsableRecords(db: Db, env: NodeJS.ProcessEnv): ForgeAccountRecord[] {
+  const stored = storedRecords(db).filter((a) => a.token.trim());
+  const hosts = new Set(stored.map((a) => serverHost(a.serverUrl)));
+  return [
+    ...stored,
+    ...environmentAccounts(env, usernamesOf(db)).filter((a) => !hosts.has(serverHost(a.serverUrl))),
+  ];
+}
+
+export function tokenMissingMessage(host: string): string {
+  return `The account for ${host} has no token. Enter the token again in Settings → Forge accounts.`;
+}
+
+/**
+ * The account to authenticate with: the first usable match. When only token-less accounts match,
+ * 409 `forge_token_missing` (never an empty token sent to the forge).
+ */
+function pickUsable(
+  db: Db,
+  env: NodeJS.ProcessEnv,
+  matches: (a: ForgeAccountRecord) => boolean,
+): ForgeAccountRecord | null {
+  const usable = listUsableRecords(db, env).find(matches);
+  if (usable) return usable;
+  const tokenless = listAccountRecords(db, env).find((a) => matches(a) && !a.token.trim());
+  if (tokenless) throw conflict(tokenMissingMessage(serverHost(tokenless.serverUrl)), 'forge_token_missing');
+  return null;
+}
+
 export function findAccountRecord(
   db: Db,
   id: string,
@@ -189,18 +222,24 @@ export function accountForRemote(
   return listAccountRecords(db, env).find((a) => sameForgeServer(a.serverUrl, remoteUrl)) ?? null;
 }
 
+/** `accountForRemote` for calls that send the token: see `pickUsable`. */
+export function credentialAccountForRemote(
+  db: Db,
+  remoteUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ForgeAccountRecord | null {
+  if (!hostOf(remoteUrl)) return null;
+  return pickUsable(db, env, (a) => sameForgeServer(a.serverUrl, remoteUrl));
+}
+
 const BASIC_USER: Record<ForgeProvider, string | null> = {
   github: 'x-access-token',
   gitlab: 'oauth2',
   gitea: null,
 };
 
-/** The account git uses for an http(s) remote: its server covers the URL, which has no user info. */
-export function accountForGitRemote(
-  db: Db,
-  remoteUrl: string,
-  env: NodeJS.ProcessEnv = process.env,
-): ForgeAccountRecord | null {
+/** The URL of an http(s) remote without user info; null otherwise. */
+function plainHttpRemote(remoteUrl: string): URL | null {
   let url: URL;
   try {
     url = new URL(remoteUrl.trim());
@@ -208,7 +247,27 @@ export function accountForGitRemote(
     return null;
   }
   if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return null;
-  return listAccountRecords(db, env).find((a) => urlUnderServer(url, a.serverUrl)) ?? null;
+  return url;
+}
+
+/** The account git uses for an http(s) remote: its server covers the URL, which has no user info. */
+export function accountForGitRemote(
+  db: Db,
+  remoteUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ForgeAccountRecord | null {
+  const url = plainHttpRemote(remoteUrl);
+  return url ? (listAccountRecords(db, env).find((a) => urlUnderServer(url, a.serverUrl)) ?? null) : null;
+}
+
+/** `accountForGitRemote` for calls that send the token: see `pickUsable`. */
+function credentialAccountForGitRemote(
+  db: Db,
+  remoteUrl: string,
+  env: NodeJS.ProcessEnv,
+): ForgeAccountRecord | null {
+  const url = plainHttpRemote(remoteUrl);
+  return url ? pickUsable(db, env, (a) => urlUnderServer(url, a.serverUrl)) : null;
 }
 
 /** Credentials for one git call to an http(s) remote under an account's server; null otherwise (ssh, other host). */
@@ -217,7 +276,7 @@ export function gitCredentialForRemote(
   remoteUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): GitHttpCredential | null {
-  const account = accountForGitRemote(db, remoteUrl, env);
+  const account = credentialAccountForGitRemote(db, remoteUrl, env);
   if (!account) return null;
   const username = BASIC_USER[account.provider] ?? account.username;
   if (!username) {

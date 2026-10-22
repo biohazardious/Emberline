@@ -16,7 +16,7 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
 import { ForgeAccountsService } from './accounts.js';
-import { type ForgeAccountRecord, accountForRemote } from './account-store.js';
+import { type ForgeAccountRecord, accountForRemote, credentialAccountForRemote } from './account-store.js';
 import { remoteUrlForDisplay, sameForgeServer } from './hosts.js';
 import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
 
@@ -192,7 +192,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   ): { account: ForgeAccountRecord; remote: ParsedForgeRemote } {
     const parsed = parseForgeRemote(remoteUrl);
     if (!parsed) throw conflict(`unable to parse forge remote URL: ${remoteUrlForDisplay(remoteUrl).url}`);
-    const account = accountForRemote(this.db, remoteUrl);
+    const account = credentialAccountForRemote(this.db, remoteUrl);
     if (!account) throw conflict(noAccountMessage(parsed.host), 'forge_account_missing');
     return { account, remote: viaAccount(remoteUrl, account, baseBranch, headBranch)! };
   }
