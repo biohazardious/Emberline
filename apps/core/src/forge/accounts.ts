@@ -91,11 +91,13 @@ export class ForgeAccountsService {
     await this.fillMissingUsernames(log).catch(() => undefined);
   }
 
-  /** Start-up: stored accounts without a username (migrated) are checked once; failures are only logged. */
+  /**
+   * Start-up: accounts without a username are checked once, one after another (one GET /user each);
+   * failures are only logged. That covers migrated stored accounts and environment accounts, whose
+   * username lives in memory only (a Gitea account's git needs it), so each start fills it again.
+   */
   async fillMissingUsernames(log: (message: string) => void): Promise<void> {
-    for (const account of listAccountRecords(this.db, this.env).filter(
-      (a) => a.source === 'settings' && !a.username,
-    )) {
+    for (const account of listAccountRecords(this.db, this.env).filter((a) => !a.username)) {
       try {
         await this.check(account.id);
       } catch (error) {

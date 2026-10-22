@@ -370,6 +370,42 @@ describe('environment accounts', () => {
   });
 });
 
+describe('environment accounts at start', () => {
+  it('get their username checked at start (kept in memory), once, without blocking or throwing', async () => {
+    const env = { EMBERLINE_FORGE_TOKEN: 'e', EMBERLINE_FORGE_API_URL: 'https://gitea-start.example/api/v1' };
+    const t = await createTestApp();
+    try {
+      const calls: string[] = [];
+      const svc = new ForgeAccountsService(
+        t.db,
+        async (url) => {
+          calls.push(String(url));
+          return reply({ login: 'robot' });
+        },
+        env,
+      );
+      expect(svc.record('env').username).toBeNull();
+      const logs: string[] = [];
+      await svc.start((m) => logs.push(m));
+      expect(svc.record('env').username).toBe('robot');
+      expect(calls).toEqual(['https://gitea-start.example/api/v1/user']);
+      await svc.start((m) => logs.push(m)); // known now: no second check
+      expect(calls).toHaveLength(1);
+      // A refused check is logged and start goes on.
+      const failing = new ForgeAccountsService(t.db, async () => reply({}, 401), {
+        EMBERLINE_FORGE_TOKEN: 'refused-secret',
+        EMBERLINE_FORGE_PROVIDER: 'gitea',
+        EMBERLINE_FORGE_ALLOWED_HOSTS: 'gitea-refused.example',
+      });
+      await expect(failing.start((m) => logs.push(m))).resolves.toBeUndefined();
+      expect(logs.join('\n')).toContain('gitea-refused.example');
+      expect(logs.join('\n')).not.toContain('refused-secret');
+    } finally {
+      await t.close();
+    }
+  });
+});
+
 describe('accountForRemote', () => {
   it('matches by host (port only between http(s) URLs), never another host', async () => {
     const t = await createTestApp();
