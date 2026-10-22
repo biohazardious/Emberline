@@ -105,6 +105,25 @@ const API: CreateProjectBody = {
   startFactory: false,
 };
 
+describe('repoUrl in responses', () => {
+  it('repoUrl comes back without a user name, token, query or fragment', async () => {
+    t.db
+      .insert(projects)
+      .values({
+        id: 'p9',
+        name: 'Tok',
+        slug: 'tok',
+        repoUrl: 'https://u:ghp_SECRET@github.example/o/r.git?x=ghp_SECRET',
+        path: path.join(t.dir, 'tok'),
+        createdAt: new Date(),
+      })
+      .run();
+    const res = await t.app.inject({ method: 'GET', url: '/api/projects', headers: { cookie } });
+    expect(res.json().find((p: { id: string }) => p.id === 'p9').repoUrl).toBe('https://github.example/o/r.git');
+    expect(res.body).not.toContain('ghp_SECRET');
+  });
+});
+
 describe('generators', () => {
   it('APP_TYPE_LABELS reads the protocol registry', () => {
     for (const type of PROJECT_TYPES) expect(APP_TYPE_LABELS[type.id]).toBe(type.label);

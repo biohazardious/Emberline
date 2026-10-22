@@ -5,6 +5,7 @@ import type { RepositoryStatus, Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
+import { forgeAccounts } from '../db/schema.js';
 import { unavailable } from '../errors.js';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
@@ -80,6 +81,15 @@ describe('repository status', () => {
       keepMainPushed: false,
       lastMainPushError: null,
     });
+  });
+
+  it('an http remote outside the account\'s sub-path has no account', async () => {
+    t.db.delete(forgeAccounts).run();
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: `${forge.url}/gitea`, token: TOKEN, username: 'alice' });
+    git(projectPath, 'remote', 'add', 'origin', `${forge.url}/other/app.git`);
+    expect((await status()).account).toBeNull();
+    git(projectPath, 'remote', 'set-url', 'origin', `${forge.url}/gitea/acme/app.git`);
+    expect((await status()).account).not.toBeNull();
   });
 });
 
@@ -458,6 +468,13 @@ describe('an origin set by hand with a token in it', () => {
     const differs = await send('POST', `/api/projects/${projectId}/repository/push-main`);
     expect(differs.json().error).toBe('origin_differs');
     const refreshed = await send('POST', `/api/projects/${projectId}/repository/refresh`);
+    // The clean URL differs from origin only by its credentials: the confirm says so.
+    const credentialsOnly = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: 'https://github.example/o/r.git',
+    });
+    expect(credentialsOnly.json()).toMatchObject({ error: 'origin_exists', credentialsOnly: true });
+    expect(credentialsOnly.json().message).toContain('with a user name or token in its URL');
+    expect(exists.json().credentialsOnly).toBe(false);
     for (const res of [exists, differs, refreshed]) expect(res.body).not.toContain(secret);
     expect(JSON.stringify(s)).not.toContain(secret);
     // Connecting the clean URL (after the confirm) replaces the origin, and its token with it.

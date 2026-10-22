@@ -6,6 +6,7 @@ import {
   deriveApiUrl,
   environmentAccounts,
   insertAccountIfHostFree,
+  listAccountRecords,
   normalizeServerUrl,
   serverFromApiUrl,
 } from './account-store.js';
@@ -323,6 +324,67 @@ describe('forge accounts API', () => {
     expect((await send('GET', '/api/forge/accounts')).json().accounts).toEqual([]);
     expect((await send('POST', '/api/forge/accounts/nope/check')).statusCode).toBe(404);
   });
+
+  it('an API URL typed as the server URL is read as its server', async () => {
+    const res = await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com/api/v1/', token: 't' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ serverUrl: 'https://git.example.com', apiUrl: 'https://git.example.com/api/v1' });
+    expect(calls.at(-1)?.url).toBe('https://git.example.com/api/v1/user');
+    const gh = await send('POST', '/api/forge/accounts', { provider: 'github', serverUrl: 'https://api.github.com', token: 't2' });
+    expect(gh.json()).toMatchObject({ serverUrl: 'https://github.com', apiUrl: 'https://api.github.com' });
+  });
+
+  it('a check that started with the old token never overwrites the name a new token gave', async () => {
+    const id = (await send('POST', '/api/forge/accounts', { provider: 'github', serverUrl: 'https://github.com', token: 'tok-OLD' })).json().id;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let checking!: () => void;
+    const waiting = new Promise<void>((r) => (checking = r));
+    t.forgeFetch.current = async (_url, init) => {
+      if ((new Headers(init?.headers).get('authorization') ?? '').includes('tok-OLD')) {
+        checking();
+        await gate;
+        return reply({ login: 'old-user' });
+      }
+      return reply({ login: 'new-user' });
+    };
+    const check = send('POST', `/api/forge/accounts/${id}/check`);
+    await waiting;
+    const patch = send('PATCH', `/api/forge/accounts/${id}`, { token: 'tok-NEW' });
+    await Promise.race([patch, new Promise((r) => setTimeout(r, 200))]);
+    release();
+    await Promise.all([check, patch]);
+    expect((await send('GET', '/api/forge/accounts')).json().accounts[0].username).toBe('new-user');
+  });
+
+  it('a 403 with retry-after on owners or repository creation is a rate limit, not an empty list or a refusal', async () => {
+    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't' })).json().id;
+    answer = (url) =>
+      url.endsWith('/user')
+        ? reply({ login: 'octo' })
+        : new Response('{}', { status: 403, headers: { 'retry-after': '30' } });
+    const owners = await send('GET', `/api/forge/accounts/${id}/owners`);
+    expect(owners.statusCode).toBe(429);
+    expect(owners.json().error).toBe('forge_rate_limited');
+    const record = new ForgeAccountsService(t.db, (url, init) => t.forgeFetch.current(url, init), {}).record(id);
+    const svc = new ForgeAccountsService(t.db, (url, init) => t.forgeFetch.current(url, init), {});
+    await expect(svc.createRepository(record, { owner: 'acme', name: 'x', private: true })).rejects.toMatchObject({
+      statusCode: 429,
+      code: 'forge_rate_limited',
+    });
+  });
+
+  it('owners are read once per account for a few minutes; a new token reads them again', async () => {
+    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't1' })).json().id;
+    answer = (url) => (url.includes('/user/orgs') ? reply([{ username: 'acme' }]) : reply({ login: 'octo' }));
+    const orgCalls = () => calls.filter((c) => c.url.includes('/user/orgs')).length;
+    await send('GET', `/api/forge/accounts/${id}/owners`);
+    await send('GET', `/api/forge/accounts/${id}/owners`);
+    expect(orgCalls()).toBe(1);
+    await send('PATCH', `/api/forge/accounts/${id}`, { token: 't2' });
+    await send('GET', `/api/forge/accounts/${id}/owners`);
+    expect(orgCalls()).toBe(2);
+  });
 });
 
 describe('environment accounts', () => {
@@ -455,6 +517,28 @@ describe('insertAccountIfHostFree', () => {
       expect(t.db.select().from(forgeAccounts).all()).toHaveLength(1);
     } finally {
       await t.close();
+    }
+  });
+});
+
+describe('environment account usernames', () => {
+  it('belong to one database: a check in one app does not name the account in another', async () => {
+    const saved = process.env.EMBERLINE_FORGE_TOKEN;
+    process.env.EMBERLINE_FORGE_TOKEN = 'env-shared-token';
+    const a = await createTestApp();
+    const b = await createTestApp();
+    try {
+      a.forgeFetch.current = async () => reply({ login: 'robot' });
+      const cookie = await setupAndLogin(a.app);
+      const res = await a.app.inject({ method: 'POST', url: '/api/forge/accounts/env/check', headers: authHeaders(cookie) });
+      expect(res.statusCode).toBe(200);
+      expect(listAccountRecords(a.db)[0]?.username).toBe('robot');
+      expect(listAccountRecords(b.db)[0]?.username).toBeNull();
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_FORGE_TOKEN;
+      else process.env.EMBERLINE_FORGE_TOKEN = saved;
+      await a.close();
+      await b.close();
     }
   });
 });

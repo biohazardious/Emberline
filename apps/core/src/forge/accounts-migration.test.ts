@@ -306,6 +306,13 @@ describe('account views and sub-path servers', () => {
       apiBaseUrl: 'https://host.example/gitea/api/v1',
     });
   });
+
+  it('an ssh remote whose owner is named like the sub-path keeps its owner', async () => {
+    project('s2', 'git@host.example:gitea/widget.git');
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: 'https://host.example/gitea', token: 'tok' });
+    const target = await new ForgeService(t.db, t.runs).projectRemote('s2');
+    expect(target.remote).toMatchObject({ repoPath: 'gitea/widget', apiBaseUrl: 'https://host.example/gitea/api/v1' });
+  });
 });
 
 describe('pull requests and status use the account of the remote', () => {

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ForgeProvider } from '@emberline/protocol';
 import { projects, runs } from '../db/schema.js';
 import { createTestApp, seedForgeAccount, type TestApp } from '../test-utils.js';
-import { IssuesClient, RateLimitError } from './issues.js';
+import { ForgeRedirectError, forgeFetch, IssuesClient, RateLimitError } from './issues.js';
 import { ForgeService, type ParsedForgeRemote, parseForgeRemote } from './service.js';
 
 interface Call {
@@ -609,5 +609,16 @@ describe('forge fetch hardening', () => {
     } finally {
       await t.close();
     }
+  });
+});
+
+describe('forgeFetch redirects', () => {
+  it('a redirect to another address is a ForgeRedirectError', async () => {
+    await expect(
+      forgeFetch(
+        async () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/x' } }),
+        'https://a.example/api/v1/user',
+      ),
+    ).rejects.toBeInstanceOf(ForgeRedirectError);
   });
 });

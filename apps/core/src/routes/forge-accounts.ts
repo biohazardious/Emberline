@@ -19,7 +19,7 @@ export function registerForgeAccountRoutes(
     accounts.update(request.params.id, request.body),
   );
   app.delete<{ Params: { id: string } }>('/api/forge/accounts/:id', async (request) => {
-    accounts.remove(request.params.id);
+    await accounts.remove(request.params.id);
     return { ok: true };
   });
   app.post<{ Params: { id: string } }>(

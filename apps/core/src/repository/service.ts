@@ -13,7 +13,7 @@ import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } fro
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.js';
-import { accountForRemote, gitCredentialForRemote } from '../forge/account-store.js';
+import { accountForGitRemote, accountForRemote, gitCredentialForRemote } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway } from '../git-gateway/gateway.js';
@@ -138,10 +138,12 @@ export class RepositoryService {
     const { fetch: origin } = await originUrls(row.path);
     const withRepo: RepositoryStatus = { ...base, isGitRepo: true, branch, hasCommits, mainTip };
     if (!origin) return withRepo;
-    const account = accountForRemote(this.db, origin);
     // A token someone put into origin by hand is never returned.
     const shown = remoteUrlForDisplay(origin);
     const transport = /^https:/i.test(origin) ? 'https' : /^http:/i.test(origin) ? 'http' : 'ssh';
+    // ssh keeps the host rule; http(s) follows git's: the account whose server covers the URL.
+    const account =
+      transport === 'ssh' ? accountForRemote(this.db, origin) : accountForGitRemote(this.db, shown.url);
     const withOrigin: RepositoryStatus = {
       ...withRepo,
       originUrl: shown.url,
@@ -202,7 +204,7 @@ export class RepositoryService {
     const ws = await this.workspace(projectId);
     // Refused before the remote is contacted; checked again under the lock when origin is set.
     const { fetch: current } = await originUrls(ws.path);
-    if (current && current !== url && !body.replace) throw this.originExists(current);
+    if (current && current !== url && !body.replace) throw this.originExists(current, url);
     const access = this.accessFor(projectId, url); // an unchecked account keeps its own error
     try {
       // Readable before anything changes; an empty repository answers with no branches.
@@ -419,11 +421,13 @@ export class RepositoryService {
   }
 
   /** Names origin without user info, query or fragment: a token set by hand in it is never echoed. */
-  private originExists(current: string): HttpError {
-    const shown = remoteUrlForDisplay(current).url;
-    return new HttpError(409, 'origin_exists', `This project already has origin ${shown}. Replace it?`, {
-      origin: shown,
-    });
+  private originExists(current: string, next?: string): HttpError {
+    const shown = remoteUrlForDisplay(current);
+    const credentialsOnly = next !== undefined && shown.hadCredentials && shown.url === next;
+    const message = credentialsOnly
+      ? `origin already points at ${shown.url}, with a user name or token in its URL. Replace it with the clean URL?`
+      : `This project already has origin ${shown.url}. Replace it?`;
+    return new HttpError(409, 'origin_exists', message, { origin: shown.url, credentialsOnly });
   }
 
   private async setOriginLocked(
@@ -434,7 +438,7 @@ export class RepositoryService {
   ): Promise<void> {
     await withMainWorkspaceLock(mainPath, async () => {
       const { fetch: current } = await originUrls(mainPath);
-      if (current && current !== url && !replace) throw this.originExists(current);
+      if (current && current !== url && !replace) throw this.originExists(current, url);
       await setOrigin(mainPath, url, current);
       this.db.update(projects).set({ repoUrl: url }).where(eq(projects.id, projectId)).run();
     });

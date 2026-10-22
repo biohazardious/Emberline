@@ -128,6 +128,49 @@ describe('run push through the gateway', () => {
     expectAgentsSeeNoToken();
   });
 
+  describe('a project without a connected repository', () => {
+    const pushWithoutRepoUrl = async (withAccount: boolean) => {
+      const wt = setupRun();
+      if (withAccount) seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+      t.db
+        .insert(projects)
+        .values({ id: 'p1', name: 'Work', slug: 'work', repoUrl: null, path: repo, createdAt: new Date() })
+        .run();
+      const now = new Date();
+      t.db
+        .insert(runs)
+        .values({
+          id: 'r1',
+          projectId: 'p1',
+          agent: 'claude',
+          state: 'done',
+          worktreePath: wt,
+          branch: 'emberline/run-1',
+          hookTokenHash: 'h',
+          stateChangedAt: now,
+          createdAt: now,
+          title: 'T',
+        })
+        .run();
+      gitIn(repo, 'remote', 'add', 'origin', appUrl());
+      return t.runs.push('r1').then(
+        () => '',
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+    };
+    const hint = "Connect this project's repository in Project settings → Repository to push with a forge account.";
+
+    it('a failed push names where to connect it when an account covers the origin', async () => {
+      expect(await pushWithoutRepoUrl(true)).toContain(hint);
+    });
+
+    it('says nothing of it when no account covers the origin', async () => {
+      const message = await pushWithoutRepoUrl(false);
+      expect(message).not.toBe('');
+      expect(message).not.toContain(hint);
+    });
+  });
+
   it("the repository's config, a planted git and askPass get nothing: pushurl helper, insteadOf, proxy, askPass, helper, submodules", async () => {
     const wt = setupRun();
     const askpass = path.join(outside, 'askpass.sh');

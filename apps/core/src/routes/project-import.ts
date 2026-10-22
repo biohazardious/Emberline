@@ -20,8 +20,9 @@ import { techStackFromChoices } from '../factory/project-plan.js';
 import { assertNotCloning, executeAdopt, importStatus, listWorkspaceFolders, planAdopt } from '../factory/project-import.js';
 import { redactCapabilityUrls } from '../git-gateway/gateway.js';
 import { finishAccountClone } from '../git-gateway/remote-git.js';
+import { remoteUrlForDisplay } from '../forge/hosts.js';
 import type { CoreDeps } from '../server.js';
-import { toProject } from './projects.js';
+import { projectResponse, toProject } from './projects.js';
 
 export function registerProjectImportRoutes(app: FastifyInstance, { db, config, ptyd, tickets, runs }: CoreDeps): void {
   const projectOr404 = (id: string) => {
@@ -138,7 +139,7 @@ export function registerProjectImportRoutes(app: FastifyInstance, { db, config, 
 
     const row = db.select().from(projects).where(eq(projects.id, project.id)).get();
     return {
-      project: row ? toProject(row) : project,
+      project: row ? projectResponse(row) : { ...project, repoUrl: project.repoUrl === null ? null : remoteUrlForDisplay(project.repoUrl).url },
       files: result.files,
       commitMessage: result.commitMessage,
       worktreeConfig: result.worktreeConfig,

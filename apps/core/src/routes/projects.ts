@@ -82,6 +82,7 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import { gitCredentialForRemote } from '../forge/account-store.js';
+import { remoteUrlForDisplay } from '../forge/hosts.js';
 import { accountCloneArgs } from '../git-gateway/remote-git.js';
 import {
   getRunnerClaudeUsage,
@@ -170,6 +171,12 @@ export const toProject = (row: ProjectRow): Project => ({
   createdAt: row.createdAt.toISOString(),
 });
 
+/** A Project as the API returns it: repoUrl without user info, query or fragment (as origin is shown). */
+export const projectResponse = (row: ProjectRow): Project => {
+  const project = toProject(row);
+  return { ...project, repoUrl: project.repoUrl === null ? null : remoteUrlForDisplay(project.repoUrl).url };
+};
+
 /** Letters NFKD does not decompose into ASCII base + combining mark. */
 const TRANSLITERATE: Record<string, string> = { ı: 'i', ß: 'ss', ø: 'o', æ: 'ae', œ: 'oe', ł: 'l', đ: 'd', þ: 'th' };
 
@@ -215,7 +222,7 @@ export function registerProjectRoutes(
       .from(projects)
       .orderBy(asc(projects.createdAt))
       .all()
-      .map((row) => ({ ...toProject(row), importSource: readImportSource(db, row.id) })),
+      .map((row) => ({ ...projectResponse(row), importSource: readImportSource(db, row.id) })),
   );
 
   app.get('/api/projects/active', async (): Promise<ActiveProjectPreference> => {
@@ -343,7 +350,7 @@ export function registerProjectRoutes(
       await rm(projectPath, { recursive: true, force: true }).catch(() => undefined);
       throw err;
     }
-    const project: Project = { ...toProject(row), importSource: 'new' };
+    const project: Project = { ...projectResponse(row), importSource: 'new' };
     saveActiveProjectId(project.id);
 
     reply.code(201);
@@ -435,7 +442,7 @@ export function registerProjectRoutes(
       // The folder is the user's own repository: removing the project keeps it (see the delete route).
       tx.insert(projectSettings).values({ projectId: row.id, settings: { importSource: 'folder' } }).run();
     });
-    const project: Project = { ...toProject(row), importSource: 'folder' };
+    const project: Project = { ...projectResponse(row), importSource: 'folder' };
     saveActiveProjectId(project.id);
     reply.code(201);
     return { project, terminalId: null };
@@ -541,7 +548,7 @@ export function registerProjectRoutes(
       tx.insert(projects).values(row).run();
       tx.insert(projectSettings).values({ projectId: id, settings: { importSource } }).run();
     });
-    const project: Project = { ...toProject(row), importSource };
+    const project: Project = { ...projectResponse(row), importSource };
 
     saveActiveProjectId(project.id);
 

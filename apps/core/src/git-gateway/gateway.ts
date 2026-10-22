@@ -70,8 +70,8 @@ export function redactCapabilityUrls(text: string): string {
 /**
  * A request URL as it may be logged. Git sends the gateway's own spelling, which its routes keep out
  * of the log (`logLevel: 'silent'`); any other spelling (`/API/…`, `/api//…`, `internal%2Fgit`)
- * misses those routes, so the segment after `internal/git/` is redacted here whatever its case,
- * slashes or percent-encoding. Other URLs are returned as they are.
+ * misses those routes, so any capability-shaped run (20+ base64url characters) of a path naming `internal` and `git`
+ * is redacted here, wherever the path puts it. Other URLs are returned as they are.
  */
 export function requestUrlForLog(url: string): string {
   let decoded = url;
@@ -80,10 +80,10 @@ export function requestUrlForLog(url: string): string {
     if (next === decoded) break;
     decoded = next;
   }
-  // Any segment after a `git` segment (also past `.`/`..` segments) once the path names `internal`.
-  if (!/internal/i.test(decoded)) return url;
-  const capability = /(^|[/\\])git((?:[/\\]+\.{1,2})*)[/\\]+[^/\\?#]+/gi;
-  return capability.test(decoded) ? decoded.replace(capability, '$1git$2/[capability]') : url;
+  if (!/internal/i.test(decoded) || !/git/i.test(decoded)) return url;
+  // Any capability-shaped run (base64url, 20+), wherever the path puts it.
+  const redacted = decoded.replace(/[A-Za-z0-9_-]{20,}/g, '[capability]');
+  return redacted === decoded ? url : redacted;
 }
 
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */

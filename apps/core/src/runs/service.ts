@@ -108,7 +108,8 @@ import { type AttentionFacts, attachAttention, loadAttentionFacts } from './atte
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { gitCredentialForRemote } from '../forge/account-store.js';
+import { accountForGitRemote, gitCredentialForRemote } from '../forge/account-store.js';
+import { execGitFile } from '../git-exec.js';
 import { GitGateway } from '../git-gateway/gateway.js';
 import { stripControlChars } from '../text/control-chars.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -521,6 +522,10 @@ function handoffBlocker(row: RunRow, continuesHeld = false): string | undefined 
   if (row.state === 'queued' || row.state === 'starting' || row.state === 'working') return `a ${row.state} run cannot be handed off`;
   return undefined;
 }
+
+/** Said after a failed run push when the project has no connected repository but an account covers its origin. */
+export const CONNECT_FOR_ACCOUNT =
+  "Connect this project's repository in Project settings → Repository to push with a forge account.";
 
 /**
  * Owns the run lifecycle: worktree + agent spawn, hook ingestion (the primary state signal),
@@ -2173,7 +2178,21 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // The account goes only to the project's own repository URL, never to an origin an agent set.
     const credential = project?.repoUrl ? gitCredentialForRemote(this.db, project.repoUrl) : null;
     const account = credential && project?.repoUrl ? { gateway: this.gitGateway, projectId: project.id, url: project.repoUrl, credential } : null;
-    const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), account);
+    let res: GitPushResponse;
+    try {
+      res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), account);
+    } catch (error) {
+      if (!project?.repoUrl && error instanceof HttpError) {
+        const origin = await execGitFile(['remote', 'get-url', 'origin'], { cwd: row.worktreePath }).then(
+          (r) => r.stdout.trim(),
+          () => '',
+        );
+        if (origin && accountForGitRemote(this.db, origin)) {
+          throw new HttpError(error.statusCode, error.code, `${error.message} ${CONNECT_FOR_ACCOUNT}`, error.details);
+        }
+      }
+      throw error;
+    }
     this.record(id, {
       source: 'user',
       type: 'pushed',

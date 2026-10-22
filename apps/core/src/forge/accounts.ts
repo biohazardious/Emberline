@@ -20,16 +20,20 @@ import {
   listAccountRecords,
   migrateLegacyForgeToken,
   normalizeServerUrl,
+  serverFromApiUrl,
   serverHost,
   setEnvironmentUsername,
   updateAccount,
 } from './account-store.js';
-import { authHeaders, type FetchLike, forgeFetch, readJson } from './issues.js';
+import { KeyedMutex } from '../keyed-mutex.js';
+import { authHeaders, type FetchLike, ForgeRedirectError, forgeFetch, readJson } from './issues.js';
 
 export const TOKEN_REFUSED = 'The forge refused this token.';
 const PROVIDER_LABELS: Record<ForgeProvider, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
 /** Longer than any forge allows; a longer "name" is not a user. */
 const USERNAME_MAX = 200;
+/** Owners (user and organizations) are read once per account for this long. */
+const OWNERS_TTL_MS = 5 * 60_000;
 const READ_ONLY = 'This account comes from EMBERLINE_FORGE_TOKEN; change it in the environment.';
 
 /** A URL as the person may see it: user info (a token pasted into the address) never leaves core. */
@@ -58,12 +62,27 @@ export function accountView(a: ForgeAccountRecord): ForgeAccount {
   };
 }
 
+/** A forge answering 429, or 403 with a rate-limit sign, is limiting requests; it is not refusing the token. */
+export const rateLimited = (res: Response): boolean =>
+  res.status === 429 ||
+  (res.status === 403 &&
+    (res.headers.has('retry-after') ||
+      res.headers.get('x-ratelimit-remaining') === '0' ||
+      res.headers.get('ratelimit-remaining') === '0'));
+
+const rateLimitedError = (host: string): HttpError =>
+  new HttpError(429, 'forge_rate_limited', `${host} is limiting requests right now. Try again in a few minutes.`);
+
 /** zod issues without input values: a token must never be echoed in a 400. */
 function invalid(issues: { path: PropertyKey[]; message: string }[]): HttpError {
   return badRequest(issues.map((i) => `${i.path.map(String).join('.') || 'body'}: ${i.message}`).join('; '));
 }
 
 export class ForgeAccountsService {
+  /** Check, token change and removal of one account run one at a time. */
+  private readonly accountLocks = new KeyedMutex();
+  private readonly ownersCache = new Map<string, { at: number; value: ForgeOwnersResponse }>();
+
   constructor(
     private readonly db: Db,
     private readonly fetch: FetchLike,
@@ -118,8 +137,10 @@ export class ForgeAccountsService {
     const parsed = CreateForgeAccountBody.safeParse(raw ?? {});
     if (!parsed.success) throw invalid(parsed.error.issues);
     const { provider, token, allowHttp } = parsed.data;
-    const serverUrl = normalizeServerUrl(parsed.data.serverUrl);
-    if (!serverUrl) throw badRequest("Enter the server's web address, such as https://gitea.example.com.");
+    const typed = normalizeServerUrl(parsed.data.serverUrl);
+    if (!typed) throw badRequest("Enter the server's web address, such as https://gitea.example.com.");
+    // An API address typed as the server (…/api/v1|v3|v4, api.github.com) names its web server.
+    const serverUrl = normalizeServerUrl(serverFromApiUrl(typed, provider)?.serverUrl ?? typed) ?? typed;
     if (serverUrl.startsWith('http://') && !allowHttp) {
       throw new HttpError(
         400,
@@ -154,47 +175,66 @@ export class ForgeAccountsService {
     if (!parsed.success) throw invalid(parsed.error.issues);
     const token = parsed.data.token?.trim();
     if (!token) return accountView(account);
-    const username = await this.currentUser(
-      account.provider,
-      account.apiUrl,
-      token,
-      serverHost(account.serverUrl),
-    );
-    updateAccount(this.db, id, { token, username });
-    return accountView(this.record(id));
+    return this.accountLocks.run(id, async () => {
+      const current = this.record(id);
+      const username = await this.currentUser(
+        current.provider,
+        current.apiUrl,
+        token,
+        serverHost(current.serverUrl),
+      );
+      updateAccount(this.db, id, { token, username });
+      this.ownersCache.delete(id);
+      return accountView(this.record(id));
+    });
   }
 
-  remove(id: string): void {
+  /** Refuses at once (404, read-only); the removal itself waits for a check or token change in flight. */
+  remove(id: string): Promise<void> {
     const account = this.record(id);
     if (account.source === 'environment') throw conflict(READ_ONLY, 'account_read_only');
-    deleteAccount(this.db, id);
+    return this.accountLocks.run(id, async () => {
+      deleteAccount(this.db, id);
+      this.ownersCache.delete(id);
+    });
   }
 
   async check(id: string): Promise<ForgeAccount> {
-    const account = this.record(id);
-    const username = await this.currentUser(
-      account.provider,
-      account.apiUrl,
-      account.token,
-      serverHost(account.serverUrl),
-    );
-    if (account.source === 'environment') setEnvironmentUsername(id, username);
-    else updateAccount(this.db, id, { username });
-    return accountView(this.record(id));
+    this.record(id); // 404 before queueing
+    return this.accountLocks.run(id, async () => {
+      // Read inside the lock: a token change that finished first is the token to check.
+      const account = this.record(id);
+      const username = await this.currentUser(
+        account.provider,
+        account.apiUrl,
+        account.token,
+        serverHost(account.serverUrl),
+      );
+      if (account.source === 'environment') setEnvironmentUsername(this.db, id, username);
+      else updateAccount(this.db, id, { username });
+      this.ownersCache.delete(id);
+      return accountView(this.record(id));
+    });
   }
 
   async owners(id: string): Promise<ForgeOwnersResponse> {
+    const cached = this.ownersCache.get(id);
+    if (cached && Date.now() - cached.at < OWNERS_TTL_MS) return cached.value;
     const account = this.record(id);
     const user = account.username ?? (await this.check(id)).username!;
     const path = account.provider === 'gitlab' ? '/groups?min_access_level=30&per_page=100' : '/user/orgs?per_page=100';
     const res = await forgeFetch(this.fetch, `${account.apiUrl}${path}`, { headers: authHeaders(account.provider, account.token) });
+    if (rateLimited(res)) throw rateLimitedError(serverHost(account.serverUrl));
     if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
     const rows = res.ok ? await readJson<Record<string, unknown>[]>(res).catch(() => []) : [];
     const orgs = (Array.isArray(rows) ? rows : []).flatMap((o): ForgeOwner[] => {
       const id = account.provider === 'gitlab' ? o.full_path : (o.login ?? o.name ?? o.username);
       return typeof id === 'string' && id ? [{ id, name: id, kind: 'organization' }] : [];
     });
-    return { owners: [{ id: user, name: user, kind: 'user' }, ...orgs] };
+    const value: ForgeOwnersResponse = { owners: [{ id: user, name: user, kind: 'user' }, ...orgs] };
+    // Only a successful read is kept; a failed or limited one throws before this.
+    this.ownersCache.set(id, { at: Date.now(), value });
+    return value;
   }
 
   /** Creates an empty repository; returns its `owner/name` path (origin is built from the account server, never the forge's clone URL). */
@@ -211,6 +251,7 @@ export class ForgeAccountsService {
       body = { name: input.name, path: input.name, visibility: input.private ? 'private' : 'public', description: input.description ?? '' };
       if (!forUser) {
         const ns = await forgeFetch(this.fetch, `${account.apiUrl}/namespaces/${encodeURIComponent(input.owner)}`, { headers });
+        if (rateLimited(ns)) throw rateLimitedError(serverHost(account.serverUrl));
         const nsData = ns.ok ? await readJson<{ id?: unknown }>(ns).catch((): { id?: unknown } => ({})) : {};
         if (typeof nsData.id !== 'number') throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
         body.namespace_id = nsData.id;
@@ -220,6 +261,7 @@ export class ForgeAccountsService {
       body = { name: input.name, private: input.private, description: input.description ?? '', auto_init: false };
     }
     const res = await forgeFetch(this.fetch, url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (rateLimited(res)) throw rateLimitedError(serverHost(account.serverUrl));
     const data = await readJson<Record<string, unknown>>(res).catch(() => ({}) as Record<string, unknown>);
     if (res.ok) {
       const fullPath = account.provider === 'gitlab' ? data.path_with_namespace : data.full_name;
@@ -264,7 +306,7 @@ export class ForgeAccountsService {
       if (error instanceof HttpError && error.code === 'forge_timeout') throw error;
       const message = error instanceof Error ? error.message : String(error);
       // forgeFetch follows only same-origin redirects; its own text names the remote and a removed setting.
-      if (message.startsWith('the forge redirected')) {
+      if (error instanceof ForgeRedirectError) {
         throw new HttpError(
           502,
           'forge_error',
@@ -277,17 +319,7 @@ export class ForgeAccountsService {
         `Couldn't check the token with ${host}: ${message.split(token).join('[redacted]')}`,
       );
     }
-    if (
-      res.status === 429 ||
-      (res.status === 403 &&
-        (res.headers.has('retry-after') || res.headers.get('x-ratelimit-remaining') === '0'))
-    ) {
-      throw new HttpError(
-        429,
-        'forge_rate_limited',
-        `${host} is limiting requests right now. Try again in a few minutes.`,
-      );
-    }
+    if (rateLimited(res)) throw rateLimitedError(host);
     if (res.status === 401 || res.status === 403) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
     if (!res.ok)
       throw new HttpError(

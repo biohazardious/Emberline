@@ -27,9 +27,12 @@ function timeoutError(): HttpError {
 /** Same-origin redirects a forge request follows (a renamed or moved repository) before giving up. */
 export const FORGE_REDIRECT_HOPS = 3;
 
+/** A redirect the forge request would not follow (another origin, no Location, too many hops). */
+export class ForgeRedirectError extends HttpError {}
+
 function redirectError(location: string | null): HttpError {
-  if (!location) return new HttpError(502, 'forge_error', 'the forge redirected without a Location; check Settings → Forge accounts');
-  return new HttpError(
+  if (!location) return new ForgeRedirectError(502, 'forge_error', 'the forge redirected without a Location; check Settings → Forge accounts');
+  return new ForgeRedirectError(
     502,
     'forge_error',
     `the forge redirected to ${location.slice(0, 300)} — has the repository moved? update the remote, or check Settings → Forge accounts`,

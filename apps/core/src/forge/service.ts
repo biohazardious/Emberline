@@ -125,9 +125,12 @@ export function noAccountMessage(host: string): string {
 }
 
 /** A server under a sub-path (`https://host/gitea`) has it in every remote's path: it is not part of the repository's. */
-function repoPathUnder(serverUrl: string, repoPath: string): string {
+function repoPathUnder(serverUrl: string, repoPath: string, remoteUrl?: string): string {
   const prefix = new URL(serverUrl).pathname.replace(/^\/+|\/+$/g, '');
-  return prefix && repoPath.startsWith(`${prefix}/`) ? repoPath.slice(prefix.length + 1) : repoPath;
+  if (!prefix || !repoPath.startsWith(`${prefix}/`)) return repoPath;
+  // An ssh address carries no web sub-path: an owner named like it is the owner.
+  if (remoteUrl !== undefined && !/^https?:\/\//i.test(remoteUrl.trim())) return repoPath;
+  return repoPath.slice(prefix.length + 1);
 }
 
 /** The remote as seen through an account: provider and API from the account, web URLs on its server. */
@@ -140,7 +143,7 @@ function viaAccount(
   const parsed = parseForgeRemote(remoteUrl);
   if (!parsed) return null;
   const via = parseForgeRemote(
-    `${account.serverUrl}/${repoPathUnder(account.serverUrl, parsed.repoPath)}.git`,
+    `${account.serverUrl}/${repoPathUnder(account.serverUrl, parsed.repoPath, remoteUrl)}.git`,
     account.provider,
     account.apiUrl,
     baseBranch,
@@ -224,7 +227,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     if (project.repoUrl?.trim()) {
       const declared = parseForgeRemote(project.repoUrl);
       if (!declared) throw conflict(`unable to parse the project's repository URL: ${remoteUrlForDisplay(project.repoUrl).url}`);
-      if (!sameForgeServer(project.repoUrl, remoteUrl) || repoPathUnder(account.serverUrl, declared.repoPath).toLowerCase() !== remote.repoPath.toLowerCase()) {
+      if (!sameForgeServer(project.repoUrl, remoteUrl) || repoPathUnder(account.serverUrl, declared.repoPath, project.repoUrl).toLowerCase() !== remote.repoPath.toLowerCase()) {
         throw conflict('origin points at a different repository than the project');
       }
     }

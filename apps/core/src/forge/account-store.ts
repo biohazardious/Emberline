@@ -84,9 +84,14 @@ const fixedProvider = (raw: string | undefined): ForgeProvider | null =>
   raw === 'github' || raw === 'gitlab' || raw === 'gitea' ? raw : null;
 
 /** Usernames of environment accounts learned by a check (they have no row to store it in). */
-const envUsernames = new Map<string, string>();
-export function setEnvironmentUsername(id: string, username: string): void {
-  envUsernames.set(id, username);
+const envUsernames = new WeakMap<Db, Map<string, string>>();
+const usernamesOf = (db: Db): Map<string, string> => {
+  let m = envUsernames.get(db);
+  if (!m) envUsernames.set(db, (m = new Map()));
+  return m;
+};
+export function setEnvironmentUsername(db: Db, id: string, username: string): void {
+  usernamesOf(db).set(id, username);
 }
 
 /**
@@ -94,7 +99,10 @@ export function setEnvironmentUsername(id: string, username: string): void {
  * (github.com without one); each EMBERLINE_FORGE_ALLOWED_HOSTS entry adds the same token for that
  * server host (`api.github.com` is covered by github.com and skipped).
  */
-export function environmentAccounts(env: NodeJS.ProcessEnv = process.env): ForgeAccountRecord[] {
+export function environmentAccounts(
+  env: NodeJS.ProcessEnv = process.env,
+  usernames: ReadonlyMap<string, string> = new Map(),
+): ForgeAccountRecord[] {
   const token = env.EMBERLINE_FORGE_TOKEN?.trim();
   if (!token) return [];
   const fixed = fixedProvider(env.EMBERLINE_FORGE_PROVIDER?.trim());
@@ -110,7 +118,7 @@ export function environmentAccounts(env: NodeJS.ProcessEnv = process.env): Forge
       provider,
       serverUrl,
       apiUrl: api,
-      username: envUsernames.get(id) ?? null,
+      username: usernames.get(id) ?? null,
       token,
       source: 'environment',
     });
@@ -154,7 +162,7 @@ function storedRecords(db: Db): ForgeAccountRecord[] {
 export function listAccountRecords(db: Db, env: NodeJS.ProcessEnv = process.env): ForgeAccountRecord[] {
   const stored = storedRecords(db);
   const hosts = new Set(stored.map((a) => serverHost(a.serverUrl)));
-  return [...stored, ...environmentAccounts(env).filter((a) => !hosts.has(serverHost(a.serverUrl)))];
+  return [...stored, ...environmentAccounts(env, usernamesOf(db)).filter((a) => !hosts.has(serverHost(a.serverUrl)))];
 }
 
 export function findAccountRecord(
@@ -184,22 +192,29 @@ const BASIC_USER: Record<ForgeProvider, string | null> = {
   gitea: null,
 };
 
+/** The account git uses for an http(s) remote: its server covers the URL, which has no user info. */
+export function accountForGitRemote(
+  db: Db,
+  remoteUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ForgeAccountRecord | null {
+  let url: URL;
+  try {
+    url = new URL(remoteUrl.trim());
+  } catch {
+    return null;
+  }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return null;
+  return listAccountRecords(db, env).find((a) => urlUnderServer(url, a.serverUrl)) ?? null;
+}
+
 /** Credentials for one git call to an http(s) remote under an account's server; null otherwise (ssh, other host). */
 export function gitCredentialForRemote(
   db: Db,
   remoteUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): GitHttpCredential | null {
-  let url: URL;
-  try {
-    url = new URL(remoteUrl.trim());
-  } catch {
-    return null; // scp-style ssh, a path
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  // A URL that carries its own user name or token never gets the account's.
-  if (url.username || url.password) return null;
-  const account = listAccountRecords(db, env).find((a) => urlUnderServer(url, a.serverUrl));
+  const account = accountForGitRemote(db, remoteUrl, env);
   if (!account) return null;
   const username = BASIC_USER[account.provider] ?? account.username;
   if (!username) {

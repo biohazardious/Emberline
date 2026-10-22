@@ -35,6 +35,8 @@ describe('request logging', () => {
       `/api/internal/%67it/${cap}/git-upload-pack`,
       `/api/internal/./git/${cap}/info/refs`,
       `/api/internal/x/../git/./${cap}/info/refs`,
+      `/api/internal/git;/${cap}/info/refs`,
+      `/api/internal/git/x/../${cap}/info/refs`,
     ];
     for (const p of paths) await fetch(`${base}${p}`);
     expect(logs.length).toBeGreaterThan(0);
