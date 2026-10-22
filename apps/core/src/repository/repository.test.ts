@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RepositoryStatus, Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { forgeAccounts } from '../db/schema.js';
 import { unavailable } from '../errors.js';
@@ -19,6 +19,8 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
+import { installedSecretsKey } from '../secrets/box.js';
+import { encryptStoredSecrets } from '../secrets/startup.js';
 import { DIVERGED_MESSAGE } from './git.js';
 
 const TOKEN = 'repo-secret-token';
@@ -484,6 +486,93 @@ describe('an origin set by hand with a token in it', () => {
     });
     expect(replaced.json()).toMatchObject({ originHasCredentials: false, connected: true });
     expect(readFileSync(path.join(projectPath, '.git', 'config'), 'utf8')).not.toContain(secret);
+  });
+});
+
+describe('a token typed into the connected origin, on a host with an account', () => {
+  it('is still the connected repository; the account reaches it through the gateway, the typed token is not sent', async () => {
+    forge.bare('alice', 'app');
+    const clean = `${forge.url}/alice/app.git`;
+    await send('POST', `/api/projects/${projectId}/repository/connect`, { url: clean });
+    git(projectPath, 'remote', 'set-url', 'origin', clean.replace('://', '://alice:typed-by-hand@'));
+    expect(await status()).toMatchObject({ originUrl: clean, originHasCredentials: true, connected: true });
+    forge.seen.length = 0;
+    const res = await send('POST', `/api/projects/${projectId}/repository/push-main`);
+    expect(res.statusCode, res.body).toBe(200);
+    const basic = forge.seen.filter((r) => r.authorization?.startsWith('Basic '));
+    expect(basic.length).toBeGreaterThan(0);
+    for (const r of basic) expect(Buffer.from(r.authorization!.slice(6), 'base64').toString()).toBe(`alice:${TOKEN}`);
+    expect(JSON.stringify(readRepositorySettings(t.db, projectId))).not.toContain('typed-by-hand');
+  });
+});
+
+describe('an import whose URL holds a token, on a host without an account', () => {
+  it('stores the clean URL, stays connected, refreshes and pushes with the token, and a restart changes nothing', async () => {
+    const secret = 'import-url-secret';
+    const other = await startFakeForge({ token: secret, username: 'alice' });
+    const ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+    await ptydServer.listen();
+    try {
+      t.ptyd.start();
+      await t.ptyd.waitUntilConnected();
+      const seed = path.join(t.dir, 'seed');
+      execFileSync('git', ['init', '-q', '-b', 'main', seed]);
+      commit(seed, 'first.txt');
+      git(seed, 'push', '-q', other.bare('alice', 'app'), 'main');
+      const clean = `${other.url}/alice/app.git`;
+      const withToken = clean.replace('://', `://alice:${secret}@`);
+      const made = await send('POST', '/api/projects', {
+        name: 'Token Import',
+        source: 'import_url',
+        repoUrl: withToken,
+      });
+      expect(made.statusCode, made.body).toBe(201);
+      const { project } = made.json();
+      expect(made.body).not.toContain(secret);
+      const repoUrlOf = () =>
+        (t.db.$client.prepare('select repo_url from projects where id = ?').get(project.id) as { repo_url: string })
+          .repo_url;
+      // Stored clean from the start: the token never reaches the database.
+      expect(repoUrlOf()).toBe(clean);
+      await vi.waitFor(
+        async () =>
+          expect((await send('GET', `/api/projects/${project.id}/import-status`)).json().status).toBe('ready'),
+        { timeout: 10_000 },
+      );
+      // origin keeps what the person typed, so git still authenticates.
+      expect(git(project.path, 'remote', 'get-url', 'origin')).toBe(withToken);
+      const statusOf = async (): Promise<RepositoryStatus> =>
+        (await send('GET', `/api/projects/${project.id}/repository`)).json();
+      expect(await statusOf()).toMatchObject({ originUrl: clean, originHasCredentials: true, connected: true });
+
+      const refreshed = await send('POST', `/api/projects/${project.id}/repository/refresh`);
+      expect(refreshed.statusCode, refreshed.body).toBe(200);
+      expect(refreshed.json()).toMatchObject({ connected: true, mainState: 'up_to_date', remoteError: null });
+      commit(project.path, 'second.txt');
+      const pushed = await send('POST', `/api/projects/${project.id}/repository/push-main`);
+      expect(pushed.statusCode, pushed.body).toBe(200);
+      expect(git(other.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
+        git(project.path, 'rev-parse', 'HEAD'),
+      );
+      expect((await statusOf()).mainState).toBe('up_to_date');
+      expect(JSON.stringify(readRepositorySettings(t.db, project.id))).not.toContain(secret);
+
+      // A restart's scrub finds nothing to change: no rewrite, no VACUUM, no snapshot warning.
+      const sqlite = t.db.$client;
+      const exec = vi.spyOn(sqlite, 'exec');
+      try {
+        expect(encryptStoredSecrets(sqlite, installedSecretsKey())).toEqual({ encrypted: 0, cleanedRepoUrls: 0 });
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        exec.mockRestore();
+      }
+      expect(repoUrlOf()).toBe(clean);
+      expect(await statusOf()).toMatchObject({ connected: true, mainState: 'up_to_date' });
+      expect((await send('POST', `/api/projects/${project.id}/repository/refresh`)).statusCode).toBe(200);
+    } finally {
+      await ptydServer.close();
+      await other.close();
+    }
   });
 });
 

@@ -104,7 +104,9 @@ export function describeGitError(error: unknown, credential?: GitHttpCredential 
         .map((l) => l.replace(/^(fatal|error|remote): /, '').trim())
         .find(Boolean) ?? 'git failed';
   }
-  return redactCapabilityUrls(redactCredential(text, credential)).slice(0, 300);
+  // A token typed into an http(s) origin (no account) is never quoted back; an ssh user name stays.
+  const withoutUserInfo = text.replace(/\b(https?:\/\/)[^/@\s'"]*@/gi, '$1');
+  return redactCapabilityUrls(redactCredential(withoutUserInfo, credential)).slice(0, 300);
 }
 
 const sizeText = (bytes: number) =>

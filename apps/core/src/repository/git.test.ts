@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
-import { pushBranch, remoteUrlForDisplay, validateRepositoryUrl } from './git.js';
+import { pushBranch, remoteUrlForDisplay, shortGitError, validateRepositoryUrl } from './git.js';
 
 let dir: string;
 const git = (cwd: string, ...args: string[]) =>
@@ -84,6 +84,20 @@ describe('pushBranch without an account: refusals', () => {
     );
     expect(error).toBeInstanceOf(HttpError);
     expect((error as HttpError).code).toBe('push_failed');
+  });
+});
+
+describe('shortGitError', () => {
+  it('drops user info from http(s) URLs git quotes (a token typed into origin), keeping ssh users', () => {
+    const error = Object.assign(new Error('git failed'), {
+      stderr:
+        "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': and ssh://git@host/o/r.git, http://tok3n@h/x",
+    });
+    const text = shortGitError(error);
+    expect(text).not.toContain('tok3n');
+    expect(text).toContain("'https://git.example.com/o/r.git/'");
+    expect(text).toContain('ssh://git@host/o/r.git');
+    expect(text).toContain('http://h/x');
   });
 });
 

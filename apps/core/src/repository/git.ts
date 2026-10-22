@@ -28,7 +28,10 @@ const BAD_URL =
  * (ssh with the runner's keys, a public https remote) the runner's git goes straight to the URL.
  */
 export interface RemoteAccess {
-  /** projects.repoUrl, or the URL being connected: never a URL read from .git/config. */
+  /**
+   * projects.repoUrl, or the URL being connected. Without an account it may be origin as configured,
+   * with a token typed into it, but only when that names the same repository as projects.repoUrl.
+   */
   url: string;
   account: AccountRemote | null;
 }

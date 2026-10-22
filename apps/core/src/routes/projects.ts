@@ -560,7 +560,8 @@ export function registerProjectRoutes(
       id,
       name: body.name,
       slug,
-      repoUrl: body.repoUrl ?? null,
+      // Without credentials: a token typed into the URL stays in origin (the clone needs it), never in the database.
+      repoUrl: body.repoUrl ? remoteUrlForDisplay(body.repoUrl).url : null,
       defaultBranch: body.defaultBranch,
       path: projectPath,
       appType: body.appType,

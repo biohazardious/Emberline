@@ -60,6 +60,9 @@ const parse = <T>(
 const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const remoteErrorText = (error: unknown) =>
   error instanceof HttpError ? error.message : shortGitError(error);
+/** One repository: a user name or token typed into a URL is never part of which repository it names. */
+const sameRepository = (a: string | null, b: string) =>
+  a !== null && remoteUrlForDisplay(a).url === remoteUrlForDisplay(b).url;
 
 /** What a refresh or push read under the main-workspace lock, for its network call outside it. */
 interface Snapshot {
@@ -67,6 +70,8 @@ interface Snapshot {
   branch: string;
   defaultBranch: string;
   access: RemoteAccess;
+  /** origin's URL as read under the lock (it may hold a token typed into it). */
+  origin: string;
 }
 
 export class RepositoryService {
@@ -158,11 +163,11 @@ export class RepositoryService {
             username: account.username,
           }
         : null,
-      connected: row.repoUrl === origin,
+      connected: sameRepository(row.repoUrl, origin),
       mainState: 'unknown',
     };
     const check = settings.lastRemoteCheck;
-    if (!check || check.url !== origin || check.branch !== main) return withOrigin; // not read since origin was set
+    if (!check || check.url !== shown.url || check.branch !== main) return withOrigin; // not read since origin was set
     const checked: RepositoryStatus = { ...withOrigin, checkedAt: check.at };
     if (check.error) return { ...checked, remoteError: check.error };
     if (!check.published) return { ...checked, mainState: 'unpublished' };
@@ -187,7 +192,7 @@ export class RepositoryService {
   private async snapshot(projectId: string): Promise<Snapshot> {
     return withMainWorkspaceLock(this.project(projectId).path, async () => {
       const ws = await this.workspace(projectId);
-      return { ...ws, access: await this.access(projectId, ws.path) };
+      return { ...ws, ...(await this.access(projectId, ws.path)) };
     });
   }
 
@@ -195,7 +200,7 @@ export class RepositoryService {
   private async originStill(projectId: string, ws: Snapshot): Promise<boolean> {
     const { fetch, push } = await originUrls(ws.path);
     const row = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
-    return row?.repoUrl === ws.access.url && fetch === ws.access.url && (!push || push === fetch);
+    return row !== undefined && sameRepository(row.repoUrl, ws.origin) && fetch === ws.origin && (!push || push === fetch);
   }
 
   async connect(projectId: string, raw: unknown): Promise<RepositoryStatus> {
@@ -327,7 +332,7 @@ export class RepositoryService {
             throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
           }
         }
-        return { ...ws, oid: tip.sha, access: await this.access(projectId, ws.path) };
+        return { ...ws, oid: tip.sha, ...(await this.access(projectId, ws.path)) };
       });
       if (plan === 'superseded') return plan;
       const result = await pushBranch(plan.path, plan.access, plan.defaultBranch, plan.oid);
@@ -340,7 +345,7 @@ export class RepositoryService {
         await setRemoteTracking(plan.path, plan.defaultBranch, plan.oid);
         await setUpstream(plan.path, plan.defaultBranch);
         const check: RemoteCheck = {
-          url: plan.access.url,
+          url: remoteUrlForDisplay(plan.origin).url,
           branch: plan.defaultBranch,
           at: new Date().toISOString(),
           published: true,
@@ -361,8 +366,13 @@ export class RepositoryService {
     return { url, account: credential ? { gateway: this.gateway, projectId, url, credential } : null };
   }
 
-  /** origin as Emberline connected it: refresh and push go to projects.repoUrl, never to a URL only .git/config names. */
-  private async access(projectId: string, mainPath: string): Promise<RemoteAccess> {
+  /**
+   * origin as Emberline connected it: refresh and push go to the repository projects.repoUrl names,
+   * never to one only .git/config names. A token typed into origin does not make it another
+   * repository: without an account git reaches origin as configured (with that token); an account
+   * only ever goes to projects.repoUrl, through the gateway.
+   */
+  private async access(projectId: string, mainPath: string): Promise<{ access: RemoteAccess; origin: string }> {
     const { fetch, push } = await originUrls(mainPath);
     if (!fetch) throw conflict('Connect a repository first.', 'no_remote');
     if (push && push !== fetch) {
@@ -371,13 +381,15 @@ export class RepositoryService {
         'push_url_differs',
       );
     }
-    if (this.project(projectId).repoUrl !== fetch) {
+    const connected = this.project(projectId).repoUrl;
+    if (connected === null || !sameRepository(connected, fetch)) {
       throw conflict(
         `origin (${remoteUrlForDisplay(fetch).url}) is not the repository connected for this project. Connect it under "Connect an existing repository" first.`,
         'origin_differs',
       );
     }
-    return this.accessFor(projectId, fetch);
+    const access = this.accessFor(projectId, connected);
+    return { access: access.account ? access : { url: fetch, account: null }, origin: fetch };
   }
 
   /**
@@ -389,18 +401,19 @@ export class RepositoryService {
   private async readRemote(projectId: string, ws: Snapshot): Promise<void> {
     const branch = ws.defaultBranch;
     const at = new Date().toISOString();
+    const checkedUrl = remoteUrlForDisplay(ws.origin).url; // stored: never with a token
     let check: RemoteCheck;
     let remoteOid: string | null = null;
     try {
       remoteOid = await remoteBranchHead(ws.path, ws.access, branch);
       if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
-      check = { url: ws.access.url, branch, at, published: remoteOid !== null, error: null };
+      check = { url: checkedUrl, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
       const reason =
         error instanceof HttpError ? error.message : describeGitError(error, ws.access.account?.credential);
-      check = { url: ws.access.url, branch, at, published: false, error: reason };
+      check = { url: checkedUrl, branch, at, published: false, error: reason };
     }
     await withMainWorkspaceLock(ws.path, async () => {
       if (!(await this.originStill(projectId, ws))) return; // origin changed meanwhile: its own read counts
