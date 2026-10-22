@@ -22,6 +22,7 @@ import {
   visionRequired,
 } from '@emberline/protocol';
 import { badRequest } from '../errors.js';
+import { normalizeMaterialInfos } from './materials.js';
 import {
   bootstrapTicket,
   bootstrapWritesWorktree,
@@ -125,9 +126,11 @@ export function dockerComposeNote(engine: DockerEngineStatus | undefined): strin
  * its container (worktree.yml v2); otherwise the summary says how to get that, by `engine`'s state.
  */
 export function planNewProject(
-  body: ProjectPlanInput,
+  input: ProjectPlanInput,
   { dockerEngine = false, engine }: { dockerEngine?: boolean; engine?: DockerEngineStatus } = {},
 ): ProjectPlan {
+  // Everything below sees the files as name, type and decoded size, whichever shape came in.
+  const body = { ...input, materials: normalizeMaterialInfos(input.materials) };
   const preset = body.presetId === undefined ? undefined : getPreset(body.presetId);
   if (body.presetId !== undefined && !preset) throw badRequest(`unknown preset "${body.presetId}"`);
   if (preset && body.appType !== 'custom' && body.appType !== preset.type) {

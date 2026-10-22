@@ -4,6 +4,7 @@ import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActiveProjectPreference,
+  MATERIALS_ERROR_CODE,
   PROJECT_CONFLICT,
   AgentCreateTicketsPayload,
   AgentId,
@@ -446,7 +447,7 @@ export function registerProjectRoutes(
       throw conflict(`a project with slug "${slug}" already exists`, PROJECT_CONFLICT.nameTaken);
     }
     if (!isWizardCreate(body) && ((body.materials?.length ?? 0) > 0 || (body.referenceUrls?.length ?? 0) > 0)) {
-      throw badRequest('Reference files and links are only accepted when the wizard creates a new project.');
+      throw new HttpError(400, MATERIALS_ERROR_CODE, 'Reference files and links are only accepted when the wizard creates a new project.');
     }
     if (body.source === 'import_folder' && body.folder !== undefined) {
       return importFolderProject(body, body.folder, slug, reply);

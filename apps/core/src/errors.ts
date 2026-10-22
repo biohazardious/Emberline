@@ -1,3 +1,4 @@
+import { MATERIALS_ERROR_CODE } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -25,6 +26,11 @@ export const unavailable = (code: string, message: string) => new HttpError(503,
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) {
+      // Reference files and links get a plain sentence and the code the wizard shows next to the area.
+      const first = error.issues[0];
+      if (first && error.issues.every((i) => i.path[0] === 'materials' || i.path[0] === 'referenceUrls')) {
+        return reply.code(400).send({ error: MATERIALS_ERROR_CODE, message: first.message });
+      }
       return reply.code(400).send({ error: 'bad_request', message: z.prettifyError(error) });
     }
     if (error instanceof HttpError) {

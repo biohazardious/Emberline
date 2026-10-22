@@ -63,6 +63,17 @@ describe('wizard materials: checks before anything is written', () => {
     }
   });
 
+  it('schema refusals of files and links are invalid_materials with a plain sentence', async () => {
+    const res = await create({ ...STATIC, materials: Array(21).fill(file('a.bin', Buffer.from('x'))) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'invalid_materials', message: 'Attach at most 20 files.' });
+    const link = await create({ ...STATIC, referenceUrls: [{ url: 'javascript:alert(1)' }] });
+    expect(link.json()).toMatchObject({
+      error: 'invalid_materials',
+      message: 'Use a link that starts with http:// or https://.',
+    });
+  });
+
   it('materials and links are only for a new project from the wizard', async () => {
     const res = await create({
       name: 'Old Way',

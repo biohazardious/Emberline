@@ -41,11 +41,12 @@ const IMAGE_TYPES: Record<string, string> = {
 export const MaterialKind = z.enum(['image', 'pdf', 'svg', 'other']);
 export type MaterialKind = z.infer<typeof MaterialKind>;
 
-const essence = (mimeType: string): string => (mimeType.split(';')[0] ?? '').trim().toLowerCase();
+/** The media type without parameters, lower-case: `IMAGE/PNG; charset=x` is `image/png`. */
+export const mimeEssence = (mimeType: string): string => (mimeType.split(';')[0] ?? '').trim().toLowerCase();
 
 /** Thumbnails for `image`; SVG is its own kind because it can carry script and is never previewed. */
 export function materialKind(mimeType: string): MaterialKind {
-  const t = essence(mimeType);
+  const t = mimeEssence(mimeType);
   if (IMAGE_TYPES[t]) return 'image';
   if (t === 'application/pdf') return 'pdf';
   if (t === 'image/svg+xml') return 'svg';
@@ -54,13 +55,13 @@ export function materialKind(mimeType: string): MaterialKind {
 
 /** The type core checks by content ('PNG' … 'PDF'), or null when it is not checked. */
 export function materialCheckedType(mimeType: string): string | null {
-  const t = essence(mimeType);
+  const t = mimeEssence(mimeType);
   if (t === 'application/pdf') return 'PDF';
   return IMAGE_TYPES[t] ?? null;
 }
 
 export function materialTypeLabel(mimeType: string): string {
-  const t = essence(mimeType);
+  const t = mimeEssence(mimeType);
   if (IMAGE_TYPES[t]) return `${IMAGE_TYPES[t]} image`;
   if (t === 'application/pdf') return 'PDF';
   if (t === 'image/svg+xml') return 'SVG image';
@@ -73,12 +74,15 @@ export function formatMaterialSize(bytes: number): string {
   return `${(bytes / MB).toFixed(1)} MB`;
 }
 
+// eslint-disable-next-line no-control-regex -- control characters are exactly what is refused
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
 /** Why a reference link (and its note) is refused, as a plain sentence; null when it is fine. */
 export function referenceUrlProblem(url: string, note?: string): string | null {
   if (url.length > REFERENCE_URL_MAX_LENGTH)
     return `The link is longer than ${REFERENCE_URL_MAX_LENGTH} characters.`;
   let parsed: URL | null = null;
-  if (!/[\s<>"`\\]/.test(url)) {
+  if (!/[\s<>"`\\]/.test(url) && !CONTROL_CHARS.test(url)) {
     try {
       parsed = new URL(url);
     } catch {
@@ -90,33 +94,41 @@ export function referenceUrlProblem(url: string, note?: string): string | null {
   }
   if (parsed.username || parsed.password) return 'Remove the user name and password from the link.';
   if (note !== undefined) {
-    // eslint-disable-next-line no-control-regex -- a control character in a note is exactly what is refused
-    if (/[\u0000-\u001f\u007f]/.test(note)) return 'Write the note on one line.';
+    if (CONTROL_CHARS.test(note)) return 'Write the note on one line.';
     if (note.length > REFERENCE_URL_NOTE_MAX) return `Keep the note to ${REFERENCE_URL_NOTE_MAX} characters.`;
   }
   return null;
 }
 
-const MaterialName = z.string().trim().min(1).max(255);
+const MaterialName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine((n) => !CONTROL_CHARS.test(n), 'A file name cannot contain line breaks or control characters.');
 const MaterialMimeType = z
   .string()
   .trim()
   .max(150)
+  .refine((t) => !CONTROL_CHARS.test(t), 'A file type cannot contain line breaks or control characters.')
   .optional()
   .transform((t) => t || 'application/octet-stream');
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /** One file of the create body. Sizes are checked again on the decoded bytes in core. */
-export const ProjectMaterialInput = z.object({
-  name: MaterialName,
-  mimeType: MaterialMimeType,
-  dataBase64: z
-    .string()
-    .min(4)
-    .max(base64Length(MATERIAL_MAX_BYTES), `a file is at most ${MATERIAL_MAX_BYTES / MB} MB`)
-    .regex(BASE64, 'must be plain base64 (no data: prefix)')
-    .refine((s) => s.length % 4 === 0, 'must be padded base64'),
-});
+export const ProjectMaterialInput = z
+  .object({ name: MaterialName, mimeType: MaterialMimeType, dataBase64: z.string() })
+  .superRefine((v, ctx) => {
+    const problem =
+      v.dataBase64.length > base64Length(MATERIAL_MAX_BYTES)
+        ? `${v.name} is larger than ${MATERIAL_MAX_BYTES / MB} MB.`
+        : v.dataBase64.length < 4 || !BASE64.test(v.dataBase64)
+          ? `${v.name} is not plain base64 (no data: prefix).`
+          : v.dataBase64.length % 4 !== 0
+            ? `${v.name} is not padded base64.`
+            : null;
+    if (problem) ctx.addIssue({ code: 'custom', path: ['dataBase64'], message: problem });
+  });
 export type ProjectMaterialInput = z.input<typeof ProjectMaterialInput>;
 export type ProjectMaterial = z.output<typeof ProjectMaterialInput>;
 

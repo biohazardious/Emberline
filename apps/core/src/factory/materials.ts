@@ -7,6 +7,7 @@ import {
   materialCheckedType,
   type MaterialKind,
   materialKind,
+  mimeEssence,
   type MaterialLimits,
   type ProjectMaterial,
   type ProjectMaterialInfo,
@@ -19,6 +20,7 @@ export type PlannedMaterial = ProjectMaterialInfo & { kind: MaterialKind; path: 
 
 const MB = 1024 * 1024;
 const STORED_NAME_MAX = 100;
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 const materialsError = (message: string) => new HttpError(400, MATERIALS_ERROR_CODE, message);
 const ascii = (bytes: Uint8Array, start: number, end: number) =>
   Buffer.from(bytes.subarray(start, end)).toString('latin1');
@@ -35,7 +37,7 @@ const SIGNATURES: Record<string, (b: Uint8Array) => boolean> = {
 
 /** Images and PDFs must start like their declared type; SVG and other files are not checked. */
 export function matchesDeclaredType(mimeType: string, bytes: Uint8Array): boolean {
-  const check = SIGNATURES[(mimeType.split(';')[0] ?? '').trim().toLowerCase()];
+  const check = SIGNATURES[mimeEssence(mimeType)];
   return check ? check(bytes) : true;
 }
 
@@ -70,9 +72,12 @@ export function storedMaterialName(name: string, index: number): string {
   const rawExt = path.posix.extname(base);
   const ext = sanitizeAttachmentName(rawExt.slice(1), '').toLowerCase().slice(0, 10);
   const stem = sanitizeAttachmentName(base.slice(0, base.length - rawExt.length), '').replace(/^[.-]+/, '');
-  const room = STORED_NAME_MAX - (ext ? ext.length + 1 : 0);
+  // The prefix for a device name ('file-') needs room too.
+  const room = STORED_NAME_MAX - (ext ? ext.length + 1 : 0) - 5;
   const safeStem = (stem || fallback).slice(0, room).replace(/[-.]+$/, '') || fallback;
-  return ext ? `${safeStem}.${ext}` : safeStem;
+  // A Windows device name (CON, NUL.txt, COM1…) cannot be checked out there, so it gets a prefix.
+  const device = WINDOWS_DEVICE.test(safeStem) ? `file-${safeStem}` : safeStem;
+  return ext ? `${device}.${ext}` : device;
 }
 
 /**
@@ -90,7 +95,11 @@ export function planMaterials(
     const ext = path.posix.extname(stored);
     const stem = stored.slice(0, stored.length - ext.length);
     let candidate = `${MATERIALS_DIR}/${stored}`;
-    for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${MATERIALS_DIR}/${stem}-${n}${ext}`;
+    for (let n = 2; used.has(candidate.toLowerCase()); n++) {
+      // The suffix counts toward the 100-character cap, so the stem gives way.
+      const suffix = `-${n}${ext}`;
+      candidate = `${MATERIALS_DIR}/${stem.slice(0, STORED_NAME_MAX - suffix.length).replace(/[-.]+$/, '')}${suffix}`;
+    }
     used.add(candidate.toLowerCase());
     return {
       name: info.name,
@@ -100,4 +109,21 @@ export function planMaterials(
       path: candidate,
     };
   });
+}
+
+/** Decoded byte length of padded base64, as `Buffer.from(…, 'base64')` counts it (without decoding). */
+const decodedLength = (base64: string): number => Math.floor((base64.replace(/=+$/, '').length * 3) / 4);
+
+/**
+ * Reduces either shape of a plan's files (the preview's metadata or a parsed create body with its
+ * bytes) to name, type and decoded size. No file is dropped.
+ */
+export function normalizeMaterialInfos(
+  materials: readonly (ProjectMaterialInfo | ProjectMaterial)[] | undefined,
+): ProjectMaterialInfo[] {
+  return (materials ?? []).map((m) => ({
+    name: m.name,
+    mimeType: m.mimeType,
+    sizeBytes: 'sizeBytes' in m ? m.sizeBytes : decodedLength(m.dataBase64),
+  }));
 }

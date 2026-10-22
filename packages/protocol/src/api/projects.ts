@@ -126,8 +126,8 @@ const CreateProjectFields = z.object({
   /** `import_folder`: name of a direct child of the workspaces directory. */
   folder: FolderName.optional(),
   /** Wizard (new project) only: files committed to docs/reference/ and links listed in PROJECT.md. */
-  materials: z.array(ProjectMaterialInput).max(MATERIALS_MAX_FILES).optional(),
-  referenceUrls: z.array(ReferenceUrl).max(REFERENCE_URLS_MAX).optional(),
+  materials: z.array(ProjectMaterialInput).max(MATERIALS_MAX_FILES, `Attach at most ${MATERIALS_MAX_FILES} files.`).optional(),
+  referenceUrls: z.array(ReferenceUrl).max(REFERENCE_URLS_MAX, `Add at most ${REFERENCE_URLS_MAX} links.`).optional(),
 });
 
 type SourceFields = { source?: ProjectSource; folder?: string; repoUrl?: string };
@@ -160,7 +160,7 @@ export type CreateProjectResponse = z.infer<typeof CreateProjectResponse>;
 
 /** `POST /api/projects/preview` takes the creation body with each file's name, type and size instead of its bytes. Writes nothing. */
 export const ProjectPreviewBody = CreateProjectFields.extend({
-  materials: z.array(ProjectMaterialInfo).max(MATERIALS_MAX_FILES).optional(),
+  materials: z.array(ProjectMaterialInfo).max(MATERIALS_MAX_FILES, `Attach at most ${MATERIALS_MAX_FILES} files.`).optional(),
 })
   .refine(hasFolder, FOLDER_RULE)
   .refine(hasRepoUrl, REPO_URL_RULE);

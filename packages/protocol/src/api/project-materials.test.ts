@@ -95,6 +95,51 @@ describe('links', () => {
   });
 });
 
+describe('control characters and plain schema sentences', () => {
+  it('refuses control characters in links, notes and names', () => {
+    expect(referenceUrlProblem('https://example.com/a\u0001b')).toBe(
+      'Use a link that starts with http:// or https://.',
+    );
+    expect(referenceUrlProblem('https://example.com', 'a\u2028b')).toBe('Write the note on one line.');
+    expect(referenceUrlProblem('https://example.com', 'a\u0085b')).toBe('Write the note on one line.');
+    expect(ProjectMaterialInput.safeParse({ name: 'a\nb.png', dataBase64: 'AAAA' }).success).toBe(false);
+    expect(
+      ProjectMaterialInput.safeParse({ name: 'a.png', mimeType: 'image/png\nx', dataBase64: 'AAAA' }).success,
+    ).toBe(false);
+  });
+  it('says what is wrong in plain words', () => {
+    const msg = (r: { error?: { issues: { message: string }[] } }) => r.error?.issues[0]?.message;
+    const file = { name: 'a.bin', dataBase64: 'AAAA' };
+    expect(msg(CreateProjectBody.safeParse({ ...NEW, materials: Array(21).fill(file) }))).toBe(
+      'Attach at most 20 files.',
+    );
+    expect(
+      msg(
+        CreateProjectBody.safeParse({
+          ...NEW,
+          referenceUrls: Array(21).fill({ url: 'https://example.com' }),
+        }),
+      ),
+    ).toBe('Add at most 20 links.');
+    expect(
+      msg(
+        CreateProjectBody.safeParse({ ...NEW, materials: [{ ...file, dataBase64: 'data:x;base64,AAAA' }] }),
+      ),
+    ).toBe('a.bin is not plain base64 (no data: prefix).');
+    expect(msg(CreateProjectBody.safeParse({ ...NEW, materials: [{ ...file, dataBase64: 'AAAAA' }] }))).toBe(
+      'a.bin is not padded base64.',
+    );
+    expect(
+      msg(
+        CreateProjectBody.safeParse({
+          ...NEW,
+          materials: [{ ...file, dataBase64: 'A'.repeat(base64Length(MATERIAL_MAX_BYTES) + 4) }],
+        }),
+      ),
+    ).toBe('a.bin is larger than 10 MB.');
+  });
+});
+
 describe('files', () => {
   it('bounds the encoded size by the 10 MB cap and wants plain padded base64', () => {
     expect(base64Length(MATERIAL_MAX_BYTES)).toBe(13_981_016);

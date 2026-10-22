@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
-import { decodeMaterials, matchesDeclaredType, planMaterials, storedMaterialName } from './materials.js';
+import {
+  decodeMaterials,
+  matchesDeclaredType,
+  normalizeMaterialInfos,
+  planMaterials,
+  storedMaterialName,
+} from './materials.js';
 import { sanitizeAttachmentName } from './orchestration.js';
 
 const PNG = Buffer.concat([
@@ -145,5 +151,49 @@ describe('stored names', () => {
       kind: 'svg',
       path: 'docs/reference/logo.svg',
     });
+  });
+});
+
+describe('fix round 1', () => {
+  it('a clash suffix keeps the stored name within 100 characters', () => {
+    const name = `${'x'.repeat(300)}.pdf`;
+    const paths = planMaterials(
+      [name, name, name].map((n) => ({ name: n, mimeType: 'application/pdf', sizeBytes: 1 })),
+    ).map((m) => m.path);
+    expect(new Set(paths.map((p) => p.toLowerCase())).size).toBe(3);
+    for (const p of paths) {
+      expect(p.slice('docs/reference/'.length).length).toBeLessThanOrEqual(100);
+      expect(p.endsWith('.pdf')).toBe(true);
+    }
+  });
+  it('Windows device names get a prefix, with or without extension, any case', () => {
+    for (const n of ['CON', 'con.png', 'Nul.txt', 'COM1.pdf', 'lpt9', 'AUX.tar.gz', 'prn'])
+      expect(storedMaterialName(n, 0), n).toMatch(/^file-/);
+    expect(storedMaterialName('CON.png', 0)).toBe('file-CON.png');
+    expect(storedMaterialName('console.png', 0)).toBe('console.png');
+    expect(storedMaterialName('COM10.png', 0)).toBe('COM10.png');
+  });
+  it('names with control characters store as plain names', () => {
+    expect(storedMaterialName('a\nb\u0001.png', 0)).toBe('a-b.png');
+  });
+  it('a parsed create body and a preview body plan the same paths and sizes', () => {
+    const bytes = Buffer.from('hello world!!'); // 13 bytes, padded base64
+    const parsed = {
+      name: 'Shot.PNG',
+      mimeType: 'application/octet-stream',
+      dataBase64: bytes.toString('base64'),
+    };
+    const decoded = decodeMaterials([parsed], { maxFiles: 5, maxFileBytes: 100, maxTotalBytes: 100 });
+    const fromParsed = normalizeMaterialInfos([parsed]);
+    const fromInfo = normalizeMaterialInfos(
+      decoded.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes })),
+    );
+    expect(fromParsed).toEqual(fromInfo);
+    expect(fromParsed[0]!.sizeBytes).toBe(13);
+    expect(planMaterials(fromParsed)).toEqual(planMaterials(fromInfo));
+    for (const b64 of ['AAAA', 'AA==', 'AAA=', '===='])
+      expect(normalizeMaterialInfos([{ name: 'x', mimeType: 'a/b', dataBase64: b64 }])[0]!.sizeBytes).toBe(
+        Buffer.from(b64, 'base64').length,
+      );
   });
 });
