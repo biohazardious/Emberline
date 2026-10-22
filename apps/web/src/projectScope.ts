@@ -75,3 +75,10 @@ export function fleetBulkTitles(scope: Scope): { stopAll: string; cleanUp: strin
     cleanUp: `Purge finished and failed sessions, close their exited terminals, and prune their temporary git worktrees ${where}`,
   };
 }
+
+/** The Inbox header's second line. */
+export function inboxSubtitle(scoped: boolean, projectName: string | undefined): string {
+  return scoped
+    ? `Runs that need you in ${projectName ?? 'this project'} · Alt+N opens the oldest in any project`
+    : 'Runs that need you, across all projects · Alt+N opens the oldest';
+}

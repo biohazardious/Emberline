@@ -106,10 +106,12 @@ const MaterialName = z
   .min(1)
   .max(255)
   .refine((n) => !CONTROL_CHARS.test(n), 'A file name cannot contain line breaks or control characters.');
+/** The longest file type core accepts; the wizard falls back to the extension type beyond it. */
+export const MATERIAL_MIME_TYPE_MAX = 150;
 const MaterialMimeType = z
   .string()
   .trim()
-  .max(150)
+  .max(MATERIAL_MIME_TYPE_MAX)
   .refine((t) => !CONTROL_CHARS.test(t), 'A file type cannot contain line breaks or control characters.')
   .optional()
   .transform((t) => t || 'application/octet-stream');

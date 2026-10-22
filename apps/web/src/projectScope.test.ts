@@ -3,6 +3,7 @@ import {
   ALL_PROJECTS_KEYS,
   fleetBulkTitles,
   type FlagStorage,
+  inboxSubtitle,
   inScope,
   moreInOtherProjects,
   outOfScope,
@@ -90,5 +91,13 @@ describe('fleetBulkTitles', () => {
     expect(fleetBulkTitles({ activeProjectId: 'a', all: true })).toEqual(everywhere);
     // No active project yet: the views show (and the buttons act on) every project.
     expect(fleetBulkTitles({ activeProjectId: null, all: false })).toEqual(everywhere);
+  });
+});
+
+describe('inboxSubtitle', () => {
+  it('names the scope', () => {
+    expect(inboxSubtitle(true, undefined)).toBe('Runs that need you in this project · Alt+N opens the oldest in any project');
+    expect(inboxSubtitle(true, 'Alpha')).toBe('Runs that need you in Alpha · Alt+N opens the oldest in any project');
+    expect(inboxSubtitle(false, 'Alpha')).toBe('Runs that need you, across all projects · Alt+N opens the oldest');
   });
 });

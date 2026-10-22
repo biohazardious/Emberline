@@ -13,7 +13,7 @@ import { api, errorMessage } from '../../api';
 import { GATE_LABELS } from '../../projectSettings';
 import { PERSONA_BY_ID } from '../PersonaBadge';
 import { MaterialList } from './MaterialList';
-import { parseReferenceUrls } from './materials';
+import { parseReferenceUrls, summaryMaterialsNote } from './materials';
 import {
   ADOPT_FILES,
   buildAdoptBody,
@@ -263,7 +263,7 @@ export function StepSummary({
               ))}
             </ul>
           )}
-          <p className="muted small">The files are committed to docs/reference/ with the first commit. Emberline never opens the links.</p>
+          <p className="muted small">{summaryMaterialsNote(state.materials.length, links.length)}</p>
         </section>
       )}
 

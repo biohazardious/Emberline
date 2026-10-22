@@ -5,12 +5,14 @@ import {
   capLine,
   encodeMaterials,
   filesToAddAgain,
+  leavesDropZone,
   MaterialReadError,
   materialDetail,
   materialMimeType,
   materialsErrorField,
   materialsErrorMessage,
   notKeptText,
+  summaryMaterialsNote,
   parseReferenceUrls,
   ThumbnailUrls,
   type WizardMaterial,
@@ -68,6 +70,7 @@ describe('addMaterials', () => {
       [
         { file: blob(1), name: 'a'.repeat(256) },
         { file: blob(1), name: 'x\ny.png' },
+        { file: blob(1), name: '   ' },
       ],
       id,
     );
@@ -75,6 +78,7 @@ describe('addMaterials', () => {
     expect(problems).toEqual([
       `${'a'.repeat(40)}… has a name longer than 255 characters.`,
       'x\\ny.png has line breaks or control characters in its name.',
+      'A file whose name is only spaces cannot be added. Rename it, then add it again.',
     ]);
   });
   it('holds the count, per-file and total caps', () => {
@@ -241,5 +245,34 @@ describe('after a reload', () => {
     const again = filesToAddAgain(['a.png', 'brief.pdf'], [material('a.png', 1, 'image/png', 'image')]);
     expect(again).toEqual(['brief.pdf']);
     expect(notKeptText(again)).toBe('Files are not kept in the draft. Add them again: brief.pdf.');
+  });
+});
+
+describe('the summary note', () => {
+  it('says where files and links go', () => {
+    expect(summaryMaterialsNote(2, 1)).toBe(
+      'The files are committed to docs/reference/ with the first commit. The links are listed in PROJECT.md, which is committed too. Emberline never opens the links.',
+    );
+    expect(summaryMaterialsNote(0, 1)).toBe(
+      'The links are listed in PROJECT.md, which is committed too. Emberline never opens the links.',
+    );
+    expect(summaryMaterialsNote(1, 0)).toBe('The files are committed to docs/reference/ with the first commit.');
+  });
+});
+
+describe('a file type the server would refuse', () => {
+  it('falls back to the extension type when too long', () => {
+    expect(materialMimeType('a.png', 'x/' + 'y'.repeat(200))).toBe('image/png');
+    expect(materialMimeType('a.png', 'image/\nx')).toBe('image/png');
+  });
+});
+
+describe('leavesDropZone', () => {
+  it('stays on while the pointer moves between children', () => {
+    const child = {};
+    const zone = { contains: (n: unknown) => n === child };
+    expect(leavesDropZone(zone, child)).toBe(false);
+    expect(leavesDropZone(zone, {})).toBe(true);
+    expect(leavesDropZone(zone, null)).toBe(true);
   });
 });

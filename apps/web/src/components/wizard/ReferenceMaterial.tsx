@@ -1,7 +1,7 @@
 import { Upload } from 'lucide-react';
 import { type ChangeEvent, type Dispatch, type DragEvent, useState } from 'react';
 import { MaterialList } from './MaterialList';
-import { addMaterials, capLine, filesToAddAgain, type MaterialCandidate, notKeptText, parseReferenceUrls } from './materials';
+import { addMaterials, capLine, filesToAddAgain, leavesDropZone, type MaterialCandidate, notKeptText, parseReferenceUrls } from './materials';
 import type { WizardAction, WizardState } from './wizardLogic';
 
 export function ReferenceMaterial({
@@ -62,7 +62,9 @@ export function ReferenceMaterial({
             e.preventDefault();
             setDragging(true);
           }}
-          onDragLeave={() => setDragging(false)}
+          onDragLeave={(e) => {
+            if (leavesDropZone(e.currentTarget, e.relatedTarget)) setDragging(false);
+          }}
           onDrop={onDrop}
         >
           <span className="muted small">Drop files here or</span>

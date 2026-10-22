@@ -51,7 +51,7 @@ import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
 import { useTrackPageViews } from './hooks/navigation';
 import { setPresenceRun } from './hooks/eventHub';
 import { useAttention } from './hooks/useAttention';
-import { projectIdFromPath, resolveActiveProjectId, switchProjectPath } from './projectPaths';
+import { inActiveScope, projectIdFromPath, resolveActiveProject, switchProjectPath } from './projectPaths';
 import { Dashboard } from './pages/Dashboard';
 import { Toasts, toastError, toastInfo } from './toast';
 
@@ -203,9 +203,12 @@ function Shell() {
 
   const ptyd = system.data?.ptyd ?? 'connecting';
 
+  const [serverActiveId, setServerActiveId] = useState<string | null | undefined>(undefined);
+  const [serverFailed, setServerFailed] = useState(false);
   const selectProject = useCallback(
     (id: string | null) => {
       setActiveProjectId(id);
+      setServerActiveId(id);
       try {
         if (id) localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, id);
         else localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
@@ -220,25 +223,35 @@ function Shell() {
   );
 
   // The server's stored choice, asked once when neither the URL nor this browser names a usable project.
-  const [serverActiveId, setServerActiveId] = useState<string | null | undefined>(undefined);
   const askedServer = useRef(false);
   const urlProjectId = projectIdFromPath(location);
   // Any /projects/<id>/… page makes <id> the active project; a stale or missing stored id resolves to
   // the server's choice (else the first project), and the result is stored so every view agrees.
+  const resolution = useMemo(
+    () =>
+      projects.data
+        ? resolveActiveProject(
+            projects.data.map((p) => p.id),
+            { fromUrl: urlProjectId, stored: activeProjectId, server: serverActiveId, serverFailed },
+          )
+        : { id: undefined, remember: true },
+    [projects.data, urlProjectId, activeProjectId, serverActiveId, serverFailed],
+  );
   useEffect(() => {
-    const ids = projects.data?.map((p) => p.id);
-    if (!ids) return;
-    const next = resolveActiveProjectId(ids, { fromUrl: urlProjectId, stored: activeProjectId, server: serverActiveId });
-    if (next === undefined) {
+    if (!projects.data) return;
+    if (resolution.id === undefined) {
       if (askedServer.current) return;
       askedServer.current = true;
       void api<ActiveProjectPreference>('/api/projects/active')
         .then((pref) => setServerActiveId(pref.activeProjectId ?? null))
-        .catch(() => setServerActiveId(null));
+        .catch(() => setServerFailed(true));
       return;
     }
-    if (next !== null && next !== activeProjectId) selectProject(next);
-  }, [projects.data, urlProjectId, activeProjectId, serverActiveId, selectProject]);
+    if (resolution.id && resolution.id !== activeProjectId) {
+      if (resolution.remember) selectProject(resolution.id);
+      else setActiveProjectId(resolution.id);
+    }
+  }, [projects.data, resolution, activeProjectId, selectProject]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -260,8 +273,8 @@ function Shell() {
 
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const activeProject = useMemo(
-    () => (activeProjectId ? projectById.get(activeProjectId) : undefined),
-    [activeProjectId, projectById],
+    () => (resolution.id ? projectById.get(resolution.id) : undefined),
+    [resolution.id, projectById],
   );
 
   // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
@@ -271,13 +284,13 @@ function Shell() {
         !r.endedAt &&
         r.state !== 'done' &&
         r.state !== 'failed' &&
-        (!activeProject || r.projectId === activeProject.id),
+        inActiveScope(projects.data ? resolution.id : undefined, r.projectId),
     );
     return list.sort((a, b) => {
       const rank = (s: string) => (s === 'waiting_input' ? 0 : s === 'working' || s === 'starting' ? 1 : 2);
       return rank(a.state) - rank(b.state);
     });
-  }, [runs, activeProject]);
+  }, [runs, projects.data, resolution.id]);
 
   const inspectedRun = useMemo(() => (runs ?? []).find((r) => r.id === inspectRunId), [runs, inspectRunId]);
 
@@ -1037,7 +1050,7 @@ function Shell() {
         open={cmdOpen}
         onClose={() => setCmdOpen(false)}
         projects={projects.data ?? []}
-        runs={(runs ?? []).filter((r) => !activeProject || r.projectId === activeProject.id)}
+        runs={(runs ?? []).filter((r) => inActiveScope(projects.data ? resolution.id : undefined, r.projectId))}
         scheduler={scheduler}
         onInspectRun={(id) => setInspectRunId(id)}
         onLogout={() => void logout()}

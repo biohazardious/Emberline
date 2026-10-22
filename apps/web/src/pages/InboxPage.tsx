@@ -20,7 +20,7 @@ import { notificationsSupported } from '../hooks/useAttention';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
 import { useAllProjects } from '../hooks/useAllProjects';
 import { useApi } from '../hooks/useApi';
-import { inScope } from '../projectScope';
+import { inboxSubtitle, inScope } from '../projectScope';
 import { ticketsQuery } from '../hooks/liveData';
 import { timeAgo, useNow } from '../time';
 import { toastInfo } from '../toast';
@@ -96,7 +96,7 @@ function InboxItem({
         <span className={`inbox-chip inbox-chip-${attention.reason}`}>
           {ATTENTION_LABELS[attention.reason]}
         </span>
-        <span className="inbox-project mono">{project?.name ?? 'Project'}</span>
+        {project && <span className="inbox-project mono">{project.name}</span>}
         <span className="inbox-age muted mono" title={attention.since}>
           {timeAgo(attention.since)}
         </span>
@@ -200,9 +200,7 @@ export function InboxPage({
         <div className="workspace-bar-title">
           <h1>Inbox</h1>
           <span className="muted small">
-            {scoped && projectName
-              ? `Runs that need you in ${projectName} · Alt+N opens the oldest in any project`
-              : 'Runs that need you, across all projects · Alt+N opens the oldest'}
+            {inboxSubtitle(scoped, projectName)}
           </span>
         </div>
         {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}

@@ -22,3 +22,20 @@ export function resolveActiveProjectId(
   if (candidates.server === undefined) return undefined;
   return known(candidates.server) ? candidates.server : projectIds[0]!;
 }
+
+/** The active project from the URL, this browser, and the server's choice; `remember` is false for a fallback after a failed server read. */
+export function resolveActiveProject(
+  projectIds: readonly string[],
+  c: { fromUrl: string | null; stored: string | null; server: string | null | undefined; serverFailed: boolean },
+): { id: string | null | undefined; remember: boolean } {
+  if (c.serverFailed && c.server === undefined) {
+    const local = resolveActiveProjectId(projectIds, { ...c, server: null });
+    return { id: local, remember: local === c.fromUrl || local === c.stored };
+  }
+  return { id: resolveActiveProjectId(projectIds, c), remember: true };
+}
+
+/** Whether a run of `projectId` belongs in the active project's views: none while pending, all without projects. */
+export function inActiveScope(activeId: string | null | undefined, projectId: string): boolean {
+  return activeId === undefined ? false : activeId === null || projectId === activeId;
+}

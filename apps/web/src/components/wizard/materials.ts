@@ -2,6 +2,7 @@
 import {
   formatMaterialSize,
   MATERIAL_LIMITS,
+  MATERIAL_MIME_TYPE_MAX,
   MATERIALS_ERROR_CODE,
   type MaterialKind,
   materialKind,
@@ -48,7 +49,8 @@ const EXTENSION_TYPES: Record<string, string> = {
 
 /** The browser's type, else one from the extension, so the web and core agree on the kind. */
 export function materialMimeType(name: string, browserType: string): string {
-  if (browserType.trim()) return browserType.trim();
+  const type = browserType.trim();
+  if (type && type.length <= MATERIAL_MIME_TYPE_MAX && !CONTROL_CHARS.test(type)) return type;
   const ext = /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase() ?? '';
   return EXTENSION_TYPES[ext] ?? 'application/octet-stream';
 }
@@ -76,6 +78,8 @@ export function addMaterials(
       problems.push(
         `${JSON.stringify(c.name).slice(1, -1)} has line breaks or control characters in its name.`,
       );
+    else if (!c.name.trim())
+      problems.push('A file whose name is only spaces cannot be added. Rename it, then add it again.');
     else if (c.file.size === 0) problems.push(`${c.name} is empty.`);
     else if (count >= limits.maxFiles)
       problems.push(`${c.name} was not added: at most ${limits.maxFiles} files.`);
@@ -217,3 +221,15 @@ export const filesToAddAgain = (notKept: readonly string[], materials: readonly 
 
 export const notKeptText = (names: readonly string[]): string =>
   `Files are not kept in the draft. Add them again: ${names.join(', ')}.`;
+
+/** What the summary says about where the files and links go. */
+export function summaryMaterialsNote(fileCount: number, linkCount: number): string {
+  const files = 'The files are committed to docs/reference/ with the first commit.';
+  const links = 'The links are listed in PROJECT.md, which is committed too. Emberline never opens the links.';
+  return [fileCount > 0 ? files : '', linkCount > 0 ? links : ''].filter(Boolean).join(' ');
+}
+
+/** A dragleave that only moves onto a child of the drop zone does not leave it. */
+export function leavesDropZone(zone: { contains: (n: never) => boolean }, related: unknown): boolean {
+  return !related || !zone.contains(related as never);
+}
