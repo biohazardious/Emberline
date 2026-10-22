@@ -168,6 +168,16 @@ export function parseComposePs(stdout: string): ComposeContainer[] {
 }
 
 /**
+ * Whether `ps --all` says the project has no container: true for empty output (or an empty JSON
+ * array), false when it lists one; null for output that is not compose's JSON, which never means gone.
+ */
+export function composePsGone(stdout: string): boolean | null {
+  const text = stdout.trim();
+  if (text === '' || text === '[]') return true;
+  return parseComposePs(text).length > 0 ? false : null;
+}
+
+/**
  * The preview service's state: `running` (a container runs and is not unhealthy), `starting`
  * (created or restarting, or health still `starting`), `stopped` (exited or dead), `missing`.
  */

@@ -31,6 +31,7 @@ import {
   type ComposePreviewTiming,
   composeDown,
   composeProjectGone,
+  composeServiceReport,
   composeServiceStatus,
   runComposePreview,
   settlesWithin,
@@ -141,7 +142,12 @@ export class MainPreviews {
    */
   async status(projectId: string, requestHost?: string, held = false): Promise<MainPreviewStatus> {
     const project = this.project(projectId);
-    if (this.interrupted(projectId)) await this.lock.run(projectId, () => this.reconcileHeld(projectId));
+    if (this.interrupted(projectId)) {
+      // `held`: the caller holds the lock already (KeyedMutex is not re-entrant).
+      await (held
+        ? this.reconcileHeld(projectId)
+        : this.lock.run(projectId, () => this.reconcileHeld(projectId)));
+    }
     const service = this.composeService(projectId);
     const label = service ? composePreviewLabel(service) : null;
     const unavailable = await this.unavailableReason(project.path, service);
@@ -179,28 +185,29 @@ export class MainPreviews {
     await this.deps.docker.ready();
     if (!this.deps.docker.status.available)
       return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
-    const engine = await composeServiceStatus({
+    const engine = await composeServiceReport({
       project: mainPreviewComposeProjectName(projectId),
       service: state.service ?? service?.compose.service ?? '',
       env: this.deps.docker.cliEnv(),
     });
-    if (engineRuns(engine)) {
+    if (engineRuns(engine.state)) {
       if (!port) return { ...base, status: 'running' };
-      const startKey = `${state.startedAt}|${state.refreshedAt ?? ''}|${port}`;
       const framing = await this.deps.framing.get(
         `main:${projectId}`,
-        startKey,
+        startKeyOf(state),
         runnerPreviewUrl('compose', port, this.deps.config.dockerHost),
       );
       return { ...base, status: 'running', framing };
     }
     // `starting` without a job here: a restart left it and the engine could not be asked yet.
     if (state.status === 'starting') return { ...base, status: 'failed', error: RESTARTED };
+    // The same `ps` says whether the containers vanished: no second call per poll.
+    const observed = { gone: engine.gone, startKey: startKeyOf(state) };
     if (
       state.status === 'running' &&
       (held
-        ? await this.releaseVanishedHeld(projectId)
-        : await this.lock.run(projectId, () => this.releaseVanishedHeld(projectId)))
+        ? await this.releaseVanishedHeld(projectId, observed)
+        : await this.lock.run(projectId, () => this.releaseVanishedHeld(projectId, observed)))
     ) {
       return { ...base, status: 'failed', error: VANISHED, logs: null };
     }
@@ -590,15 +597,24 @@ export class MainPreviews {
    * A stored `running` with no container left (`ps --all` lists none): taken down (the networks a
    * reset left) and `failed`, which frees its port. Exited containers, a start or refresh still
    * going, or an engine that does not answer change nothing. Callers hold the project's lock.
+   * `observed`: the caller's `ps` answer, used while the start it was read for is still the stored one.
    */
-  private async releaseVanishedHeld(projectId: string): Promise<boolean> {
+  private async releaseVanishedHeld(
+    projectId: string,
+    observed?: { gone: boolean | null; startKey: string },
+  ): Promise<boolean> {
     const state = this.read(projectId);
     if (state?.status !== 'running' || this.jobs.has(projectId)) return false;
     await this.deps.docker.ready();
     const env = this.deps.docker.cliEnv();
     if (!env.DOCKER_HOST) return false;
     const project = mainPreviewComposeProjectName(projectId);
-    if ((await composeProjectGone(project, env)) !== true) return false;
+    // A `ps` read before waiting for the lock counts only if no start or refresh happened since.
+    const gone =
+      observed && observed.startKey === startKeyOf(state)
+        ? observed.gone
+        : await composeProjectGone(project, env);
+    if (gone !== true) return false;
     const down = await composeDown(project, env);
     if (!down.ok)
       this.deps
@@ -667,6 +683,11 @@ export class MainPreviews {
 /** What `compose ps` says counts as running: running, starting, or it could not tell. */
 function engineRuns(state: Awaited<ReturnType<typeof composeServiceStatus>>): boolean {
   return state === 'running' || state === 'starting' || state === 'unknown';
+}
+
+/** One start (or refresh) of the preview: a `ps` answer counts only for the start it was read for. */
+function startKeyOf(state: MainPreviewState): string {
+  return `${state.startedAt}|${state.refreshedAt ?? ''}|${state.port}`;
 }
 
 function labelOf(state: MainPreviewState): string {

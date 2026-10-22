@@ -13,6 +13,7 @@ import {
   composeOutputTail,
   composeOverrideYaml,
   composePsArgs,
+  composePsGone,
   composeServiceState,
   composeServicesArgs,
   composeShell,
@@ -171,6 +172,14 @@ describe('parsing compose output', () => {
     expect(parseComposePs('not json\n{"Service":"web","State":"created"}\n{"no":"service"}')).toEqual([
       { service: 'web', state: 'created', health: '', exitCode: null },
     ]);
+  });
+  it('ps --all says gone only for no containers; output that is not compose JSON never means gone', () => {
+    expect(composePsGone('')).toBe(true);
+    expect(composePsGone('  \n')).toBe(true);
+    expect(composePsGone('[]')).toBe(true); // older compose: a JSON array
+    expect(composePsGone('{"Service":"web","State":"exited"}')).toBe(false);
+    expect(composePsGone('WARN[0000] the attribute `version` is obsolete')).toBeNull();
+    expect(composePsGone('{"no":"service"}')).toBeNull();
   });
   it('service state: running, starting, stopped, missing', () => {
     const c = (service: string, state: string, health = '') => ({ service, state, health, exitCode: null });

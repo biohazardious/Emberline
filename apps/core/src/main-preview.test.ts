@@ -30,6 +30,7 @@ import type { CoreConfig } from './config.js';
 import { readProjectSettings, writeProjectSettings } from './db/project-settings.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
 import { DockerEngine, mainComposeProjectName, mainPreviewComposeProjectName } from './docker/engine.js';
+import type { KeyedMutex } from './keyed-mutex.js';
 import { DemoTokens } from './demo-token.js';
 import { agentDemoUrl, demoWorkspacePath } from './factory/demo-target.js';
 import { RunService } from './runs/service.js';
@@ -96,6 +97,8 @@ class FakeEngine {
   projects = new Map<string, Map<string, string>>();
   /** published host port → project */
   published = new Map<number, string>();
+  /** When set, every `compose ps` prints this instead of the projects' rows. */
+  psOutput: string | null = null;
   /** When set, `up` fails with this output. */
   upFails: string | null = null;
   /** While set, `up` waits for it (or for a cancel). */
@@ -199,6 +202,7 @@ class FakeEngine {
       return ok(' Container web-1 Started\n');
     }
     if (verb === 'ps') {
+      if (this.psOutput !== null) return ok(this.psOutput);
       const states = this.projects.get(project) ?? new Map();
       return ok(
         [...states]
@@ -626,6 +630,38 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     }
   });
 
+  it('one compose ps per status read of a running preview, also when its container exited or vanished', async () => {
+    await start('tcp://docker:2376', twoDockerPorts);
+    const p = await createProject();
+    await runningMain(p.id);
+    const name = mainPreviewComposeProjectName(p.id);
+    const psCount = () => engine.composeCalls('ps', name).length;
+    // A RunService without startReconciler(): no boot pass runs its own ps meanwhile.
+    const restarted = new RunService(t.db, t.config, t.ptyd);
+    try {
+      engine.add(name, { web: 'exited' });
+      let before = psCount();
+      expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'exited' });
+      expect(psCount() - before).toBe(1);
+      engine.projects.delete(name);
+      before = psCount();
+      expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'failed', error: VANISHED });
+      expect(psCount() - before).toBe(1);
+    } finally {
+      restarted.dispose();
+    }
+  });
+
+  it('compose output that is not JSON never takes a running preview down', async () => {
+    await start('tcp://docker:2376', twoDockerPorts);
+    const p = await createProject();
+    const port = (await runningMain(p.id)).port!;
+    engine.psOutput = 'WARN[0000] the attribute `version` is obsolete\n';
+    expect(await restartedStatus(p.id)).toMatchObject({ status: 'exited', port });
+    expect(stored(p.id)?.status).toBe('running');
+    expect(engine.downs()).toEqual([]);
+  });
+
   const fastTiming = {
     upTimeoutMs: 5_000,
     readyTimeoutMs: 1_000,
@@ -638,6 +674,22 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     restarted.composePreviewTiming = fastTiming;
     return restarted;
   };
+
+  it('a status read under the project lock settles an interrupted start without taking the lock again', async () => {
+    await start();
+    const p = await createProject();
+    engine.upGate = new Promise(() => undefined);
+    expect((await startMain(p.id)).statusCode).toBe(200);
+    engine.upGate = null;
+    const restarted = restartedService();
+    const { lock } = restarted.mainPreviews as unknown as { lock: KeyedMutex };
+    const read = lock.run(p.id, () => restarted.mainPreviews.status(p.id, undefined, true));
+    const outcome = await Promise.race([
+      read.then((s) => s.status),
+      new Promise((resolve) => setTimeout(() => resolve('deadlock'), 3_000)),
+    ]);
+    expect(outcome).toBe('failed');
+  });
 
   it('a start that never came up is reconciled at boot: taken down, failed with a hint, and its port is free again', async () => {
     await start('tcp://docker:2376', {

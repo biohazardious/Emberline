@@ -13,6 +13,7 @@ import {
   composeOutputTail,
   composeOverrideYaml,
   composePsArgs,
+  composePsGone,
   composeServiceState,
   composeServicesArgs,
   composeShell,
@@ -162,23 +163,31 @@ export async function runComposePreview(
   }
 }
 
+/** One `ps --all`: the preview service's state, and whether the project has no container left (null: no answer). */
+export async function composeServiceReport(
+  target: Pick<ComposePreviewTarget, 'project' | 'service' | 'env'>,
+): Promise<{ state: ReturnType<typeof composeServiceState> | 'unknown'; gone: boolean | null }> {
+  const ps = await run(composePsArgs(target.project), NEUTRAL_CWD, target.env, SHORT_TIMEOUT_MS);
+  if (!ps.ok) return { state: 'unknown', gone: null };
+  const stdout = ps.result!.stdout;
+  return { state: composeServiceState(parseComposePs(stdout), target.service), gone: composePsGone(stdout) };
+}
+
 /** The preview service's state from `ps`; `unknown` when compose could not answer. */
 export async function composeServiceStatus(
   target: Pick<ComposePreviewTarget, 'project' | 'service' | 'env'>,
 ): Promise<ReturnType<typeof composeServiceState> | 'unknown'> {
-  const ps = await run(composePsArgs(target.project), NEUTRAL_CWD, target.env, SHORT_TIMEOUT_MS);
-  if (!ps.ok) return 'unknown';
-  return composeServiceState(parseComposePs(ps.result!.stdout), target.service);
+  return (await composeServiceReport(target)).state;
 }
 
-/** Whether the compose project has no container at all (`ps --all` lists none); null when compose could not answer. */
+/** Whether the compose project has no container at all (`ps --all` lists none); null when compose could not say. */
 export async function composeProjectGone(
   project: string,
   env: Record<string, string>,
 ): Promise<boolean | null> {
   const ps = await run(composePsArgs(project), NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
   if (!ps.ok) return null;
-  return parseComposePs(ps.result!.stdout).length === 0;
+  return composePsGone(ps.result!.stdout);
 }
 
 /**
