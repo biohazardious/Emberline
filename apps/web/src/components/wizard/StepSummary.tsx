@@ -12,10 +12,12 @@ import { type Dispatch, type KeyboardEvent, type ReactNode, useEffect, useRef, u
 import { api, errorMessage } from '../../api';
 import { GATE_LABELS } from '../../projectSettings';
 import { PERSONA_BY_ID } from '../PersonaBadge';
+import { MaterialList } from './MaterialList';
+import { parseReferenceUrls } from './materials';
 import {
   ADOPT_FILES,
   buildAdoptBody,
-  buildCreateBody,
+  buildPreviewBody,
   canApproveRepoWorktreeYml,
   choiceLabel,
   isImport,
@@ -46,7 +48,7 @@ export interface PreviewState {
 export function useSummaryPreview(state: WizardState, active: boolean): PreviewState {
   const imported = isImport(state.source);
   const projectId = state.importProjectId;
-  const body = imported ? buildAdoptBody(state) : buildCreateBody(state);
+  const body = imported ? buildAdoptBody(state) : buildPreviewBody(state);
   const key = `${projectId ?? ''}|${JSON.stringify(body)}`;
   const [result, setResult] = useState<{ key: string; error: string | null } | null>(null);
   const [lastGood, setLastGood] = useState<SummaryPreview | null>(null);
@@ -188,6 +190,7 @@ export function StepSummary({
   onEdit: (step: StepId) => void;
 }) {
   const imported = isImport(state.source);
+  const links = parseReferenceUrls(state.referenceUrlsText).urls;
   const type = state.appType ? getProjectType(state.appType)?.label : undefined;
   const preset = state.presetId ? getPreset(state.presetId) : undefined;
   const detect = state.detect;
@@ -235,6 +238,33 @@ export function StepSummary({
             <Item label="Reference docs">{state.referenceDocs.trim().length.toLocaleString()} characters</Item>
           )}
         </Group>
+      )}
+
+      {!imported && (state.materials.length > 0 || links.length > 0) && (
+        <section className="wizard-sum-group" aria-labelledby="wizard-sum-material">
+          <div className="wizard-sum-head">
+            <h4 id="wizard-sum-material">Reference material</h4>
+            <button type="button" className="btn btn-sm btn-ghost" aria-label="Edit reference material" onClick={() => onEdit('type')}>
+              Edit
+            </button>
+          </div>
+          <MaterialList
+            materials={state.materials}
+            paths={preview.ready && data?.kind === 'new' ? data.data.materials.map((m) => m.path) : undefined}
+          />
+          {links.length > 0 && (
+            <ul className="wizard-files">
+              {/* Duplicate links are allowed, so the index is part of the key. */}
+              {links.map((u, i) => (
+                <li key={`${i} ${u.url}`}>
+                  <span className="mono">{u.url}</span>
+                  {u.note && <span className="muted small"> · {u.note}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="muted small">The files are committed to docs/reference/ with the first commit. Emberline never opens the links.</p>
+        </section>
       )}
 
       <Group title="Stack" editStep="stack" onEdit={onEdit}>

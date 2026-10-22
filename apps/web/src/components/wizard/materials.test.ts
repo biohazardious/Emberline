@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   addMaterials,
+  bytesToBase64,
   capLine,
+  encodeMaterials,
+  filesToAddAgain,
+  MaterialReadError,
   materialDetail,
   materialMimeType,
+  materialsErrorMessage,
+  notKeptText,
   parseReferenceUrls,
   ThumbnailUrls,
   type WizardMaterial,
@@ -175,5 +181,51 @@ describe('ThumbnailUrls', () => {
     reg.sync([png, gif]);
     reg.revokeAll(); // what unmount does
     expect(f.revoked).toEqual(['blob:1', 'blob:2', 'blob:3', 'blob:4']);
+  });
+});
+
+describe('sending the files', () => {
+  it('base64 matches Node for sizes around the chunk boundary', () => {
+    for (const size of [0, 1, 2, 3, 0x8000 - 1, 0x8000, 0x8000 * 3 + 7]) {
+      const bytes = Uint8Array.from({ length: size }, (_, i) => (i * 31) % 256);
+      expect(bytesToBase64(bytes), String(size)).toBe(Buffer.from(bytes).toString('base64'));
+    }
+  });
+  it('encodes each file as { name, mimeType, dataBase64 }', async () => {
+    const m = { ...material('a.png', 3, 'image/png', 'image'), file: new Blob([new Uint8Array([1, 2, 3])]) };
+    expect(await encodeMaterials([m])).toEqual([{ name: 'a.png', mimeType: 'image/png', dataBase64: 'AQID' }]);
+  });
+  it('a file that cannot be read any more names itself', async () => {
+    const broken = {
+      ...material('gone.pdf', 3, 'application/pdf', 'pdf'),
+      file: { arrayBuffer: () => Promise.reject(new Error('NotReadableError')) } as unknown as Blob,
+    };
+    await expect(encodeMaterials([broken])).rejects.toEqual(
+      new MaterialReadError("Couldn't read gone.pdf. Remove it and add it again."),
+    );
+  });
+});
+
+describe('errors next to the area', () => {
+  it("maps core's invalid_materials, a 413 and a read failure; anything else stays with the dialog", () => {
+    expect(materialsErrorMessage({ status: 400, code: 'invalid_materials', message: 'photo.png is not a PNG file.' })).toBe(
+      'photo.png is not a PNG file.',
+    );
+    expect(materialsErrorMessage({ status: 413, code: 'bad_request', message: 'Request body is too large' })).toBe(
+      'The files are too large for the server to accept. Remove some and try again.',
+    );
+    expect(materialsErrorMessage(new MaterialReadError("Couldn't read a.png. Remove it and add it again."))).toBe(
+      "Couldn't read a.png. Remove it and add it again.",
+    );
+    expect(materialsErrorMessage({ status: 400, code: 'bad_request', message: 'x' })).toBeNull();
+    expect(materialsErrorMessage({ status: 409, code: 'name_taken', message: 'x' })).toBeNull();
+  });
+});
+
+describe('after a reload', () => {
+  it('asks to add again only the files not re-added yet', () => {
+    const again = filesToAddAgain(['a.png', 'brief.pdf'], [material('a.png', 1, 'image/png', 'image')]);
+    expect(again).toEqual(['brief.pdf']);
+    expect(notKeptText(again)).toBe('Files are not kept in the draft. Add them again: brief.pdf.');
   });
 });

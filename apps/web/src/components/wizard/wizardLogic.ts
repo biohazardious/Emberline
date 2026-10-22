@@ -14,6 +14,7 @@ import {
   type ProjectDetectResponse,
   type ProjectGateKey,
   ProjectGateOverrides,
+  type ProjectPreviewBody,
   type ProjectTypeId,
   presetsForType,
   PROJECT_CONFLICT,
@@ -26,7 +27,7 @@ import {
   type WorkspaceFolder,
 } from '@emberline/protocol';
 import type { GateChoice } from '../../projectSettings';
-import { parseReferenceUrls, type WizardMaterial } from './materials';
+import { encodeMaterials, filesToAddAgain, materialInfos, parseReferenceUrls, type WizardMaterial } from './materials';
 
 export type WizardSource = 'preset' | 'blank' | 'import_url' | 'import_folder';
 export type StepId = 'start' | 'type' | 'repo' | 'import' | 'stack' | 'factory' | 'summary';
@@ -532,6 +533,7 @@ export function buildCreateBody(s: WizardState): CreateProjectBody {
   }
   if (s.source === 'import_folder') return { name, source: 'import_folder', folder: s.folder };
   const referenceDocs = s.referenceDocs.trim();
+  const referenceUrls = parseReferenceUrls(s.referenceUrlsText).urls;
   return {
     name,
     source: 'new',
@@ -545,7 +547,21 @@ export function buildCreateBody(s: WizardState): CreateProjectBody {
     defaultBranch: s.defaultBranch.trim() || 'main',
     techStack: { versionPolicy: s.versionPolicy },
     ...(referenceDocs ? { referenceDocs } : {}),
+    ...(referenceUrls.length > 0 ? { referenceUrls } : {}),
   };
+}
+
+/** `POST /api/projects/preview`: the create body with the files' name, type and size, never their bytes. */
+export function buildPreviewBody(s: WizardState): ProjectPreviewBody {
+  const { materials: _none, ...body } = buildCreateBody(s);
+  return isImport(s.source) || s.materials.length === 0 ? body : { ...body, materials: materialInfos(s.materials) };
+}
+
+/** `POST /api/projects` for a new project, with the files read and encoded now. */
+export async function buildCreateBodyWithFiles(s: WizardState): Promise<CreateProjectBody> {
+  const body = buildCreateBody(s);
+  if (isImport(s.source) || s.materials.length === 0) return body;
+  return { ...body, materials: await encodeMaterials(s.materials) };
 }
 
 /** `POST /api/projects/:id/adopt` (and its preview). */
@@ -579,6 +595,9 @@ export interface WizardDraft {
   presetId: string | null;
   vision: string;
   referenceDocs: string;
+  referenceUrlsText: string;
+  /** Names only: files are never stored in the browser. */
+  materialNames: string[];
   choices: ProjectChoices;
   dirty: StackDimensionId[];
   defaultBranch: string;
@@ -604,6 +623,8 @@ export function draftOf(s: WizardState): WizardDraft | null {
     presetId: s.presetId,
     vision: s.vision,
     referenceDocs: s.referenceDocs,
+    referenceUrlsText: s.referenceUrlsText,
+    materialNames: [...new Set([...s.materials.map((m) => m.name), ...filesToAddAgain(s.materialsNotKept, s.materials)])].slice(0, 20),
     choices: s.choices,
     dirty: s.dirty,
     defaultBranch: s.defaultBranch,
@@ -618,7 +639,7 @@ export function draftOf(s: WizardState): WizardDraft | null {
 
 const SOURCES: readonly WizardSource[] = ['preset', 'blank', 'import_url', 'import_folder'];
 const STEPS: readonly StepId[] = ['start', 'type', 'repo', 'import', 'stack', 'factory', 'summary'];
-const STRING_FIELDS = ['name', 'vision', 'referenceDocs', 'defaultBranch', 'versionPolicy', 'repoUrl', 'folder'] as const;
+const STRING_FIELDS = ['name', 'vision', 'referenceDocs', 'referenceUrlsText', 'defaultBranch', 'versionPolicy', 'repoUrl', 'folder'] as const;
 
 /**
  * A stored draft, or null when it is missing or corrupt (not JSON, another version, a field of the
@@ -660,6 +681,10 @@ export function parseDraft(raw: string | null): WizardDraft | null {
     presetId: preset && preset.type === appType ? preset.id : null,
     vision: str('vision'),
     referenceDocs: str('referenceDocs'),
+    referenceUrlsText: str('referenceUrlsText'),
+    materialNames: Array.isArray(d.materialNames)
+      ? (d.materialNames as unknown[]).filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 255).slice(0, 20)
+      : [],
     choices,
     dirty: Array.isArray(d.dirty)
       ? STACK_DIMENSION_IDS.filter((id) => (d.dirty as unknown[]).includes(id) && choices[id] !== undefined)
@@ -675,8 +700,8 @@ export function parseDraft(raw: string | null): WizardDraft | null {
 
 /** The state of a draft, on the furthest of its steps the rail can reach (never past an import's creation). */
 function restoreDraft(d: WizardDraft): WizardState {
-  const { v: _version, ...fields } = d;
-  const s: WizardState = { ...initialWizardState(), ...fields, nameError: null, furthest: 0, step: 'start' };
+  const { v: _version, materialNames, ...fields } = d;
+  const s: WizardState = { ...initialWizardState(), ...fields, materialsNotKept: materialNames, nameError: null, furthest: 0, step: 'start' };
   const steps = stepsFor(s.source);
   const wanted = Math.max(0, steps.indexOf(d.step));
   let at = 0;

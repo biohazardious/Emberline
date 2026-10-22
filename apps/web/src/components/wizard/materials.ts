@@ -2,10 +2,13 @@
 import {
   formatMaterialSize,
   MATERIAL_LIMITS,
+  MATERIALS_ERROR_CODE,
   type MaterialKind,
   materialKind,
   type MaterialLimits,
   materialTypeLabel,
+  type ProjectMaterialInfo,
+  type ProjectMaterialInput,
   REFERENCE_URLS_MAX,
   type ReferenceUrl,
   referenceUrlProblem,
@@ -162,3 +165,49 @@ export class ThumbnailUrls {
     this.urls.clear();
   }
 }
+
+export const materialInfos = (materials: readonly WizardMaterial[]): ProjectMaterialInfo[] =>
+  materials.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes }));
+
+/** Base64 in chunks (String.fromCharCode with 10 MB of arguments would overflow the stack). */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+export class MaterialReadError extends Error {}
+
+/** One file at a time, so only one file's bytes and its base64 are in memory together. */
+export async function encodeMaterials(materials: readonly WizardMaterial[]): Promise<ProjectMaterialInput[]> {
+  const out: ProjectMaterialInput[] = [];
+  for (const m of materials) {
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await m.file.arrayBuffer());
+    } catch {
+      throw new MaterialReadError(`Couldn't read ${m.name}. Remove it and add it again.`);
+    }
+    out.push({ name: m.name, mimeType: m.mimeType, dataBase64: bytesToBase64(bytes) });
+  }
+  return out;
+}
+
+export const MATERIALS_TOO_LARGE_TEXT = 'The files are too large for the server to accept. Remove some and try again.';
+
+/** A create failure that belongs next to the Reference material area, or null. */
+export function materialsErrorMessage(err: unknown): string | null {
+  if (err instanceof MaterialReadError) return err.message;
+  if (!err || typeof err !== 'object') return null;
+  const { status, code, message } = err as { status?: unknown; code?: unknown; message?: unknown };
+  if (status === 413) return MATERIALS_TOO_LARGE_TEXT;
+  if (status === 400 && code === MATERIALS_ERROR_CODE && typeof message === 'string') return message;
+  return null;
+}
+
+/** Names from a restored draft that are not in the list again yet. */
+export const filesToAddAgain = (notKept: readonly string[], materials: readonly WizardMaterial[]): string[] =>
+  notKept.filter((name) => !materials.some((m) => m.name === name));
+
+export const notKeptText = (names: readonly string[]): string =>
+  `Files are not kept in the draft. Add them again: ${names.join(', ')}.`;

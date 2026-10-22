@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAdoptBody,
   buildCreateBody,
+  buildCreateBodyWithFiles,
+  buildPreviewBody,
   canVisit,
   choiceHint,
   draftOf,
@@ -590,5 +592,58 @@ describe('reference material state', () => {
     const s = wizardReducer(typed(), { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example\nnot a link' });
     expect(stepProblem(s, 'type')).toBe('Line 2: Use a link that starts with http:// or https://.');
     expect(stepProblem(wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example note' }), 'type')).toBeNull();
+  });
+});
+
+describe('reference material: bodies and draft', () => {
+  const bytes = new TextEncoder().encode('SECRET-BYTES');
+  const m = { id: 'm1', file: new Blob([bytes]), name: 'a.png', sizeBytes: bytes.length, mimeType: 'image/png', kind: 'image' as const };
+  const withMaterial = (): WizardState => {
+    let s = wizardReducer(initialWizardState(), { type: 'source', source: 'preset' });
+    s = wizardReducer(s, { type: 'field', field: 'name', value: 'Shop' });
+    s = wizardReducer(s, { type: 'appType', appType: 'static_site' });
+    s = wizardReducer(s, { type: 'materialsAdded', materials: [m] });
+    return wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://example.com/app like this one' });
+  };
+
+  it('create body: links parsed, no files; preview body: file metadata, never bytes', () => {
+    const s = withMaterial();
+    expect(buildCreateBody(s)).toMatchObject({ referenceUrls: [{ url: 'https://example.com/app', note: 'like this one' }] });
+    expect(buildCreateBody(s)).not.toHaveProperty('materials');
+    const preview = buildPreviewBody(s);
+    expect(preview.materials).toEqual([{ name: 'a.png', mimeType: 'image/png', sizeBytes: bytes.length }]);
+    expect(JSON.stringify(preview)).not.toContain(Buffer.from(bytes).toString('base64'));
+  });
+  it('the create request carries the bytes as base64', async () => {
+    const body = await buildCreateBodyWithFiles(withMaterial());
+    expect(body.materials).toEqual([{ name: 'a.png', mimeType: 'image/png', dataBase64: Buffer.from(bytes).toString('base64') }]);
+  });
+  it('imports never send material', async () => {
+    let s = withMaterial();
+    s = { ...s, source: 'import_folder', folder: 'old-app' };
+    expect(buildCreateBody(s)).toEqual({ name: 'Shop', source: 'import_folder', folder: 'old-app' });
+    expect(await buildCreateBodyWithFiles(s)).toEqual({ name: 'Shop', source: 'import_folder', folder: 'old-app' });
+  });
+  it('the draft keeps the links and the file names, never the bytes; restoring asks to add the files again', () => {
+    const raw = JSON.stringify(draftOf(withMaterial()));
+    expect(raw).not.toContain('SECRET-BYTES');
+    expect(raw).not.toContain(Buffer.from(bytes).toString('base64'));
+    const draft = parseDraft(raw)!;
+    expect(draft.referenceUrlsText).toBe('https://example.com/app like this one');
+    expect(draft.materialNames).toEqual(['a.png']);
+    const restored = wizardReducer(initialWizardState(), { type: 'restore', draft });
+    expect(restored.materials).toEqual([]);
+    expect(restored.materialsNotKept).toEqual(['a.png']);
+    expect(restored.referenceUrlsText).toBe('https://example.com/app like this one');
+    // A second reload before re-adding still remembers the name.
+    expect(draftOf(restored)?.materialNames).toEqual(['a.png']);
+  });
+  it('an older draft without the new fields still parses; junk names are dropped', () => {
+    const old = JSON.parse(JSON.stringify(draftOf(withMaterial()))) as Record<string, unknown>;
+    delete old.referenceUrlsText;
+    delete old.materialNames;
+    expect(parseDraft(JSON.stringify(old))).toMatchObject({ referenceUrlsText: '', materialNames: [] });
+    expect(parseDraft(JSON.stringify({ ...old, materialNames: ['ok.png', 42, '', 'x'.repeat(300)] }))?.materialNames).toEqual(['ok.png']);
+    expect(parseDraft(JSON.stringify({ ...old, referenceUrlsText: 7 }))).toBeNull();
   });
 });

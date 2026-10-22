@@ -1,7 +1,7 @@
 import { Upload } from 'lucide-react';
 import { type ChangeEvent, type Dispatch, type DragEvent, useState } from 'react';
 import { MaterialList } from './MaterialList';
-import { addMaterials, capLine, type MaterialCandidate, parseReferenceUrls } from './materials';
+import { addMaterials, capLine, filesToAddAgain, type MaterialCandidate, notKeptText, parseReferenceUrls } from './materials';
 import type { WizardAction, WizardState } from './wizardLogic';
 
 export function ReferenceMaterial({
@@ -16,6 +16,7 @@ export function ReferenceMaterial({
   const [linksTouched, setLinksTouched] = useState(false);
   const links = parseReferenceUrls(state.referenceUrlsText);
   const showLinkErrors = linksTouched && links.problems.length > 0;
+  const toAddAgain = filesToAddAgain(state.materialsNotKept, state.materials);
   const errors = [...(state.materialsError ? [state.materialsError] : []), ...problems];
 
   const add = (candidates: MaterialCandidate[]) => {
@@ -77,6 +78,7 @@ export function ReferenceMaterial({
         <p id="wizard-materials-cap" className="muted small" aria-live="polite">
           {capLine(state.materials)}
         </p>
+        {toAddAgain.length > 0 && <p className="notice-box">{notKeptText(toAddAgain)}</p>}
         <MaterialList
           materials={state.materials}
           onRemove={(id) => {

@@ -19,10 +19,12 @@ import { StepStack } from './StepStack';
 import { StepRepo, StepStart } from './StepStart';
 import { StepSummary, useSummaryPreview } from './StepSummary';
 import { StepType } from './StepType';
+import { materialsErrorMessage } from './materials';
 import { useWizardState } from './useWizardState';
 import {
   buildAdoptBody,
   buildCreateBody,
+  buildCreateBodyWithFiles,
   canVisit,
   hasImportableFolders,
   isDirty,
@@ -204,7 +206,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     try {
       const res = imported
         ? await api<AdoptProjectResponse>(`/api/projects/${state.importProjectId}/adopt`, 'POST', buildAdoptBody(state))
-        : await api<CreateProjectResponse>('/api/projects', 'POST', buildCreateBody(state));
+        : await api<CreateProjectResponse>('/api/projects', 'POST', await buildCreateBodyWithFiles(state));
       const name = state.name.trim();
       // The project exists now: a failing refresh must not look like a failed create.
       await Promise.resolve(onCreated(res.project)).catch(() => undefined);
@@ -213,9 +215,13 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
       if (res.warning) setDone({ name, warning: res.warning });
       else onClose();
     } catch (err) {
+      const materialsProblem = imported ? null : materialsErrorMessage(err);
       if (!imported && isNameConflict(err)) {
         dispatch({ type: 'nameError', message: errorMessage(err) });
         go('type', 'wizard-name');
+      } else if (materialsProblem) {
+        dispatch({ type: 'materialsError', message: materialsProblem });
+        go('type', 'wizard-materials');
       } else {
         setActionError(errorMessage(err));
       }
