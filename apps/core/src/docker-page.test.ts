@@ -33,7 +33,7 @@ import {
 import { runEvents, runs } from './db/schema.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({
   exitCode: 0,
@@ -253,7 +253,7 @@ const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
     method,
     url,
     ...(method === 'POST' ? { payload: payload ?? {} } : {}),
-    headers: { ...CSRF, cookie },
+    headers: authHeaders(cookie),
   });
 const overview = async () => {
   const res = await api('GET', '/api/docker');

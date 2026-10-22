@@ -14,7 +14,7 @@ import {
   setCommandExecutor,
 } from './command-exec.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   ALREADY_CONTAINER_PREVIEW_TEXT,
   NO_COMPOSE_FILE_TEXT,
@@ -63,7 +63,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 const options = async (id: string) =>
   (await api('GET', `/api/projects/${id}/container-preview`)).json() as ContainerPreviewOptionsResponse;
 const YML = '.emberline/worktree.yml';

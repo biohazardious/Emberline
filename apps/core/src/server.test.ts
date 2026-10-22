@@ -5,7 +5,16 @@ import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { loadConfig, parseAllowedHosts } from './config.js';
-import { CSRF, createTestApp, setupAndLogin, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
+import {
+  authHeaders,
+  CSRF,
+  createTestApp,
+  sessionFrom,
+  setupAndLogin,
+  TEST_SETUP_TOKEN,
+  type TestApp,
+  wsProtocols,
+} from './test-utils.js';
 import { appCsp } from './security-headers.js';
 
 let t: TestApp | undefined;
@@ -267,9 +276,9 @@ describe('auth', () => {
 
     const ok = await login('the right password');
     expect(ok.statusCode).toBe(200);
-    const cookie = `emberline_session=${ok.cookies.find((c) => c.name === 'emberline_session')?.value}`;
+    const cookie = sessionFrom(ok);
 
-    await t.app.inject({ method: 'POST', url: '/api/auth/logout', headers: { ...CSRF, cookie } });
+    await t.app.inject({ method: 'POST', url: '/api/auth/logout', headers: authHeaders(cookie) });
     expect((await t.app.inject({ url: '/api/projects', headers: { cookie } })).statusCode).toBe(401);
 
     for (let i = 0; i < 5; i++) expect((await login('wrong')).statusCode).toBe(401);
@@ -285,19 +294,19 @@ describe('auth', () => {
       headers: CSRF,
       payload: { password: 'the first password' },
     });
-    const other = `emberline_session=${second.cookies.find((c) => c.name === 'emberline_session')?.value}`;
+    const other = sessionFrom(second);
     const change = (cookie: string, currentPassword: string, newPassword: string) =>
       t!.app.inject({
         method: 'POST',
         url: '/api/auth/password',
-        headers: { ...CSRF, cookie },
+        headers: authHeaders(cookie),
         payload: { currentPassword, newPassword },
       });
     expect((await change(first, 'wrong password', 'a brand new password')).statusCode).toBe(403);
     expect((await change(first, 'the first password', 'short')).statusCode).toBe(400);
     const ok = await change(first, 'the first password', 'a brand new password');
     expect(ok.statusCode).toBe(200);
-    const fresh = `emberline_session=${ok.cookies.find((c) => c.name === 'emberline_session')?.value}`;
+    const fresh = sessionFrom(ok);
     expect((await t.app.inject({ url: '/api/projects', headers: { cookie: other } })).statusCode).toBe(401);
     expect((await t.app.inject({ url: '/api/projects', headers: { cookie: first } })).statusCode).toBe(401);
     expect((await t.app.inject({ url: '/api/projects', headers: { cookie: fresh } })).statusCode).toBe(200);
@@ -327,13 +336,13 @@ describe('auth', () => {
     t = await createTestApp();
     const cookie = await setupAndLogin(t.app);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
     await new Promise((resolve, reject) => {
       ws.once('open', resolve);
       ws.once('error', reject);
     });
     const closed = new Promise((resolve) => ws.once('close', resolve));
-    await t.app.inject({ method: 'POST', url: '/api/auth/logout', headers: { ...CSRF, cookie } });
+    await t.app.inject({ method: 'POST', url: '/api/auth/logout', headers: authHeaders(cookie) });
     await closed;
     expect(ws.readyState).toBe(WebSocket.CLOSED);
   });

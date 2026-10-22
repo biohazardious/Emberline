@@ -2,7 +2,7 @@ import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ProjectRoadmapState } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function createProject(): Promise<{ id: string; path: string }> {
   return (await api('POST', '/api/projects', { name: 'Roadmap App' })).json().project;

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setSetting } from './db/index.js';
 import { runs, settings } from './db/schema.js';
 import type * as FactoryService from './factory/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
 
 /** A critic verdict for the next pipelines to get instead of running the real critic (null: the real one). */
@@ -72,7 +72,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string, payload: object = {}) =>
   t.app.inject({

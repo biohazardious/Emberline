@@ -10,7 +10,24 @@ import WebSocket from 'ws';
 import { ContainerAddresses } from './auth/container-addresses.js';
 import { loadConfig } from './config.js';
 import { runs, sessions } from './db/schema.js';
-import { CSRF, createTestApp, TEST_SETUP_TOKEN, type TestApp } from './test-utils.js';
+import {
+  CSRF_HEADER,
+  SESSION_KEY_MISSING_MESSAGE,
+  SESSION_KEY_PROTOCOL_PREFIX,
+  type SessionIssued,
+  WS_PROTOCOL,
+} from '@emberline/protocol';
+import {
+  authHeaders,
+  CSRF,
+  createTestApp,
+  keyOf,
+  sessionFrom,
+  setupAndLogin,
+  TEST_SETUP_TOKEN,
+  type TestApp,
+  wsProtocols,
+} from './test-utils.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -30,8 +47,7 @@ async function setupFrom(app: TestApp, remoteAddress: string, forwardedFor?: str
     payload: { password: 'correct horse battery', setupToken: TEST_SETUP_TOKEN },
   });
   expect(res.statusCode).toBe(200);
-  const cookie = res.cookies.find((c) => c.name === 'emberline_session')!;
-  return `${cookie.name}=${cookie.value}`;
+  return sessionFrom(res);
 }
 
 const get = (app: TestApp, url: string, cookie: string, remoteAddress: string, headers: Record<string, string> = {}) =>
@@ -92,7 +108,7 @@ describe('sessions are bound to the client address', () => {
     const cookie = await setupFrom(t, '192.0.2.10');
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
     const status = await new Promise<number>((resolve) => {
-      const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, {
+      const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
         headers: { cookie, origin: address },
       });
       ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
@@ -103,6 +119,152 @@ describe('sessions are bound to the client address', () => {
       ws.once('error', () => undefined);
     });
     expect(status).toBe(401);
+  });
+});
+
+describe('a per-login key', () => {
+  /** Signs in from `remoteAddress` (setup is done already), optionally sending this browser's cookie. */
+  const login = (remoteAddress: string, headers: Record<string, string> = {}) =>
+    t!.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      remoteAddress,
+      headers: { ...CSRF, ...headers },
+      payload: { password: 'correct horse battery' },
+    });
+  const wsStatus = (address: string, cookie: string, protocols?: string[]) =>
+    new Promise<{ status: number; protocol?: string }>((resolve) => {
+      const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, protocols, {
+        headers: { cookie, origin: address },
+      });
+      ws.once('unexpected-response', (_req, res) => resolve({ status: res.statusCode ?? 0 }));
+      ws.once('open', () => {
+        const protocol = ws.protocol;
+        ws.close();
+        resolve({ status: 101, protocol });
+      });
+      ws.once('error', () => undefined);
+    });
+
+  it('mutations need the key, plain GETs need only the cookie', async () => {
+    t = await createTestApp();
+    await setupFrom(t, '192.0.2.10');
+    const res = await login('192.0.2.10');
+    const cookie = sessionFrom(res);
+    const key = (res.json() as SessionIssued).sessionKey;
+    expect(key).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    const post = (k: string) =>
+      t!.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        remoteAddress: '192.0.2.10',
+        headers: { cookie, [CSRF_HEADER]: k },
+        payload: { name: 'K', initGit: false },
+      });
+    expect((await post('1')).json()).toMatchObject({ error: 'session_key_missing', message: SESSION_KEY_MISSING_MESSAGE });
+    expect((await post('1')).statusCode).toBe(401);
+    expect((await post(key)).statusCode).toBe(201);
+    expect((await get(t, '/api/projects', cookie, '192.0.2.10')).statusCode).toBe(200);
+  });
+
+  it('the key works with EMBERLINE_SESSION_BIND_IP=false and is required there too', async () => {
+    t = await createTestApp({ sessionBindIp: false });
+    await setupFrom(t, '192.0.2.10');
+    const res = await login('192.0.2.10');
+    const cookie = sessionFrom(res);
+    const key = (res.json() as SessionIssued).sessionKey;
+    const post = (k: string) =>
+      t!.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        remoteAddress: '198.51.100.7',
+        headers: { cookie, [CSRF_HEADER]: k },
+        payload: { name: 'K', initGit: false },
+      });
+    expect((await post('1')).statusCode).toBe(401);
+    expect((await post(key)).statusCode).toBe(201);
+  });
+
+  it('a WebSocket needs the key as a subprotocol; the server echoes only "emberline"', async () => {
+    t = await createTestApp();
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      headers: CSRF,
+      payload: { password: 'correct horse battery', setupToken: TEST_SETUP_TOKEN },
+    });
+    const cookie = sessionFrom(res);
+    const key = (res.json() as SessionIssued).sessionKey;
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    expect((await wsStatus(address, cookie)).status).toBe(401);
+    expect((await wsStatus(address, cookie, [WS_PROTOCOL])).status).toBe(401);
+    expect((await wsStatus(address, cookie, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}wrong`])).status).toBe(401);
+    expect(await wsStatus(address, cookie, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${key}`])).toEqual({
+      status: 101,
+      protocol: 'emberline',
+    });
+  });
+
+  it('a session from before 0.5.0 (no key) is signed out once with the notice', async () => {
+    t = await createTestApp();
+    const cookie = await setupAndLogin(t.app);
+    t.db.update(sessions).set({ keyHash: null }).run();
+    const projects = await t.app.inject({ method: 'GET', url: '/api/projects', headers: { cookie } });
+    expect(projects.statusCode).toBe(401);
+    expect(projects.json()).toMatchObject({ error: 'session_key_missing', message: SESSION_KEY_MISSING_MESSAGE });
+    expect((await t.app.inject({ method: 'GET', url: '/api/auth/state', headers: { cookie } })).json()).toEqual({
+      authenticated: false,
+      signedOut: SESSION_KEY_MISSING_MESSAGE,
+      setupRequired: false,
+    });
+  });
+
+  it('/api/auth/state checks a key the browser sends, and answers signed in without one', async () => {
+    t = await createTestApp();
+    const cookie = await setupAndLogin(t.app);
+    const state = (headers: Record<string, string>) =>
+      t!.app.inject({ method: 'GET', url: '/api/auth/state', headers: { cookie, ...headers } }).then((r) => r.json());
+    expect(await state({})).toEqual({ authenticated: true, setupRequired: false });
+    expect(await state({ [CSRF_HEADER]: keyOf(cookie) })).toEqual({ authenticated: true, setupRequired: false });
+    expect(await state({ [CSRF_HEADER]: 'a-key-from-another-sign-in' })).toEqual({
+      authenticated: false,
+      signedOut: SESSION_KEY_MISSING_MESSAGE,
+      setupRequired: false,
+    });
+  });
+
+  it("a sign-in revokes the session this browser's cookie named; other devices keep theirs", async () => {
+    t = await createTestApp();
+    const a = await setupFrom(t, '192.0.2.10');
+    const c = sessionFrom(await login('203.0.113.9'));
+    const b = sessionFrom(await login('198.51.100.7', { cookie: a }));
+    expect((await get(t, '/api/projects', a, '192.0.2.10')).statusCode).toBe(401);
+    expect((await get(t, '/api/projects', b, '198.51.100.7')).statusCode).toBe(200);
+    expect((await get(t, '/api/projects', c, '203.0.113.9')).statusCode).toBe(200);
+  });
+
+  it("a sign-in closes the WebSockets of the session it revokes", async () => {
+    t = await createTestApp();
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      headers: CSRF,
+      payload: { password: 'correct horse battery', setupToken: TEST_SETUP_TOKEN },
+    });
+    const cookie = sessionFrom(res);
+    const key = (res.json() as SessionIssued).sessionKey;
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${key}`], {
+      headers: { cookie, origin: address },
+    });
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    const closed = new Promise((resolve) => ws.once('close', resolve));
+    expect((await login('127.0.0.1', { cookie })).statusCode).toBe(200);
+    await closed;
+    expect(ws.readyState).toBe(WebSocket.CLOSED);
   });
 });
 
@@ -135,7 +297,7 @@ describe("session cookies from Emberline's own containers", () => {
       method: 'POST',
       url: '/api/projects',
       remoteAddress: '192.0.2.10',
-      headers: { ...CSRF, cookie: browser },
+      headers: authHeaders(browser),
       payload: { name: 'Bound', initGit: false },
     });
     expect(created.statusCode).toBe(201);
@@ -191,8 +353,7 @@ async function setupFromLogin(app: TestApp, remoteAddress: string): Promise<stri
     payload: { password: 'correct horse battery' },
   });
   expect(res.statusCode).toBe(200);
-  const cookie = res.cookies.find((c) => c.name === 'emberline_session')!;
-  return `${cookie.name}=${cookie.value}`;
+  return sessionFrom(res);
 }
 
 describe('container addresses', () => {

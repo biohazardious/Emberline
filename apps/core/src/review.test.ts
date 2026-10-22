@@ -15,7 +15,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeNextCronDate } from './cron/service.js';
 import { parseForgeRemote } from './forge/service.js';
-import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function createGitProjectWithBareRemote(name: string) {
   const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json() as {
@@ -272,7 +272,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
       const patchRes = await t.app.inject({
         method: 'PATCH',
         url: '/api/notifications',
-        headers: { ...CSRF, cookie },
+        headers: authHeaders(cookie),
         payload: {
           enabled: true,
           provider: 'webhook',
@@ -458,7 +458,7 @@ describe('M6 review, git commit/push, and artifacts', () => {
     const patchRes = await t.app.inject({
       method: 'PATCH',
       url: `/api/cron/${job.id}`,
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
       payload: { enabled: false },
     });
     expect(patchRes.statusCode).toBe(200);

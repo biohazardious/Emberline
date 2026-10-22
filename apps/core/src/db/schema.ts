@@ -55,6 +55,8 @@ export const sessions = sqliteTable('sessions', {
   userAgent: text('user_agent'),
   /** The client address that signed in (`request.ip`); a session is only valid from it. Null: from before 0.3.3. */
   clientIp: text('client_ip'),
+  /** sha256 of the per-login key the browser keeps in localStorage. Null: from before 0.5.0, sign in again. */
+  keyHash: text('key_hash'),
 });
 
 export const projects = sqliteTable('projects', {

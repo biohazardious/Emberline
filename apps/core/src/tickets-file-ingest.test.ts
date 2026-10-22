@@ -5,7 +5,7 @@ import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readProjectSettings, writeWizardTickets } from './db/project-settings.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /**
  * The tickets-file loop: a `.emberline/new-tickets.json` that reached main was copied into every
@@ -52,7 +52,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string, payload: object = {}) =>
   t.app.inject({

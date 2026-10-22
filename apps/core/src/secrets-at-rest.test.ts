@@ -4,13 +4,13 @@ import { getSetting } from './db/index.js';
 import { DemoTokens } from './demo-token.js';
 import { getProviderEnvFromSettings } from './factory/settings.js';
 import { gitCredentialForRemote } from './forge/account-store.js';
-import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let headers: Record<string, string>;
 beforeEach(async () => {
   t = await createTestApp();
-  headers = { cookie: await setupAndLogin(t.app), ...CSRF };
+  headers = authHeaders(await setupAndLogin(t.app));
 });
 afterEach(async () => {
   await t.close();

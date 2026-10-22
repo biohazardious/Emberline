@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { forgeAccounts } from '../db/schema.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from '../test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from '../test-utils.js';
 import {
   accountForRemote,
   deriveApiUrl,
@@ -89,7 +89,7 @@ describe('forge accounts API', () => {
     t.app.inject({
       method,
       url,
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
       ...(payload === undefined ? {} : { payload: payload as object }),
     });
 

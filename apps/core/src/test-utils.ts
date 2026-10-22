@@ -1,7 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CSRF_HEADER, type ForgeProvider } from '@emberline/protocol';
+import {
+  CSRF_HEADER,
+  type ForgeProvider,
+  SESSION_KEY_PROTOCOL_PREFIX,
+  type SessionIssued,
+  WS_PROTOCOL,
+} from '@emberline/protocol';
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { type CoreConfig, DEFAULT_DOCKER_CERT_PATH, DEFAULT_PREVIEW_PORTS } from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
@@ -159,7 +165,30 @@ export async function createTestApp(
   };
 }
 
+/** The CSRF header without a session key: public routes (setup, login) and negative tests. */
 export const CSRF = { [CSRF_HEADER]: '1' };
+
+const sessionKeys = new Map<string, string>();
+
+/** The cookie header of a setup/login response; remembers its key for authHeaders/wsProtocols. */
+export function sessionFrom(res: { cookies: { name: string; value: string }[]; json: () => unknown }): string {
+  const cookie = res.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  sessionKeys.set(cookie, (res.json() as SessionIssued).sessionKey);
+  return cookie;
+}
+
+/** The per-login key of a cookie from `setupAndLogin` or `sessionFrom`. */
+export const keyOf = (cookie: string): string => {
+  const key = sessionKeys.get(cookie);
+  if (!key) throw new Error('sign in through setupAndLogin or sessionFrom first');
+  return key;
+};
+
+/** Headers of a signed-in mutation: the cookie and its per-login key. */
+export const authHeaders = (cookie: string): Record<string, string> => ({ cookie, [CSRF_HEADER]: keyOf(cookie) });
+
+/** The subprotocols a signed-in WebSocket offers (`ws` client's second argument). */
+export const wsProtocols = (cookie: string): string[] => [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${keyOf(cookie)}`];
 
 /** Runs first-time setup and returns the session cookie header value. */
 export const TEST_SETUP_TOKEN = 'test-setup-token';
@@ -172,9 +201,8 @@ export async function setupAndLogin(app: FastifyInstance, password = 'correct ho
     payload: { password, setupToken: TEST_SETUP_TOKEN },
   });
   if (res.statusCode !== 200) throw new Error(`setup failed: ${res.statusCode} ${res.body}`);
-  const cookie = res.cookies.find((c) => c.name === 'emberline_session');
-  if (!cookie) throw new Error('no session cookie');
-  return `${cookie.name}=${cookie.value}`;
+  if (!res.cookies.some((c) => c.name === 'emberline_session')) throw new Error('no session cookie');
+  return sessionFrom(res);
 }
 
 /** A forge account without a forge call (tests); `apiUrl` defaults to the derived one. */

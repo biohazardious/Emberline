@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `key_hash` text;

@@ -10,7 +10,7 @@ import { writeIssueSync, writeWizardTickets } from './db/project-settings.js';
 import { projects, runs, tickets } from './db/schema.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
-import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   DEPENDENCY_BLOCK_MAX,
   DEPENDENCY_SECTION_MAX,
@@ -62,7 +62,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string, payload: object = {}) =>
   t.app.inject({

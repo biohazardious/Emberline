@@ -5,7 +5,7 @@ import type { Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { updateFactorySettings } from './factory/settings.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -19,7 +19,7 @@ beforeEach(async () => {
   await ptydServer.listen();
   t.ptyd.start();
   await t.ptyd.waitUntilConnected();
-  headers = { ...CSRF, cookie: await setupAndLogin(t.app) };
+  headers = authHeaders(await setupAndLogin(t.app));
 });
 afterEach(async () => {
   await ptydServer.close();

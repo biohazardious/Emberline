@@ -10,8 +10,8 @@ import { basicAuthValue, type GitHttpCredential } from '../git-credentials.js';
 import { pushWorktreeBranch } from '../runs/git.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
+  authHeaders,
   createTestApp,
-  CSRF,
   seedForgeAccount,
   setupAndLogin,
   startGitGateway,
@@ -222,7 +222,7 @@ describe('import clone', () => {
     t.app.inject({
       method: 'POST',
       url: '/api/projects',
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
       payload: { name, source: 'import_url', repoUrl },
     });
   const importStatus = async (id: string) =>

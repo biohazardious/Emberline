@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { stripControlChars } from './text/control-chars.js';
 
 /** Control characters in `text` other than newline and tab (C0, DEL, C1). */
@@ -45,7 +45,7 @@ afterEach(async () => {
   await t.close();
 });
 
-const api = (method: 'POST', url: string, payload?: object) => t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+const api = (method: 'POST', url: string, payload?: object) => t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function idleRun(): Promise<Run> {
   const { project } = (await api('POST', '/api/projects', { name: 'Paste' })).json();

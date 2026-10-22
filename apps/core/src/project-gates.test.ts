@@ -3,14 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readProjectSettings, writeIssueSync } from './db/project-settings.js';
 import { projects } from './db/schema.js';
 import { effectiveFactorySettings, updateFactorySettings } from './factory/settings.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let headers: Record<string, string>;
 
 beforeEach(async () => {
   t = await createTestApp();
-  headers = { ...CSRF, cookie: await setupAndLogin(t.app) };
+  headers = authHeaders(await setupAndLogin(t.app));
   for (const id of ['a', 'b']) {
     t.db.insert(projects).values({ id, name: id, slug: id, path: `/tmp/${id}`, createdAt: new Date() }).run();
   }

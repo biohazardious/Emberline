@@ -1,8 +1,9 @@
-import { MIN_PASSWORD_LENGTH } from '@emberline/protocol';
+import { MIN_PASSWORD_LENGTH, type SessionIssued } from '@emberline/protocol';
 import { KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../api';
 import { PasswordField, StrengthMeter } from '../auth';
+import { setSessionKey } from '../sessionKey';
 
 /** Change the admin password; every other session (browser, device) is signed out. */
 export function AccountPanel() {
@@ -21,7 +22,8 @@ export function AccountPanel() {
     setError(undefined);
     setDone(false);
     try {
-      await api('/api/auth/password', 'POST', { currentPassword: current, newPassword: next });
+      const issued = await api<SessionIssued>('/api/auth/password', 'POST', { currentPassword: current, newPassword: next });
+      setSessionKey(issued.sessionKey);
       setCurrent('');
       setNext('');
       setConfirm('');

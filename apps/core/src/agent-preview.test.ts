@@ -25,7 +25,7 @@ import { DemoTokens } from './demo-token.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { mainPreviewComposeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { agentPreview } from './runs/agent-preview.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
 const failed = (stderr: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout: '', stderr, timedOut: false, truncated: false });
@@ -130,7 +130,7 @@ async function start(dockerHost: string | null = 'tcp://docker:2376', overrides:
 }
 
 const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
-  t.app.inject({ method, url, ...(method === 'POST' ? { payload: payload ?? {} } : {}), headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, ...(method === 'POST' ? { payload: payload ?? {} } : {}), headers: authHeaders(cookie) });
 
 /** A git project; `yml` is approved; main gets an untracked static build saying MAIN. */
 async function createProject(yml: string | null = COMPOSE_V2, files: Record<string, string> = { 'compose.yaml': PROJECT_COMPOSE }) {

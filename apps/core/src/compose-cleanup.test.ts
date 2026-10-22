@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type ExecRequest, type ExecResult, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { runs } from './db/schema.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
 const failed = (stderr: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout: '', stderr, timedOut: false, truncated: false });
@@ -94,7 +94,7 @@ async function start(dockerHost: string | null = 'tcp://docker:2376') {
 }
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function createProject(name = 'Shop'): Promise<{ id: string; path: string }> {
   const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json();

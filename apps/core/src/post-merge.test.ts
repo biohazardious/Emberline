@@ -12,7 +12,7 @@ import { readDemoBuilds } from './factory/demo-builds.js';
 import { isDemoBuildRunning } from './factory/demo.js';
 import { MERGE_NOTES, PostMergeJobs, type PostMergeContext } from './factory/post-merge.js';
 import type { RunService } from './runs/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], {
@@ -43,7 +43,7 @@ class FakeRuns extends EventEmitter {
 let t: TestApp;
 let cookie: string;
 const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function gitProject(name = 'Merge') {
   const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json() as {

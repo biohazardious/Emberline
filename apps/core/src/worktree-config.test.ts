@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CommandExecutor, localCommandCanceller, localCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
 import { projectWorktreeConfig, runs } from './db/schema.js';
 import { syncWorktreeToMainWorkspace } from './factory/merge.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -71,7 +71,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string, payload: object = {}) =>
   t.app.inject({
@@ -858,7 +858,7 @@ describe('editing worktree.yml from Project settings', () => {
       method: 'PUT',
       url: `/api/projects/${projectId}/worktree-config`,
       payload: { content, baseSha256 },
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
     });
   const NEXT = 'version: 1\nsetup:\n  - "true"\n';
   const INVALID = 'version: 1\nchecks:\n  container: x\n';

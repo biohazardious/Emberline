@@ -1,4 +1,13 @@
-import { type AuthState, ChangePasswordBody, CSRF_HEADER, LoginBody, SetupBody } from '@emberline/protocol';
+import {
+  type AuthState,
+  ChangePasswordBody,
+  CSRF_HEADER,
+  LoginBody,
+  SESSION_KEY_MISSING_MESSAGE,
+  SESSION_KEY_PROTOCOL_PREFIX,
+  type SessionIssued,
+  SetupBody,
+} from '@emberline/protocol';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { hash, verify } from '@node-rs/argon2';
@@ -41,17 +50,40 @@ export const ADDRESS_CHANGED_MESSAGE = 'signed out: your network address changed
 export const FROM_CONTAINER_MESSAGE =
   "session cookies are not accepted from Emberline's own containers (an agent's preview could have replayed it)";
 
-type SessionState = 'ok' | 'none' | 'address_changed' | 'from_container';
+type SessionState = 'ok' | 'none' | 'address_changed' | 'key_missing' | 'from_container';
+
+const isUpgrade = (r: FastifyRequest) => r.headers.upgrade?.toLowerCase() === 'websocket';
+/** The per-login key: the CSRF header value, or on a WebSocket upgrade the `emberline.key.*` subprotocol. */
+const presentedKey = (r: FastifyRequest): string | undefined => {
+  if (isUpgrade(r)) {
+    const offered = String(r.headers['sec-websocket-protocol'] ?? '')
+      .split(',')
+      .map((p) => p.trim());
+    return offered.find((p) => p.startsWith(SESSION_KEY_PROTOCOL_PREFIX))?.slice(SESSION_KEY_PROTOCOL_PREFIX.length) || undefined;
+  }
+  const v = r.headers[CSRF_HEADER];
+  return typeof v === 'string' && v !== '' ? v : undefined;
+};
 
 /**
  * Single-user auth (PROJECT.md §3.13).
  *
  * - Password hashed with argon2id, set once during first-run setup.
  * - HTTP-only, SameSite=Lax session cookie.
- * - CSRF: mutating /api requests must send `x-emberline-csrf: 1` (a custom header cannot be sent
- *   cross-origin without a CORS preflight, which core never allows) and any Origin header must
- *   match the Host. WebSocket upgrades are GETs, so the Origin check also blocks cross-site
+ * - CSRF: mutating /api requests must send the `x-emberline-csrf` header (a custom header cannot
+ *   be sent cross-origin without a CORS preflight, which core never allows) and any Origin header
+ *   must match the Host. WebSocket upgrades are GETs, so the Origin check also blocks cross-site
  *   WebSocket hijacking.
+ * - Per-login key (0.5.0): setup, login and a password change answer a random `sessionKey` that the
+ *   browser keeps in localStorage; only its SHA-256 is stored, and it is never logged. Signed in,
+ *   every non-GET request sends it as the `x-emberline-csrf` value and every WebSocket upgrade as
+ *   the subprotocol `emberline.key.<key>` (never in a URL, which proxies log). A plain GET is
+ *   authorised by the cookie alone (navigation, images, frames, downloads). A cookie without its key
+ *   is refused with `session_key_missing`, so a stolen cookie cannot change anything. A session
+ *   from before 0.5.0 has no key and is refused on every request: the person signs in once. The key
+ *   is checked whether or not sessions are bound to the address (`EMBERLINE_SESSION_BIND_IP`).
+ * - A sign-in ends the sessions its request's cookies name (this browser's older one, whichever
+ *   address it came from); other devices keep theirs.
  */
 export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; config: CoreConfig }): SessionStore {
   const store = new SessionStore(db, config.sessionTtlMs);
@@ -75,15 +107,21 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
   app.addHook('onClose', async () => containers.stop());
   const bindIp = config.sessionBindIp ?? true;
 
-  const sessionState = async (request: FastifyRequest): Promise<SessionState> => {
+  /** `key`: the per-login key the request sent; `undefined` when it needs none, `null` when it needs one and sent none. */
+  const sessionState = async (request: FastifyRequest, key?: string | null): Promise<SessionState> => {
     const token = sessionToken(request);
     if (!token) return 'none';
     if (await containers.has(request.raw.socket.remoteAddress)) return 'from_container';
-    return store.check(token, request.ip, bindIp);
+    return store.check(token, request.ip, { bindIp, key });
   };
 
-  const issueSession = (request: FastifyRequest, reply: FastifyReply) => {
-    const { token, expiresAt } = store.create(request.headers['user-agent'], request.ip);
+  /** Signs this browser in again and returns the new per-login key for the response body. */
+  const issueSession = (request: FastifyRequest, reply: FastifyReply): string => {
+    // This browser's previous session (address changed, from before the key, or still live) ends
+    // here, with its WebSockets: whoever gets that address next cannot use its cookie.
+    store.revoke(request.cookies[SECURE_SESSION_COOKIE]);
+    store.revoke(request.cookies[SESSION_COOKIE]);
+    const { token, key, expiresAt } = store.create(request.headers['user-agent'], request.ip);
     // HTTPS is detected per request (X-Forwarded-Proto counts with EMBERLINE_TRUST_PROXY), so a TLS
     // proxy gets Secure cookies without extra configuration; plain-HTTP LAN access keeps working.
     const secure = config.secureCookies || request.protocol === 'https';
@@ -94,6 +132,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
       path: '/',
       expires: expiresAt,
     });
+    return key;
   };
 
   const hostAllowed = hostAllowList(config);
@@ -124,35 +163,45 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     }
     // Browsers always send Origin on WebSocket handshakes; a missing one is a non-browser client
     // that has no business holding a session cookie here.
-    if (!origin && request.headers.upgrade?.toLowerCase() === 'websocket') {
+    if (!origin && isUpgrade(request)) {
       return reply.code(403).send({ error: 'forbidden', message: 'WebSocket upgrades need an Origin header' });
     }
-    if (!SAFE_METHODS.has(request.method) && request.headers[CSRF_HEADER] !== '1') {
+    // Presence only: any value makes a cross-origin request need a preflight. Signed in, the value
+    // must be the session's key (checked below).
+    if (!SAFE_METHODS.has(request.method) && !request.headers[CSRF_HEADER]) {
       return reply.code(403).send({ error: 'csrf', message: `missing ${CSRF_HEADER} header` });
     }
     if (PUBLIC_ROUTES.has(route)) return;
-    const session = await sessionState(request);
+    const needsKey = !SAFE_METHODS.has(request.method) || isUpgrade(request);
+    const session = await sessionState(request, needsKey ? (presentedKey(request) ?? null) : undefined);
     if (session === 'from_container') {
       return reply.code(403).send({ error: 'session_from_container', message: FROM_CONTAINER_MESSAGE });
     }
     if (session === 'address_changed') {
       return reply.code(401).send({ error: 'session_address_changed', message: ADDRESS_CHANGED_MESSAGE });
     }
+    if (session === 'key_missing') {
+      return reply.code(401).send({ error: 'session_key_missing', message: SESSION_KEY_MISSING_MESSAGE });
+    }
     if (session !== 'ok') {
       return reply.code(401).send({ error: 'unauthorized', message: 'login required' });
     }
-    // Terminals and the event stream stay open for hours: logout or a password change closes them.
-    if (request.headers.upgrade?.toLowerCase() === 'websocket') {
+    // Terminals and the event stream stay open for hours: logout, a new sign-in from this browser or
+    // a password change closes them.
+    if (isUpgrade(request)) {
       store.bindConnection(sessionToken(request)!, request.raw.socket);
     }
   });
 
   app.get('/api/auth/state', async (request): Promise<AuthState> => {
-    const session = await sessionState(request);
+    // A key the browser sends is checked; without one the answer says whether the cookie alone is
+    // valid, and the web app asks for a sign-in when it holds no key.
+    const session = await sessionState(request, presentedKey(request));
     return {
       setupRequired: getSetting<string>(db, PASSWORD_KEY) === undefined,
       authenticated: session === 'ok',
       ...(session === 'address_changed' ? { signedOut: ADDRESS_CHANGED_MESSAGE } : {}),
+      ...(session === 'key_missing' ? { signedOut: SESSION_KEY_MISSING_MESSAGE } : {}),
     };
   });
 
@@ -163,8 +212,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
       throw new HttpError(403, 'forbidden', 'invalid setup token (see the core log)');
     }
     setSetting(db, PASSWORD_KEY, await hash(password));
-    issueSession(request, reply);
-    return { ok: true };
+    return { ok: true, sessionKey: issueSession(request, reply) } satisfies SessionIssued;
   });
 
   let globalFailures = { count: 0, since: 0 };
@@ -215,8 +263,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
       throw new HttpError(401, 'invalid_password', 'invalid password');
     }
     failures.delete(request.ip);
-    issueSession(request, reply);
-    return { ok: true };
+    return { ok: true, sessionKey: issueSession(request, reply) } satisfies SessionIssued;
   });
 
   // Changing the password ends every session (other browsers, stolen cookies) and signs this one in again.
@@ -231,8 +278,7 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     }
     setSetting(db, PASSWORD_KEY, await hash(newPassword));
     store.revokeAll();
-    issueSession(request, reply);
-    return { ok: true };
+    return { ok: true, sessionKey: issueSession(request, reply) } satisfies SessionIssued;
   });
 
   app.post('/api/auth/logout', async (request, reply) => {

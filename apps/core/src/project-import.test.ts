@@ -22,7 +22,7 @@ import { HARDENED_GIT_ARGS } from './git-exec.js';
 import { parseWorktreeYml } from './worktree-config/load.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /** While set, `git init` waits for it: holds a wizard create in progress. */
 const gitGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
@@ -46,7 +46,7 @@ let execs: ExecRequest[];
 beforeEach(async () => {
   ws = mkdtempSync(path.join(tmpdir(), 'ws-'));
   t = await createTestApp({ workspacesDir: ws });
-  headers = { ...CSRF, cookie: await setupAndLogin(t.app) };
+  headers = authHeaders(await setupAndLogin(t.app));
   execs = [];
   setCommandExecutor((request) => {
     execs.push(request);

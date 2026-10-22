@@ -15,7 +15,7 @@ import {
 } from './factory/demo-builds.js';
 import { buildWorkspaceDemo, hasVerifiableBuildTarget } from './factory/demo.js';
 import { workspaceHeadSha, worktreeHeadSha } from './runs/git.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], {
@@ -189,7 +189,7 @@ describe('build records', () => {
   let t: TestApp;
   let cookie: string;
   const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
-    t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+    t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
   beforeEach(async () => {
     t = await createTestApp();

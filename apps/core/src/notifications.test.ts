@@ -496,12 +496,12 @@ describe('NotificationService quota lanes', () => {
 
 describe('NotificationService on a real RunService', () => {
   it('pages exactly once, with the held text, when the completion gate holds a done run', async () => {
-    const { createTestApp, setupAndLogin, CSRF } = await import('./test-utils.js');
+    const { createTestApp, setupAndLogin, authHeaders } = await import('./test-utils.js');
     const { runs } = await import('./db/schema.js');
     const t = await createTestApp();
     try {
       const cookie = await setupAndLogin(t.app);
-      const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Int', initGit: false }, headers: { ...CSRF, cookie } });
+      const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Int', initGit: false }, headers: authHeaders(cookie) });
       const projectId = res.json().project.id as string;
       const now = new Date();
       t.db.insert(runs).values({ id: 'run-int', projectId, agent: 'claude', state: 'done', worktreePath: '/tmp/x', hookTokenHash: 'h', stateChangedAt: now, createdAt: now, title: 'DP-3' }).run();
@@ -531,12 +531,12 @@ describe('NotificationService on a real RunService', () => {
 describe('NotificationService on real hooks', () => {
   it('a wait entered without a Notification (StopFailure) and Claude\'s later idle reminder are one occurrence, one page', async () => {
     const { createHash } = await import('node:crypto');
-    const { createTestApp, setupAndLogin, CSRF } = await import('./test-utils.js');
+    const { createTestApp, setupAndLogin, authHeaders } = await import('./test-utils.js');
     const { runs } = await import('./db/schema.js');
     const t = await createTestApp();
     try {
       const cookie = await setupAndLogin(t.app);
-      const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Hooks', initGit: false }, headers: { ...CSRF, cookie } });
+      const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Hooks', initGit: false }, headers: authHeaders(cookie) });
       const projectId = res.json().project.id as string;
       const now = new Date();
       const hookTokenHash = createHash('sha256').update('tok').digest('hex');

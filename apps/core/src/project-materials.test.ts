@@ -10,7 +10,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import type * as Files from './factory/files.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /** Makes the n-th `writeNewWorkspaceFile` call fail while set (0 = never). */
 const writes = vi.hoisted(() => ({ failOn: 0, count: 0 }));
@@ -31,7 +31,7 @@ let headers: Record<string, string>;
 beforeEach(async () => {
   writes.count = 0;
   t = await createTestApp();
-  headers = { ...CSRF, cookie: await setupAndLogin(t.app) };
+  headers = authHeaders(await setupAndLogin(t.app));
 });
 afterEach(async () => {
   writes.failOn = 0;

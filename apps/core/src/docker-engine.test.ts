@@ -23,7 +23,7 @@ import {
   mainPreviewComposeProjectName,
   previewComposeProjectName,
 } from './docker/engine.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout: string): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
 const failed = (stderr: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout: '', stderr, timedOut: false, truncated: false });
@@ -294,7 +294,7 @@ describe('Docker engine in core: /api/system, run env, first prompt, worktree.ym
   }
 
   const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
-    t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+    t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
   async function waitFile(file: string): Promise<string> {
     await expect.poll(() => existsSync(file), { timeout: 8_000 }).toBe(true);

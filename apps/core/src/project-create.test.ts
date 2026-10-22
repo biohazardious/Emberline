@@ -25,7 +25,7 @@ import { APP_TYPE_LABELS, generateProjectBlueprint, generateWorktreeYml } from '
 import { planNewProject } from './factory/project-plan.js';
 import { STARTERS } from './factory/starters.js';
 import { parseWorktreeYml } from './worktree-config/load.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 /** Makes `git init` fail while set (the rest of git keeps working). */
 const git = vi.hoisted(() => ({ failInit: false }));
@@ -47,7 +47,7 @@ let cookie: string;
 beforeEach(async () => {
   t = await createTestApp();
   cookie = await setupAndLogin(t.app);
-  headers = { ...CSRF, cookie };
+  headers = authHeaders(cookie);
 });
 afterEach(async () => {
   git.failInit = false;
@@ -678,7 +678,7 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
       await t.close();
       t = await createTestApp({ dockerHost: 'tcp://docker:2376' });
       cookie = await setupAndLogin(t.app);
-      headers = { ...CSRF, cookie };
+      headers = authHeaders(cookie);
       setCommandExecutor(async (request) =>
         request.file === 'docker' && request.args[0] === 'version'
           ? { exitCode: engine.up ? 0 : 1, signal: null, stdout: engine.up ? '"29.8.2"\n' : '', stderr: engine.up ? '' : 'Cannot connect', timedOut: false, truncated: false }

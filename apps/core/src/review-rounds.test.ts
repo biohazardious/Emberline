@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runEvents, runs } from './db/schema.js';
 import { conflict } from './errors.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function token(run: Run): Promise<string> {
   const file = path.join(t.dir, `token-${run.id}`);

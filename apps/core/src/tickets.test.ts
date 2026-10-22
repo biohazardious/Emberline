@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { runs, settings } from './db/schema.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 import { keyPrefix, statusForRunState, TicketService, ticketPrompt } from './tickets/service.js';
 
 let t: TestApp;
@@ -52,7 +52,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string, payload: object = {}) =>
   t.app.inject({
@@ -332,7 +332,7 @@ describe('tickets', () => {
   it('pushes ticket updates over /api/events', async () => {
     const project = await createProject();
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
     const events: { type: string; ticket?: Ticket; id?: string }[] = [];
     ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {

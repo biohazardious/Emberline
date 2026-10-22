@@ -8,7 +8,7 @@ import { updateAccount } from '../forge/account-store.js';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
-  CSRF,
+  authHeaders,
   createTestApp,
   seedForgeAccount,
   setupAndLogin,
@@ -30,7 +30,7 @@ const send = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: unknown) 
   t.app.inject({
     method,
     url,
-    headers: { ...CSRF, cookie },
+    headers: authHeaders(cookie),
     ...(payload === undefined ? {} : { payload: payload as object }),
   });
 const status = async (): Promise<RepositoryStatus> =>

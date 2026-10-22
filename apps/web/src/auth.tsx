@@ -1,4 +1,4 @@
-import { type AuthState, MIN_PASSWORD_LENGTH } from '@emberline/protocol';
+import { type AuthState, MIN_PASSWORD_LENGTH, type SessionIssued } from '@emberline/protocol';
 import {
   Bot,
   Check,
@@ -28,6 +28,7 @@ import {
 import { api, ApiRequestError, errorMessage } from './api';
 import { BrandLogo } from './components/BrandLogo';
 import { SecurityBanner } from './components/SecurityBanner';
+import { authGateState, clearSessionKey, getSessionKey, setSessionKey } from './sessionKey';
 
 interface AuthContextValue {
   logout: () => Promise<void>;
@@ -58,8 +59,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
-    await api('/api/auth/logout', 'POST');
-    await refresh();
+    try {
+      await api('/api/auth/logout', 'POST');
+    } finally {
+      clearSessionKey();
+      await refresh();
+    }
   }, [refresh]);
 
   if (error) {
@@ -76,7 +81,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
   if (!state) return <div className="splash" aria-busy="true" />;
   if (state.setupRequired) return <SetupForm onDone={refresh} />;
-  if (!state.authenticated) return <LoginForm onDone={refresh} notice={state.signedOut} />;
+  const gate = authGateState(state, getSessionKey());
+  if (!gate.signedIn) return <LoginForm onDone={refresh} notice={gate.notice} />;
   return <AuthContext.Provider value={{ logout }}>{children}</AuthContext.Provider>;
 }
 
@@ -307,7 +313,8 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
     setBusy(true);
     setError(undefined);
     try {
-      await api('/api/auth/setup', 'POST', { password, setupToken: setupToken.trim() });
+      const issued = await api<SessionIssued>('/api/auth/setup', 'POST', { password, setupToken: setupToken.trim() });
+      setSessionKey(issued.sessionKey);
       await onDone();
     } catch (e) {
       setError(
@@ -431,7 +438,7 @@ function LoginForm({ onDone, notice }: { onDone: () => Promise<void>; notice?: s
     setBusy(true);
     setError(undefined);
     try {
-      await api('/api/auth/login', 'POST', { password });
+      setSessionKey((await api<SessionIssued>('/api/auth/login', 'POST', { password })).sessionKey);
       await onDone();
     } catch (e) {
       setError(

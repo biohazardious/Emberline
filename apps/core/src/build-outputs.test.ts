@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ARCHIVE_DIR_NAME } from './outputs/archive.js';
 import { buildOutputs, projects, runs, tickets } from './db/schema.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -15,7 +15,7 @@ beforeEach(async () => {
   t = await createTestApp({ workspacesHostDir: '/srv/emberline/workspaces' });
   cookie = await setupAndLogin(t.app);
   auth = { cookie };
-  mut = { cookie, ...CSRF };
+  mut = authHeaders(cookie);
 });
 afterEach(async () => {
   await t.close();

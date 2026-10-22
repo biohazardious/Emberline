@@ -183,6 +183,13 @@
       "when": 1792624365945,
       "tag": "0025_forge_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1792663811814,
+      "tag": "0026_session_key",
+      "breakpoints": true
     }
   ]
 }

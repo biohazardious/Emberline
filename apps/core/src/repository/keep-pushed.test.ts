@@ -8,7 +8,7 @@ import { runEvents, runs } from '../db/schema.js';
 import { syncWorktreeToMainWorkspace } from '../factory/merge.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
-  CSRF,
+  authHeaders,
   createTestApp,
   seedForgeAccount,
   setupAndLogin,
@@ -96,7 +96,7 @@ beforeEach(async () => {
     await t.app.inject({
       method: 'POST',
       url: '/api/projects',
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
       payload: { name: 'KP', initGit: true },
     })
   ).json();

@@ -1,8 +1,15 @@
 /** API contracts: common. */
 import { z } from 'zod';
 
-/** Every mutating API request must carry this header (CSRF defence, see core auth). */
+/**
+ * Every mutating API request must carry this header (CSRF defence, see core auth). Signed in, its
+ * value is the per-login key from `SessionIssued.sessionKey`; before that, any non-empty value.
+ */
 export const CSRF_HEADER = 'x-emberline-csrf';
+/** The WebSocket subprotocol core accepts and echoes. */
+export const WS_PROTOCOL = 'emberline';
+/** A WebSocket carries the per-login key as the extra subprotocol `emberline.key.<key>` (never in its URL). */
+export const SESSION_KEY_PROTOCOL_PREFIX = 'emberline.key.';
 
 export const ApiError = z.object({ error: z.string(), message: z.string() });
 export type ApiError = z.infer<typeof ApiError>;

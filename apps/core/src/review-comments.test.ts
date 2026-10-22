@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ReviewComment, Run, RunReviewState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let server: PtydServer;
@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 async function startRun(name = 'Review Project'): Promise<Run> {
   const { project } = (await api('POST', '/api/projects', { name })).json();

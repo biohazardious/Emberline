@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { openDb } from './db/index.js';
 import { auditWorktreeSlop } from './factory/service.js';
 import { getProviderEnvFromSettings, updateFactorySettings } from './factory/settings.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -38,7 +38,7 @@ describe('AI Coding Factory (F1–F4)', () => {
   it('creates a wizard project with PROJECT.md, CLAUDE.md, git init, starter tickets, and active project persistence', async () => {
     t = await createTestApp();
     const cookie = await setupAndLogin(t.app);
-    const headers = { ...CSRF, cookie };
+    const headers = authHeaders(cookie);
 
     const createRes = await t.app.inject({
       method: 'POST',
@@ -142,7 +142,7 @@ describe('AI Coding Factory (F1–F4)', () => {
   it('serves ready-made task templates and supports manual project seeding & switching', async () => {
     t = await createTestApp();
     const cookie = await setupAndLogin(t.app);
-    const headers = { ...CSRF, cookie };
+    const headers = authHeaders(cookie);
 
     const tplRes = await t.app.inject({ url: '/api/factory/templates', headers: { cookie } });
     expect(tplRes.statusCode).toBe(200);

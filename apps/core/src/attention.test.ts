@@ -4,7 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { runEvents, runs, tickets } from './db/schema.js';
 import { attentionBoundsQuery, computeAttention, FAILURE_WINDOW_MS, HOLD_WINDOW_MS, type AttentionFacts } from './runs/attention.js';
 import { HOLD_EVENTS } from './runs/hold-events.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const NOW = Date.parse('2026-10-18T12:00:00Z');
 const at = (msAgo: number) => new Date(NOW - msAgo);
@@ -207,7 +207,7 @@ describe('attention through RunService', () => {
   beforeEach(async () => {
     t = await createTestApp();
     const cookie = await setupAndLogin(t.app);
-    const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Att', initGit: false }, headers: { ...CSRF, cookie } });
+    const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Att', initGit: false }, headers: authHeaders(cookie) });
     projectId = res.json().project.id;
   });
   afterEach(async () => {

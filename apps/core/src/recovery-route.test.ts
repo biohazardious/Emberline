@@ -8,7 +8,7 @@ import { desc, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, reviewComments, runEvents, runs, tickets } from './db/schema.js';
 import * as gitExec from './git-exec.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -382,7 +382,7 @@ describe('delivering a recovery prompt', () => {
     await ptydServer.close();
   });
 
-  const post = (url: string, payload?: object) => t.app.inject({ method: 'POST', url, payload, headers: { ...CSRF, cookie } });
+  const post = (url: string, payload?: object) => t.app.inject({ method: 'POST', url, payload, headers: authHeaders(cookie) });
   const recover = (id: string, text: string) => post(`/api/runs/${id}/recover`, { text });
   /** The arguments the fake CLI was started with for `runId` (every start appends). */
   async function argsOf(runId: string): Promise<string> {

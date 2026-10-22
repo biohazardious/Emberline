@@ -1,4 +1,5 @@
 import { CSRF_HEADER } from '@emberline/protocol';
+import { getSessionKey } from './sessionKey';
 
 export class ApiRequestError extends Error {
   constructor(
@@ -15,10 +16,16 @@ export class ApiRequestError extends Error {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-/** JSON fetch against core. Mutating requests carry the CSRF header core requires. */
+/**
+ * JSON fetch against core. Mutating requests carry the CSRF header core requires: the per-login key
+ * once signed in, `1` before (setup, login). Reads send the key too, so `/api/auth/state` can tell a
+ * key from another sign-in.
+ */
 export async function api<T>(path: string, method: Method = 'GET', body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
-  if (method !== 'GET') headers[CSRF_HEADER] = '1';
+  const key = getSessionKey();
+  if (method !== 'GET') headers[CSRF_HEADER] = key ?? '1';
+  else if (key) headers[CSRF_HEADER] = key;
   if (body !== undefined) headers['content-type'] = 'application/json';
 
   const res = await fetch(path, {

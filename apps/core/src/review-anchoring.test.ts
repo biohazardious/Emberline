@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { ReviewComment, Run, RunDiffSummary, RunReviewState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const SRC = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
 

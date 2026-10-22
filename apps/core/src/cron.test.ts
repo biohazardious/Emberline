@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CronService } from './cron/service.js';
 import { computeNextCronDate, previewCronRuns } from './cron/schedule.js';
 import { quotaWindows, runs as runsTable, scheduledJobs } from './db/schema.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const next = (expr: string, from: string, zone = 'UTC') => computeNextCronDate(expr, new Date(from), zone).toISOString();
 
@@ -75,7 +75,7 @@ describe('cron jobs', () => {
     await t.ptyd.waitUntilConnected();
     const cookie = await setupAndLogin(t.app);
     const api = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
-      t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+      t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
     const { project } = (await api('POST', '/api/projects', { name: 'Cron Project' })).json();
     return { api, projectId: project.id as string };
   }

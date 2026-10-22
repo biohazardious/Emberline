@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { projects } from './db/schema.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -46,7 +46,7 @@ describe('the explorer never writes .emberline/worktree.yml', () => {
     const file = path.join(dir, '.emberline', 'worktree.yml');
     writeFileSync(file, 'version: 1\n');
     const send = (method: 'PUT' | 'DELETE' | 'POST', url: string, payload: object) =>
-      t.app.inject({ method, url: `/api/projects/p1${url}`, payload, headers: { ...CSRF, cookie } });
+      t.app.inject({ method, url: `/api/projects/p1${url}`, payload, headers: authHeaders(cookie) });
 
     for (const rel of ['.emberline/worktree.yml', './.emberline/worktree.yml', '.emberline\\worktree.yml']) {
       const put = await send('PUT', '/files/content', { path: rel, content: 'version: 2\n' });

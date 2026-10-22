@@ -10,7 +10,7 @@ import { eq } from 'drizzle-orm';
 import { projects, runEvents, runs } from './db/schema.js';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { worktreeHeadSha } from './runs/git.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string | undefined, payload: object = {}) =>
   t.app.inject({
@@ -681,7 +681,7 @@ describe('runs', () => {
   it('pushes run updates over /api/events', async () => {
     const project = await createProject('Events', false);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
     const events: { type: string; run?: Run }[] = [];
     ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {
@@ -702,7 +702,7 @@ describe('runs', () => {
   it('sends run updates over /api/events with their computed attention', async () => {
     const project = await createProject('Events attention', false);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
     const events: { type: string; run?: Run }[] = [];
     ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {

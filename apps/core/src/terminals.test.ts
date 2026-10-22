@@ -4,7 +4,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { slugify } from './routes/projects.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 describe('projects', () => {
   it('slugifies names', () => {
@@ -74,7 +74,7 @@ describe('terminals', () => {
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
     const url = `${address.replace('http', 'ws')}/api/terminals/${terminal.id}/ws`;
 
-    const ws = new WebSocket(url, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(url, wsProtocols(cookie), { headers: { cookie, origin: address } });
     const messages: { type: string; data?: string }[] = [];
     ws.on('message', (raw) => messages.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {
@@ -97,7 +97,7 @@ describe('terminals', () => {
 
     const statusOf = (headers: Record<string, string>) =>
       new Promise<number>((resolve) => {
-        const ws = new WebSocket(url, { headers });
+        const ws = new WebSocket(url, wsProtocols(cookie), { headers });
         ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
         ws.once('open', () => {
           ws.close();

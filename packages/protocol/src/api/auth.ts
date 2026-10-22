@@ -9,6 +9,16 @@ export const AuthState = z.object({
 });
 export type AuthState = z.infer<typeof AuthState>;
 
+/** Why a session from before 0.5.0, or one whose key this browser lost, no longer signs it in. */
+export const SESSION_KEY_MISSING_MESSAGE = 'signed out: Emberline now ties each sign-in to this browser';
+
+/**
+ * What setup, login and a password change answer. The browser keeps `sessionKey` (localStorage) and
+ * sends it on every change and live connection; the cookie alone only authorises plain reads.
+ */
+export const SessionIssued = z.object({ ok: z.literal(true), sessionKey: z.string().min(1) });
+export type SessionIssued = z.infer<typeof SessionIssued>;
+
 export const MIN_PASSWORD_LENGTH = 10;
 
 export const SetupBody = z.object({

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { PRESENCE_TTL_MS, PresenceRegistry } from './notifications/presence.js';
-import { createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 
 describe('PresenceRegistry', () => {
   it('counts only a visible client that has exactly this run open', () => {
@@ -47,7 +47,7 @@ describe('presence over the events socket', () => {
 
   const open = async () => {
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
     await new Promise((resolve, reject) => {
       ws.once('open', resolve);
       ws.once('error', reject);
@@ -86,7 +86,7 @@ describe('runs over the events socket', () => {
 
   it('a failing attention computation neither escapes the emit nor drops the run update', async () => {
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
     const received: { type: string; run?: { id: string } }[] = [];
     ws.on('message', (raw) => received.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {

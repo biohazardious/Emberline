@@ -12,7 +12,7 @@ import {
   routeUsable,
   updateFactorySettings,
 } from './factory/settings.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 beforeEach(async () => {
@@ -213,10 +213,10 @@ describe('maxParallelTicketsPerProject over HTTP', () => {
         method: 'PATCH',
         url: '/api/factory/settings',
         payload: { maxParallelTicketsPerProject: value },
-        headers: { ...CSRF, cookie },
+        headers: authHeaders(cookie),
       });
     const read = async () =>
-      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: { ...CSRF, cookie } })).json()
+      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: authHeaders(cookie) })).json()
         .maxParallelTicketsPerProject;
     expect(await read()).toBe(2);
     for (const value of [1, 2, 3, 4]) {
@@ -240,10 +240,10 @@ describe('buildOutputsQuotaGb over HTTP', () => {
         method: 'PATCH',
         url: '/api/factory/settings',
         payload: { buildOutputsQuotaGb: value },
-        headers: { ...CSRF, cookie },
+        headers: authHeaders(cookie),
       });
     const read = async () =>
-      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: { ...CSRF, cookie } })).json()
+      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: authHeaders(cookie) })).json()
         .buildOutputsQuotaGb;
     expect(await read()).toBe(5);
     for (const value of [0.5, 12.5, 1000]) {
@@ -263,7 +263,7 @@ describe('Antigravity terms acknowledgement', () => {
   it('enabling Antigravity requires the acknowledgement; already enabled installs keep running', async () => {
     const cookie = await setupAndLogin(t.app);
     const patch = (payload: object) =>
-      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', payload, headers: { ...CSRF, cookie } });
+      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', payload, headers: authHeaders(cookie) });
 
     expect(getFactorySettings(t.db).antigravityTermsAcknowledged).toBe(false);
     const refused = await patch({ enabledProviders: ['claude', 'antigravity'] });
@@ -275,7 +275,7 @@ describe('Antigravity terms acknowledgement', () => {
       method: 'POST',
       url: '/api/factory/provider-login',
       payload: { provider: 'antigravity' },
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
     });
     expect(login.statusCode).toBe(409);
     expect(getFactorySettings(t.db).enabledProviders).toEqual(['claude']);
@@ -339,9 +339,9 @@ describe('requireCompletionSignal over HTTP', () => {
   it('defaults to true and round-trips', async () => {
     const cookie = await setupAndLogin(t.app);
     const patch = (value: unknown) =>
-      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', payload: { requireCompletionSignal: value }, headers: { ...CSRF, cookie } });
+      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', payload: { requireCompletionSignal: value }, headers: authHeaders(cookie) });
     const read = async () =>
-      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: { ...CSRF, cookie } })).json().requireCompletionSignal;
+      (await t.app.inject({ method: 'GET', url: '/api/factory/settings', headers: authHeaders(cookie) })).json().requireCompletionSignal;
     expect(await read()).toBe(true);
     expect((await patch(false)).json().requireCompletionSignal).toBe(false);
     expect(await read()).toBe(false);

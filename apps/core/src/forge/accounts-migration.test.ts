@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { forgeAccounts, projects, runs, settings } from '../db/schema.js';
-import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from '../test-utils.js';
+import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from '../test-utils.js';
 import {
   accountForRemote,
   forgetLegacyToken,
@@ -279,7 +279,7 @@ describe('migration details', () => {
     const res = await t.app.inject({
       method: 'DELETE',
       url: '/api/forge/legacy-token',
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
     });
     expect(res.statusCode).toBe(200);
     expect(t.forge.accounts.list().legacyTokenUnmatched).toBe(false);

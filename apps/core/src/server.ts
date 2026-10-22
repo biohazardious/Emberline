@@ -1,5 +1,12 @@
 import { existsSync } from 'node:fs';
-import { API_VERSION, type HealthResponse, PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION, type SystemStatus } from '@emberline/protocol';
+import {
+  API_VERSION,
+  type HealthResponse,
+  PTYD_MIN_PROTOCOL_VERSION,
+  PTYD_PROTOCOL_VERSION,
+  type SystemStatus,
+  WS_PROTOCOL,
+} from '@emberline/protocol';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
@@ -155,7 +162,11 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   installErrorHandler(app);
   installSecurityHeaders(app);
   await app.register(cookie);
-  await app.register(websocket, { options: { maxPayload: 1024 * 1024 } });
+  // Browsers offer `emberline` plus `emberline.key.<key>` (the per-login key, see auth/plugin.ts);
+  // only `emberline` is echoed, so the key never comes back in a response.
+  await app.register(websocket, {
+    options: { maxPayload: 1024 * 1024, handleProtocols: (p: Set<string>) => (p.has(WS_PROTOCOL) ? WS_PROTOCOL : false) },
+  });
 
   app.get('/api/health', async (): Promise<HealthResponse> => ({
     status: 'ok',

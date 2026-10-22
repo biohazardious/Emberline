@@ -8,7 +8,7 @@ import { openDb } from './db/index.js';
 import { quotaWindows } from './db/schema.js';
 import { PtydServer } from '@emberline/ptyd/server';
 import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -48,7 +48,7 @@ describe('ops endpoints', () => {
       Object.defineProperty(t.ptyd, 'protocolVersion', { get: () => version });
       const cookie = await setupAndLogin(t.app);
       const deep = await t.app.inject({ url: '/api/health/deep' });
-      const system = (await t.app.inject({ url: '/api/system', headers: { ...CSRF, cookie } })).json();
+      const system = (await t.app.inject({ url: '/api/system', headers: authHeaders(cookie) })).json();
       return { deep, system };
     }
 

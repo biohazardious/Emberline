@@ -3,7 +3,7 @@ import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncResponse, I
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { forgeAccounts, projects, tickets } from './db/schema.js';
-import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -49,10 +49,10 @@ function installForge(overrides: Record<number, Record<string, unknown>> = {}) {
 }
 
 const post = (url: string, payload: unknown) =>
-  t.app.inject({ method: 'POST', url, headers: { ...CSRF, cookie }, payload: payload as object });
+  t.app.inject({ method: 'POST', url, headers: authHeaders(cookie), payload: payload as object });
 const get = (url: string) => t.app.inject({ method: 'GET', url, headers: { cookie } });
 const patch = (url: string, payload: unknown) =>
-  t.app.inject({ method: 'PATCH', url, headers: { ...CSRF, cookie }, payload: payload as object });
+  t.app.inject({ method: 'PATCH', url, headers: authHeaders(cookie), payload: payload as object });
 
 const sel = (...numbers: number[]) => ({ issues: numbers.map((n) => ({ externalId: String(9000 + n), number: n })) });
 

@@ -7,7 +7,7 @@ import { issueTombstones, projects, runEvents, runs, tickets } from '../db/schem
 import { HOLD_ENDING_EVENTS } from '../runs/hold-events.js';
 import { stillHeld } from '../runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from '../runs/service.js';
-import { CSRF, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from '../test-utils.js';
+import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from '../test-utils.js';
 import { ISSUE_SYNC_INTERVAL_MS, IssueSyncService, SYNC_TICK_REQUEST_CAP } from './issue-sync.js';
 
 interface Call {
@@ -196,7 +196,7 @@ describe('label sync', () => {
     const [a, b] = ticketsOf('p1').sort((x, y) => x.external!.number - y.external!.number);
     const cookie = await setupAndLogin(t.app);
     const patch = (id: string, payload: object) =>
-      t.app.inject({ method: 'PATCH', url: `/api/tickets/${id}`, payload, headers: { ...CSRF, cookie } });
+      t.app.inject({ method: 'PATCH', url: `/api/tickets/${id}`, payload, headers: authHeaders(cookie) });
     expect((await patch(a!.id, { status: 'backlog', position: 1 })).json().external.triage).toBe(true);
     expect((await patch(a!.id, { position: 2 })).json().external.triage).toBe(true);
     // The pipeline or the roadmap moving it is no person's decision.
@@ -387,7 +387,7 @@ describe('poller lifecycle and status', () => {
     expect(body).toMatchObject({ enabled: true, label: 'emberline' });
     expect(body.syncStatus.lastSyncAt).toEqual(expect.any(String));
     expect(body.syncStatus.lastError).toBeNull();
-    const patched = await t.app.inject({ method: 'PATCH', url: '/api/projects/p1/issue-sync', headers: { ...CSRF, cookie }, payload: { status: 'ready' } });
+    const patched = await t.app.inject({ method: 'PATCH', url: '/api/projects/p1/issue-sync', headers: authHeaders(cookie), payload: { status: 'ready' } });
     expect(patched.json().syncStatus.lastSyncAt).toBe(body.syncStatus.lastSyncAt);
   });
 });
@@ -645,7 +645,7 @@ describe('tombstones', () => {
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/projects/p1/issues/import',
-      headers: { ...CSRF, cookie },
+      headers: authHeaders(cookie),
       payload: { issues: [{ externalId: '9001', number: 1 }] },
     });
     expect(res.json().created.map((tk: Ticket) => tk.external?.number)).toEqual([1]);
@@ -665,7 +665,7 @@ describe('tombstones', () => {
 
 describe('sync now', () => {
   let cookie: string;
-  const run = (id = 'p1') => t.app.inject({ method: 'POST', url: `/api/projects/${id}/issue-sync/run`, headers: { ...CSRF, cookie } });
+  const run = (id = 'p1') => t.app.inject({ method: 'POST', url: `/api/projects/${id}/issue-sync/run`, headers: authHeaders(cookie) });
 
   beforeEach(async () => {
     cookie = await setupAndLogin(t.app);

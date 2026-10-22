@@ -26,7 +26,7 @@ import {
 import type { CoreConfig } from './config.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
 import { composeProjectName, previewComposeProjectName } from './docker/engine.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
 const failed = (stdout: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
@@ -207,7 +207,7 @@ describe('compose previews (worktree.yml v2)', () => {
   }
 
   const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object, host?: string) =>
-    t.app.inject({ method, url, payload, headers: { ...CSRF, cookie, ...(host ? { host } : {}) } });
+    t.app.inject({ method, url, payload, headers: { ...authHeaders(cookie), ...(host ? { host } : {}) } });
 
   /** A git project with `compose.yaml`, a `.env` naming a compose project, and an approved worktree.yml. */
   async function project(worktreeYml = COMPOSE_V2): Promise<{ id: string; path: string }> {

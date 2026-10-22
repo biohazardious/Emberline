@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import { runs } from './db/schema.js';
 import { reviewUnblockPending, stillHeld } from './runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import type { TicketService } from './tickets/service.js';
 
 let t: TestApp;
@@ -51,7 +51,7 @@ afterEach(async () => {
 });
 
 const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, payload, headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
 
 const hook = (runId: string, event: string, token: string, payload: object = {}) =>
   t.app.inject({

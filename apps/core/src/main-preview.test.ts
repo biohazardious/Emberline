@@ -33,7 +33,7 @@ import { DockerEngine, mainComposeProjectName, mainPreviewComposeProjectName } f
 import { DemoTokens } from './demo-token.js';
 import { agentDemoUrl, demoWorkspacePath } from './factory/demo-target.js';
 import { RunService } from './runs/service.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
 const failed = (stderr: string, exitCode = 1): ExecResult => ({
@@ -212,7 +212,7 @@ async function start(dockerHost: string | null = 'tcp://docker:2376', overrides:
 }
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, ...(method === 'POST' ? { payload: payload ?? {} } : {}), headers: { ...CSRF, cookie } });
+  t.app.inject({ method, url, ...(method === 'POST' ? { payload: payload ?? {} } : {}), headers: authHeaders(cookie) });
 
 /** A git project; `yml` is approved; `composeFile` commits the project's compose.yaml into main. */
 async function createProject(

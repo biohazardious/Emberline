@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 const BASE = process.argv[2] ?? 'http://127.0.0.1:7498';
 const PASSWORD = 'e2e password long enough';
 let cookie = '';
+/** The per-login key from the login answer: sent on every change and as a WebSocket subprotocol. */
+let sessionKey = '';
 const results = [];
 
 async function api(method, path, body) {
@@ -15,7 +17,7 @@ async function api(method, path, body) {
     method,
     redirect: 'manual',
     headers: {
-      ...(method === 'GET' ? {} : { 'x-emberline-csrf': '1' }),
+      ...(method === 'GET' ? {} : { 'x-emberline-csrf': sessionKey || '1' }),
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       ...(cookie ? { cookie } : {}),
     },
@@ -65,7 +67,18 @@ await step('first-run setup needs the setup token, then login works', async () =
   const login = await api('POST', '/api/auth/login', { password: PASSWORD });
   assert.equal(login.status, 200);
   cookie = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  sessionKey = login.json.sessionKey;
+  assert.match(sessionKey, /^[A-Za-z0-9_-]{40,}$/);
   assert.equal((await api('GET', '/%61pi/projects')).status, 200, 'session works through the normalized route');
+});
+
+await step('a change with the cookie but without the per-login key is refused', async () => {
+  const saved = sessionKey;
+  sessionKey = '';
+  const res = await api('POST', '/api/projects', { name: 'E2E No Key', initGit: false });
+  sessionKey = saved;
+  assert.equal(res.status, 401, res.text);
+  assert.equal(res.json.error, 'session_key_missing');
 });
 
 await step('unauthenticated requests are refused (route-based auth)', async () => {
@@ -240,7 +253,7 @@ await step('Live Browser keeps one tab per project', async () => {
 await step('ticket changes are pushed over /api/events', async () => {
   const wsUrl = `${BASE.replace(/^http/, 'ws')}/api/events`;
   const origin = BASE;
-  const ws = new WebSocket(wsUrl, { headers: { cookie, origin } });
+  const ws = new WebSocket(wsUrl, { protocols: ['emberline', `emberline.key.${sessionKey}`], headers: { cookie, origin } });
   const seen = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no ticket event within 5 s')), 5_000);
     ws.addEventListener('message', (message) => {

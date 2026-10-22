@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { CreateProjectResponse } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DemoTokens } from './demo-token.js';
-import { CSRF, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -16,7 +16,7 @@ beforeEach(async () => {
   const res = await t.app.inject({
     method: 'POST',
     url: '/api/projects',
-    headers: { ...CSRF, cookie },
+    headers: authHeaders(cookie),
     payload: { name: 'Sandbox Demo' },
   });
   const project = (res.json() as CreateProjectResponse).project;

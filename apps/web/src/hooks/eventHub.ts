@@ -1,5 +1,6 @@
 import { type ClientPresenceMessage, ServerEvent } from '@emberline/protocol';
 import { clearSlotIfOwner, presentRunId, type PresenceSource } from '../presenceSlots';
+import { sessionProtocols } from '../sessionKey';
 
 type Listener = { onEvent: (event: ServerEvent) => void; onOpen: () => void };
 
@@ -43,7 +44,7 @@ if (typeof document !== 'undefined') document.addEventListener('visibilitychange
 
 function connect(): void {
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/events`;
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(url, sessionProtocols());
   socket = ws;
   ws.onopen = () => {
     if (Date.now() - overflowAt > 10_000) delay = 500;

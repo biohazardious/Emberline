@@ -4,6 +4,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
+import { sessionProtocols } from '../sessionKey';
 
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting' | 'exited';
 
@@ -102,7 +103,7 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
 
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/api/terminals/${encodeURIComponent(terminalId)}/ws`);
+      ws = new WebSocket(`${proto}://${location.host}/api/terminals/${encodeURIComponent(terminalId)}/ws`, sessionProtocols());
       ws.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as TerminalServerMessage;
         switch (message.type) {
