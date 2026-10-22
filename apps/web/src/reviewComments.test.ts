@@ -4,6 +4,9 @@ import { ApiRequestError } from './api';
 import {
   blockingBanner,
   blockingMessage,
+  DrawerMergeError,
+  drawerFailure,
+  mergeNowNext,
   carriedMessage,
   commentsOffDiff,
   escapeDraft,
@@ -244,5 +247,29 @@ describe('requestTargets', () => {
   it('offers a new run from main only for a ticket run', () => {
     expect(requestTargets({ ticketId: 't1' })).toEqual(['same', 'new']);
     expect(requestTargets({ ticketId: null })).toEqual(['same']);
+  });
+});
+
+describe('the step a drawer merge failure offers', () => {
+  it('Merge anyway for blocking comments, Move to Done without merging for a missing worktree, else none', () => {
+    expect(mergeNowNext(new ApiRequestError(409, 'review_blocked', 'x', { blocking: 1 }))).toBe(
+      'merge_anyway',
+    );
+    expect(mergeNowNext(new ApiRequestError(409, 'worktree_missing', 'x', { ticketId: 't1' }))).toBe(
+      'move_without_merge',
+    );
+    expect(mergeNowNext(new Error('boom'))).toBeNull();
+  });
+
+  it('keeps core’s own sentence and the offered step; any other error is just its message', () => {
+    expect(drawerFailure(new DrawerMergeError('Merged nothing: main moved.', null))).toEqual({
+      text: 'Merged nothing: main moved.',
+      next: null,
+    });
+    expect(drawerFailure(new DrawerMergeError('2 blocking comments are open', 'merge_anyway'))).toEqual({
+      text: '2 blocking comments are open',
+      next: 'merge_anyway',
+    });
+    expect(drawerFailure(new Error('offline'))).toEqual({ text: 'offline', next: null });
   });
 });

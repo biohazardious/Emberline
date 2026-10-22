@@ -163,6 +163,31 @@ export function mergeNowFailure(error: unknown, ticketKey: string): string {
   return `Not merged: ${errorMessage(error)}`;
 }
 
+/** The step the ticket drawer offers after a merge that did not happen, as the page dialogs do. */
+export type MergeNext = 'merge_anyway' | 'move_without_merge' | null;
+
+export function mergeNowNext(error: unknown): MergeNext {
+  if (reviewBlockedCount(error) !== null) return 'merge_anyway';
+  if (worktreeMissing(error)) return 'move_without_merge';
+  return null;
+}
+
+/** A merge from the ticket drawer that did not happen: the sentence to show and the step to offer. */
+export class DrawerMergeError extends Error {
+  constructor(
+    message: string,
+    readonly next: MergeNext,
+  ) {
+    super(message);
+    this.name = 'DrawerMergeError';
+  }
+}
+
+export function drawerFailure(error: unknown): { text: string; next: MergeNext } {
+  if (error instanceof DrawerMergeError) return { text: error.message, next: error.next };
+  return { text: errorMessage(error), next: null };
+}
+
 /** Markdown characters a hover would render; escaped so a comment body shows as typed. */
 const MARKDOWN_SPECIAL = /[\\`*_{}[\]()#+\-.!|<>~&]/g;
 

@@ -158,7 +158,7 @@ export function RunFailureBanner({ run }: { run: Run }) {
   const [detail, setDetail] = useState<RunDetail>();
 
   useEffect(() => {
-    if (run.state !== 'failed') return;
+    if (run.state !== 'failed' || run.cancelled) return;
     let cancelled = false;
     void api<RunDetail>(`/api/runs/${run.id}`)
       .then((res) => {
@@ -168,9 +168,10 @@ export function RunFailureBanner({ run }: { run: Run }) {
     return () => {
       cancelled = true;
     };
-  }, [run.id, run.state, run.stateChangedAt]);
+  }, [run.id, run.state, run.cancelled, run.stateChangedAt]);
 
-  if (run.state !== 'failed') return null;
+  // A stop is `failed` + `cancelled`: the pill already says "cancelled", and nothing exited unexpectedly.
+  if (run.state !== 'failed' || run.cancelled) return null;
 
   const { reason, exitCode, needsAuth } = extractFailureDetails(detail?.events ?? [], run.agent);
 

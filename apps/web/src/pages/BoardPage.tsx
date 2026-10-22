@@ -11,7 +11,16 @@ import { Coins, Play, Sparkles, Wrench, X } from 'lucide-react';
 import { type DragEvent, type FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import { blockingMessage, mergeNowFailure, reviewBlockedCount, worktreeMissing } from '../reviewComments';
+import {
+  blockingMessage,
+  DrawerMergeError,
+  drawerFailure,
+  mergeNowFailure,
+  mergeNowNext,
+  type MergeNext,
+  reviewBlockedCount,
+  worktreeMissing,
+} from '../reviewComments';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { IssueImportDialog } from '../components/IssueImportDialog';
 import { issueHref } from '../issueImport';
@@ -204,23 +213,14 @@ export function BoardPage({ projectId }: { projectId: string }) {
     // Accepting a ticket brings its run's branch into the main workspace first; a conflict keeps the
     // ticket where it is so nothing is marked done that is not actually in main.
     if (target.status === 'done' && ticket.status !== 'done' && currentRun?.branch && !skipMerge) {
+      let sync: SyncWorktreeResponse;
       try {
-        const sync = await api<SyncWorktreeResponse>(
-          `/api/projects/${ticket.projectId}/sync-worktree`,
-          'POST',
-          {
-            runId: currentRun.id,
-            ...(force ? { force: true } : {}),
-          },
-        );
-        if (!sync.ok) {
-          if (inDrawer) throw new Error(sync.summary);
-          setError(sync.summary);
-          return;
-        }
-        toastInfo(sync.summary);
+        sync = await api<SyncWorktreeResponse>(`/api/projects/${ticket.projectId}/sync-worktree`, 'POST', {
+          runId: currentRun.id,
+          ...(force ? { force: true } : {}),
+        });
       } catch (e) {
-        if (inDrawer) throw new Error(mergeNowFailure(e, ticket.key));
+        if (inDrawer) throw new DrawerMergeError(mergeNowFailure(e, ticket.key), mergeNowNext(e));
         // Never mark a ticket done after a merge that did not happen.
         const blocking = reviewBlockedCount(e);
         if (blocking !== null) {
@@ -234,6 +234,13 @@ export function BoardPage({ projectId }: { projectId: string }) {
         setError(`Not merged: ${errorMessage(e)}`);
         return;
       }
+      // Core's own summary, as it wrote it (outside the try: never re-worded as "Not merged: …").
+      if (!sync.ok) {
+        if (inDrawer) throw new DrawerMergeError(sync.summary, null);
+        setError(sync.summary);
+        return;
+      }
+      toastInfo(sync.summary);
     }
 
     patchLocal({ ...ticket, status: target.status, position });
@@ -500,7 +507,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
           onDiscard={() =>
             move(open, { status: 'done', beforeId: null }, { skipMerge: true, inDrawer: true })
           }
-          onAccept={() => move(open, { status: 'done', beforeId: null }, { inDrawer: true })}
+          onAccept={(opts) =>
+            move(open, { status: 'done', beforeId: null }, { inDrawer: true, force: opts?.force ?? false })
+          }
         />
       )}
 
@@ -728,7 +737,8 @@ function TicketDrawer({
   /** Moves the ticket to Done without merging its branch. */
   onDiscard: () => Promise<void>;
   /** Accepts the ticket: merges its run's branch into main, then moves it to Done (dependents start). */
-  onAccept: () => Promise<void>;
+  /** `force`: merge past open blocking comments (Merge anyway). */
+  onAccept: (opts?: { force?: boolean }) => Promise<void>;
 }) {
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
@@ -746,14 +756,19 @@ function TicketDrawer({
   const setViewTab = (view: DrawerView) => setViewParam(view === defaultView ? null : view);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  // The step a failed Mark done offers here, as the page's dialogs do.
+  const [mergeNext, setMergeNext] = useState<MergeNext>(null);
   // The footer's merge failures show here, in the drawer, not in the page banners behind its backdrop.
-  const markDone = async () => {
+  const markDone = async (opts?: { force?: boolean }) => {
     setBusy('done');
     setError(undefined);
+    setMergeNext(null);
     try {
-      await onAccept();
+      await onAccept(opts);
     } catch (e) {
-      setError(errorMessage(e));
+      const failure = drawerFailure(e);
+      setError(failure.text);
+      setMergeNext(failure.next);
     } finally {
       setBusy(undefined);
     }
@@ -792,6 +807,7 @@ function TicketDrawer({
   const act = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
     setError(undefined);
+    setMergeNext(null);
     try {
       await fn();
     } catch (e) {
@@ -1299,6 +1315,29 @@ function TicketDrawer({
           <p className="form-error" role="alert">
             {error}
           </p>
+        )}
+        {error && mergeNext && (
+          <div className="actions">
+            {mergeNext === 'merge_anyway' ? (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={!!busy}
+                onClick={() => void markDone({ force: true })}
+              >
+                Merge anyway
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={!!busy}
+                onClick={() => void act('done', onDiscard)}
+              >
+                Move to Done without merging
+              </button>
+            )}
+          </div>
         )}
 
         <footer className="drawer-foot">
