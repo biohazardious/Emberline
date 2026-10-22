@@ -27,7 +27,13 @@ import {
   type WorkspaceFolder,
 } from '@emberline/protocol';
 import type { GateChoice } from '../../projectSettings';
-import { encodeMaterials, filesToAddAgain, materialInfos, parseReferenceUrls, type WizardMaterial } from './materials';
+import {
+  encodeMaterials,
+  filesToAddAgain,
+  materialInfos,
+  parseReferenceUrls,
+  type WizardMaterial,
+} from './materials';
 
 export type WizardSource = 'preset' | 'blank' | 'import_url' | 'import_folder';
 export type StepId = 'start' | 'type' | 'repo' | 'import' | 'stack' | 'factory' | 'summary';
@@ -73,7 +79,15 @@ export interface WizardState {
   approveWorktreeYml: boolean;
 }
 
-type TextField = 'name' | 'vision' | 'referenceDocs' | 'referenceUrlsText' | 'defaultBranch' | 'versionPolicy' | 'repoUrl' | 'folder';
+type TextField =
+  | 'name'
+  | 'vision'
+  | 'referenceDocs'
+  | 'referenceUrlsText'
+  | 'defaultBranch'
+  | 'versionPolicy'
+  | 'repoUrl'
+  | 'folder';
 
 export type WizardAction =
   | { type: 'source'; source: WizardSource }
@@ -174,20 +188,26 @@ export function urlProblem(url: string): string | null {
 }
 
 export function branchProblem(branch: string): string | null {
-  return GitBranchName.safeParse(branch).success ? null : 'Enter a valid branch name (letters, digits, ".", "_", "/", "-").';
+  return GitBranchName.safeParse(branch).success
+    ? null
+    : 'Enter a valid branch name (letters, digits, ".", "_", "/", "-").';
 }
 
 /** An Other choice must be one line of 1-200 characters; option ids, none and agent always pass. */
 export function choiceProblem(choice: StackChoice | undefined): string | null {
   if (choice === undefined || typeof choice === 'string') return null;
-  return StackChoice.safeParse({ other: choice.other }).success ? null : 'Describe it in one line (1-200 characters).';
+  return StackChoice.safeParse({ other: choice.other }).success
+    ? null
+    : 'Describe it in one line (1-200 characters).';
 }
 
 /**
  * New projects on Auto (or with three or more primary dimensions left to the agent) need a vision
  * the agent can decide from. Imports never do: the code is the input there.
  */
-export function visionProblem(s: Pick<WizardState, 'source' | 'presetId' | 'choices' | 'vision'>): string | null {
+export function visionProblem(
+  s: Pick<WizardState, 'source' | 'presetId' | 'choices' | 'vision'>,
+): string | null {
   if (isImport(s.source) || !visionRequired(s.presetId, s.choices)) return null;
   return s.vision.trim().length >= VISION_MIN_LENGTH
     ? null
@@ -331,7 +351,9 @@ export function canApproveRepoWorktreeYml(detect: ProjectDetectResponse | null):
  * commands run in every new run worktree, and an install there may run the repository's own
  * install scripts. Null when no worktree.yml gets approved.
  */
-export function worktreeYmlImportNote(state: Pick<WizardState, 'detect' | 'write' | 'approveWorktreeYml'>): string | null {
+export function worktreeYmlImportNote(
+  state: Pick<WizardState, 'detect' | 'write' | 'approveWorktreeYml'>,
+): string | null {
   const scripts =
     "Its setup commands run in every new run worktree, and an install there may run the repository's own install scripts (package lifecycle scripts, setup.py and the like).";
   if (state.write.includes('worktreeYml') && writableFiles(state.detect).includes('worktreeYml')) {
@@ -420,7 +442,8 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
       if (s.importProjectId !== null || s.source === a.source) return s;
       const next: WizardState = { ...s, source: a.source, furthest: 0, startFactory: !isImport(a.source) };
       if (a.source === 'blank') return withPreset(next, 'custom', 'custom-blank');
-      if (a.source === 'preset' && s.presetId === 'custom-blank') return { ...next, appType: null, presetId: null };
+      if (a.source === 'preset' && s.presetId === 'custom-blank')
+        return { ...next, appType: null, presetId: null };
       return next;
     }
     case 'materialsAdded':
@@ -454,7 +477,11 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
           ? current.id
           : (presetsForType(a.appType)[0]?.id ?? null);
       if (isImport(s.source) && s.detect) {
-        return { ...s, appType: a.appType, ...mergeDefaults(s.choices, s.dirty, detectedChoices(s.detect, a.appType), a.appType) };
+        return {
+          ...s,
+          appType: a.appType,
+          ...mergeDefaults(s.choices, s.dirty, detectedChoices(s.detect, a.appType), a.appType),
+        };
       }
       return withPreset(s, a.appType, presetId);
     }
@@ -482,11 +509,25 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
     case 'importCreated': {
       if (!isImport(s.source)) return s;
       const steps = stepsFor(s.source);
-      return { ...s, importProjectId: a.projectId, detect: null, step: 'import', furthest: steps.indexOf('import') };
+      return {
+        ...s,
+        importProjectId: a.projectId,
+        detect: null,
+        step: 'import',
+        furthest: steps.indexOf('import'),
+      };
     }
     case 'importCancelled': {
       if (!isImport(s.source)) return s;
-      return { ...s, importProjectId: null, detect: null, write: [], approveWorktreeYml: false, step: 'repo', furthest: 1 };
+      return {
+        ...s,
+        importProjectId: null,
+        detect: null,
+        write: [],
+        approveWorktreeYml: false,
+        step: 'repo',
+        furthest: 1,
+      };
     }
     case 'detected': {
       if (!isImport(s.source)) return s;
@@ -561,7 +602,9 @@ export function buildCreateBody(s: WizardState): CreateProjectBody {
 /** `POST /api/projects/preview`: the create body with the files' name, type and size, never their bytes. */
 export function buildPreviewBody(s: WizardState): ProjectPreviewBody {
   const { materials: _none, ...body } = buildCreateBody(s);
-  return isImport(s.source) || s.materials.length === 0 ? body : { ...body, materials: materialInfos(s.materials) };
+  return isImport(s.source) || s.materials.length === 0
+    ? body
+    : { ...body, materials: materialInfos(s.materials) };
 }
 
 /** `POST /api/projects` for a new project, with the files read and encoded now. */
@@ -631,7 +674,9 @@ export function draftOf(s: WizardState): WizardDraft | null {
     vision: s.vision,
     referenceDocs: s.referenceDocs,
     referenceUrlsText: s.referenceUrlsText,
-    materialNames: [...new Set([...s.materials.map((m) => m.name), ...filesToAddAgain(s.materialsNotKept, s.materials)])].slice(0, 20),
+    materialNames: [
+      ...new Set([...s.materials.map((m) => m.name), ...filesToAddAgain(s.materialsNotKept, s.materials)]),
+    ].slice(0, 20),
     choices: s.choices,
     dirty: s.dirty,
     defaultBranch: s.defaultBranch,
@@ -646,7 +691,16 @@ export function draftOf(s: WizardState): WizardDraft | null {
 
 const SOURCES: readonly WizardSource[] = ['preset', 'blank', 'import_url', 'import_folder'];
 const STEPS: readonly StepId[] = ['start', 'type', 'repo', 'import', 'stack', 'factory', 'summary'];
-const STRING_FIELDS = ['name', 'vision', 'referenceDocs', 'referenceUrlsText', 'defaultBranch', 'versionPolicy', 'repoUrl', 'folder'] as const;
+const STRING_FIELDS = [
+  'name',
+  'vision',
+  'referenceDocs',
+  'referenceUrlsText',
+  'defaultBranch',
+  'versionPolicy',
+  'repoUrl',
+  'folder',
+] as const;
 
 /**
  * A stored draft, or null when it is missing or corrupt (not JSON, another version, a field of the
@@ -669,7 +723,8 @@ export function parseDraft(raw: string | null): WizardDraft | null {
   }
   if (d.startFactory !== undefined && typeof d.startFactory !== 'boolean') return null;
 
-  const appType = typeof d.appType === 'string' && getProjectType(d.appType) ? (d.appType as ProjectTypeId) : null;
+  const appType =
+    typeof d.appType === 'string' && getProjectType(d.appType) ? (d.appType as ProjectTypeId) : null;
   const preset = typeof d.presetId === 'string' ? getPreset(d.presetId) : undefined;
   const choices: ProjectChoices = {};
   const rawChoices = d.choices && typeof d.choices === 'object' ? (d.choices as Record<string, unknown>) : {};
@@ -690,14 +745,18 @@ export function parseDraft(raw: string | null): WizardDraft | null {
     referenceDocs: str('referenceDocs'),
     referenceUrlsText: str('referenceUrlsText'),
     materialNames: Array.isArray(d.materialNames)
-      ? (d.materialNames as unknown[]).filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 255).slice(0, 20)
+      ? (d.materialNames as unknown[])
+          .filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 255)
+          .slice(0, 20)
       : [],
     choices,
     dirty: Array.isArray(d.dirty)
       ? STACK_DIMENSION_IDS.filter((id) => (d.dirty as unknown[]).includes(id) && choices[id] !== undefined)
       : [],
     defaultBranch: str('defaultBranch'),
-    versionPolicy: VERSION_POLICIES.some((p) => p.id === d.versionPolicy) ? (d.versionPolicy as string) : base.versionPolicy,
+    versionPolicy: VERSION_POLICIES.some((p) => p.id === d.versionPolicy)
+      ? (d.versionPolicy as string)
+      : base.versionPolicy,
     gates: gates.success ? gates.data : {},
     startFactory: typeof d.startFactory === 'boolean' ? d.startFactory : !isImport(d.source as WizardSource),
     repoUrl: stripUrlCredentials(str('repoUrl')),
@@ -708,7 +767,14 @@ export function parseDraft(raw: string | null): WizardDraft | null {
 /** The state of a draft, on the furthest of its steps the rail can reach (never past an import's creation). */
 function restoreDraft(d: WizardDraft): WizardState {
   const { v: _version, materialNames, ...fields } = d;
-  const s: WizardState = { ...initialWizardState(), ...fields, materialsNotKept: materialNames, nameError: null, furthest: 0, step: 'start' };
+  const s: WizardState = {
+    ...initialWizardState(),
+    ...fields,
+    materialsNotKept: materialNames,
+    nameError: null,
+    furthest: 0,
+    step: 'start',
+  };
   const steps = stepsFor(s.source);
   const wanted = Math.max(0, steps.indexOf(d.step));
   let at = 0;
@@ -733,4 +799,3 @@ export function gateOptions(
     { value: 'off', label: 'Off' },
   ];
 }
-

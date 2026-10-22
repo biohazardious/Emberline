@@ -30,7 +30,9 @@ export const NEEDS_PERSON_INPUT: ReadonlySet<string> = new Set(['answer_blockers
 /** Files named in a why line before "and N more". */
 const WHY_FILES = 3;
 
-const suggestion = (s: Pick<RecoverySuggestion, 'id' | 'kind' | 'label'> & Partial<RecoverySuggestion>): RecoverySuggestion => ({
+const suggestion = (
+  s: Pick<RecoverySuggestion, 'id' | 'kind' | 'label'> & Partial<RecoverySuggestion>,
+): RecoverySuggestion => ({
   detail: null,
   prompt: null,
   files: [],
@@ -45,7 +47,9 @@ const text = (payload: Record<string, unknown> | null, key: string): string | nu
 
 const strings = (payload: Record<string, unknown> | null, key: string): string[] => {
   const value = payload?.[key];
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0) : [];
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
 };
 
 const count = (payload: Record<string, unknown> | null, key: string): number | null => {
@@ -63,7 +67,9 @@ const lastLine = (output: string): string | null =>
     .at(-1) ?? null;
 
 const fileList = (files: string[]): string =>
-  files.length > WHY_FILES ? `${files.slice(0, WHY_FILES).join(', ')} and ${files.length - WHY_FILES} more` : files.join(', ');
+  files.length > WHY_FILES
+    ? `${files.slice(0, WHY_FILES).join(', ')} and ${files.length - WHY_FILES} more`
+    : files.join(', ');
 
 /** Ticket keys as one phrase: one, `A, B`, or `A, B and N more`. */
 const movedByList = (keys: string[]): string =>
@@ -74,19 +80,27 @@ const gitMessage = (error: string): string =>
   (lastLine(error) ?? error).replace(/^.*\bexited with code \d+: /, '').replace(/^(fatal|error): /, '');
 
 /** A path as one shell word, so the command copies as is. */
-const shellWord = (value: string): string => (/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`);
+const shellWord = (value: string): string =>
+  /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 
 function discard(ticketKey: string | null, detail?: string, label = 'Discard this work'): RecoverySuggestion {
   return suggestion({
     id: 'discard',
     kind: 'discard',
     label,
-    detail: detail ?? `Move ${ticketKey ?? 'the ticket'} to Done without merging; the branch is kept until the next cleanup.`,
+    detail:
+      detail ??
+      `Move ${ticketKey ?? 'the ticket'} to Done without merging; the branch is kept until the next cleanup.`,
   });
 }
 
 const openReview = (): RecoverySuggestion =>
-  suggestion({ id: 'open_review', kind: 'open_review', label: 'Open review', detail: 'Look at the changes and decide there.' });
+  suggestion({
+    id: 'open_review',
+    kind: 'open_review',
+    label: 'Open review',
+    detail: 'Look at the changes and decide there.',
+  });
 
 function mergeFailed(input: RecoveryInput): { why: string; suggestions: RecoverySuggestion[] } {
   const { mainBranch, probe, ticketKey } = input;
@@ -109,7 +123,10 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
       id: 'resolve_conflicts',
       kind: 'prompt',
       label: 'Resolve conflicts',
-      detail: files.length > 0 ? `Ask the agent to merge ${mainBranch} and resolve ${plural(files.length, 'conflict', 'conflicts')}.` : `Ask the agent to merge ${mainBranch} and resolve the conflicts.`,
+      detail:
+        files.length > 0
+          ? `Ask the agent to merge ${mainBranch} and resolve ${plural(files.length, 'conflict', 'conflicts')}.`
+          : `Ask the agent to merge ${mainBranch} and resolve the conflicts.`,
       prompt:
         (files.length > 0
           ? conflictResolutionPrompt(mainBranch, files)
@@ -122,7 +139,12 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
     return {
       why: `the branch merges cleanly into ${mainBranch} now`,
       suggestions: [
-        suggestion({ id: 'merge_now', kind: 'merge', label: 'Merge now', detail: `Nothing conflicts with ${mainBranch} any more.` }),
+        suggestion({
+          id: 'merge_now',
+          kind: 'merge',
+          label: 'Merge now',
+          detail: `Nothing conflicts with ${mainBranch} any more.`,
+        }),
         discard(ticketKey),
       ],
     };
@@ -136,7 +158,11 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
     if (sup?.done && sup.files * 2 >= sup.of) {
       return {
         why,
-        suggestions: [discard(ticketKey, `${sup.key} already added these files (${sup.files} of ${sup.of} conflicts).`), resolve(files), manual(files)],
+        suggestions: [
+          discard(ticketKey, `${sup.key} already added these files (${sup.files} of ${sup.of} conflicts).`),
+          resolve(files),
+          manual(files),
+        ],
       };
     }
     return { why, suggestions: [resolve(files), discard(ticketKey), manual(files)] };
@@ -152,7 +178,10 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
   return { why, suggestions: [resolve(stored), discard(ticketKey), manual(stored)] };
 }
 
-function buildGate(input: RecoveryInput, couldNotRun: boolean): { why: string; suggestions: RecoverySuggestion[] } {
+function buildGate(
+  input: RecoveryInput,
+  couldNotRun: boolean,
+): { why: string; suggestions: RecoverySuggestion[] } {
   const payload = input.hold.payload;
   const output = text(payload, couldNotRun ? 'message' : 'output');
   const last = output ? lastLine(output) : null;
@@ -167,7 +196,13 @@ function buildGate(input: RecoveryInput, couldNotRun: boolean): { why: string; s
   return {
     why: last ? `${head}: ${last}` : head,
     suggestions: [
-      suggestion({ id: 'fix_checks', kind: 'prompt', label: 'Fix the checks', detail: 'Ask the agent to make the checks pass.', prompt: prompt + input.completionReminder }),
+      suggestion({
+        id: 'fix_checks',
+        kind: 'prompt',
+        label: 'Fix the checks',
+        detail: 'Ask the agent to make the checks pass.',
+        prompt: prompt + input.completionReminder,
+      }),
       suggestion({
         id: 'run_checks',
         kind: 'manual',
@@ -194,7 +229,11 @@ function worktreeConfig(input: RecoveryInput): { why: string; suggestions: Recov
   if (!commands && label !== 'Worktree config is not valid') return null;
   const output = text(payload, 'output') ?? '';
   const errorText = output.replace(/^\.emberline\/worktree\.yml is not valid:\n?/, '').trim();
-  const first = errorText.split('\n').map((l) => l.trim()).find(Boolean) ?? null;
+  const first =
+    errorText
+      .split('\n')
+      .map((l) => l.trim())
+      .find(Boolean) ?? null;
   return {
     why: commands
       ? 'the bootstrap left .emberline/worktree.yml without setup, build, lint or test commands'
@@ -204,8 +243,13 @@ function worktreeConfig(input: RecoveryInput): { why: string; suggestions: Recov
         id: 'fix_worktree_yml',
         kind: 'prompt',
         label: 'Fix the file',
-        detail: commands ? 'Ask the agent to add the commands.' : 'Ask the agent to make .emberline/worktree.yml valid.',
-        prompt: (commands ? WORKTREE_COMMANDS_PROMPT : worktreeYmlFixPrompt(errorText || 'The file could not be read.')) + input.completionReminder,
+        detail: commands
+          ? 'Ask the agent to add the commands.'
+          : 'Ask the agent to make .emberline/worktree.yml valid.',
+        prompt:
+          (commands
+            ? WORKTREE_COMMANDS_PROMPT
+            : worktreeYmlFixPrompt(errorText || 'The file could not be read.')) + input.completionReminder,
       }),
       openReview(),
       discard(input.ticketKey),
@@ -223,9 +267,17 @@ function secretGuard(input: RecoveryInput): { why: string; suggestions: Recovery
     "Run the project's checks, commit, and finish." +
     (found ? `\n\nWhat the guard found:\n\n${found}` : '');
   return {
-    why: n ? `${plural(n, 'possible secret', 'possible secrets')} in the diff` : 'possible secrets in the diff',
+    why: n
+      ? `${plural(n, 'possible secret', 'possible secrets')} in the diff`
+      : 'possible secrets in the diff',
     suggestions: [
-      suggestion({ id: 'remove_secrets', kind: 'prompt', label: 'Remove the secrets', detail: 'Ask the agent to take them out of the branch.', prompt: prompt + input.completionReminder }),
+      suggestion({
+        id: 'remove_secrets',
+        kind: 'prompt',
+        label: 'Remove the secrets',
+        detail: 'Ask the agent to take them out of the branch.',
+        prompt: prompt + input.completionReminder,
+      }),
       openReview(),
     ],
   };
@@ -233,9 +285,22 @@ function secretGuard(input: RecoveryInput): { why: string; suggestions: Recovery
 
 function completionBlocked(input: RecoveryInput): { why: string; suggestions: RecoverySuggestion[] } {
   const blockers = strings(input.hold.payload, 'blockers');
-  const quoted = blockers.length > 0 ? blockers.map((b) => b.split('\n').map((l) => `> ${l}`).join('\n')).join('\n') : '> (no details)';
+  const quoted =
+    blockers.length > 0
+      ? blockers
+          .map((b) =>
+            b
+              .split('\n')
+              .map((l) => `> ${l}`)
+              .join('\n'),
+          )
+          .join('\n')
+      : '> (no details)';
   return {
-    why: blockers.length > 0 ? `the agent reported blockers: ${blockers.join('; ')}` : 'the agent reported blockers',
+    why:
+      blockers.length > 0
+        ? `the agent reported blockers: ${blockers.join('; ')}`
+        : 'the agent reported blockers',
     suggestions: [
       suggestion({
         id: 'answer_blockers',
@@ -256,10 +321,18 @@ function reviewBlocked(input: RecoveryInput): { why: string; suggestions: Recove
     ? `These blocking review comments are open on your changes:\n\n${comments}\n\nAddress every one of them, run the project's checks, commit, and finish.`
     : "Address the open blocking review comments on your changes, run the project's checks, commit, and finish.";
   return {
-    why: n ? `${plural(n, 'blocking review comment is', 'blocking review comments are')} open` : 'blocking review comments are open',
+    why: n
+      ? `${plural(n, 'blocking review comment is', 'blocking review comments are')} open`
+      : 'blocking review comments are open',
     suggestions: [
       openReview(),
-      suggestion({ id: 'address_comments', kind: 'prompt', label: 'Address the comments', detail: 'Ask the agent to work through them.', prompt: prompt + input.completionReminder }),
+      suggestion({
+        id: 'address_comments',
+        kind: 'prompt',
+        label: 'Address the comments',
+        detail: 'Ask the agent to work through them.',
+        prompt: prompt + input.completionReminder,
+      }),
     ],
   };
 }
@@ -292,7 +365,8 @@ export function buildRecovery(input: RecoveryInput): Recovery {
             'apply_audit',
             "Apply the audit's request",
             'Ask the agent to address what the code audit found.',
-            text(payload, 'followUpPrompt') ?? "Address the code audit's findings on your branch, run the project's checks, commit, and finish.",
+            text(payload, 'followUpPrompt') ??
+              "Address the code audit's findings on your branch, run the project's checks, commit, and finish.",
           ),
           openReview(),
         ],
@@ -334,7 +408,9 @@ export function buildRecovery(input: RecoveryInput): Recovery {
       // its reply is the explanation, and a person marks the ticket done.
       const canComplete = input.completionReminder !== '';
       return done({
-        why: canComplete ? 'the agent ended without changing anything or saying what it did' : 'the agent ended without changing anything',
+        why: canComplete
+          ? 'the agent ended without changing anything or saying what it did'
+          : 'the agent ended without changing anything',
         suggestions: [
           ask(
             'do_the_ticket',

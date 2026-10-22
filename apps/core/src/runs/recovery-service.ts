@@ -94,7 +94,9 @@ export class RecoveryService {
    */
   async holdPrompt(runId: string): Promise<string | null> {
     const recovery = await this.get(runId);
-    return recovery?.suggestions.find((s) => s.kind === 'prompt' && !NEEDS_PERSON_INPUT.has(s.id))?.prompt ?? null;
+    return (
+      recovery?.suggestions.find((s) => s.kind === 'prompt' && !NEEDS_PERSON_INPUT.has(s.id))?.prompt ?? null
+    );
   }
 
   /**
@@ -117,11 +119,16 @@ export class RecoveryService {
     return this.delivering.run(runId, async () => {
       const run = this.runs.getRun(runId);
       if (BUSY_STATES.has(run.state)) {
-        throw new HttpError(409, 'run_busy', `the agent is ${run.state}; send your prompt once it is waiting`);
+        throw new HttpError(
+          409,
+          'run_busy',
+          `the agent is ${run.state}; send your prompt once it is waiting`,
+        );
       }
       if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
       const delivery = this.deliveryFor(run);
-      if (delivery === 'session') return { delivery, run: await this.runs.prompt(run.id, text, { automatic: false }) };
+      if (delivery === 'session')
+        return { delivery, run: await this.runs.prompt(run.id, text, { automatic: false }) };
       if (delivery === 'none') throw this.refusal(run);
       const route = this.runs.currentRoute(run.id);
       this.scheduler.assertRouteOpen(route);
@@ -139,14 +146,23 @@ export class RecoveryService {
 
   /** Why a held run cannot take a prompt at all. */
   private refusal(run: Run): HttpError {
-    if (run.handedOffTo) return new HttpError(409, 'not_held', 'this run was handed off; its successor continues the work');
+    if (run.handedOffTo)
+      return new HttpError(409, 'not_held', 'this run was handed off; its successor continues the work');
     if (run.cancelled && !this.runs.cancelledOnlyByFinishedStep(run.id)) {
       return new HttpError(409, 'run_stopped_by_you', 'this run was stopped; start a new run or discard it');
     }
     if (!run.worktreePath || !existsSync(run.worktreePath)) {
-      return new HttpError(409, 'worktree_missing', "this run's worktree was removed; start a new run or discard it");
+      return new HttpError(
+        409,
+        'worktree_missing',
+        "this run's worktree was removed; start a new run or discard it",
+      );
     }
-    return new HttpError(409, 'no_session', 'this run has no agent session to continue; start a new run or discard it');
+    return new HttpError(
+      409,
+      'no_session',
+      'this run has no agent session to continue; start a new run or discard it',
+    );
   }
 
   /** Open blocking review comments on the run and the runs it took over from, one line each. */
@@ -155,7 +171,13 @@ export class RecoveryService {
     return this.db
       .select({ filePath: reviewComments.filePath, line: reviewComments.line, body: reviewComments.body })
       .from(reviewComments)
-      .where(and(inArray(reviewComments.runId, chain), eq(reviewComments.priority, 'blocking'), ne(reviewComments.status, 'resolved')))
+      .where(
+        and(
+          inArray(reviewComments.runId, chain),
+          eq(reviewComments.priority, 'blocking'),
+          ne(reviewComments.status, 'resolved'),
+        ),
+      )
       .orderBy(asc(reviewComments.createdAt))
       .all()
       .map((c) => `${c.filePath}${c.line === null ? '' : `:${c.line}`}: ${c.body.trim()}`);

@@ -237,7 +237,9 @@ function ContainerPreview({
           {targetSelect}
           <span className={badge.className}>{badge.text}</span>
           {(status.command ?? status.detectedCommand) && (
-            <span className="mono muted small container-preview-command">{status.command ?? status.detectedCommand}</span>
+            <span className="mono muted small container-preview-command">
+              {status.command ?? status.detectedCommand}
+            </span>
           )}
         </div>
         <div className="actions">
@@ -246,7 +248,12 @@ function ContainerPreview({
               <Square className="icon" aria-hidden /> {busy ? 'Stopping…' : 'Stop'}
             </button>
           ) : (
-            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void act('start')}>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              onClick={() => void act('start')}
+            >
               <Play className="icon" aria-hidden /> {busy ? 'Starting…' : 'Start'}
             </button>
           )}
@@ -315,7 +322,9 @@ function ContainerPreview({
       ) : status.status === 'running' && status.url ? (
         <>
           {frameMode?.note && <p className="muted small container-preview-note">{frameMode.note}</p>}
-          {framing === 'unknown' && <p className="muted small container-preview-note">{FRAMING_UNKNOWN_NOTE}</p>}
+          {framing === 'unknown' && (
+            <p className="muted small container-preview-note">{FRAMING_UNKNOWN_NOTE}</p>
+          )}
           <iframe
             key={nonce}
             className="container-preview-frame"

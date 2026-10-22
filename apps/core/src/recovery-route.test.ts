@@ -21,7 +21,10 @@ vi.mock('./git-exec.js', async (orig) => {
 });
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
 const write = (dir: string, name: string, body: string) => writeFileSync(path.join(dir, name), body);
 
 beforeEach(async () => {
@@ -46,7 +49,17 @@ function addTicket(key: string, status: string): string {
   const number = Number(key.split('-')[1] ?? ++ticketNo);
   t.db
     .insert(tickets)
-    .values({ id, projectId: 'p1', number, key, title: key, status, position: number, createdAt: new Date(), updatedAt: new Date() })
+    .values({
+      id,
+      projectId: 'p1',
+      number,
+      key,
+      title: key,
+      status,
+      position: number,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
     .run();
   return id;
 }
@@ -70,7 +83,12 @@ interface RunSeed {
   worktreePath?: string;
   ended?: boolean;
   /** Who stopped it: `system` = the pipeline's factory_step_finished stop. */
-  stops?: { source: 'system' | 'user'; reason?: string; type?: 'stop_requested' | 'cancelled'; payload?: Record<string, unknown> }[];
+  stops?: {
+    source: 'system' | 'user';
+    reason?: string;
+    type?: 'stop_requested' | 'cancelled';
+    payload?: Record<string, unknown>;
+  }[];
   handedOffTo?: string;
   /** The hold note after the run's switch to done; null for none. */
   hold?: { type: string; payload: Record<string, unknown> } | null;
@@ -102,7 +120,11 @@ function seedRun(seed: RunSeed): string {
       handedOffTo: seed.handedOffTo ?? null,
     })
     .run();
-  if (seed.completionTool) t.db.insert(runEvents).values({ runId: seed.id, ts: now, source: 'system', type: 'completion_tool_ready', payload: null }).run();
+  if (seed.completionTool)
+    t.db
+      .insert(runEvents)
+      .values({ runId: seed.id, ts: now, source: 'system', type: 'completion_tool_ready', payload: null })
+      .run();
   for (const stop of seed.stops ?? []) {
     t.db
       .insert(runEvents)
@@ -115,8 +137,14 @@ function seedRun(seed: RunSeed): string {
       })
       .run();
   }
-  t.db.insert(runEvents).values({ runId: seed.id, ts: now, source: 'hook', type: 'Stop', state: 'done', payload: null }).run();
-  const hold = seed.hold === undefined ? { type: 'merge_failed', payload: { conflicts: ['app.js'], autoFix: false } } : seed.hold;
+  t.db
+    .insert(runEvents)
+    .values({ runId: seed.id, ts: now, source: 'hook', type: 'Stop', state: 'done', payload: null })
+    .run();
+  const hold =
+    seed.hold === undefined
+      ? { type: 'merge_failed', payload: { conflicts: ['app.js'], autoFix: false } }
+      : seed.hold;
   if (hold) t.runs.note(seed.id, hold.type, hold.payload);
   return seed.id;
 }
@@ -145,7 +173,7 @@ describe('GET /api/runs/:id/recovery', () => {
     expect(res.json()).toBeNull();
   });
 
-  it('is null once the ticket left Review (the hold is no longer anyone\'s)', async () => {
+  it("is null once the ticket left Review (the hold is no longer anyone's)", async () => {
     seedRun({ id: 'r1' });
     t.db.update(tickets).set({ status: 'done' }).run();
     expect(await recovery('r1')).toEqual({ status: 200, body: null });
@@ -158,10 +186,20 @@ describe('GET /api/runs/:id/recovery', () => {
   it('merge_failed: compares the branch with main now and suggests resolving the current conflicts', async () => {
     const wt = worktree('r1', { 'app.js': 'line1\nfrom-run\nline3\n' });
     conflictOnMain();
-    seedRun({ id: 'r1', ...wt, hold: { type: 'merge_failed', payload: { conflicts: ['stale.txt'], autoFix: false } }, completionTool: true });
+    seedRun({
+      id: 'r1',
+      ...wt,
+      hold: { type: 'merge_failed', payload: { conflicts: ['stale.txt'], autoFix: false } },
+      completionTool: true,
+    });
     const { status, body } = await recovery('r1');
     expect(status).toBe(200);
-    expect(body).toMatchObject({ hold: 'merge_failed', label: 'Merge failed', delivery: 'session', why: 'main moved on (EL-12) and 1 file now conflicts: app.js' });
+    expect(body).toMatchObject({
+      hold: 'merge_failed',
+      label: 'Merge failed',
+      delivery: 'session',
+      why: 'main moved on (EL-12) and 1 file now conflicts: app.js',
+    });
     expect(body!.suggestions.map((s) => s.kind)).toEqual(['prompt', 'discard', 'manual']);
     expect(body!.suggestions[0]!.prompt).toContain('conflicts in: app.js');
     expect(body!.suggestions[0]!.prompt!.endsWith('When finished, call `ticket_complete` again.')).toBe(true);
@@ -192,7 +230,16 @@ describe('GET /api/runs/:id/recovery', () => {
     git(main, 'add', '-A');
     git(main, 'commit', '-q', '-m', 'feat(EL-10): factory run output');
     git(main, 'checkout', '-q', 'main');
-    git(main, 'merge', '--no-ff', '--no-edit', '-q', '-m', 'Merge EL-10 (emberline/el-10)', 'emberline/el-10');
+    git(
+      main,
+      'merge',
+      '--no-ff',
+      '--no-edit',
+      '-q',
+      '-m',
+      'Merge EL-10 (emberline/el-10)',
+      'emberline/el-10',
+    );
   }
 
   it('superseded by a done ticket: Discard first, naming it', async () => {
@@ -200,14 +247,18 @@ describe('GET /api/runs/:id/recovery', () => {
     superseded('done');
     seedRun({ id: 'r1', ticketKey: 'EL-6', ...wt });
     const { body } = await recovery('r1');
-    expect(body!.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (3 of 3 conflicts).' });
+    expect(body!.suggestions[0]).toMatchObject({
+      kind: 'discard',
+      detail: 'EL-10 already added these files (3 of 3 conflicts).',
+    });
   });
 
   it('a second read with unchanged heads looks nothing up again', async () => {
     const wt = worktree('r1', { a: 'mine\n', b: 'mine\n', c: 'mine\n' });
     superseded('done');
     seedRun({ id: 'r1', ticketKey: 'EL-6', ...wt });
-    const logCalls = () => vi.mocked(gitExec.execGitFile).mock.calls.filter(([args]) => args.includes('log')).length;
+    const logCalls = () =>
+      vi.mocked(gitExec.execGitFile).mock.calls.filter(([args]) => args.includes('log')).length;
     const first = await recovery('r1');
     const before = logCalls();
     expect(before).toBeGreaterThan(0);
@@ -228,7 +279,16 @@ describe('GET /api/runs/:id/recovery', () => {
     seedRun({ id: 'r1', hold: { type: 'review_blocked', payload: { count: 1 } } });
     t.db
       .insert(reviewComments)
-      .values({ id: 'c1', runId: 'r1', filePath: 'src/a.ts', line: 3, side: 'modified', body: 'use the helper', priority: 'blocking', createdAt: new Date() })
+      .values({
+        id: 'c1',
+        runId: 'r1',
+        filePath: 'src/a.ts',
+        line: 3,
+        side: 'modified',
+        body: 'use the helper',
+        priority: 'blocking',
+        createdAt: new Date(),
+      })
       .run();
     const { body } = await recovery('r1');
     expect(body!.suggestions.map((s) => s.kind)).toEqual(['open_review', 'prompt']);
@@ -254,7 +314,9 @@ describe('GET /api/runs/:id/recovery', () => {
     seedRun({ id: 'r2', completionTool: true, hold: { type: 'no_changes', payload: { autoFix: false } } });
     const codex = (await recovery('r1')).body!;
     expect(codex.why).toBe('the agent ended without changing anything');
-    expect(codex.suggestions[0]!.prompt).toContain('explain why in your reply; a person will mark the ticket done.');
+    expect(codex.suggestions[0]!.prompt).toContain(
+      'explain why in your reply; a person will mark the ticket done.',
+    );
     const claude = (await recovery('r2')).body!;
     expect(claude.why).toBe('the agent ended without changing anything or saying what it did');
     expect(claude.suggestions[0]!.prompt).toContain('explain why nothing is needed and finish.');
@@ -294,7 +356,10 @@ describe('RecoveryService.deliveryFor', () => {
 
   it('successor for a real legacy stop: the pipeline stop, then reconcile noting the exit', () => {
     mkdirSync(path.join(t.dir, '.worktrees', 'el-2'), { recursive: true });
-    seedRun({ id: 'el-2', stops: [legacyStop, { source: 'system', type: 'cancelled', payload: { exitCode: 129, signal: 0 } }] });
+    seedRun({
+      id: 'el-2',
+      stops: [legacyStop, { source: 'system', type: 'cancelled', payload: { exitCode: 129, signal: 0 } }],
+    });
     expect(delivery('el-2')).toBe('successor');
   });
 
@@ -302,7 +367,11 @@ describe('RecoveryService.deliveryFor', () => {
     mkdirSync(path.join(t.dir, '.worktrees', 'el-3'), { recursive: true });
     seedRun({
       id: 'el-3',
-      stops: [legacyStop, { source: 'system', type: 'cancelled', payload: { exitCode: 129, signal: 0 } }, { source: 'user' }],
+      stops: [
+        legacyStop,
+        { source: 'system', type: 'cancelled', payload: { exitCode: 129, signal: 0 } },
+        { source: 'user' },
+      ],
     });
     expect(delivery('el-3')).toBe('none');
   });
@@ -348,7 +417,11 @@ describe('delivering a recovery prompt', () => {
   let ptydServer: PtydServer;
   const legacyStop = { source: 'system' as const, reason: 'factory_step_finished' };
   /** Reconcile's note of the exit that followed the pipeline's stop (a real pre-upgrade run, like EL-2). */
-  const exitNoted = { source: 'system' as const, type: 'cancelled' as const, payload: { exitCode: 129, signal: 0 } };
+  const exitNoted = {
+    source: 'system' as const,
+    type: 'cancelled' as const,
+    payload: { exitCode: 129, signal: 0 },
+  };
 
   beforeEach(async () => {
     const file = path.join(t.dir, 'fake-claude.sh');
@@ -382,17 +455,21 @@ describe('delivering a recovery prompt', () => {
     await ptydServer.close();
   });
 
-  const post = (url: string, payload?: object) => t.app.inject({ method: 'POST', url, payload, headers: authHeaders(cookie) });
+  const post = (url: string, payload?: object) =>
+    t.app.inject({ method: 'POST', url, payload, headers: authHeaders(cookie) });
   const recover = (id: string, text: string) => post(`/api/runs/${id}/recover`, { text });
   /** The arguments the fake CLI was started with for `runId` (every start appends). */
   async function argsOf(runId: string): Promise<string> {
     const file = path.join(t.dir, `args-${runId}`);
     // `>>` creates the file before the start's line lands in it.
-    await expect.poll(() => existsSync(file) && readFileSync(file, 'utf8').length > 0, { timeout: 5_000 }).toBe(true);
+    await expect
+      .poll(() => existsSync(file) && readFileSync(file, 'utf8').length > 0, { timeout: 5_000 })
+      .toBe(true);
     return readFileSync(file, 'utf8');
   }
   /** The prompt of the run's latest `--resume <session>` start. */
-  const resumedWith = async (runId: string) => (await argsOf(runId)).split('--resume\nsess\n--\n').at(-1)!.replace(/\n$/, '');
+  const resumedWith = async (runId: string) =>
+    (await argsOf(runId)).split('--resume\nsess\n--\n').at(-1)!.replace(/\n$/, '');
   const successorsOf = (id: string) => t.db.select().from(runs).where(eq(runs.predecessorRunId, id)).all();
 
   describe('POST /api/runs/:id/recover', () => {
@@ -428,10 +505,16 @@ describe('delivering a recovery prompt', () => {
       const handedOff = t.runs.get('el-2').events.find((e) => e.type === 'handed_off');
       expect(handedOff?.payload).toMatchObject({ reason: 'continued after a hold' });
       // The ticket follows the successor.
-      const latest = t.db.select().from(runs).where(eq(runs.ticketId, 'tk-EL-2')).orderBy(desc(runs.createdAt), desc(runs.id)).get();
+      const latest = t.db
+        .select()
+        .from(runs)
+        .where(eq(runs.ticketId, 'tk-EL-2'))
+        .orderBy(desc(runs.createdAt), desc(runs.id))
+        .get();
       expect(latest?.id).toBe(body.run.id);
       // Its prompt: the handoff context, then the person's text.
-      const prompt = t.db.select({ prompt: runs.prompt }).from(runs).where(eq(runs.id, body.run.id)).get()!.prompt;
+      const prompt = t.db.select({ prompt: runs.prompt }).from(runs).where(eq(runs.id, body.run.id)).get()!
+        .prompt;
       expect(prompt).toContain('continued after a hold');
       expect(prompt.endsWith('\n\nresolve the conflicts in app.js')).toBe(true);
       expect(await argsOf(body.run.id)).toContain('resolve the conflicts in app.js');
@@ -470,13 +553,18 @@ describe('delivering a recovery prompt', () => {
       const wt = worktree('el-2', { 'new.js': 'x\n' });
       seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
       // A long ticket: the handoff context alone is several thousand characters.
-      t.db.update(tickets).set({ body: 'b'.repeat(5_000) }).where(eq(tickets.id, 'tk-EL-2')).run();
+      t.db
+        .update(tickets)
+        .set({ body: 'b'.repeat(5_000) })
+        .where(eq(tickets.id, 'tk-EL-2'))
+        .run();
       const text = 'y'.repeat(17_000);
       const res = await recover('el-2', text);
       expect(res.statusCode).toBe(200);
       const body = res.json() as RecoverResponse;
       expect(body.delivery).toBe('successor');
-      const prompt = t.db.select({ prompt: runs.prompt }).from(runs).where(eq(runs.id, body.run.id)).get()!.prompt;
+      const prompt = t.db.select({ prompt: runs.prompt }).from(runs).where(eq(runs.id, body.run.id)).get()!
+        .prompt;
       expect(prompt.length).toBeLessThanOrEqual(20_000);
       expect(prompt.endsWith(`\n\n${text}`)).toBe(true);
       expect(prompt).toContain('continued after a hold');
@@ -485,7 +573,11 @@ describe('delivering a recovery prompt', () => {
     it('a prompt too long to go with the handoff context: 400 prompt_too_long, nothing handed off', async () => {
       const wt = worktree('el-2', { 'new.js': 'x\n' });
       seedRun({ id: 'el-2', ticketKey: 'EL-2', ...wt, stops: [legacyStop, exitNoted] });
-      t.db.update(tickets).set({ body: 'b'.repeat(5_000) }).where(eq(tickets.id, 'tk-EL-2')).run();
+      t.db
+        .update(tickets)
+        .set({ body: 'b'.repeat(5_000) })
+        .where(eq(tickets.id, 'tk-EL-2'))
+        .run();
       const res = await recover('el-2', 'y'.repeat(19_000));
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ error: 'prompt_too_long' });
@@ -496,7 +588,11 @@ describe('delivering a recovery prompt', () => {
     it('a legacy run keeps the model its route tag names in the successor', async () => {
       const wt = worktree('el-2', { 'new.js': 'x\n' });
       seedRun({ id: 'el-2', ...wt, stops: [legacyStop, exitNoted] });
-      t.db.update(runs).set({ model: null, prompt: '[Preferred Agent: claude · Model: opus] EL-2' }).where(eq(runs.id, 'el-2')).run();
+      t.db
+        .update(runs)
+        .set({ model: null, prompt: '[Preferred Agent: claude · Model: opus] EL-2' })
+        .where(eq(runs.id, 'el-2'))
+        .run();
       const body = (await recover('el-2', 'go on')).json() as RecoverResponse;
       expect(body.run.model).toBe('opus');
     });
@@ -532,7 +628,11 @@ describe('delivering a recovery prompt', () => {
 
     it('a blocked run gets the answer the person wrote', async () => {
       const wt = worktree('r1', { 'new.js': 'x\n' });
-      seedRun({ id: 'r1', ...wt, hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } } });
+      seedRun({
+        id: 'r1',
+        ...wt,
+        hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } },
+      });
       const res = await recover('r1', 'Use the TEST_KEY variable.');
       expect(res.statusCode).toBe(200);
       expect((res.json() as RecoverResponse).delivery).toBe('session');
@@ -574,7 +674,11 @@ describe('delivering a recovery prompt', () => {
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'not_held' });
       seedRun({ id: 'r2', ...worktree('r2', { 'new.js': 'x\n' }) });
-      t.db.update(tickets).set({ status: 'done' }).where(eq(tickets.id, t.runs.getRun('r2').ticketId!)).run();
+      t.db
+        .update(tickets)
+        .set({ status: 'done' })
+        .where(eq(tickets.id, t.runs.getRun('r2').ticketId!))
+        .run();
       expect((await recover('r2', 'go on')).json()).toMatchObject({ error: 'not_held' });
     });
 
@@ -586,8 +690,15 @@ describe('delivering a recovery prompt', () => {
 
   describe('POST /api/runs/:id/resume', () => {
     it('without text on a held run sends the hold prompt', async () => {
-      for (const [id, payload] of [['r1', {}], ['r2', { text: '   ' }]] as const) {
-        seedRun({ id, ...worktree(id, { 'new.js': `${id}\n` }), hold: { type: 'completion_missing', payload: {} } });
+      for (const [id, payload] of [
+        ['r1', {}],
+        ['r2', { text: '   ' }],
+      ] as const) {
+        seedRun({
+          id,
+          ...worktree(id, { 'new.js': `${id}\n` }),
+          hold: { type: 'completion_missing', payload: {} },
+        });
         const expected = await t.recovery.holdPrompt(id);
         expect(expected, id).toContain('ticket_complete');
         expect((await post(`/api/runs/${id}/resume`, payload)).statusCode, id).toBe(200);
@@ -597,7 +708,11 @@ describe('delivering a recovery prompt', () => {
 
     it('without text on a blocked run sends the plain continue, not the empty answer form', async () => {
       const wt = worktree('r1', { 'new.js': 'x\n' });
-      seedRun({ id: 'r1', ...wt, hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } } });
+      seedRun({
+        id: 'r1',
+        ...wt,
+        hold: { type: 'completion_blocked', payload: { blockers: ['which API key?'] } },
+      });
       expect((await post('/api/runs/r1/resume', {})).statusCode).toBe(200);
       expect(await resumedWith('r1')).toBe(CONTINUE_PROMPT);
     });
@@ -625,10 +740,16 @@ describe('delivering a recovery prompt', () => {
       delete process.env.EMBERLINE_GEMINI_COMMAND;
     });
     /** The `-p` prompt of the run's latest start. */
-    const freshPrompt = async (runId: string) => (await argsOf(runId)).split('-p\n').at(-1)!.replace(/\n$/, '');
+    const freshPrompt = async (runId: string) =>
+      (await argsOf(runId)).split('-p\n').at(-1)!.replace(/\n$/, '');
 
     it('an empty Resume of a held run gets the handoff context, then the hold prompt', async () => {
-      seedRun({ id: 'g1', agent: 'gemini', ...worktree('g1', { 'new.js': 'x\n' }), hold: { type: 'completion_missing', payload: {} } });
+      seedRun({
+        id: 'g1',
+        agent: 'gemini',
+        ...worktree('g1', { 'new.js': 'x\n' }),
+        hold: { type: 'completion_missing', payload: {} },
+      });
       const expected = await t.recovery.holdPrompt('g1');
       expect((await post('/api/runs/g1/resume', {})).statusCode).toBe(200);
       const prompt = await freshPrompt('g1');
@@ -653,17 +774,31 @@ describe('delivering a recovery prompt', () => {
     });
 
     it('a finished run from before the headless check is not resumed in Accept edits, and keeps its result', async () => {
-      seedRun({ id: 'g4', agent: 'gemini', permissionMode: 'acceptEdits', ...worktree('g4', { 'new.js': 'x\n' }), hold: null });
+      seedRun({
+        id: 'g4',
+        agent: 'gemini',
+        permissionMode: 'acceptEdits',
+        ...worktree('g4', { 'new.js': 'x\n' }),
+        hold: null,
+      });
       const res = await post('/api/runs/g4/resume', { text: 'more' });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
-      expect(res.json().message).toContain('Gemini runs without a terminal to answer in, so in Accept edits mode');
+      expect(res.json().message).toContain(
+        'Gemini runs without a terminal to answer in, so in Accept edits mode',
+      );
       expect(t.runs.getRun('g4').state).toBe('done');
       expect(existsSync(path.join(t.dir, 'args-g4'))).toBe(false);
     });
 
     it('a held headless run in Accept edits is refused before anything is handed off', async () => {
-      seedRun({ id: 'g5', agent: 'gemini', permissionMode: 'acceptEdits', ...worktree('g5', { 'n.js': 'x\n' }), stops: [legacyStop, exitNoted] });
+      seedRun({
+        id: 'g5',
+        agent: 'gemini',
+        permissionMode: 'acceptEdits',
+        ...worktree('g5', { 'n.js': 'x\n' }),
+        stops: [legacyStop, exitNoted],
+      });
       const res = await post('/api/runs/g5/recover', { text: 'go on' });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
@@ -674,7 +809,9 @@ describe('delivering a recovery prompt', () => {
     it("a person's handoff of a run in Accept edits to a headless lane is refused before anything is handed off", async () => {
       seedRun({ id: 'c6', permissionMode: 'acceptEdits', ...worktree('c6', { 'n.js': 'x\n' }), hold: null });
       t.db.update(runs).set({ state: 'failed' }).where(eq(runs.id, 'c6')).run();
-      const res = await post('/api/runs/c6/handoff', { route: { agent: 'gemini', model: 'auto', credential: 'login' } });
+      const res = await post('/api/runs/c6/handoff', {
+        route: { agent: 'gemini', model: 'auto', credential: 'login' },
+      });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
       expect(successorsOf('c6')).toHaveLength(0);
@@ -684,7 +821,12 @@ describe('delivering a recovery prompt', () => {
 
   describe('RunService.handOff of a cancelled run', () => {
     const route = { agent: 'claude', model: 'auto', credential: 'login' } as const;
-    const held = { reason: 'continued after a hold', source: 'user' as const, automatic: false, extraPrompt: 'go on' };
+    const held = {
+      reason: 'continued after a hold',
+      source: 'user' as const,
+      automatic: false,
+      extraPrompt: 'go on',
+    };
 
     it('continues a held run the pipeline alone stopped, only when asked to', async () => {
       const wt = worktree('el-2', { 'new.js': 'x\n' });
@@ -704,7 +846,10 @@ describe('delivering a recovery prompt', () => {
       ];
       for (const seed of cases) {
         seedRun({ ...seed, ...worktree(seed.id, { 'new.js': `${seed.id}\n` }) });
-        await expect(t.runs.handOff(seed.id, route, { ...held, allowSystemFinishedCancel: true }), seed.id).rejects.toMatchObject({
+        await expect(
+          t.runs.handOff(seed.id, route, { ...held, allowSystemFinishedCancel: true }),
+          seed.id,
+        ).rejects.toMatchObject({
           statusCode: 409,
         });
         expect(successorsOf(seed.id), seed.id).toHaveLength(0);
