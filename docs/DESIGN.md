@@ -109,7 +109,7 @@ Ticket columns are `backlog`, `ready`, `in_progress`, `review` and `done`. A tic
 
 - A Monaco diff per run (branch vs. base, staged, unstaged) with stage/unstage per file.
 - Line comments are collected and sent back to the agent as one structured revision prompt.
-- Commit, push and pull requests to GitHub, GitLab or Gitea. Emberline never pushes to the default branch, and forge tokens are only sent to the configured forge host.
+- Commit, push and pull requests to GitHub, GitLab or Gitea. Forge accounts (one per server) hold the tokens, and a token never leaves core: REST calls send it only to its own account's server, and Emberline's own git (run and main pushes, fetches, the import clone) runs in the runner without credentials against a one-time gateway URL in core, which adds the token for that one operation and repository; the runner and agents never get it. Run branches are pushed on request; the default branch is pushed only when a person clicks Push main, or after each merge when the project turns on Keep main pushed, and never with --force.
 - Optional gates before merge: build, lint and test in the runner; a scan for leftover secrets and debug code over everything the branch changed; and a read-only review of the diff by a different provider's CLI.
 - Checkpoints record the main workspace's git history, with rollback and project export.
 

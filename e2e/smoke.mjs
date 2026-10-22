@@ -123,6 +123,28 @@ await step('build gate runs workspace scripts in the runner, not in core', async
   assert.match(build.json.output, /ran-in-runner=true/);
 });
 
+await step('repository: a forge account creates the repository and main is pushed', async () => {
+  const added = await api('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'http://forge:3000', token: 'e2e-forge-token', allowHttp: true });
+  assert.equal(added.status, 201, added.text);
+  assert.equal(added.json.username, 'e2e');
+  assert.ok(!added.text.includes('e2e-forge-token'), 'the token never comes back');
+  const owners = await api('GET', `/api/forge/accounts/${added.json.id}/owners`);
+  assert.equal(owners.json.owners[0].id, 'e2e');
+  const created = await api('POST', `/api/projects/${project.id}/repository/create`, { accountId: added.json.id, owner: 'e2e', name: 'smoke', private: true });
+  assert.equal(created.status, 200, created.text);
+  assert.equal(created.json.originUrl, 'http://forge:3000/e2e/smoke.git');
+  assert.equal(created.json.mainState, 'unpublished');
+  const pushed = await api('POST', `/api/projects/${project.id}/repository/push-main`);
+  assert.equal(pushed.status, 200, pushed.text);
+  assert.equal(pushed.json.mainState, 'up_to_date');
+  const refreshed = await api('POST', `/api/projects/${project.id}/repository/refresh`);
+  assert.equal(refreshed.status, 200, refreshed.text);
+  assert.equal(refreshed.json.mainState, 'up_to_date');
+  assert.ok(!`${created.text}${pushed.text}${refreshed.text}`.includes('e2e-forge-token'), 'the token never comes back');
+  const head = await (await fetch('http://forge:3000/_e2e/head/e2e/smoke')).json();
+  assert.match(head.main ?? '', /^[0-9a-f]{40}$/);
+});
+
 await step('demo is served sandboxed through a capability URL', async () => {
   const entry = await api('GET', `/api/projects/${project.id}/demo/main/`);
   assert.equal(entry.status, 302);

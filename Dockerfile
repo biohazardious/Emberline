@@ -114,7 +114,9 @@ ENV EMBERLINE_TOOLS_DIR=/opt/ai-tools \
 # ---------------------------------------------------------------------------
 FROM ubuntu_node AS core
 # Core holds the database, tokens and API keys and executes nothing from a workspace: git, builds,
-# tests and agent CLIs all run in the runner via ptyd (apps/core/src/command-exec.ts). So the image
+# tests and agent CLIs all run in the runner via ptyd (apps/core/src/command-exec.ts).
+# With a forge account the runner's git goes through core's git gateway (/api/internal/git/), which only adds the
+# token and streams the data; core still runs no git and parses no git objects. So the image
 # carries no git, ssh, compilers or language toolchains, and nothing from /opt/ai-tools is on PATH.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
