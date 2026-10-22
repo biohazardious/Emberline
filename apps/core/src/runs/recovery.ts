@@ -1,4 +1,4 @@
-import { holdLabelOf, type RecoverySuggestion, type RunRecovery } from '@emberline/protocol';
+import { holdLabelOf, type RecoverySuggestion, type RunRecovery, worktreeCheckOf } from '@emberline/protocol';
 import type { MergeProbeResult } from '../factory/merge-probe.js';
 import { conflictResolutionPrompt } from '../factory/merge.js';
 
@@ -224,9 +224,9 @@ export const WORKTREE_COMMANDS_PROMPT =
 /** The worktree config checks hold as a `build_gate_failed` note; null for an ordinary failed build. */
 function worktreeConfig(input: RecoveryInput): { why: string; suggestions: RecoverySuggestion[] } | null {
   const payload = input.hold.payload;
-  const label = holdLabelOf('build_gate_failed', payload);
-  const commands = label === 'Worktree commands are missing';
-  if (!commands && label !== 'Worktree config is not valid') return null;
+  const check = worktreeCheckOf('build_gate_failed', payload);
+  if (!check) return null;
+  const commands = check === 'worktree_commands';
   const output = text(payload, 'output') ?? '';
   const errorText = output.replace(/^\.emberline\/worktree\.yml is not valid:\n?/, '').trim();
   const first =

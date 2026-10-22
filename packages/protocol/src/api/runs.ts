@@ -597,20 +597,27 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   no_changes: 'Finished without changes',
 };
 
+/** Which worktree check a `build_gate_failed` note is about; null for an ordinary failed build and other notes. */
+export function worktreeCheckOf(type: string, payload: unknown): 'worktree_yml' | 'worktree_commands' | null {
+  if (type !== 'build_gate_failed') return null;
+  const p = (payload ?? null) as { check?: unknown; output?: unknown } | null;
+  if (
+    p?.check === 'worktree_yml' ||
+    (p?.check === undefined &&
+      typeof p?.output === 'string' &&
+      p.output.startsWith('.emberline/worktree.yml is not valid:'))
+  ) {
+    return 'worktree_yml';
+  }
+  if (p?.check === 'worktree_commands') return 'worktree_commands';
+  return null;
+}
+
 /** A hold's label: the worktree config checks (both are `build_gate_failed` notes) have their own; every other hold uses HOLD_LABELS. */
 export function holdLabelOf(type: string, payload: unknown): string {
-  if (type === 'build_gate_failed') {
-    const p = (payload ?? null) as { check?: unknown; output?: unknown } | null;
-    if (
-      p?.check === 'worktree_yml' ||
-      (p?.check === undefined &&
-        typeof p?.output === 'string' &&
-        p.output.startsWith('.emberline/worktree.yml is not valid:'))
-    ) {
-      return 'Worktree config is not valid';
-    }
-    if (p?.check === 'worktree_commands') return 'Worktree commands are missing';
-  }
+  const check = worktreeCheckOf(type, payload);
+  if (check === 'worktree_yml') return 'Worktree config is not valid';
+  if (check === 'worktree_commands') return 'Worktree commands are missing';
   return HOLD_LABELS[type] ?? 'Held for review';
 }
 

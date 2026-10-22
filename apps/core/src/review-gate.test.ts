@@ -677,3 +677,18 @@ describe('a headless run in Accept edits', () => {
     expect((chosen.json() as { run: Run }).run.permissionMode).toBe('auto');
   });
 });
+
+describe('request changes', () => {
+  it('a mode for the same run is a 400 and sends nothing', async () => {
+    const { run } = await factoryTicket();
+    for (const body of [{ permissionMode: 'auto' }, { target: 'same', permissionMode: 'auto' }]) {
+      const res = await api('POST', `/api/runs/${run.id}/review/request-changes`, body);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({
+        error: 'bad_request',
+        message: 'a mode can be chosen only for a new run',
+      });
+    }
+    expect(followups(run)).toEqual([]);
+  });
+});

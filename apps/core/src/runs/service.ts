@@ -585,7 +585,8 @@ export const CONNECT_FOR_ACCOUNT =
  */
 export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
-  private reconciling = false;
+  /** The reconcile pass running now; resolves (never rejects) when it ends. */
+  private reconcilePass: Promise<void> | null = null;
   private lastAutoGcAt = 0;
   private lastEventPruneAt = 0;
   /** Auto-GC's last verdict on a kept worktree, by run id: the HEAD it saw and when. */
@@ -2323,12 +2324,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /**
+   * A pass that sees the present: one already running may have listed the sessions before the exit
+   * that matters, so it is waited out first. A pass someone started meanwhile also began after it.
+   */
+  private async reconcileNow(): Promise<void> {
+    if (this.reconcilePass) await this.reconcilePass;
+    if (this.reconcilePass) return this.reconcilePass;
+    await this.reconcile();
+  }
+
+  /**
    * The run, re-read after a reconcile when its CLI is a one-shot one whose session is still open: it
    * may have finished its turn and be about to exit. Once its exit is noted, a prompt respawns it.
    */
   private async afterOneShotExit(row: RunRow): Promise<RunRow> {
     if (!row.ptydSessionId || row.endedAt || !this.exitsAfterTurn(row)) return row;
-    await this.reconcile();
+    await this.reconcileNow();
     return this.row(row.id);
   }
 
@@ -4011,8 +4022,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
   async reconcile(): Promise<void> {
-    if (this.reconciling || this.ptyd.status !== 'connected') return;
-    this.reconciling = true;
+    if (this.reconcilePass || this.ptyd.status !== 'connected') return;
+    let done!: () => void;
+    this.reconcilePass = new Promise<void>((resolve) => (done = resolve));
     try {
       if (Date.now() - this.lastEventPruneAt > EVENT_PRUNE_INTERVAL_MS) {
         this.lastEventPruneAt = Date.now();
@@ -4259,7 +4271,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     } catch {
       // ptyd went away mid-call; next tick retries.
     } finally {
-      this.reconciling = false;
+      this.reconcilePass = null;
+      done();
     }
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROVIDER_REGISTRY } from './runs.js';
+import { holdLabelOf, PROVIDER_REGISTRY, worktreeCheckOf } from './runs.js';
 
 describe('PROVIDER_REGISTRY terms', () => {
   it('every provider carries a dated terms note with an https link and a risk level', () => {
@@ -12,5 +12,25 @@ describe('PROVIDER_REGISTRY terms', () => {
       expect(['low', 'medium', 'high'], entry.id).toContain(terms.risk);
       expect(terms.summary.length, entry.id).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('worktreeCheckOf', () => {
+  it('tells the worktree checks apart by their check field, and older notes by their output', () => {
+    expect(worktreeCheckOf('build_gate_failed', { check: 'worktree_yml' })).toBe('worktree_yml');
+    expect(worktreeCheckOf('build_gate_failed', { check: 'worktree_commands' })).toBe('worktree_commands');
+    expect(worktreeCheckOf('build_gate_failed', { output: '.emberline/worktree.yml is not valid:\nx' })).toBe(
+      'worktree_yml',
+    );
+    expect(worktreeCheckOf('build_gate_failed', { check: 'build', output: 'tsc failed' })).toBeNull();
+    expect(worktreeCheckOf('merge_conflict', { check: 'worktree_yml' })).toBeNull();
+    expect(worktreeCheckOf('build_gate_failed', null)).toBeNull();
+  });
+
+  it('the labels follow the check', () => {
+    expect(holdLabelOf('build_gate_failed', { check: 'worktree_yml' })).toBe('Worktree config is not valid');
+    expect(holdLabelOf('build_gate_failed', { check: 'worktree_commands' })).toBe(
+      'Worktree commands are missing',
+    );
   });
 });

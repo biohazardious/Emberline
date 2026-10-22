@@ -1268,6 +1268,53 @@ describe('runs', () => {
         delete process.env.EMBERLINE_GEMINI_COMMAND;
       }
     });
+
+    it('the same prompt respawns it while a reconcile pass is running', async () => {
+      process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+      try {
+        const project = await createProject('One-shot during a pass', true);
+        const now = new Date();
+        t.db
+          .insert(runs)
+          .values({
+            id: 'gem-3',
+            projectId: project.id,
+            agent: 'gemini',
+            permissionMode: 'auto',
+            state: 'done',
+            prompt: 'do it',
+            worktreePath: project.path,
+            hookTokenHash: 'h',
+            agentSessionId: 'gemini-gem-3',
+            ptydSessionId: 'pty-gone-3',
+            stateChangedAt: now,
+            createdAt: now,
+            endedAt: null,
+          })
+          .run();
+        // A pass that is still listing the sessions when the prompt arrives.
+        const client = t.ptyd.get();
+        const list = client.list.bind(client);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        let calls = 0;
+        vi.spyOn(client, 'list').mockImplementation(async (...args: Parameters<typeof list>) => {
+          calls += 1;
+          if (calls === 1) await gate;
+          return list(...args);
+        });
+        const pass = t.runs.reconcile();
+        const prompting = t.runs.prompt('gem-3', 'fix', { automatic: true });
+        setTimeout(release, 50);
+        const run = await prompting;
+        await pass;
+        expect(run).toMatchObject({ state: 'starting', endedAt: null });
+        expect(t.runs.get('gem-3').events.map((e) => e.type)).toContain('respawning');
+        await tokenFor('gem-3');
+      } finally {
+        delete process.env.EMBERLINE_GEMINI_COMMAND;
+      }
+    });
   });
 
   describe('idle close and the completion pipeline', () => {
