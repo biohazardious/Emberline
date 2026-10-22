@@ -1,4 +1,5 @@
 import type { ContainerPreviewOptionsResponse, ContainerPreviewService } from '@emberline/protocol';
+import type { FlagStorage } from './projectScope';
 
 export const CONTAINER_PREVIEW_TITLE = 'Container preview';
 export const USE_CONTAINER_PREVIEW_LABEL = 'Use container preview';
@@ -64,4 +65,52 @@ export function declaredPortsLine(service: string, ports: readonly number[]): st
 
 export function containerPreviewSettingsHref(projectId: string): string {
   return `/projects/${projectId}/settings#${CONTAINER_PREVIEW_ANCHOR}`;
+}
+
+function defaultStorage(): FlagStorage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function containerPreviewHintKey(projectId: string): string {
+  return `emberline.containerPreviewHint.dismissed.${projectId}`;
+}
+
+export function readHintDismissed(projectId: string, storage: FlagStorage | null = defaultStorage()): boolean {
+  try {
+    return storage?.getItem(containerPreviewHintKey(projectId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** A storage failure is ignored: the hint stays dismissed for this visit (component state). */
+export function writeHintDismissed(projectId: string, storage: FlagStorage | null = defaultStorage()): void {
+  try {
+    storage?.setItem(containerPreviewHintKey(projectId), '1');
+  } catch {
+    // Storage unavailable.
+  }
+}
+
+/**
+ * Spec section 3: the approved preview is a command, the box is offered (HEAD has a compose file),
+ * not dismissed, and not a run already previewing a container. Main's status is always
+ * `kind: 'compose'`, so only a run's kind counts.
+ */
+export function containerPreviewHintShown(
+  o: ContainerPreviewOptionsResponse | undefined,
+  target: { kind: string },
+  preview: { kind: 'command' | 'compose' } | undefined,
+  dismissed: boolean,
+): boolean {
+  if (dismissed || !o?.file || !o.commandPreview) return false;
+  return target.kind === 'main' || preview?.kind !== 'compose';
+}
+
+export function containerPreviewHint(file: string): { text: string; link: string } {
+  return { text: `This project has ${file}.`, link: 'Preview it in a container instead' };
 }

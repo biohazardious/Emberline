@@ -5917,3 +5917,6 @@ dialog.cmd-dialog::backdrop {
   gap: 8px;
   max-width: 520px;
 }
+.container-preview-suggest {
+  margin: 0 0 8px;
+}

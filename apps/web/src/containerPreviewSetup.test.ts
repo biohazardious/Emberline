@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   choiceForService,
   containerPreviewBoxShown,
+  containerPreviewHint,
+  containerPreviewHintKey,
+  containerPreviewHintShown,
   containerPreviewIntro,
   containerPreviewSaveEnabled,
   containerPreviewSettingsHref,
@@ -9,6 +12,8 @@ import {
   defaultContainerPreviewChoice,
   parsePort,
   portProblem,
+  readHintDismissed,
+  writeHintDismissed,
 } from './containerPreviewSetup';
 
 const off = { available: false, reason: 'x', file: null, services: [], commandPreview: true };
@@ -100,5 +105,72 @@ describe('portProblem', () => {
     expect(portProblem('8080')).toBeNull();
     for (const bad of ['', '0', '65536', '80.5', 'abc'])
       expect(portProblem(bad)).toBe('Enter a port from 1 to 65535.');
+  });
+});
+
+describe('the Preview & Build hint', () => {
+  const offer = {
+    available: true,
+    reason: null,
+    file: 'compose.yaml' as const,
+    services: [{ name: 'web', ports: [8080] }],
+    commandPreview: true,
+  };
+  const main = { kind: 'main' };
+  const run = { kind: 'run' };
+
+  it('shows for a command preview while the box is offered', () => {
+    expect(containerPreviewHintShown(offer, main, { kind: 'compose' }, false)).toBe(true); // main's status is always kind compose
+    expect(containerPreviewHintShown(offer, run, { kind: 'command' }, false)).toBe(true);
+    expect(containerPreviewHintShown({ ...offer, available: false, reason: 'x' }, run, { kind: 'command' }, false)).toBe(true);
+  });
+  it('hides when dismissed, without a box, without a command preview, or for a run already on a compose preview', () => {
+    expect(containerPreviewHintShown(offer, run, { kind: 'command' }, true)).toBe(false);
+    expect(containerPreviewHintShown({ ...offer, file: null }, run, { kind: 'command' }, false)).toBe(false);
+    expect(containerPreviewHintShown({ ...offer, commandPreview: false }, run, { kind: 'command' }, false)).toBe(false);
+    expect(containerPreviewHintShown(offer, run, { kind: 'compose' }, false)).toBe(false);
+    expect(containerPreviewHintShown(undefined, run, { kind: 'command' }, false)).toBe(false);
+  });
+  it('is the spec line', () => {
+    expect(containerPreviewHint('compose.yaml')).toEqual({
+      text: 'This project has compose.yaml.',
+      link: 'Preview it in a container instead',
+    });
+  });
+});
+
+describe('hint dismissal storage (Review Focus 5)', () => {
+  const memory = () => {
+    const m = new Map<string, string>();
+    return {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+      removeItem: (k: string) => void m.delete(k),
+    };
+  };
+  const throwing = {
+    getItem: () => {
+      throw new Error('blocked');
+    },
+    setItem: () => {
+      throw new Error('blocked');
+    },
+    removeItem: () => {
+      throw new Error('blocked');
+    },
+  };
+  it('is per project', () => {
+    const s = memory();
+    writeHintDismissed('a', s);
+    expect(readHintDismissed('a', s)).toBe(true);
+    expect(readHintDismissed('b', s)).toBe(false);
+    expect(s.getItem(containerPreviewHintKey('a'))).toBe('1');
+    expect(containerPreviewHintKey('a')).toBe('emberline.containerPreviewHint.dismissed.a');
+  });
+  it('never throws without storage', () => {
+    expect(readHintDismissed('a', throwing)).toBe(false);
+    expect(() => writeHintDismissed('a', throwing)).not.toThrow();
+    expect(readHintDismissed('a', null)).toBe(false);
+    expect(() => writeHintDismissed('a', null)).not.toThrow();
   });
 });

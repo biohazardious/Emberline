@@ -1,5 +1,11 @@
-import type { MainPreviewStatus, Project, RunPreviewStatus, WorkspaceDemoTarget } from '@emberline/protocol';
-import { type ReactNode, useState } from 'react';
+import type {
+  ContainerPreviewOptionsResponse,
+  MainPreviewStatus,
+  Project,   RunPreviewStatus,
+  WorkspaceDemoTarget,
+} from '@emberline/protocol';
+import { type ReactNode, useEffect, useState } from 'react';
+import { Link } from 'wouter';
 import { Box, ExternalLink, Package, Play, RotateCw, Square } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import {
@@ -13,6 +19,13 @@ import {
   previewFrameMode,
   previewProblem,
 } from '../containerPreview';
+import {
+  containerPreviewHint,
+  containerPreviewHintShown,
+  containerPreviewSettingsHref,
+  readHintDismissed,
+  writeHintDismissed,
+} from '../containerPreviewSetup';
 import { useApi } from '../hooks/useApi';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 
@@ -24,6 +37,40 @@ const CREDENTIALLESS = { credentialless: 'true' } as Record<string, string>;
 /** Where a target's container preview is read, started and stopped. */
 export function previewApiPath(projectId: string, target: Pick<WorkspaceDemoTarget, 'id' | 'kind'>): string {
   return target.kind === 'main' ? `/api/projects/${projectId}/preview` : `/api/runs/${target.id}/preview`;
+}
+
+/** One line pointing a command preview to Project settings, Container preview (spec section 3). */
+function ContainerPreviewHint({
+  projectId,
+  target,
+  preview,
+}: {
+  projectId: string;
+  target: WorkspaceDemoTarget;
+  preview: PreviewStatus | undefined;
+}) {
+  const options = useApi<ContainerPreviewOptionsResponse>(`/api/projects/${projectId}/container-preview`, 60_000);
+  const [dismissed, setDismissed] = useState(() => readHintDismissed(projectId));
+  useEffect(() => setDismissed(readHintDismissed(projectId)), [projectId]);
+  const file = options.data?.file;
+  if (!file || !containerPreviewHintShown(options.data, target, preview, dismissed)) return null;
+  const hint = containerPreviewHint(file);
+  return (
+    <p className="muted small container-preview-suggest" role="note">
+      {hint.text} <Link href={containerPreviewSettingsHref(projectId)}>{hint.link}</Link>{' '}
+      <button
+        type="button"
+        className="link-btn"
+        aria-label="Dismiss this hint"
+        onClick={() => {
+          writeHintDismissed(projectId);
+          setDismissed(true);
+        }}
+      >
+        Dismiss
+      </button>
+    </p>
+  );
 }
 
 /**
@@ -53,6 +100,7 @@ export function PreviewAndBuildView({
   const poll = useApi<PreviewStatus>(path, (data) => (data?.status === 'starting' ? 2_000 : 8_000));
   const [showStatic, setShowStatic] = useState(false);
   const primary = choosePrimaryView(target, poll.data, engineAvailable);
+  const hint = <ContainerPreviewHint projectId={project.id} target={target} preview={poll.data} />;
 
   if (primary === null && !poll.error) {
     return (
@@ -61,10 +109,16 @@ export function PreviewAndBuildView({
       </p>
     );
   }
-  if (primary !== 'container' || !poll.data) return <>{children}</>;
+  if (primary !== 'container' || !poll.data) return (
+      <>
+        {hint}
+        {children}
+      </>
+    );
 
   return (
     <div className="preview-build">
+      {hint}
       <div className="preview-build-switch">
         <div className="segmented" role="tablist" aria-label="Preview view">
           <button
