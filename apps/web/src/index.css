@@ -4917,6 +4917,31 @@ dialog.cmd-dialog::backdrop {
   }
 }
 
+/* --- settings: forge accounts ---------------------------------------------------- */
+.forge-account-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.forge-account-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.forge-account-row .mono {
+  overflow-wrap: anywhere;
+}
+
 /* --- project settings: gates and the worktree.yml review ----------------------- */
 .gate-list {
   display: grid;

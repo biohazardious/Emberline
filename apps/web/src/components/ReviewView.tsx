@@ -40,6 +40,7 @@ import {
   requestTargets,
   viewedState,
 } from '../reviewComments';
+import { FORGE_ACCOUNTS_HREF } from '../forgeAccounts';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { MonacoDiff } from './MonacoDiff';
 import { CommentChip, commentChipId } from './review/CommentChip';
@@ -1128,7 +1129,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
           </div>
           {!forgeStatus?.tokenConfigured && (
             <span className="muted small">
-              Configure a Forge Personal Access Token on the Overview page (or use Compare ↗).
+              Add a forge account for this repository&apos;s server in{' '}
+              <Link href={FORGE_ACCOUNTS_HREF}>Settings → Forge accounts</Link> (or use Compare ↗).
             </span>
           )}
         </form>

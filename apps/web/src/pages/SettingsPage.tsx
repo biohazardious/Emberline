@@ -68,6 +68,7 @@ import { useApi } from '../hooks/useApi';
 import { clampQuotaGb } from '../buildOutputs';
 import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { AccountPanel } from '../components/AccountPanel';
+import { ForgeAccountsPanel } from '../components/ForgeAccountsPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
@@ -1569,7 +1570,12 @@ export function SettingsPage({
       )}
 
       {activeTab === 'quota' && <QuotaPanel />}
-      {activeTab === 'notifications' && <NotificationsPanel />}
+      {activeTab === 'notifications' && (
+        <>
+          <ForgeAccountsPanel />
+          <NotificationsPanel />
+        </>
+      )}
       {activeTab === 'updates' && <UpdatesPanel />}
       {activeTab === 'account' && <AccountPanel />}
     </div>
