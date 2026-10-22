@@ -12,10 +12,10 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDb } from '../db/index.js';
+import { getSetting, openDb } from '../db/index.js';
 import { getProviderEnvFromSettings } from '../factory/settings.js';
 import { listAccountRecords } from '../forge/account-store.js';
-import { installedSecretsKey, installSecretsKey, SecretsKeyError } from './box.js';
+import { installedSecretsKey, installSecretsKey, SecretsKeyError, sealWith } from './box.js';
 import { encryptStoredSecrets, startSecrets } from './startup.js';
 
 const testKey = installedSecretsKey();
@@ -212,6 +212,135 @@ describe('secrets at start', () => {
       .prepare('insert into settings(key, value) values (?, ?)')
       .run('ui.note', JSON.stringify('enc:v1:hello'));
     expect(startSecrets(o.db, { env: {}, dataDir: dir }).source).toBe('created');
+    o.close();
+  });
+});
+
+describe('EMBERLINE_FORGET_SECRETS=1 (a database restored without its key)', () => {
+  /** Two settings and an account sealed with `lost`, the notification token sealed with `kept`. */
+  const restored = (dir: string, lost: Buffer, kept: Buffer) => {
+    const o = openDb(path.join(dir, 'emberline.db'));
+    const put = o.db.$client.prepare('insert into settings(key, value) values (?, ?)');
+    put.run(
+      'updates.config',
+      JSON.stringify({ autoCheck: true, githubToken: sealWith(lost, 'ghp_CANARY10') }),
+    );
+    put.run('demo.tokenSecret', JSON.stringify(sealWith(lost, 'ef'.repeat(32))));
+    put.run(
+      'factory.providerKeys',
+      JSON.stringify({
+        anthropicApiKey: sealWith(lost, 'sk-ant-CANARY13'),
+        openaiApiKey: sealWith(kept, 'sk-CANARY14'),
+      }),
+    );
+    put.run(
+      'notifications.config',
+      JSON.stringify({
+        enabled: true,
+        provider: 'ntfy',
+        url: 'https://ntfy.sh/x',
+        token: sealWith(kept, 'CANARY11'),
+      }),
+    );
+    o.db.$client
+      .prepare(
+        `insert into forge_accounts (id, provider, server_url, api_url, username, token, created_at, updated_at)
+      values ('a','github','https://github.com','https://api.github.com',null,?,0,0)`,
+      )
+      .run(sealWith(lost, 'CANARY12'));
+    return o;
+  };
+  const envWith = (key: Buffer, forget = true): NodeJS.ProcessEnv => ({
+    EMBERLINE_SECRETS_KEY: key.toString('base64'),
+    ...(forget ? { EMBERLINE_FORGET_SECRETS: '1' } : {}),
+  });
+  const rows = (o: ReturnType<typeof openDb>) =>
+    JSON.stringify([
+      o.db.$client.prepare('select * from settings order by key').all(),
+      o.db.$client.prepare('select token from forge_accounts').all(),
+    ]);
+
+  it('without it, a key that cannot read them still stops start and changes nothing', () => {
+    const dir = tempDir();
+    const o = restored(dir, randomBytes(32), randomBytes(32));
+    const before = rows(o);
+    expect(() => startSecrets(o.db, { env: envWith(randomBytes(32), false), dataDir: dir })).toThrow(
+      SecretsKeyError,
+    );
+    expect(rows(o)).toBe(before);
+    o.close();
+  });
+
+  it('clears only what the key cannot read, snapshots first, and names places, never values', () => {
+    const dir = tempDir();
+    const lost = randomBytes(32);
+    const kept = randomBytes(32);
+    const o = restored(dir, lost, kept);
+    const result = startSecrets(o.db, { env: envWith(kept), dataDir: dir });
+    expect(result.forget.requested).toBe(true);
+    expect([...result.forget.cleared].sort()).toEqual([
+      'forge account https://github.com',
+      'settings demo.tokenSecret',
+      'settings factory.providerKeys',
+      'settings updates.config',
+    ]);
+    expect(JSON.stringify(result.forget)).not.toMatch(/CANARY|enc:v1:/);
+    expect(result.forget.snapshot).toMatch(/emberline\.db\.pre-forget-secrets-\d+\.bak$/);
+    expect(existsSync(result.forget.snapshot!)).toBe(true);
+    // A half-readable setting keeps its readable field; the readable setting stays as it was.
+    expect(getSetting(o.db, 'factory.providerKeys')).toEqual({
+      anthropicApiKey: '',
+      openaiApiKey: 'sk-CANARY14',
+    });
+    expect(getSetting(o.db, 'notifications.config')).toMatchObject({ token: 'CANARY11' });
+    expect(getSetting(o.db, 'updates.config')).toMatchObject({ githubToken: '' });
+    expect(getSetting(o.db, 'demo.tokenSecret')).toBe('');
+    expect(listAccountRecords(o.db, {})[0]!.token).toBe('');
+    // The next start, without the variable, opens everything.
+    expect(startSecrets(o.db, { env: envWith(kept, false), dataDir: dir }).forget).toEqual({
+      requested: false,
+      cleared: [],
+      snapshot: null,
+    });
+    o.close();
+  });
+
+  it('with every secret readable it clears nothing and takes no snapshot', () => {
+    const dir = tempDir();
+    const kept = randomBytes(32);
+    const o = restored(dir, kept, kept);
+    const before = rows(o);
+    expect(startSecrets(o.db, { env: envWith(kept), dataDir: dir }).forget).toEqual({
+      requested: true,
+      cleared: [],
+      snapshot: null,
+    });
+    expect(rows(o)).toBe(before);
+    o.close();
+  });
+
+  it('a missing key file is created as on a first start, and what the lost key sealed is cleared', () => {
+    const dir = tempDir();
+    const lost = randomBytes(32);
+    const o = restored(dir, lost, lost);
+    const result = startSecrets(o.db, { env: { EMBERLINE_FORGET_SECRETS: '1' }, dataDir: dir });
+    expect(result.source).toBe('created');
+    expect(result.forget.cleared).toHaveLength(5);
+    expect(startSecrets(o.db, { env: {}, dataDir: dir }).source).toBe('file');
+    o.close();
+  });
+
+  it('never masks a malformed EMBERLINE_SECRETS_KEY: start still stops and nothing is cleared', () => {
+    const dir = tempDir();
+    const o = restored(dir, randomBytes(32), randomBytes(32));
+    const before = rows(o);
+    expect(() =>
+      startSecrets(o.db, {
+        env: { EMBERLINE_SECRETS_KEY: 'not-a-key', EMBERLINE_FORGET_SECRETS: '1' },
+        dataDir: dir,
+      }),
+    ).toThrow(SecretsKeyError);
+    expect(rows(o)).toBe(before);
     o.close();
   });
 });

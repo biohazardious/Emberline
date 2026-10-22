@@ -4,6 +4,14 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- `EMBERLINE_FORGET_SECRETS=1`: for a database restored without its secrets key. Core clears the stored secrets the current key cannot read instead of refusing to start, keeps a snapshot of the database first (`emberline.db.pre-forget-secrets-*.bak`) and logs which secrets it cleared, never their values. Enter them again, then remove the variable.
+
+### Fixed
+
+- The first start creates `/data/secrets.key` on volumes without hard links, such as SMB/CIFS mounts.
+
 ## [0.5.0] - 2026-10-22
 
 ### Added

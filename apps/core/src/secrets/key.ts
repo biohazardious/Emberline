@@ -9,6 +9,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeSync,
@@ -35,28 +36,67 @@ function fsyncPath(target: string, flags: string): void {
   }
 }
 
+/** `link` errors that mean the volume has no hard links (SMB/CIFS, some FUSE mounts). */
+const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'ENOSYS']);
+/** Directory fsync errors from such volumes; the key file itself is synced already. */
+const NO_DIRECTORY_FSYNC = new Set(['EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EISDIR']);
+
+/** The filesystem calls {@link createKeyFile} publishes a key with; tests replace them. */
+export interface KeyFileOps {
+  link(from: string, to: string): void;
+  rename(from: string, to: string): void;
+  exists(file: string): boolean;
+  fsyncDir(dir: string): void;
+}
+
+export const NODE_KEY_FILE_OPS: KeyFileOps = {
+  link: linkSync,
+  rename: renameSync,
+  exists: existsSync,
+  fsyncDir: (dir) => fsyncPath(dir, 'r'),
+};
+
 /**
  * Writes a new key durably before anything is sealed with it: a 0600 temp file in the same
  * directory, synced, then hard-linked into place (fails when `file` exists, so a key is never
  * replaced), then the directory synced. A temp file left by a crash is never read as the key.
+ * On a volume without hard links (SMB/CIFS, some FUSE mounts) the synced temp file is renamed into
+ * place once no key exists, then read back; the directory sync is best effort there. Two starts
+ * racing on such a volume can still both pass the check in a narrow window (one core per volume).
  */
-export function createKeyFile(file: string, key: Buffer): void {
+export function createKeyFile(file: string, key: Buffer, ops: KeyFileOps = NODE_KEY_FILE_OPS): void {
   const tmp = `${file}.tmp`;
+  const text = `${key.toString('base64')}\n`;
+  let linked = true;
   rmSync(tmp, { force: true });
   try {
     const fd = openSync(tmp, 'wx', 0o600);
     try {
-      writeSync(fd, `${key.toString('base64')}\n`);
+      writeSync(fd, text);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
     chmodSync(tmp, 0o600); // the mode above is filtered by the umask
-    linkSync(tmp, file);
+    try {
+      ops.link(tmp, file);
+    } catch (error) {
+      if (!NO_HARD_LINKS.has(errorCode(error))) throw error;
+      if (ops.exists(file)) throw Object.assign(new Error(`${file} already exists`), { code: 'EEXIST' });
+      ops.rename(tmp, file);
+      linked = false;
+      if (readFileSync(file, 'utf8') !== text) {
+        throw Object.assign(new Error(`${file} was replaced by another start`), { code: 'EEXIST' });
+      }
+    }
   } finally {
     rmSync(tmp, { force: true });
   }
-  fsyncPath(path.dirname(file), 'r');
+  try {
+    ops.fsyncDir(path.dirname(file));
+  } catch (error) {
+    if (linked || !NO_DIRECTORY_FSYNC.has(errorCode(error))) throw error;
+  }
 }
 
 export function loadSecretsKey(o: { env: NodeJS.ProcessEnv; dataDir: string; allowCreate: boolean }): {

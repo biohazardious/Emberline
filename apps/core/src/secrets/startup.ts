@@ -1,7 +1,8 @@
 /**
  * Start-up pass for secrets at rest: load the key, prove it opens every sealed value, install it,
  * then seal the plaintext values an older version left (one transaction, then a checkpoint and
- * VACUUM so no plaintext page stays in the file). Nothing is written before the key is verified.
+ * VACUUM so no plaintext page stays in the file). Nothing is written before the key is verified, except,
+ * with `EMBERLINE_FORGET_SECRETS=1`, the clearing of values the key cannot open (after a snapshot).
  */
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -23,8 +24,12 @@ function secretSettingRows(sqlite: Sqlite): { key: string; value: string }[] {
     .all(...SECRET_KEYS) as { key: string; value: string }[];
 }
 
-function forgeTokenRows(sqlite: Sqlite): { id: string; token: string }[] {
-  return sqlite.prepare('select id, token from forge_accounts').all() as { id: string; token: string }[];
+function forgeTokenRows(sqlite: Sqlite): { id: string; token: string; server_url: string }[] {
+  return sqlite.prepare('select id, token, server_url from forge_accounts').all() as {
+    id: string;
+    token: string;
+    server_url: string;
+  }[];
 }
 
 /** Maps a settings row's secret strings; null when its stored JSON cannot be read (left alone). */
@@ -66,6 +71,72 @@ export function assertSecretsReadable(sqlite: Sqlite, key: Buffer): void {
     };
   for (const row of secretSettingRows(sqlite)) mapSettingRow(row, open(`settings ${row.key}`));
   for (const row of forgeTokenRows(sqlite)) open('forge_accounts')(row.token);
+}
+
+/** Set to `1` for one start: stored secrets the current key cannot open are cleared instead of refusing to start. */
+export const FORGET_SECRETS_ENV = 'EMBERLINE_FORGET_SECRETS';
+
+const settingPlace = (key: string) => `settings ${key}`;
+const accountPlace = (serverUrl: string) => `forge account ${serverUrl}`;
+
+/** A mapper that leaves readable values alone and notes (or, with `clear`, empties) the others' place. */
+function unreadableMapper(key: Buffer, places: Set<string>, place: string, clear: boolean): Fn {
+  return (s) => {
+    if (!isSealed(s)) return s;
+    try {
+      openWith(key, s);
+      return s;
+    } catch {
+      places.add(place);
+      return clear ? '' : s;
+    }
+  };
+}
+
+/** Where a stored secret cannot be opened with `key` (`settings <key>`, `forge account <server>`); never a value. */
+export function unreadableSecrets(sqlite: Sqlite, key: Buffer): string[] {
+  const places = new Set<string>();
+  for (const row of secretSettingRows(sqlite)) {
+    mapSettingRow(row, unreadableMapper(key, places, settingPlace(row.key), false));
+  }
+  for (const row of forgeTokenRows(sqlite)) {
+    unreadableMapper(key, places, accountPlace(row.server_url), false)(row.token);
+  }
+  return [...places];
+}
+
+/**
+ * Clears every stored secret `key` cannot open, in one transaction: such a setting field becomes
+ * empty (unset: the feature reads as not configured, the demo secret is made again), such a forge
+ * account keeps no token. Readable values, also in the same setting, stay. Returns the places.
+ */
+export function forgetUnreadableSecrets(sqlite: Sqlite, key: Buffer): string[] {
+  const cleared = new Set<string>();
+  sqlite.transaction(() => {
+    const setValue = sqlite.prepare('update settings set value = ? where key = ?');
+    for (const row of secretSettingRows(sqlite)) {
+      const place = settingPlace(row.key);
+      const next = mapSettingRow(row, unreadableMapper(key, cleared, place, true));
+      if (cleared.has(place)) setValue.run(JSON.stringify(next), row.key);
+    }
+    const setToken = sqlite.prepare('update forge_accounts set token = ? where id = ?');
+    for (const row of forgeTokenRows(sqlite)) {
+      const place = accountPlace(row.server_url);
+      unreadableMapper(key, cleared, place, true)(row.token);
+      // Sealed like every token, so the encryption pass below leaves it alone; it opens to "".
+      if (cleared.has(place)) setToken.run(sealWith(key, ''), row.id);
+    }
+  })();
+  return [...cleared];
+}
+
+/** A `VACUUM INTO` snapshot next to the database, like the migration snapshots (db/index.ts); null in memory. */
+function snapshotBeforeForget(sqlite: Sqlite): string | null {
+  const file = sqlite.name;
+  if (!file || file === ':memory:') return null;
+  const target = `${file}.pre-forget-secrets-${Date.now()}.bak`;
+  sqlite.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`);
+  return target;
 }
 
 /**
@@ -152,11 +223,23 @@ export function startSecrets(
   encrypted: number;
   cleanedRepoUrls: number;
   plaintextSnapshots: string[];
+  forget: { requested: boolean; cleared: string[]; snapshot: string | null };
 } {
   const startedAt = Date.now();
   const sqlite = db.$client;
-  // A key file is created only for a database that holds no sealed value yet.
-  const loaded = loadSecretsKey({ env: o.env, dataDir: o.dataDir, allowCreate: !hasSealedSecrets(sqlite) });
+  const requested = o.env[FORGET_SECRETS_ENV]?.trim() === '1';
+  // A key file is created only for a database that holds no sealed value yet, or when the person
+  // asked to forget what a lost key sealed (as on a first start).
+  const loaded = loadSecretsKey({
+    env: o.env,
+    dataDir: o.dataDir,
+    allowCreate: requested || !hasSealedSecrets(sqlite),
+  });
+  const forget = { requested, cleared: [] as string[], snapshot: null as string | null };
+  if (requested && unreadableSecrets(sqlite, loaded.key).length > 0) {
+    forget.snapshot = snapshotBeforeForget(sqlite);
+    forget.cleared = forgetUnreadableSecrets(sqlite, loaded.key);
+  }
   assertSecretsReadable(sqlite, loaded.key);
   installSecretsKey(loaded.key);
   // Only after the key is durably on disk (key.ts) and proven: from here on data is written.
@@ -167,5 +250,6 @@ export function startSecrets(
     encrypted,
     cleanedRepoUrls,
     plaintextSnapshots: encrypted + cleanedRepoUrls > 0 ? plaintextSnapshots(o.dataDir, startedAt) : [],
+    forget,
   };
 }

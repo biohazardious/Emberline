@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SecretsKeyError } from './box.js';
-import { createKeyFile, loadSecretsKey } from './key.js';
+import { createKeyFile, type KeyFileOps, loadSecretsKey, NODE_KEY_FILE_OPS } from './key.js';
 
 let dir: string;
 beforeEach(() => {
@@ -84,7 +84,7 @@ describe('loadSecretsKey', () => {
     const error = thrown(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true }));
     expect(error).toBeInstanceOf(SecretsKeyError);
     expect((error as Error).message).toBe(
-      "Emberline can't read its stored secrets: the secrets key changed or is missing.",
+      "Emberline can't read its stored secrets: the secrets key changed or is missing. If the key is lost, start once with EMBERLINE_FORGET_SECRETS=1 to clear the secrets it cannot read.",
     );
     expect((error as SecretsKeyError).detail).toContain(keyFile());
     expect((error as SecretsKeyError).detail).not.toContain(bad);
@@ -122,5 +122,92 @@ describe('loadSecretsKey', () => {
     const error = thrown(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true }));
     expect(error).toBeInstanceOf(SecretsKeyError);
     expect((error as SecretsKeyError).detail).toContain(keyFile());
+  });
+});
+
+const errno = (code: string) => Object.assign(new Error(code), { code });
+/** A volume without hard links (SMB/CIFS, some FUSE mounts): `link` fails with EPERM; calls are recorded. */
+const noLinks = (over: Partial<KeyFileOps> = {}) => {
+  const calls: string[] = [];
+  const ops: KeyFileOps = {
+    link: () => {
+      calls.push('link');
+      throw errno('EPERM');
+    },
+    exists: (file) => {
+      calls.push('exists');
+      return NODE_KEY_FILE_OPS.exists(file);
+    },
+    rename: (from, to) => {
+      calls.push('rename');
+      NODE_KEY_FILE_OPS.rename(from, to);
+    },
+    fsyncDir: (d) => NODE_KEY_FILE_OPS.fsyncDir(d),
+    ...over,
+  };
+  return { ops, calls };
+};
+
+describe('createKeyFile on a volume without hard links', () => {
+  it('renames the synced temp file into place (0600) after checking that no key exists', () => {
+    const key = randomBytes(32);
+    const { ops, calls } = noLinks();
+    createKeyFile(keyFile(), key, ops);
+    expect(calls).toEqual(['link', 'exists', 'rename']);
+    expect(readFileSync(keyFile(), 'utf8')).toBe(`${key.toString('base64')}\n`);
+    expect(statSync(keyFile()).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual(['secrets.key']);
+  });
+
+  it('takes a refused directory sync as best effort there (the key file itself is synced)', () => {
+    const key = randomBytes(32);
+    const { ops, calls } = noLinks({
+      fsyncDir: () => {
+        throw errno('EINVAL');
+      },
+    });
+    createKeyFile(keyFile(), key, ops);
+    expect(calls).toContain('rename');
+    expect(readFileSync(keyFile(), 'utf8').trim()).toBe(key.toString('base64'));
+  });
+
+  it('never replaces a key file that exists or appeared meanwhile', () => {
+    const existing = `${randomBytes(32).toString('base64')}\n`;
+    writeFileSync(keyFile(), existing, { mode: 0o600 });
+    const { ops, calls } = noLinks();
+    expect(() => createKeyFile(keyFile(), randomBytes(32), ops)).toThrow(/already exists/);
+    expect(calls).toEqual(['link', 'exists']);
+    expect(readFileSync(keyFile(), 'utf8')).toBe(existing);
+    expect(readdirSync(dir)).toEqual(['secrets.key']);
+  });
+
+  it('refuses when another start renamed its own key over this one', () => {
+    const theirs = `${randomBytes(32).toString('base64')}\n`;
+    const { ops } = noLinks({
+      rename: (from, to) => {
+        NODE_KEY_FILE_OPS.rename(from, to);
+        writeFileSync(to, theirs); // the other start's rename lands right after ours
+      },
+    });
+    expect(() => createKeyFile(keyFile(), randomBytes(32), ops)).toThrow(/another start/);
+    expect(readFileSync(keyFile(), 'utf8')).toBe(theirs);
+  });
+
+  it('a link error that is not about hard links, and a refused directory sync after a real link, still fail', () => {
+    const { ops } = noLinks({
+      link: () => {
+        throw errno('EACCES');
+      },
+    });
+    expect(() => createKeyFile(keyFile(), randomBytes(32), ops)).toThrow('EACCES');
+    expect(readdirSync(dir)).toEqual([]);
+    expect(() =>
+      createKeyFile(keyFile(), randomBytes(32), {
+        ...NODE_KEY_FILE_OPS,
+        fsyncDir: () => {
+          throw errno('EINVAL');
+        },
+      }),
+    ).toThrow('EINVAL');
   });
 });

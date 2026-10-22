@@ -9,14 +9,16 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 export const SEALED_PREFIX = 'enc:v1:';
 export const SECRETS_KEY_SENTENCE =
   "Emberline can't read its stored secrets: the secrets key changed or is missing.";
+export const SECRETS_KEY_FORGET_SENTENCE =
+  'If the key is lost, start once with EMBERLINE_FORGET_SECRETS=1 to clear the secrets it cannot read.';
 
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 
-/** The spec sentence as the message; `detail` says which key or place, never a value. */
+/** The spec sentences as the message; `detail` says which key or place, never a value. */
 export class SecretsKeyError extends Error {
   constructor(readonly detail: string) {
-    super(SECRETS_KEY_SENTENCE);
+    super(`${SECRETS_KEY_SENTENCE} ${SECRETS_KEY_FORGET_SENTENCE}`);
     this.name = 'SecretsKeyError';
   }
 }
