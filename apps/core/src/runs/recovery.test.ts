@@ -106,6 +106,49 @@ describe('buildRecovery: merge_failed', () => {
     expect(r.why).toContain('merges cleanly');
   });
 
+  it('a merge that failed without conflicts names git’s reason, not "merges cleanly"', () => {
+    const summary =
+      'git -c core.fsmonitor=false -c core.hooksPath=/dev/null exited with code 128: fatal: .git/index: index file open failed: Permission denied';
+    const r = buildRecovery(input('merge_failed', { summary }, { probe: probe() }));
+    expectWellFormed('merge_failed', r);
+    expect(r.why).toBe('the merge into main failed: .git/index: index file open failed: Permission denied');
+    expect(r.suggestions.map((s) => [s.kind, s.id, s.label])).toEqual([
+      ['merge', 'merge_now', 'Try the merge again'],
+      ['discard', 'discard', 'Discard this work'],
+    ]);
+    expect(r.suggestions[0]!.detail).toContain('uid 1000');
+  });
+
+  it('a refused merge reports the reason inside the merge summary', () => {
+    const summary =
+      'Could not merge EL-6 into the main workspace (error: The following untracked working tree files would be overwritten by merge:); it was left unchanged.';
+    const r = buildRecovery(input('merge_failed', { summary }, { probe: probe() }));
+    expect(r.why).toBe(
+      'the merge into main failed: The following untracked working tree files would be overwritten by merge:',
+    );
+    expect(r.suggestions[0]).toMatchObject({ id: 'merge_now', label: 'Try the merge again' });
+    expect(r.suggestions[0]!.detail).not.toContain('uid 1000');
+  });
+
+  it('a merge that failed without conflicts keeps its reason when the comparison fails too', () => {
+    const r = buildRecovery(
+      input(
+        'merge_failed',
+        { summary: 'fatal: .git/index.lock: File exists.' },
+        { probe: { ok: false, error: 'fatal: bad revision' } },
+      ),
+    );
+    expect(r.why).toBe('the merge into main failed: .git/index.lock: File exists.');
+    expect(r.suggestions.map((s) => s.id)).toEqual(['merge_now', 'discard']);
+  });
+
+  it('main moved on since a merge that failed without conflicts: the conflicts win', () => {
+    const r = buildRecovery(
+      input('merge_failed', { summary: 'fatal: Permission denied' }, { probe: probe(['a.ts', 'content']) }),
+    );
+    expect(r.why).toBe('main moved on and 1 file now conflicts: a.ts');
+  });
+
   it('superseded by a done ticket at half or more: Discard first, naming it', () => {
     const files = Array.from({ length: 11 }, (_, i): [string, string] => [`f${i}.ts`, 'add/add']);
     const r = buildRecovery(

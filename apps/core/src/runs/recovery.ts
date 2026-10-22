@@ -79,6 +79,20 @@ const movedByList = (keys: string[]): string =>
 const gitMessage = (error: string): string =>
   (lastLine(error) ?? error).replace(/^.*\bexited with code \d+: /, '').replace(/^(fatal|error): /, '');
 
+/**
+ * Why a merge failed when it was not a conflict, from its note's summary: the git error inside
+ * "Could not merge … (<reason>); it was left unchanged." or a thrown git error. Null for a
+ * conflict (the note lists them) or a note without a summary.
+ */
+const mergeFailureReason = (payload: Record<string, unknown> | null): string | null => {
+  const summary = text(payload, 'summary');
+  if (!summary || strings(payload, 'conflicts').length > 0) return null;
+  const refused = /^Could not merge .+? into the main workspace \((.*)\); it was left unchanged\.$/s.exec(
+    summary,
+  );
+  return gitMessage(refused ? refused[1]! : summary);
+};
+
 /** A path as one shell word, so the command copies as is. */
 const shellWord = (value: string): string =>
   /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
@@ -134,6 +148,26 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
         input.completionReminder,
       files,
     });
+
+  // The merge failed for another reason than conflicts (a file it could not write, a lock): a clean
+  // comparison says nothing about it, so the why is git's reason and the merge is tried again.
+  const failure = mergeFailureReason(input.hold.payload);
+  if (failure && !(probe?.ok && probe.conflicts.length > 0)) {
+    return {
+      why: `the merge into ${mainBranch} failed: ${failure}`,
+      suggestions: [
+        suggestion({
+          id: 'merge_now',
+          kind: 'merge',
+          label: 'Try the merge again',
+          detail: /permission denied/i.test(failure)
+            ? "A file in the main workspace isn't writable by Emberline's runner, probably because it was changed outside Emberline by another user (such as root). Give it back to the runner's user (uid 1000), then try again."
+            : `Fix what stopped the merge, then try again; nothing in ${mainBranch} was changed.`,
+        }),
+        discard(ticketKey),
+      ],
+    };
+  }
 
   if (probe?.ok && probe.conflicts.length === 0) {
     return {

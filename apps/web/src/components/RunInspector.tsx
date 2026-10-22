@@ -85,7 +85,8 @@ export function formatAgentResumePlaceholder(agent?: string | null): string {
   }
 }
 
-function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
+/** The tool and the one line shown under a run event. */
+export function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
   if (!payload || typeof payload !== 'object') return {};
   const rec = payload as Record<string, unknown>;
   const tool = typeof rec.tool_name === 'string' ? rec.tool_name : undefined;
@@ -98,6 +99,8 @@ function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
     (typeof rec.last_assistant_message === 'string' && rec.last_assistant_message) ||
     (typeof rec.reason === 'string' && rec.reason) ||
     (typeof rec.error === 'string' && rec.error) ||
+    // A merge's outcome (why it failed).
+    (typeof rec.summary === 'string' && rec.summary) ||
     undefined;
   const detail = exitPrefix && msg ? `${exitPrefix}: ${msg}` : msg || exitPrefix;
   return { tool, detail };

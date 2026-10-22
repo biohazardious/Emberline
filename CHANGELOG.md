@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- A merge that failed for another reason than conflicts (for example a file in the main workspace that the runner cannot write) said "The branch merges cleanly into main now" and offered **Merge now**, which failed the same way. The held ticket now names git's reason and offers **Try the merge again**; when the reason is "Permission denied" it says to give the file back to the runner's user (uid 1000). The run's event list also shows why a merge failed.
+
 ## [0.5.1] - 2026-10-22
 
 Clean-up after 0.5.0: the items its reviews left open, two escape hatches for unusual setups, and formatting checks for contributors.
