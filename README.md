@@ -73,7 +73,7 @@ Day-to-day commands (from source):
 
 ```bash
 make upgrade-core        # rebuild and restart core only; running agents keep running
-make backup              # consistent database snapshot, copied to ./backups/
+make backup              # consistent database snapshot, copied to ./backups/ (back up /data/secrets.key separately)
 make reset-password      # forgot the admin password: clears it, then use the new setup token
 make down
 ```
@@ -91,6 +91,7 @@ Set these in `.env` (read by `compose.yaml`):
 | `EMBERLINE_ALLOWED_HOSTS`        | unset          | Comma-separated host names you open Emberline by, such as `emberline.example.com` or `truenas.local` (through a reverse proxy, say). IP addresses and `localhost` always work; other names get HTTP 421. `*` turns the check off. |
 | `EMBERLINE_SESSION_BIND_IP`      | `true`         | A login is valid only from the network address that signed in (behind a proxy, with `EMBERLINE_TRUST_PROXY`, the forwarded address). A changed address signs you out. `false` turns this off; see [SECURITY.md](SECURITY.md#preview-ports-and-the-session-cookie). |
 | `EMBERLINE_METRICS_TOKEN`        | unset          | Enables `GET /metrics` for scrapers sending `Authorization: Bearer <token>`.                                                                                                                                                      |
+| `EMBERLINE_SECRETS_KEY`          | unset          | Key for secrets stored in the database (32 bytes, base64). Unset: core creates `/data/secrets.key` on first start.                                                                                                              |
 | `EMBERLINE_PREVIEW_PORTS_RUNNER` | `4300-4324`    | Host ports for command previews (dev servers), published by the runner on `EMBERLINE_BIND`.                                                                                                                                       |
 | `EMBERLINE_PREVIEW_PORTS_DOCKER` | `4325-4349`    | Host ports for compose previews, published by the Docker engine. Keep the two ranges apart.                                                                                                                                       |
 | `EMBERLINE_PREVIEW_HOST`         | unset          | Base URL previews open on, such as `http://previews.lan` (a second name for this machine); unset uses the host name you opened Emberline by. A separate name keeps Emberline's session cookie away from previews ([SECURITY.md](SECURITY.md#preview-ports-and-the-session-cookie)). |
@@ -214,7 +215,7 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 - **The Docker engine is privileged, and on by default.** It runs rootless and never gets the host's Docker socket, and its API needs a client certificate, but the container itself is privileged, and anything that can start containers in it (every agent) can control all of it. See [Docker engine](#docker-engine).
 - **Preview ports are published.** By default 4300-4349 are published on `EMBERLINE_BIND`: the runner publishes 4300-4324 on every install, and the Docker engine 4325-4349 unless `EMBERLINE_DOCKER_ENGINE=0`. With `0.0.0.0` a running preview is open to your network without a login.
 - **The runner is one trust domain.** All agents and terminals run as the same user and can read each other's workspaces and the provider logins in the runner's home. Don't run agents for projects you don't trust next to ones you do.
-- **Secrets are stored in plaintext** in the SQLite database in core's data volume. They are never sent back to the browser, but anyone with access to that volume or a backup can read them.
+- **Secrets are encrypted at rest.** Secrets stored in the database (provider keys, forge tokens, the notification token, the demo signing secret, MCP server environment values) are encrypted with AES-256-GCM. The key is `EMBERLINE_SECRETS_KEY` or `/data/secrets.key`.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
@@ -257,7 +258,7 @@ Design decisions and the reasons behind them are in [docs/DESIGN.md](docs/DESIGN
 
 - **Health:** `GET /api/health` is the liveness check Docker uses. `GET /api/health/deep` also checks the database, the runner connection and protocol version, the workspaces volume and free disk space, and answers 503 with the failing check.
 - **Metrics:** with `EMBERLINE_METRICS_TOKEN` set, `GET /metrics` exposes runs by state, tickets by column, scheduler queue and quota pause, runner connection, database size and HTTP responses.
-- **Backups:** `make backup` takes a consistent snapshot (`VACUUM INTO`, safe while running), keeps the newest `EMBERLINE_BACKUP_KEEP` in the data volume and copies it to `./backups/`. Core also snapshots the database before applying migrations.
+- **Backups:** `make backup` takes a consistent snapshot (`VACUUM INTO`, safe while running), keeps the newest `EMBERLINE_BACKUP_KEEP` in the data volume and copies it to `./backups/`. Core also snapshots the database before applying migrations. `make backup` copies the database only; its secrets are encrypted with `/data/secrets.key` (or `EMBERLINE_SECRETS_KEY`). Keep a copy of that key somewhere else, such as a password manager, not next to the backups. Restoring needs the same key. Snapshots taken before 0.5.0 (`emberline.db.pre-migration-*.bak` and older backups) still hold plaintext secrets; delete them once you no longer need to roll back.
 - **Logs:** structured JSON on stdout, `make logs`.
 - **Upgrades:** with the published images, also download the current `deploy/compose.yaml` (a release may change it; 0.3.5 does), change `EMBERLINE_VERSION` (or keep `latest`), then `docker compose pull && docker compose up -d`; from source, `git pull && make up`. Core snapshots the database before it applies migrations. Restarting the runner stops running agents, so upgrade when they are idle. See [CHANGELOG.md](CHANGELOG.md) for what changed.
 

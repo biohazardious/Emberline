@@ -25,7 +25,7 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 ### What it does not protect
 
 - **Agents from each other.** All agents and terminals in the runner run as the same user. Any agent can read every workspace and every provider login in the runner's home directory. Don't run agents on untrusted code next to projects you care about.
-- **Secrets at rest.** Provider keys and tokens are stored in plaintext in the SQLite database in core's data volume, and in its backups. Anyone with access to that volume, to `./backups/` or to the Docker host can read them.
+- **Secrets at rest, from someone with the key.** Secrets in the database are encrypted with AES-256-GCM under `EMBERLINE_SECRETS_KEY` or `/data/secrets.key`, which sits in the same data volume unless you set the variable, so anyone with access to that volume or to the Docker host can still read them, and snapshots from before 0.5.0 hold them in plaintext.
 - **Traffic on the network.** Emberline does not terminate TLS. It listens on `127.0.0.1` by default. If you set `EMBERLINE_BIND=0.0.0.0` without a TLS reverse proxy or VPN, passwords and session cookies travel in plaintext on your network.
 - **Attached hardware.** With `compose.usb.yaml` enabled, every agent can read and flash the attached serial device.
 - **The host from the Docker engine.** The engine is on by default and is a privileged container; see [The Docker engine](#the-docker-engine). `EMBERLINE_DOCKER_ENGINE=0` turns it off.
@@ -63,4 +63,4 @@ Since 0.3.3 Emberline does two things against a replayed cookie:
 
 - Keep the default `127.0.0.1` bind and reach Emberline through Tailscale, WireGuard or a TLS reverse proxy (set `EMBERLINE_TRUST_PROXY=true` behind a proxy).
 - Use fine-grained forge tokens limited to the repositories Emberline works on.
-- Treat the Docker host, the `data` volume and `./backups/` as sensitive.
+- Treat the Docker host, the `data` volume and `./backups/` as sensitive, and keep a copy of `/data/secrets.key` (or `EMBERLINE_SECRETS_KEY`) apart from the backups: a backup cannot be restored without it.

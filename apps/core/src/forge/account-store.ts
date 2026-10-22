@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { ForgeProvider } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
-import type { Db } from '../db/index.js';
-import { forgeAccounts, projects, settings } from '../db/schema.js';
+import { type Db, getSetting, setSetting } from '../db/index.js';
+import { forgeAccounts, projects } from '../db/schema.js';
 import { conflict } from '../errors.js';
 import { type GitHttpCredential, urlUnderServer } from '../git-credentials.js';
 import { hostOf, sameForgeServer } from './hosts.js';
@@ -265,9 +265,10 @@ interface LegacyForgeConfig {
   unmatched?: unknown;
 }
 
+/** The old global config, its token opened in memory (sealed at rest). */
 const readLegacy = (db: Db): LegacyForgeConfig | null => {
-  const row = db.select().from(settings).where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY)).get();
-  return row && typeof row.value === 'object' && row.value !== null ? (row.value as LegacyForgeConfig) : null;
+  const value = getSetting<unknown>(db, LEGACY_FORGE_SETTINGS_KEY);
+  return typeof value === 'object' && value !== null ? (value as LegacyForgeConfig) : null;
 };
 const legacyToken = (cfg: LegacyForgeConfig | null) => (typeof cfg?.token === 'string' ? cfg.token.trim() : '');
 
@@ -342,10 +343,7 @@ export function migrateLegacyForgeToken(db: Db): 'none' | 'migrated' | 'unmatche
     typeof cfg.apiUrl === 'string' && cfg.apiUrl.trim() ? cfg.apiUrl.trim().replace(/\/+$/, '') : null;
   const target = legacyTarget(db, cfg, apiUrl);
   if (!target) {
-    db.update(settings)
-      .set({ value: { ...cfg, unmatched: true } })
-      .where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY))
-      .run();
+    setSetting(db, LEGACY_FORGE_SETTINGS_KEY, { ...cfg, unmatched: true });
     return 'unmatched';
   }
   insertAccountIfHostFree(
@@ -371,8 +369,5 @@ export function legacyTokenUnmatched(db: Db): boolean {
 export function forgetLegacyToken(db: Db): void {
   const cfg = readLegacy(db);
   if (!cfg) return;
-  db.update(settings)
-    .set({ value: { ...cfg, token: null, unmatched: false } })
-    .where(eq(settings.key, LEGACY_FORGE_SETTINGS_KEY))
-    .run();
+  setSetting(db, LEGACY_FORGE_SETTINGS_KEY, { ...cfg, token: null, unmatched: false });
 }

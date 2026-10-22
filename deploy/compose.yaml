@@ -29,6 +29,8 @@ services:
       # Host names you open Emberline by (reverse proxy, truenas.local). IPs and localhost always work.
       EMBERLINE_ALLOWED_HOSTS: ${EMBERLINE_ALLOWED_HOSTS:-}
       EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
+      # Key for the secrets stored in the database (32 bytes, base64); unset: core creates /data/secrets.key.
+      EMBERLINE_SECRETS_KEY: ${EMBERLINE_SECRETS_KEY:-}
       # Shows host paths of build outputs when EMBERLINE_WORKSPACES is a host path.
       EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES:-}
       # The Docker engine (service `docker`) is on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off

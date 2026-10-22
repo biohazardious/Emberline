@@ -9,8 +9,8 @@ import {
   UpdateNotificationSettingsBody as UpdateNotificationSettingsBodySchema,
 } from '@emberline/protocol';
 import { and, eq, lt, max } from 'drizzle-orm';
-import type { Db } from '../db/index.js';
-import { notificationLog, runEvents, settings } from '../db/schema.js';
+import { type Db, getSetting, setSetting } from '../db/index.js';
+import { notificationLog, runEvents } from '../db/schema.js';
 import { badRequest } from '../errors.js';
 import { providerAdapter } from '../runs/providers.js';
 import { minutesOf, type RunService, STALL_WATCHDOG_MS, WAITING_INPUT_TIMEOUT_MS } from '../runs/service.js';
@@ -394,7 +394,7 @@ export class NotificationService {
   }
 
   getSettings(): NotificationSettings {
-    const row = this.db.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).get();
+    const stored = getSetting<unknown>(this.db, SETTINGS_KEY);
     const defaultUrl = process.env.EMBERLINE_NOTIFY_URL?.trim() ?? '';
     const defaultProvider = process.env.EMBERLINE_NOTIFY_PROVIDER === 'webhook' ? 'webhook' : 'ntfy';
     const defaultToken = process.env.EMBERLINE_NOTIFY_TOKEN?.trim() || null;
@@ -410,8 +410,8 @@ export class NotificationService {
       onRunFinished: false,
     };
 
-    if (!row || typeof row.value !== 'object' || row.value === null) return defaults;
-    const parsed = NotificationSettingsSchema.safeParse({ ...defaults, ...(row.value as object) });
+    if (typeof stored !== 'object' || stored === null) return defaults;
+    const parsed = NotificationSettingsSchema.safeParse({ ...defaults, ...stored });
     return parsed.success ? parsed.data : defaults;
   }
 
@@ -438,14 +438,7 @@ export class NotificationService {
         throw badRequest('notification URL must be a valid http(s) URL');
       }
     }
-    this.db
-      .insert(settings)
-      .values({ key: SETTINGS_KEY, value: next })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: { value: next },
-      })
-      .run();
+    setSetting(this.db, SETTINGS_KEY, next);
     return next;
   }
 

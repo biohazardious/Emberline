@@ -5,9 +5,11 @@ import Database from 'better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { openSetting, sealSetting } from '../secrets/fields.js';
 import * as schema from './schema.js';
 
-export type Db = BetterSQLite3Database<typeof schema>;
+/** The drizzle database; `$client` is the better-sqlite3 connection (raw SQL at start-up, secrets/startup.ts). */
+export type Db = BetterSQLite3Database<typeof schema> & { $client: Database.Database };
 
 /** Same relative location from src/db (dev/tests) and dist/db (production). */
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../drizzle', import.meta.url));
@@ -70,12 +72,15 @@ function backupBeforeMigrations(sqlite: Database.Database, file: string): void {
   }
 }
 
+/** A settings value; secret fields (secrets/fields.ts) are opened in memory. */
 export function getSetting<T>(db: Db, key: string): T | undefined {
   const row = db.select().from(schema.settings).where(eq(schema.settings.key, key)).get();
-  return row?.value as T | undefined;
+  return (row ? openSetting(key, row.value) : undefined) as T | undefined;
 }
 
-export function setSetting(db: Db, key: string, value: unknown): void {
+/** Stores a settings value; secret fields (secrets/fields.ts) are sealed first. */
+export function setSetting(db: Db, key: string, plain: unknown): void {
+  const value = sealSetting(key, plain);
   db.insert(schema.settings)
     .values({ key, value })
     .onConflictDoUpdate({ target: schema.settings.key, set: { value } })

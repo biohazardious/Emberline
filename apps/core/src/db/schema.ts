@@ -1,6 +1,7 @@
 import type { Route, TicketCompletion } from '@emberline/protocol';
 import { sql } from 'drizzle-orm';
-import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { customType, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { openSecret, sealSecret } from '../secrets/box.js';
 
 /** Free-form key/value settings (JSON values). */
 export const settings = sqliteTable('settings', {
@@ -8,9 +9,16 @@ export const settings = sqliteTable('settings', {
   value: text('value', { mode: 'json' }).$type<unknown>().notNull(),
 });
 
+/** The token, sealed at rest (enc:v1:, secrets/box.ts). Random nonces: never filter by it. */
+const secretText = customType<{ data: string; driverData: string }>({
+  dataType: () => 'text',
+  toDriver: (v) => sealSecret(v),
+  fromDriver: (v) => openSecret(v),
+});
+
 /**
- * Forge accounts: one per server host. The token is stored like the other secrets (plaintext in
- * the core DB) and never returned by the API.
+ * Forge accounts: one per server host. The token is stored like the other secrets (encrypted at
+ * rest, secrets/box.ts) and never returned by the API.
  */
 export const forgeAccounts = sqliteTable(
   'forge_accounts',
@@ -21,7 +29,7 @@ export const forgeAccounts = sqliteTable(
     serverUrl: text('server_url').notNull(),
     apiUrl: text('api_url').notNull(),
     username: text('username'),
-    token: text('token').notNull(),
+    token: secretText('token').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },

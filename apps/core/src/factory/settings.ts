@@ -22,11 +22,9 @@ import {
   type SkillPluginEntry,
   UpdateFactorySettingsBody,
 } from '@emberline/protocol';
-import { eq } from 'drizzle-orm';
-import type { Db } from '../db/index.js';
+import { type Db, getSetting, setSetting } from '../db/index.js';
 import { HttpError } from '../errors.js';
 import { readProjectSettings } from '../db/project-settings.js';
-import { settings } from '../db/schema.js';
 
 // --- F7 & F10: Unified Factory Settings & Multi-Provider Routing ------------
 
@@ -47,6 +45,11 @@ type StoredFactorySettings = Partial<Omit<FactorySettings, 'personaRoutes' | 'qu
   quotaPolicy?: Partial<QuotaPolicy>;
   quotaAutoDowngrade?: boolean;
 };
+
+/** The stored provider keys, opened in memory (sealed at rest). */
+function readProviderKeys(db: Db): StoredProviderKeys {
+  return getSetting<StoredProviderKeys>(db, FACTORY_KEYS_KEY) ?? {};
+}
 
 /** Which stored API keys each agent may see; aider talks to any vendor, copilot uses none of them. */
 const PROVIDER_KEY_ACCESS: Record<AgentId, readonly ('anthropic' | 'openai' | 'gemini')[]> = {
@@ -353,15 +356,12 @@ function quotaPolicyOf(raw: StoredFactorySettings): QuotaPolicy {
 
 /** The quota policy alone: one settings row, none of the provider auth detection `getFactorySettings` does. */
 export function getQuotaPolicy(db: Db): QuotaPolicy {
-  const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
-  return quotaPolicyOf((row?.value ?? {}) as StoredFactorySettings);
+  return quotaPolicyOf(getSetting<StoredFactorySettings>(db, FACTORY_SETTINGS_KEY) ?? {});
 }
 
 export function getFactorySettings(db: Db): FactorySettings {
-  const row = db.select().from(settings).where(eq(settings.key, FACTORY_SETTINGS_KEY)).get();
-  const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
-  const raw = (row?.value ?? {}) as StoredFactorySettings;
-  const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
+  const raw = getSetting<StoredFactorySettings>(db, FACTORY_SETTINGS_KEY) ?? {};
+  const keys = readProviderKeys(db);
 
   const anthropicKeyConfigured = Boolean(keys.anthropicApiKey || process.env.ANTHROPIC_API_KEY);
   const openaiKeyConfigured = Boolean(keys.openaiApiKey || process.env.OPENAI_API_KEY);
@@ -555,21 +555,14 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };
 
-  db.insert(settings)
-    .values({ key: FACTORY_SETTINGS_KEY, value: nextValue })
-    .onConflictDoUpdate({
-      target: settings.key,
-      set: { value: nextValue },
-    })
-    .run();
+  setSetting(db, FACTORY_SETTINGS_KEY, nextValue);
 
   if (
     body.anthropicApiKey !== undefined ||
     body.openaiApiKey !== undefined ||
     body.geminiApiKey !== undefined
   ) {
-    const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
-    const prevKeys = (keysRow?.value ?? {}) as StoredProviderKeys;
+    const prevKeys = readProviderKeys(db);
     const nextKeys: StoredProviderKeys = {
       anthropicApiKey:
         body.anthropicApiKey === undefined ? prevKeys.anthropicApiKey : body.anthropicApiKey || null,
@@ -578,13 +571,7 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
       geminiApiKey:
         body.geminiApiKey === undefined ? prevKeys.geminiApiKey : body.geminiApiKey || null,
     };
-    db.insert(settings)
-      .values({ key: FACTORY_KEYS_KEY, value: nextKeys })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: { value: nextKeys },
-      })
-      .run();
+    setSetting(db, FACTORY_KEYS_KEY, nextKeys);
   }
 
   return getFactorySettings(db);
@@ -595,7 +582,7 @@ export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { ag
   const cfg = getFactorySettings(db);
   const chain = cfg.personaRoutes[persona];
   const enabled = new Set<string>(cfg.enabledProviders);
-  const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
+  const keys = readProviderKeys(db);
   const tagged = AgentId.safeParse(preferred?.agent);
   const preferredModel = AgentModelId.safeParse(preferred?.model).data;
   // A tagged or hand-picked agent leads even when its provider is not enabled (as before 0.2.0);
@@ -628,14 +615,14 @@ export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { ag
 
 /** The credential a run of `agent` gets without a configured route: the stored key when there is one, else the login. */
 export function defaultCredentialFor(db: Db, agent: AgentId): Credential {
-  const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
+  const keys = readProviderKeys(db);
   return defaultCredential(agent, keys);
 }
 
 /** An API-key route is only usable while its provider's key is stored; login and credits routes always are. */
 export function routeUsable(db: Db, route: Route): boolean {
   if (route.credential !== 'api_key') return true;
-  const keys = (db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get()?.value ?? {}) as StoredProviderKeys;
+  const keys = readProviderKeys(db);
   return keyStoredFor(route.agent, keys);
 }
 
@@ -646,8 +633,7 @@ export function getProviderEnvFromSettings(
   credential: Credential = 'api_key',
 ): Record<string, string> {
   if (credential !== 'api_key') return {};
-  const keysRow = db.select().from(settings).where(eq(settings.key, FACTORY_KEYS_KEY)).get();
-  const keys = (keysRow?.value ?? {}) as StoredProviderKeys;
+  const keys = readProviderKeys(db);
   const access: readonly string[] = PROVIDER_KEY_ACCESS[agent as AgentId] ?? [];
   const env: Record<string, string> = {};
   if (keys.anthropicApiKey && access.includes('anthropic')) env.ANTHROPIC_API_KEY = keys.anthropicApiKey;

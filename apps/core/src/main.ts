@@ -8,12 +8,26 @@ import { DockerEngine } from './docker/engine.js';
 import { openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
+import { SecretsKeyError } from './secrets/box.js';
+import { startSecrets } from './secrets/startup.js';
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { TicketService } from './tickets/service.js';
 
 const config = loadConfig();
 const { db, close: closeDb } = openDb(path.join(config.dataDir, 'emberline.db'));
+// Before any service reads a secret: a wrong or missing key stops here and nothing is written.
+let secrets: ReturnType<typeof startSecrets>;
+try {
+  secrets = startSecrets(db, { env: process.env, dataDir: config.dataDir });
+} catch (error) {
+  if (error instanceof SecretsKeyError) {
+    process.stderr.write(`${error.message}\n${error.detail}\n`);
+    closeDb();
+    process.exit(1);
+  }
+  throw error;
+}
 const ptyd = new PtydBridge(config.ptydSocket);
 // git, builds and tests for workspaces run in the runner container, never here.
 setCommandExecutor(ptydCommandExecutor(ptyd));
@@ -34,6 +48,15 @@ const app = await buildServer(
   { config, db, ptyd, runs, tickets, scheduler },
   { logger: { level: config.logLevel } },
 );
+if (secrets.source === 'created') {
+  app.log.info(`secrets: created ${secrets.file}; back it up separately from the database`);
+}
+if (secrets.encrypted > 0) app.log.info(`secrets: encrypted ${secrets.encrypted} stored secrets`);
+if (secrets.plaintextSnapshots.length > 0) {
+  app.log.warn(
+    `secrets: these snapshots from before this start still hold secrets in plaintext; delete them once you no longer need to roll back: ${secrets.plaintextSnapshots.join(', ')}`,
+  );
+}
 const { ignored: ignoredHosts } = parseAllowedHosts(process.env.EMBERLINE_ALLOWED_HOSTS ?? '');
 if (ignoredHosts.length > 0) {
   app.log.warn(

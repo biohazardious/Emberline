@@ -16,6 +16,8 @@ import { KeepMainPushed } from './repository/keep-pushed.js';
 import { RepositoryService } from './repository/service.js';
 import { RecoveryService } from './runs/recovery-service.js';
 import { RunService } from './runs/service.js';
+import { installedSecretsKey } from './secrets/box.js';
+import { encryptStoredSecrets } from './secrets/startup.js';
 import { Scheduler, type SchedulerOptions } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { TicketService, type TicketServiceOptions } from './tickets/service.js';
@@ -89,6 +91,8 @@ export async function createTestApp(
   };
   const opened: OpenedDb = openDb(':memory:');
   beforeStart?.(opened.db);
+  // What core's start does with what an older version left: seal it with the installed key.
+  encryptStoredSecrets(opened.db.$client, installedSecretsKey());
   const ptyd = new PtydBridge(config.ptydSocket);
   const runs = new RunService(opened.db, config, ptyd);
   // No periodic ticks in tests: event-driven kicks plus explicit tick() calls.

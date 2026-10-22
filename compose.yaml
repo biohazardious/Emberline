@@ -27,6 +27,8 @@ services:
       TZ: ${TZ:-UTC}
       # Enables GET /metrics (Prometheus) for scrapers that send this bearer token.
       EMBERLINE_METRICS_TOKEN: ${EMBERLINE_METRICS_TOKEN:-}
+      # Key for the secrets stored in the database (32 bytes, base64); unset: core creates /data/secrets.key.
+      EMBERLINE_SECRETS_KEY: ${EMBERLINE_SECRETS_KEY:-}
       # Host path of the workspaces bind mount, only to show where build outputs are on the host.
       EMBERLINE_WORKSPACES_HOST_DIR: ${EMBERLINE_WORKSPACES_HOST_DIR:-${PWD}/workspaces}
       # The Docker engine (service `docker`) is on by default; EMBERLINE_DOCKER_ENGINE=0 turns it off
