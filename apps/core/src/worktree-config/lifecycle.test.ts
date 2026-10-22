@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { unifiedDiff } from './diff.js';
 import {
+  COPY_LIMITS,
   COPY_MAX_BYTES,
   COPY_MAX_FILES,
   copyIntoWorktree,
@@ -19,6 +20,9 @@ import {
 let root: string;
 let main: string;
 let wt: string;
+
+const SMALL = { ...COPY_LIMITS, maxEntries: 8 };
+const copySmall = (p: string) => copyIntoWorktree(dirs(), [{ path: p, mode: 'copy' }], SMALL);
 
 beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), 'wtcfg-'));
@@ -90,21 +94,29 @@ describe('copy entries into a run worktree', () => {
   });
 
   describe('size caps (never a partial copy)', () => {
-    it('skips a directory with more than 5000 files', async () => {
+    it('production caps: 5000 entries and 200 MB', () => {
       expect(COPY_MAX_FILES).toBe(5000);
-      mkdirSync(path.join(main, 'many'));
-      for (let i = 0; i <= COPY_MAX_FILES; i++) writeFileSync(path.join(main, 'many', `f${i}`), '');
-      expect((await copy('many'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 5000 files and directories' });
-      expect(existsSync(path.join(wt, 'many'))).toBe(false);
+      expect(COPY_LIMITS).toEqual({ maxEntries: 5000, maxBytes: 200 * 1024 * 1024 });
     });
 
-    it('counts directories toward the 5000 entries', async () => {
+    it('skips a directory with one entry more than the cap; exactly the cap is copied', async () => {
+      mkdirSync(path.join(main, 'many'));
+      for (let i = 0; i <= SMALL.maxEntries; i++) writeFileSync(path.join(main, 'many', `f${i}`), '');
+      expect((await copySmall('many'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 8 files and directories' });
+      expect(existsSync(path.join(wt, 'many'))).toBe(false);
+      rmSync(path.join(main, 'many', 'f0'));
+      expect((await copySmall('many'))[0]).toMatchObject({ status: 'copied' });
+      expect(readdirSync(path.join(wt, 'many'))).toHaveLength(8);
+    });
+
+    it('counts directories toward the entries', async () => {
+      // 3 dirs x 2 files = 9 entries > 8; counting files only would give 6 and copy it.
       mkdirSync(path.join(main, 'nested'));
-      for (let i = 0; i < 2600; i++) {
+      for (let i = 0; i < 3; i++) {
         mkdirSync(path.join(main, 'nested', `d${i}`));
-        writeFileSync(path.join(main, 'nested', `d${i}`, 'f'), '');
+        for (const f of ['a', 'b']) writeFileSync(path.join(main, 'nested', `d${i}`, f), '');
       }
-      expect((await copy('nested'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 5000 files and directories' });
+      expect((await copySmall('nested'))[0]).toMatchObject({ status: 'skipped', reason: 'more than 8 files and directories' });
       expect(existsSync(path.join(wt, 'nested'))).toBe(false);
     });
 

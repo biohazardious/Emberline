@@ -25,6 +25,13 @@ export const SETUP_TOTAL_MS = 30 * 60_000;
 /** One copy entry may hold at most this many files and bytes; a bigger one is skipped whole. */
 export const COPY_MAX_FILES = 5000;
 export const COPY_MAX_BYTES = 200 * 1024 * 1024;
+
+/** The copy caps; a test passes lower ones so it needs few real entries. */
+export interface CopyLimits {
+  maxEntries: number;
+  maxBytes: number;
+}
+export const COPY_LIMITS: CopyLimits = { maxEntries: COPY_MAX_FILES, maxBytes: COPY_MAX_BYTES };
 export const TEARDOWN_TIMEOUT_MS = 2 * 60_000;
 /** Output kept from a failed setup command (event and prompt prefix). */
 export const SETUP_TAIL_CHARS = 2000;
@@ -106,14 +113,14 @@ async function verifiedDir(dir: string, expectedReal: string): Promise<string> {
  * itself excluded) and the files' sizes without following links (they are left out of a copy
  * anyway), stopping as soon as a cap is passed.
  */
-async function overCaps(srcReal: string, isDir: boolean): Promise<string | null> {
+async function overCaps(srcReal: string, isDir: boolean, limits: CopyLimits): Promise<string | null> {
   let entries = 0;
   let bytes = 0;
   const add = (size: number) => {
     entries++;
     bytes += size;
-    if (entries > COPY_MAX_FILES) return `more than ${COPY_MAX_FILES} files and directories`;
-    if (bytes > COPY_MAX_BYTES) return `larger than ${COPY_MAX_BYTES / 1024 / 1024} MB`;
+    if (entries > limits.maxEntries) return `more than ${limits.maxEntries} files and directories`;
+    if (bytes > limits.maxBytes) return `larger than ${limits.maxBytes / 1024 / 1024} MB`;
     return null;
   };
   if (!isDir) return add((await lstat(srcReal)).size);
@@ -176,6 +183,7 @@ async function copyVerifiedDir(srcReal: string, destReal: string, rel: string, f
 export async function copyIntoWorktree(
   dirs: { trustedBase: string; mainPath: string; worktreePath: string },
   entries: readonly WorktreeCopyEntry[],
+  limits: CopyLimits = COPY_LIMITS,
 ): Promise<CopyOutcome[]> {
   const mainReal = await realDirUnder(dirs.trustedBase, dirs.mainPath);
   const worktreeReal = await realDirUnder(dirs.trustedBase, dirs.worktreePath);
@@ -208,7 +216,7 @@ export async function copyIntoWorktree(
       const srcReal = path.join(mainReal, ...parts);
       const destParent = path.join(worktreeReal, ...parts.slice(0, -1));
       const name = parts[parts.length - 1]!;
-      const over = entry.mode === 'copy' ? await overCaps(srcReal, source.isDir) : null;
+      const over = entry.mode === 'copy' ? await overCaps(srcReal, source.isDir, limits) : null;
       if (over) {
         outcomes.push(skip(over));
         continue;

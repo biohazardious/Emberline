@@ -741,8 +741,10 @@ describe('one automatic merge-conflict resolution', () => {
 
   it('asks the agent once to resolve the conflict, then merges the resolution', async () => {
     const { project, b, runB } = await conflictingPair();
+    const passes = trackPipelines();
     await stopAgain(runB);
     await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes); // pass 1 fully done before the next turn
     expect(followups(runB)).toEqual([FOLLOW_UP('app.js')]);
     const events = (await api('GET', `/api/runs/${runB.id}`)).json() as RunDetail;
     expect(events.events.find((e) => e.type === 'conflict_resolution_requested')?.payload).toEqual({
@@ -827,8 +829,10 @@ describe('one automatic merge-conflict resolution', () => {
 
   it('a second conflict lands in Review, asks nothing again and dispatches the next ticket', async () => {
     const { project, b, runB } = await conflictingPair();
+    const passes = trackPipelines();
     await stopAgain(runB);
     await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
     const c = await createTicket(project.id, { title: 'C', status: 'backlog' });
     expect(runsFor(c.id)).toHaveLength(0);
 
@@ -858,30 +862,43 @@ describe('one automatic merge-conflict resolution', () => {
 
   it('asks again when main moved after the first attempt and the merge conflicts again', async () => {
     const { project, runB } = await conflictingPair();
+    const passes = trackPipelines();
     await stopAgain(runB);
-    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes); // pass 1 fully done: note written, busy released
+    const firstHead = wgit(project.path, 'rev-parse', 'HEAD').trim();
+    expect(await requestedHeads(runB)).toEqual([firstHead]); // recorded, not just typed
+    expect(followups(runB)).toHaveLength(1);
     moveMain(project.path, 2);
+    const movedHead = wgit(project.path, 'rev-parse', 'HEAD').trim();
     await stopAgain(runB);
-    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(2);
-    const heads = await requestedHeads(runB);
-    expect(heads).toHaveLength(2);
-    expect(heads[1]).toBe(wgit(project.path, 'rev-parse', 'HEAD').trim());
-    expect(heads[1]).not.toBe(heads[0]);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await Promise.all(passes);
+    expect(await requestedHeads(runB)).toEqual([firstHead, movedHead]);
+    expect(followups(runB)).toHaveLength(2);
+    expect(movedHead).not.toBe(firstHead);
   });
 
   it('stops asking after three attempts even when main keeps moving', async () => {
     const { project, runB } = await conflictingPair();
+    const passes = trackPipelines();
     await stopAgain(runB);
-    await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(followups(runB)).toHaveLength(1);
     for (const n of [2, 3]) {
       moveMain(project.path, n);
       await stopAgain(runB);
-      await expect.poll(() => followups(runB).length, { timeout: 10_000 }).toBe(n);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(n);
+      await Promise.all(passes);
+      expect(followups(runB)).toHaveLength(n);
     }
     expect(CONFLICT_ATTEMPT_CAP).toBe(3);
     moveMain(project.path, 4);
     await stopAgain(runB);
-    await expect.poll(async () => (await eventTypes(runB)).filter((x) => x === 'merge_failed').length, { timeout: 10_000 }).toBe(4);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(4);
+    await Promise.all(passes);
+    expect((await eventTypes(runB)).filter((x) => x === 'merge_failed')).toHaveLength(4);
     expect(followups(runB)).toHaveLength(3);
     expect(await requestedHeads(runB)).toHaveLength(3);
   });

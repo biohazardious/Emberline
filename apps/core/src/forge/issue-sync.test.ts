@@ -27,6 +27,8 @@ interface FakeRepo {
   respond?: () => Response;
   /** List calls wait for this first. */
   gate?: Promise<void>;
+  /** Rows per page, whatever per_page asks for (a small repo that still spans pages). */
+  pageSize?: number;
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -80,7 +82,7 @@ function installForge() {
       const extra = { etag, ...repo.headers };
       if (headers['If-None-Match'] === etag) return reply(null, 304, extra);
       const page = Number(url.searchParams.get('page') ?? 1);
-      const per = Number(url.searchParams.get('per_page') ?? 30);
+      const per = repo.pageSize ?? Number(url.searchParams.get('per_page') ?? 30);
       const rows = repo.issues.slice((page - 1) * per, page * per);
       const more = repo.issues.length > page * per;
       return reply(rows, 200, more ? { ...extra, link: `<https://api.github.com/repos/acme/${list[1]}/issues?page=${page + 1}>; rel="next"` } : extra);
@@ -104,9 +106,9 @@ function installForge() {
   };
 }
 
-function addProject(id: string, repo: string, settings: Partial<IssueSyncSettings> | null = {}) {
+function addProject(id: string, repo: string, settings: Partial<IssueSyncSettings> | null = {}, { dir: makeDir = true } = {}) {
   const dir = `${t.dir}/${id}`;
-  execFileSync('mkdir', ['-p', dir]);
+  if (makeDir) execFileSync('mkdir', ['-p', dir]); // without it detectRemoteUrl falls back to repoUrl with no git spawn
   t.db
     .insert(projects)
     .values({ id, name: `Proj ${id}`, slug: id, repoUrl: `https://github.com/acme/${repo}.git`, path: dir, createdAt: new Date() })
@@ -340,9 +342,11 @@ describe('budget', () => {
   });
 
   it(`never makes more than ${SYNC_TICK_REQUEST_CAP} requests per tick across projects, and continues where it stopped`, async () => {
-    for (let i = 10; i < 25; i++) {
-      const repo = addProject(`p${i}`, `r${i}`);
-      repo.issues = Array.from({ length: 101 }, (_, n) => ghIssue(`r${i}`, n + 1));
+    const ids = Array.from({ length: 15 }, (_, i) => `p${i + 10}`);
+    for (const id of ids) {
+      const repo = addProject(id, `r${id}`, {}, { dir: false });
+      repo.pageSize = 1; // 2 issues = 2 pages, as 101 at 100
+      repo.issues = [ghIssue(`r${id}`, 1), ghIssue(`r${id}`, 2)];
     }
     await sync.tick();
     expect(listCalls()).toHaveLength(SYNC_TICK_REQUEST_CAP);
@@ -352,8 +356,11 @@ describe('budget', () => {
     await sync.tick();
     expect(listCalls()).toHaveLength(SYNC_TICK_REQUEST_CAP);
     const second = listCalls().map((c) => c.url.pathname);
-    // The five projects left out last time come first.
-    for (const p of second.slice(0, 10)) expect(first.has(p)).toBe(false);
+    // The five left out come first, both pages each.
+    const leftOut = new Set(ids.map((id) => `/repos/acme/r${id}/issues`).filter((p) => !first.has(p)));
+    expect(new Set(second.slice(0, 10))).toEqual(leftOut);
+    expect(listCalls().slice(10).every((c) => c.headers['If-None-Match'])).toBe(true); // then ETag 304s
+    for (const id of ids) expect(ticketsOf(id)).toHaveLength(2);
   });
 });
 
