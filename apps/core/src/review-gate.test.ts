@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attachAttention } from './runs/attention.js';
 import { eq } from 'drizzle-orm';
-import { runs } from './db/schema.js';
+import { runs, tickets } from './db/schema.js';
 import { reviewUnblockPending, stillHeld } from './runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -575,5 +575,41 @@ describe('a lifted review hold keeps a run in the factory only until the next ou
     expect(types).not.toContain('merged_to_main');
     expect(types).not.toContain('completion_nudged');
     expect(existsSync(path.join(project.path, 'C.txt'))).toBe(false);
+  });
+});
+
+describe('a headless run in Accept edits', () => {
+  beforeEach(() => {
+    process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+  });
+  afterEach(() => {
+    delete process.env.EMBERLINE_GEMINI_COMMAND;
+  });
+
+  async function headlessReview() {
+    const { ticket, run, token } = await factoryTicket();
+    await comment(run, 'important');
+    const passes = trackPipelines();
+    await finishTurn(run, token);
+    await settled(passes, 1);
+    t.db.update(tickets).set({ body: '[Preferred Agent: gemini · Model: auto]' }).where(eq(tickets.id, ticket.id)).run();
+    t.db.update(runs).set({ agent: 'gemini', permissionMode: 'acceptEdits', endedAt: new Date(), cancelledAt: null }).where(eq(runs.id, run.id)).run();
+    return run;
+  }
+
+  it('a send to the same run says a new run needs Autonomous mode; a new run needs the person to choose it', async () => {
+    const run = await headlessReview();
+    const same = await api('POST', `/api/runs/${run.id}/review/request-changes`, { target: 'same' });
+    expect(same.statusCode).toBe(409);
+    expect(same.json()).toMatchObject({ error: 'headless_needs_auto', needsAutonomous: true });
+
+    const bare = await api('POST', `/api/runs/${run.id}/review/request-changes`, { target: 'new' });
+    expect(bare.statusCode).toBe(409);
+    expect(bare.json()).toMatchObject({ error: 'headless_needs_auto' });
+    expect(t.runs.list().filter((r) => r.ticketId === run.ticketId)).toHaveLength(1);
+
+    const chosen = await api('POST', `/api/runs/${run.id}/review/request-changes`, { target: 'new', permissionMode: 'auto' });
+    expect(chosen.statusCode).toBe(200);
+    expect((chosen.json() as { run: Run }).run.permissionMode).toBe('auto');
   });
 });

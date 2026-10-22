@@ -4,7 +4,7 @@ import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projects, reviewComments, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
-import { type MergeProbeResult, probeMerge, supersedingFor } from '../factory/merge-probe.js';
+import { mainMoversFor, type MergeProbeResult, probeMerge, supersedingFor } from '../factory/merge-probe.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -54,12 +54,14 @@ export class RecoveryService {
     let mainBranch = project?.defaultBranch ?? 'main';
     let probe: MergeProbeResult | null = null;
     let superseding: RecoveryInput['superseding'] = null;
+    let movedBy: string[] = [];
     if (hold.type === 'merge_failed' && project) {
       mainBranch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
       probe = run.branch
         ? await probeMerge(project.path, mainBranch, run.branch)
         : { ok: false, error: 'the run has no branch' };
       if (probe.ok && probe.conflicts.length > 0) {
+        movedBy = await mainMoversFor(project.path, probe, ticketKey);
         const found = await supersedingFor(project.path, probe, ticketKey);
         if (found) {
           const other = this.db
@@ -79,8 +81,9 @@ export class RecoveryService {
       worktreePath: run.worktreePath,
       probe,
       superseding,
+      movedBy,
       reviewComments: hold.type === 'review_blocked' ? this.openBlockingComments(run) : [],
-      completeAgain: this.opts.completionReminder(run),
+      completionReminder: this.opts.completionReminder(run),
     });
     return { ...recovery, delivery: this.deliveryFor(run) };
   }

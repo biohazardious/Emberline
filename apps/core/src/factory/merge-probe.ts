@@ -3,7 +3,7 @@ import { execGitFile } from '../git-exec.js';
 export interface ConflictFile {
   /** Repository-relative path. */
   path: string;
-  /** 'add/add' | 'content' | 'modify/delete' | … (git's own wording). */
+  /** 'add/add' | 'content' | 'modify/delete' | 'file/directory' | … (git's own wording), or 'unknown' when no message names the path. */
   kind: string;
 }
 
@@ -11,7 +11,7 @@ export interface MergeProbe {
   ok: true;
   mainHead: string;
   branchHead: string;
-  conflicts: ConflictFile[];
+  conflicts: readonly ConflictFile[];
 }
 
 export type MergeProbeResult = MergeProbe | { ok: false; error: string };
@@ -35,6 +35,9 @@ function remember<T>(map: Map<string, T>, key: string, value: T): void {
   }
 }
 
+/** The path as a whole word of a message: after the start or a space, before a space or punctuation. */
+const at = (p: string) => new RegExp(`(?:^|\\s)${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\s.,;:~]|$)`);
+
 /**
  * Parses `git merge-tree --write-tree --name-only --messages` output: the tree id, the conflicted
  * paths (one per line), an empty line, then the informational messages. Clean merges print the
@@ -57,11 +60,17 @@ export function parseMergeTree(stdout: string): ConflictFile[] {
       kinds.set(inFile[1]!, kind);
       continue;
     }
-    // Other kinds start with the path: "d deleted in br and modified in main. …".
-    const owner = paths.filter((p) => rest.startsWith(`${p} `)).sort((a, b) => b.length - a.length)[0];
-    if (owner && !kinds.has(owner)) kinds.set(owner, kind);
+    // Other kinds name their paths inside the text: "d deleted in br and modified in main. …",
+    // "directory in the way of d from main; …". Longest paths first, so `a.ts` is not read as `a`.
+    let left = rest;
+    for (const p of [...paths].sort((a, b) => b.length - a.length)) {
+      const hit = at(p).exec(left);
+      if (!hit) continue;
+      if (!kinds.has(p)) kinds.set(p, kind);
+      left = left.slice(0, hit.index) + ' '.repeat(hit[0].length) + left.slice(hit.index + hit[0].length);
+    }
   }
-  return paths.map((p) => ({ path: p, kind: kinds.get(p) ?? 'content' }));
+  return paths.map((p) => ({ path: p, kind: kinds.get(p) ?? 'unknown' }));
 }
 
 async function revParse(cwd: string, ref: string): Promise<string> {
@@ -103,7 +112,13 @@ export async function probeMerge(
       if (e.code !== 1 || typeof e.stdout !== 'string') throw err;
       stdout = e.stdout;
     }
-    const probe: MergeProbe = { ok: true, mainHead, branchHead, conflicts: parseMergeTree(stdout) };
+    // Frozen: the cached object is handed to every caller, and none may change what the next one reads.
+    const probe: MergeProbe = Object.freeze({
+      ok: true as const,
+      mainHead,
+      branchHead,
+      conflicts: Object.freeze(parseMergeTree(stdout).map((c) => Object.freeze(c))),
+    });
     remember(cache, key, probe);
     return probe;
   } catch (err) {
@@ -126,7 +141,7 @@ export function ticketKeyFromSubject(subject: string): string | null {
 async function readSuperseding(
   mainWorkspacePath: string,
   mainBranch: string,
-  conflicts: ConflictFile[],
+  conflicts: readonly ConflictFile[],
   ownKey: string | null,
 ): Promise<{ found: Superseding | null; complete: boolean }> {
   const counts = new Map<string, number>();
@@ -172,7 +187,7 @@ async function readSuperseding(
 export async function findSuperseding(
   mainWorkspacePath: string,
   mainBranch: string,
-  conflicts: ConflictFile[],
+  conflicts: readonly ConflictFile[],
   ownKey: string | null,
 ): Promise<Superseding | null> {
   return (await readSuperseding(mainWorkspacePath, mainBranch, conflicts, ownKey)).found;
@@ -203,4 +218,53 @@ export async function supersedingFor(
   // A failed lookup is transient: cache only a complete answer.
   if (complete) remember(supersedingCache, key, found);
   return found;
+}
+
+/** main's first-parent history by path, newest first, keyed by main head, branch head, own key and paths. */
+const moversCache = new Map<string, string[]>();
+
+/**
+ * Which tickets moved main under a branch? The keys of the commits on main since the branch's head
+ * that touched the probe's conflicted paths, newest first, without duplicates and without `ownKey`.
+ * Cached by the probe's heads and paths (history at two heads never changes); a failed read is
+ * not cached and answers nothing.
+ */
+export async function mainMoversFor(
+  mainWorkspacePath: string,
+  probe: MergeProbe,
+  ownKey: string | null,
+): Promise<string[]> {
+  const paths = probe.conflicts.map((c) => c.path).sort();
+  if (paths.length === 0) return [];
+  const key = JSON.stringify([mainWorkspacePath, probe.mainHead, probe.branchHead, ownKey, paths]);
+  const hit = moversCache.get(key);
+  if (hit) return hit;
+  let out: string;
+  try {
+    out = (
+      await execGitFile([
+        '-C',
+        mainWorkspacePath,
+        '-c',
+        'core.quotePath=false',
+        'log',
+        '--first-parent',
+        '--no-patch',
+        '--format=%s',
+        `${probe.branchHead}..${probe.mainHead}`,
+        '--',
+        ...paths,
+      ])
+    ).stdout;
+  } catch {
+    return [];
+  }
+  const keys = new Set<string>();
+  for (const subject of out.split('\n')) {
+    const found = ticketKeyFromSubject(subject.trim());
+    if (found && found !== ownKey) keys.add(found);
+  }
+  const movers = [...keys];
+  remember(moversCache, key, movers);
+  return movers;
 }

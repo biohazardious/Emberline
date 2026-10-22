@@ -161,7 +161,7 @@ describe('GET /api/runs/:id/recovery', () => {
     seedRun({ id: 'r1', ...wt, hold: { type: 'merge_failed', payload: { conflicts: ['stale.txt'], autoFix: false } }, completionTool: true });
     const { status, body } = await recovery('r1');
     expect(status).toBe(200);
-    expect(body).toMatchObject({ hold: 'merge_failed', label: 'Merge failed', delivery: 'session', why: 'main moved on and 1 file now conflicts: app.js' });
+    expect(body).toMatchObject({ hold: 'merge_failed', label: 'Merge failed', delivery: 'session', why: 'main moved on (EL-12) and 1 file now conflicts: app.js' });
     expect(body!.suggestions.map((s) => s.kind)).toEqual(['prompt', 'discard', 'manual']);
     expect(body!.suggestions[0]!.prompt).toContain('conflicts in: app.js');
     expect(body!.suggestions[0]!.prompt!.endsWith('When finished, call `ticket_complete` again.')).toBe(true);
@@ -200,7 +200,7 @@ describe('GET /api/runs/:id/recovery', () => {
     superseded('done');
     seedRun({ id: 'r1', ticketKey: 'EL-6', ...wt });
     const { body } = await recovery('r1');
-    expect(body!.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (3 of 3 conflicts)' });
+    expect(body!.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (3 of 3 conflicts).' });
   });
 
   it('a second read with unchanged heads looks nothing up again', async () => {

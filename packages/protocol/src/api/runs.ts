@@ -572,6 +572,18 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   no_changes: 'Finished without changes',
 };
 
+/** A hold's label: the worktree config checks (both are `build_gate_failed` notes) have their own; every other hold uses HOLD_LABELS. */
+export function holdLabelOf(type: string, payload: unknown): string {
+  if (type === 'build_gate_failed') {
+    const p = (payload ?? null) as { check?: unknown; output?: unknown } | null;
+    if (p?.check === 'worktree_yml' || (p?.check === undefined && typeof p?.output === 'string' && p.output.startsWith('.emberline/worktree.yml is not valid:'))) {
+      return 'Worktree config is not valid';
+    }
+    if (p?.check === 'worktree_commands') return 'Worktree commands are missing';
+  }
+  return HOLD_LABELS[type] ?? 'Held for review';
+}
+
 /** One way out of a hold, best first (apps/core/src/runs/recovery.ts). */
 export const RecoverySuggestion = z.object({
   /** Stable per kind, e.g. `resolve_conflicts`. */

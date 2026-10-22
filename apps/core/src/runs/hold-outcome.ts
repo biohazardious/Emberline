@@ -1,7 +1,7 @@
 import { and, desc, eq, gt, inArray, lt } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runEvents, runs } from '../db/schema.js';
-import { CHAIN_MAX } from '../review/blocking.js';
+import { predecessorChain } from './handoff-chain.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 
 /** Notes the completion pipeline writes after a run's switch to `done`; they decide its outcome. */
@@ -163,16 +163,8 @@ export function reviewBlockedIsCurrent(db: Db, runId: string): boolean {
   return newest?.type === 'review_blocked';
 }
 
-/** The run and the runs it took over from by handoff, the run first (bounded by CHAIN_MAX). */
-export function handoffChain(db: Db, runId: string): string[] {
-  const chain: string[] = [];
-  let id: string | null = runId;
-  while (id && chain.length < CHAIN_MAX && !chain.includes(id)) {
-    chain.push(id);
-    id = db.select({ p: runs.predecessorRunId }).from(runs).where(eq(runs.id, id)).get()?.p ?? null;
-  }
-  return chain;
-}
+/** The run and the runs it took over from by handoff, the run first (see handoff-chain.ts). */
+export const handoffChain = predecessorChain;
 
 /**
  * Whether the run carries on held work: the nearest run it took over from (by handoff, any number

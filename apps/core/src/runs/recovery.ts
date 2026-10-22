@@ -1,4 +1,4 @@
-import { HOLD_LABELS, type RecoverySuggestion, type RunRecovery } from '@emberline/protocol';
+import { holdLabelOf, type RecoverySuggestion, type RunRecovery } from '@emberline/protocol';
 import type { MergeProbeResult } from '../factory/merge-probe.js';
 import { conflictResolutionPrompt } from '../factory/merge.js';
 
@@ -14,10 +14,12 @@ export interface RecoveryInput {
   probe: MergeProbeResult | null;
   /** Another ticket that added most of the add/add conflicts; `of` = all conflicts now. */
   superseding: { key: string; files: number; of: number; done: boolean } | null;
+  /** Tickets whose commits moved main under the branch (merge holds only), newest first; empty when unknown. */
+  movedBy: string[];
   /** Open blocking review comments, one line each (review holds only). */
   reviewComments: string[];
   /** Appended to every prompt: the completion reminder for an agent with the tool, else '' (it cannot signal completion). */
-  completeAgain: string;
+  completionReminder: string;
 }
 
 type Recovery = Omit<RunRecovery, 'delivery'>;
@@ -63,6 +65,10 @@ const lastLine = (output: string): string | null =>
 const fileList = (files: string[]): string =>
   files.length > WHY_FILES ? `${files.slice(0, WHY_FILES).join(', ')} and ${files.length - WHY_FILES} more` : files.join(', ');
 
+/** Ticket keys as one phrase: one, `A, B`, or `A, B and N more`. */
+const movedByList = (keys: string[]): string =>
+  keys.length > 2 ? `${keys.slice(0, 2).join(', ')} and ${keys.length - 2} more` : keys.join(', ');
+
 /** A git failure as people read it: its last line, without the command line and git's `fatal:` prefix. */
 const gitMessage = (error: string): string =>
   (lastLine(error) ?? error).replace(/^.*\bexited with code \d+: /, '').replace(/^(fatal|error): /, '');
@@ -70,11 +76,11 @@ const gitMessage = (error: string): string =>
 /** A path as one shell word, so the command copies as is. */
 const shellWord = (value: string): string => (/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`);
 
-function discard(ticketKey: string | null, detail?: string): RecoverySuggestion {
+function discard(ticketKey: string | null, detail?: string, label = 'Discard this work'): RecoverySuggestion {
   return suggestion({
     id: 'discard',
     kind: 'discard',
-    label: 'Discard this work',
+    label,
     detail: detail ?? `Move ${ticketKey ?? 'the ticket'} to Done without merging; the branch is kept until the next cleanup.`,
   });
 }
@@ -108,7 +114,7 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
         (files.length > 0
           ? conflictResolutionPrompt(mainBranch, files)
           : `Merge ${mainBranch} into your branch (git merge ${mainBranch}), resolve every conflict keeping the intent of both changes, run the project's checks, commit, and finish.`) +
-        input.completeAgain,
+        input.completionReminder,
       files,
     });
 
@@ -124,12 +130,13 @@ function mergeFailed(input: RecoveryInput): { why: string; suggestions: Recovery
 
   if (probe?.ok) {
     const files = probe.conflicts.map((c) => c.path);
-    const why = `${mainBranch} moved on and ${plural(files.length, 'file now conflicts', 'files now conflict')}: ${fileList(files)}`;
+    const movers = movedByList(input.movedBy);
+    const why = `${mainBranch} moved on${movers ? ` (${movers})` : ''} and ${plural(files.length, 'file now conflicts', 'files now conflict')}: ${fileList(files)}`;
     const sup = input.superseding;
     if (sup?.done && sup.files * 2 >= sup.of) {
       return {
         why,
-        suggestions: [discard(ticketKey, `${sup.key} already added these files (${sup.files} of ${sup.of} conflicts)`), resolve(files), manual(files)],
+        suggestions: [discard(ticketKey, `${sup.key} already added these files (${sup.files} of ${sup.of} conflicts).`), resolve(files), manual(files)],
       };
     }
     return { why, suggestions: [resolve(files), discard(ticketKey), manual(files)] };
@@ -160,13 +167,48 @@ function buildGate(input: RecoveryInput, couldNotRun: boolean): { why: string; s
   return {
     why: last ? `${head}: ${last}` : head,
     suggestions: [
-      suggestion({ id: 'fix_checks', kind: 'prompt', label: 'Fix the checks', detail: 'Ask the agent to make the checks pass.', prompt: prompt + input.completeAgain }),
+      suggestion({ id: 'fix_checks', kind: 'prompt', label: 'Fix the checks', detail: 'Ask the agent to make the checks pass.', prompt: prompt + input.completionReminder }),
       suggestion({
         id: 'run_checks',
         kind: 'manual',
         label: 'Run Build & Verify',
         detail: "Run the checks again from the run's Build & Verify panel to see the current result.",
       }),
+    ],
+  };
+}
+
+/** What the agent is asked when the run's `.emberline/worktree.yml` does not parse (also the automatic request's text). */
+export const worktreeYmlFixPrompt = (errorText: string): string =>
+  `[Worktree config check] \`.emberline/worktree.yml\` in your branch is not valid, so Emberline would ignore it:\n\n\`\`\`\n${errorText}\n\`\`\`\n\nFix it (or remove your change) so the file matches the schema, then commit before finishing.`;
+
+/** What the agent is asked when an Auto Bootstrap left `.emberline/worktree.yml` without commands. */
+export const WORKTREE_COMMANDS_PROMPT =
+  '[Worktree commands] This ticket asks you to write the setup, build, lint and test commands and the preview service for the chosen stack into `.emberline/worktree.yml`, and the file still has none. Add them, make them pass, then commit before finishing.';
+
+/** The worktree config checks hold as a `build_gate_failed` note; null for an ordinary failed build. */
+function worktreeConfig(input: RecoveryInput): { why: string; suggestions: RecoverySuggestion[] } | null {
+  const payload = input.hold.payload;
+  const label = holdLabelOf('build_gate_failed', payload);
+  const commands = label === 'Worktree commands are missing';
+  if (!commands && label !== 'Worktree config is not valid') return null;
+  const output = text(payload, 'output') ?? '';
+  const errorText = output.replace(/^\.emberline\/worktree\.yml is not valid:\n?/, '').trim();
+  const first = errorText.split('\n').map((l) => l.trim()).find(Boolean) ?? null;
+  return {
+    why: commands
+      ? 'the bootstrap left .emberline/worktree.yml without setup, build, lint or test commands'
+      : `the run's .emberline/worktree.yml is not valid${first ? `: ${first}` : ''}`,
+    suggestions: [
+      suggestion({
+        id: 'fix_worktree_yml',
+        kind: 'prompt',
+        label: 'Fix the file',
+        detail: commands ? 'Ask the agent to add the commands.' : 'Ask the agent to make .emberline/worktree.yml valid.',
+        prompt: (commands ? WORKTREE_COMMANDS_PROMPT : worktreeYmlFixPrompt(errorText || 'The file could not be read.')) + input.completionReminder,
+      }),
+      openReview(),
+      discard(input.ticketKey),
     ],
   };
 }
@@ -183,7 +225,7 @@ function secretGuard(input: RecoveryInput): { why: string; suggestions: Recovery
   return {
     why: n ? `${plural(n, 'possible secret', 'possible secrets')} in the diff` : 'possible secrets in the diff',
     suggestions: [
-      suggestion({ id: 'remove_secrets', kind: 'prompt', label: 'Remove the secrets', detail: 'Ask the agent to take them out of the branch.', prompt: prompt + input.completeAgain }),
+      suggestion({ id: 'remove_secrets', kind: 'prompt', label: 'Remove the secrets', detail: 'Ask the agent to take them out of the branch.', prompt: prompt + input.completionReminder }),
       openReview(),
     ],
   };
@@ -200,7 +242,7 @@ function completionBlocked(input: RecoveryInput): { why: string; suggestions: Re
         kind: 'prompt',
         label: 'Answer the blockers',
         detail: 'Write your answer under the quoted blockers.',
-        prompt: `You reported that you are blocked:\n\n${quoted}\n\nMy answer:\n\n\n\nContinue the work with this answer, run the project's checks, commit, and finish.${input.completeAgain}`,
+        prompt: `You reported that you are blocked:\n\n${quoted}\n\nMy answer:\n\n\n\nContinue the work with this answer, run the project's checks, commit, and finish.${input.completionReminder}`,
       }),
       discard(input.ticketKey),
     ],
@@ -217,7 +259,7 @@ function reviewBlocked(input: RecoveryInput): { why: string; suggestions: Recove
     why: n ? `${plural(n, 'blocking review comment is', 'blocking review comments are')} open` : 'blocking review comments are open',
     suggestions: [
       openReview(),
-      suggestion({ id: 'address_comments', kind: 'prompt', label: 'Address the comments', detail: 'Ask the agent to work through them.', prompt: prompt + input.completeAgain }),
+      suggestion({ id: 'address_comments', kind: 'prompt', label: 'Address the comments', detail: 'Ask the agent to work through them.', prompt: prompt + input.completionReminder }),
     ],
   };
 }
@@ -225,7 +267,7 @@ function reviewBlocked(input: RecoveryInput): { why: string; suggestions: Recove
 /** Why a run is held and at most three ways out, best first. Pure. */
 export function buildRecovery(input: RecoveryInput): Recovery {
   const { type, payload } = input.hold;
-  const label = HOLD_LABELS[type] ?? 'Held for review';
+  const label = holdLabelOf(type, payload);
   const done = (body: { why: string; suggestions: RecoverySuggestion[] }): Recovery => ({
     hold: type,
     label,
@@ -233,13 +275,13 @@ export function buildRecovery(input: RecoveryInput): Recovery {
     suggestions: body.suggestions.slice(0, 3),
   });
   const ask = (id: string, button: string, detail: string, prompt: string) =>
-    suggestion({ id, kind: 'prompt', label: button, detail, prompt: prompt + input.completeAgain });
+    suggestion({ id, kind: 'prompt', label: button, detail, prompt: prompt + input.completionReminder });
 
   switch (type) {
     case 'merge_failed':
       return done(mergeFailed(input));
     case 'build_gate_failed':
-      return done(buildGate(input, false));
+      return done(worktreeConfig(input) ?? buildGate(input, false));
     case 'build_gate_error':
       return done(buildGate(input, true));
     case 'critic_blocked':
@@ -288,9 +330,9 @@ export function buildRecovery(input: RecoveryInput): Recovery {
     case 'review_blocked':
       return done(reviewBlocked(input));
     case 'no_changes': {
-      // An agent without the completion tool (completeAgain is '') cannot register an explanation:
+      // An agent without the completion tool (completionReminder is '') cannot register an explanation:
       // its reply is the explanation, and a person marks the ticket done.
-      const canComplete = input.completeAgain !== '';
+      const canComplete = input.completionReminder !== '';
       return done({
         why: canComplete ? 'the agent ended without changing anything or saying what it did' : 'the agent ended without changing anything',
         suggestions: [
@@ -308,9 +350,13 @@ export function buildRecovery(input: RecoveryInput): Recovery {
             id: 'merge_now',
             kind: 'merge',
             label: 'Mark done anyway',
-            detail: `Move ${input.ticketKey ?? 'the ticket'} to Done; there is nothing to merge.`,
+            detail: `Move ${input.ticketKey ?? 'the ticket'} to Done as finished. There is nothing to merge.`,
           }),
-          discard(input.ticketKey),
+          discard(
+            input.ticketKey,
+            `Move ${input.ticketKey ?? 'the ticket'} to Done as not needed. Nothing is merged, and the branch is kept until the next cleanup.`,
+            'Close as not needed',
+          ),
         ],
       });
     }

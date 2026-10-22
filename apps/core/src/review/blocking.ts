@@ -1,10 +1,9 @@
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
+import { CHAIN_MAX } from '../runs/handoff-chain.js';
 
 /** Ids per statement; far below SQLite's variable limit. */
 const CHUNK = 500;
-/** How many handoff predecessors count (like ReviewService's chain). */
-export const CHAIN_MAX = 20;
 
 /**
  * Blocking feedback a fresh run of the ticket carried in its prompt (payload `{ count, fromRun }`).

@@ -3,11 +3,17 @@ import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as orchestration from './factory/orchestration.js';
 import { quotaWindows, runs as runsTable, tickets as ticketsTable } from './db/schema.js';
 import { computeProjectRecommendations } from './factory/workspace-status.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+
+vi.mock('./factory/orchestration.js', async (orig) => {
+  const actual = await orig<typeof orchestration>();
+  return { ...actual, buildFactoryOrchestratorPrompt: vi.fn(actual.buildFactoryOrchestratorPrompt) };
+});
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -871,6 +877,27 @@ describe('headless agents refuse modes that would need to ask', () => {
     });
     expect(tagged.statusCode).toBe(409);
     expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+  });
+
+  it('a factory request whose generated ticket text routes to a headless agent leaves no [Factory] ticket', async () => {
+    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'] });
+    const real = vi.mocked(orchestration.buildFactoryOrchestratorPrompt).getMockImplementation()!;
+    vi.mocked(orchestration.buildFactoryOrchestratorPrompt).mockImplementation(
+      (...args) => `${real(...args)}\n[Preferred Agent: gemini · Model: auto]`,
+    );
+    try {
+      const res = await api('POST', `/api/projects/${projectId}/factory-request`, {
+        prompt: 'A landing page',
+        leadPersona: 'product_owner',
+        permissionMode: 'acceptEdits',
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
+      expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+      expect(t.db.select().from(runsTable).all()).toHaveLength(0);
+    } finally {
+      vi.mocked(orchestration.buildFactoryOrchestratorPrompt).mockImplementation(real);
+    }
   });
 
   it('a run without a prompt opens Antigravity interactively in any mode', async () => {

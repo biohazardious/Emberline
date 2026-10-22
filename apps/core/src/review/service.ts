@@ -5,6 +5,7 @@ import {
   RequestChangesBody,
   type RequestChangesResponse,
   type ReviewComment,
+  type PermissionMode,
   type Run,
   RUN_PROMPT_MAX,
   type RunReviewState,
@@ -12,8 +13,9 @@ import {
 } from '@emberline/protocol';
 import { and, asc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { reviewComments, reviewFileViews, runEvents, runs as runsTable } from '../db/schema.js';
+import { reviewComments, reviewFileViews, runEvents } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { predecessorChain, successorChain } from '../runs/handoff-chain.js';
 import { reviewBlockedIsCurrent } from '../runs/hold-outcome.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
@@ -76,8 +78,6 @@ export interface ReviewServiceOptions {
   completionHint?: (run: Run) => string;
 }
 
-/** Longest handoff chain followed when settling comments. */
-const CHAIN_MAX = 20;
 /**
  * A `done` from these is not the agent finishing a turn: it never addresses comments. A CLI that
  * exits cleanly mid-turn reports SessionEnd (working -> done) before its process exit is noticed.
@@ -110,11 +110,7 @@ export class ReviewService {
     if (!stateChanged || run.state !== 'done') return;
     try {
       // The done of a handoff successor settles what its predecessors were sent.
-      let id: string | null = run.id;
-      for (let i = 0; id && i < CHAIN_MAX; i += 1) {
-        this.settle(id);
-        id = this.db.select({ p: runsTable.predecessorRunId }).from(runsTable).where(eq(runsTable.id, id)).get()?.p ?? null;
-      }
+      for (const id of predecessorChain(this.db, run.id)) this.settle(id);
     } catch (error) {
       this.log(`review: marking the comments of run ${run.id} addressed failed`, error);
     }
@@ -131,13 +127,7 @@ export class ReviewService {
 
   /** The run and the runs that took over from it by handoff, in order. */
   private chain(runId: string): string[] {
-    const ids = [runId];
-    let next = this.db.select({ to: runsTable.handedOffTo }).from(runsTable).where(eq(runsTable.id, runId)).get()?.to ?? null;
-    while (next && ids.length < CHAIN_MAX && !ids.includes(next)) {
-      ids.push(next);
-      next = this.db.select({ to: runsTable.handedOffTo }).from(runsTable).where(eq(runsTable.id, next)).get()?.to ?? null;
-    }
-    return ids;
+    return successorChain(this.db, runId);
   }
 
   /**
@@ -416,9 +406,10 @@ export class ReviewService {
    * status. One send per run at a time.
    */
   async requestChanges(runId: string, raw: unknown): Promise<RequestChangesResponse> {
-    const { note, target } = parse(RequestChangesBody, raw);
+    const { note, target, permissionMode } = parse(RequestChangesBody, raw);
     this.runs.getRun(runId);
-    return this.sending.run(runId, () => (target === 'new' ? this.sendToNewRun(runId, note) : this.sendToSameRun(runId, note)));
+    if (permissionMode && target !== 'new') throw badRequest('a mode can be chosen only for a new run');
+    return this.sending.run(runId, () => (target === 'new' ? this.sendToNewRun(runId, note, permissionMode) : this.sendToSameRun(runId, note)));
   }
 
   private async sendToSameRun(runId: string, note: string): Promise<RequestChangesResponse> {
@@ -439,7 +430,7 @@ export class ReviewService {
     return { run: prompted, sent: comments.length };
   }
 
-  private async sendToNewRun(runId: string, note: string): Promise<RequestChangesResponse> {
+  private async sendToNewRun(runId: string, note: string, permissionMode?: PermissionMode): Promise<RequestChangesResponse> {
     const run = this.runs.getRun(runId);
     if (!run.ticketId || !this.startTicketRun) throw conflict('only a ticket run can start a new run');
     const comments = await this.batch(run);
@@ -448,7 +439,8 @@ export class ReviewService {
     const sentAt = new Date();
     const fresh = await this.startTicketRun({
       ticketId: run.ticketId,
-      permissionMode: run.permissionMode,
+      // Kept unless the person chose another mode for the new run (never raised on its own).
+      permissionMode: permissionMode ?? run.permissionMode,
       persona: run.persona,
       section: (room) => {
         const built = newRunFeedbackSection(run.id, note, comments, room);
@@ -473,7 +465,12 @@ export class ReviewService {
     // Queued or starting is only a wait: sending again soon works.
     const waiting = run.state === 'queued' || run.state === 'starting';
     if (!run.ticketId || !this.startTicketRun || waiting) return error;
-    return new HttpError(409, error.code, error.message, { ...error.details, canStartNew: true });
+    return new HttpError(409, error.code, error.message, {
+      ...error.details,
+      canStartNew: true,
+      // A new run in Autonomous mode is a way out for an agent that cannot ask; the person has to choose it.
+      ...(error.code === 'headless_needs_auto' ? { needsAutonomous: true } : {}),
+    });
   }
 
   /**

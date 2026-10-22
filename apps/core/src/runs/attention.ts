@@ -1,5 +1,5 @@
 import { isPermissionNotification } from '@emberline/adapter-sdk';
-import { HOLD_LABELS, type Run, type RunAttention } from '@emberline/protocol';
+import { HOLD_LABELS, holdLabelOf, type Run, type RunAttention } from '@emberline/protocol';
 import { inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runs, tickets } from '../db/schema.js';
@@ -121,7 +121,7 @@ export function computeAttention(
       if (run.ticketId ? !(ticket?.inReview && ticket.latest) : now - hold.ts.getTime() > HOLD_WINDOW_MS) return null;
       const since = hold.ts.toISOString();
       if (hold.type === 'completion_blocked') return make(run, 'blocked', blockersOf(hold), since, hold.id);
-      return make(run, 'held', HOLD_LABELS[hold.type] ?? hold.type, since, hold.id);
+      return make(run, 'held', Object.hasOwn(HOLD_LABELS, hold.type) ? holdLabelOf(hold.type, hold.payload) : hold.type, since, hold.id);
     }
     default:
       return null;

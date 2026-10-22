@@ -1,11 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as gitExec from '../git-exec.js';
 import {
   findSuperseding,
+  mainMoversFor,
+  type MergeProbe,
   parseMergeTree,
   probeMerge,
   supersedingFor,
@@ -70,6 +72,30 @@ describe('parseMergeTree', () => {
       { path: 'n', kind: 'add/add' },
     ]);
   });
+  it('gives a kind to a path a message names inside its text, and `unknown` to one no message names', () => {
+    const out = [
+      'tree',
+      'd~main',
+      'g',
+      'sub/h.ts',
+      '',
+      'CONFLICT (file/directory): directory in the way of d~main from main; moving it to d~main instead.',
+      'CONFLICT (rename/rename): sub/h.ts renamed to x in br and to y in main.',
+      '',
+    ].join('\n');
+    expect(parseMergeTree(out)).toEqual([
+      { path: 'd~main', kind: 'file/directory' },
+      { path: 'g', kind: 'unknown' },
+      { path: 'sub/h.ts', kind: 'rename/rename' },
+    ]);
+  });
+  it('does not take a longer path for a shorter one', () => {
+    const out = ['tree', 'a', 'a.ts', '', 'CONFLICT (file/directory): directory in the way of a.ts from main.', ''].join('\n');
+    expect(parseMergeTree(out)).toEqual([
+      { path: 'a', kind: 'unknown' },
+      { path: 'a.ts', kind: 'file/directory' },
+    ]);
+  });
   it('returns nothing for a clean merge', () => {
     expect(parseMergeTree('05852ee282a1f05fc1a4f6aa7edb1a636c8a0e4c\n')).toEqual([]);
   });
@@ -114,6 +140,30 @@ describe('probeMerge', () => {
     git(dir, 'commit', '-q', '-m', 'main adds it too');
     const res = await probeMerge(dir, 'main', 'b');
     expect(res.ok && res.conflicts).toEqual([{ path: 'çiçek.ts', kind: 'add/add' }]);
+  });
+
+  it('a branch that replaces a file with a directory main edited: no conflict reads as content', async () => {
+    git(dir, 'checkout', '-q', '-b', 'b');
+    git(dir, 'rm', '-q', 'd');
+    mkdirSync(path.join(dir, 'd'));
+    write('d/inner', 'n\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'dir');
+    git(dir, 'checkout', '-q', 'main');
+    write('d', 'y\n');
+    git(dir, 'commit', '-q', '-am', 'main edits d');
+    const res = await probeMerge(dir, 'main', 'b');
+    const conflicts = res.ok ? res.conflicts : [];
+    expect(conflicts.length).toBeGreaterThan(0);
+    expect(conflicts.every((c) => c.kind !== 'content')).toBe(true);
+    expect(conflicts.find((c) => c.path.startsWith('d'))?.kind).toMatch(/directory|delete|unknown/);
+  });
+
+  it('a cached probe cannot be changed by a caller', async () => {
+    branchAdding('b', 'EL-2', ['new.txt']);
+    const a = await probeMerge(dir, 'main', 'b');
+    expect(() => (a as unknown as { conflicts: unknown[] }).conflicts.push({ path: 'x', kind: 'content' })).toThrow();
+    expect(((await probeMerge(dir, 'main', 'b')) as MergeProbe).conflicts.map((c) => c.path)).not.toContain('x');
   });
 
   it('fails softly when the branch is missing', async () => {
@@ -198,5 +248,27 @@ describe('supersedingFor', () => {
     spy.mockRejectedValueOnce(new Error('runner busy')).mockRejectedValueOnce(new Error('runner busy'));
     expect(await supersedingFor(dir, probe, 'EL-11')).toBeNull();
     expect(await supersedingFor(dir, probe, 'EL-11')).toEqual({ key: 'EL-10', files: 2 });
+  });
+});
+
+describe('mainMoversFor', () => {
+  it('names the tickets whose commits on main touched the conflicted paths, newest first, without the own key', async () => {
+    branchAdding('b', 'EL-9', ['f']);
+    for (const [key, body] of [['EL-12', '1'], ['EL-14', '2'], ['EL-9', '3'], ['EL-12', '4']] as const) {
+      write('f', `${body}\n`);
+      git(dir, 'commit', '-q', '-am', `feat(${key}): change`);
+    }
+    write('other', 'x\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'feat(EL-99): elsewhere');
+    const probe = (await probeMerge(dir, 'main', 'b')) as MergeProbe;
+    expect(probe.conflicts.map((c) => c.path)).toEqual(['f']);
+    expect(await mainMoversFor(dir, probe, 'EL-9')).toEqual(['EL-12', 'EL-14']);
+    expect(await mainMoversFor(dir, probe, null)).toEqual(['EL-12', 'EL-9', 'EL-14']);
+  });
+
+  it('is empty without conflicts', async () => {
+    branchAdding('b', 'EL-2', ['new.txt']);
+    expect(await mainMoversFor(dir, (await probeMerge(dir, 'main', 'b')) as MergeProbe, 'EL-2')).toEqual([]);
   });
 });

@@ -17,7 +17,7 @@ import {
   dependencyContextSection,
   type FinishedDependency,
 } from './tickets/dependency-context.js';
-import type { TicketService } from './tickets/service.js';
+import { TicketService } from './tickets/service.js';
 
 const NUDGE =
   'You stopped without calling `ticket_complete`. If the ticket is finished, call it now with a summary and handoff. If something blocks you, call it with `blockers`. If you need an answer from a person, ask the question plainly and stop.';
@@ -1233,8 +1233,9 @@ describe('the worktree config check before the merge', () => {
     const types = await eventTypes(run);
     expect(types).toContain('build_gate_failed');
     expect(types).not.toContain('merged_to_main');
-    const note = (await eventPayload(run, 'build_gate_failed')) as { autoFix: boolean; output: string };
+    const note = (await eventPayload(run, 'build_gate_failed')) as { autoFix: boolean; output: string; check?: string };
     expect(note.autoFix).toBe(true);
+    expect(note.check).toBe('worktree_yml');
     expect(note.output).toContain(MESSAGE);
     // Not merged and not Done; the typed request puts the agent (and its ticket) back to work.
     expect(await statusOf(ticket.id)).not.toBe('done');
@@ -1280,6 +1281,23 @@ describe('the worktree config check before the merge', () => {
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(ticket.id)).not.toBe('done');
     expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('a .emberline the run turned into a linked directory is refused and named so', async () => {
+    const { run } = await ymlTicket();
+    mkdirSync(path.join(run.worktreePath, 'cfg'));
+    writeFileSync(path.join(run.worktreePath, 'cfg', 'worktree.yml'), VALID);
+    rmSync(path.join(run.worktreePath, '.emberline'), { recursive: true, force: true });
+    symlinkSync('cfg', path.join(run.worktreePath, '.emberline'));
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'link dir');
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'x' });
+    await settled(passes, 1);
+    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain(
+      '.emberline/worktree.yml is inside a linked directory',
+    );
   });
 
   it('a valid change passes and merges', async () => {
@@ -1526,6 +1544,23 @@ describe('the worktree config check before the merge', () => {
     expect(checkPrompts(run)).toBe(1);
     expect(await statusOf(ticket.id)).toBe('review');
     expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('the one fix request survives a restart', async () => {
+    const { run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'x' });
+    await settled(passes, 1);
+    await expect.poll(() => checkPrompts(run), { timeout: 10_000 }).toBe(1);
+    // A restarted core has no memory of the ask; the second invalid stop is handled by it too.
+    const restarted = new TicketService(t.db, t.runs, t.scheduler, { pipelineSettleMs: 0 });
+    const restartedPasses = trackPipelines(restarted);
+    await nextTurn(run, { summary: 'still mine' });
+    await settled(passes, 2);
+    await settled(restartedPasses, 1);
+    expect(checkPrompts(run)).toBe(1);
   });
 });
 

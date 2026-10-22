@@ -66,6 +66,7 @@ import {
   reviewUnblockPending,
   stillHeld,
 } from '../runs/hold-outcome.js';
+import { WORKTREE_COMMANDS_PROMPT, worktreeYmlFixPrompt } from '../runs/recovery.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
@@ -240,9 +241,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
   private readonly selfHealedRuns = new Set<string>();
-  /** Runs already asked once to fix their branch's worktree.yml: a second invalid stop is a person's. */
-  private readonly worktreeConfigPromptedRuns = new Set<string>();
-  private readonly worktreeCommandsPromptedRuns = new Set<string>();
   private readonly slopHealedRuns = new Set<string>();
   private readonly criticReviewedRuns = new Set<string>();
   private readonly dispatchLock = new KeyedMutex();
@@ -536,20 +534,39 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   createFactoryTicket(
     projectId: string,
     prompt: string,
-    opts: { autoDispatch?: boolean; attachmentContext?: string; leadPersona?: AgentPersona } = {},
+    opts: { autoDispatch?: boolean; attachmentContext?: string; leadPersona?: AgentPersona; body?: string } = {},
   ): Ticket {
     return this.create(projectId, {
       title: factoryTicketTitle(prompt),
-      body: buildFactoryOrchestratorPrompt(
-        prompt,
-        opts.autoDispatch ?? true,
-        opts.attachmentContext ?? '',
-        getFactorySettings(this.db).maxParallelTicketsPerProject,
-      ),
+      body:
+        opts.body ??
+        buildFactoryOrchestratorPrompt(
+          prompt,
+          opts.autoDispatch ?? true,
+          opts.attachmentContext ?? '',
+          getFactorySettings(this.db).maxParallelTicketsPerProject,
+        ),
       persona: opts.leadPersona ?? 'product_owner',
       priority: 3,
       status: 'ready',
     });
+  }
+
+  /** Whether the run was already asked to fix this check (the autoFix note survives restarts). */
+  private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands'): boolean {
+    return this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'build_gate_failed')))
+      .all()
+      .some(({ payload }) => {
+        const p = payload as { check?: string; autoFix?: boolean; output?: string } | null;
+        return (
+          p?.autoFix === true &&
+          (p.check === check ||
+            (check === 'worktree_yml' && p.check === undefined && (p.output ?? '').startsWith('.emberline/worktree.yml is not valid:')))
+        );
+      });
   }
 
   /**
@@ -561,8 +578,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const projectRow = this.project(projectId);
     const body = FactoryRequestBodySchema.parse(input);
     // Refused before anything is written (attachments, ticket, auto-chain). The lead run's route tag
-    // comes from the ticket body, which holds the request's text.
-    const tag = parseRouteTag(body.prompt);
+    // comes from the ticket body, the text generated around the request (which may carry a tag too).
+    const maxParallel = getFactorySettings(this.db).maxParallelTicketsPerProject;
+    const leadBody = (attachments: string) =>
+      buildFactoryOrchestratorPrompt(body.prompt, body.autoDispatch, attachments, maxParallel);
+    const tag = parseRouteTag(leadBody(''));
     this.runs.assertStartable({
       projectId,
       prompt: body.prompt,
@@ -578,6 +598,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       autoDispatch: body.autoDispatch,
       attachmentContext,
       leadPersona: body.leadPersona,
+      body: leadBody(attachmentContext),
     });
     if (body.autoDispatch) {
       this.chainOn(projectId);
@@ -1078,18 +1099,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (problems) {
         const errorText = problems.join('\n').slice(0, 2_400);
-        const gateNote = { output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`) };
+        const gateNote = { check: 'worktree_yml', output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`) };
         const autoFix =
-          fSettings.selfHealingBuildGate && !this.worktreeConfigPromptedRuns.has(run.id) && (!run.endedAt || run.resumable);
+          fSettings.selfHealingBuildGate && !this.askedToFix(run.id, 'worktree_yml') && (!run.endedAt || run.resumable);
         let asked = false;
         if (autoFix) {
-          this.worktreeConfigPromptedRuns.add(run.id);
           // Held before asking: an undelivered request must not let a later dispatch merge the file.
           this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
           asked = await this.runs
             .prompt(
               run.id,
-              `[Worktree config check] \`.emberline/worktree.yml\` in your branch is not valid, so Emberline would ignore it:\n\n\`\`\`\n${errorText}\n\`\`\`\n\nFix it (or remove your change) so the file matches the schema, then commit before finishing.${this.completionReminder(run, ' ')}`,
+              `${worktreeYmlFixPrompt(errorText)}${this.completionReminder(run, ' ')}`,
               { automatic: true },
             )
             .then(() => true)
@@ -1112,16 +1132,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (ticketRow && roles?.bootstrapWritesWorktree && ticketRow.id === roles.bootstrap) {
       const missing = await worktreeCommandsMissing(run.worktreePath || projectRow.path).catch(() => null);
       if (missing) {
-        const gateNote = { output: holdText(missing) };
-        const autoFix = fSettings.selfHealingBuildGate && !this.worktreeCommandsPromptedRuns.has(run.id) && (!run.endedAt || run.resumable);
+        const gateNote = { check: 'worktree_commands', output: holdText(missing) };
+        const autoFix = fSettings.selfHealingBuildGate && !this.askedToFix(run.id, 'worktree_commands') && (!run.endedAt || run.resumable);
         let asked = false;
         if (autoFix) {
-          this.worktreeCommandsPromptedRuns.add(run.id);
           this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
           asked = await this.runs
             .prompt(
               run.id,
-              `[Worktree commands] This ticket asks you to write the setup, build, lint and test commands and the preview service for the chosen stack into \`.emberline/worktree.yml\`, and the file still has none. Add them, make them pass, then commit before finishing.${this.completionReminder(run, ' ')}`,
+              `${WORKTREE_COMMANDS_PROMPT}${this.completionReminder(run, ' ')}`,
               { automatic: true },
             )
             .then(() => true)

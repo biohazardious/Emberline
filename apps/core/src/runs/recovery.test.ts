@@ -13,8 +13,9 @@ const input = (type: string, payload: Record<string, unknown> | null = {}, more:
   worktreePath: WT,
   probe: null,
   superseding: null,
+  movedBy: [],
   reviewComments: [],
-  completeAgain: REMINDER,
+  completionReminder: REMINDER,
   ...more,
 });
 
@@ -66,6 +67,17 @@ describe('buildRecovery: merge_failed', () => {
     expect(r.why).toBe('main moved on and 11 files now conflict: f0.ts, f1.ts, f2.ts and 8 more');
   });
 
+  it('names the tickets that moved main', () => {
+    const one = buildRecovery(input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12'] }));
+    expect(one.why).toBe('main moved on (EL-12) and 1 file now conflicts: app.js');
+    const two = buildRecovery(input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12', 'EL-14'] }));
+    expect(two.why).toBe('main moved on (EL-12, EL-14) and 1 file now conflicts: app.js');
+    const many = buildRecovery(
+      input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12', 'EL-14', 'EL-15', 'EL-16'] }),
+    );
+    expect(many.why).toBe('main moved on (EL-12, EL-14 and 2 more) and 1 file now conflicts: app.js');
+  });
+
   it('no conflicts now: Merge now, Discard', () => {
     const r = buildRecovery(input('merge_failed', { conflicts: ['a'] }, { probe: probe() }));
     expectWellFormed('merge_failed', r);
@@ -82,7 +94,7 @@ describe('buildRecovery: merge_failed', () => {
       input('merge_failed', {}, { probe: probe(...files), superseding: { key: 'EL-10', files: 11, of: 11, done: true } }),
     );
     expectWellFormed('merge_failed', r);
-    expect(r.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (11 of 11 conflicts)' });
+    expect(r.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (11 of 11 conflicts).' });
     expect(r.suggestions.map((s) => s.kind)).toEqual(['discard', 'prompt', 'manual']);
   });
 
@@ -233,14 +245,17 @@ describe('buildRecovery: the other holds', () => {
     expect(r.suggestions.map((s) => [s.kind, s.id, s.label])).toEqual([
       ['prompt', 'do_the_ticket', 'Do the ticket'],
       ['merge', 'merge_now', 'Mark done anyway'],
-      ['discard', 'discard', 'Discard this work'],
+      ['discard', 'discard', 'Close as not needed'],
     ]);
+    const [, merge, discard] = r.suggestions;
+    expect(merge!.detail).toBe('Move EL-6 to Done as finished. There is nothing to merge.');
+    expect(discard!.detail).toBe('Move EL-6 to Done as not needed. Nothing is merged, and the branch is kept until the next cleanup.');
     expect(r.suggestions[0]!.prompt).toMatch(/^The ticket asks for changes, but you made none\./);
     expect(r.suggestions[0]!.prompt).toContain('explain why nothing is needed');
   });
 
   it('no_changes for an agent without the completion tool: no "saying what it did", the reply is the explanation', () => {
-    const r = buildRecovery(input('no_changes', { autoFix: false }, { completeAgain: '' }));
+    const r = buildRecovery(input('no_changes', { autoFix: false }, { completionReminder: '' }));
     expect(r.why).toBe('the agent ended without changing anything');
     expect(r.suggestions.map((s) => s.id)).toEqual(['do_the_ticket', 'merge_now', 'discard']);
     const prompt = r.suggestions[0]!.prompt!;
@@ -251,7 +266,44 @@ describe('buildRecovery: the other holds', () => {
   });
 
   it('a prompt without the completion tool ends with the prompt itself', () => {
-    const r = buildRecovery(input('completion_missing', {}, { completeAgain: '' }));
+    const r = buildRecovery(input('completion_missing', {}, { completionReminder: '' }));
     expect(r.suggestions[0]!.prompt!.endsWith('say what blocks you.')).toBe(true);
+  });
+});
+
+describe('buildRecovery: the worktree config holds', () => {
+  const yml = {
+    check: 'worktree_yml',
+    autoFix: false,
+    output: '.emberline/worktree.yml is not valid:\nchecks: Unrecognized key: "container"',
+  };
+
+  it('build_gate_failed from the worktree config check: its own label and suggestions, no Build & Verify', () => {
+    const r = buildRecovery(input('build_gate_failed', yml));
+    expect(r.label).toBe('Worktree config is not valid');
+    expect(r.why).toBe('the run\'s .emberline/worktree.yml is not valid: checks: Unrecognized key: "container"');
+    expect(r.suggestions.map((s) => s.id)).toEqual(['fix_worktree_yml', 'open_review', 'discard']);
+    expect(r.suggestions[0]!.prompt).toContain('checks: Unrecognized key: "container"');
+    expect(r.suggestions[0]!.prompt!.endsWith(REMINDER)).toBe(true);
+  });
+
+  it('an older note without `check` is recognised by its output', () => {
+    const { check: _check, ...old } = yml;
+    const r = buildRecovery(input('build_gate_failed', old));
+    expect(r.label).toBe('Worktree config is not valid');
+    expect(r.suggestions.map((s) => s.id)).toEqual(['fix_worktree_yml', 'open_review', 'discard']);
+  });
+
+  it('missing worktree commands: their own label and why', () => {
+    const r = buildRecovery(input('build_gate_failed', { check: 'worktree_commands', autoFix: false, output: 'no commands' }));
+    expect(r.label).toBe('Worktree commands are missing');
+    expect(r.why).toBe('the bootstrap left .emberline/worktree.yml without setup, build, lint or test commands');
+    expect(r.suggestions.map((s) => s.id)).toEqual(['fix_worktree_yml', 'open_review', 'discard']);
+  });
+
+  it('an ordinary failed build still offers Build & Verify', () => {
+    const r = buildRecovery(input('build_gate_failed', { output: 'boom' }));
+    expect(r.label).toBe('Build checks failed');
+    expect(r.suggestions.map((s) => s.id)).toEqual(['fix_checks', 'run_checks']);
   });
 });

@@ -30,6 +30,7 @@ import { buildOutputs, projects, runEvents, runs, tickets } from '../db/schema.j
 import { notFound } from '../errors.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { predecessorChain, successorChain } from '../runs/handoff-chain.js';
 import { listBuildOutputs, resolveSafeWorktreePath } from '../runs/git.js';
 import {
   copyBetweenHandles,
@@ -717,22 +718,10 @@ export class BuildOutputArchive {
    * from, and the runs that took over from it.
    */
   private chainIds(run: RunRow): Set<string> {
-    const ids = new Set<string>([run.id]);
-    const walk = (start: string | null, step: (id: string) => string | null | undefined) => {
-      let next = start;
-      while (next && !ids.has(next) && ids.size < MAX_CHAIN_LENGTH) {
-        ids.add(next);
-        next = step(next) ?? null;
-      }
-    };
-    walk(
-      run.predecessorRunId,
-      (id) => this.db.select({ id: runs.predecessorRunId }).from(runs).where(eq(runs.id, id)).get()?.id,
-    );
-    walk(
-      run.handedOffTo,
-      (id) => this.db.select({ id: runs.handedOffTo }).from(runs).where(eq(runs.id, id)).get()?.id,
-    );
+    const ids = new Set([
+      ...predecessorChain(this.db, run.id, MAX_CHAIN_LENGTH),
+      ...successorChain(this.db, run.id, MAX_CHAIN_LENGTH),
+    ]);
     ids.delete(run.id);
     return ids;
   }

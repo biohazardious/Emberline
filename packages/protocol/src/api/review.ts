@@ -1,5 +1,6 @@
 /** API contracts: review: git diff, commit/push & artifacts (M6). */
 import { z } from 'zod';
+import { PermissionMode } from './projects.js';
 import type { Run } from './runs.js';
 
 /**
@@ -220,6 +221,8 @@ export const RequestChangesBody = z.object({
   /** Optional overall note sent before the line comments. */
   note: z.string().trim().max(10_000).default(''),
   target: RequestChangesTarget.default('same'),
+  /** Only with `target: 'new'`: the new run's mode, chosen by the person (e.g. Autonomous for an agent that cannot ask). */
+  permissionMode: PermissionMode.optional(),
 });
 export type RequestChangesBody = z.input<typeof RequestChangesBody>;
 
