@@ -169,8 +169,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 # Chromium (open source, not Google Chrome) for the agents' headless browser. Ubuntu ships it only as a
 # snap (cannot run in a container), so it comes from the xtradeb PPA; apt pinning takes nothing else from
-# it. The PPA key is fetched by its fingerprint and checked against it after the download. When Launchpad fails after retries, Playwright's pinned Chromium build (Chrome for Testing, checksum
-# taken at pin time) is used instead. CHROMIUM_SOURCE=ppa|playwright forces one source (to test each path).
+# it. The PPA key is fetched by its fingerprint and checked against it after the download. When
+# Launchpad fails after retries, Playwright's pinned Chromium build (Chrome for Testing, checksum taken
+# at pin time) is used instead. CHROMIUM_SOURCE=ppa|playwright forces one source (to test each path).
 # The build cache keeps whichever source won until this layer is rebuilt.
 ARG XTRADEB_SIGNER_FINGERPRINT=5301FA4FD93244FBC6F6149982BB6851C64F6880
 ARG CHROMIUM_SOURCE=auto
