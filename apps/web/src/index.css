@@ -5861,3 +5861,42 @@ dialog.cmd-dialog::backdrop {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* --- Project settings → Repository --- */
+.repo-block {
+  margin: 0 0 16px;
+}
+
+.repo-status {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+
+.repo-status dt {
+  color: var(--text-muted);
+}
+
+.repo-status dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.repo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.repo-form {
+  margin-top: 8px;
+}
+
+.repo-form .form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 520px;
+}

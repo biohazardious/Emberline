@@ -14,6 +14,7 @@ import {
   worktreeEditAvailable,
   worktreeBanner,
 } from '../projectSettings';
+import { RepositoryPanel } from './RepositoryPanel';
 import { WorktreeEditor } from './WorktreeEditor';
 
 /** The unified diff, the schema errors and Approve for HEAD's .emberline/worktree.yml. */
@@ -206,6 +207,7 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
           </p>
         </div>
       </header>
+      <RepositoryPanel project={project} />
       {error && (
         <p className="banner banner-error" role="alert">
           {error}
