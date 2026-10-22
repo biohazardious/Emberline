@@ -13,12 +13,14 @@ import { useApi } from '../hooks/useApi';
 import {
   accountText,
   connectPrefill,
-  existingOrigin,
+  createRepoEnabled,
   lastPushText,
   mainStateText,
   mainTipText,
   originCredentialsText,
   pushMainBlocked,
+  repoErrorForm,
+  replaceOriginQuestion,
 } from '../repository';
 
 /** Project settings → Repository: origin, the account used, main against origin, and the person's push. */
@@ -27,15 +29,19 @@ export function RepositoryPanel({ project }: { project: Project }) {
   const status = useApi<RepositoryStatus>(base, 120_000);
   const accounts = useApi<ForgeAccountsResponse>('/api/forge/accounts', 120_000);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ form: 'connect' | 'create' | 'actions'; text: string } | null>(null);
   const [url, setUrl] = useState('');
   const [accountId, setAccountId] = useState('');
-  const [owners, setOwners] = useState<ForgeOwner[]>([]);
+  // The owners belong to the account they were read for; a changed account never shows another's.
+  const [ownersOf, setOwnersOf] = useState<{ accountId: string; owners: ForgeOwner[] } | null>(null);
+  const [ownersError, setOwnersError] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const [owner, setOwner] = useState('');
   const [name, setName] = useState(project.slug);
   const [isPrivate, setIsPrivate] = useState(true);
   const [description, setDescription] = useState('');
   const s = status.data;
+  const owners = ownersOf?.accountId === accountId ? ownersOf.owners : [];
 
   useEffect(() => {
     if (!accountId && accounts.data?.accounts[0]) setAccountId(accounts.data.accounts[0].id);
@@ -47,21 +53,23 @@ export function RepositoryPanel({ project }: { project: Project }) {
     if (offeredOrigin) setUrl((current) => current || offeredOrigin);
   }, [offeredOrigin]);
   useEffect(() => {
-    if (!accountId) return;
+    // Owners are read from the forge, so only once the person opens Create.
+    if (!createOpen || !accountId) return;
     let live = true;
+    setOwnersError(null);
     void api<ForgeOwnersResponse>(`/api/forge/accounts/${accountId}/owners`)
       .then((res) => {
         if (!live) return;
-        setOwners(res.owners);
+        setOwnersOf({ accountId, owners: res.owners });
         setOwner(res.owners[0]?.id ?? '');
       })
       .catch((err: unknown) => {
-        if (live) setError(errorMessage(err));
+        if (live) setOwnersError(errorMessage(err));
       });
     return () => {
       live = false;
     };
-  }, [accountId]);
+  }, [accountId, createOpen]);
 
   /** Runs a mutation; on origin_exists asks once and resends with replace. */
   const act = async (key: string, send: (replace: boolean) => Promise<RepositoryStatus>) => {
@@ -71,12 +79,13 @@ export function RepositoryPanel({ project }: { project: Project }) {
       try {
         await send(false);
       } catch (err) {
-        const origin = existingOrigin(err);
-        if (!origin || !window.confirm(`This project already has origin ${origin}. Replace it?`)) throw err;
+        const question = replaceOriginQuestion(err);
+        if (!question) throw err;
+        if (!window.confirm(question)) return; // cancelled: nothing changed, nothing to report
         await send(true);
       }
     } catch (err) {
-      setError(errorMessage(err));
+      setError({ form: repoErrorForm(key), text: errorMessage(err) });
     } finally {
       // The status shows what happened (also after a failed push), so always re-read it.
       await status.refresh();
@@ -161,9 +170,9 @@ export function RepositoryPanel({ project }: { project: Project }) {
           {lastPush}
         </p>
       )}
-      {error && (
-        <p className="banner banner-error" role="alert">
-          {error}
+      {error?.form === 'actions' && (
+        <p className="banner banner-error" role="alert" id="repo-actions-error">
+          {error.text}
         </p>
       )}
       {s?.isGitRepo && (
@@ -173,6 +182,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
               type="button"
               className="btn btn-sm btn-primary"
               disabled={busy !== null || blocked !== null}
+              aria-describedby={error?.form === 'actions' ? 'repo-actions-error' : undefined}
               title={blocked ?? undefined}
               onClick={() => void act('push', () => api<RepositoryStatus>(`${base}/push-main`, 'POST'))}
             >
@@ -212,6 +222,8 @@ export function RepositoryPanel({ project }: { project: Project }) {
               <input
                 className="input mono"
                 aria-label="Repository URL"
+                aria-invalid={error?.form === 'connect' || undefined}
+                aria-describedby={error?.form === 'connect' ? 'repo-connect-error' : undefined}
                 placeholder="https://github.com/you/app.git"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
@@ -219,9 +231,14 @@ export function RepositoryPanel({ project }: { project: Project }) {
               <button type="submit" className="btn btn-sm" disabled={busy !== null || !url.trim()}>
                 {busy === 'connect' ? 'Connecting…' : 'Connect'}
               </button>
+              {error?.form === 'connect' && (
+                <p className="form-error" role="alert" id="repo-connect-error">
+                  {error.text}
+                </p>
+              )}
             </form>
           </details>
-          <details className="repo-form">
+          <details className="repo-form" onToggle={(e) => setCreateOpen(e.currentTarget.open)}>
             <summary>Create a repository</summary>
             {accounts.data && accounts.data.accounts.length === 0 ? (
               <p className="muted">
@@ -230,9 +247,28 @@ export function RepositoryPanel({ project }: { project: Project }) {
               </p>
             ) : (
               <form className="form" onSubmit={create}>
+                {accounts.error !== undefined && !accounts.data && (
+                  <p className="form-error" role="alert">
+                    Could not load the forge accounts: {errorMessage(accounts.error)}{' '}
+                    <button type="button" className="btn btn-sm" onClick={() => void accounts.refresh()}>
+                      Retry
+                    </button>
+                  </p>
+                )}
+                {ownersError !== null && (
+                  <p className="form-error" role="alert">
+                    Could not load the owners: {ownersError}
+                  </p>
+                )}
                 <label>
                   Account
-                  <select className="input" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                  <select
+                    className="input"
+                    value={accountId}
+                    aria-invalid={error?.form === 'create' || undefined}
+                    aria-describedby={error?.form === 'create' ? 'repo-create-error' : undefined}
+                    onChange={(e) => setAccountId(e.target.value)}
+                  >
                     {accounts.data?.accounts.map((a) => (
                       <option key={a.id} value={a.id}>
                         {PROVIDER_LABEL[a.provider]} · {accountHost(a)}
@@ -282,10 +318,23 @@ export function RepositoryPanel({ project }: { project: Project }) {
                 <button
                   type="submit"
                   className="btn btn-sm"
-                  disabled={busy !== null || !accountId || !owner || !name.trim()}
+                  disabled={
+                    !createRepoEnabled({
+                      busy: busy !== null,
+                      accountId,
+                      owner,
+                      ownersAccountId: ownersOf?.accountId ?? null,
+                      name,
+                    })
+                  }
                 >
                   {busy === 'create' ? 'Creating…' : 'Create and connect'}
                 </button>
+                {error?.form === 'create' && (
+                  <p className="form-error" role="alert" id="repo-create-error">
+                    {error.text}
+                  </p>
+                )}
               </form>
             )}
           </details>

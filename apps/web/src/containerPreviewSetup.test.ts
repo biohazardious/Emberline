@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  anchorScrollDue,
   choiceForService,
   containerPreviewBoxShown,
   containerPreviewHint,
@@ -176,5 +177,16 @@ describe('hint dismissal storage (Review Focus 5)', () => {
     expect(() => writeHintDismissed('a', throwing)).not.toThrow();
     expect(readHintDismissed('a', null)).toBe(false);
     expect(() => writeHintDismissed('a', null)).not.toThrow();
+  });
+});
+
+describe('anchorScrollDue', () => {
+  const v = { scrolled: false, shown: true, fetching: 0, hash: '#forge-accounts', anchor: 'forge-accounts' };
+  it('waits for loads to settle and scrolls once', () => {
+    expect(anchorScrollDue({ ...v, fetching: 1 })).toBe(false);
+    expect(anchorScrollDue(v)).toBe(true);
+    expect(anchorScrollDue({ ...v, scrolled: true })).toBe(false);
+    expect(anchorScrollDue({ ...v, shown: false })).toBe(false);
+    expect(anchorScrollDue({ ...v, hash: '#other' })).toBe(false);
   });
 });

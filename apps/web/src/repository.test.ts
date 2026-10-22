@@ -4,12 +4,15 @@ import { ApiRequestError } from './api';
 import {
   accountText,
   connectPrefill,
+  createRepoEnabled,
   existingOrigin,
   originCredentialsText,
   lastPushText,
   mainStateText,
   mainTipText,
   pushMainBlocked,
+  replaceOriginQuestion,
+  repoErrorForm,
 } from './repository';
 
 const base: RepositoryStatus = {
@@ -135,5 +138,31 @@ describe('an origin with a user name or token in it', () => {
     expect(connectPrefill({ ...base, connected: false })).toBe('https://git.example.com/al/app.git');
     expect(connectPrefill(base)).toBeNull();
     expect(connectPrefill({ ...base, originUrl: null, connected: false })).toBeNull();
+  });
+});
+
+describe('replaceOriginQuestion', () => {
+  it('uses the question core wrote', () => {
+    expect(replaceOriginQuestion(new ApiRequestError(409, 'origin_exists', 'Q?', { origin: 'u' }))).toBe('Q?');
+    expect(replaceOriginQuestion(new ApiRequestError(409, 'other', 'x'))).toBeNull();
+    expect(replaceOriginQuestion(new Error('x'))).toBeNull();
+  });
+});
+
+describe('createRepoEnabled', () => {
+  it('needs owners that belong to the chosen account', () => {
+    const base = { busy: false, accountId: 'b', owner: 'org-a', ownersAccountId: 'a', name: 'app' };
+    expect(createRepoEnabled(base)).toBe(false);
+    expect(createRepoEnabled({ ...base, owner: 'org-b', ownersAccountId: 'b' })).toBe(true);
+    expect(createRepoEnabled({ ...base, owner: 'org-b', ownersAccountId: 'b', busy: true })).toBe(false);
+    expect(createRepoEnabled({ ...base, owner: 'org-b', ownersAccountId: 'b', name: ' ' })).toBe(false);
+  });
+});
+
+describe('repoErrorForm', () => {
+  it('maps an action key to the form that shows its error', () => {
+    expect(repoErrorForm('connect')).toBe('connect');
+    expect(repoErrorForm('push')).toBe('actions');
+    expect(repoErrorForm('create')).toBe('create');
   });
 });

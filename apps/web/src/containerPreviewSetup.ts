@@ -118,3 +118,14 @@ export function containerPreviewHintShown(
 export function containerPreviewHint(file: string): { text: string; link: string } {
   return { text: `This project has ${file}.`, link: 'Preview it in a container instead' };
 }
+
+/** Scroll to a hash anchor once, after the page's first loads settle (content above it still grows until then). */
+export function anchorScrollDue(v: {
+  scrolled: boolean;
+  shown: boolean;
+  fetching: number;
+  hash: string;
+  anchor: string;
+}): boolean {
+  return !v.scrolled && v.shown && v.fetching === 0 && v.hash === `#${v.anchor}`;
+}

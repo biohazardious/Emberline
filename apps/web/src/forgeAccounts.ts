@@ -65,3 +65,20 @@ export function asSentence(message: string): string {
   const capital = text.charAt(0).toUpperCase() + text.slice(1);
   return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 }
+
+export interface Feedback {
+  scope: string;
+  ok: boolean;
+  text: string;
+}
+
+/** What the alert and status regions of one scope hold; both regions always render, the other stays empty. */
+export function feedbackFor(f: Feedback | null, scope: string): { alert: string; status: string } {
+  if (f?.scope !== scope) return { alert: '', status: '' };
+  return f.ok ? { alert: '', status: f.text } : { alert: f.text, status: '' };
+}
+
+/** Opening or closing Replace token drops that row's own result, never another scope's. */
+export function feedbackAfterToggle(f: Feedback | null, accountId: string): Feedback | null {
+  return f?.scope === accountId ? null : f;
+}

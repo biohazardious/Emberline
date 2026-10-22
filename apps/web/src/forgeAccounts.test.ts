@@ -4,6 +4,8 @@ import {
   accountUserLine,
   asSentence,
   createAccountBody,
+  feedbackAfterToggle,
+  feedbackFor,
   isPlainHttpServer,
   replaceTokenBody,
   serverAfterProviderChange,
@@ -71,5 +73,22 @@ describe('asSentence', () => {
       'The forge did not answer within 30 seconds.',
     );
     expect(asSentence('Already fine.')).toBe('Already fine.');
+  });
+});
+
+describe('feedback helpers', () => {
+  it('splits a result into the alert and the status region of its scope', () => {
+    expect(feedbackFor({ scope: 'a', ok: true, text: 'x' }, 'a')).toEqual({ alert: '', status: 'x' });
+    expect(feedbackFor({ scope: 'a', ok: false, text: 'y' }, 'a')).toEqual({ alert: 'y', status: '' });
+    expect(feedbackFor({ scope: 'b', ok: false, text: 'y' }, 'a')).toEqual({ alert: '', status: '' });
+    expect(feedbackFor(null, 'a')).toEqual({ alert: '', status: '' });
+  });
+  it('clears only the toggled row feedback', () => {
+    expect(feedbackAfterToggle({ scope: 'a1', ok: true, text: 'x' }, 'a1')).toBeNull();
+    expect(feedbackAfterToggle({ scope: 'add', ok: false, text: 'y' }, 'a1')).toEqual({
+      scope: 'add',
+      ok: false,
+      text: 'y',
+    });
   });
 });

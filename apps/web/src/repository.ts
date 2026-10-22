@@ -76,3 +76,24 @@ export function connectPrefill(s: RepositoryStatus): string | null {
   if (!s.originUrl) return null;
   return !s.connected || s.originHasCredentials ? s.originUrl : null;
 }
+
+/** origin_exists from connect/create: core's own question (it names the clean URL), else null. */
+export function replaceOriginQuestion(error: unknown): string | null {
+  return error instanceof ApiRequestError && error.code === 'origin_exists' ? error.message : null;
+}
+
+/** Create needs owners fetched for the chosen account, one of them chosen, and a name. */
+export function createRepoEnabled(v: {
+  busy: boolean;
+  accountId: string;
+  owner: string;
+  ownersAccountId: string | null;
+  name: string;
+}): boolean {
+  return !v.busy && Boolean(v.accountId) && v.ownersAccountId === v.accountId && Boolean(v.owner) && Boolean(v.name.trim());
+}
+
+/** The form that shows the error of an action key. */
+export function repoErrorForm(key: string): 'connect' | 'create' | 'actions' {
+  return key === 'connect' ? 'connect' : key === 'create' ? 'create' : 'actions';
+}

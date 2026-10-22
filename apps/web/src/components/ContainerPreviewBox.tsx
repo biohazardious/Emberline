@@ -13,6 +13,7 @@ import {
   CONTAINER_PREVIEW_TITLE,
   type ContainerPreviewDraft,
   USE_CONTAINER_PREVIEW_LABEL,
+  anchorScrollDue,
   choiceForService,
   containerPreviewBoxShown,
   containerPreviewIntro,
@@ -57,7 +58,15 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
   const fetching = useIsFetching();
   const scrolled = useRef(false);
   useEffect(() => {
-    if (scrolled.current || !shown || fetching > 0 || window.location.hash !== `#${CONTAINER_PREVIEW_ANCHOR}`)
+    if (
+      !anchorScrollDue({
+        scrolled: scrolled.current,
+        shown,
+        fetching,
+        hash: window.location.hash,
+        anchor: CONTAINER_PREVIEW_ANCHOR,
+      })
+    )
       return;
     scrolled.current = true;
     box.current?.scrollIntoView({ block: 'start' });

@@ -5,13 +5,18 @@ import {
   type ForgeAccountsResponse,
   type ForgeProvider,
 } from '@emberline/protocol';
+import { useIsFetching } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api';
+import { anchorScrollDue } from '../containerPreviewSetup';
 import {
   accountHost,
   accountUserLine,
   asSentence,
   createAccountBody,
+  type Feedback,
+  feedbackAfterToggle,
+  feedbackFor,
   isPlainHttpServer,
   PROVIDER_LABEL,
   replaceTokenBody,
@@ -30,14 +35,28 @@ export function ForgeAccountsPanel() {
   const [allowHttp, setAllowHttp] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   // Where the last result shows: on the row it belongs to ('legacy' and 'add' for the banner and the form).
-  const [feedback, setFeedback] = useState<{ scope: string; ok: boolean; text: string } | null>(null);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
   const [newToken, setNewToken] = useState('');
   const panelRef = useRef<HTMLElement>(null);
   // Links from errors and Project settings land here (FORGE_ACCOUNTS_HREF): wouter does not scroll to a hash.
+  // It waits until the page's loads settle, because content above the panel still grows until then.
+  const fetching = useIsFetching();
+  const scrolled = useRef(false);
   useEffect(() => {
-    if (window.location.hash === '#forge-accounts') panelRef.current?.scrollIntoView({ block: 'start' });
-  }, []);
+    if (
+      !anchorScrollDue({
+        scrolled: scrolled.current,
+        shown: list.data !== undefined || list.error !== undefined,
+        fetching,
+        hash: window.location.hash,
+        anchor: 'forge-accounts',
+      })
+    )
+      return;
+    scrolled.current = true;
+    panelRef.current?.scrollIntoView({ block: 'start' });
+  }, [fetching, list.data, list.error]);
 
   const run = async (
     scope: string,
@@ -60,16 +79,18 @@ export function ForgeAccountsPanel() {
     }
   };
 
+  // Both regions are always in the page, so a screen reader announces a result put into one.
   const show = (scope: string) => {
-    if (feedback?.scope !== scope) return null;
-    return feedback.ok ? (
-      <p className="muted small" role="status">
-        {feedback.text}
-      </p>
-    ) : (
-      <p className="form-error" role="alert">
-        {feedback.text}
-      </p>
+    const mine = feedbackFor(feedback, scope);
+    return (
+      <>
+        <p className="form-error" role="alert">
+          {mine.alert}
+        </p>
+        <p className="muted small" role="status">
+          {mine.status}
+        </p>
+      </>
     );
   };
 
@@ -113,7 +134,7 @@ export function ForgeAccountsPanel() {
   };
 
   return (
-    <section className="panel" id="forge-accounts" ref={panelRef} aria-labelledby="forge-accounts-title">
+    <section className="panel forge-accounts" id="forge-accounts" ref={panelRef} aria-labelledby="forge-accounts-title">
       <header className="panel-head">
         <div>
           <h2 id="forge-accounts-title">Forge accounts</h2>
@@ -148,10 +169,9 @@ export function ForgeAccountsPanel() {
               Forget it
             </button>
           </p>
-          {show('legacy')}
         </div>
       )}
-      {!list.data?.legacyTokenUnmatched && show('legacy')}
+      {show('legacy')}
       {list.data && list.data.accounts.length === 0 && <p className="muted">No forge accounts yet.</p>}
       <ul className="forge-account-list">
         {list.data?.accounts.map((a) => {
@@ -191,6 +211,7 @@ export function ForgeAccountsPanel() {
                       aria-expanded={replacing === a.id}
                       onClick={() => {
                         setNewToken('');
+                        setFeedback((f) => feedbackAfterToggle(f, a.id));
                         setReplacing(replacing === a.id ? null : a.id);
                       }}
                     >
