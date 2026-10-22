@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
+import { PLAYTEST_HELD_MESSAGE } from '@emberline/protocol';
 import type {
   BrowserActionBody,
   BrowserAgentAction,
@@ -13,7 +14,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.5.1';
+export const BROWSER_DAEMON_VERSION = '1.5.2';
 
 /**
  * S17: the same rule the daemon applies before navigating (`normalizeNavigateUrl`), checked in core
@@ -805,7 +806,7 @@ async function handleAction(body, q) {
 
   if (action === 'stop_playtest') {
     if (playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
-      return { ...(await captureState(q)), message: 'Auto-Interact is running for another project.' };
+      return { ...(await captureState(q)), message: ${JSON.stringify(PLAYTEST_HELD_MESSAGE)}, playtestHeldByOther: true };
     }
     stopPlaytestLoop('Stopped by user');
     return captureState(q);
@@ -816,7 +817,7 @@ async function handleAction(body, q) {
 
   if (action === 'start_playtest') {
     if (playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
-      return { ...(await captureState(q)), message: 'Auto-Interact is running for another project.' };
+      return { ...(await captureState(q)), message: ${JSON.stringify(PLAYTEST_HELD_MESSAGE)}, playtestHeldByOther: true };
     }
     // Auto-Interact runs on shared-Chromium tabs only, not in an agent's own Playwright Chromium.
     if (!ephemeral) await startPlaytestLoop(tab, body.url || q.defaultUrl, q.projectId);

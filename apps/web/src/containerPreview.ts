@@ -2,11 +2,12 @@
  * Container previews in Preview & Build and Live Browser: which view a target opens with, the
  * texts of a preview's state, the runner browser's URL for a target, and the QA request text.
  */
-import type {
-  BrowserUrlResponse,
-  BrowserViewportSnapshot,
-  RunPreviewStatus,
-  WorkspaceDemoTarget,
+import {
+  PLAYTEST_HELD_MESSAGE,
+  type BrowserUrlResponse,
+  type BrowserViewportSnapshot,
+  type RunPreviewStatus,
+  type WorkspaceDemoTarget,
 } from '@emberline/protocol';
 
 /** The fields of a run's or main's preview status these helpers read (`unavailable`: main only). */
@@ -265,29 +266,41 @@ export function offersFollow(snap: FollowFields | null): boolean {
   return Boolean(snap?.canFollow && !snap.following);
 }
 
-/** The daemon's answer when another project's Auto-Interact keeps this one from stopping or starting it. */
-export const PLAYTEST_HELD_MESSAGE = 'Auto-Interact is running for another project.';
+export { PLAYTEST_HELD_MESSAGE };
 export const PLAYTEST_ELSEWHERE_TEXT =
   'Auto-Interact is running for another project. Start it here once that one stops.';
 export const PLAYTEST_STARTED_TEXT =
   'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.';
 
-export type LiveBanner = { kind: 'ok' | 'err' | 'info'; text: string };
+export const PLAYTEST_SHARED_ONLY_TEXT =
+  "Auto-Interact runs only in the shared browser, not in an agent's own browser. Show this project's tab, then start it again.";
 
-/** The banner after Start Auto-Interact: started, refused (another project runs it), or none. */
+/** `playtestRefusal`: the banner says another project runs Auto-Interact; it goes once that one stops. */
+export type LiveBanner = { kind: 'ok' | 'err' | 'info'; text: string; playtestRefusal?: true };
+
+/** The banner after Start Auto-Interact: started, refused (another project runs it), not started here, or none. */
 export function playtestStartBanner(
   res: Pick<BrowserViewportSnapshot, 'playtestActive' | 'playtestElsewhere'> | null,
 ): LiveBanner | undefined {
-  if (res?.playtestElsewhere) return { kind: 'info', text: PLAYTEST_ELSEWHERE_TEXT };
-  return res?.playtestActive ? { kind: 'ok', text: PLAYTEST_STARTED_TEXT } : undefined;
+  if (!res) return undefined;
+  if (res.playtestElsewhere) return { kind: 'info', text: PLAYTEST_ELSEWHERE_TEXT, playtestRefusal: true };
+  if (res.playtestActive) return { kind: 'ok', text: PLAYTEST_STARTED_TEXT };
+  return { kind: 'info', text: PLAYTEST_SHARED_ONLY_TEXT };
 }
 
-const PLAYTEST_REFUSALS = new Set([PLAYTEST_ELSEWHERE_TEXT, PLAYTEST_HELD_MESSAGE]);
+/** The banner for a start or stop the daemon refused (flagged, never matched by its text). */
+export function playtestRefusalBanner(
+  res: Pick<BrowserViewportSnapshot, 'playtestHeldByOther' | 'message'>,
+): LiveBanner | undefined {
+  return res.playtestHeldByOther
+    ? { kind: 'info', text: res.message ?? PLAYTEST_HELD_MESSAGE, playtestRefusal: true }
+    : undefined;
+}
 
 /** The banner after a poll: a start or stop refusal goes once the other project's Auto-Interact stopped. */
 export function bannerAfterSnapshot(
   b: LiveBanner | undefined,
   snap: Pick<BrowserViewportSnapshot, 'playtestElsewhere'>,
 ): LiveBanner | undefined {
-  return b && PLAYTEST_REFUSALS.has(b.text) && !snap.playtestElsewhere ? undefined : b;
+  return b?.playtestRefusal && !snap.playtestElsewhere ? undefined : b;
 }

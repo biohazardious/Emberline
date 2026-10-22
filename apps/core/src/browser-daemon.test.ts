@@ -1,3 +1,4 @@
+import { PLAYTEST_HELD_MESSAGE } from '@emberline/protocol';
 import net, { type AddressInfo, type Server } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
@@ -129,7 +130,7 @@ describe('browser daemon tabs per project', () => {
     );
   });
   it('the daemon version moved with the script', () => {
-    expect(BROWSER_DAEMON_VERSION).toBe('1.5.1');
+    expect(BROWSER_DAEMON_VERSION).toBe('1.5.2');
   });
 });
 
@@ -531,6 +532,7 @@ function loadHandleAction(over: {
   playtestTabId?: string | null;
   playtestProjectId?: string | null;
   playtestTimer?: unknown;
+  resolveShown?: () => Promise<unknown>;
 }) {
   const fetched: string[] = [];
   const captured: ActionQuery[] = [];
@@ -550,7 +552,8 @@ function loadHandleAction(over: {
       return { message: 'Live Chromium CDP stream', q };
     },
     sharedPages: async () => [],
-    resolveShown: async () => ({ pages: [], tab: null, following: false, ephemeral: false }),
+    resolveShown:
+      over.resolveShown ?? (async () => ({ pages: [], tab: null, following: false, ephemeral: false })),
     stopPlaytestLoop: (reason: string) => void stopped.push(reason),
     startPlaytestLoop: async () => undefined,
     playtestHeldByOther: new Function(
@@ -573,7 +576,7 @@ function loadHandleAction(over: {
   ) as (
     body: Record<string, unknown>,
     q: ActionQuery,
-  ) => Promise<{ message?: string | null; q: ActionQuery }>;
+  ) => Promise<{ message?: string | null; playtestHeldByOther?: boolean; q: ActionQuery }>;
   return { handleAction, fetched, captured, stopped, saves: () => saves };
 }
 
@@ -642,16 +645,20 @@ describe('browser daemon actions keep to the project that asks (B-8, B-29)', () 
     expect(h.stopped).toContain('Project removed');
   });
 
-  it("stop_playtest from B leaves A's Auto-Interact running and says why", async () => {
-    const h = loadHandleAction({
-      tabProjects: labels(),
-      playtestTabId: 'ta',
-      playtestProjectId: 'A',
-      playtestTimer: 1,
-    });
-    const res = await h.handleAction({ action: 'stop_playtest' }, { ...qA, projectId: 'B', tabId: 'tb' });
-    expect(res.message).toBe('Auto-Interact is running for another project.');
-    expect(h.stopped).toEqual([]);
+  it("start or stop from B leaves A's Auto-Interact running, flags the refusal and says why", async () => {
+    for (const action of ['stop_playtest', 'start_playtest']) {
+      const h = loadHandleAction({
+        tabProjects: labels(),
+        playtestTabId: 'ta',
+        playtestProjectId: 'A',
+        playtestTimer: 1,
+        resolveShown: async () => ({ pages: [], tab: { id: 'tb' }, following: false, ephemeral: false }),
+      });
+      const res = await h.handleAction({ action }, { ...qA, projectId: 'B', tabId: 'tb' });
+      expect(res.playtestHeldByOther, action).toBe(true);
+      expect(res.message, action).toBe(PLAYTEST_HELD_MESSAGE);
+      expect(h.stopped, action).toEqual([]);
+    }
   });
 
   it('a snapshot says when Auto-Interact runs for another project (B-12)', () => {

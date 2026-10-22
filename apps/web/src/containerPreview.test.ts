@@ -1,4 +1,4 @@
-import type { BrowserUrlResponse } from '@emberline/protocol';
+import { PLAYTEST_HELD_MESSAGE, type BrowserUrlResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   FRAMING_UNKNOWN_NOTE,
@@ -17,8 +17,9 @@ import {
   offersFollow,
   bannerAfterSnapshot,
   PLAYTEST_ELSEWHERE_TEXT,
-  PLAYTEST_HELD_MESSAGE,
+  PLAYTEST_SHARED_ONLY_TEXT,
   PLAYTEST_STARTED_TEXT,
+  playtestRefusalBanner,
   playtestStartBanner,
   previewBadge,
   previewEmptyText,
@@ -442,6 +443,7 @@ describe('Auto-Interact start banner (B-12)', () => {
     expect(playtestStartBanner({ playtestActive: false, playtestElsewhere: true })).toEqual({
       kind: 'info',
       text: PLAYTEST_ELSEWHERE_TEXT,
+      playtestRefusal: true,
     });
     expect(playtestStartBanner({ playtestActive: true })).toEqual({
       kind: 'ok',
@@ -450,20 +452,37 @@ describe('Auto-Interact start banner (B-12)', () => {
     expect(PLAYTEST_STARTED_TEXT).toBe(
       'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
     );
-    expect(playtestStartBanner({ playtestActive: false })).toBeUndefined();
     expect(playtestStartBanner(null)).toBeUndefined();
   });
 
+  it("says why nothing started on an agent's own browser", () => {
+    expect(playtestStartBanner({ playtestActive: false })).toEqual({
+      kind: 'info',
+      text: PLAYTEST_SHARED_ONLY_TEXT,
+    });
+    expect(PLAYTEST_SHARED_ONLY_TEXT).toBe(
+      "Auto-Interact runs only in the shared browser, not in an agent's own browser. Show this project's tab, then start it again.",
+    );
+  });
+
+  it('a refusal is recognised by its flag, not by its text', () => {
+    expect(playtestRefusalBanner({ playtestHeldByOther: true, message: PLAYTEST_HELD_MESSAGE })).toEqual({
+      kind: 'info',
+      text: PLAYTEST_HELD_MESSAGE,
+      playtestRefusal: true,
+    });
+    expect(playtestRefusalBanner({ message: PLAYTEST_HELD_MESSAGE })).toBeUndefined();
+  });
+
   it('drops only the refusal, once the other project stops', () => {
-    const refusal = { kind: 'info' as const, text: PLAYTEST_ELSEWHERE_TEXT };
+    const refusal = { kind: 'info' as const, text: PLAYTEST_ELSEWHERE_TEXT, playtestRefusal: true as const };
+    const sameText = { kind: 'info' as const, text: PLAYTEST_ELSEWHERE_TEXT };
     const other = { kind: 'err' as const, text: 'down' };
     expect(bannerAfterSnapshot(refusal, { playtestElsewhere: true })).toBe(refusal);
     expect(bannerAfterSnapshot(refusal, { playtestElsewhere: false })).toBeUndefined();
     expect(bannerAfterSnapshot(refusal, {})).toBeUndefined();
+    expect(bannerAfterSnapshot(sameText, { playtestElsewhere: false })).toBe(sameText);
     expect(bannerAfterSnapshot(other, { playtestElsewhere: false })).toBe(other);
-    const heldStop = { kind: 'info' as const, text: PLAYTEST_HELD_MESSAGE };
-    expect(bannerAfterSnapshot(heldStop, { playtestElsewhere: true })).toBe(heldStop);
-    expect(bannerAfterSnapshot(heldStop, { playtestElsewhere: false })).toBeUndefined();
     expect(bannerAfterSnapshot(undefined, { playtestElsewhere: false })).toBeUndefined();
   });
 });

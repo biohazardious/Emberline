@@ -435,6 +435,9 @@ export const BrowserAgentAction = z.object({
 });
 export type BrowserAgentAction = z.infer<typeof BrowserAgentAction>;
 
+/** The browser daemon's answer when another project's Auto-Interact keeps this one from starting or stopping it. */
+export const PLAYTEST_HELD_MESSAGE = 'Auto-Interact is running for another project.';
+
 export const BrowserViewportSnapshot = z.object({
   available: z.boolean(),
   source: z.enum(['cdp_live', 'x11', 'headless_browser', 'none']),
@@ -448,6 +451,8 @@ export const BrowserViewportSnapshot = z.object({
   playtestActive: z.boolean().optional(),
   /** Auto-Interact runs for another project; this one cannot start it now. */
   playtestElsewhere: z.boolean().optional(),
+  /** This start or stop was refused: another project's Auto-Interact runs ({@link PLAYTEST_HELD_MESSAGE}). */
+  playtestHeldByOther: z.boolean().optional(),
   /**
    * The view shows an agent's browser tab (its own Playwright Chromium or the tab it drives), not the
    * project's tab.

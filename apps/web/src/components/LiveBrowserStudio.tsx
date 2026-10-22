@@ -36,7 +36,7 @@ import {
   FOLLOW_AGENT,
   liveBrowserNote,
   offersFollow,
-  PLAYTEST_HELD_MESSAGE,
+  playtestRefusalBanner,
   playtestStartBanner,
   qaRequestPrompt,
   resolveRunnerBrowserUrl,
@@ -131,7 +131,8 @@ export function LiveBrowserStudio({
       });
       setSnap(res);
       if (res.targetUrl) setUrlInput(res.targetUrl);
-      if (res.message === PLAYTEST_HELD_MESSAGE) setBanner({ kind: 'info', text: res.message });
+      const refusal = playtestRefusalBanner(res);
+      if (refusal) setBanner(refusal);
       return res;
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
