@@ -65,11 +65,7 @@ function getFactoryExamples(project: Project, target?: WorkspaceDemoTarget): str
     ];
   }
 
-  if (
-    appType === 'cli_tool' ||
-    layers.includes('CLI / System Automation') ||
-    stack.includes('shell')
-  ) {
+  if (appType === 'cli_tool' || layers.includes('CLI / System Automation') || stack.includes('shell')) {
     return [
       'Add --dry-run mode, pre-flight kernel/ZFS checks, and automatic rollback on failure',
       'Add structured JSON/log output, strict exit codes, and systemd service/timer unit',
@@ -77,11 +73,7 @@ function getFactoryExamples(project: Project, target?: WorkspaceDemoTarget): str
     ];
   }
 
-  if (
-    appType === 'mobile_desktop' ||
-    layers.includes('Desktop / Mobile Native') ||
-    stack.includes('rust')
-  ) {
+  if (appType === 'mobile_desktop' || layers.includes('Desktop / Mobile Native') || stack.includes('rust')) {
     return [
       'Add persistent JSON configuration, multi-monitor window state, and system tray controls',
       'Implement smooth hardware-accelerated rendering, keyboard shortcuts, and theme presets',
@@ -214,9 +206,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       try {
         const dataUrl = await readFileAsDataUrl(file);
         const rawBase64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
-        const isImage =
-          file.type.startsWith('image/') ||
-          /\.(png|jpe?g|webp|gif|svg|ico)$/i.test(file.name);
+        const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|ico)$/i.test(file.name);
         added.push({
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: file.name || `pasted-image-${Date.now()}.png`,
@@ -303,21 +293,16 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
   const targets = summary.targets;
   const activeTarget: WorkspaceDemoTarget =
-    targets.find((t) => t.id === selectedTargetId) ??
-    targets.find((t) => Boolean(t.demoUrl)) ??
-    targets[0]!;
+    targets.find((t) => t.id === selectedTargetId) ?? targets.find((t) => Boolean(t.demoUrl)) ?? targets[0]!;
 
   const playableTargets = targets.filter((t) => Boolean(t.demoUrl));
-  const bestPlayableTarget =
-    playableTargets[0] ?? targets.find((t) => t.hasBuildScript) ?? targets[0];
+  const bestPlayableTarget = playableTargets[0] ?? targets.find((t) => t.hasBuildScript) ?? targets[0];
 
   const isTargetCompleted = (t: WorkspaceDemoTarget) =>
     t.kind === 'worktree' && (t.runStatus === 'done' || t.runStatus === 'failed');
 
   const completedWorktreesCount = targets.filter(isTargetCompleted).length;
-  const visibleTargets = hideCompletedWorktrees
-    ? targets.filter((t) => !isTargetCompleted(t))
-    : targets;
+  const visibleTargets = hideCompletedWorktrees ? targets.filter((t) => !isTargetCompleted(t)) : targets;
 
   const submitFactoryRequestNow = async () => {
     const trimmed =
@@ -329,25 +314,21 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     setSubmittingFactory(true);
     setBanner(undefined);
     try {
-      const res = await api<FactoryRequestResponse>(
-        `/api/projects/${project.id}/factory-request`,
-        'POST',
-        {
-          prompt: trimmed,
-          leadPersona: 'product_owner',
-          permissionMode: 'auto',
-          autoDispatch,
-          attachments:
-            factoryAttachments.length > 0
-              ? factoryAttachments.map((a) => ({
-                  name: a.name,
-                  mimeType: a.mimeType,
-                  dataBase64: a.dataBase64,
-                  sizeBytes: a.sizeBytes,
-                }))
-              : undefined,
-        },
-      );
+      const res = await api<FactoryRequestResponse>(`/api/projects/${project.id}/factory-request`, 'POST', {
+        prompt: trimmed,
+        leadPersona: 'product_owner',
+        permissionMode: 'auto',
+        autoDispatch,
+        attachments:
+          factoryAttachments.length > 0
+            ? factoryAttachments.map((a) => ({
+                name: a.name,
+                mimeType: a.mimeType,
+                dataBase64: a.dataBase64,
+                sizeBytes: a.sizeBytes,
+              }))
+            : undefined,
+      });
       const attachedCount = factoryAttachments.length;
       setFactoryPrompt('');
       setFactoryAttachments([]);
@@ -376,16 +357,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     setSubmittingTweak(true);
     setBanner(undefined);
     try {
-      const res = await api<FactoryRequestResponse>(
-        `/api/projects/${project.id}/factory-request`,
-        'POST',
-        {
-          prompt: `[Live Demo Quick Tweak] ${trimmed}`,
-          leadPersona: 'coder',
-          permissionMode: 'auto',
-          autoDispatch: true,
-        },
-      );
+      const res = await api<FactoryRequestResponse>(`/api/projects/${project.id}/factory-request`, 'POST', {
+        prompt: `[Live Demo Quick Tweak] ${trimmed}`,
+        leadPersona: 'coder',
+        permissionMode: 'auto',
+        autoDispatch: true,
+      });
       setQuickTweakPrompt('');
       await statusPoll.refresh();
       await ticketsPoll.refresh();
@@ -404,16 +381,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     setSubmittingTweak(true);
     setBanner(undefined);
     try {
-      const res = await api<FactoryRequestResponse>(
-        `/api/projects/${project.id}/factory-request`,
-        'POST',
-        {
-          prompt: `[Runtime Error Fix] The Live Demo threw the following runtime error in the browser:\n\nError: ${errItem.message}\n${errItem.stack ? `Stack:\n\`\`\`\n${errItem.stack.slice(0, 1200)}\n\`\`\`\n` : ''}\nPlease diagnose and fix the root cause in the codebase and rebuild the bundle.`,
-          leadPersona: 'coder',
-          permissionMode: 'auto',
-          autoDispatch: true,
-        },
-      );
+      const res = await api<FactoryRequestResponse>(`/api/projects/${project.id}/factory-request`, 'POST', {
+        prompt: `[Runtime Error Fix] The Live Demo threw the following runtime error in the browser:\n\nError: ${errItem.message}\n${errItem.stack ? `Stack:\n\`\`\`\n${errItem.stack.slice(0, 1200)}\n\`\`\`\n` : ''}\nPlease diagnose and fix the root cause in the codebase and rebuild the bundle.`,
+        leadPersona: 'coder',
+        permissionMode: 'auto',
+        autoDispatch: true,
+      });
       setDemoErrors([]);
       await statusPoll.refresh();
       await ticketsPoll.refresh();
@@ -508,11 +481,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
     setBuildingTargetId(target.id);
     setBanner(undefined);
     try {
-      const res = await api<BuildDemoResponse>(
-        `/api/projects/${project.id}/build-demo`,
-        'POST',
-        { targetId: target.id },
-      );
+      const res = await api<BuildDemoResponse>(`/api/projects/${project.id}/build-demo`, 'POST', {
+        targetId: target.id,
+      });
       setLastBuildOutput(res.output || '');
       await statusPoll.refresh();
       setSelectedTargetId(target.id);
@@ -547,7 +518,10 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   /** Opening a stale target starts its build, once per opening of the tab and target. */
   const buildIfStale = (target: WorkspaceDemoTarget | undefined) => {
     if (!target) return;
-    const state = { building: buildingTargetId !== undefined, alreadyStarted: autoBuiltTargets.current.has(target.id) };
+    const state = {
+      building: buildingTargetId !== undefined,
+      alreadyStarted: autoBuiltTargets.current.has(target.id),
+    };
     if (!shouldAutoBuild(target, state)) return;
     autoBuiltTargets.current.add(target.id);
     void handleBuildAndPlay(target, false);
@@ -602,9 +576,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             <span className="dot" />
             <span className="pill-text">{project.name}</span>
           </span>
-          {summary.autoChainActive && (
-            <span className="badge badge-soft mono">⟳ Auto-Pipeline Active</span>
-          )}
+          {summary.autoChainActive && <span className="badge badge-soft mono">⟳ Auto-Pipeline Active</span>}
           <span className="muted small">
             {summary.completionPercent}% complete · {ticketCounts.done}/{ticketCounts.total} tickets done
           </span>
@@ -623,8 +595,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 'Starting…'
               ) : (
                 <>
-                  <Zap className="icon" aria-hidden /> Run Pipeline (
-                  {startable})
+                  <Zap className="icon" aria-hidden /> Run Pipeline ({startable})
                 </>
               )}
             </button>
@@ -825,8 +796,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           className="badge mono hide-sm"
           title="Host bind-mount directory mapped to container /workspaces"
         >
-          {summary.hostBindHint} <ArrowLeftRight className="icon" aria-hidden />{' '}
-          {summary.workspaceRoot}
+          {summary.hostBindHint} <ArrowLeftRight className="icon" aria-hidden /> {summary.workspaceRoot}
         </span>
       </div>
 
@@ -927,8 +897,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <strong style={{ fontSize: '0.8rem', color: 'var(--ember-2)' }}>
-                  <Zap className="icon" aria-hidden /> Ask AI Factory (PO Orchestrator → Specialist
-                  Personas)
+                  <Zap className="icon" aria-hidden /> Ask AI Factory (PO Orchestrator → Specialist Personas)
                 </strong>
                 <PersonaBadge persona="product_owner" />
                 <span className="muted small">→ delegates to</span>
@@ -1077,7 +1046,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     }
                   }
                 }}
-                placeholder='Describe a feature, bug fix, or UI change… (Shift+Enter for new line, Enter to delegate, paste or drop screenshots/files directly)'
+                placeholder="Describe a feature, bug fix, or UI change… (Shift+Enter for new line, Enter to delegate, paste or drop screenshots/files directly)"
                 style={{
                   width: '100%',
                   minHeight: 54,
@@ -1149,10 +1118,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  disabled={
-                    submittingFactory ||
-                    (!factoryPrompt.trim() && factoryAttachments.length === 0)
-                  }
+                  disabled={submittingFactory || (!factoryPrompt.trim() && factoryAttachments.length === 0)}
                 >
                   {submittingFactory ? (
                     'Delegating…'
@@ -1175,12 +1141,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
             >
               <span className="muted small">Quick examples:</span>
               {getFactoryExamples(project, mainTarget).map((ex) => (
-                <button
-                  key={ex}
-                  type="button"
-                  className="chip-btn"
-                  onClick={() => setFactoryPrompt(ex)}
-                >
+                <button key={ex} type="button" className="chip-btn" onClick={() => setFactoryPrompt(ex)}>
                   + {ex}
                 </button>
               ))}
@@ -1254,11 +1215,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     )}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => setActiveTab('browser')}
-                >
+                <button type="button" className="btn btn-sm" onClick={() => setActiveTab('browser')}>
                   <Globe className="icon" aria-hidden /> Open Live Browser Studio
                 </button>
                 {mainTarget.hasBuildScript && (
@@ -1363,11 +1320,19 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         setDemoErrors([]);
                         buildIfStale(targets.find((t) => t.id === e.target.value));
                       }}
-                      style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
+                      style={{
+                        width: 'auto',
+                        maxWidth: 'min(320px, 100%)',
+                        fontSize: '0.78rem',
+                        padding: '4px 8px',
+                      }}
                     >
                       {targets.map((t) => (
                         <option key={t.id} value={t.id}>
-                          {t.label} {t.demoEntryRelPath ? `(${t.demoEntryRelPath})` : `(${t.detectedStack ?? 'no bundle'})`}
+                          {t.label}{' '}
+                          {t.demoEntryRelPath
+                            ? `(${t.demoEntryRelPath})`
+                            : `(${t.detectedStack ?? 'no bundle'})`}
                         </option>
                       ))}
                     </select>
@@ -1385,11 +1350,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     >
                       <RotateCw className="icon" aria-hidden /> Reload
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => setFullscreen((f) => !f)}
-                    >
+                    <button type="button" className="btn btn-sm" onClick={() => setFullscreen((f) => !f)}>
                       {fullscreen ? (
                         <>
                           <Minimize2 className="icon" aria-hidden /> Exit Fullscreen
@@ -1400,12 +1361,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         </>
                       )}
                     </button>
-                    <a
-                      href={activeTarget.demoUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn btn-sm"
-                    >
+                    <a href={activeTarget.demoUrl} target="_blank" rel="noreferrer" className="btn btn-sm">
                       <ExternalLink className="icon" aria-hidden /> New Tab
                     </a>
                     <button
@@ -1435,7 +1391,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                   >
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <strong>
-                        <Bug className="icon" aria-hidden /> Runtime Error Detected in Live Preview ({demoErrors[0]!.timestamp}):
+                        <Bug className="icon" aria-hidden /> Runtime Error Detected in Live Preview (
+                        {demoErrors[0]!.timestamp}):
                       </strong>
                       <div
                         className="mono small"
@@ -1544,8 +1501,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <strong style={{ fontSize: '0.88rem' }}>
-                      <Wrench className="icon" aria-hidden /> Workspace Build, Verification &amp;
-                      Architecture Console
+                      <Wrench className="icon" aria-hidden /> Workspace Build, Verification &amp; Architecture
+                      Console
                     </strong>
                     <select
                       className="input"
@@ -1554,7 +1511,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         setSelectedTargetId(e.target.value);
                         buildIfStale(targets.find((t) => t.id === e.target.value));
                       }}
-                      style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '4px 8px' }}
+                      style={{
+                        width: 'auto',
+                        maxWidth: 'min(320px, 100%)',
+                        fontSize: '0.78rem',
+                        padding: '4px 8px',
+                      }}
                     >
                       {targets.map((t) => (
                         <option key={t.id} value={t.id}>
@@ -1583,11 +1545,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                         )}
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => setActiveTab('browser')}
-                    >
+                    <button type="button" className="btn btn-sm" onClick={() => setActiveTab('browser')}>
                       <Globe className="icon" aria-hidden /> Live Browser Studio
                     </button>
                     <button
@@ -1634,13 +1592,19 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
                 <p className="muted small" style={{ margin: 0, lineHeight: 1.5 }}>
                   This workspace target does not expose a static HTML bundle yet (common for{' '}
-                  <strong>Backend APIs, CLI / System Automation, Desktop &amp; Mobile Apps, Embedded / ESP32 Firmware</strong>,
-                  or unbuilt web projects). Use <strong>
+                  <strong>
+                    Backend APIs, CLI / System Automation, Desktop &amp; Mobile Apps, Embedded / ESP32
+                    Firmware
+                  </strong>
+                  , or unbuilt web projects). Use{' '}
+                  <strong>
                     <Hammer className="icon" aria-hidden /> Run Build &amp; Verify
-                  </strong> above to compile or syntax-check the
-                  project, or open <strong>
+                  </strong>{' '}
+                  above to compile or syntax-check the project, or open{' '}
+                  <strong>
                     <Globe className="icon" aria-hidden /> Live Browser Studio
-                  </strong> to inspect any running web server URL.
+                  </strong>{' '}
+                  to inspect any running web server URL.
                 </p>
 
                 {lastBuildOutput && (
@@ -1767,7 +1731,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                         <span className="badge badge-soft mono">
-                          {target.kind === 'main' ? 'MAIN' : target.ticketKey ?? 'WORKTREE'}
+                          {target.kind === 'main' ? 'MAIN' : (target.ticketKey ?? 'WORKTREE')}
                         </span>
                         {target.persona && <PersonaBadge persona={target.persona} />}
                       </div>
@@ -1801,7 +1765,8 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                       {target.workspacePath}
                     </div>
 
-                    {(target.detectedStack || (target.detectedLayers && target.detectedLayers.length > 0)) && (
+                    {(target.detectedStack ||
+                      (target.detectedLayers && target.detectedLayers.length > 0)) && (
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
                         {target.detectedStack && (
                           <span className="badge mono" style={{ fontSize: '0.66rem' }}>
@@ -1944,7 +1909,9 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
           {checkpoints.length === 0 ? (
             <p className="muted small">No commits recorded yet in main workspace.</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+            <div
+              style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}
+            >
               {checkpoints.map((cp, index) => (
                 <div
                   key={cp.sha}
@@ -1974,9 +1941,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="mono muted small">
-                      {new Date(cp.createdAt).toLocaleString()}
-                    </span>
+                    <span className="mono muted small">{new Date(cp.createdAt).toLocaleString()}</span>
                     {index > 0 && (
                       <button
                         type="button"

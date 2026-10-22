@@ -69,7 +69,13 @@ describe('command execution through the runner', () => {
   it('cancels a running command in the runner by its execId (ptyd protocol 3)', async () => {
     setCommandCanceller(ptydCommandCanceller(bridge));
     const startedAt = Date.now();
-    const running = execCommand({ file: 'sleep', args: ['30'], cwd: dir, timeoutMs: 60_000, execId: 'setup-x' });
+    const running = execCommand({
+      file: 'sleep',
+      args: ['30'],
+      cwd: dir,
+      timeoutMs: 60_000,
+      execId: 'setup-x',
+    });
     await new Promise((r) => setTimeout(r, 200));
     expect(await cancelCommand('setup-x')).toBe(true);
     expect(await running).toMatchObject({ cancelled: true, exitCode: null });
@@ -89,7 +95,9 @@ describe('command execution through the runner', () => {
   });
 
   it('rejects non-zero exits with the command output, like execFile', async () => {
-    await expect(execFileChecked({ file: 'sh', args: ['-c', 'echo bad >&2; exit 2'], cwd: dir })).rejects.toMatchObject({
+    await expect(
+      execFileChecked({ file: 'sh', args: ['-c', 'echo bad >&2; exit 2'], cwd: dir }),
+    ).rejects.toMatchObject({
       code: 2,
       stderr: 'bad\n',
     });

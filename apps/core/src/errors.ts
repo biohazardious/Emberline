@@ -38,7 +38,9 @@ export function installErrorHandler(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'bad_request', message: z.prettifyError(error) });
     }
     if (error instanceof HttpError) {
-      return reply.code(error.statusCode).send({ ...error.details, error: error.code, message: error.message });
+      return reply
+        .code(error.statusCode)
+        .send({ ...error.details, error: error.code, message: error.message });
     }
     const status = (error as { statusCode?: number }).statusCode;
     if (status && status < 500) {

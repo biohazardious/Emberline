@@ -47,7 +47,9 @@ describe('presence over the events socket', () => {
 
   const open = async () => {
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
     await new Promise((resolve, reject) => {
       ws.once('open', resolve);
       ws.once('error', reject);
@@ -60,7 +62,13 @@ describe('presence over the events socket', () => {
     ws.send(JSON.stringify({ type: 'presence', visible: true, runId: 'r1' }));
     await expect.poll(() => t.presence.isWatched('r1')).toBe(true);
 
-    for (const bad of ['not json', '{"type":"presence"}', '{"type":"presence","visible":"yes","runId":"r2"}', '{"type":"presence","visible":true,"runId":7}', '[]']) {
+    for (const bad of [
+      'not json',
+      '{"type":"presence"}',
+      '{"type":"presence","visible":"yes","runId":"r2"}',
+      '{"type":"presence","visible":true,"runId":7}',
+      '[]',
+    ]) {
       ws.send(bad);
     }
     ws.send(JSON.stringify({ type: 'presence', visible: true, runId: 'r2' }));
@@ -86,7 +94,9 @@ describe('runs over the events socket', () => {
 
   it('a failing attention computation neither escapes the emit nor drops the run update', async () => {
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
     const received: { type: string; run?: { id: string } }[] = [];
     ws.on('message', (raw) => received.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {

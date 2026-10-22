@@ -9,7 +9,13 @@ export function withHandoff(list: Run[], predecessor: Run, successor: Run, now =
   const current = list.find((r) => r.id === predecessor.id) ?? predecessor;
   const ended: Run = current.handedOffTo
     ? current
-    : { ...current, state: 'done', handedOffTo: successor.id, endedAt: current.endedAt ?? now.toISOString(), resumable: false };
+    : {
+        ...current,
+        state: 'done',
+        handedOffTo: successor.id,
+        endedAt: current.endedAt ?? now.toISOString(),
+        resumable: false,
+      };
   const next = list.map((r) => (r.id === ended.id ? ended : r));
   if (!next.some((r) => r.id === ended.id)) next.unshift(ended);
   return next.some((r) => r.id === successor.id) ? next : [successor, ...next];

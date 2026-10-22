@@ -10,7 +10,11 @@ const project = { id: 'p1', name: 'Shop' } as Project;
 const url = '/api/projects/p1/container-preview';
 const options = (o: Record<string, unknown>) => o as unknown as ContainerPreviewOptionsResponse;
 const box = (o: Record<string, unknown>) =>
-  renderStatic(createElement(ContainerPreviewBox, { project }), { [url]: options(o) }, '/projects/p1/settings');
+  renderStatic(
+    createElement(ContainerPreviewBox, { project }),
+    { [url]: options(o) },
+    '/projects/p1/settings',
+  );
 
 beforeEach(() => {
   vi.stubGlobal('window', { location: { hash: '', protocol: 'http:' } });

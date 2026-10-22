@@ -14,16 +14,23 @@ describe('routing helpers', () => {
 
   it('a provider-wide window covers every pool of the same agent and credential only', () => {
     const wide = { agent: 'antigravity', credential: 'login', pool: '*' };
-    expect(laneCovers(wide, laneOf({ agent: 'antigravity', model: 'argon', credential: 'login' }))).toBe(true);
+    expect(laneCovers(wide, laneOf({ agent: 'antigravity', model: 'argon', credential: 'login' }))).toBe(
+      true,
+    );
     expect(laneCovers(wide, laneOf({ agent: 'claude', model: 'opus', credential: 'login' }))).toBe(false);
-    expect(laneCovers(wide, laneOf({ agent: 'antigravity', model: 'argon', credential: 'api_key' }))).toBe(false);
+    expect(laneCovers(wide, laneOf({ agent: 'antigravity', model: 'argon', credential: 'api_key' }))).toBe(
+      false,
+    );
     const opus = { agent: 'claude', credential: 'login', pool: 'opus' };
     expect(laneCovers(opus, laneOf({ agent: 'claude', model: 'sonnet', credential: 'login' }))).toBe(false);
     expect(laneCovers(opus, laneOf({ agent: 'claude', model: 'opus', credential: 'login' }))).toBe(true);
   });
 
   it('knows which credentials and resume mode each provider supports', () => {
-    expect(PROVIDER_RUNTIME.antigravity).toEqual({ credentials: ['login', 'credits'], resumeMode: 'continue_latest' });
+    expect(PROVIDER_RUNTIME.antigravity).toEqual({
+      credentials: ['login', 'credits'],
+      resumeMode: 'continue_latest',
+    });
     expect(PROVIDER_RUNTIME.aider.credentials).toEqual(['api_key']);
     expect(PROVIDER_RUNTIME.claude.resumeMode).toBe('session');
     expect(PROVIDER_RUNTIME.gemini.resumeMode).toBe('fresh');

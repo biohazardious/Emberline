@@ -64,7 +64,9 @@ describe('terminals', () => {
     const terminal = created.json();
     expect(terminal).toMatchObject({ kind: 'shell', status: 'running', title: 'Shell · workspaces' });
 
-    expect((await api('GET', '/api/terminals')).json().map((x: { id: string }) => x.id)).toContain(terminal.id);
+    expect((await api('GET', '/api/terminals')).json().map((x: { id: string }) => x.id)).toContain(
+      terminal.id,
+    );
     expect((await api('DELETE', `/api/terminals/${terminal.id}`)).statusCode).toBe(200);
     expect((await api('GET', '/api/terminals')).json()).toHaveLength(0);
   });
@@ -84,7 +86,14 @@ describe('terminals', () => {
 
     ws.send(JSON.stringify({ type: 'input', data: 'echo ws-$((6*7))\r' }));
     await expect
-      .poll(() => messages.filter((m) => m.type === 'output').map((m) => m.data).join(''), { timeout: 5_000 })
+      .poll(
+        () =>
+          messages
+            .filter((m) => m.type === 'output')
+            .map((m) => m.data)
+            .join(''),
+        { timeout: 5_000 },
+      )
       .toContain('ws-42');
     expect(messages[0]?.type).toBe('snapshot');
     ws.close();

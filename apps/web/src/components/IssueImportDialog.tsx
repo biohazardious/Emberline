@@ -93,7 +93,13 @@ export function IssueImportDialog({
   );
 }
 
-function ImportTab({ projectId, onImported }: { projectId: string; onImported?: (tickets: Ticket[]) => void }) {
+function ImportTab({
+  projectId,
+  onImported,
+}: {
+  projectId: string;
+  onImported?: (tickets: Ticket[]) => void;
+}) {
   const client = useQueryClient();
   const [draftSearch, setDraftSearch] = useState('');
   const [draftLabels, setDraftLabels] = useState('');
@@ -117,7 +123,12 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
   });
 
   const run = useMutation({
-    mutationFn: () => api<ImportIssuesResponse>(`/api/projects/${projectId}/issues/import`, 'POST', buildImportBody(selected, status)),
+    mutationFn: () =>
+      api<ImportIssuesResponse>(
+        `/api/projects/${projectId}/issues/import`,
+        'POST',
+        buildImportBody(selected, status),
+      ),
     onSuccess: (res) => {
       setResult(res);
       setSelected([]);
@@ -128,12 +139,14 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
 
   const items = list.data?.items ?? [];
   const selectable = visibleIssueKeys(items);
-  const allOnPageSelected = selectable.length > 0 && selectable.every((id) => selected.some((s) => s.externalId === id));
+  const allOnPageSelected =
+    selectable.length > 0 && selectable.every((id) => selected.some((s) => s.externalId === id));
   const toggleAll = () =>
     setSelected((cur) => {
       if (allOnPageSelected) return cur.filter((s) => !selectable.includes(s.externalId));
       let next = cur;
-      for (const item of items) if (!next.some((s) => s.externalId === item.externalId)) next = toggleIssue(next, item);
+      for (const item of items)
+        if (!next.some((s) => s.externalId === item.externalId)) next = toggleIssue(next, item);
       return next;
     });
 
@@ -195,7 +208,12 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
           <>
             <div className="issue-list-head">
               <label className="issue-check">
-                <input type="checkbox" checked={allOnPageSelected} disabled={selectable.length === 0} onChange={toggleAll} />
+                <input
+                  type="checkbox"
+                  checked={allOnPageSelected}
+                  disabled={selectable.length === 0}
+                  onChange={toggleAll}
+                />
                 <span>Select all on this page</span>
               </label>
               <span className="muted small">
@@ -212,7 +230,10 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
                   const checked = selected.some((s) => s.externalId === item.externalId);
                   const atLimit = !checked && selected.length >= MAX_IMPORT;
                   return (
-                    <li key={item.externalId} className={`issue-row${item.linkedTicketKey ? ' issue-linked' : ''}`}>
+                    <li
+                      key={item.externalId}
+                      className={`issue-row${item.linkedTicketKey ? ' issue-linked' : ''}`}
+                    >
                       <label className="issue-check">
                         <input
                           type="checkbox"
@@ -224,7 +245,12 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
                       </label>
                       <div className="issue-main">
                         {issueHref(item.url) ? (
-                          <a href={issueHref(item.url)!} target="_blank" rel="noopener noreferrer" className="issue-title">
+                          <a
+                            href={issueHref(item.url)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="issue-title"
+                          >
                             <span className="mono">#{item.number}</span> {item.title}
                           </a>
                         ) : (
@@ -255,7 +281,12 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
               </ul>
             )}
             <div className="issue-pager">
-              <button type="button" className="btn btn-sm btn-ghost" disabled={page <= 1 || list.isFetching} onClick={() => setPage((p) => p - 1)}>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={page <= 1 || list.isFetching}
+                onClick={() => setPage((p) => p - 1)}
+              >
                 Previous
               </button>
               <span className="muted small">Page {page}</span>
@@ -279,13 +310,16 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
       )}
       {run.isPending && (
         <p className="muted small" role="status">
-          Importing {selected.length} {selected.length === 1 ? 'issue' : 'issues'}… this can take a while, as the forge is asked once per issue.
+          Importing {selected.length} {selected.length === 1 ? 'issue' : 'issues'}… this can take a while, as
+          the forge is asked once per issue.
         </p>
       )}
       {result && !run.isPending && (
         <div className="banner" role="status">
           <p>{describeImportResult(result)}</p>
-          {result.created.length > 0 && <p className="mono small">{result.created.map((t) => t.key).join(', ')}</p>}
+          {result.created.length > 0 && (
+            <p className="mono small">{result.created.map((t) => t.key).join(', ')}</p>
+          )}
           {result.skipped.length > 0 && (
             <ul className="small">
               {result.skipped.map((s) => (
@@ -332,7 +366,11 @@ function ImportTab({ projectId, onImported }: { projectId: string; onImported?: 
 function SyncTab({ projectId }: { projectId: string }) {
   const client = useQueryClient();
   const url = `/api/projects/${projectId}/issue-sync`;
-  const query = useQuery({ queryKey: ['issue-sync', projectId], queryFn: () => api<IssueSyncResponse>(url), retry: false });
+  const query = useQuery({
+    queryKey: ['issue-sync', projectId],
+    queryFn: () => api<IssueSyncResponse>(url),
+    retry: false,
+  });
   const [form, setForm] = useState<{
     enabled: boolean;
     label: string;
@@ -376,7 +414,9 @@ function SyncTab({ projectId }: { projectId: string }) {
     mutationFn: () => api<IssueSyncStatus>(`${url}/run`, 'POST'),
     onSuccess: (status) => {
       // The pass's own status: a failure shows at once in the "Last sync failed" banner below.
-      client.setQueryData<IssueSyncResponse>(['issue-sync', projectId], (old) => (old ? { ...old, syncStatus: status } : old));
+      client.setQueryData<IssueSyncResponse>(['issue-sync', projectId], (old) =>
+        old ? { ...old, syncStatus: status } : old,
+      );
       const result = describeSyncNow(status);
       setNotice(result.error ? undefined : result.text);
     },
@@ -413,7 +453,8 @@ function SyncTab({ projectId }: { projectId: string }) {
       }}
     >
       <p className="muted small">
-        Every 10 minutes label sync looks at the most recently updated labelled issues, up to 200 (on Gitea: the 100 most recently created). Use the Import tab for older ones.
+        Every 10 minutes label sync looks at the most recently updated labelled issues, up to 200 (on Gitea:
+        the 100 most recently created). Use the Import tab for older ones.
       </p>
       <label className="issue-check">
         <input type="checkbox" checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
@@ -421,26 +462,50 @@ function SyncTab({ projectId }: { projectId: string }) {
       </label>
       <label className="field">
         <span className="drawer-label">Label (required when enabled)</span>
-        <input className="input" value={form.label} maxLength={100} onChange={(e) => set({ label: e.target.value })} />
+        <input
+          className="input"
+          value={form.label}
+          maxLength={100}
+          onChange={(e) => set({ label: e.target.value })}
+        />
       </label>
       <label className="field">
         <span className="drawer-label">New issues land in</span>
-        <select className="input" value={form.status} onChange={(e) => set({ status: e.target.value as 'backlog' | 'ready' })}>
+        <select
+          className="input"
+          value={form.status}
+          onChange={(e) => set({ status: e.target.value as 'backlog' | 'ready' })}
+        >
           <option value="backlog">Backlog</option>
           <option value="ready">Ready</option>
         </select>
-        <span className="muted small">Issues from authors not in Trusted authors always land in Backlog.</span>
+        <span className="muted small">
+          Issues from authors not in Trusted authors always land in Backlog.
+        </span>
       </label>
       <label className="field">
         <span className="drawer-label">Trusted authors (comma or one per line)</span>
-        <textarea className="input" rows={3} value={form.trusted} onChange={(e) => set({ trusted: e.target.value })} />
+        <textarea
+          className="input"
+          rows={3}
+          value={form.trusted}
+          onChange={(e) => set({ trusted: e.target.value })}
+        />
       </label>
       <label className="issue-check">
-        <input type="checkbox" checked={form.closeOnDone} onChange={(e) => set({ closeOnDone: e.target.checked })} />
+        <input
+          type="checkbox"
+          checked={form.closeOnDone}
+          onChange={(e) => set({ closeOnDone: e.target.checked })}
+        />
         <span>Close the issue when its ticket is Done</span>
       </label>
       <label className="issue-check">
-        <input type="checkbox" checked={form.commentOnProgress} onChange={(e) => set({ commentOnProgress: e.target.checked })} />
+        <input
+          type="checkbox"
+          checked={form.commentOnProgress}
+          onChange={(e) => set({ commentOnProgress: e.target.checked })}
+        />
         <span>Comment on the issue when a PR is opened or the work is merged</span>
       </label>
 

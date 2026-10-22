@@ -164,7 +164,8 @@ export class PtydServer {
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
       const { execId } = params;
-      if (execId && this.execs.has(execId)) throw new PtydError('conflict', `exec ${execId} is already running`);
+      if (execId && this.execs.has(execId))
+        throw new PtydError('conflict', `exec ${execId} is already running`);
       try {
         const result = await runExec(params, pickBaseEnv(), (cancel) => {
           if (!execId) return;
@@ -224,7 +225,11 @@ export class PtydServer {
    * The response is written synchronously inside the subscription callback, before any
    * output event for this session can be sent, so clients always get the snapshot first.
    */
-  private async attach(conn: Connection, id: number, { sessionId }: PtydParsedParams<'attach'>): Promise<void> {
+  private async attach(
+    conn: Connection,
+    id: number,
+    { sessionId }: PtydParsedParams<'attach'>,
+  ): Promise<void> {
     const session = this.get(sessionId);
     conn.attachments.get(sessionId)?.();
     conn.attachments.delete(sessionId);

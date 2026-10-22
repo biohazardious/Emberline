@@ -47,13 +47,17 @@ async function projectWithSecret(name: string): Promise<{ projectId: string; run
   return { projectId: project.id, run };
 }
 
-const commit = (run: Run) => call('POST', `/api/runs/${run.id}/git/commit`, { message: 'wip', stageAll: true });
+const commit = (run: Run) =>
+  call('POST', `/api/runs/${run.id}/git/commit`, { message: 'wip', stageAll: true });
 
 describe('secret guard per project (Review Focus 5)', () => {
   it('Off for project A commits; project B inherits and is blocked; B follows a global change', async () => {
     const a = await projectWithSecret('Gate A');
     const b = await projectWithSecret('Gate B');
-    expect((await call('PATCH', `/api/projects/${a.projectId}/settings`, { gates: { secretGuardGate: false } })).statusCode).toBe(200);
+    expect(
+      (await call('PATCH', `/api/projects/${a.projectId}/settings`, { gates: { secretGuardGate: false } }))
+        .statusCode,
+    ).toBe(200);
 
     expect((await commit(a.run)).statusCode).toBe(200);
     const blocked = await commit(b.run);

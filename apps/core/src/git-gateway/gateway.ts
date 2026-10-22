@@ -76,7 +76,9 @@ export function redactCapabilityUrls(text: string): string {
 export function requestUrlForLog(url: string): string {
   let decoded = url;
   for (let i = 0; i < 3; i++) {
-    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_m, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
     if (next === decoded) break;
     decoded = next;
   }

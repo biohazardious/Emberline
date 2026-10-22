@@ -12,14 +12,21 @@ describe('review_unblocked ordering', () => {
 
   it('a later review_blocked holds again; several unblocks lift every earlier block', () => {
     expect(decidePipelineOutcome(['review_blocked', 'review_unblocked', 'review_blocked'])).toBe('held');
-    expect(decidePipelineOutcome(['review_blocked', 'review_unblocked', 'review_blocked', 'review_unblocked'])).toBeNull();
+    expect(
+      decidePipelineOutcome(['review_blocked', 'review_unblocked', 'review_blocked', 'review_unblocked']),
+    ).toBeNull();
     expect(decidePipelineOutcome(['review_blocked', 'review_blocked', 'review_unblocked'])).toBeNull();
-    expect(withoutUnblocked(['review_blocked', 'review_unblocked', 'review_blocked'])).toEqual(['review_unblocked', 'review_blocked']);
+    expect(withoutUnblocked(['review_blocked', 'review_unblocked', 'review_blocked'])).toEqual([
+      'review_unblocked',
+      'review_blocked',
+    ]);
   });
 
   it('currentHold follows the same rule', () => {
     const e = (type: string, id: number) => ({ type, id });
-    expect(currentHold([e('merge_failed', 1), e('review_blocked', 2), e('review_unblocked', 3)])?.type).toBe('merge_failed');
+    expect(currentHold([e('merge_failed', 1), e('review_blocked', 2), e('review_unblocked', 3)])?.type).toBe(
+      'merge_failed',
+    );
     expect(currentHold([e('review_blocked', 1), e('review_unblocked', 2)])).toBeNull();
   });
 });

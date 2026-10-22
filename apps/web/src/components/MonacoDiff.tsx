@@ -64,7 +64,6 @@ export function MonacoDiff({
       .then((monaco) => {
         if (cancelled || !containerRef.current) return;
 
-
         const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
           theme: monacoTheme(themeRef.current),
           readOnly: true,
@@ -173,11 +172,20 @@ export function MonacoDiff({
           c.side === side && c.currentLine !== null && c.currentLine !== undefined
             ? [
                 {
-                  range: { startLineNumber: c.currentLine, startColumn: 1, endLineNumber: c.currentLine, endColumn: 1 },
+                  range: {
+                    startLineNumber: c.currentLine,
+                    startColumn: 1,
+                    endLineNumber: c.currentLine,
+                    endColumn: 1,
+                  },
                   options: {
                     glyphMarginClassName: `comment-glyph comment-glyph-${c.priority}`,
                     // Plain text: the body is escaped, and neither HTML nor commands are allowed.
-                    glyphMarginHoverMessage: { value: glyphHoverText(c), isTrusted: false, supportHtml: false },
+                    glyphMarginHoverMessage: {
+                      value: glyphHoverText(c),
+                      isTrusted: false,
+                      supportHtml: false,
+                    },
                   },
                 },
               ]
@@ -191,11 +199,7 @@ export function MonacoDiff({
   }, [ready, comments, original, modified]);
 
   if (loadError) {
-    return (
-      <div className="empty review-empty">
-        Monaco failed to load ({loadError}).
-      </div>
-    );
+    return <div className="empty review-empty">Monaco failed to load ({loadError}).</div>;
   }
 
   return (

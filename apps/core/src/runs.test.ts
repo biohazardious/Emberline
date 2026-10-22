@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Run, RunBuildOutputsResponse, RunDetail, Ticket } from '@emberline/protocol';
@@ -89,7 +97,13 @@ describe('run event pruning', () => {
       .values(Array.from({ length: n }, () => ({ runId, ts: new Date(), source: 'hook', type })))
       .run();
   const typesOf = (runId: string) =>
-    t.db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(runEvents.id).all().map((e) => e.type);
+    t.db
+      .select()
+      .from(runEvents)
+      .where(eq(runEvents.runId, runId))
+      .orderBy(runEvents.id)
+      .all()
+      .map((e) => e.type);
 
   it('keeps the newest 5000 events of a run and never the protected kinds', async () => {
     const project = await createProject('Prune', false);
@@ -136,10 +150,22 @@ describe('run event pruning', () => {
     const project = await createProject('Prune3', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     t.db.delete(runEvents).where(eq(runEvents.runId, run.id)).run();
-    const row = (type: string, state?: string) => ({ runId: run.id, ts: new Date(), source: 'hook', type, ...(state ? { state } : {}) });
+    const row = (type: string, state?: string) => ({
+      runId: run.id,
+      ts: new Date(),
+      source: 'hook',
+      type,
+      ...(state ? { state } : {}),
+    });
     t.db
       .insert(runEvents)
-      .values([row('UserPromptSubmit', 'working'), row('preview_stopped'), row('preview_started'), row('preview_ready'), row('preview_failed')])
+      .values([
+        row('UserPromptSubmit', 'working'),
+        row('preview_stopped'),
+        row('preview_started'),
+        row('preview_ready'),
+        row('preview_failed'),
+      ])
       .run();
     seed(run.id, 'PreToolUse', 5100);
     t.db.insert(runEvents).values(row('Failed', 'failed')).run();
@@ -147,7 +173,13 @@ describe('run event pruning', () => {
     t.runs.pruneRunEvents();
 
     const kept = t.db.select().from(runEvents).where(eq(runEvents.runId, run.id)).orderBy(runEvents.id).all();
-    expect(kept.map((e) => e.type).slice(0, 5)).toEqual(['UserPromptSubmit', 'preview_stopped', 'preview_started', 'preview_ready', 'preview_failed']);
+    expect(kept.map((e) => e.type).slice(0, 5)).toEqual([
+      'UserPromptSubmit',
+      'preview_stopped',
+      'preview_started',
+      'preview_ready',
+      'preview_failed',
+    ]);
     expect(kept.some((e) => e.state === 'working')).toBe(true);
   });
 
@@ -170,12 +202,16 @@ describe('runs', () => {
 
     expect(run.state).toBe('starting');
     expect(run.branch).toMatch(/^emberline\/run-[0-9a-f]{8}$/);
-    expect(run.worktreePath).toBe(path.join(t.config.workspacesDir, '.worktrees', 'repo-app', run.id.slice(0, 8)));
+    expect(run.worktreePath).toBe(
+      path.join(t.config.workspacesDir, '.worktrees', 'repo-app', run.id.slice(0, 8)),
+    );
     expect(existsSync(path.join(run.worktreePath, '.git'))).toBe(true);
     expect(run.terminalId).toBeTruthy();
 
     const terminals = (await api('GET', '/api/terminals')).json();
-    expect(terminals).toContainEqual(expect.objectContaining({ id: run.terminalId, kind: 'agent', runId: run.id }));
+    expect(terminals).toContainEqual(
+      expect.objectContaining({ id: run.terminalId, kind: 'agent', runId: run.id }),
+    );
   });
 
   it('runs in place for projects that are not git repositories', async () => {
@@ -198,7 +234,11 @@ describe('runs', () => {
       ['SessionStart', { session_id: 'sess-1', source: 'startup' }, 'waiting_input'],
       ['UserPromptSubmit', { prompt: 'do it' }, 'working'],
       ['PreToolUse', { tool_name: 'Bash', tool_input: { command: 'x'.repeat(10_000) } }, 'working'],
-      ['Notification', { notification_type: 'permission_prompt', message: 'needs permission' }, 'waiting_input'],
+      [
+        'Notification',
+        { notification_type: 'permission_prompt', message: 'needs permission' },
+        'waiting_input',
+      ],
       ['PostToolUse', { tool_name: 'Bash' }, 'working'],
       ['Stop', {}, 'done'],
     ];
@@ -365,7 +405,12 @@ describe('runs', () => {
     expect(existsSync(clean.worktreePath)).toBe(false);
     expect(readFileSync(path.join(dirty.worktreePath, 'unsaved.txt'), 'utf8')).toContain('work in progress');
     expect(existsSync(inReview.worktreePath)).toBe(true);
-    expect(t.runs.list().map((r) => r.id).sort()).toEqual([dirty.id, inReview.id].sort());
+    expect(
+      t.runs
+        .list()
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([dirty.id, inReview.id].sort());
   });
 
   describe('garbage collection and shared worktrees', () => {
@@ -392,7 +437,11 @@ describe('runs', () => {
       const successor: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(successor.id);
       // The still-active successor took over the predecessor's worktree (a handoff).
-      t.db.update(runs).set({ worktreePath: predecessor.worktreePath }).where(eq(runs.id, successor.id)).run();
+      t.db
+        .update(runs)
+        .set({ worktreePath: predecessor.worktreePath })
+        .where(eq(runs.id, successor.id))
+        .run();
 
       const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0, pruneWorktrees: true });
       expect(res.removedRuns).toBe(2);
@@ -408,10 +457,26 @@ describe('runs', () => {
       const lone = await finishRun(project.id);
       const predecessor = await finishRun(project.id);
       const successor = await finishRun(project.id);
-      t.db.update(runs).set({ worktreePath: predecessor.worktreePath }).where(eq(runs.id, successor.id)).run();
-      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, lone.id)).run();
-      t.db.update(runs).set({ createdAt: new Date(2_000) }).where(eq(runs.id, predecessor.id)).run();
-      t.db.update(runs).set({ createdAt: new Date(5_000) }).where(eq(runs.id, successor.id)).run();
+      t.db
+        .update(runs)
+        .set({ worktreePath: predecessor.worktreePath })
+        .where(eq(runs.id, successor.id))
+        .run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(1_000) })
+        .where(eq(runs.id, lone.id))
+        .run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(2_000) })
+        .where(eq(runs.id, predecessor.id))
+        .run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(5_000) })
+        .where(eq(runs.id, successor.id))
+        .run();
       // Nine newer finished rows plus the successor fill the ten kept slots.
       for (let i = 0; i < 9; i += 1) {
         t.db
@@ -462,7 +527,19 @@ describe('runs', () => {
       return t.runs.getRun(run.id);
     };
     const commitIn = (dir: string) =>
-      execFileSync('git', ['-C', dir, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'agent work']);
+      execFileSync('git', [
+        '-C',
+        dir,
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=t',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'agent work',
+      ]);
 
     it('manual GC keeps a worktree whose branch has commits outside the default branch, until it is merged', async () => {
       const project = await createProject('GC unmerged', true);
@@ -474,7 +551,20 @@ describe('runs', () => {
       expect(first.keptWorktrees).toEqual([{ runId: run.id, reason: 'unmerged_commits' }]);
       expect(existsSync(run.worktreePath)).toBe(true);
 
-      execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'merge', '-q', '--no-ff', '-m', 'merge', run.branch ?? '']);
+      execFileSync('git', [
+        '-C',
+        project.path,
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=t',
+        'merge',
+        '-q',
+        '--no-ff',
+        '-m',
+        'merge',
+        run.branch ?? '',
+      ]);
       const second = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(second.removedRuns).toBe(1);
       expect(second.keptWorktrees).toEqual([]);
@@ -488,7 +578,20 @@ describe('runs', () => {
       commitIn(run.worktreePath);
       const kept = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(kept.keptWorktrees).toEqual([{ runId: run.id, reason: 'unmerged_commits' }]);
-      execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'merge', '-q', '--no-ff', '-m', 'merge', run.branch ?? '']);
+      execFileSync('git', [
+        '-C',
+        project.path,
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=t',
+        'merge',
+        '-q',
+        '--no-ff',
+        '-m',
+        'merge',
+        run.branch ?? '',
+      ]);
       const done = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(done.removedRuns).toBe(1);
       expect(existsSync(run.worktreePath)).toBe(false);
@@ -514,9 +617,21 @@ describe('runs', () => {
       const project = await createProject('GC handoff kept', true);
       const predecessor = await finishRun(project.id);
       const successor = await finishRun(project.id);
-      t.db.update(runs).set({ worktreePath: predecessor.worktreePath }).where(eq(runs.id, successor.id)).run();
-      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, predecessor.id)).run();
-      t.db.update(runs).set({ createdAt: new Date(2_000) }).where(eq(runs.id, successor.id)).run();
+      t.db
+        .update(runs)
+        .set({ worktreePath: predecessor.worktreePath })
+        .where(eq(runs.id, successor.id))
+        .run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(1_000) })
+        .where(eq(runs.id, predecessor.id))
+        .run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(2_000) })
+        .where(eq(runs.id, successor.id))
+        .run();
       commitIn(predecessor.worktreePath);
       const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
       expect(res.keptWorktrees).toEqual([{ runId: successor.id, reason: 'unmerged_commits' }]);
@@ -526,7 +641,11 @@ describe('runs', () => {
       const project = await createProject('Auto GC cache', true);
       const stale = await finishRun(project.id);
       commitIn(stale.worktreePath);
-      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, stale.id)).run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(1_000) })
+        .where(eq(runs.id, stale.id))
+        .run();
       for (let i = 0; i < 10; i += 1) {
         t.db
           .insert(runs)
@@ -586,7 +705,11 @@ describe('runs', () => {
       const project = await createProject('Auto GC unmerged', true);
       const stale = await finishRun(project.id);
       commitIn(stale.worktreePath);
-      t.db.update(runs).set({ createdAt: new Date(1_000) }).where(eq(runs.id, stale.id)).run();
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(1_000) })
+        .where(eq(runs.id, stale.id))
+        .run();
       for (let i = 0; i < 10; i += 1) {
         t.db
           .insert(runs)
@@ -636,7 +759,12 @@ describe('runs', () => {
     const a: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     const b: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     const start = async (run: Run, port?: number) =>
-      (await api('POST', `/api/runs/${run.id}/preview/start`, { command: 'sleep 30', ...(port ? { port } : {}) })).json();
+      (
+        await api('POST', `/api/runs/${run.id}/preview/start`, {
+          command: 'sleep 30',
+          ...(port ? { port } : {}),
+        })
+      ).json();
     // Occupy exactly the port b hashes to, so the allocator has to move b.
     let hash = 0;
     for (const ch of b.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
@@ -644,7 +772,9 @@ describe('runs', () => {
     const pa = await start(a, first + (hash % (last - first + 1)));
     const pb = await start(b);
     expect(pb.port).not.toBe(pa.port);
-    expect((await api('GET', '/api/terminals')).json().some((x: { id: string }) => x.id === pa.terminalId)).toBe(true);
+    expect(
+      (await api('GET', '/api/terminals')).json().some((x: { id: string }) => x.id === pa.terminalId),
+    ).toBe(true);
 
     await t.runs.stop(a.id);
     await api('DELETE', `/api/runs/${a.id}`);
@@ -653,19 +783,28 @@ describe('runs', () => {
     expect(terminals.some((x) => x.id === pb.terminalId)).toBe(true);
   });
 
-  it('a running command preview reports its framing, probed on the runner\'s localhost', async () => {
+  it("a running command preview reports its framing, probed on the runner's localhost", async () => {
     const probes: string[] = [];
     setCommandExecutor(async (request: ExecRequest) => {
       if (request.file === 'curl' && request.args.includes('-D')) {
         probes.push(request.args.at(-1) ?? '');
-        return { exitCode: 0, signal: null, stdout: 'HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\n\r\n', stderr: '', timedOut: false, truncated: false };
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: 'HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\n\r\n',
+          stderr: '',
+          timedOut: false,
+          truncated: false,
+        };
       }
       return localCommandExecutor(request);
     });
     try {
       const project = await createProject('Framing', true);
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
-      const started = (await api('POST', `/api/runs/${run.id}/preview/start`, { command: 'sleep 30' })).json();
+      const started = (
+        await api('POST', `/api/runs/${run.id}/preview/start`, { command: 'sleep 30' })
+      ).json();
       expect(started.status).toBe('running');
       const status = (await api('GET', `/api/runs/${run.id}/preview`)).json();
       expect(status.framing).toEqual({ state: 'refused', reason: 'X-Frame-Options: DENY' });
@@ -682,7 +821,10 @@ describe('runs', () => {
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     await tokenFor(run.id);
     await expect
-      .poll(async () => (await api('GET', `/api/runs/${run.id}/screen-text?lines=5`)).json().text as string | null)
+      .poll(
+        async () =>
+          (await api('GET', `/api/runs/${run.id}/screen-text?lines=5`)).json().text as string | null,
+      )
       .toContain('fake claude ready');
     const text = (await api('GET', `/api/runs/${run.id}/screen-text`)).json().text as string;
     expect(text).not.toContain(String.fromCharCode(27));
@@ -691,7 +833,9 @@ describe('runs', () => {
   it('pushes run updates over /api/events', async () => {
     const project = await createProject('Events', false);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
     const events: { type: string; run?: Run }[] = [];
     ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {
@@ -712,7 +856,9 @@ describe('runs', () => {
   it('sends run updates over /api/events with their computed attention', async () => {
     const project = await createProject('Events attention', false);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
     const events: { type: string; run?: Run }[] = [];
     ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {
@@ -722,9 +868,16 @@ describe('runs', () => {
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
     const token = await tokenFor(run.id);
     await hook(run.id, 'UserPromptSubmit', token);
-    await hook(run.id, 'Notification', token, { notification_type: 'permission_prompt', message: 'Allow rm?' });
+    await hook(run.id, 'Notification', token, {
+      notification_type: 'permission_prompt',
+      message: 'Allow rm?',
+    });
     await expect
-      .poll(() => events.find((e) => e.type === 'run' && e.run?.id === run.id && e.run.state === 'waiting_input')?.run?.attention)
+      .poll(
+        () =>
+          events.find((e) => e.type === 'run' && e.run?.id === run.id && e.run.state === 'waiting_input')?.run
+            ?.attention,
+      )
       .toMatchObject({ reason: 'permission', detail: 'Allow rm?' });
     expect(t.runs.getRun(run.id).attention?.reason).toBe('permission');
     ws.close();
@@ -816,13 +969,20 @@ describe('runs', () => {
       '.pio/build/esp32dev/firmware.bin': false,
     });
 
-    const download = await api('GET', `/api/runs/${run.id}/build-outputs/download?path=app/build/outputs/apk/debug/app-debug.apk`);
+    const download = await api(
+      'GET',
+      `/api/runs/${run.id}/build-outputs/download?path=app/build/outputs/apk/debug/app-debug.apk`,
+    );
     expect(download.statusCode).toBe(200);
     expect(download.headers['content-disposition']).toContain('attachment; filename="app-debug.apk"');
     expect(download.rawPayload.length).toBe(2048);
     // Only deliverables can be downloaded through this route.
-    expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=.gitignore`)).statusCode).toBe(404);
-    expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=../../etc/passwd`)).statusCode).toBeGreaterThanOrEqual(400);
+    expect((await api('GET', `/api/runs/${run.id}/build-outputs/download?path=.gitignore`)).statusCode).toBe(
+      404,
+    );
+    expect(
+      (await api('GET', `/api/runs/${run.id}/build-outputs/download?path=../../etc/passwd`)).statusCode,
+    ).toBeGreaterThanOrEqual(400);
   });
 
   it('neither lists nor serves build outputs of a worktree swapped for a symlink', async () => {
@@ -856,7 +1016,9 @@ describe('runs', () => {
       const project = await createProject('Not signed in', false);
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await expect
-        .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).state, { timeout: 5_000 })
+        .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).state, {
+          timeout: 5_000,
+        })
         .toBe('failed');
       const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
       expect(detail.terminalId).toBeNull();
@@ -874,17 +1036,27 @@ describe('runs', () => {
     async function waitingOnPermission(unattended: boolean) {
       const project = await createProject(unattended ? 'Cron Wait' : 'Manual Wait', true);
       const run: Run = unattended
-        ? await t.scheduler.submit({ projectId: project.id, prompt: 'x', permissionMode: 'auto' }, { unattended: 'cron' })
+        ? await t.scheduler.submit(
+            { projectId: project.id, prompt: 'x', permissionMode: 'auto' },
+            { unattended: 'cron' },
+          )
         : (await api('POST', '/api/runs', { projectId: project.id })).json();
       const token = await tokenFor(run.id);
       await hook(run.id, 'SessionStart', token, { session_id: 's' });
       await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
-      await hook(run.id, 'Notification', token, { notification_type: 'permission_prompt', message: 'needs permission' });
+      await hook(run.id, 'Notification', token, {
+        notification_type: 'permission_prompt',
+        message: 'needs permission',
+      });
       expect(t.runs.getRun(run.id).state).toBe('waiting_input');
       return run;
     }
     const age = (id: string, ms: number) =>
-      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - ms) }).where(eq(runs.id, id)).run();
+      t.db
+        .update(runs)
+        .set({ stateChangedAt: new Date(Date.now() - ms) })
+        .where(eq(runs.id, id))
+        .run();
 
     it('fails an unattended run that waited on a permission prompt for over 30 minutes', async () => {
       const run = await waitingOnPermission(true);
@@ -919,7 +1091,10 @@ describe('runs', () => {
 
     it('leaves a turn that failed for a non-limit, non-temporary reason waiting for the user', async () => {
       const { run, token } = await working('Stop failure');
-      const res = await hook(run.id, 'StopFailure', token, { error: 'invalid_request', error_details: 'prompt is too long' });
+      const res = await hook(run.id, 'StopFailure', token, {
+        error: 'invalid_request',
+        error_details: 'prompt is too long',
+      });
       expect(res.json()).toMatchObject({ state: 'waiting_input' });
       expect(t.runs.getRun(run.id)).toMatchObject({ state: 'waiting_input', autoRetry: null, endedAt: null });
       expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('retry_scheduled');
@@ -927,7 +1102,9 @@ describe('runs', () => {
 
     it('treats SessionEnd of a live session as done', async () => {
       const { run, token } = await working('Session end');
-      expect((await hook(run.id, 'SessionEnd', token, { reason: 'other' })).json()).toMatchObject({ state: 'done' });
+      expect((await hook(run.id, 'SessionEnd', token, { reason: 'other' })).json()).toMatchObject({
+        state: 'done',
+      });
     });
 
     it('closes an idle finished session after its TTL and keeps the run resumable', async () => {
@@ -935,7 +1112,11 @@ describe('runs', () => {
       await hook(run.id, 'Stop', token);
       await t.runs.reconcile();
       expect(t.runs.getRun(run.id)).toMatchObject({ state: 'done', endedAt: null });
-      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) }).where(eq(runs.id, run.id)).run();
+      t.db
+        .update(runs)
+        .set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) })
+        .where(eq(runs.id, run.id))
+        .run();
       await t.runs.reconcile();
       const after = t.runs.get(run.id);
       expect(after).toMatchObject({ state: 'done', terminalId: null, resumable: true });
@@ -943,7 +1124,7 @@ describe('runs', () => {
       expect(after.events.map((e) => e.type)).toContain('idle_session_closed');
     });
 
-    it('closes a held run\'s session as resumable, not cancelled, and a prompt respawns it', async () => {
+    it("closes a held run's session as resumable, not cancelled, and a prompt respawns it", async () => {
       const { run, token } = await working('Held close');
       await hook(run.id, 'Stop', token);
       const closed = await t.runs.closeHeldSession(run.id);
@@ -951,7 +1132,9 @@ describe('runs', () => {
       expect(closed.endedAt).not.toBeNull();
       const detail = t.runs.get(run.id);
       expect(detail.terminalId).toBeNull();
-      expect(detail.events.find((e) => e.type === 'idle_session_closed')?.payload).toEqual({ reason: 'held' });
+      expect(detail.events.find((e) => e.type === 'idle_session_closed')?.payload).toEqual({
+        reason: 'held',
+      });
       expect(detail.events.map((e) => e.type)).not.toContain('stop_requested');
 
       // Reconcile does not turn it into a cancelled or failed run.
@@ -1005,8 +1188,21 @@ describe('runs', () => {
       const { run, token } = await working('Idle close, typed');
       await hook(run.id, 'Stop', token);
       // A prompt typed into the CLI (this stand-in would exit on it, so it is only recorded).
-      t.db.insert(runEvents).values({ runId: run.id, ts: new Date(), source: 'user', type: 'prompt_sent', payload: { length: 14 } }).run();
-      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) }).where(eq(runs.id, run.id)).run();
+      t.db
+        .insert(runEvents)
+        .values({
+          runId: run.id,
+          ts: new Date(),
+          source: 'user',
+          type: 'prompt_sent',
+          payload: { length: 14 },
+        })
+        .run();
+      t.db
+        .update(runs)
+        .set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) })
+        .where(eq(runs.id, run.id))
+        .run();
       await t.runs.reconcile();
       expect(t.runs.getRun(run.id).endedAt).toBeNull();
       expect(t.runs.get(run.id).events.map((e) => e.type)).not.toContain('idle_session_closed');
@@ -1082,7 +1278,11 @@ describe('runs', () => {
       await hook(run.id, 'SessionStart', token, { session_id: 's-idle-busy' });
       await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
       await hook(run.id, 'Stop', token);
-      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) }).where(eq(runs.id, run.id)).run();
+      t.db
+        .update(runs)
+        .set({ stateChangedAt: new Date(Date.now() - 3 * 60_000) })
+        .where(eq(runs.id, run.id))
+        .run();
       t.runs.pipelineBusy(run.id, true);
       await t.runs.reconcile();
       expect(t.runs.getRun(run.id).endedAt).toBeNull();
@@ -1129,7 +1329,9 @@ describe('runs', () => {
       expect(detail.endedAt).toBeNull();
 
       // The agent was alive after all: its next hook moves it back as usual.
-      expect((await hook(run.id, 'PreToolUse', token, { tool_name: 'Bash' })).json()).toMatchObject({ state: 'working' });
+      expect((await hook(run.id, 'PreToolUse', token, { tool_name: 'Bash' })).json()).toMatchObject({
+        state: 'working',
+      });
       later(5);
       expect(await state()).toBe('working');
     });
@@ -1150,7 +1352,10 @@ describe('runs', () => {
 
     it('stops an unattended stalled run 30 minutes after the stall (R6)', async () => {
       const project = await createProject('Cron Stall', false);
-      const run = await t.scheduler.submit({ projectId: project.id, prompt: 'x', permissionMode: 'auto' }, { unattended: 'cron' });
+      const run = await t.scheduler.submit(
+        { projectId: project.id, prompt: 'x', permissionMode: 'auto' },
+        { unattended: 'cron' },
+      );
       const token = await tokenFor(run.id);
       await hook(run.id, 'SessionStart', token, { session_id: 's-cron-stall' });
       await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
@@ -1208,7 +1413,9 @@ describe('runs', () => {
       await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
 
       expect((await api('POST', `/api/runs/${run.id}/resume`, {})).statusCode).toBe(409);
-      await expect(t.runs.sendPrompt(run.id, 'nudge', { automatic: true })).rejects.toMatchObject({ statusCode: 409 });
+      await expect(t.runs.sendPrompt(run.id, 'nudge', { automatic: true })).rejects.toMatchObject({
+        statusCode: 409,
+      });
       await new Promise((r) => setTimeout(r, 300));
       expect(await screen(run)).not.toMatch(/Continue where you left off|nudge/);
       expect(t.runs.getRun(run.id).state).toBe('working');
@@ -1259,7 +1466,13 @@ describe('build output archive', () => {
     expect(Buffer.concat(chunks)).toEqual(Buffer.alloc(bytes, 5));
   };
   const staleRunsBehindTenNewer = (projectId: string, projectPath: string, stale: Run[]) => {
-    stale.forEach((r, i) => t.db.update(runs).set({ createdAt: new Date(1_000 + i) }).where(eq(runs.id, r.id)).run());
+    stale.forEach((r, i) =>
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(1_000 + i) })
+        .where(eq(runs.id, r.id))
+        .run(),
+    );
     for (let i = 0; i < 10; i += 1) {
       t.db
         .insert(runs)
@@ -1485,7 +1698,9 @@ describe('build output archive', () => {
     let release: () => void = () => undefined;
     const spy = vi
       .spyOn(t.runs.outputs, 'archiveRun')
-      .mockImplementation(() => new Promise((resolve) => (release = () => resolve({ archived: 0, skipped: 0, failed: 0 }))));
+      .mockImplementation(
+        () => new Promise((resolve) => (release = () => resolve({ archived: 0, skipped: 0, failed: 0 }))),
+      );
     try {
       const res = await hook(run.id, 'Stop', token);
       expect(res.statusCode).toBe(200);
@@ -1539,7 +1754,12 @@ describe('ticket_complete endpoint', () => {
       payload: body as object,
     });
   const eventsOf = (runId: string, type: string) =>
-    t.db.select().from(runEvents).where(eq(runEvents.runId, runId)).all().filter((e) => e.type === type);
+    t.db
+      .select()
+      .from(runEvents)
+      .where(eq(runEvents.runId, runId))
+      .all()
+      .filter((e) => e.type === type);
 
   async function ticketRun(name = 'Complete') {
     const project = await createProject(name, false);
@@ -1579,19 +1799,30 @@ describe('ticket_complete endpoint', () => {
       { summary: 's', blockers: ['x'.repeat(501)] },
     ];
     for (const body of bad) expect((await complete(run.id, token, body)).statusCode).toBe(400);
-    const edge = { summary: 'x'.repeat(4000), handoff: 'y'.repeat(8000), blockers: Array.from({ length: 10 }, () => 'z'.repeat(500)) };
+    const edge = {
+      summary: 'x'.repeat(4000),
+      handoff: 'y'.repeat(8000),
+      blockers: Array.from({ length: 10 }, () => 'z'.repeat(500)),
+    };
     expect((await complete(run.id, token, edge)).statusCode).toBe(200);
   });
 
   it('stores the event and ticket.completion; the latest call wins', async () => {
     const { run, ticket, token } = await ticketRun('CompleteStore');
     expect((await complete(run.id, token, { summary: 'first' })).statusCode).toBe(200);
-    expect((await complete(run.id, token, { summary: 'second', handoff: 'h', blockers: ['b1'] })).statusCode).toBe(200);
+    expect(
+      (await complete(run.id, token, { summary: 'second', handoff: 'h', blockers: ['b1'] })).statusCode,
+    ).toBe(200);
     const events = eventsOf(run.id, 'ticket_complete');
     expect(events).toHaveLength(2);
     expect(events[1]?.payload).toMatchObject({ summary: 'second', handoff: 'h', blockers: ['b1'] });
     const got = await ticketOf(ticket.id);
-    expect(got.completion).toMatchObject({ runId: run.id, summary: 'second', handoff: 'h', blockers: ['b1'] });
+    expect(got.completion).toMatchObject({
+      runId: run.id,
+      summary: 'second',
+      handoff: 'h',
+      blockers: ['b1'],
+    });
     expect(typeof got.completion.at).toBe('string');
   });
 
@@ -1619,7 +1850,14 @@ describe('ticket_complete endpoint', () => {
     await complete(run.id, token, { summary: 'keep me' });
     t.db
       .insert(runEvents)
-      .values(Array.from({ length: 5100 }, () => ({ runId: run.id, ts: new Date(), source: 'hook', type: 'PreToolUse' })))
+      .values(
+        Array.from({ length: 5100 }, () => ({
+          runId: run.id,
+          ts: new Date(),
+          source: 'hook',
+          type: 'PreToolUse',
+        })),
+      )
       .run();
     t.runs.pruneRunEvents();
     expect(eventsOf(run.id, 'ticket_complete')).toHaveLength(1);
@@ -1633,7 +1871,14 @@ describe('ticket_complete endpoint', () => {
     await hook(run.id, 'UserPromptSubmit', token);
     t.db
       .insert(runEvents)
-      .values(Array.from({ length: 5100 }, () => ({ runId: run.id, ts: new Date(), source: 'hook', type: 'PreToolUse' })))
+      .values(
+        Array.from({ length: 5100 }, () => ({
+          runId: run.id,
+          ts: new Date(),
+          source: 'hook',
+          type: 'PreToolUse',
+        })),
+      )
       .run();
     t.runs.pruneRunEvents();
     expect(eventsOf(run.id, 'UserPromptSubmit')).toHaveLength(2);
@@ -1700,7 +1945,7 @@ describe('completion-tool check-in endpoint', () => {
     expect(t.runs.hasEvent(run.id, 'completion_tool_ready')).toBe(true);
   });
 
-  it('does not become the run\'s last event (a waiting run keeps SessionStart)', async () => {
+  it("does not become the run's last event (a waiting run keeps SessionStart)", async () => {
     const { run, token } = await liveRun('ToolLastEvent');
     await hook(run.id, 'SessionStart', token, { session_id: 's-tool' });
     const before = t.runs.get(run.id).lastEvent;
@@ -1713,7 +1958,14 @@ describe('completion-tool check-in endpoint', () => {
     await checkIn(run.id, token);
     t.db
       .insert(runEvents)
-      .values(Array.from({ length: 5100 }, () => ({ runId: run.id, ts: new Date(), source: 'hook', type: 'PreToolUse' })))
+      .values(
+        Array.from({ length: 5100 }, () => ({
+          runId: run.id,
+          ts: new Date(),
+          source: 'hook',
+          type: 'PreToolUse',
+        })),
+      )
       .run();
     t.runs.pruneRunEvents();
     expect(readyEvents(run.id)).toHaveLength(1);

@@ -150,7 +150,12 @@ export class BuildOutputArchive {
         this.lastCollect.set(projectId, { ...counts, finishedAt: new Date().toISOString() });
       })
       .catch(() => {
-        this.lastCollect.set(projectId, { archived: 0, skipped: 0, failed: 1, finishedAt: new Date().toISOString() });
+        this.lastCollect.set(projectId, {
+          archived: 0,
+          skipped: 0,
+          failed: 1,
+          finishedAt: new Date().toISOString(),
+        });
       })
       .finally(() => this.collecting.delete(projectId));
     this.collecting.set(projectId, job);
@@ -561,7 +566,11 @@ export class BuildOutputArchive {
         r.sourceMtime.getTime() === listedMtime;
       const existing = own.get(output.path);
       // Unchanged since this run archived it, or since the quota evicted it (never copied back).
-      if (existing && same(existing) && (!live(existing) || (await this.files.hasFile(existing.storedPath)))) {
+      if (
+        existing &&
+        same(existing) &&
+        (!live(existing) || (await this.files.hasFile(existing.storedPath)))
+      ) {
         counts.skipped += 1;
         continue;
       }
@@ -606,7 +615,11 @@ export class BuildOutputArchive {
           }
           let twin: BuildOutputRow | undefined;
           for (const candidate of twins) {
-            if (live(candidate) && candidate.sha256 === digest && (await this.files.hasFile(candidate.storedPath))) {
+            if (
+              live(candidate) &&
+              candidate.sha256 === digest &&
+              (await this.files.hasFile(candidate.storedPath))
+            ) {
               twin = candidate;
               break;
             }
@@ -627,7 +640,8 @@ export class BuildOutputArchive {
           }
         }
         // A rebuilt pinned output stays pinned, so it replaces its own share of the pinned bytes.
-        const pinnedOthers = existing?.pinned && live(existing) ? pinnedBytes - existing.sizeBytes : pinnedBytes;
+        const pinnedOthers =
+          existing?.pinned && live(existing) ? pinnedBytes - existing.sizeBytes : pinnedBytes;
         if (pinnedOthers + copiedBytes + source.size > quota) {
           overQuota.push(output.path);
           counts.skipped += 1;

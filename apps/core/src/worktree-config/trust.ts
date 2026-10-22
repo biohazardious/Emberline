@@ -4,7 +4,11 @@
  * the main workspace's HEAD applies once a person approved exactly that content.
  */
 import { createHash } from 'node:crypto';
-import { ADOPT_FILE_PATHS, MAX_WORKTREE_YML_BYTES, type WorktreeConfigStatusResponse } from '@emberline/protocol';
+import {
+  ADOPT_FILE_PATHS,
+  MAX_WORKTREE_YML_BYTES,
+  type WorktreeConfigStatusResponse,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projectWorktreeConfig } from '../db/schema.js';
@@ -19,10 +23,22 @@ import { parseWorktreeYml } from './load.js';
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
 /** The approved content next to HEAD's committed file, with the diff between them. */
-export async function worktreeConfigStatus(db: Db, project: { id: string; path: string }): Promise<WorktreeConfigStatusResponse> {
-  const row = db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+export async function worktreeConfigStatus(
+  db: Db,
+  project: { id: string; path: string },
+): Promise<WorktreeConfigStatusResponse> {
+  const row = db
+    .select()
+    .from(projectWorktreeConfig)
+    .where(eq(projectWorktreeConfig.projectId, project.id))
+    .get();
   const approved = row
-    ? { content: row.content, sha256: row.sha256, approvedAt: row.approvedAt.toISOString(), approvedBy: row.approvedBy }
+    ? {
+        content: row.content,
+        sha256: row.sha256,
+        approvedAt: row.approvedAt.toISOString(),
+        approvedBy: row.approvedBy,
+      }
     : null;
   const read = await readHeadWorktreeYml(project.path);
   const yml = read.kind === 'present' ? read.yml : null;
@@ -32,7 +48,8 @@ export async function worktreeConfigStatus(db: Db, project: { id: string; path: 
   const removed = read.kind === 'absent' && approved !== null;
   // HEAD has a file, but a link, an oversized or an invalid one: the review shows why it cannot be approved.
   const unusable = read.kind === 'present' && (head === null || errors.length > 0);
-  const changed = removed || (head !== null && head.sha256 !== approved?.sha256) || (unusable && approved !== null);
+  const changed =
+    removed || (head !== null && head.sha256 !== approved?.sha256) || (unusable && approved !== null);
   return {
     approved,
     head,
@@ -40,14 +57,18 @@ export async function worktreeConfigStatus(db: Db, project: { id: string; path: 
     changed,
     removed,
     // Without HEAD content there is nothing to compare: the errors say what is wrong.
-    diff: changed && (head !== null || removed) ? unifiedDiff(approved?.content ?? '', head?.content ?? '') : '',
+    diff:
+      changed && (head !== null || removed) ? unifiedDiff(approved?.content ?? '', head?.content ?? '') : '',
     errors,
     unusable,
   };
 }
 
 /** Accepts that HEAD removed the file: the approval goes, and runs get no worktree lifecycle. */
-export async function approveWorktreeConfigRemoval(db: Db, project: { id: string; path: string }): Promise<WorktreeConfigStatusResponse> {
+export async function approveWorktreeConfigRemoval(
+  db: Db,
+  project: { id: string; path: string },
+): Promise<WorktreeConfigStatusResponse> {
   const current = await worktreeConfigStatus(db, project);
   if (!current.removed) {
     throw conflict(
@@ -73,12 +94,15 @@ export async function approveWorktreeConfig(
 ): Promise<WorktreeConfigStatusResponse> {
   const current = await worktreeConfigStatus(db, project);
   if (!current.head) {
-    throw conflict(current.errors[0] ?? current.headError ?? 'the main workspace has no committed .emberline/worktree.yml');
+    throw conflict(
+      current.errors[0] ?? current.headError ?? 'the main workspace has no committed .emberline/worktree.yml',
+    );
   }
   if (current.head.sha256 !== sha) {
     throw conflict('.emberline/worktree.yml changed in HEAD since it was reviewed; review it again');
   }
-  if (current.errors.length > 0) throw badRequest(`.emberline/worktree.yml is invalid: ${current.errors.join('; ')}`);
+  if (current.errors.length > 0)
+    throw badRequest(`.emberline/worktree.yml is invalid: ${current.errors.join('; ')}`);
   storeApproval(db, project.id, current.head.content, 'person');
   return worktreeConfigStatus(db, project);
 }
@@ -95,7 +119,8 @@ export function storeApproval(db: Db, projectId: string, content: string, approv
 /** Why a worktree file could not be opened safely, from {@link UnsafePathError}'s wording. */
 function unsafeReason(rel: string, error: UnsafePathError): string {
   if (error.message.endsWith('is a symbolic link')) return `${rel} is a symbolic link`;
-  if (error.message.endsWith('resolves outside the expected place')) return `${rel} is inside a linked directory`;
+  if (error.message.endsWith('resolves outside the expected place'))
+    return `${rel} is inside a linked directory`;
   return `${rel} is not a regular file`;
 }
 
@@ -110,7 +135,8 @@ const REAL_OBJECTS: Required<GitReadOptions> = {
   args: ['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false'],
   env: { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' },
 };
-const realGit = (args: string[], cwd: string) => execGitFile([...REAL_OBJECTS.args, ...args], { cwd, env: REAL_OBJECTS.env });
+const realGit = (args: string[], cwd: string) =>
+  execGitFile([...REAL_OBJECTS.args, ...args], { cwd, env: REAL_OBJECTS.env });
 
 /** The commit main's HEAD names; null when git cannot tell. */
 async function mainHeadCommit(mainWorkspacePath: string): Promise<string | null> {
@@ -178,7 +204,10 @@ async function sameAs(worktreePath: string, rev: string, rel: string): Promise<b
  * committed file is read only when the run's file is invalid or unreadable; throws when git cannot
  * read it then.
  */
-export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspacePath: string): Promise<string[] | null> {
+export async function runWorktreeYmlProblems(
+  worktreePath: string,
+  mainWorkspacePath: string,
+): Promise<string[] | null> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
   let content: string | null = null;
   let unreadable: string | null = null;
@@ -202,14 +231,16 @@ export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspace
     const untouched = async (rev: string | null, read: HeadWorktreeYml | null) =>
       read?.kind === 'present' &&
       (content === read.yml.content || (rev !== null && (await sameAs(worktreePath, rev, rel))));
-    if (await untouched(head, await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD', REAL_OBJECTS))) return null;
+    if (await untouched(head, await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD', REAL_OBJECTS)))
+      return null;
     const base = await branchBaseWorktreeYml(worktreePath, head);
     return base && (await untouched(base.commit, base.read)) ? null : parsed.errors;
   }
   // The run did not make an unusable file worse than main's or its starting point's.
   const head = await mainHeadCommit(mainWorkspacePath);
   const main = await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD', REAL_OBJECTS);
-  if (unusable(main) || unusable((await branchBaseWorktreeYml(worktreePath, head))?.read ?? null)) return null;
+  if (unusable(main) || unusable((await branchBaseWorktreeYml(worktreePath, head))?.read ?? null))
+    return null;
   return [unreadable ?? `${rel} cannot be read`];
 }
 

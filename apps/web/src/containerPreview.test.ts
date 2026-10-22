@@ -47,12 +47,15 @@ describe('primary view', () => {
   });
 
   it('is the static build for main without a compose preview service or the engine', () => {
-    const unavailable = 'the approved worktree.yml has no compose preview service, so main has no container preview';
+    const unavailable =
+      'the approved worktree.yml has no compose preview service, so main has no container preview';
     expect(choosePrimaryView(main, preview({ unavailable }), true)).toBe('static');
   });
 
   it('keeps a started main preview visible even once it became unavailable, so it can be stopped', () => {
-    expect(choosePrimaryView(main, preview({ status: 'exited', unavailable: 'engine off' }), false)).toBe('container');
+    expect(choosePrimaryView(main, preview({ status: 'exited', unavailable: 'engine off' }), false)).toBe(
+      'container',
+    );
   });
 
   it('is the container preview for a run with a compose preview service and the engine', () => {
@@ -66,7 +69,9 @@ describe('primary view', () => {
   });
 
   it('keeps a started command preview (the fallback) visible with its Stop, but never offers to start one', () => {
-    expect(choosePrimaryView(run, preview({ kind: 'command', status: 'running', port: 4300 }), true)).toBe('container');
+    expect(choosePrimaryView(run, preview({ kind: 'command', status: 'running', port: 4300 }), true)).toBe(
+      'container',
+    );
     expect(choosePrimaryView(run, preview({ kind: 'command', status: 'exited' }), false)).toBe('container');
     expect(choosePrimaryView(run, preview({ kind: 'command' }), true)).toBe('static');
   });
@@ -91,8 +96,14 @@ describe('status badge', () => {
       text: 'Running on :4325',
       className: 'badge badge-ok',
     });
-    expect(previewBadge(preview({ status: 'failed' }))).toEqual({ text: 'Failed', className: 'badge badge-bad' });
-    expect(previewBadge(preview({ status: 'exited' }))).toEqual({ text: 'Exited', className: 'badge badge-warn' });
+    expect(previewBadge(preview({ status: 'failed' }))).toEqual({
+      text: 'Failed',
+      className: 'badge badge-bad',
+    });
+    expect(previewBadge(preview({ status: 'exited' }))).toEqual({
+      text: 'Exited',
+      className: 'badge badge-warn',
+    });
   });
 
   it('says running without a port', () => {
@@ -107,12 +118,18 @@ describe('preview problem', () => {
   });
 
   it('shows the error of a failed or exited preview', () => {
-    expect(previewProblem(preview({ status: 'failed', error: '"web" did not answer HTTP on port 80 within 120 s' }))).toEqual({
+    expect(
+      previewProblem(
+        preview({ status: 'failed', error: '"web" did not answer HTTP on port 80 within 120 s' }),
+      ),
+    ).toEqual({
       title: 'The container preview failed',
       detail: '"web" did not answer HTTP on port 80 within 120 s',
       hint: null,
     });
-    expect(previewProblem(preview({ status: 'exited', error: 'the "web" container is not running' }))).toEqual({
+    expect(
+      previewProblem(preview({ status: 'exited', error: 'the "web" container is not running' })),
+    ).toEqual({
       title: 'The container preview exited',
       detail: 'the "web" container is not running',
       hint: null,
@@ -121,7 +138,10 @@ describe('preview problem', () => {
 
   it('says a failed refresh after a merge took main down, and how to retry', () => {
     const problem = previewProblem(
-      preview({ status: 'failed', error: 'the refresh after a merge failed: "web" did not answer HTTP on port 80 within 120 s' }),
+      preview({
+        status: 'failed',
+        error: 'the refresh after a merge failed: "web" did not answer HTTP on port 80 within 120 s',
+      }),
     );
     expect(problem).toEqual({
       title: 'The container preview failed',
@@ -149,7 +169,9 @@ describe('empty preview text', () => {
     expect(previewEmptyText(preview({ status: 'failed', error: 'x' }), 'main')).toBe(
       'Nothing is serving. Start to try again.',
     );
-    expect(previewEmptyText(preview({ status: 'running' }), 'main')).toBe('The preview runs but has no address yet.');
+    expect(previewEmptyText(preview({ status: 'running' }), 'main')).toBe(
+      'The preview runs but has no address yet.',
+    );
   });
 
   it('names the service from the detected command when none was started yet', () => {
@@ -176,8 +198,14 @@ describe('preview frame', () => {
   });
 
   it('frames a preview on an IPv6 address with a note (the frame policy cannot name it, so it allows any address)', () => {
-    expect(previewFrameMode('http:', 'http://[fd00::5]:4325')).toEqual({ frame: true, note: IPV6_FRAME_NOTE });
-    expect(previewFrameMode('https:', 'https://[fd00::5]:4325')).toEqual({ frame: true, note: IPV6_FRAME_NOTE });
+    expect(previewFrameMode('http:', 'http://[fd00::5]:4325')).toEqual({
+      frame: true,
+      note: IPV6_FRAME_NOTE,
+    });
+    expect(previewFrameMode('https:', 'https://[fd00::5]:4325')).toEqual({
+      frame: true,
+      note: IPV6_FRAME_NOTE,
+    });
     expect(IPV6_FRAME_NOTE).toBe(
       "Emberline is open on an IPv6 address, which a browser's frame policy cannot name, so previews can be framed from any address. Open Emberline by its host name to limit that to the preview ports.",
     );
@@ -247,7 +275,11 @@ describe('runner browser URL', () => {
   it('starts the container preview, waits until it runs, then opens the runner-side URL', async () => {
     const d = deps({
       container: true,
-      statuses: [preview(), preview({ status: 'starting', port: 4325 }), preview({ status: 'running', port: 4325 })],
+      statuses: [
+        preview(),
+        preview({ status: 'starting', port: 4325 }),
+        preview({ status: 'running', port: 4325 }),
+      ],
       browserUrl: { url: 'http://docker:4325/', kind: 'compose' },
     });
     const res = await resolveRunnerBrowserUrl(d.deps, { timeoutMs: 10_000, pollMs: 1_000 });
@@ -322,13 +354,17 @@ describe('runner browser URL', () => {
     const res = await resolveRunnerBrowserUrl(d.deps, { timeoutMs: 10_000, pollMs: 1_000 });
     expect(res).toEqual({
       url: null,
-      message: 'The container preview could not start: enable the Docker engine. There is nothing else to open yet.',
+      message:
+        'The container preview could not start: enable the Docker engine. There is nothing else to open yet.',
       problem: true,
     });
   });
 
   it('says clearly when there is nothing to open', async () => {
-    const d = deps({ container: false, browserUrl: { url: null, kind: 'static', note: 'main has no demo yet' } });
+    const d = deps({
+      container: false,
+      browserUrl: { url: null, kind: 'static', note: 'main has no demo yet' },
+    });
     const res = await resolveRunnerBrowserUrl(d.deps, { timeoutMs: 10_000, pollMs: 1_000 });
     expect(res).toEqual({
       url: null,
@@ -346,18 +382,30 @@ describe('framing', () => {
   });
 
   it('the panel text has no parentheses without a reason', () => {
-    expect(framingRefusedText(null)).toBe('This app does not allow being shown inside another page. Open it in a new tab.');
+    expect(framingRefusedText(null)).toBe(
+      'This app does not allow being shown inside another page. Open it in a new tab.',
+    );
   });
 
   it('maps framing to the view', () => {
-    expect(framingView(preview({ status: 'running', framing: { state: 'refused', reason: 'X-Frame-Options: DENY' } }))).toBe('refused');
-    expect(framingView(preview({ status: 'running', framing: { state: 'unknown', reason: null } }))).toBe('unknown');
-    expect(framingView(preview({ status: 'running', framing: { state: 'allowed', reason: null } }))).toBe('allowed');
+    expect(
+      framingView(
+        preview({ status: 'running', framing: { state: 'refused', reason: 'X-Frame-Options: DENY' } }),
+      ),
+    ).toBe('refused');
+    expect(framingView(preview({ status: 'running', framing: { state: 'unknown', reason: null } }))).toBe(
+      'unknown',
+    );
+    expect(framingView(preview({ status: 'running', framing: { state: 'allowed', reason: null } }))).toBe(
+      'allowed',
+    );
     expect(framingView(preview({ status: 'running' }))).toBe('allowed');
   });
 
   it('shows no notice while the preview is not running', () => {
-    expect(framingView(preview({ status: 'stopped', framing: { state: 'refused', reason: 'x' } }))).toBe('allowed');
+    expect(framingView(preview({ status: 'stopped', framing: { state: 'refused', reason: 'x' } }))).toBe(
+      'allowed',
+    );
   });
 
   it("the unknown note and the button are the spec's", () => {
@@ -395,7 +443,10 @@ describe('Auto-Interact start banner (B-12)', () => {
       kind: 'info',
       text: PLAYTEST_ELSEWHERE_TEXT,
     });
-    expect(playtestStartBanner({ playtestActive: true })).toEqual({ kind: 'ok', text: PLAYTEST_STARTED_TEXT });
+    expect(playtestStartBanner({ playtestActive: true })).toEqual({
+      kind: 'ok',
+      text: PLAYTEST_STARTED_TEXT,
+    });
     expect(PLAYTEST_STARTED_TEXT).toBe(
       'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
     );

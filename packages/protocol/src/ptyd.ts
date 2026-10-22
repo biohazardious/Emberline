@@ -106,7 +106,12 @@ export const ptydMethods = {
       cwd: z.string().min(1),
       /** Merged over the same minimal base environment as `spawn`. */
       env: StringMap.default({}),
-      timeoutMs: z.number().int().min(1).max(60 * 60_000).default(60_000),
+      timeoutMs: z
+        .number()
+        .int()
+        .min(1)
+        .max(60 * 60_000)
+        .default(60_000),
       maxOutputBytes: z.number().int().min(1).max(MAX_EXEC_OUTPUT_BYTES).default(MAX_EXEC_OUTPUT_BYTES),
       /** `base64` for binary stdout (e.g. `git show <blob>`); stderr is always UTF-8. */
       encoding: z.enum(['utf8', 'base64']).default('utf8'),

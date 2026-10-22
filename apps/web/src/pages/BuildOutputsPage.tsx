@@ -1,4 +1,8 @@
-import type { CollectBuildOutputsResponse, ProjectBuildOutput, ProjectBuildOutputsResponse } from '@emberline/protocol';
+import type {
+  CollectBuildOutputsResponse,
+  ProjectBuildOutput,
+  ProjectBuildOutputsResponse,
+} from '@emberline/protocol';
 import { Check, Copy, Download, Package, Pin, PinOff, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
@@ -99,11 +103,7 @@ function Actions({
         disabled={busy}
         onClick={onDelete}
       >
-        {confirming ? (
-          'Click again to confirm'
-        ) : (
-          <Trash2 className="icon" aria-hidden />
-        )}
+        {confirming ? 'Click again to confirm' : <Trash2 className="icon" aria-hidden />}
       </button>
     </div>
   );
@@ -122,9 +122,13 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   // With a run filter the list also reports that run's handoff chain, which the filter matches.
   const runQuery = runFilter ? `?run=${encodeURIComponent(runFilter)}` : '';
   // Poll faster while a collect pass runs.
-  const { data, error: loadError, loading, refresh } = useApi<ProjectBuildOutputsResponse>(
-    `/api/projects/${projectId}/build-outputs${runQuery}`,
-    (latest) => (starting || latest?.collecting ? 2_000 : 8_000),
+  const {
+    data,
+    error: loadError,
+    loading,
+    refresh,
+  } = useApi<ProjectBuildOutputsResponse>(`/api/projects/${projectId}/build-outputs${runQuery}`, (latest) =>
+    starting || latest?.collecting ? 2_000 : 8_000,
   );
   const collecting = (data?.collecting ?? false) || starting;
 
@@ -220,7 +224,12 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
           <Package className="icon" aria-hidden />
           <h1>Build Outputs</h1>
         </div>
-        <button type="button" className="btn btn-sm" disabled={collecting || !data} onClick={() => void collect()}>
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={collecting || !data}
+          onClick={() => void collect()}
+        >
           <RefreshCw className={`icon${collecting ? ' icon-spin' : ''}`} aria-hidden />{' '}
           {collecting ? 'Collecting…' : 'Collect now'}
         </button>
@@ -251,8 +260,8 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
           </div>
           {quotaFull && (
             <p className="muted small">
-              Pinned outputs fill the whole quota, so nothing new is archived. Unpin or delete some, or raise the
-              quota in Settings.
+              Pinned outputs fill the whole quota, so nothing new is archived. Unpin or delete some, or raise
+              the quota in Settings.
             </p>
           )}
           {last && !collecting && (
@@ -307,7 +316,11 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {loading && !data && <p className="muted" aria-busy="true">Loading…</p>}
+      {loading && !data && (
+        <p className="muted" aria-busy="true">
+          Loading…
+        </p>
+      )}
 
       {data && total === 0 && (
         <div className="build-outputs-empty">
@@ -316,8 +329,9 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
             <strong>No build outputs yet.</strong>
           </p>
           <p className="muted small">
-            When a run finishes and has built an APK, installer or firmware image, a copy is kept here so it survives
-            cleaning up the worktree. Use Collect now to pick up files from runs that still have a worktree.
+            When a run finishes and has built an APK, installer or firmware image, a copy is kept here so it
+            survives cleaning up the worktree. Use Collect now to pick up files from runs that still have a
+            worktree.
           </p>
         </div>
       )}

@@ -91,20 +91,38 @@ export async function runComposePreview(
   },
 ): Promise<ComposePreviewOutcome> {
   const { project, file, service } = target;
-  const listed = await run(composeServicesArgs(project, file), target.worktreePath, target.env, SHORT_TIMEOUT_MS);
+  const listed = await run(
+    composeServicesArgs(project, file),
+    target.worktreePath,
+    target.env,
+    SHORT_TIMEOUT_MS,
+  );
   if (control.cancelled()) return { ok: false, cancelled: true };
-  if (!listed.ok) return { ok: false, error: `docker compose config failed (${listed.how})`, logs: listed.output };
+  if (!listed.ok)
+    return { ok: false, error: `docker compose config failed (${listed.how})`, logs: listed.output };
   const services = parseComposeServices(listed.result!.stdout);
-  if (!services.includes(service)) return { ok: false, error: `"${service}" is not a service in ${file}`, logs: null };
+  if (!services.includes(service))
+    return { ok: false, error: `"${service}" is not a service in ${file}`, logs: null };
 
   const shell = composeShell(composeUpArgs(project, file, service));
   const tried = new Set<number>();
   for (let attempt = 1; ; attempt++) {
-    const override = composeOverrideYaml({ service, port: target.containerPort, hostPort: target.hostPort, services });
-    const up = await run(shell.args, target.worktreePath, { ...target.env, [COMPOSE_OVERRIDE_ENV]: override }, timing.upTimeoutMs, {
-      file: shell.file,
-      execId: control.execId,
+    const override = composeOverrideYaml({
+      service,
+      port: target.containerPort,
+      hostPort: target.hostPort,
+      services,
     });
+    const up = await run(
+      shell.args,
+      target.worktreePath,
+      { ...target.env, [COMPOSE_OVERRIDE_ENV]: override },
+      timing.upTimeoutMs,
+      {
+        file: shell.file,
+        execId: control.execId,
+      },
+    );
     if (control.cancelled() || up.result?.cancelled) return { ok: false, cancelled: true };
     if (up.ok) break;
     // Something else in the engine (an agent's container) holds the port: take the next free one.
@@ -113,7 +131,11 @@ export async function runComposePreview(
       try {
         target.hostPort = await control.reallocate(tried);
       } catch {
-        return { ok: false, error: `docker compose up failed (${up.how}) and no other preview port is free`, logs: up.output };
+        return {
+          ok: false,
+          error: `docker compose up failed (${up.how}) and no other preview port is free`,
+          logs: up.output,
+        };
       }
       if (control.cancelled()) return { ok: false, cancelled: true };
       continue;
@@ -150,7 +172,10 @@ export async function composeServiceStatus(
 }
 
 /** Whether the compose project has no container at all (`ps --all` lists none); null when compose could not answer. */
-export async function composeProjectGone(project: string, env: Record<string, string>): Promise<boolean | null> {
+export async function composeProjectGone(
+  project: string,
+  env: Record<string, string>,
+): Promise<boolean | null> {
   const ps = await run(composePsArgs(project), NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
   if (!ps.ok) return null;
   return parseComposePs(ps.result!.stdout).length === 0;
@@ -166,15 +191,24 @@ export async function composeDown(
   opts: { volumes?: boolean; images?: boolean } = {},
 ): Promise<{ ok: boolean; output: string; exitCode: number | null }> {
   const down = await run(composeDownArgs(project, opts), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
-  return { ok: down.ok, output: down.output, exitCode: down.result && !down.result.timedOut ? down.result.exitCode : null };
+  return {
+    ok: down.ok,
+    output: down.output,
+    exitCode: down.result && !down.result.timedOut ? down.result.exitCode : null,
+  };
 }
 
 /** Every compose project in the engine (`compose ls -a`), or why compose could not answer (one line). */
-export async function composeProjects(env: Record<string, string>): Promise<{ ok: true; names: string[] } | { ok: false; error: string }> {
+export async function composeProjects(
+  env: Record<string, string>,
+): Promise<{ ok: true; names: string[] } | { ok: false; error: string }> {
   const ls = await run(composeLsArgs(), NEUTRAL_CWD, env, SHORT_TIMEOUT_MS);
   if (ls.ok) return { ok: true, names: parseComposeLs(ls.result!.stdout) };
   const detail = stripControlChars(ls.output.replace(/\s+/g, ' '), '').trim();
-  return { ok: false, error: clipText(`docker compose ls failed (${ls.how})${detail ? `: ${detail}` : ''}`, 300) };
+  return {
+    ok: false,
+    error: clipText(`docker compose ls failed (${ls.how})${detail ? `: ${detail}` : ''}`, 300),
+  };
 }
 
 /** `image prune` and `builder prune`, each `-f --filter until=72h`. Never throws. */
@@ -196,7 +230,10 @@ export function dockerQuery(args: string[], env: Record<string, string>): Promis
  * Gives the files under `dir` back to the runner user through a throwaway container in the engine
  * (see {@link reclaimArgs}). Never throws.
  */
-export async function reclaimFiles(dir: string, env: Record<string, string>): Promise<{ ok: boolean; output: string }> {
+export async function reclaimFiles(
+  dir: string,
+  env: Record<string, string>,
+): Promise<{ ok: boolean; output: string }> {
   let args: string[];
   try {
     args = reclaimArgs(dir);
@@ -208,7 +245,12 @@ export async function reclaimFiles(dir: string, env: Record<string, string>): Pr
 }
 
 async function composeLogsTail(target: ComposePreviewTarget): Promise<string | null> {
-  const logs = await run(composeLogsArgs(target.project, target.service), NEUTRAL_CWD, target.env, SHORT_TIMEOUT_MS);
+  const logs = await run(
+    composeLogsArgs(target.project, target.service),
+    NEUTRAL_CWD,
+    target.env,
+    SHORT_TIMEOUT_MS,
+  );
   return logs.output || null;
 }
 
@@ -256,7 +298,9 @@ async function run(
     });
     const output = composeOutputTail(`${result.stdout}${result.stderr}`);
     const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled;
-    const how = result.timedOut ? `timed out after ${Math.round(timeoutMs / 1000)} s` : `exit ${result.exitCode}`;
+    const how = result.timedOut
+      ? `timed out after ${Math.round(timeoutMs / 1000)} s`
+      : `exit ${result.exitCode}`;
     return { ok, result, how, output };
   } catch (error) {
     return { ok: false, how: 'could not run', output: composeOutputTail((error as Error).message) };

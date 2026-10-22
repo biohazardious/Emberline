@@ -179,7 +179,16 @@ export const redactedProject = (project: Project): Project => ({
 export const projectResponse = (row: ProjectRow): Project => redactedProject(toProject(row));
 
 /** Letters NFKD does not decompose into ASCII base + combining mark. */
-const TRANSLITERATE: Record<string, string> = { ı: 'i', ß: 'ss', ø: 'o', æ: 'ae', œ: 'oe', ł: 'l', đ: 'd', þ: 'th' };
+const TRANSLITERATE: Record<string, string> = {
+  ı: 'i',
+  ß: 'ss',
+  ø: 'o',
+  æ: 'ae',
+  œ: 'oe',
+  ł: 'l',
+  đ: 'd',
+  þ: 'th',
+};
 
 export function slugify(name: string): string {
   return name
@@ -194,7 +203,16 @@ export function slugify(name: string): string {
 
 export function registerProjectRoutes(
   app: FastifyInstance,
-  { db, config, ptyd, tickets, runs, scheduler, postMerge, mainPush }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed },
+  {
+    db,
+    config,
+    ptyd,
+    tickets,
+    runs,
+    scheduler,
+    postMerge,
+    mainPush,
+  }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed },
 ): void {
   const saveActiveProjectId = (activeProjectId: string | null) => {
     db.insert(settings)
@@ -289,7 +307,13 @@ export function registerProjectRoutes(
       tickets: plannedTickets(plan),
       gates: plan.gates,
       notes: plan.notes,
-      materials: plan.materials.map(({ name, path: p, kind, mimeType, sizeBytes }) => ({ name, path: p, kind, mimeType, sizeBytes })),
+      materials: plan.materials.map(({ name, path: p, kind, mimeType, sizeBytes }) => ({
+        name,
+        path: p,
+        kind,
+        mimeType,
+        sizeBytes,
+      })),
     };
   });
 
@@ -308,7 +332,10 @@ export function registerProjectRoutes(
     );
     const projectPath = path.join(config.workspacesDir, slug);
     if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
-      throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
+      throw conflict(
+        `directory already exists and is not empty: ${projectPath}`,
+        PROJECT_CONFLICT.directoryExists,
+      );
     }
     const row: ProjectRow = {
       id: randomUUID(),
@@ -357,7 +384,10 @@ export function registerProjectRoutes(
         tx.insert(projectSettings)
           .values({
             projectId: row.id,
-            settings: { importSource: 'new', ...(Object.keys(plan.gates).length > 0 ? { gates: plan.gates } : {}) },
+            settings: {
+              importSource: 'new',
+              ...(Object.keys(plan.gates).length > 0 ? { gates: plan.gates } : {}),
+            },
           })
           .run();
       });
@@ -365,7 +395,11 @@ export function registerProjectRoutes(
       await rm(projectPath, { recursive: true, force: true }).catch(() => undefined);
       const code = (err as NodeJS.ErrnoException).code;
       if (code && /^E[A-Z]+$/.test(code)) {
-        throw new HttpError(500, 'project_write_failed', `The project folder could not be written (${code}). Nothing was created.`);
+        throw new HttpError(
+          500,
+          'project_write_failed',
+          `The project folder could not be written (${code}). Nothing was created.`,
+        );
       }
       throw err;
     }
@@ -380,7 +414,13 @@ export function registerProjectRoutes(
       }
       const bootstrap = created.get('bootstrap');
       if (plan.startFactory && plan.vision && bootstrap) {
-        created.set('factory', tickets.createFactoryTicket(project.id, plan.vision, { autoDispatch: true, attachmentContext: plan.materialsText }));
+        created.set(
+          'factory',
+          tickets.createFactoryTicket(project.id, plan.vision, {
+            autoDispatch: true,
+            attachmentContext: plan.materialsText,
+          }),
+        );
       }
       for (const spec of [...plan.tickets, { key: 'factory', dependsOn: ['bootstrap'] }]) {
         const ticket = created.get(spec.key);
@@ -425,7 +465,8 @@ export function registerProjectRoutes(
   ): Promise<CreateProjectResponse> {
     // A wizard create is writing into this folder right now: it is not an existing repository.
     const beingCreated = () => {
-      if (creating.has(folder)) throw conflict(`"${folder}" is being created by the wizard`, PROJECT_CONFLICT.beingCreated);
+      if (creating.has(folder))
+        throw conflict(`"${folder}" is being created by the wizard`, PROJECT_CONFLICT.beingCreated);
     };
     beingCreated();
     const projectPath = await resolveWorkspaceFolder(config.workspacesDir, folder);
@@ -459,7 +500,9 @@ export function registerProjectRoutes(
     db.transaction((tx) => {
       tx.insert(projects).values(row).run();
       // The folder is the user's own repository: removing the project keeps it (see the delete route).
-      tx.insert(projectSettings).values({ projectId: row.id, settings: { importSource: 'folder' } }).run();
+      tx.insert(projectSettings)
+        .values({ projectId: row.id, settings: { importSource: 'folder' } })
+        .run();
     });
     const project: Project = { ...projectResponse(row), importSource: 'folder' };
     saveActiveProjectId(project.id);
@@ -467,124 +510,143 @@ export function registerProjectRoutes(
     return { project, terminalId: null };
   }
 
-  app.post('/api/projects', { bodyLimit: PROJECT_CREATE_BODY_LIMIT }, async (request, reply): Promise<CreateProjectResponse> => {
-    const body = CreateProjectBody.parse(request.body);
-    const slug = slugify(body.name);
-    if (!slug) throw badRequest('name must contain at least one letter or digit');
-    if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
-      throw conflict(`a project with slug "${slug}" already exists`, PROJECT_CONFLICT.nameTaken);
-    }
-    if (!isWizardCreate(body) && ((body.materials?.length ?? 0) > 0 || (body.referenceUrls?.length ?? 0) > 0)) {
-      throw new HttpError(400, MATERIALS_ERROR_CODE, 'Reference files and links are only accepted when the wizard creates a new project.');
-    }
-    if (body.source === 'import_folder' && body.folder !== undefined) {
-      return importFolderProject(body, body.folder, slug, reply);
-    }
-    if (isWizardCreate(body)) {
-      if (body.repoUrl) throw badRequest('a new project cannot have a repoUrl; use source "import_url"');
-      // A double submit must not write twice into the same directory.
-      if (creating.has(slug)) throw conflict(`a project with slug "${slug}" is being created`, PROJECT_CONFLICT.beingCreated);
-      creating.add(slug);
-      try {
-        // Refused before the disk is touched. Once decoded, the parsed body and the request body drop
-        // their `materials` (the base64 strings, up to 40 MB), so before the first await nothing here
-        // references them; the decoded Buffers go to createNewProject.
-        const decoded = decodeMaterials(body.materials ?? []);
-        body.materials = undefined;
-        (request.body as { materials?: unknown }).materials = undefined;
-        return await createNewProject(body, decoded, slug, reply, request.log);
-      } finally {
-        creating.delete(slug);
+  app.post(
+    '/api/projects',
+    { bodyLimit: PROJECT_CREATE_BODY_LIMIT },
+    async (request, reply): Promise<CreateProjectResponse> => {
+      const body = CreateProjectBody.parse(request.body);
+      const slug = slugify(body.name);
+      if (!slug) throw badRequest('name must contain at least one letter or digit');
+      if (db.select().from(projects).where(eq(projects.slug, slug)).get()) {
+        throw conflict(`a project with slug "${slug}" already exists`, PROJECT_CONFLICT.nameTaken);
       }
-    }
-
-    const id = randomUUID();
-    const projectPath = path.join(config.workspacesDir, slug);
-    let terminalId: string | null = null;
-
-    if (body.repoUrl) {
-      if (existsSync(projectPath)) throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
-      const credential = gitCredentialForRemote(db, body.repoUrl);
-      // With an account the URL must be one Connect accepts (no query or fragment), so both entry
-      // points bind capabilities to, and store, the same URL shapes.
-      if (credential) validateRepositoryUrl(body.repoUrl);
-      // With a forge account the PTY's git clones from a one-time gateway URL: the token stays in core.
-      const args = credential
-        ? accountCloneArgs({ gateway: runs.gitGateway, projectId: id, url: body.repoUrl, credential }, projectPath)
-        : ['clone', '--progress', '--', body.repoUrl, projectPath];
-      try {
-        const session = await ptyd.get().spawn({
-          file: 'git',
-          args,
-          cwd: config.workspacesDir,
-          meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
-        });
-        terminalId = session.id;
-      } catch (error) {
-        runs.gitGateway.forgetClone(id);
-        throw error;
+      if (
+        !isWizardCreate(body) &&
+        ((body.materials?.length ?? 0) > 0 || (body.referenceUrls?.length ?? 0) > 0)
+      ) {
+        throw new HttpError(
+          400,
+          MATERIALS_ERROR_CODE,
+          'Reference files and links are only accepted when the wizard creates a new project.',
+        );
       }
-    } else {
-      // Never write blueprint files or `git init` into someone's existing folder.
-      if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
-        throw conflict(`directory already exists and is not empty: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
+      if (body.source === 'import_folder' && body.folder !== undefined) {
+        return importFolderProject(body, body.folder, slug, reply);
       }
-      await mkdir(projectPath, { recursive: true });
-      const shouldWriteBlueprint =
-        body.mode === 'wizard' ||
-        Boolean(body.description.trim()) ||
-        Boolean(body.techStack) ||
-        Boolean(body.architectureNotes?.trim()) ||
-        Boolean(body.referenceDocs?.trim());
-      if (shouldWriteBlueprint) {
-        const blueprintContent = generateProjectBlueprint({
-          name: body.name,
-          appType: body.appType,
-          description: body.description,
-          techStack: body.techStack ?? null,
-          architectureNotes: body.architectureNotes,
-          referenceDocs: body.referenceDocs,
-        });
-        await writeFile(path.join(projectPath, 'PROJECT.md'), blueprintContent, 'utf8');
-        await writeFile(path.join(projectPath, 'CLAUDE.md'), generateClaudeInstructions(body.name), 'utf8');
+      if (isWizardCreate(body)) {
+        if (body.repoUrl) throw badRequest('a new project cannot have a repoUrl; use source "import_url"');
+        // A double submit must not write twice into the same directory.
+        if (creating.has(slug))
+          throw conflict(`a project with slug "${slug}" is being created`, PROJECT_CONFLICT.beingCreated);
+        creating.add(slug);
+        try {
+          // Refused before the disk is touched. Once decoded, the parsed body and the request body drop
+          // their `materials` (the base64 strings, up to 40 MB), so before the first await nothing here
+          // references them; the decoded Buffers go to createNewProject.
+          const decoded = decodeMaterials(body.materials ?? []);
+          body.materials = undefined;
+          (request.body as { materials?: unknown }).materials = undefined;
+          return await createNewProject(body, decoded, slug, reply, request.log);
+        } finally {
+          creating.delete(slug);
+        }
       }
-      // Runs need git for worktree isolation, review and merge, so new projects get a repository
-      // unless the caller opts out.
-      const shouldInitGit = body.initGit ?? true;
-      if (shouldInitGit) {
-        await initLocalGitRepository(projectPath, body.defaultBranch);
+
+      const id = randomUUID();
+      const projectPath = path.join(config.workspacesDir, slug);
+      let terminalId: string | null = null;
+
+      if (body.repoUrl) {
+        if (existsSync(projectPath))
+          throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
+        const credential = gitCredentialForRemote(db, body.repoUrl);
+        // With an account the URL must be one Connect accepts (no query or fragment), so both entry
+        // points bind capabilities to, and store, the same URL shapes.
+        if (credential) validateRepositoryUrl(body.repoUrl);
+        // With a forge account the PTY's git clones from a one-time gateway URL: the token stays in core.
+        const args = credential
+          ? accountCloneArgs(
+              { gateway: runs.gitGateway, projectId: id, url: body.repoUrl, credential },
+              projectPath,
+            )
+          : ['clone', '--progress', '--', body.repoUrl, projectPath];
+        try {
+          const session = await ptyd.get().spawn({
+            file: 'git',
+            args,
+            cwd: config.workspacesDir,
+            meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
+          });
+          terminalId = session.id;
+        } catch (error) {
+          runs.gitGateway.forgetClone(id);
+          throw error;
+        }
+      } else {
+        // Never write blueprint files or `git init` into someone's existing folder.
+        if (existsSync(projectPath) && (await readdir(projectPath)).length > 0) {
+          throw conflict(
+            `directory already exists and is not empty: ${projectPath}`,
+            PROJECT_CONFLICT.directoryExists,
+          );
+        }
+        await mkdir(projectPath, { recursive: true });
+        const shouldWriteBlueprint =
+          body.mode === 'wizard' ||
+          Boolean(body.description.trim()) ||
+          Boolean(body.techStack) ||
+          Boolean(body.architectureNotes?.trim()) ||
+          Boolean(body.referenceDocs?.trim());
+        if (shouldWriteBlueprint) {
+          const blueprintContent = generateProjectBlueprint({
+            name: body.name,
+            appType: body.appType,
+            description: body.description,
+            techStack: body.techStack ?? null,
+            architectureNotes: body.architectureNotes,
+            referenceDocs: body.referenceDocs,
+          });
+          await writeFile(path.join(projectPath, 'PROJECT.md'), blueprintContent, 'utf8');
+          await writeFile(path.join(projectPath, 'CLAUDE.md'), generateClaudeInstructions(body.name), 'utf8');
+        }
+        // Runs need git for worktree isolation, review and merge, so new projects get a repository
+        // unless the caller opts out.
+        const shouldInitGit = body.initGit ?? true;
+        if (shouldInitGit) {
+          await initLocalGitRepository(projectPath, body.defaultBranch);
+        }
       }
-    }
 
-    const row: ProjectRow = {
-      id,
-      name: body.name,
-      slug,
-      // Without credentials: a token typed into the URL stays in origin (the clone needs it), never in the database.
-      repoUrl: body.repoUrl ? remoteUrlForDisplay(body.repoUrl).url : null,
-      defaultBranch: body.defaultBranch,
-      path: projectPath,
-      appType: body.appType,
-      description: body.description,
-      techStack: body.techStack ?? null,
-      createdAt: new Date(),
-    };
-    const importSource = body.repoUrl ? 'url' : 'new';
-    db.transaction((tx) => {
-      tx.insert(projects).values(row).run();
-      tx.insert(projectSettings).values({ projectId: id, settings: { importSource } }).run();
-    });
-    const project: Project = { ...projectResponse(row), importSource };
+      const row: ProjectRow = {
+        id,
+        name: body.name,
+        slug,
+        // Without credentials: a token typed into the URL stays in origin (the clone needs it), never in the database.
+        repoUrl: body.repoUrl ? remoteUrlForDisplay(body.repoUrl).url : null,
+        defaultBranch: body.defaultBranch,
+        path: projectPath,
+        appType: body.appType,
+        description: body.description,
+        techStack: body.techStack ?? null,
+        createdAt: new Date(),
+      };
+      const importSource = body.repoUrl ? 'url' : 'new';
+      db.transaction((tx) => {
+        tx.insert(projects).values(row).run();
+        tx.insert(projectSettings).values({ projectId: id, settings: { importSource } }).run();
+      });
+      const project: Project = { ...projectResponse(row), importSource };
 
-    saveActiveProjectId(project.id);
+      saveActiveProjectId(project.id);
 
-    if (body.seedStarterTickets) {
-      seedStarterTickets(project, tickets);
-    }
+      if (body.seedStarterTickets) {
+        seedStarterTickets(project, tickets);
+      }
 
-    reply.code(201);
-    return { project, terminalId };
-  });
+      reply.code(201);
+      return { project, terminalId };
+    },
+  );
 
   app.get<{ Params: { id: string } }>(
     '/api/projects/:id/blueprint',
@@ -607,11 +669,14 @@ export function registerProjectRoutes(
     },
   );
 
-  app.post<{ Params: { id: string } }>('/api/projects/:id/seed-tickets', async (request): Promise<Ticket[]> => {
-    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
-    if (!row) throw notFound('no such project');
-    return seedStarterTickets(toProject(row), tickets);
-  });
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/seed-tickets',
+    async (request): Promise<Ticket[]> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      return seedStarterTickets(toProject(row), tickets);
+    },
+  );
 
   app.get<{ Params: { id: string } }>(
     '/api/projects/:id/recommendations',
@@ -667,22 +732,19 @@ export function registerProjectRoutes(
     },
   );
 
-  app.post<{ Params: { id: string } }>(
-    '/api/projects/:id/run-pipeline',
-    async (request) => {
-      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
-      if (!row) throw notFound('no such project');
-      tickets.setAutoChain(row.id, true);
-      const dispatched = await tickets.dispatchNextReadyTicket(row.id);
-      return {
-        ok: true,
-        autoChainActive: tickets.isAutoChainActive(row.id),
-        // `started` keeps its pre-0.2.0 shape (the first ticket or null); `dispatched` lists them all.
-        started: dispatched[0] ?? null,
-        dispatched,
-      };
-    },
-  );
+  app.post<{ Params: { id: string } }>('/api/projects/:id/run-pipeline', async (request) => {
+    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+    if (!row) throw notFound('no such project');
+    tickets.setAutoChain(row.id, true);
+    const dispatched = await tickets.dispatchNextReadyTicket(row.id);
+    return {
+      ok: true,
+      autoChainActive: tickets.isAutoChainActive(row.id),
+      // `started` keeps its pre-0.2.0 shape (the first ticket or null); `dispatched` lists them all.
+      started: dispatched[0] ?? null,
+      dispatched,
+    };
+  });
 
   app.post<{ Params: { id: string } }>(
     '/api/projects/:id/sync-worktree',
@@ -705,7 +767,12 @@ export function registerProjectRoutes(
         // Only work that is not in main yet is held back: a no-op merge needs no override.
         beforeMerge: () => {
           if (blocking > 0 && !body.force) {
-            throw new HttpError(409, 'review_blocked', `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`, { blocking });
+            throw new HttpError(
+              409,
+              'review_blocked',
+              `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`,
+              { blocking },
+            );
           }
         },
       }).catch((error: unknown) => {
@@ -718,7 +785,8 @@ export function registerProjectRoutes(
       // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
       // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that
       // was already in main is no new merge (its sha would be main's HEAD, not this merge).
-      if (result.ok && !result.alreadyMerged && blocking > 0) runs.note(run.id, 'review_blocking_overridden', { count: blocking });
+      if (result.ok && !result.alreadyMerged && blocking > 0)
+        runs.note(run.id, 'review_blocking_overridden', { count: blocking });
       if (result.ok && !result.alreadyMerged && ticket) {
         runs.note(run.id, 'merged_by_person', {
           ...(result.commitSha ? { commitSha: result.commitSha } : {}),
@@ -731,7 +799,12 @@ export function registerProjectRoutes(
         postMerge.enqueue(project.id);
         mainPush.enqueue(project.id, run.id, result.commitOid, result.commitUnverified);
       }
-      const { commitOid: _commitOid, commitUnverified: _commitUnverified, mainHead: _mainHead, ...response } = result;
+      const {
+        commitOid: _commitOid,
+        commitUnverified: _commitUnverified,
+        mainHead: _mainHead,
+        ...response
+      } = result;
       return response;
     },
   );
@@ -754,7 +827,8 @@ export function registerProjectRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/projects/:id/preview/framing',
-    async (request): Promise<MainPreviewStatus> => runs.mainPreviews.recheckFraming(request.params.id, request.host),
+    async (request): Promise<MainPreviewStatus> =>
+      runs.mainPreviews.recheckFraming(request.params.id, request.host),
   );
 
   app.post<{ Params: { id: string } }>(
@@ -787,11 +861,18 @@ export function registerProjectRoutes(
   );
 
   /** URL agents and the runner browser use to reach the demo (no session cookie there). */
-  const agentDemoUrl = (projectId: string, targetId: string) => sharedAgentDemoUrl(config, demoTokens, projectId, targetId);
+  const agentDemoUrl = (projectId: string, targetId: string) =>
+    sharedAgentDemoUrl(config, demoTokens, projectId, targetId);
 
   // Authenticated entry point: hands the browser a short-lived capability URL. Demo documents run
   // sandboxed with an opaque origin, so they cannot reuse the session to call the API.
-  const redirectToDemo = (projectId: string, targetId: string, subPath: string, rawUrl: string, reply: FastifyReply) => {
+  const redirectToDemo = (
+    projectId: string,
+    targetId: string,
+    subPath: string,
+    rawUrl: string,
+    reply: FastifyReply,
+  ) => {
     if (!demoWorkspacePath(db, projectId, targetId)) throw notFound('no such demo target');
     const token = demoTokens.mint({ projectId, targetId }, UI_DEMO_TOKEN_TTL_MS);
     const query = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
@@ -800,28 +881,41 @@ export function registerProjectRoutes(
 
   app.get<{ Params: { id: string; targetId: string } }>(
     '/api/projects/:id/demo/:targetId',
-    async (request, reply) => redirectToDemo(request.params.id, request.params.targetId, '', request.url, reply),
+    async (request, reply) =>
+      redirectToDemo(request.params.id, request.params.targetId, '', request.url, reply),
   );
 
   app.get<{ Params: { id: string; targetId: string; '*': string } }>(
     '/api/projects/:id/demo/:targetId/*',
     async (request, reply) =>
-      redirectToDemo(request.params.id, request.params.targetId, request.params['*'] ?? '', request.url, reply),
+      redirectToDemo(
+        request.params.id,
+        request.params.targetId,
+        request.params['*'] ?? '',
+        request.url,
+        reply,
+      ),
   );
 
   const serveDemo = async (token: string, subPath: string, reply: FastifyReply) => {
     const target = demoTokens.verify(token);
     const workspacePath = target ? demoWorkspacePath(db, target.projectId, target.targetId) : null;
     if (!workspacePath) throw notFound('demo link expired or unknown');
-    const result = await serveWorkspaceDemoAsset({ workspacePath, demoBaseHref: demoBasePath(token), subPath });
-    return reply
-      .code(result.status)
-      .header('content-type', result.contentType)
-      .header('content-security-policy', UNTRUSTED_CONTENT_CSP)
-      // Module scripts and fetches from the sandboxed (opaque-origin) document are CORS requests.
-      .header('access-control-allow-origin', '*')
-      .header('cache-control', 'no-store')
-      .send(result.body);
+    const result = await serveWorkspaceDemoAsset({
+      workspacePath,
+      demoBaseHref: demoBasePath(token),
+      subPath,
+    });
+    return (
+      reply
+        .code(result.status)
+        .header('content-type', result.contentType)
+        .header('content-security-policy', UNTRUSTED_CONTENT_CSP)
+        // Module scripts and fetches from the sandboxed (opaque-origin) document are CORS requests.
+        .header('access-control-allow-origin', '*')
+        .header('cache-control', 'no-store')
+        .send(result.body)
+    );
   };
 
   app.get<{ Params: { token: string } }>('/api/demo/:token', async (request, reply) =>
@@ -880,25 +974,32 @@ export function registerProjectRoutes(
     global: gateValues(getFactorySettings(db)),
   });
 
-  app.get<{ Params: { id: string } }>('/api/projects/:id/settings', async (request): Promise<ProjectSettingsResponse> => {
-    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
-    if (!row) throw notFound('no such project');
-    return projectSettingsResponse(row.id);
-  });
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/settings',
+    async (request): Promise<ProjectSettingsResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      return projectSettingsResponse(row.id);
+    },
+  );
 
-  app.patch<{ Params: { id: string } }>('/api/projects/:id/settings', async (request): Promise<ProjectSettingsResponse> => {
-    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
-    if (!row) throw notFound('no such project');
-    const body = UpdateProjectSettingsBody.safeParse(request.body ?? {});
-    if (!body.success) throw badRequest('send { gates: { <gate>: true | false | null } } with known gate names only');
-    const gates: Record<string, boolean> = { ...readProjectGates(db, row.id) };
-    for (const [key, value] of Object.entries(body.data.gates)) {
-      if (value === null) delete gates[key];
-      else if (value !== undefined) gates[key] = value;
-    }
-    writeProjectSettings(db, row.id, { gates });
-    return projectSettingsResponse(row.id);
-  });
+  app.patch<{ Params: { id: string } }>(
+    '/api/projects/:id/settings',
+    async (request): Promise<ProjectSettingsResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      const body = UpdateProjectSettingsBody.safeParse(request.body ?? {});
+      if (!body.success)
+        throw badRequest('send { gates: { <gate>: true | false | null } } with known gate names only');
+      const gates: Record<string, boolean> = { ...readProjectGates(db, row.id) };
+      for (const [key, value] of Object.entries(body.data.gates)) {
+        if (value === null) delete gates[key];
+        else if (value !== undefined) gates[key] = value;
+      }
+      writeProjectSettings(db, row.id, { gates });
+      return projectSettingsResponse(row.id);
+    },
+  );
 
   app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
     '/api/projects/:id/usage',
@@ -950,10 +1051,7 @@ export function registerProjectRoutes(
       ? `printf "\\033[1;33m📦 ${entry.shortLabel} CLI not yet installed in /opt/ai-tools — installing latest version now...\\033[0m\\n"; ${toolStatus.installCommand}`
       : '';
 
-    const loginSpecs: Record<
-      typeof provider,
-      { cmd: string; instructions: string }
-    > = {
+    const loginSpecs: Record<typeof provider, { cmd: string; instructions: string }> = {
       claude: {
         cmd: 'claude login',
         instructions:
@@ -981,8 +1079,7 @@ export function registerProjectRoutes(
       },
       aider: {
         cmd: 'aider --version',
-        instructions:
-          'Aider uses your configured Anthropic, OpenAI, or Gemini credentials.',
+        instructions: 'Aider uses your configured Anthropic, OpenAI, or Gemini credentials.',
       },
     };
 
@@ -1036,7 +1133,10 @@ export function registerProjectRoutes(
     },
   );
 
-  const resolveProjectTargetPath = (projectId: string, targetId = 'main'): { project: Project; workspacePath: string } => {
+  const resolveProjectTargetPath = (
+    projectId: string,
+    targetId = 'main',
+  ): { project: Project; workspacePath: string } => {
     const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
     if (!row) throw notFound('no such project');
     const project = toProject(row);
@@ -1094,23 +1194,20 @@ export function registerProjectRoutes(
     },
   );
 
-  app.delete<{ Params: { id: string } }>(
-    '/api/projects/:id/files',
-    async (request) => {
-      const body = DeleteWorkspaceFileBody.parse(request.body);
-      const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
-      // Deleting .emberline would delete worktree.yml with it.
-      if (isWorktreeYmlPath(body.path) || isEmberlineDirPath(body.path)) {
-        throw conflict(WORKTREE_YML_EDIT_IN_SETTINGS, WORKTREE_CONFIG_CODES.editInSettings);
-      }
-      try {
-        await deleteWorkspaceFileEntry(workspacePath, body.path);
-        return { ok: true };
-      } catch (err) {
-        throw badRequest((err as Error).message);
-      }
-    },
-  );
+  app.delete<{ Params: { id: string } }>('/api/projects/:id/files', async (request) => {
+    const body = DeleteWorkspaceFileBody.parse(request.body);
+    const { workspacePath } = resolveProjectTargetPath(request.params.id, body.targetId);
+    // Deleting .emberline would delete worktree.yml with it.
+    if (isWorktreeYmlPath(body.path) || isEmberlineDirPath(body.path)) {
+      throw conflict(WORKTREE_YML_EDIT_IN_SETTINGS, WORKTREE_CONFIG_CODES.editInSettings);
+    }
+    try {
+      await deleteWorkspaceFileEntry(workspacePath, body.path);
+      return { ok: true };
+    } catch (err) {
+      throw badRequest((err as Error).message);
+    }
+  });
 
   app.get<{ Params: { id: string }; Querystring: { targetId?: string; path?: string; inline?: string } }>(
     '/api/projects/:id/files/download',
@@ -1160,32 +1257,26 @@ export function registerProjectRoutes(
     },
   );
 
-  app.post<{ Params: { id: string } }>(
-    '/api/projects/:id/rollback',
-    async (request) => {
-      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
-      if (!row) throw notFound('no such project');
-      const body = RollbackCheckpointBody.parse(request.body);
-      try {
-        return await rollbackProjectCheckpoint(row.path, body.sha);
-      } catch (err) {
-        throw badRequest((err as Error).message);
-      }
-    },
-  );
+  app.post<{ Params: { id: string } }>('/api/projects/:id/rollback', async (request) => {
+    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+    if (!row) throw notFound('no such project');
+    const body = RollbackCheckpointBody.parse(request.body);
+    try {
+      return await rollbackProjectCheckpoint(row.path, body.sha);
+    } catch (err) {
+      throw badRequest((err as Error).message);
+    }
+  });
 
-  app.get<{ Params: { id: string } }>(
-    '/api/projects/:id/export.tar.gz',
-    async (request, reply) => {
-      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
-      if (!row) throw notFound('no such project');
-      const archive = await exportProjectTarGz(row.path);
-      return reply
-        .header('content-type', 'application/gzip')
-        .header('content-disposition', contentDisposition('attachment', `${row.slug}.tar.gz`))
-        .send(archive);
-    },
-  );
+  app.get<{ Params: { id: string } }>('/api/projects/:id/export.tar.gz', async (request, reply) => {
+    const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+    if (!row) throw notFound('no such project');
+    const archive = await exportProjectTarGz(row.path);
+    return reply
+      .header('content-type', 'application/gzip')
+      .header('content-disposition', contentDisposition('attachment', `${row.slug}.tar.gz`))
+      .send(archive);
+  });
 
   app.get<{ Params: { id: string }; Querystring: { targetId?: string } }>(
     '/api/projects/:id/browser-viewport',
@@ -1384,7 +1475,9 @@ export function registerProjectRoutes(
         // A folder registered in place is the user's own repository: only an explicit request deletes it.
         const flag = request.query.deleteFiles;
         const shouldDeleteFiles =
-          readImportSource(db, projectId) === 'folder' ? flag === '1' || flag === 'true' : flag !== '0' && flag !== 'false';
+          readImportSource(db, projectId) === 'folder'
+            ? flag === '1' || flag === 'true'
+            : flag !== '0' && flag !== 'false';
         const resolvedWorkspace = path.resolve(row.path);
         const resolvedRoot = path.resolve(config.workspacesDir);
         if (
@@ -1397,7 +1490,10 @@ export function registerProjectRoutes(
 
         // Archived build outputs go with the project (rows and files).
         await runs.outputs.removeProject(projectId).catch((err: unknown) => {
-          request.log.warn({ err, projectId }, 'removing the archived build outputs of a deleted project failed');
+          request.log.warn(
+            { err, projectId },
+            'removing the archived build outputs of a deleted project failed',
+          );
         });
         db.delete(projects).where(eq(projects.id, projectId)).run();
         void browserTabs.forget(projectId).catch(() => undefined);
@@ -1471,10 +1567,7 @@ export function registerProjectRoutes(
     },
   );
 
-  app.get<{ Params: { id: string } }>(
-    '/api/runs/:id/telemetry',
-    async (request): Promise<RunTelemetry> => {
-      return runs.getTelemetry(request.params.id);
-    },
-  );
+  app.get<{ Params: { id: string } }>('/api/runs/:id/telemetry', async (request): Promise<RunTelemetry> => {
+    return runs.getTelemetry(request.params.id);
+  });
 }

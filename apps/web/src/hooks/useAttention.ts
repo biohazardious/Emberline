@@ -29,7 +29,9 @@ function readSeen(): SeenMap {
   try {
     const parsed = JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}') as Record<string, unknown>;
     // The old format keyed by run id with a state timestamp string: those entries match no occurrence.
-    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'number')) as SeenMap;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === 'number'),
+    ) as SeenMap;
   } catch {
     return {};
   }
@@ -97,9 +99,13 @@ export function useAttention(
     if (document.visibilityState === 'visible') return;
     for (const run of runs) {
       const attention = run.attention;
-      if (!attention || previous.has(attention.occurrence) || seen[attention.occurrence] !== undefined) continue;
+      if (!attention || previous.has(attention.occurrence) || seen[attention.occurrence] !== undefined)
+        continue;
       const note = new Notification(`${run.title ?? 'Agent run'} ${attentionReason(run)}`, {
-        body: attention.reason === 'failed' ? 'Open Emberline to see what went wrong.' : 'Open Emberline to respond.',
+        body:
+          attention.reason === 'failed'
+            ? 'Open Emberline to see what went wrong.'
+            : 'Open Emberline to respond.',
         tag: run.id,
         icon: '/favicon.svg',
       });

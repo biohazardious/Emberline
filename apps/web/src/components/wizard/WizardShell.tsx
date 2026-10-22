@@ -39,7 +39,8 @@ import {
   stepsFor,
 } from './wizardLogic';
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 interface Props {
   open: boolean;
@@ -205,7 +206,11 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     setBusy(imported ? 'Importing…' : 'Creating the project…');
     try {
       const res = imported
-        ? await api<AdoptProjectResponse>(`/api/projects/${state.importProjectId}/adopt`, 'POST', buildAdoptBody(state))
+        ? await api<AdoptProjectResponse>(
+            `/api/projects/${state.importProjectId}/adopt`,
+            'POST',
+            buildAdoptBody(state),
+          )
         : await api<CreateProjectResponse>('/api/projects', 'POST', await buildCreateBodyWithFiles(state));
       const name = state.name.trim();
       // The project exists now: a failing refresh must not look like a failed create.
@@ -241,7 +246,10 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     }
   };
 
-  const onDetected = useCallback((detect: ProjectDetectResponse) => dispatch({ type: 'detected', detect }), [dispatch]);
+  const onDetected = useCallback(
+    (detect: ProjectDetectResponse) => dispatch({ type: 'detected', detect }),
+    [dispatch],
+  );
   const onRecreated = useCallback(
     (projectId: string) => {
       onProjectsChanged();
@@ -263,7 +271,8 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const problem = stepProblem(state, state.step);
   const cloneBlocked = state.step === 'repo' && state.source === 'import_url' && runnerDown;
   const summaryBlocked = state.step === 'summary' && !preview.ready;
-  const nextDisabled = busy !== null || problem !== null || cloneBlocked || summaryBlocked || state.step === 'import';
+  const nextDisabled =
+    busy !== null || problem !== null || cloneBlocked || summaryBlocked || state.step === 'import';
   const hint =
     busy ??
     problem ??
@@ -297,13 +306,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
         if (e.target === e.currentTarget) requestClose();
       }}
     >
-      <div
-        ref={dialogRef}
-        className="wizard"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="wizard-title"
-      >
+      <div ref={dialogRef} className="wizard" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
         <header className="wizard-top">
           <div className="wizard-top-title">
             <h2 id="wizard-title">New project</h2>
@@ -313,7 +316,13 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
               </span>
             )}
           </div>
-          <button id="wizard-close" type="button" className="icon-btn" aria-label="Close" onClick={requestClose}>
+          <button
+            id="wizard-close"
+            type="button"
+            className="icon-btn"
+            aria-label="Close"
+            onClick={requestClose}
+          >
             <X className="icon" aria-hidden />
           </button>
         </header>
@@ -383,7 +392,9 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                 />
               )}
               {state.step === 'type' && <StepType state={state} dispatch={dispatch} />}
-              {state.step === 'repo' && <StepRepo state={state} dispatch={dispatch} folders={folders} runnerDown={runnerDown} />}
+              {state.step === 'repo' && (
+                <StepRepo state={state} dispatch={dispatch} folders={folders} runnerDown={runnerDown} />
+              )}
               {state.step === 'import' && imported && state.importProjectId && (
                 <ImportProgress
                   key={state.importProjectId}
@@ -401,12 +412,16 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                   state={state}
                   dispatch={dispatch}
                   factory={factory.data}
-                  factoryError={factory.error !== undefined && !factory.data ? errorMessage(factory.error) : null}
+                  factoryError={
+                    factory.error !== undefined && !factory.data ? errorMessage(factory.error) : null
+                  }
                   onEditDeploy={() => go('stack', 'wizard-dim-deploy')}
                   onSettings={leaveForSettings}
                 />
               )}
-              {state.step === 'summary' && <StepSummary state={state} dispatch={dispatch} preview={preview} onEdit={go} />}
+              {state.step === 'summary' && (
+                <StepSummary state={state} dispatch={dispatch} preview={preview} onEdit={go} />
+              )}
             </>
           )}
         </div>

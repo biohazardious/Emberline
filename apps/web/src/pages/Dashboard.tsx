@@ -79,7 +79,9 @@ export function Dashboard({
 
   const runnerDown = system?.ptyd !== 'connected';
   const activeProject = useMemo(
-    () => (activeProjectId ? projects.data?.find((p) => p.id === activeProjectId) : undefined) ?? projects.data?.[0],
+    () =>
+      (activeProjectId ? projects.data?.find((p) => p.id === activeProjectId) : undefined) ??
+      projects.data?.[0],
     [activeProjectId, projects.data],
   );
 
@@ -144,7 +146,8 @@ export function Dashboard({
     try {
       if (action === 'stop') await api(`/api/runs/${id}/stop`, 'POST');
       else if (action === 'resume') await api(`/api/runs/${id}/resume`, 'POST', {});
-      else if (action === 'prune') await api(`/api/runs/${id}/worktree/prune`, 'POST', force ? { force: true } : {});
+      else if (action === 'prune')
+        await api(`/api/runs/${id}/worktree/prune`, 'POST', force ? { force: true } : {});
       else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
       if (action === 'prune' && e instanceof ApiRequestError && e.code === 'worktree_has_work') {
@@ -173,8 +176,8 @@ export function Dashboard({
       )}
       {system?.runnerUpdateAvailable && !system.runnerOutdated && (
         <div className="banner banner-info" role="status">
-          Runner update available: stopping a run during setup waits for its current command. <code>make up</code> when
-          convenient (restarts agents).
+          Runner update available: stopping a run during setup waits for its current command.{' '}
+          <code>make up</code> when convenient (restarts agents).
         </div>
       )}
       {dockerLine && system?.docker && (
@@ -184,7 +187,8 @@ export function Dashboard({
       )}
       {system && system.apiVersion !== API_VERSION && (
         <div className="banner banner-warn" role="status">
-          Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the new version.
+          Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the
+          new version.
         </div>
       )}
       {cleanupNotice && (
@@ -195,7 +199,11 @@ export function Dashboard({
       {pruneBlocked && (
         <div className="banner banner-error" role="alert">
           {pruneBlocked.message}{' '}
-          <button type="button" className="btn btn-sm" onClick={() => void runAction(pruneBlocked.id, 'prune', true)}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => void runAction(pruneBlocked.id, 'prune', true)}
+          >
             Prune anyway
           </button>
         </div>
@@ -296,7 +304,8 @@ export function Dashboard({
               className={overviewTab === 'runs' ? 'active' : ''}
               onClick={() => setOverviewTab('runs')}
             >
-              <Bot className="icon" aria-hidden /> Runs &amp; Terminals ({stats.working + stats.attention + stats.queuedOrPaused} active / {visibleRuns.length} total)
+              <Bot className="icon" aria-hidden /> Runs &amp; Terminals (
+              {stats.working + stats.attention + stats.queuedOrPaused} active / {visibleRuns.length} total)
             </button>
             <button
               id="overview-tab-automation"
@@ -391,11 +400,7 @@ export function Dashboard({
                   <p className="muted">Start the AI Coding Factory by creating or cloning a project.</p>
                 </div>
                 {onOpenWizard && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    onClick={onOpenWizard}
-                  >
+                  <button type="button" className="btn btn-sm btn-primary" onClick={onOpenWizard}>
                     + AI Factory Wizard
                   </button>
                 )}
@@ -454,7 +459,11 @@ export function Dashboard({
                       <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
                         Board
                       </Link>
-                      <button className="btn btn-sm" disabled={runnerDown} onClick={() => void openTerminal('shell', p.id)}>
+                      <button
+                        className="btn btn-sm"
+                        disabled={runnerDown}
+                        onClick={() => void openTerminal('shell', p.id)}
+                      >
                         Shell
                       </button>
                       <button
@@ -572,9 +581,13 @@ export function Dashboard({
                       <span className={`dot dot-${t.status}`} aria-label={t.status} />
                       <span className="row-title">{t.title}</span>
                       <span className="badge">{KIND_LABEL[t.kind]}</span>
-                      {t.projectId && <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>}
+                      {t.projectId && (
+                        <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>
+                      )}
                       <span className="row-meta mono">
-                        {t.status === 'exited' ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · ` : ''}
+                        {t.status === 'exited'
+                          ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · `
+                          : ''}
                         {timeAgo(t.createdAt)}
                       </span>
                     </Link>
@@ -596,7 +609,9 @@ export function Dashboard({
             <header className="panel-head">
               <div>
                 <h2 id="runs-title">Runs ({filteredRuns.length})</h2>
-                <p className="muted">Agent sessions on their own branch and worktree. State comes live from hooks.</p>
+                <p className="muted">
+                  Agent sessions on their own branch and worktree. State comes live from hooks.
+                </p>
               </div>
               <div className="actions">
                 <label
@@ -660,7 +675,9 @@ export function Dashboard({
       {overviewTab === 'automation' && (
         <>
           {activeProject && <BudgetPanel key={`budget-${activeProject.id}`} project={activeProject} />}
-          {activeProject && <ProjectSettingsPanel key={`settings-${activeProject.id}`} project={activeProject} />}
+          {activeProject && (
+            <ProjectSettingsPanel key={`settings-${activeProject.id}`} project={activeProject} />
+          )}
           <ScheduledJobsPanel projects={visibleProjects} />
         </>
       )}
@@ -707,12 +724,15 @@ function RunRow({
 }) {
   const ticketKey = run.title?.split(' ')[0];
   const canPrune =
-    Boolean(run.endedAt) &&
-    run.worktreePath.includes('/.worktrees/') &&
-    run.lastEvent !== 'worktree_pruned';
+    Boolean(run.endedAt) && run.worktreePath.includes('/.worktrees/') && run.lastEvent !== 'worktree_pruned';
   const body = (
     <>
-      <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
+      <RunStatePill
+        state={run.state}
+        cancelled={run.cancelled}
+        autoRetry={run.autoRetry}
+        handedOffTo={run.handedOffTo}
+      />
       <PersonaBadge persona={run.persona} />
       <span className="row-title">{run.title ?? projectName ?? 'project'}</span>
       {run.title && projectName && <span className="badge">{projectName}</span>}

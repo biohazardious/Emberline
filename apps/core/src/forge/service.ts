@@ -197,7 +197,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     return { account, remote: viaAccount(remoteUrl, account, baseBranch, headBranch)! };
   }
 
-  private async detectRemoteUrl(worktreePath: string, projectPath: string, fallbackRepoUrl: string | null): Promise<string | null> {
+  private async detectRemoteUrl(
+    worktreePath: string,
+    projectPath: string,
+    fallbackRepoUrl: string | null,
+  ): Promise<string | null> {
     for (const dir of [worktreePath, projectPath]) {
       if (!dir || !existsSync(dir)) continue;
       try {
@@ -220,14 +224,23 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     if (!project) throw notFound('no such project');
     const remoteUrl = await this.detectRemoteUrl('', project.path, project.repoUrl);
     if (!remoteUrl) {
-      throw conflict('git remote "origin" is not configured for this project; add a remote or set its repository URL');
+      throw conflict(
+        'git remote "origin" is not configured for this project; add a remote or set its repository URL',
+      );
     }
     const { account, remote } = this.target(remoteUrl, project.defaultBranch, null);
     // The agent can rewrite origin: it must still name the repository the project was set up with.
     if (project.repoUrl?.trim()) {
       const declared = parseForgeRemote(project.repoUrl);
-      if (!declared) throw conflict(`unable to parse the project's repository URL: ${remoteUrlForDisplay(project.repoUrl).url}`);
-      if (!sameForgeServer(project.repoUrl, remoteUrl) || repoPathUnder(account.serverUrl, declared.repoPath, project.repoUrl).toLowerCase() !== remote.repoPath.toLowerCase()) {
+      if (!declared)
+        throw conflict(
+          `unable to parse the project's repository URL: ${remoteUrlForDisplay(project.repoUrl).url}`,
+        );
+      if (
+        !sameForgeServer(project.repoUrl, remoteUrl) ||
+        repoPathUnder(account.serverUrl, declared.repoPath, project.repoUrl).toLowerCase() !==
+          remote.repoPath.toLowerCase()
+      ) {
         throw conflict('origin points at a different repository than the project');
       }
     }
@@ -255,7 +268,9 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       headBranch: typeof p.headBranch === 'string' ? p.headBranch : '',
       baseBranch: typeof p.baseBranch === 'string' ? p.baseBranch : 'main',
       ciStatus:
-        p.ciStatus === 'pending' || p.ciStatus === 'success' || p.ciStatus === 'failure' ? p.ciStatus : 'unknown',
+        p.ciStatus === 'pending' || p.ciStatus === 'success' || p.ciStatus === 'failure'
+          ? p.ciStatus
+          : 'unknown',
     };
   }
 
@@ -264,7 +279,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     if (!run) throw notFound('no such run');
     const project = this.db.select().from(projects).where(eq(projects.id, run.projectId)).get();
     const baseBranch = project?.defaultBranch ?? 'main';
-    const remoteUrl = await this.detectRemoteUrl(run.worktreePath, project?.path ?? '', project?.repoUrl ?? null);
+    const remoteUrl = await this.detectRemoteUrl(
+      run.worktreePath,
+      project?.path ?? '',
+      project?.repoUrl ?? null,
+    );
     const account = remoteUrl ? accountForRemote(this.db, remoteUrl) : null;
     const parsed = remoteUrl
       ? account
@@ -303,7 +322,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     const project = this.db.select().from(projects).where(eq(projects.id, run.projectId)).get();
     const baseBranch = body.baseBranch?.trim() || project?.defaultBranch || 'main';
 
-    const remoteUrl = await this.detectRemoteUrl(run.worktreePath, project?.path ?? '', project?.repoUrl ?? null);
+    const remoteUrl = await this.detectRemoteUrl(
+      run.worktreePath,
+      project?.path ?? '',
+      project?.repoUrl ?? null,
+    );
     if (!remoteUrl) {
       throw conflict('git remote "origin" is not configured for this repository');
     }
@@ -319,7 +342,8 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     }
 
     const title = body.title?.trim() || run.title || `Changes from ${run.branch}`;
-    const prBody = body.body ?? `Automated pull request created from Emberline run \`${run.id}\` (\`${run.branch}\`).`;
+    const prBody =
+      body.body ?? `Automated pull request created from Emberline run \`${run.id}\` (\`${run.branch}\`).`;
 
     const pr = await this.createPrOnForge(parsed, account.token, {
       title,
@@ -340,11 +364,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       })
       .run();
 
-    this.db
-      .update(runs)
-      .set({ lastEvent: 'pr_created' })
-      .where(eq(runs.id, runId))
-      .run();
+    this.db.update(runs).set({ lastEvent: 'pr_created' }).where(eq(runs.id, runId)).run();
     // Listeners (the issue write-back) must never fail the request that created the PR.
     try {
       this.emit('pullRequest', runId, pr);
@@ -388,7 +408,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        throw new HttpError(res.status, 'forge_error', `GitHub PR creation failed (${res.status}): ${text.slice(0, 300)}`);
+        throw new HttpError(
+          res.status,
+          'forge_error',
+          `GitHub PR creation failed (${res.status}): ${text.slice(0, 300)}`,
+        );
       }
       const data = await readJson<{
         number: number;
@@ -417,7 +441,10 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
 
     if (remote.provider === 'gitlab') {
       const projectId = encodeURIComponent(remote.repoPath);
-      const glTitle = input.draft && !input.title.toLowerCase().startsWith('draft:') ? `Draft: ${input.title}` : input.title;
+      const glTitle =
+        input.draft && !input.title.toLowerCase().startsWith('draft:')
+          ? `Draft: ${input.title}`
+          : input.title;
       const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/projects/${projectId}/merge_requests`, {
         method: 'POST',
         headers: {
@@ -434,7 +461,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        throw new HttpError(res.status, 'forge_error', `GitLab MR creation failed (${res.status}): ${text.slice(0, 300)}`);
+        throw new HttpError(
+          res.status,
+          'forge_error',
+          `GitLab MR creation failed (${res.status}): ${text.slice(0, 300)}`,
+        );
       }
       const data = await readJson<{
         iid: number;
@@ -466,7 +497,8 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
         'User-Agent': 'Emberline-Core',
       },
       body: JSON.stringify({
-        title: input.draft && !input.title.toLowerCase().startsWith('wip:') ? `WIP: ${input.title}` : input.title,
+        title:
+          input.draft && !input.title.toLowerCase().startsWith('wip:') ? `WIP: ${input.title}` : input.title,
         body: input.body,
         head: input.headBranch,
         base: input.baseBranch,
@@ -474,7 +506,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new HttpError(res.status, 'forge_error', `Gitea PR creation failed (${res.status}): ${text.slice(0, 300)}`);
+      throw new HttpError(
+        res.status,
+        'forge_error',
+        `Gitea PR creation failed (${res.status}): ${text.slice(0, 300)}`,
+      );
     }
     const data = await readJson<{
       number: number;
@@ -503,13 +539,17 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     pr: ForgePullRequest,
   ): Promise<ForgePullRequest> {
     if (remote.provider === 'github') {
-      const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls/${pr.number}`, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${token}`,
-          'User-Agent': 'Emberline-Core',
+      const res = await forgeFetch(
+        this.fetch,
+        `${remote.apiBaseUrl}/repos/${remote.repoPath}/pulls/${pr.number}`,
+        {
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'User-Agent': 'Emberline-Core',
+          },
         },
-      });
+      );
       if (!res.ok) return pr;
       const data = await readJson<{
         title?: string;
@@ -534,9 +574,13 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
 
     if (remote.provider === 'gitlab') {
       const projectId = encodeURIComponent(remote.repoPath);
-      const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/projects/${projectId}/merge_requests/${pr.number}`, {
-        headers: { 'PRIVATE-TOKEN': token, 'User-Agent': 'Emberline-Core' },
-      });
+      const res = await forgeFetch(
+        this.fetch,
+        `${remote.apiBaseUrl}/projects/${projectId}/merge_requests/${pr.number}`,
+        {
+          headers: { 'PRIVATE-TOKEN': token, 'User-Agent': 'Emberline-Core' },
+        },
+      );
       if (!res.ok) return pr;
       const data = await readJson<{
         title?: string;
@@ -558,14 +602,22 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     return pr;
   }
 
-  private async fetchGithubCiStatus(remote: ParsedForgeRemote, token: string, sha: string): Promise<ForgeCiStatus> {
-    const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/commits/${sha}/status`, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-        'User-Agent': 'Emberline-Core',
+  private async fetchGithubCiStatus(
+    remote: ParsedForgeRemote,
+    token: string,
+    sha: string,
+  ): Promise<ForgeCiStatus> {
+    const res = await forgeFetch(
+      this.fetch,
+      `${remote.apiBaseUrl}/repos/${remote.repoPath}/commits/${sha}/status`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'Emberline-Core',
+        },
       },
-    });
+    );
     if (!res.ok) return 'unknown';
     const data = await readJson<{ state?: string }>(res);
     if (data.state === 'success') return 'success';
@@ -579,6 +631,7 @@ function mapGitlabPipelineStatus(status?: string): ForgeCiStatus {
   if (!status) return 'unknown';
   if (status === 'success') return 'success';
   if (status === 'failed' || status === 'canceled') return 'failure';
-  if (status === 'running' || status === 'pending' || status === 'created' || status === 'preparing') return 'pending';
+  if (status === 'running' || status === 'pending' || status === 'created' || status === 'preparing')
+    return 'pending';
   return 'unknown';
 }

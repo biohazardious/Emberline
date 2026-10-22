@@ -90,7 +90,13 @@ export function createRepoEnabled(v: {
   ownersAccountId: string | null;
   name: string;
 }): boolean {
-  return !v.busy && Boolean(v.accountId) && v.ownersAccountId === v.accountId && Boolean(v.owner) && Boolean(v.name.trim());
+  return (
+    !v.busy &&
+    Boolean(v.accountId) &&
+    v.ownersAccountId === v.accountId &&
+    Boolean(v.owner) &&
+    Boolean(v.name.trim())
+  );
 }
 
 /** The form that shows the error of an action key. */

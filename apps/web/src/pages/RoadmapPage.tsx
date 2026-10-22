@@ -155,9 +155,7 @@ export function RouteBadgeSelect({
 }) {
   const activeProviders: AgentId[] =
     enabledProviders && enabledProviders.length > 0 ? enabledProviders : ['claude'];
-  const effectiveAgent: AgentId = activeProviders.includes(agent)
-    ? agent
-    : (activeProviders[0] ?? 'claude');
+  const effectiveAgent: AgentId = activeProviders.includes(agent) ? agent : (activeProviders[0] ?? 'claude');
   const effectiveModel: AgentModelId = coerceModelForProvider(effectiveAgent, model, persona);
   const providerEntry = PROVIDER_REGISTRY[effectiveAgent] ?? PROVIDER_REGISTRY.claude;
   const scopedModels = getModelsForProvider(effectiveAgent);
@@ -244,11 +242,7 @@ export function RouteBadgeSelect({
         }}
       >
         {scopedModels.map((m) => (
-          <option
-            key={m.id}
-            value={m.id}
-            style={{ background: 'var(--bg-elevated)', color: 'var(--text)' }}
-          >
+          <option key={m.id} value={m.id} style={{ background: 'var(--bg-elevated)', color: 'var(--text)' }}>
             ★{m.rank} {m.shortLabel}
           </option>
         ))}
@@ -318,10 +312,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [quickAddTarget, setQuickAddTarget] = useState<string>('auto');
   const [inlineMsInputs, setInlineMsInputs] = useState<Record<string, string>>({});
 
-  const project = useMemo(
-    () => projects.data?.find((p) => p.id === projectId),
-    [projects.data, projectId],
-  );
+  const project = useMemo(() => projects.data?.find((p) => p.id === projectId), [projects.data, projectId]);
   const roadmap = localRoadmap ?? roadmapPoll.data;
 
   // Milestone item filter, remembered per project in this browser.
@@ -345,7 +336,10 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     [roadmap?.milestones, itemFilter],
   );
   const statusCounts = useMemo(() => countRoadmapStatuses(roadmap?.milestones ?? []), [roadmap?.milestones]);
-  const categoryCounts = useMemo(() => countRoadmapCategories(roadmap?.milestones ?? []), [roadmap?.milestones]);
+  const categoryCounts = useMemo(
+    () => countRoadmapCategories(roadmap?.milestones ?? []),
+    [roadmap?.milestones],
+  );
   const filterActive = isRoadmapFilterActive(itemFilter);
 
   const filteredSuggestions = useMemo(() => {
@@ -499,18 +493,15 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         ),
         milestones: prev.milestones.map((m) => ({
           ...m,
-          items: m.items.map((it) =>
-            it.id === id ? { ...it, preferredAgent, preferredModel } : it,
-          ),
+          items: m.items.map((it) => (it.id === id ? { ...it, preferredAgent, preferredModel } : it)),
         })),
       };
     });
     try {
-      const next = await api<ProjectRoadmapState>(
-        `/api/projects/${projectId}/roadmap/items/${id}`,
-        'PATCH',
-        { preferredAgent, preferredModel },
-      );
+      const next = await api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items/${id}`, 'PATCH', {
+        preferredAgent,
+        preferredModel,
+      });
       setLocalRoadmap(next);
     } catch (e) {
       setError(errorMessage(e));
@@ -674,31 +665,21 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     setBanner(null);
     try {
       if (quickAddTarget === '__new_milestone__') {
-        const next = await api<ProjectRoadmapState>(
-          `/api/projects/${projectId}/roadmap/milestones`,
-          'POST',
-          {
-            title: raw,
-          },
-        );
+        const next = await api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/milestones`, 'POST', {
+          title: raw,
+        });
         setLocalRoadmap(next);
         setQuickAddText('');
         setQuickAddTarget('auto');
         setBanner(`Created new milestone "${raw}".`);
       } else {
-        const next = await api<ProjectRoadmapState>(
-          `/api/projects/${projectId}/roadmap/items`,
-          'POST',
-          {
-            milestoneId: quickAddTarget || 'auto',
-            title: raw,
-          },
-        );
+        const next = await api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items`, 'POST', {
+          milestoneId: quickAddTarget || 'auto',
+          title: raw,
+        });
         setLocalRoadmap(next);
         setQuickAddText('');
-        setBanner(
-          `Auto-routed "${raw}" to the right milestone, specialist persona & AI model!`,
-        );
+        setBanner(`Auto-routed "${raw}" to the right milestone, specialist persona & AI model!`);
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -770,7 +751,8 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h2 style={{ margin: 0, fontSize: '1.05rem' }}>
-                <Target className="icon" aria-hidden /> {project?.name ?? 'Project'} — Roadmap, Milestones &amp; AI Brainstorming Studio
+                <Target className="icon" aria-hidden /> {project?.name ?? 'Project'} — Roadmap, Milestones
+                &amp; AI Brainstorming Studio
               </h2>
               <span className="badge mono">
                 {roadmap.completedItems}/{roadmap.totalItems} completed ({roadmap.completionPercent}%)
@@ -953,7 +935,8 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
             }}
           >
             <span className="mono" style={{ fontSize: '0.82rem', fontWeight: 600 }}>
-              <SquareCheck className="icon" aria-hidden /> {totalSelected} selected ({selectedSuggestions.size} suggestion
+              <SquareCheck className="icon" aria-hidden /> {totalSelected} selected (
+              {selectedSuggestions.size} suggestion
               {selectedSuggestions.size === 1 ? '' : 's'}, {selectedItems.size} roadmap item
               {selectedItems.size === 1 ? '' : 's'})
             </span>
@@ -986,7 +969,8 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   'Dispatching…'
                 ) : (
                   <>
-                    <Rocket className="icon" aria-hidden /> Create Tickets &amp; Auto-Dispatch Multi-Agent Pipeline
+                    <Rocket className="icon" aria-hidden /> Create Tickets &amp; Auto-Dispatch Multi-Agent
+                    Pipeline
                   </>
                 )}
               </button>
@@ -1019,9 +1003,12 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <header className="panel-head" style={{ marginBottom: 0 }}>
             <div>
-              <h2><Brain className="icon" aria-hidden /> AI Brainstorming &amp; Feature Suggestions</h2>
+              <h2>
+                <Brain className="icon" aria-hidden /> AI Brainstorming &amp; Feature Suggestions
+              </h2>
               <p className="muted">
-                Explore what to build next, customize each idea&apos;s CLI agent &amp; model route inline, or launch all ideas at once.
+                Explore what to build next, customize each idea&apos;s CLI agent &amp; model route inline, or
+                launch all ideas at once.
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -1210,14 +1197,23 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   style={{
                     padding: '12px 14px',
                     borderRadius: 'var(--radius)',
-                    background: checked ? 'color-mix(in srgb, var(--ember-1) 8%, transparent)' : 'var(--bg-elevated)',
+                    background: checked
+                      ? 'color-mix(in srgb, var(--ember-1) 8%, transparent)'
+                      : 'var(--bg-elevated)',
                     border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 8,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                    }}
+                  >
                     <label
                       style={{
                         display: 'flex',
@@ -1325,13 +1321,21 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
               >
                 {isAgentBrainstorming ? (
                   <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
-                    <Brain className="icon" aria-hidden /> <strong>Deep Brainstorming Agent</strong> is analyzing <strong>{project?.name ?? 'this project'}</strong>…
-                    Tailored suggestions will automatically appear here as soon as analysis finishes.
+                    <Brain className="icon" aria-hidden /> <strong>Deep Brainstorming Agent</strong> is
+                    analyzing <strong>{project?.name ?? 'this project'}</strong>… Tailored suggestions will
+                    automatically appear here as soon as analysis finishes.
                   </p>
                 ) : (
                   <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
-                    Brainstorming list is empty. Click <strong><Bot className="icon" aria-hidden /> Deep Agent Brainstorm</strong> (for full AI codebase analysis)
-                    or <strong><Zap className="icon" aria-hidden /> Synthesize Ideas</strong> above to populate suggestions tailored to{' '}
+                    Brainstorming list is empty. Click{' '}
+                    <strong>
+                      <Bot className="icon" aria-hidden /> Deep Agent Brainstorm
+                    </strong>{' '}
+                    (for full AI codebase analysis) or{' '}
+                    <strong>
+                      <Zap className="icon" aria-hidden /> Synthesize Ideas
+                    </strong>{' '}
+                    above to populate suggestions tailored to{' '}
                     <strong>{project?.name ?? 'this project'}</strong>.
                   </p>
                 )}
@@ -1344,9 +1348,12 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <header className="panel-head" style={{ marginBottom: 0 }}>
             <div>
-              <h2><MapIcon className="icon" aria-hidden /> Project Milestones &amp; Roadmap</h2>
+              <h2>
+                <MapIcon className="icon" aria-hidden /> Project Milestones &amp; Roadmap
+              </h2>
               <p className="muted">
-                Track milestone delivery, check off completed items, or dispatch any roadmap item to the Kanban board.
+                Track milestone delivery, check off completed items, or dispatch any roadmap item to the
+                Kanban board.
               </p>
             </div>
             <span className="badge mono">{roadmap.milestones.length} milestones</span>
@@ -1369,7 +1376,11 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   <span className="muted small mono">
                     {filteredRoadmap.shown} of {filteredRoadmap.total} items
                   </span>
-                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setItemFilter(EMPTY_ROADMAP_FILTER)}>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => setItemFilter(EMPTY_ROADMAP_FILTER)}
+                  >
                     <X className="icon" aria-hidden /> Clear
                   </button>
                 </>
@@ -1394,7 +1405,9 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                   type="button"
                   className={`chip-btn${itemFilter.categories.includes(category) ? ' chip-on' : ''}`}
                   aria-pressed={itemFilter.categories.includes(category)}
-                  onClick={() => setItemFilter((f) => ({ ...f, categories: toggled(f.categories, category) }))}
+                  onClick={() =>
+                    setItemFilter((f) => ({ ...f, categories: toggled(f.categories, category) }))
+                  }
                 >
                   {CATEGORY_META[category].label} {categoryCounts[category]}
                 </button>
@@ -1525,7 +1538,11 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                     </p>
                   ) : ms.items.length === 0 ? (
                     <p className="muted small" style={{ margin: '2px 0' }}>
-                      No items in {ms.code} yet. Click <strong><Sparkles className="icon" aria-hidden /> Auto-Generate Roadmap</strong> above, promote a brainstorm idea, or type below.
+                      No items in {ms.code} yet. Click{' '}
+                      <strong>
+                        <Sparkles className="icon" aria-hidden /> Auto-Generate Roadmap
+                      </strong>{' '}
+                      above, promote a brainstorm idea, or type below.
                     </p>
                   ) : (
                     <ul className="list" style={{ margin: 0 }}>
@@ -1546,7 +1563,15 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                               flexWrap: 'wrap',
                             }}
                           >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 200 }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                flex: 1,
+                                minWidth: 200,
+                              }}
+                            >
                               <input
                                 type="checkbox"
                                 checked={isChecked}
@@ -1560,7 +1585,8 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                                 onClick={() => void handleToggleItemDone(item)}
                                 title={isDone ? 'Mark as planned' : 'Mark as done'}
                               >
-                                {ROADMAP_STATUS_MARK[item.status]} {ROADMAP_STATUS_LABEL[item.status].toUpperCase()}
+                                {ROADMAP_STATUS_MARK[item.status]}{' '}
+                                {ROADMAP_STATUS_LABEL[item.status].toUpperCase()}
                               </button>
                               <span
                                 style={{
@@ -1636,9 +1662,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
                       style={{ flex: 1, fontSize: '0.78rem', padding: '5px 8px' }}
                       placeholder={`+ Add task to ${ms.code} and press Enter (auto-routes persona & model)…`}
                       value={inlineMsInputs[ms.id] ?? ''}
-                      onChange={(e) =>
-                        setInlineMsInputs((prev) => ({ ...prev, [ms.id]: e.target.value }))
-                      }
+                      onChange={(e) => setInlineMsInputs((prev) => ({ ...prev, [ms.id]: e.target.value }))}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();

@@ -12,7 +12,9 @@ import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-
 import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
 
 /** A critic verdict for the next pipelines to get instead of running the real critic (null: the real one). */
-const critic = vi.hoisted(() => ({ result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null } }));
+const critic = vi.hoisted(() => ({
+  result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null },
+}));
 /** A build gate result for the next pipelines to get instead of building (null: the real build). */
 const build = vi.hoisted(() => ({ result: null as null | { ok: boolean; output: string } }));
 vi.mock('./factory/service.js', async (importOriginal) => {
@@ -102,7 +104,12 @@ const getTicket = async (id: string): Promise<Ticket> => (await api('GET', `/api
 const signal = async (runId: string, token: string, summary = 'done') => {
   const headers = { authorization: `Bearer ${token}` };
   await t.app.inject({ method: 'POST', url: `/api/internal/runs/${runId}/completion-tool`, headers });
-  return t.app.inject({ method: 'POST', url: `/api/internal/runs/${runId}/complete`, headers, payload: { summary } });
+  return t.app.inject({
+    method: 'POST',
+    url: `/api/internal/runs/${runId}/complete`,
+    headers,
+    payload: { summary },
+  });
 };
 
 async function waitFile(name: string): Promise<string> {
@@ -110,7 +117,6 @@ async function waitFile(name: string): Promise<string> {
   await expect.poll(() => existsSync(file), { timeout: 5_000 }).toBe(true);
   return readFileSync(file, 'utf8');
 }
-
 
 /** `ref` and `dependsOn` are loose on purpose: the PO writes them by hand. */
 type Draft = { ref?: unknown; title: string; persona?: string; dependsOn?: unknown };
@@ -131,11 +137,15 @@ async function ingestDrafts(projectId: string, drafts: Draft[]): Promise<{ run: 
   await signal(run.id, token);
   await hook(run.id, 'Stop', token);
   const list = async () =>
-    ((await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[]).filter((x) => x.id !== po.id);
+    ((await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[]).filter(
+      (x) => x.id !== po.id,
+    );
   await expect.poll(async () => (await list()).length).toBe(drafts.length);
   // The edges are written right after the tickets: wait for the run note.
   await expect
-    .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type))
+    .poll(async () =>
+      ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type),
+    )
     .toContain('dependencies_applied');
   return { run, tickets: await list() };
 }
@@ -148,12 +158,21 @@ describe('ticket dependencies', () => {
     const { run, tickets } = await ingestDrafts(project.id, [
       { ref: 'brand-assets', title: 'Brand assets', persona: 'ui_ux' },
       { ref: 'android-shell', title: 'Android shell', persona: 'coder' },
-      { ref: 'apk-build', title: 'APK build', persona: 'coder', dependsOn: ['brand-assets', 'android-shell'] },
+      {
+        ref: 'apk-build',
+        title: 'APK build',
+        persona: 'coder',
+        dependsOn: ['brand-assets', 'android-shell'],
+      },
       { ref: 'qa', title: 'QA pass', persona: 'qa', dependsOn: ['apk-build'] },
     ]);
     expect(tickets).toHaveLength(4);
-    const [assets, shell, apk, qa] = ['Brand assets', 'Android shell', 'APK build', 'QA pass'].map((x) => byTitle(tickets, x));
-    expect([...(apk as Ticket).dependsOn].sort()).toEqual([(assets as Ticket).id, (shell as Ticket).id].sort());
+    const [assets, shell, apk, qa] = ['Brand assets', 'Android shell', 'APK build', 'QA pass'].map((x) =>
+      byTitle(tickets, x),
+    );
+    expect([...(apk as Ticket).dependsOn].sort()).toEqual(
+      [(assets as Ticket).id, (shell as Ticket).id].sort(),
+    );
     expect((qa as Ticket).blockedBy.map((b) => b.key)).toEqual([(apk as Ticket).key]);
     expect((assets as Ticket).blockedBy).toEqual([]);
     const detail: RunDetail = (await api('GET', `/api/runs/${run.id}`)).json();
@@ -193,14 +212,19 @@ describe('ticket dependencies', () => {
     ]);
     expect(tickets).toHaveLength(4);
     const apk = byTitle(tickets, 'APK build');
-    expect([...apk.dependsOn].sort()).toEqual([byTitle(tickets, 'Brand assets').id, byTitle(tickets, 'Android shell').id].sort());
+    expect([...apk.dependsOn].sort()).toEqual(
+      [byTitle(tickets, 'Brand assets').id, byTitle(tickets, 'Android shell').id].sort(),
+    );
     expect(byTitle(tickets, 'QA pass').dependsOn).toEqual([apk.id]);
   });
 
   it('notes a tickets file it cannot read on the run instead of dropping it silently', async () => {
     await api('PATCH', '/api/factory/settings', { autoPickupReady: false });
     const project = await createProject();
-    for (const content of ['{ "tickets": [ { "title": "A" ', JSON.stringify({ autoDispatch: false, tickets: [] })]) {
+    for (const content of [
+      '{ "tickets": [ { "title": "A" ',
+      JSON.stringify({ autoDispatch: false, tickets: [] }),
+    ]) {
       const po = await createTicket(project.id, { title: 'Plan the work', status: 'ready' });
       const { run } = (await api('POST', `/api/tickets/${po.id}/start`, {})).json() as { run: Run };
       const file = path.join(run.worktreePath, '.emberline', 'new-tickets.json');
@@ -211,10 +235,14 @@ describe('ticket dependencies', () => {
       await hook(run.id, 'UserPromptSubmit', token);
       await hook(run.id, 'Stop', token);
       await expect
-        .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type))
+        .poll(async () =>
+          ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type),
+        )
         .toContain('tickets_file_rejected');
       const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
-      const note = detail.events.find((e) => e.type === 'tickets_file_rejected')?.payload as { message: string };
+      const note = detail.events.find((e) => e.type === 'tickets_file_rejected')?.payload as {
+        message: string;
+      };
       expect(note.message.length).toBeGreaterThan(0);
       expect(note.message.length).toBeLessThanOrEqual(500);
       expect(existsSync(file)).toBe(false);
@@ -224,7 +252,10 @@ describe('ticket dependencies', () => {
   it('orders tickets delegated through the API like ingested ones', async () => {
     const project = await createProject();
     const delegate = async (tickets: object[]) => {
-      const res = await api('POST', `/api/projects/${project.id}/delegate-tickets`, { autoDispatch: false, tickets });
+      const res = await api('POST', `/api/projects/${project.id}/delegate-tickets`, {
+        autoDispatch: false,
+        tickets,
+      });
       expect(res.statusCode).toBe(201);
       return res.json() as Ticket[];
     };
@@ -255,7 +286,9 @@ describe('ticket dependencies', () => {
       { title: 'Verify', persona: 'qa' },
     ]);
     const verify = byTitle(tickets, 'Verify');
-    expect([...verify.dependsOn].sort()).toEqual([byTitle(tickets, 'Build').id, byTitle(tickets, 'Design').id].sort());
+    expect([...verify.dependsOn].sort()).toEqual(
+      [byTitle(tickets, 'Build').id, byTitle(tickets, 'Design').id].sort(),
+    );
     expect(byTitle(tickets, 'Build').dependsOn).toEqual([]);
     expect(byTitle(tickets, 'Design').dependsOn).toEqual([]);
   });
@@ -344,10 +377,9 @@ const statusOf = async (id: string) => (await getTicket(id)).status;
 
 /** Waits until every dispatch pass queued for the project so far is through. */
 const dispatchesDone = (projectId: string) =>
-  (t.tickets as unknown as { dispatchLock: { run(key: string, fn: () => Promise<void>): Promise<void> } }).dispatchLock.run(
-    projectId,
-    async () => undefined,
-  );
+  (
+    t.tickets as unknown as { dispatchLock: { run(key: string, fn: () => Promise<void>): Promise<void> } }
+  ).dispatchLock.run(projectId, async () => undefined);
 
 /** The started agents write into the test directory; let them get there before teardown. */
 const settle = (projectId: string) =>
@@ -431,7 +463,9 @@ describe('dependency-aware dispatch', () => {
 
   it('does not count a ticket-less run of the project as busy', async () => {
     const project = await createProject();
-    const manual = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'look around' })).json() as Run;
+    const manual = (
+      await api('POST', '/api/runs', { projectId: project.id, prompt: 'look around' })
+    ).json() as Run;
     expect(manual.ticketId).toBeNull();
     const x = await createTicket(project.id, { title: 'X', status: 'ready' });
     const y = await createTicket(project.id, { title: 'Y', status: 'ready' });
@@ -461,12 +495,15 @@ describe('dependency-aware dispatch', () => {
   it('two runs finishing at once start no ticket twice and never exceed the limit', async () => {
     const project = await createProject();
     const created: Ticket[] = [];
-    for (const title of ['P1', 'P2', 'P3', 'P4']) created.push(await createTicket(project.id, { title, status: 'ready' }));
+    for (const title of ['P1', 'P2', 'P3', 'P4'])
+      created.push(await createTicket(project.id, { title, status: 'ready' }));
     let maxBusy = 0;
     t.runs.on('run', () => {
       const busy = t.runs
         .list()
-        .filter((r) => r.projectId === project.id && r.ticketId && !r.handedOffTo && ACTIVE.has(r.state)).length;
+        .filter(
+          (r) => r.projectId === project.id && r.ticketId && !r.handedOffTo && ACTIVE.has(r.state),
+        ).length;
       maxBusy = Math.max(maxBusy, busy);
     });
     const passes = trackPipelines();
@@ -502,7 +539,11 @@ describe('dependency-aware dispatch', () => {
       release = resolve;
     });
     const svc = t.tickets as unknown as {
-      mergeRunIntoMain(r: Run, main: string, key: string | null): Promise<{ ok: boolean; conflicts: string[] }>;
+      mergeRunIntoMain(
+        r: Run,
+        main: string,
+        key: string | null,
+      ): Promise<{ ok: boolean; conflicts: string[] }>;
     };
     const merge = svc.mergeRunIntoMain.bind(t.tickets);
     svc.mergeRunIntoMain = async (r, main, key) => {
@@ -529,7 +570,10 @@ describe('dependency-aware dispatch', () => {
   it("starts at most the limit of an upgraded project's ready tickets without edges", async () => {
     const project = await createProject();
     for (const title of ['U1', 'U2', 'U3', 'U4']) await createTicket(project.id, { title, status: 'ready' });
-    await Promise.all([t.tickets.dispatchNextReadyTicket(project.id), t.tickets.dispatchNextReadyTicket(project.id)]);
+    await Promise.all([
+      t.tickets.dispatchNextReadyTicket(project.id),
+      t.tickets.dispatchNextReadyTicket(project.id),
+    ]);
     expect(ticketRuns(project.id)).toHaveLength(2);
     await settle(project.id);
   });
@@ -637,7 +681,12 @@ describe('dependency-aware dispatch', () => {
     const { run: po, tickets } = await ingestDrafts(project.id, [
       { ref: 'brand-assets', title: 'Brand assets', persona: 'ui_ux' },
       { ref: 'android-shell', title: 'Android shell', persona: 'coder' },
-      { ref: 'apk-build', title: 'APK build', persona: 'coder', dependsOn: ['brand-assets', 'android-shell'] },
+      {
+        ref: 'apk-build',
+        title: 'APK build',
+        persona: 'coder',
+        dependsOn: ['brand-assets', 'android-shell'],
+      },
       { ref: 'qa', title: 'QA pass', persona: 'qa', dependsOn: ['apk-build'] },
     ]);
     const assets = byTitle(tickets, 'Brand assets');
@@ -648,7 +697,12 @@ describe('dependency-aware dispatch', () => {
     await api('PATCH', '/api/factory/settings', { autoPickupReady: true });
 
     await t.tickets.dispatchNextReadyTicket(project.id);
-    expect(ticketRuns(project.id).filter((r) => r.id !== po.id).map((r) => r.ticketId).sort()).toEqual([assets.id, shell.id].sort());
+    expect(
+      ticketRuns(project.id)
+        .filter((r) => r.id !== po.id)
+        .map((r) => r.ticketId)
+        .sort(),
+    ).toEqual([assets.id, shell.id].sort());
 
     await finish(runsFor(shell.id)[0] as Run);
     await expect.poll(() => statusOf(shell.id), { timeout: 10_000 }).toBe('done');
@@ -686,7 +740,9 @@ function writeLivingClaude(dir: string): string {
 }
 
 const wgit = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], { encoding: 'utf8' });
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], {
+    encoding: 'utf8',
+  });
 
 const followups = (run: Run) => {
   const file = path.join(t.dir, `followups-${run.id}`);
@@ -737,7 +793,6 @@ describe('one automatic merge-conflict resolution', () => {
     await api('PATCH', '/api/factory/settings', { autoPickupBacklog: true });
     return { project, a, b, runA, runB };
   }
-
 
   it('asks the agent once to resolve the conflict, then merges the resolution', async () => {
     const { project, b, runB } = await conflictingPair();
@@ -817,7 +872,9 @@ describe('one automatic merge-conflict resolution', () => {
     expect(t.runs.getRun(runA.id)).toMatchObject({ resumable: false });
     expect(t.runs.getRun(runA.id).cancelled).toBe(true);
     const detail = (await api('GET', `/api/runs/${runA.id}`)).json() as RunDetail;
-    expect(detail.events.find((e) => e.type === 'stop_requested')?.payload).toMatchObject({ reason: 'factory_step_finished' });
+    expect(detail.events.find((e) => e.type === 'stop_requested')?.payload).toMatchObject({
+      reason: 'factory_step_finished',
+    });
   });
 
   it('names the branch the main workspace is on, not main', async () => {
@@ -880,7 +937,8 @@ describe('one automatic merge-conflict resolution', () => {
   });
 
   /** The pass has written the line to the terminal; the stand-in logs it to its file a moment later. */
-  const typedLines = (run: Run, n: number) => expect.poll(() => followups(run).length, { timeout: 10_000 }).toBe(n);
+  const typedLines = (run: Run, n: number) =>
+    expect.poll(() => followups(run).length, { timeout: 10_000 }).toBe(n);
 
   it('stops asking after three attempts even when main keeps moving', async () => {
     const { project, runB } = await conflictingPair();
@@ -961,7 +1019,8 @@ describe('one automatic merge-conflict resolution', () => {
     // The idle sweep closes the finished session while the checks are still running.
     const busy = t.runs.pipelineBusy.bind(t.runs);
     t.runs.pipelineBusy = (id, on) => {
-      if (on && id === runB.id) t.db.update(runs).set({ endedAt: new Date(), ptydSessionId: null }).where(eq(runs.id, id)).run();
+      if (on && id === runB.id)
+        t.db.update(runs).set({ endedAt: new Date(), ptydSessionId: null }).where(eq(runs.id, id)).run();
       busy(id, on);
     };
     const svc = t.runs as unknown as { resume(id: string, text?: string): Promise<Run> };
@@ -995,7 +1054,9 @@ describe('one automatic merge-conflict resolution', () => {
     expect(types).not.toContain('conflict_resolution_requested');
     expect(types).toContain('conflict_resolution_failed');
     const detail = (await api('GET', `/api/runs/${runB.id}`)).json() as RunDetail;
-    expect(detail.events.find((e) => e.type === 'conflict_resolution_failed')?.payload).toMatchObject({ message: 'no live session' });
+    expect(detail.events.find((e) => e.type === 'conflict_resolution_failed')?.payload).toMatchObject({
+      message: 'no live session',
+    });
     await settle(project.id);
   });
 });
@@ -1276,7 +1337,9 @@ describe('factory chain robustness', () => {
     // The guard first asks the agent to clean up; it stops again with the leak still there. Its
     // next turn starts once the request is recorded (the fake reads the line before core notes it).
     await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
-    await expect.poll(async () => (await eventTypes(run)).includes('prompt_sent'), { timeout: 10_000 }).toBe(true);
+    await expect
+      .poll(async () => (await eventTypes(run)).includes('prompt_sent'), { timeout: 10_000 })
+      .toBe(true);
     await stopAgain(run);
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
     await Promise.all(passes);
@@ -1327,7 +1390,10 @@ describe('factory chain robustness', () => {
 
     await t.tickets.dispatchNextReadyTicket(project.id);
     const run = runsFor(a.id)[0] as Run;
-    writeFileSync(path.join(run.worktreePath, 'slop.ts'), 'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n');
+    writeFileSync(
+      path.join(run.worktreePath, 'slop.ts'),
+      'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n',
+    );
     wgit(run.worktreePath, 'add', '-A');
     wgit(run.worktreePath, 'commit', '-q', '-m', 'slop');
     await finish(run);
@@ -1370,7 +1436,8 @@ describe('factory chain robustness', () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });
     // Core goes down before the completion pipeline of A's run gets to run.
-    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () => undefined;
+    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+      undefined;
 
     await t.tickets.dispatchNextReadyTicket(project.id);
     const run = runsFor(a.id)[0] as Run;
@@ -1415,7 +1482,9 @@ async function pagesOf() {
 }
 
 const noteOf = async (run: Run, type: string) =>
-  ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter((e) => e.type === type).map((e) => e.payload);
+  ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events
+    .filter((e) => e.type === type)
+    .map((e) => e.payload);
 
 const failPrompts = () => {
   const fail = async () => {
@@ -1490,7 +1559,10 @@ describe('a hold the agent is already fixing does not need you', () => {
     const passes = trackPipelines();
     const pages = await pagesOf();
     const run = await livingRun(project, a.id);
-    writeFileSync(path.join(run.worktreePath, 'slop.ts'), 'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n');
+    writeFileSync(
+      path.join(run.worktreePath, 'slop.ts'),
+      'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n',
+    );
     wgit(run.worktreePath, 'add', '-A');
     wgit(run.worktreePath, 'commit', '-q', '-m', 'slop');
     await stopAgain(run);
@@ -1543,7 +1615,8 @@ describe('a hold the agent is already fixing does not need you', () => {
     await Promise.all(passes);
     const notes = await noteOf(run, 'secret_guard_blocked');
     expect(notes.map((n) => (n as { autoFix?: boolean }).autoFix)).toEqual([true, false]);
-    for (const n of notes) expect((n as { autoFixPrompt?: string }).autoFixPrompt?.length ?? 0).toBeGreaterThan(0);
+    for (const n of notes)
+      expect((n as { autoFixPrompt?: string }).autoFixPrompt?.length ?? 0).toBeGreaterThan(0);
     expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held' });
     await expect.poll(() => pages.sent.length).toBe(1);
     pages.stop();

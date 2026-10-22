@@ -887,7 +887,11 @@ describe('BuildOutputArchive quota tombstones', () => {
     setQuotaBytes(3000);
     addProject('p1');
     await buildsInOrder(5);
-    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r3', 'r4', 'r5']);
+    expect(
+      rowsOf('p1')
+        .map((r) => r.runId)
+        .sort(),
+    ).toEqual(['r3', 'r4', 'r5']);
     const tombstones = allRowsOf('p1').filter((r) => r.evictedAt !== null);
     expect(tombstones.map((r) => r.runId).sort()).toEqual(['r1', 'r2']);
     expect(existsSync(stored('p1/r1/app.apk'))).toBe(false);
@@ -905,7 +909,11 @@ describe('BuildOutputArchive quota tombstones', () => {
     } finally {
       copies.mockRestore();
     }
-    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r3', 'r4', 'r5']);
+    expect(
+      rowsOf('p1')
+        .map((r) => r.runId)
+        .sort(),
+    ).toEqual(['r3', 'r4', 'r5']);
     expect(archive.get(tombstones[0]?.id ?? '')).toBeUndefined();
     await expect(archive.open(tombstones[0]?.id ?? '')).rejects.toMatchObject({ statusCode: 404 });
   });
@@ -941,7 +949,11 @@ describe('BuildOutputArchive quota tombstones', () => {
     expect(rowsOf('p1')).toHaveLength(4);
     setQuotaBytes(2000);
     await archive.enforceQuota();
-    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r3', 'r4']);
+    expect(
+      rowsOf('p1')
+        .map((r) => r.runId)
+        .sort(),
+    ).toEqual(['r3', 'r4']);
     expect(archive.list('p1').usedBytes).toBe(2000);
   });
 });
@@ -962,7 +974,11 @@ describe('BuildOutputArchive identical files across runs', () => {
     // Rebuilt by a later run: a new build, archived under that run.
     put(workspace, 'dist/app.apk', 1000, { fill: 4, mtimeSec: 1_700_000_500 });
     expect(await archive.archiveRun('r3')).toEqual({ archived: 1, skipped: 0, failed: 0 });
-    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r1', 'r3']);
+    expect(
+      rowsOf('p1')
+        .map((r) => r.runId)
+        .sort(),
+    ).toEqual(['r1', 'r3']);
   });
 
   it('copies a committed deliverable once even though every worktree checks it out anew', async () => {
@@ -981,7 +997,11 @@ describe('BuildOutputArchive identical files across runs', () => {
     expect(await archive.archiveRun('r1')).toEqual({ archived: 1, skipped: 0, failed: 0 });
     expect(await archive.archiveRun('r2')).toEqual({ archived: 0, skipped: 1, failed: 0 });
     expect(await archive.archiveRun('r3')).toEqual({ archived: 1, skipped: 0, failed: 0 });
-    expect(rowsOf('p1').map((r) => r.runId).sort()).toEqual(['r1', 'r3']);
+    expect(
+      rowsOf('p1')
+        .map((r) => r.runId)
+        .sort(),
+    ).toEqual(['r1', 'r3']);
   });
 });
 
@@ -1173,7 +1193,13 @@ describe('BuildOutputArchive deletes and identical tombstones', () => {
       addRun('r2', 'p1', addWorktree('r2'));
       db()
         .insert(runEvents)
-        .values({ runId: 'r2', ts: new Date(), source: 'system', type: 'build_outputs_archive_failed', payload: { reason: 'timeout', message: 'x' } })
+        .values({
+          runId: 'r2',
+          ts: new Date(),
+          source: 'system',
+          type: 'build_outputs_archive_failed',
+          payload: { reason: 'timeout', message: 'x' },
+        })
         .run();
       expect(archive.firstFailureAt('r2')).toBeNull();
     } finally {

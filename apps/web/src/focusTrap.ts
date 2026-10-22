@@ -25,7 +25,10 @@ export function isTabbable(el: FocusCandidate): boolean {
   if (tabindex !== null && Number.parseInt(tabindex, 10) < 0) return false;
   if (typeof el.checkVisibility === 'function') return el.checkVisibility({ visibilityProperty: true });
   // Browsers without checkVisibility: the computed style still tells.
-  return typeof getComputedStyle !== 'function' || getComputedStyle(el as unknown as Element).visibility !== 'hidden';
+  return (
+    typeof getComputedStyle !== 'function' ||
+    getComputedStyle(el as unknown as Element).visibility !== 'hidden'
+  );
 }
 
 /**
@@ -44,7 +47,11 @@ export function nextFocusIndex(current: number, count: number, shift: boolean): 
 export function trapTab(container: HTMLElement | null, event: KeyboardEvent | ReactKeyboardEvent): void {
   if (!container || event.key !== 'Tab') return;
   const items = [...container.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(isTabbable);
-  const next = nextFocusIndex(items.indexOf(document.activeElement as HTMLElement), items.length, event.shiftKey);
+  const next = nextFocusIndex(
+    items.indexOf(document.activeElement as HTMLElement),
+    items.length,
+    event.shiftKey,
+  );
   if (next === null) return;
   event.preventDefault();
   items[next]?.focus();

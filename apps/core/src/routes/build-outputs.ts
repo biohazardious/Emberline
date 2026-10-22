@@ -15,7 +15,8 @@ import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.j
 /** Archived run deliverables: the per-project list, download, pin, delete and "collect now". */
 export function registerBuildOutputRoutes(app: FastifyInstance, db: Db, archive: BuildOutputArchive): void {
   const requireProject = (id: string): void => {
-    if (!db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).get()) throw notFound('no such project');
+    if (!db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).get())
+      throw notFound('no such project');
   };
 
   /** `?run=<runId>` adds that run's handoff chain (`runChain`), which the page's run filter matches. */
@@ -23,7 +24,8 @@ export function registerBuildOutputRoutes(app: FastifyInstance, db: Db, archive:
     '/api/projects/:id/build-outputs',
     async (request): Promise<ProjectBuildOutputsResponse> => {
       requireProject(request.params.id);
-      const runId = typeof request.query.run === 'string' && request.query.run ? request.query.run : undefined;
+      const runId =
+        typeof request.query.run === 'string' && request.query.run ? request.query.run : undefined;
       return archive.list(request.params.id, { runId });
     },
   );
@@ -56,13 +58,16 @@ export function registerBuildOutputRoutes(app: FastifyInstance, db: Db, archive:
     return reply.send(stream);
   });
 
-  app.patch<{ Params: { id: string } }>('/api/build-outputs/:id', async (request): Promise<ProjectBuildOutput> => {
-    const body = UpdateBuildOutputBody.parse(request.body);
-    const row = archive.setPinned(request.params.id, body.pinned);
-    const output = archive.list(row.projectId).outputs.find((o) => o.id === row.id);
-    if (!output) throw notFound('no such build output');
-    return output;
-  });
+  app.patch<{ Params: { id: string } }>(
+    '/api/build-outputs/:id',
+    async (request): Promise<ProjectBuildOutput> => {
+      const body = UpdateBuildOutputBody.parse(request.body);
+      const row = archive.setPinned(request.params.id, body.pinned);
+      const output = archive.list(row.projectId).outputs.find((o) => o.id === row.id);
+      if (!output) throw notFound('no such build output');
+      return output;
+    },
+  );
 
   app.delete<{ Params: { id: string } }>('/api/build-outputs/:id', async (request, reply) => {
     await archive.remove(request.params.id);

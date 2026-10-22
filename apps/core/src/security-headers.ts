@@ -80,7 +80,10 @@ export function previewFrameSources(
 }
 
 /** The scheme and host name previews open on; null when it is not a plain http(s) host. */
-function previewHost(hostHeader: string | undefined, override: string | undefined): { protocol: string; name: string } | null {
+function previewHost(
+  hostHeader: string | undefined,
+  override: string | undefined,
+): { protocol: string; name: string } | null {
   const base = override?.trim();
   if (base) {
     try {
@@ -102,7 +105,9 @@ function previewHost(hostHeader: string | undefined, override: string | undefine
  */
 export function appCsp(hostHeader: string | undefined, ports: CoreConfig['previewPorts']): string {
   const sources = previewFrameSources(hostHeader, ports);
-  return sources.length > 0 ? APP_CSP.replace("frame-src 'self'", `frame-src 'self' ${sources.join(' ')}`) : APP_CSP;
+  return sources.length > 0
+    ? APP_CSP.replace("frame-src 'self'", `frame-src 'self' ${sources.join(' ')}`)
+    : APP_CSP;
 }
 
 /**
@@ -135,6 +140,9 @@ export function installSecurityHeaders(app: FastifyInstance, ports: CoreConfig['
  */
 export function contentDisposition(kind: 'attachment' | 'inline', fileName: string): string {
   const fallback = fileName.replace(/[^\x20-\x7e]|["\\%]/g, '_');
-  const encoded = encodeURIComponent(fileName).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
   return `${kind}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }

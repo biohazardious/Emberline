@@ -59,7 +59,11 @@ const presentedKey = (r: FastifyRequest): string | undefined => {
     const offered = String(r.headers['sec-websocket-protocol'] ?? '')
       .split(',')
       .map((p) => p.trim());
-    return offered.find((p) => p.startsWith(SESSION_KEY_PROTOCOL_PREFIX))?.slice(SESSION_KEY_PROTOCOL_PREFIX.length) || undefined;
+    return (
+      offered
+        .find((p) => p.startsWith(SESSION_KEY_PROTOCOL_PREFIX))
+        ?.slice(SESSION_KEY_PROTOCOL_PREFIX.length) || undefined
+    );
   }
   const v = r.headers[CSRF_HEADER];
   return typeof v === 'string' && v !== '' ? v : undefined;
@@ -85,7 +89,10 @@ const presentedKey = (r: FastifyRequest): string | undefined => {
  * - A sign-in ends the sessions its request's cookies name (this browser's older one, whichever
  *   address it came from); other devices keep theirs.
  */
-export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; config: CoreConfig }): SessionStore {
+export function registerAuth(
+  app: FastifyInstance,
+  { db, config }: { db: Db; config: CoreConfig },
+): SessionStore {
   const store = new SessionStore(db, config.sessionTtlMs);
   store.purgeExpired();
   const failures = new Map<string, { count: number; since: number }>();
@@ -141,9 +148,10 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     // same-origin with us. Browsers still send the attacker's name as Host, so refuse unknown names
     // (this covers the API, the SPA and /metrics). IP literals cannot be rebound.
     if (!hostAllowed(request.host)) {
-      return reply
-        .code(421)
-        .send({ error: 'misdirected_request', message: `Host "${request.host}" is not allowed. Add it to EMBERLINE_ALLOWED_HOSTS.` });
+      return reply.code(421).send({
+        error: 'misdirected_request',
+        message: `Host "${request.host}" is not allowed. Add it to EMBERLINE_ALLOWED_HOSTS.`,
+      });
     }
     // Absolute-form targets (`GET http://host/api/...`) are only meant for proxies.
     if (!request.raw.url?.startsWith('/')) {
@@ -164,7 +172,9 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     // Browsers always send Origin on WebSocket handshakes; a missing one is a non-browser client
     // that has no business holding a session cookie here.
     if (!origin && isUpgrade(request)) {
-      return reply.code(403).send({ error: 'forbidden', message: 'WebSocket upgrades need an Origin header' });
+      return reply
+        .code(403)
+        .send({ error: 'forbidden', message: 'WebSocket upgrades need an Origin header' });
     }
     // Presence only: any value makes a cross-origin request need a preflight. Signed in, the value
     // must be the session's key (checked below).
@@ -222,7 +232,9 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     const now = Date.now();
     const entry = failures.get(request.ip);
     const blockedUntil = Math.max(
-      entry && now - entry.since < FAILURE_WINDOW_MS && entry.count >= MAX_FAILURES ? entry.since + FAILURE_WINDOW_MS : 0,
+      entry && now - entry.since < FAILURE_WINDOW_MS && entry.count >= MAX_FAILURES
+        ? entry.since + FAILURE_WINDOW_MS
+        : 0,
       now - globalFailures.since < FAILURE_WINDOW_MS && globalFailures.count >= MAX_GLOBAL_FAILURES
         ? globalFailures.since + FAILURE_WINDOW_MS
         : 0,
@@ -245,7 +257,10 @@ export function registerAuth(app: FastifyInstance, { db, config }: { db: Db; con
     if (fresh && failures.size >= MAX_TRACKED_CLIENTS) {
       for (const [ip, e] of failures) if (now - e.since >= FAILURE_WINDOW_MS) failures.delete(ip);
     }
-    failures.set(request.ip, fresh ? { count: 1, since: now } : { count: entry.count + 1, since: entry.since });
+    failures.set(
+      request.ip,
+      fresh ? { count: 1, since: now } : { count: entry.count + 1, since: entry.since },
+    );
     globalFailures =
       now - globalFailures.since >= FAILURE_WINDOW_MS
         ? { count: 1, since: now }

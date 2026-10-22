@@ -72,9 +72,10 @@ export function commentActions(c: Pick<ReviewComment, 'status'>): CommentAction[
  * What the blocking banners show, from core's own count (`blockingOpen`, chain-aware): the blocking
  * comments, and apart from them what a new run carried from the previous attempt.
  */
-export function blockingBanner(
-  state: Pick<RunReviewState, 'blockingOpen' | 'carriedBlocking'> | undefined,
-): { comments: number; carried: RunReviewState['carriedBlocking'] } {
+export function blockingBanner(state: Pick<RunReviewState, 'blockingOpen' | 'carriedBlocking'> | undefined): {
+  comments: number;
+  carried: RunReviewState['carriedBlocking'];
+} {
   if (!state) return { comments: 0, carried: null };
   const carried = state.carriedBlocking;
   return { comments: Math.max(0, state.blockingOpen - (carried?.count ?? 0)), carried };
@@ -90,7 +91,10 @@ export function carriedMessage(count: number): string {
  * Unresolved comments whose file is not in the diff any more (it was reverted, or the worktree is
  * gone), by file: they are listed apart so they can still be resolved. None until the diff loaded.
  */
-export function commentsOffDiff(comments: readonly ReviewComment[], diffPaths: readonly string[] | null): ReviewComment[] {
+export function commentsOffDiff(
+  comments: readonly ReviewComment[],
+  diffPaths: readonly string[] | null,
+): ReviewComment[] {
   if (diffPaths === null) return [];
   const inDiff = new Set(diffPaths);
   return comments
@@ -152,8 +156,10 @@ export function worktreeMissing(error: unknown): { ticketId: string | null } | n
 /** Why a merge from the ticket drawer (Mark done, Accept) did not happen, as one sentence for the recovery block. */
 export function mergeNowFailure(error: unknown, ticketKey: string): string {
   const blocking = reviewBlockedCount(error);
-  if (blocking !== null) return `${blockingMessage(blocking)} on ${ticketKey}, so it was not merged. Resolve them in Review first.`;
-  if (worktreeMissing(error)) return `The worktree of ${ticketKey}'s run is gone and its work isn't in main. Nothing was merged.`;
+  if (blocking !== null)
+    return `${blockingMessage(blocking)} on ${ticketKey}, so it was not merged. Resolve them in Review first.`;
+  if (worktreeMissing(error))
+    return `The worktree of ${ticketKey}'s run is gone and its work isn't in main. Nothing was merged.`;
   return `Not merged: ${errorMessage(error)}`;
 }
 

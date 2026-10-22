@@ -84,7 +84,9 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
       timeoutMs,
       maxOutputBytes: Math.min(request.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES, MAX_EXEC_OUTPUT_BYTES),
       encoding: request.encoding ?? 'utf8',
-      ...(request.execId && (ptyd.protocolVersion ?? 0) >= CANCEL_PROTOCOL_VERSION ? { execId: request.execId } : {}),
+      ...(request.execId && (ptyd.protocolVersion ?? 0) >= CANCEL_PROTOCOL_VERSION
+        ? { execId: request.execId }
+        : {}),
     });
     // ptyd enforces the timeout; this only guards against a reply that never comes.
     let timer: NodeJS.Timeout | undefined;
@@ -187,7 +189,11 @@ export const localCommandExecutor: CommandExecutor = (request) =>
  */
 export function isRunnerUnavailable(error: unknown): boolean {
   for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
-    if (e instanceof HttpError && e.statusCode === 503 && (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated'))
+    if (
+      e instanceof HttpError &&
+      e.statusCode === 503 &&
+      (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated')
+    )
       return true;
     if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) return true;
   }
@@ -208,7 +214,9 @@ export class CommandFailedError extends Error {
       : result.truncated
         ? 'output exceeded the size limit'
         : `exited with code ${result.exitCode ?? result.signal}`;
-    super(`${request.file} ${request.args.slice(0, 4).join(' ')} ${why}${stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ''}`);
+    super(
+      `${request.file} ${request.args.slice(0, 4).join(' ')} ${why}${stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ''}`,
+    );
     this.name = 'CommandFailedError';
   }
 }

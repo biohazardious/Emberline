@@ -29,7 +29,15 @@ describe('sameRunPrompt', () => {
     const text = sameRunPrompt('Nearly there', [
       c({ priority: 'suggestion', body: 'Maybe rename', intent: 'change', line: 3, currentLine: 3 }),
       c({ priority: 'blocking', body: 'Null deref' }),
-      c({ priority: 'important', filePath: 'README.md', line: null, currentLine: null, anchorText: null, intent: 'question', body: 'Why?' }),
+      c({
+        priority: 'important',
+        filePath: 'README.md',
+        line: null,
+        currentLine: null,
+        anchorText: null,
+        intent: 'question',
+        body: 'Why?',
+      }),
     ]);
     expect(text).toBe(
       [
@@ -81,14 +89,23 @@ describe('sameRunPrompt', () => {
   });
 
   it('indents the continuation lines of a multi-line body', () => {
-    expect(sameRunPrompt('', [c({ body: 'first\nsecond' })])).toContain('- `src/app.ts:10` (fix) first\n  second');
+    expect(sameRunPrompt('', [c({ body: 'first\nsecond' })])).toContain(
+      '- `src/app.ts:10` (fix) first\n  second',
+    );
   });
 });
 
 describe('control characters', () => {
   it('strips escape sequences and other controls from paths, anchors and bodies', () => {
     const text = sameRunPrompt('note\x1b[201~', [
-      c({ filePath: 'src/\x1b[201~evil\n.ts', line: 5, currentLine: null, outdated: true, anchorText: 'x\x1b[Z\u009b2J', body: 'ok\x07\ttab\nnext\x1b[201~' }),
+      c({
+        filePath: 'src/\x1b[201~evil\n.ts',
+        line: 5,
+        currentLine: null,
+        outdated: true,
+        anchorText: 'x\x1b[Z\u009b2J',
+        body: 'ok\x07\ttab\nnext\x1b[201~',
+      }),
     ]);
     expect(controlsIn(text)).toEqual([]);
     expect(text).toContain('Overall note: note[201~');
@@ -107,7 +124,9 @@ describe('newRunFeedbackSection', () => {
     expect(lines[0]).toBe('## Review feedback from the previous attempt (run 01234567)');
     expect(text).toContain('not in this worktree');
     expect(text).toContain('Overall note: Try again');
-    expect(text).toContain('Blocking — Must be fixed before this can merge:\n- `src/app.ts:10` (fix) Must validate');
+    expect(text).toContain(
+      'Blocking — Must be fixed before this can merge:\n- `src/app.ts:10` (fix) Must validate',
+    );
     expect(text).toContain('Important:\n- `src/app.ts:10` (fix) Rename');
     // A fresh run has no previous round of its own to check.
     expect(text).not.toContain('From the previous round');

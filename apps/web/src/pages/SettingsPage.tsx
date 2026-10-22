@@ -87,26 +87,27 @@ const CAPABILITY_TAG_META: Record<ModelCapabilityTag, { label: string; icon: Luc
   fast: { label: 'Fast', icon: Zap },
 };
 
-const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; text: string; label: string }> = {
-  high: {
-    bg: 'color-mix(in srgb, var(--violet) 14%, transparent)',
-    border: 'color-mix(in srgb, var(--violet) 45%, transparent)',
-    text: 'var(--violet)',
-    label: 'HIGH (★4–5)',
-  },
-  medium: {
-    bg: 'color-mix(in srgb, var(--info) 14%, transparent)',
-    border: 'color-mix(in srgb, var(--info) 45%, transparent)',
-    text: 'var(--info)',
-    label: 'MEDIUM (★3)',
-  },
-  low: {
-    bg: 'color-mix(in srgb, var(--ok) 14%, transparent)',
-    border: 'color-mix(in srgb, var(--ok) 45%, transparent)',
-    text: 'var(--ok)',
-    label: 'LOW (★1–2)',
-  },
-};
+const TIER_COLORS: Record<ModelCapabilityTier, { bg: string; border: string; text: string; label: string }> =
+  {
+    high: {
+      bg: 'color-mix(in srgb, var(--violet) 14%, transparent)',
+      border: 'color-mix(in srgb, var(--violet) 45%, transparent)',
+      text: 'var(--violet)',
+      label: 'HIGH (★4–5)',
+    },
+    medium: {
+      bg: 'color-mix(in srgb, var(--info) 14%, transparent)',
+      border: 'color-mix(in srgb, var(--info) 45%, transparent)',
+      text: 'var(--info)',
+      label: 'MEDIUM (★3)',
+    },
+    low: {
+      bg: 'color-mix(in srgb, var(--ok) 14%, transparent)',
+      border: 'color-mix(in srgb, var(--ok) 45%, transparent)',
+      text: 'var(--ok)',
+      label: 'LOW (★1–2)',
+    },
+  };
 
 /** The parallel-tickets field as a whole number between 1 and 4 (anything unreadable counts as 1). */
 function clampParallel(value: string): number {
@@ -119,7 +120,15 @@ function defaultRoute(agent: AgentId, model: Route['model'], prior?: Route['cred
   return { agent, model, credential: prior && allowed.includes(prior) ? prior : allowed[0]! };
 }
 
-const SETTINGS_TABS = ['autopilot', 'providers', 'mcp_plugins', 'quota', 'notifications', 'updates', 'account'] as const;
+const SETTINGS_TABS = [
+  'autopilot',
+  'providers',
+  'mcp_plugins',
+  'quota',
+  'notifications',
+  'updates',
+  'account',
+] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export function SettingsPage({
@@ -132,7 +141,9 @@ export function SettingsPage({
   const [, setLocation] = useLocation();
   // The tab lives in the address, so coming back from a login or install terminal returns to it.
   const [tabParam, setTabParam] = useQueryParam('tab');
-  const activeTab: SettingsTab = SETTINGS_TABS.includes(tabParam as SettingsTab) ? (tabParam as SettingsTab) : 'autopilot';
+  const activeTab: SettingsTab = SETTINGS_TABS.includes(tabParam as SettingsTab)
+    ? (tabParam as SettingsTab)
+    : 'autopilot';
   const setActiveTab = (tab: SettingsTab) => setTabParam(tab === 'autopilot' ? null : tab);
   const [settings, setSettings] = useState<FactorySettings | null>(null);
   const [themePref, setThemePref] = useState<ThemeMode>(theme);
@@ -215,11 +226,15 @@ export function SettingsPage({
 
   useEffect(() => {
     const anyInstalling =
-      (toolchain?.tools.some((t) => t.installing) ?? false) || (toolchain?.sdks.some((s) => s.installing) ?? false);
+      (toolchain?.tools.some((t) => t.installing) ?? false) ||
+      (toolchain?.sdks.some((s) => s.installing) ?? false);
     if (!anyInstalling && activeTab !== 'providers') return;
-    const interval = setInterval(() => {
-      void refreshToolchain();
-    }, anyInstalling ? 2500 : 8000);
+    const interval = setInterval(
+      () => {
+        void refreshToolchain();
+      },
+      anyInstalling ? 2500 : 8000,
+    );
     return () => clearInterval(interval);
   }, [toolchain, activeTab, refreshToolchain]);
 
@@ -283,7 +298,9 @@ export function SettingsPage({
     try {
       // Signing in enables the provider, which the server allows for Antigravity only once the risk is accepted.
       if (providerId === 'antigravity' && !settings?.antigravityTermsAcknowledged) {
-        const updated = await api<FactorySettings>('/api/factory/settings', 'PATCH', { antigravityTermsAcknowledged: true });
+        const updated = await api<FactorySettings>('/api/factory/settings', 'PATCH', {
+          antigravityTermsAcknowledged: true,
+        });
         setSettings(updated);
       }
       const res = await api<ProviderLoginResponse>('/api/factory/provider-login', 'POST', {
@@ -324,7 +341,12 @@ export function SettingsPage({
             const kept = prev[p.id].filter((r) => r.agent !== providerId);
             updated[p.id] = kept.length
               ? kept
-              : [defaultRoute(fallbackAgent, coerceModelForProvider(fallbackAgent, prev[p.id][0]?.model ?? 'opus', p.id))];
+              : [
+                  defaultRoute(
+                    fallbackAgent,
+                    coerceModelForProvider(fallbackAgent, prev[p.id][0]?.model ?? 'opus', p.id),
+                  ),
+                ];
           }
           return updated;
         });
@@ -338,11 +360,19 @@ export function SettingsPage({
       if (!prev) return prev;
       const [first, ...rest] = prev[personaKey];
       if (!first) return prev;
-      return { ...prev, [personaKey]: [{ ...first, model: selectProviderModelByTier(first.agent, tier, personaKey) }, ...rest] };
+      return {
+        ...prev,
+        [personaKey]: [
+          { ...first, model: selectProviderModelByTier(first.agent, tier, personaKey) },
+          ...rest,
+        ],
+      };
     });
   };
 
-  const applyCapabilityPreset = (preset: 'auto-rank' | 'all-high' | 'all-medium' | 'all-low' | 'multi-provider') => {
+  const applyCapabilityPreset = (
+    preset: 'auto-rank' | 'all-high' | 'all-medium' | 'all-low' | 'multi-provider',
+  ) => {
     if (!personaRoutes) return;
     // Presets replace each chain with a single route; add fallbacks afterwards.
     if (preset === 'multi-provider') {
@@ -358,13 +388,51 @@ export function SettingsPage({
           : (enabledProviders[0] ?? 'claude');
 
       setPersonaRoutes({
-        product_owner: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5), personaRoutes.product_owner[0]?.credential)],
-        architect: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 5), personaRoutes.architect[0]?.credential)],
-        ui_ux: [defaultRoute(uiProvider, selectProviderModelByRank(uiProvider, 5), personaRoutes.ui_ux[0]?.credential)],
-        coder: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4), personaRoutes.coder[0]?.credential)],
-        dba: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4), personaRoutes.dba[0]?.credential)],
-        qa: [defaultRoute(qaProvider, selectProviderModelByRank(qaProvider, 3), personaRoutes.qa[0]?.credential)],
-        security: [defaultRoute(coreProvider, selectProviderModelByRank(coreProvider, 4), personaRoutes.security[0]?.credential)],
+        product_owner: [
+          defaultRoute(
+            coreProvider,
+            selectProviderModelByRank(coreProvider, 5),
+            personaRoutes.product_owner[0]?.credential,
+          ),
+        ],
+        architect: [
+          defaultRoute(
+            coreProvider,
+            selectProviderModelByRank(coreProvider, 5),
+            personaRoutes.architect[0]?.credential,
+          ),
+        ],
+        ui_ux: [
+          defaultRoute(
+            uiProvider,
+            selectProviderModelByRank(uiProvider, 5),
+            personaRoutes.ui_ux[0]?.credential,
+          ),
+        ],
+        coder: [
+          defaultRoute(
+            coreProvider,
+            selectProviderModelByRank(coreProvider, 4),
+            personaRoutes.coder[0]?.credential,
+          ),
+        ],
+        dba: [
+          defaultRoute(
+            coreProvider,
+            selectProviderModelByRank(coreProvider, 4),
+            personaRoutes.dba[0]?.credential,
+          ),
+        ],
+        qa: [
+          defaultRoute(qaProvider, selectProviderModelByRank(qaProvider, 3), personaRoutes.qa[0]?.credential),
+        ],
+        security: [
+          defaultRoute(
+            coreProvider,
+            selectProviderModelByRank(coreProvider, 4),
+            personaRoutes.security[0]?.credential,
+          ),
+        ],
       });
       setNotice(
         'Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. Fallbacks were reset. Click Save to persist.',
@@ -395,7 +463,9 @@ export function SettingsPage({
       'all-medium': 'Balanced Medium Tier (★3)',
       'all-low': 'Fast / Token-Saver Low Tier (★1–2)',
     };
-    setNotice(`Applied "${labelMap[preset]}" across active providers. Fallbacks were reset. Click Save to persist.`);
+    setNotice(
+      `Applied "${labelMap[preset]}" across active providers. Fallbacks were reset. Click Save to persist.`,
+    );
   };
 
   const handleSaveFactorySettings = async (e: FormEvent) => {
@@ -570,7 +640,8 @@ export function SettingsPage({
               <span className="eyebrow">Autonomous Pipeline</span>
               <h3 style={{ margin: '4px 0 4px' }}>Backlog &amp; Ready Auto-Pickup + Self-Healing</h3>
               <p className="muted small">
-                Configure how the AI Coding Factory chains specialist tickets, verifies builds, and updates the live workspace.
+                Configure how the AI Coding Factory chains specialist tickets, verifies builds, and updates
+                the live workspace.
               </p>
             </div>
 
@@ -584,7 +655,8 @@ export function SettingsPage({
               <div>
                 <strong>Auto-Pickup Ready Queue</strong>
                 <div className="muted small">
-                  Automatically start the highest-priority ticket in the <code>Ready</code> column as soon as the previous specialist finishes.
+                  Automatically start the highest-priority ticket in the <code>Ready</code> column as soon as
+                  the previous specialist finishes.
                 </div>
               </div>
             </label>
@@ -599,7 +671,8 @@ export function SettingsPage({
               <div>
                 <strong>Auto-Pickup Backlog Queue (Continuous Factory Mode)</strong>
                 <div className="muted small">
-                  When the <code>Ready</code> column is empty during an active pipeline run, automatically pull the next highest-priority ticket from <code>Backlog</code>.
+                  When the <code>Ready</code> column is empty during an active pipeline run, automatically
+                  pull the next highest-priority ticket from <code>Backlog</code>.
                 </div>
               </div>
             </label>
@@ -613,10 +686,16 @@ export function SettingsPage({
               />
               <div>
                 <strong>
-                  <FlaskConical className="icon" aria-hidden /> Self-Healing Build, Lint &amp; Unit Test Gate (Auto-Verify &amp; Auto-Fix)
+                  <FlaskConical className="icon" aria-hidden /> Self-Healing Build, Lint &amp; Unit Test Gate
+                  (Auto-Verify &amp; Auto-Fix)
                 </strong>
                 <div className="muted small">
-                  When a specialist finishes a run, automatically run the project&apos;s <code>build</code>/<code>typecheck</code>, <code>lint</code>, and <code>test</code> suites (`CI=true`). If any check fails, resume the agent with the exact compiler/linter/test failure output to self-heal before advancing. It also asks the agent once to fix an invalid .emberline/worktree.yml or to add an Auto Bootstrap&apos;s missing commands; when it is off, such runs wait for you in Review.
+                  When a specialist finishes a run, automatically run the project&apos;s <code>build</code>/
+                  <code>typecheck</code>, <code>lint</code>, and <code>test</code> suites (`CI=true`). If any
+                  check fails, resume the agent with the exact compiler/linter/test failure output to
+                  self-heal before advancing. It also asks the agent once to fix an invalid
+                  .emberline/worktree.yml or to add an Auto Bootstrap&apos;s missing commands; when it is off,
+                  such runs wait for you in Review.
                 </div>
               </div>
             </label>
@@ -630,10 +709,15 @@ export function SettingsPage({
               />
               <div>
                 <strong>
-                  <Shield className="icon" aria-hidden /> Anti-AI-Slop &amp; Anti-Vibe-Coding Gate (Deterministic Diff Audit &amp; Auto-Clean)
+                  <Shield className="icon" aria-hidden /> Anti-AI-Slop &amp; Anti-Vibe-Coding Gate
+                  (Deterministic Diff Audit &amp; Auto-Clean)
                 </strong>
                 <div className="muted small">
-                  Automatically scan every completed worktree diff for type evasion (<code>: any</code>, <code>as any</code>, <code>@ts-ignore</code>), unfinished <code>TODO</code>/<code>FIXME</code> stubs, skipped tests, leftover <code>console.log</code>/<code>debugger</code>, and generic AI gradient clichés. If blocked, auto-resume the agent once to clean its own code.
+                  Automatically scan every completed worktree diff for type evasion (<code>: any</code>,{' '}
+                  <code>as any</code>, <code>@ts-ignore</code>), unfinished <code>TODO</code>/
+                  <code>FIXME</code> stubs, skipped tests, leftover <code>console.log</code>/
+                  <code>debugger</code>, and generic AI gradient clichés. If blocked, auto-resume the agent
+                  once to clean its own code.
                 </div>
               </div>
             </label>
@@ -648,7 +732,8 @@ export function SettingsPage({
               <div>
                 <strong>Require agents to confirm completion</strong>
                 <div className="muted small">
-                  Factory tickets advance only after the agent calls <code>ticket_complete</code>; otherwise it is asked once, then the ticket waits for you.
+                  Factory tickets advance only after the agent calls <code>ticket_complete</code>; otherwise
+                  it is asked once, then the ticket waits for you.
                 </div>
               </div>
             </label>
@@ -662,10 +747,15 @@ export function SettingsPage({
               />
               <div>
                 <strong>
-                  <Lock className="icon" aria-hidden /> Pre-Commit Secret &amp; Credential Guard (Auto-Block &amp; Redact Leaked Keys)
+                  <Lock className="icon" aria-hidden /> Pre-Commit Secret &amp; Credential Guard (Auto-Block
+                  &amp; Redact Leaked Keys)
                 </strong>
                 <div className="muted small">
-                  Inspects diffs before commit and before <code>main</code> workspace sync for hardcoded API keys (<code>sk-...</code>, <code>AIza...</code>, <code>ghp_...</code>, <code>AKIA...</code>), private keys (<code>.pem</code>/<code>.key</code>), and tracked <code>.env</code> files. Blocks merging into <code>main</code> and instructs the agent to move secrets to <code>process.env</code> + <code>.env.example</code>.
+                  Inspects diffs before commit and before <code>main</code> workspace sync for hardcoded API
+                  keys (<code>sk-...</code>, <code>AIza...</code>, <code>ghp_...</code>, <code>AKIA...</code>
+                  ), private keys (<code>.pem</code>/<code>.key</code>), and tracked <code>.env</code> files.
+                  Blocks merging into <code>main</code> and instructs the agent to move secrets to{' '}
+                  <code>process.env</code> + <code>.env.example</code>.
                 </div>
               </div>
             </label>
@@ -682,7 +772,9 @@ export function SettingsPage({
                   <Scale className="icon" aria-hidden /> Cross-Provider AI Critic (Rival Provider Code Review)
                 </strong>
                 <div className="muted small">
-                  When multiple providers are active (e.g. Claude + Google Antigravity), automatically have a rival provider audit the completed diff against the ticket specification before moving to <code>Done</code>.
+                  When multiple providers are active (e.g. Claude + Google Antigravity), automatically have a
+                  rival provider audit the completed diff against the ticket specification before moving to{' '}
+                  <code>Done</code>.
                 </div>
               </div>
             </label>
@@ -697,7 +789,9 @@ export function SettingsPage({
               <div>
                 <strong>Auto-Sync Completed Worktrees into Main Host Workspace</strong>
                 <div className="muted small">
-                  Merge each completed specialist's branch into <code>/workspaces/&lt;slug&gt;</code> with git so subsequent specialists and the Live Demo stay up to date. Conflicts keep the ticket in Review; untracked files such as <code>.env</code> are never touched.
+                  Merge each completed specialist's branch into <code>/workspaces/&lt;slug&gt;</code> with git
+                  so subsequent specialists and the Live Demo stay up to date. Conflicts keep the ticket in
+                  Review; untracked files such as <code>.env</code> are never touched.
                 </div>
               </div>
             </label>
@@ -712,7 +806,8 @@ export function SettingsPage({
               <div>
                 <strong>Auto-Move Verified Factory Tickets to Done</strong>
                 <div className="muted small">
-                  Move factory pipeline tickets directly to the <code>Done</code> column once their build and sync succeed.
+                  Move factory pipeline tickets directly to the <code>Done</code> column once their build and
+                  sync succeed.
                 </div>
               </div>
             </label>
@@ -724,13 +819,16 @@ export function SettingsPage({
                 min={0}
                 max={1000}
                 value={maxAutoRunsPerDay}
-                onChange={(e) => setMaxAutoRunsPerDay(Math.max(0, Math.min(1000, Number(e.target.value) || 0)))}
+                onChange={(e) =>
+                  setMaxAutoRunsPerDay(Math.max(0, Math.min(1000, Number(e.target.value) || 0)))
+                }
                 style={{ width: '90px' }}
               />
               <div>
                 <strong>Daily run budget per project</strong>
                 <div className="muted small">
-                  Auto-dispatch stops starting new runs for a project once this many runs started in the last 24 hours (0 = unlimited). Manual starts are not limited.
+                  Auto-dispatch stops starting new runs for a project once this many runs started in the last
+                  24 hours (0 = unlimited). Manual starts are not limited.
                 </div>
               </div>
             </label>
@@ -749,7 +847,8 @@ export function SettingsPage({
               <div>
                 <strong>Parallel tickets per project</strong>
                 <div className="muted small">
-                  How many unblocked tickets of one project the factory works on at the same time (1-4). Tickets that wait for a dependency never start early.
+                  How many unblocked tickets of one project the factory works on at the same time (1-4).
+                  Tickets that wait for a dependency never start early.
                 </div>
               </div>
             </label>
@@ -769,7 +868,10 @@ export function SettingsPage({
               <div>
                 <strong>Build outputs archive per project (GB)</strong>
                 <div className="muted small">
-                  Archived APKs, installers and firmware images are kept per project, on the workspaces volume, up to this size (0.5-1000 GB). Beyond it the oldest unpinned outputs are deleted; pinned ones stay. A lower value applies as soon as you save. Nothing is copied while the volume has less than 1 GB free.
+                  Archived APKs, installers and firmware images are kept per project, on the workspaces
+                  volume, up to this size (0.5-1000 GB). Beyond it the oldest unpinned outputs are deleted;
+                  pinned ones stay. A lower value applies as soon as you save. Nothing is copied while the
+                  volume has less than 1 GB free.
                 </div>
               </div>
             </label>
@@ -787,7 +889,8 @@ export function SettingsPage({
               <div>
                 <strong>Agent ticket depth limit</strong>
                 <div className="muted small">
-                  How many generations of agent-created tickets may follow a ticket you created. Drafts beyond it are dropped and noted on the run.
+                  How many generations of agent-created tickets may follow a ticket you created. Drafts beyond
+                  it are dropped and noted on the run.
                 </div>
               </div>
             </label>
@@ -815,14 +918,26 @@ export function SettingsPage({
         >
           {/* STEP 1: ACTIVE AI PROVIDERS, PERSISTENT CLI VOLUME & CREDENTIALS */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: '12px',
+                flexWrap: 'wrap',
+              }}
+            >
               <div>
-                <span className="eyebrow">Step 1 · Provider Registry, Persistent CLI Volume &amp; Credentials</span>
+                <span className="eyebrow">
+                  Step 1 · Provider Registry, Persistent CLI Volume &amp; Credentials
+                </span>
                 <h3 style={{ margin: '4px 0 4px' }}>
                   Active AI Providers ({enabledProviders.length} Enabled)
                 </h3>
                 <p className="muted small" style={{ maxWidth: 760, margin: 0 }}>
-                  Runner image is generic and CLI-agnostic. All AI CLIs are dynamically installed and updated inside the persistent <code>{toolchain?.toolsDir ?? '/opt/ai-tools'}</code> volume so container rebuilds never lose your tools.
+                  Runner image is generic and CLI-agnostic. All AI CLIs are dynamically installed and updated
+                  inside the persistent <code>{toolchain?.toolsDir ?? '/opt/ai-tools'}</code> volume so
+                  container rebuilds never lose your tools.
                 </p>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -837,8 +952,8 @@ export function SettingsPage({
                     }}
                     title="Generic Runner Base OS & Node.js LTS Runtime"
                   >
-                    <Cpu className="icon" aria-hidden /> {toolchain.osInfo} · Node {toolchain.nodeVersion} · <Folder className="icon" aria-hidden />{' '}
-                    {toolchain.toolsDir}
+                    <Cpu className="icon" aria-hidden /> {toolchain.osInfo} · Node {toolchain.nodeVersion} ·{' '}
+                    <Folder className="icon" aria-hidden /> {toolchain.toolsDir}
                   </span>
                 )}
                 <button
@@ -913,7 +1028,9 @@ export function SettingsPage({
                     style={{
                       padding: '12px 14px',
                       borderRadius: '8px',
-                      background: isEnabled ? 'var(--surface-2)' : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
+                      background: isEnabled
+                        ? 'var(--surface-2)'
+                        : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
                       border: isEnabled
                         ? '1px solid color-mix(in srgb, var(--info) 50%, transparent)'
                         : '1px dashed var(--border)',
@@ -926,7 +1043,14 @@ export function SettingsPage({
                     }}
                   >
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                        }}
+                      >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
                           <ProviderMark id={entry.id} />
                           <strong style={{ fontSize: '0.9rem' }}>{entry.label}</strong>
@@ -953,9 +1077,9 @@ export function SettingsPage({
                             onChange={(e) => setAntigravityAck(e.target.checked)}
                           />
                           <span>
-                            Google does not support using an Antigravity consumer login (Google AI Pro/Ultra) inside
-                            third-party tools such as Emberline and has suspended accounts for it. I accept this risk for
-                            my account.
+                            Google does not support using an Antigravity consumer login (Google AI Pro/Ultra)
+                            inside third-party tools such as Emberline and has suspended accounts for it. I
+                            accept this risk for my account.
                           </span>
                         </label>
                       )}
@@ -984,11 +1108,13 @@ export function SettingsPage({
                         >
                           {isToolBusy ? (
                             <>
-                              <LoaderCircle className="icon icon-spin" aria-hidden /> Installing {toolStatus?.binaryName ?? providerId}…
+                              <LoaderCircle className="icon icon-spin" aria-hidden /> Installing{' '}
+                              {toolStatus?.binaryName ?? providerId}…
                             </>
                           ) : toolStatus?.installed ? (
                             <>
-                              <Package className="icon" aria-hidden /> {toolStatus.binaryName} ({toolStatus.version ?? 'installed'})
+                              <Package className="icon" aria-hidden /> {toolStatus.binaryName} (
+                              {toolStatus.version ?? 'installed'})
                             </>
                           ) : (
                             <>
@@ -1030,7 +1156,10 @@ export function SettingsPage({
                       </div>
 
                       {authStatus?.warning && (
-                        <div className="small" style={{ fontSize: '0.72rem', lineHeight: 1.35, color: 'var(--warn)' }}>
+                        <div
+                          className="small"
+                          style={{ fontSize: '0.72rem', lineHeight: 1.35, color: 'var(--warn)' }}
+                        >
                           {authStatus.warning}
                         </div>
                       )}
@@ -1150,11 +1279,22 @@ export function SettingsPage({
                       )}
 
                       {supportsOAuthLogin && (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                            flexWrap: 'wrap',
+                          }}
+                        >
                           <button
                             type="button"
                             className="btn btn-xs btn-ghost"
-                            disabled={launchingLoginProvider !== null || (providerId === 'antigravity' && !antigravityAck)}
+                            disabled={
+                              launchingLoginProvider !== null ||
+                              (providerId === 'antigravity' && !antigravityAck)
+                            }
                             onClick={() => void handleStartProviderLogin(providerId)}
                             style={{
                               borderColor: 'color-mix(in srgb, var(--info) 45%, transparent)',
@@ -1209,7 +1349,9 @@ export function SettingsPage({
                       {isEnabled && (providerId === 'gemini' || providerId === 'antigravity') && (
                         <label className="field" style={{ gap: 3, marginTop: 2 }}>
                           <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-                            {providerId === 'gemini' ? 'Google Gemini API Key (recommended)' : 'Google Gemini API Key (optional)'}
+                            {providerId === 'gemini'
+                              ? 'Google Gemini API Key (recommended)'
+                              : 'Google Gemini API Key (optional)'}
                           </span>
                           <input
                             type="password"
@@ -1254,12 +1396,27 @@ export function SettingsPage({
 
           {/* STEP 2: CAPABILITY-RANKED PERSONA ROUTING MATRIX */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
               <div>
-                <span className="eyebrow">Step 2 · Capability-Ranked Persona Matrix (★1–5 &amp; Low / Med / High)</span>
-                <h3 style={{ margin: '4px 0 4px' }}>Specialist Persona Routing &amp; Model Rank Assignment</h3>
+                <span className="eyebrow">
+                  Step 2 · Capability-Ranked Persona Matrix (★1–5 &amp; Low / Med / High)
+                </span>
+                <h3 style={{ margin: '4px 0 4px' }}>
+                  Specialist Persona Routing &amp; Model Rank Assignment
+                </h3>
                 <p className="muted small" style={{ maxWidth: 720, margin: 0 }}>
-                  Each specialist role has a recommended capability rank (<code>★5 Frontier</code> for Architecture/PO, <code>★4 High</code> for Full-Stack/UI/Security, <code>★3 Medium</code> for Fast QA). Model choices are strictly scoped to the selected provider—switching a persona&apos;s provider automatically selects the matching rank model from that provider!
+                  Each specialist role has a recommended capability rank (<code>★5 Frontier</code> for
+                  Architecture/PO, <code>★4 High</code> for Full-Stack/UI/Security, <code>★3 Medium</code> for
+                  Fast QA). Model choices are strictly scoped to the selected provider—switching a
+                  persona&apos;s provider automatically selects the matching rank model from that provider!
                 </p>
               </div>
 
@@ -1315,7 +1472,9 @@ export function SettingsPage({
                 <select
                   className="input"
                   value={quotaPolicy.newRuns}
-                  onChange={(e) => setQuotaPolicy({ ...quotaPolicy, newRuns: e.target.value as QuotaPolicy['newRuns'] })}
+                  onChange={(e) =>
+                    setQuotaPolicy({ ...quotaPolicy, newRuns: e.target.value as QuotaPolicy['newRuns'] })
+                  }
                 >
                   <option value="wait">Wait for the reset</option>
                   <option value="fallback">Start on the next route</option>
@@ -1326,7 +1485,9 @@ export function SettingsPage({
                 <select
                   className="input"
                   value={quotaPolicy.inFlight}
-                  onChange={(e) => setQuotaPolicy({ ...quotaPolicy, inFlight: e.target.value as QuotaPolicy['inFlight'] })}
+                  onChange={(e) =>
+                    setQuotaPolicy({ ...quotaPolicy, inFlight: e.target.value as QuotaPolicy['inFlight'] })
+                  }
                 >
                   <option value="wait">Wait for the reset and continue</option>
                   <option value="fallback">Hand off to the next route</option>
@@ -1334,9 +1495,10 @@ export function SettingsPage({
               </label>
             </div>
             <p className="muted small" style={{ margin: 0 }}>
-              The factory works on one ticket per project at a time, so a ticket waiting for its provider&apos;s quota
-              holds that project&apos;s queue. For factory projects, give the persona a fallback route and choose
-              &ldquo;Start on the next route&rdquo; / &ldquo;Hand off to the next route&rdquo;.
+              The factory works on one ticket per project at a time, so a ticket waiting for its
+              provider&apos;s quota holds that project&apos;s queue. For factory projects, give the persona a
+              fallback route and choose &ldquo;Start on the next route&rdquo; / &ldquo;Hand off to the next
+              route&rdquo;.
             </p>
 
             {claudeUsage?.extraUsage && (
@@ -1370,8 +1532,7 @@ export function SettingsPage({
                 const providerEntry = PROVIDER_REGISTRY[selectedAgent];
                 const selectedModel = firstRoute?.model ?? 'auto';
                 const modelInfo = getModelInfoForProvider(selectedAgent, selectedModel);
-                const activeTier: ModelCapabilityTier =
-                  modelInfo?.tier ?? targetSpec.recommendedTier;
+                const activeTier: ModelCapabilityTier = modelInfo?.tier ?? targetSpec.recommendedTier;
                 const activeRank = modelInfo?.rank ?? targetSpec.recommendedRank;
                 const tierStyle = TIER_COLORS[activeTier];
 
@@ -1391,7 +1552,14 @@ export function SettingsPage({
                   >
                     {/* Header: Persona + Recommended Rank */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '6px',
+                        }}
+                      >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <strong>{meta.label}</strong>
                           <span className="badge mono" style={{ fontSize: '0.68rem' }}>
@@ -1436,8 +1604,8 @@ export function SettingsPage({
                             gemini: Boolean(settings?.geminiKeyStored),
                             aider: Boolean(
                               settings?.anthropicKeyStored ||
-                                settings?.openaiKeyStored ||
-                                settings?.geminiKeyStored,
+                              settings?.openaiKeyStored ||
+                              settings?.geminiKeyStored,
                             ),
                           }}
                         />
@@ -1479,7 +1647,9 @@ export function SettingsPage({
                                 fontWeight: isCurrentTier ? 700 : 500,
                                 borderRadius: '5px',
                                 cursor: 'pointer',
-                                background: isCurrentTier ? tMeta.bg : 'color-mix(in srgb, var(--text) 2%, transparent)',
+                                background: isCurrentTier
+                                  ? tMeta.bg
+                                  : 'color-mix(in srgb, var(--text) 2%, transparent)',
                                 border: isCurrentTier
                                   ? `1px solid ${tMeta.border}`
                                   : '1px solid var(--border)',
@@ -1488,11 +1658,7 @@ export function SettingsPage({
                               }}
                               title={`Auto-select ${providerEntry.shortLabel}'s ${tierKey.toUpperCase()} tier model`}
                             >
-                              {tierKey === 'low'
-                                ? 'LOW ★1-2'
-                                : tierKey === 'medium'
-                                  ? 'MED ★3'
-                                  : 'HIGH ★4-5'}
+                              {tierKey === 'low' ? 'LOW ★1-2' : tierKey === 'medium' ? 'MED ★3' : 'HIGH ★4-5'}
                             </button>
                           );
                         })}
@@ -1581,4 +1747,3 @@ export function SettingsPage({
     </div>
   );
 }
-

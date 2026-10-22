@@ -44,7 +44,12 @@ export const STOP_TIMEOUT_MS = 5_000;
 const writeBackLock = new KeyedMutex();
 
 type TicketRow = typeof tickets.$inferSelect;
-type LinkedRow = TicketRow & { externalSource: ForgeProvider; externalNumber: number; externalUrl: string; externalId: string };
+type LinkedRow = TicketRow & {
+  externalSource: ForgeProvider;
+  externalNumber: number;
+  externalUrl: string;
+  externalId: string;
+};
 
 interface ProjectSyncState {
   lastSyncAt: number | null;
@@ -202,7 +207,13 @@ export class IssueSyncService {
     if (this.isPaused()) return;
     const enabled = this.enabledProjects();
     if (enabled.length === 0) return;
-    const from = this.cursor === null ? 0 : Math.max(0, enabled.findIndex((p) => p.projectId >= this.cursor!));
+    const from =
+      this.cursor === null
+        ? 0
+        : Math.max(
+            0,
+            enabled.findIndex((p) => p.projectId >= this.cursor!),
+          );
     const order = [...enabled.slice(from), ...enabled.slice(0, from)];
     this.cursor = null;
     const budget = { left: SYNC_TICK_REQUEST_CAP };
@@ -242,8 +253,11 @@ export class IssueSyncService {
   private enabledProjects(): { projectId: string; settings: IssueSyncSettings }[] {
     const out: { projectId: string; settings: IssueSyncSettings }[] = [];
     for (const row of this.db.select().from(projectSettings).all()) {
-      const parsed = IssueSyncSettings.safeParse((row.settings as { issueSync?: unknown } | null)?.issueSync ?? {});
-      if (parsed.success && parsed.data.enabled && parsed.data.label) out.push({ projectId: row.projectId, settings: parsed.data });
+      const parsed = IssueSyncSettings.safeParse(
+        (row.settings as { issueSync?: unknown } | null)?.issueSync ?? {},
+      );
+      if (parsed.success && parsed.data.enabled && parsed.data.label)
+        out.push({ projectId: row.projectId, settings: parsed.data });
     }
     return out.sort((a, b) => (a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0));
   }
@@ -258,15 +272,25 @@ export class IssueSyncService {
   }
 
   /** Syncs one project within the budget, or joins its running pass; true when the forge asked to pause. */
-  private syncProject(projectId: string, settings: IssueSyncSettings, budget: { left: number }): Promise<boolean> {
+  private syncProject(
+    projectId: string,
+    settings: IssueSyncSettings,
+    budget: { left: number },
+  ): Promise<boolean> {
     const running = this.inflight.get(projectId);
     if (running) return running;
-    const pass = this.syncProjectPass(projectId, settings, budget).finally(() => this.inflight.delete(projectId));
+    const pass = this.syncProjectPass(projectId, settings, budget).finally(() =>
+      this.inflight.delete(projectId),
+    );
     this.inflight.set(projectId, pass);
     return pass;
   }
 
-  private async syncProjectPass(projectId: string, settings: IssueSyncSettings, budget: { left: number }): Promise<boolean> {
+  private async syncProjectPass(
+    projectId: string,
+    settings: IssueSyncSettings,
+    budget: { left: number },
+  ): Promise<boolean> {
     const state = this.stateOf(projectId);
     try {
       const target = await this.forge.projectRemote(projectId);
@@ -308,7 +332,10 @@ export class IssueSyncService {
       // A page 1 that was read without what follows it must be read again next time.
       state.etag = complete && etag ? { key, value: etag } : null;
       if (low) {
-        this.pause(low.resetAt ?? this.now() + ISSUE_SYNC_INTERVAL_MS, `${low.remaining ?? 'few'} forge requests left`);
+        this.pause(
+          low.resetAt ?? this.now() + ISSUE_SYNC_INTERVAL_MS,
+          `${low.remaining ?? 'few'} forge requests left`,
+        );
         return true;
       }
       return false;
@@ -329,7 +356,8 @@ export class IssueSyncService {
   private checkPinned(settings: IssueSyncSettings, target: ForgeTarget): void {
     const { provider, repoPath } = target.remote;
     const pinned = settings.repo;
-    if (!pinned) throw conflict('issue sync has no repository pinned; turn issue sync off and on again to pin origin');
+    if (!pinned)
+      throw conflict('issue sync has no repository pinned; turn issue sync off and on again to pin origin');
     if (pinned.provider !== provider || pinned.repoPath.toLowerCase() !== repoPath.toLowerCase()) {
       throw conflict(
         `origin now names ${provider} ${repoPath}, but issue sync was enabled for ${pinned.provider} ${pinned.repoPath}; turn issue sync off and on again to sync the new repository`,
@@ -343,7 +371,12 @@ export class IssueSyncService {
    * otherwise, so no automatic dispatch starts them before a person has looked. Linked
    * tickets get the issue's state and labels and are never moved.
    */
-  private apply(projectId: string, source: ForgeProvider, settings: IssueSyncSettings, items: ForgeIssue[]): void {
+  private apply(
+    projectId: string,
+    source: ForgeProvider,
+    settings: IssueSyncSettings,
+    items: ForgeIssue[],
+  ): void {
     if (items.length === 0) return;
     const linked = this.tickets.linkedTickets(
       projectId,
@@ -358,12 +391,16 @@ export class IssueSyncService {
       source,
       items.map((i) => i.externalId),
     );
-    const fresh = items.filter((i) => i.state === 'open' && !linked.has(i.externalId) && !dismissed.has(i.externalId));
+    const fresh = items.filter(
+      (i) => i.state === 'open' && !linked.has(i.externalId) && !dismissed.has(i.externalId),
+    );
     const trustedIssues = fresh.filter(isTrusted);
     // Untrusted imports also need a person's triage before any automatic dispatch (Backlog auto-pickup).
     const untrusted = fresh.filter((i) => !isTrusted(i));
-    if (trustedIssues.length > 0) this.tickets.importIssues(projectId, source, trustedIssues, settings.status);
-    if (untrusted.length > 0) this.tickets.importIssues(projectId, source, untrusted, 'backlog', { triage: true });
+    if (trustedIssues.length > 0)
+      this.tickets.importIssues(projectId, source, trustedIssues, settings.status);
+    if (untrusted.length > 0)
+      this.tickets.importIssues(projectId, source, untrusted, 'backlog', { triage: true });
     const known = items.filter((i) => linked.has(i.externalId));
     if (known.length > 0) this.tickets.syncIssueLinks(projectId, source, known, new Date(this.now()));
   }
@@ -380,7 +417,8 @@ export class IssueSyncService {
 
   /** closeOnDone acts on the move into Done only, never on a later change of a Done ticket. */
   private readonly onMoved = (ticket: Ticket, from: TicketStatus): void => {
-    if (ticket.status === 'done' && from !== 'done' && ticket.external) this.track(() => this.closeDone(ticket.id));
+    if (ticket.status === 'done' && from !== 'done' && ticket.external)
+      this.track(() => this.closeDone(ticket.id));
   };
 
   /** Runs a write-back in the background; it never throws into the caller (the pipeline). */
@@ -399,14 +437,18 @@ export class IssueSyncService {
   private linkedRow(ticketId: string | null | undefined): LinkedRow | null {
     if (!ticketId) return null;
     const row = this.db.select().from(tickets).where(eq(tickets.id, ticketId)).get();
-    if (!row?.externalSource || !row.externalId || row.externalNumber === null || !row.externalUrl) return null;
+    if (!row?.externalSource || !row.externalId || row.externalNumber === null || !row.externalUrl)
+      return null;
     return row as LinkedRow;
   }
 
   /** The project's forge, and only when it is still the repository the issue is in. */
   private async targetFor(row: LinkedRow): Promise<ForgeTarget> {
     const target = await this.forge.projectRemote(row.projectId);
-    if (target.remote.provider !== row.externalSource || !issueInRepo(row.externalUrl, target.remote.repoPath)) {
+    if (
+      target.remote.provider !== row.externalSource ||
+      !issueInRepo(row.externalUrl, target.remote.repoPath)
+    ) {
       throw conflict(`the project's repository is no longer the one the issue of ${row.key} is in`);
     }
     return target;
@@ -436,7 +478,13 @@ export class IssueSyncService {
   }
 
   /** Posts one comment for (ticket, kind, ref), and a merge comment once per run, unless recorded earlier. */
-  private async postOnce(runId: string, row: LinkedRow, kind: 'pr' | 'merge', ref: string, text: string): Promise<void> {
+  private async postOnce(
+    runId: string,
+    row: LinkedRow,
+    kind: 'pr' | 'merge',
+    ref: string,
+    text: string,
+  ): Promise<void> {
     await writeBackLock.run(row.id, async () => {
       if (this.recorded(row.id, ['issue_commented'], ref, kind)) return;
       // One merge comment per run: a re-merge (the "already merged" path names main's HEAD) is no news.
@@ -503,7 +551,8 @@ export class IssueSyncService {
     await writeBackLock.run(ticketId, async () => {
       const row = this.linkedRow(ticketId);
       if (!row || row.status !== 'done') return;
-      if (this.recorded(ticketId, ['issue_closed', 'issue_close_failed', 'issue_close_skipped'], merge.ref)) return;
+      if (this.recorded(ticketId, ['issue_closed', 'issue_close_failed', 'issue_close_skipped'], merge.ref))
+        return;
       const info = { ticketKey: row.key, ref: merge.ref };
       if (row.externalState !== 'open') {
         this.runs.note(merge.runId, 'issue_close_skipped', info);
@@ -526,11 +575,19 @@ export class IssueSyncService {
         new Date(this.now()),
       );
       try {
-        await this.forge.issues.comment(target, row.externalNumber, `Emberline closed this issue because ${row.key} is done.`);
+        await this.forge.issues.comment(
+          target,
+          row.externalNumber,
+          `Emberline closed this issue because ${row.key} is done.`,
+        );
         this.runs.note(merge.runId, 'issue_commented', { kind: 'close', ...info });
       } catch (err) {
         this.noteRateLimit(err);
-        this.runs.note(merge.runId, 'issue_comment_failed', { kind: 'close', ...info, message: messageOf(err) });
+        this.runs.note(merge.runId, 'issue_comment_failed', {
+          kind: 'close',
+          ...info,
+          message: messageOf(err),
+        });
       }
     });
   }

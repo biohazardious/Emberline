@@ -42,13 +42,15 @@ export function computeProjectRecommendations(
   const reviewTickets = projectTickets.filter((t) => t.status === 'review');
   const finishedRuns = projectRuns.filter((r) => r.state === 'done' && !r.handedOffTo);
   if (reviewTickets.length > 0) {
-    const latestReviewRun = finishedRuns.find((r) => reviewTickets.some((t) => t.id === r.ticketId)) ?? finishedRuns[0];
+    const latestReviewRun =
+      finishedRuns.find((r) => reviewTickets.some((t) => t.id === r.ticketId)) ?? finishedRuns[0];
     recommendations.push({
       id: 'review-pending-work',
       priority: 'high',
       category: 'review',
       title: `${reviewTickets.length} ticket${reviewTickets.length > 1 ? 's' : ''} ready for Code Review`,
-      description: 'Inspect the git diff, run a live preview server, or open a Pull Request before moving to Done.',
+      description:
+        'Inspect the git diff, run a live preview server, or open a Pull Request before moving to Done.',
       persona: 'architect',
       actionLabel: latestReviewRun ? 'Inspect Diff & Review' : 'Open Board',
       actionType: latestReviewRun ? 'open_review' : 'open_board',
@@ -74,7 +76,8 @@ export function computeProjectRecommendations(
   // 4. Ready/Backlog tickets ready to be dispatched when no agent is actively running
   const queuedTickets = projectTickets.filter((t) => t.status === 'ready' || t.status === 'backlog');
   const activeRuns = projectRuns.filter(
-    (r) => r.state === 'working' || r.state === 'starting' || r.state === 'queued' || r.state === 'waiting_input',
+    (r) =>
+      r.state === 'working' || r.state === 'starting' || r.state === 'queued' || r.state === 'waiting_input',
   );
   const nextTicket = queuedTickets.find((t) => t.status === 'ready') ?? queuedTickets[0];
   if (nextTicket && activeRuns.length === 0) {
@@ -219,10 +222,13 @@ export async function inspectWorkspaceProject(
   const hasPlatformIo = existsSync(path.join(workspacePath, 'platformio.ini'));
   const hasFlutter = existsSync(path.join(workspacePath, 'pubspec.yaml'));
   const hasGradle =
-    existsSync(path.join(workspacePath, 'gradlew')) || existsSync(path.join(workspacePath, 'android', 'gradlew'));
+    existsSync(path.join(workspacePath, 'gradlew')) ||
+    existsSync(path.join(workspacePath, 'android', 'gradlew'));
   const hasCMake = existsSync(path.join(workspacePath, 'CMakeLists.txt'));
   const hasMakefile = existsSync(path.join(workspacePath, 'Makefile'));
-  const hasIno = topFiles.some((f) => f.endsWith('.ino') || f.endsWith('.c') || f.endsWith('.cpp') || f.endsWith('.h'));
+  const hasIno = topFiles.some(
+    (f) => f.endsWith('.ino') || f.endsWith('.c') || f.endsWith('.cpp') || f.endsWith('.h'),
+  );
   const hasPyFiles = topFiles.some((f) => f.endsWith('.py'));
   const hasShFiles = topFiles.some((f) => f.endsWith('.sh'));
 
@@ -278,7 +284,11 @@ export async function inspectWorkspaceProject(
   if (hasPlatformIo || hasIno || existsSync(path.join(workspacePath, 'firmware'))) {
     layers.add('Embedded / Hardware Firmware');
   }
-  if (hasShFiles || existsSync(path.join(workspacePath, 'scripts')) || existsSync(path.join(workspacePath, 'bin'))) {
+  if (
+    hasShFiles ||
+    existsSync(path.join(workspacePath, 'scripts')) ||
+    existsSync(path.join(workspacePath, 'bin'))
+  ) {
     layers.add('CLI / System Automation');
   }
   if (
@@ -294,7 +304,9 @@ export async function inspectWorkspaceProject(
   let detectedStack = 'Polyglot / Custom';
 
   if (hasPackageJson) {
-    detectedStack = hasPnpmWorkspace ? `TypeScript / JS Monorepo (${pkgManager})` : `Node.js / TypeScript (${pkgManager})`;
+    detectedStack = hasPnpmWorkspace
+      ? `TypeScript / JS Monorepo (${pkgManager})`
+      : `Node.js / TypeScript (${pkgManager})`;
     try {
       const raw = await readFile(pkgPath, 'utf-8');
       const parsed = JSON.parse(raw) as {
@@ -304,7 +316,13 @@ export async function inspectWorkspaceProject(
       };
       const scripts = parsed.scripts ?? {};
       const deps = { ...(parsed.dependencies ?? {}), ...(parsed.devDependencies ?? {}) };
-      if (deps.electron || deps['@tauri-apps/api'] || deps['@capacitor/core'] || deps.expo || deps['react-native']) {
+      if (
+        deps.electron ||
+        deps['@tauri-apps/api'] ||
+        deps['@capacitor/core'] ||
+        deps.expo ||
+        deps['react-native']
+      ) {
         layers.add('Desktop / Mobile Native');
       }
       if (deps.electron) detectedStack = `Electron Desktop (${pkgManager})`;
@@ -341,7 +359,9 @@ export async function inspectWorkspaceProject(
     hasBuildScript = true;
     buildCommand = buildCommand ?? 'flutter analyze && flutter test';
   } else if (hasCargo) {
-    detectedStack = existsSync(path.join(workspacePath, 'src-tauri')) ? 'Rust + Tauri Desktop' : 'Rust / Cargo';
+    detectedStack = existsSync(path.join(workspacePath, 'src-tauri'))
+      ? 'Rust + Tauri Desktop'
+      : 'Rust / Cargo';
     hasBuildScript = true;
     buildCommand = buildCommand ?? 'cargo check';
   } else if (hasGradle && !hasPackageJson) {
@@ -449,7 +469,14 @@ export async function computeProjectStatusSummary(params: {
   /** Whether a build of the target is running or queued. */
   isBuilding?: (targetId: string, workspacePath: string) => boolean;
 }): Promise<ProjectStatusSummary> {
-  const { project, tickets, runs, autoChainActive = false, demoBuilds = {}, isBuilding = () => false } = params;
+  const {
+    project,
+    tickets,
+    runs,
+    autoChainActive = false,
+    demoBuilds = {},
+    isBuilding = () => false,
+  } = params;
   /** Build record, staleness (HEAD read from git's files: a few small reads) and build state. */
   const freshness = async (targetId: string, workspacePath: string, demoEntry: string | null) => {
     const demoBuild = demoBuilds[targetId] ?? null;
@@ -482,7 +509,8 @@ export async function computeProjectStatusSummary(params: {
     counts.total > 0 ? Math.round(((counts.done + counts.review * 0.75) / counts.total) * 100) : 0;
 
   const activeRunCount = projectRuns.filter(
-    (r) => r.state === 'working' || r.state === 'starting' || r.state === 'queued' || r.state === 'waiting_input',
+    (r) =>
+      r.state === 'working' || r.state === 'starting' || r.state === 'queued' || r.state === 'waiting_input',
   ).length;
 
   const ticketMap = new Map(projectTickets.map((t) => [t.id, t]));

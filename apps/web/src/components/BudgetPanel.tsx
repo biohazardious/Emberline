@@ -32,9 +32,10 @@ export function BudgetPanel({ project }: { project: Project }) {
         <div>
           <h2 id="budget-title">Usage &amp; budget · {project.name}</h2>
           <p className="muted">
-            Last 7 days: {totals.runs} runs, {formatTokensCompact(totals.tokens)} tokens, {formatDuration(totals.duration)}{' '}
-            of agent time.
-            {totals.estimated > 0 && ` Tokens of ${totals.estimated} run(s) are estimated (no transcript usage).`}
+            Last 7 days: {totals.runs} runs, {formatTokensCompact(totals.tokens)} tokens,{' '}
+            {formatDuration(totals.duration)} of agent time.
+            {totals.estimated > 0 &&
+              ` Tokens of ${totals.estimated} run(s) are estimated (no transcript usage).`}
           </p>
         </div>
         <div className="actions">
@@ -44,15 +45,18 @@ export function BudgetPanel({ project }: { project: Project }) {
           >
             {data.runsLast24h}/{budget === 0 ? '∞' : budget} runs · 24h
           </span>
-          <span className="badge badge-soft mono" title="Generations of agent-created tickets allowed (Settings)">
+          <span
+            className="badge badge-soft mono"
+            title="Generations of agent-created tickets allowed (Settings)"
+          >
             ticket depth ≤ {data.maxTicketDepth}
           </span>
         </div>
       </header>
       {data.budgetExhausted && (
         <p className="banner banner-warn" role="status">
-          Daily run budget reached: auto-dispatch is paused for this project until older runs leave the 24-hour
-          window. Manual starts still work; raise the budget in Settings if this is intended.
+          Daily run budget reached: auto-dispatch is paused for this project until older runs leave the
+          24-hour window. Manual starts still work; raise the budget in Settings if this is intended.
         </p>
       )}
       <div className="usage-bars" role="list">

@@ -3,7 +3,10 @@ import { clearSlotIfOwner, presentRunId, type PresenceSource } from './presenceS
 
 describe('presence slots', () => {
   it('reports by priority', () => {
-    const slots = new Map<PresenceSource, string>([['fleet', 'f'], ['inbox', 'i']]);
+    const slots = new Map<PresenceSource, string>([
+      ['fleet', 'f'],
+      ['inbox', 'i'],
+    ]);
     expect(presentRunId(slots)).toBe('i');
     slots.set('inspector', 'x');
     expect(presentRunId(slots)).toBe('x');

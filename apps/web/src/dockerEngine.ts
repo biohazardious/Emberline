@@ -1,12 +1,21 @@
-import { DOCKER_ENGINE_UNREACHABLE_HINT, type DockerEngineStatus, dockerEngineOffText, withHint } from '@emberline/protocol';
+import {
+  DOCKER_ENGINE_UNREACHABLE_HINT,
+  type DockerEngineStatus,
+  dockerEngineOffText,
+  withHint,
+} from '@emberline/protocol';
 
 /** The Dashboard's quiet line about the Docker engine sidecar; null when core does not report it. */
 export function dockerEngineLine(docker: DockerEngineStatus | undefined): string | null {
   if (!docker) return null;
-  if (!docker.enabled) return docker.reason === 'switched_off' ? 'Docker engine: off' : 'Docker engine: not configured';
+  if (!docker.enabled)
+    return docker.reason === 'switched_off' ? 'Docker engine: off' : 'Docker engine: not configured';
   if (!docker.checked) return 'Docker engine: checking…';
   if (docker.available) return `Docker engine: on (${docker.version ?? 'unknown version'})`;
-  return withHint(`Docker engine: unreachable${docker.error ? ` — ${docker.error}` : ''}`, DOCKER_ENGINE_UNREACHABLE_HINT);
+  return withHint(
+    `Docker engine: unreachable${docker.error ? ` — ${docker.error}` : ''}`,
+    DOCKER_ENGINE_UNREACHABLE_HINT,
+  );
 }
 
 /** The Dashboard line's tooltip: why an engine that is not on is off, else what it is. */

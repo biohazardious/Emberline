@@ -347,7 +347,19 @@ describe('keep main pushed', () => {
     const res = await merge('m1', worktree('m1'));
     git(projectPath, 'checkout', '-q', '-b', 'side');
     // Someone commits on main outside Emberline (main is not checked out).
-    const outside = git(projectPath, '-c', 'user.name=o', '-c', 'user.email=o@e', 'commit-tree', `${res.commitOid!}^{tree}`, '-p', res.commitOid!, '-m', 'outside');
+    const outside = git(
+      projectPath,
+      '-c',
+      'user.name=o',
+      '-c',
+      'user.email=o@e',
+      'commit-tree',
+      `${res.commitOid!}^{tree}`,
+      '-p',
+      res.commitOid!,
+      '-m',
+      'outside',
+    );
     git(projectPath, 'update-ref', 'refs/heads/main', outside);
     noteMerge('m1', res);
     await t.mainPush.idle();
@@ -360,7 +372,13 @@ describe('keep main pushed', () => {
     const stored = (commitOid: string) =>
       writeRepositorySettings(t.db, projectId, {
         keepMainPushed: true,
-        pendingMainPush: { id: 'p1', runId: 'r1', commitOid, unverified: false, queuedAt: new Date().toISOString() },
+        pendingMainPush: {
+          id: 'p1',
+          runId: 'r1',
+          commitOid,
+          unverified: false,
+          queuedAt: new Date().toISOString(),
+        },
       });
     const nothingRecorded = () => {
       expect(readRepositorySettings(t.db, projectId).pendingMainPush?.id).toBe('p1');
@@ -406,7 +424,8 @@ describe('keep main pushed', () => {
     it('the runner going away during the push keeps it for the next connection', async () => {
       const m = merged();
       setCommandExecutor(async (request) => {
-        if (request.args.includes('push')) throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+        if (request.args.includes('push'))
+          throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
         return localCommandExecutor(request);
       });
       writeRepositorySettings(t.db, projectId, { keepMainPushed: true });

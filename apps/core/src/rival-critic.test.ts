@@ -80,7 +80,12 @@ describe('cross-provider critic', () => {
       },
     });
     const res = await runCrossProviderCritic({ run: run('claude'), workspacePath: repo, settings });
-    expect(res).toMatchObject({ reviewerAgent: 'antigravity', reviewSource: 'rival', verdict: 'NEEDS_FIX', score: 41 });
+    expect(res).toMatchObject({
+      reviewerAgent: 'antigravity',
+      reviewSource: 'rival',
+      verdict: 'NEEDS_FIX',
+      score: 41,
+    });
     expect(res.issues[0]).toMatchObject({ file: 'math.js:1', severity: 'critical' });
     expect(res.followUpPrompt).toContain('[Cross-Provider Review · ANTIGRAVITY');
     const args = readFileSync(path.join(dir, 'agy.args'), 'utf8');
@@ -94,11 +99,16 @@ describe('cross-provider critic', () => {
     process.env.EMBERLINE_AGY_COMMAND = fakeReviewer('agy', null, 1);
     const res = await runCrossProviderCritic({ run: run('claude'), workspacePath: repo, settings });
     expect(res.reviewSource).toBe('deterministic');
-    expect(res.summary).toMatch(/Rival review by antigravity did not run: antigravity exited 1: not logged in/);
+    expect(res.summary).toMatch(
+      /Rival review by antigravity did not run: antigravity exited 1: not logged in/,
+    );
   });
 
   it('rejects an answer that does not match the review schema', async () => {
-    process.env.EMBERLINE_AGY_COMMAND = fakeReviewer('agy', { status: 'SUCCESS', structured_output: { verdict: 'MAYBE' } });
+    process.env.EMBERLINE_AGY_COMMAND = fakeReviewer('agy', {
+      status: 'SUCCESS',
+      structured_output: { verdict: 'MAYBE' },
+    });
     const res = await runCrossProviderCritic({ run: run('claude'), workspacePath: repo, settings });
     expect(res.reviewSource).toBe('deterministic');
     expect(res.summary).toContain('returned no valid structured review');
@@ -144,7 +154,10 @@ describe('slop / secret audit scope', () => {
     const { auditWorktreeSlop } = await import('./factory/slop-guard.js');
     const git = (...args: string[]) =>
       execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', repo, ...args]);
-    writeFileSync(path.join(repo, 'config.js'), 'export const api_key = "abcdefghijklmnopqrstuvwxyz123456";\n');
+    writeFileSync(
+      path.join(repo, 'config.js'),
+      'export const api_key = "abcdefghijklmnopqrstuvwxyz123456";\n',
+    );
     git('add', '-A');
     git('commit', '-q', '-m', 'add config');
     writeFileSync(path.join(repo, 'feature.js'), 'export const feature = () => 1;\n');

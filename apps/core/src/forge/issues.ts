@@ -21,7 +21,11 @@ function isAbort(err: unknown): boolean {
 }
 
 function timeoutError(): HttpError {
-  return new HttpError(504, 'forge_timeout', `the forge did not answer within ${FORGE_FETCH_TIMEOUT_MS / 1000} seconds`);
+  return new HttpError(
+    504,
+    'forge_timeout',
+    `the forge did not answer within ${FORGE_FETCH_TIMEOUT_MS / 1000} seconds`,
+  );
 }
 
 /** Same-origin redirects a forge request follows (a renamed or moved repository) before giving up. */
@@ -31,7 +35,12 @@ export const FORGE_REDIRECT_HOPS = 3;
 export class ForgeRedirectError extends HttpError {}
 
 function redirectError(location: string | null): HttpError {
-  if (!location) return new ForgeRedirectError(502, 'forge_error', 'the forge redirected without a Location; check Settings → Forge accounts');
+  if (!location)
+    return new ForgeRedirectError(
+      502,
+      'forge_error',
+      'the forge redirected without a Location; check Settings → Forge accounts',
+    );
   return new ForgeRedirectError(
     502,
     'forge_error',
@@ -41,7 +50,11 @@ function redirectError(location: string | null): HttpError {
 
 async function fetchOnce(fetchFn: FetchLike, url: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetchFn(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS) });
+    return await fetchFn(url, {
+      ...init,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(FORGE_FETCH_TIMEOUT_MS),
+    });
   } catch (err) {
     if (isAbort(err)) throw timeoutError();
     const cause = err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : '';
@@ -73,7 +86,8 @@ export async function forgeFetch(fetchFn: FetchLike, url: string, init: RequestI
     // 301/302/303 turn a request with a body into a GET (fetch semantics): never re-send it there.
     const method = (init.method ?? 'GET').toUpperCase();
     const keepsMethod = res.status === 307 || res.status === 308 || method === 'GET' || method === 'HEAD';
-    if (!keepsMethod || hop >= FORGE_REDIRECT_HOPS || next.origin !== new URL(current).origin) throw redirectError(next.href);
+    if (!keepsMethod || hop >= FORGE_REDIRECT_HOPS || next.origin !== new URL(current).origin)
+      throw redirectError(next.href);
     current = next.href;
   }
 }
@@ -108,7 +122,11 @@ export class RateLimitError extends HttpError {
     readonly resetAt: number,
     detail: string,
   ) {
-    super(429, 'forge_rate_limited', `forge rate limit reached; retry after ${new Date(resetAt).toISOString()}${detail ? `: ${detail}` : ''}`);
+    super(
+      429,
+      'forge_rate_limited',
+      `forge rate limit reached; retry after ${new Date(resetAt).toISOString()}${detail ? `: ${detail}` : ''}`,
+    );
     this.name = 'RateLimitError';
   }
 }
@@ -140,7 +158,11 @@ export interface IssuesClientOptions {
 export function authHeaders(provider: ForgeProvider, token: string): Record<string, string> {
   if (provider === 'gitlab') return { 'PRIVATE-TOKEN': token, 'User-Agent': 'Emberline-Core' };
   if (provider === 'gitea') return { Authorization: `token ${token}`, 'User-Agent': 'Emberline-Core' };
-  return { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'User-Agent': 'Emberline-Core' };
+  return {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    'User-Agent': 'Emberline-Core',
+  };
 }
 
 function numberHeader(res: Response, ...names: string[]): number | null {
@@ -183,7 +205,8 @@ function labelNames(raw: unknown): string[] {
   const out: string[] = [];
   for (const l of raw) {
     if (typeof l === 'string') out.push(l);
-    else if (l && typeof l === 'object' && typeof (l as { name?: unknown }).name === 'string') out.push((l as { name: string }).name);
+    else if (l && typeof l === 'object' && typeof (l as { name?: unknown }).name === 'string')
+      out.push((l as { name: string }).name);
   }
   return out;
 }
@@ -254,13 +277,19 @@ export class IssuesClient {
     const state = query.state ?? 'open';
     const labels = query.labels?.trim() ?? '';
     const search = query.search?.trim() ?? '';
-    const perPage = String(Math.min(Math.max(1, Math.trunc(query.perPage ?? ISSUES_PAGE_SIZE)), ISSUES_PAGE_SIZE_MAX));
+    const perPage = String(
+      Math.min(Math.max(1, Math.trunc(query.perPage ?? ISSUES_PAGE_SIZE)), ISSUES_PAGE_SIZE_MAX),
+    );
     const params = new URLSearchParams();
     let path: string;
     if (remote.provider === 'github' && search) {
       const q = [`repo:${remote.repoPath}`, 'is:issue'];
       if (state !== 'all') q.push(`is:${state}`);
-      for (const l of labels.split(',').map((s) => s.trim()).filter(Boolean)) q.push(`label:"${l.replace(/"/g, '')}"`);
+      for (const l of labels
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean))
+        q.push(`label:"${l.replace(/"/g, '')}"`);
       q.push(search);
       params.set('q', q.join(' '));
       params.set('sort', 'updated');
@@ -372,14 +401,21 @@ export class IssuesClient {
     const limit = readRateLimit(res);
     const limited =
       res.status === 429 ||
-      (res.status === 403 && (retryAfter !== null || (limit.resetAt !== null && (limit.remaining === null || limit.remaining === 0))));
+      (res.status === 403 &&
+        (retryAfter !== null ||
+          (limit.resetAt !== null && (limit.remaining === null || limit.remaining === 0))));
     if (limited) {
-      const resetAt = retryAfter !== null ? this.now() + retryAfter * 1000 : (limit.resetAt ?? this.now() + 60_000);
+      const resetAt =
+        retryAfter !== null ? this.now() + retryAfter * 1000 : (limit.resetAt ?? this.now() + 60_000);
       throw new RateLimitError(resetAt, text.slice(0, 300));
     }
     if (notFoundIsMissing && res.status === 404) throw notFound('issue not found on the forge');
     const name = PROVIDER_NAMES[remote.provider];
     const hint = res.status === 401 || res.status === 403 ? `: ${TOKEN_SCOPE_HINT}` : '';
-    throw new HttpError(502, 'forge_error', `${name} issues request failed (${res.status})${hint} ${text.slice(0, 300)}`.trimEnd());
+    throw new HttpError(
+      502,
+      'forge_error',
+      `${name} issues request failed (${res.status})${hint} ${text.slice(0, 300)}`.trimEnd(),
+    );
   }
 }

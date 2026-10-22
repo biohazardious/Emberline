@@ -134,8 +134,9 @@ export async function isAncestorCommit(mainPath: string, ancestor: string, commi
 
 export async function originUrls(mainPath: string): Promise<{ fetch: string | null; push: string | null }> {
   const read = async (args: string[]) =>
-    (await execGitFile(args, { cwd: mainPath }).catch(unlessRunnerUnavailable({ stdout: '' }))).stdout.trim() ||
-    null;
+    (
+      await execGitFile(args, { cwd: mainPath }).catch(unlessRunnerUnavailable({ stdout: '' }))
+    ).stdout.trim() || null;
   return {
     fetch: await read(['remote', 'get-url', 'origin']),
     push: await read(['remote', 'get-url', '--push', 'origin']),
@@ -186,10 +187,7 @@ export async function remoteBranchHead(
 }
 
 const hasRealCommit = (cwd: string, oid: string) =>
-  realGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(
-    () => true,
-    unlessRunnerUnavailable(false),
-  );
+  realGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(() => true, unlessRunnerUnavailable(false));
 
 /**
  * The remote branch's objects, so `oid` (what ls-remote reported) can be read locally. No ref and no
@@ -228,7 +226,11 @@ export async function fetchBranchObjects(
     );
   // The remote moved on between ls-remote and the fetch.
   if (!(await hasRealCommit(mainPath, oid)))
-    throw new HttpError(409, 'remote_moved', "origin's main changed while Emberline read it. Press Refresh again.");
+    throw new HttpError(
+      409,
+      'remote_moved',
+      "origin's main changed while Emberline read it. Press Refresh again.",
+    );
 }
 
 /** Points `refs/remotes/origin/<branch>` at `oid`. Local only; the caller holds the main-workspace lock. */

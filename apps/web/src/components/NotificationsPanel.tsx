@@ -102,9 +102,7 @@ export function NotificationsPanel() {
       <header className="panel-head">
         <div>
           <h2 id="notifications-title">Webhooks</h2>
-          <p className="muted">
-            Push alerts through ntfy.sh or a webhook.
-          </p>
+          <p className="muted">Push alerts through ntfy.sh or a webhook.</p>
         </div>
         <div className="actions">
           <span className={`badge mono${settings?.enabled ? ' badge-soft' : ''}`}>
@@ -121,11 +119,7 @@ export function NotificationsPanel() {
           <form className="form" onSubmit={(e) => void save(e)}>
             <div className="form-row">
               <label className="review-checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(e) => setEnabled(e.target.checked)}
-                />
+                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
                 Enable push notifications
               </label>
 

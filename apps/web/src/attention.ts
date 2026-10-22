@@ -1,4 +1,10 @@
-import { HOLD_LABELS, type Run, type RunAttention, type RunAttentionReason, type Ticket } from '@emberline/protocol';
+import {
+  HOLD_LABELS,
+  type Run,
+  type RunAttention,
+  type RunAttentionReason,
+  type Ticket,
+} from '@emberline/protocol';
 
 /** Inbox group order: what blocks a run hardest comes first. */
 export const ATTENTION_ORDER: readonly RunAttentionReason[] = [
@@ -47,7 +53,11 @@ export function attentionCount(runs: readonly Run[], seen: SeenMap): number {
 }
 
 /** Pending attention outside the project in view (Fleet is project-scoped, the count is global); 0 for all projects. */
-export function needsElsewhere(runs: readonly Run[], seen: SeenMap, projectId: string | null | undefined): number {
+export function needsElsewhere(
+  runs: readonly Run[],
+  seen: SeenMap,
+  projectId: string | null | undefined,
+): number {
   return projectId ? pendingAttention(runs, seen).filter((run) => run.projectId !== projectId).length : 0;
 }
 
@@ -67,7 +77,10 @@ export function ticketEventRecomputesAttention(
 export type TicketName = { key: string; title: string };
 
 /** An Inbox item's heading: the ticket's key and current title; the run title when the ticket is not known. */
-export function inboxHeading(run: Run, ticketsById: ReadonlyMap<string, TicketName>): { key: string | null; title: string } {
+export function inboxHeading(
+  run: Run,
+  ticketsById: ReadonlyMap<string, TicketName>,
+): { key: string | null; title: string } {
   const ticket = run.ticketId ? ticketsById.get(run.ticketId) : undefined;
   return ticket ? { key: ticket.key, title: ticket.title } : { key: null, title: run.title ?? 'Ad-hoc run' };
 }

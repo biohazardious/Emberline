@@ -103,7 +103,10 @@ function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
   return { tool, detail };
 }
 
-export function extractFailureDetails(events: RunEvent[], agent?: string | null): {
+export function extractFailureDetails(
+  events: RunEvent[],
+  agent?: string | null,
+): {
   reason: string;
   exitCode?: number;
   needsAuth: boolean;
@@ -186,7 +189,15 @@ export function RunFailureBanner({ run }: { run: Run }) {
         gap: '6px',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '8px',
+          flexWrap: 'wrap',
+        }}
+      >
         <strong style={{ color: 'var(--bad)', fontSize: '0.85rem' }}>
           <TriangleAlert className="icon" aria-hidden /> {formatAgentDisplayName(run.agent)} Run Failed
           {exitCode !== undefined ? ` (exit code ${exitCode})` : ''}
@@ -221,7 +232,8 @@ export function RunFailureBanner({ run }: { run: Run }) {
 /** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
 function handoffTarget(ev: RunEvent): string | undefined {
   const payload = ev.payload as { toRunId?: unknown; fromRunId?: unknown } | null;
-  const id = ev.type === 'handed_off' ? payload?.toRunId : ev.type === 'handoff_from' ? payload?.fromRunId : undefined;
+  const id =
+    ev.type === 'handed_off' ? payload?.toRunId : ev.type === 'handoff_from' ? payload?.fromRunId : undefined;
   return typeof id === 'string' ? id : undefined;
 }
 
@@ -272,29 +284,29 @@ export function RunEventTimeline({ run }: { run: Run }) {
       <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />
       {detail?.lastScreen && !run.terminalId && <LastScreen text={detail.lastScreen} />}
       <ol className="event-timeline" aria-label="Agent event timeline">
-      {[...events].reverse().map((ev) => {
-        const summary = payloadSummary(ev.payload);
-        const tool = summary.tool;
-        const dropped = ev.type === 'dependency_dropped' ? droppedDependencyText(ev.payload) : undefined;
-        const text = dropped ?? completionEventText(ev.type, ev.payload) ?? summary.detail;
-        return (
-          <li key={ev.id} className={`event-item event-src-${ev.source}`}>
-            <div className="event-head">
-              <span className="event-source mono">{ev.source}</span>
-              <span className="event-type mono">{EVENT_LABEL[ev.type] ?? ev.type}</span>
-              {handoffTarget(ev) && (
-                <Link href={`/runs/${handoffTarget(ev)}/review`} className="badge badge-soft mono">
-                  run {handoffTarget(ev)?.slice(0, 8)} →
-                </Link>
-              )}
-              {tool && <span className="badge badge-soft mono">{tool}</span>}
-              {ev.state && <RunStatePill state={ev.state} />}
-              <span className="event-time mono">{timeAgo(ev.ts)}</span>
-            </div>
-            {text && <ExpandableText text={text} />}
-          </li>
-        );
-      })}
+        {[...events].reverse().map((ev) => {
+          const summary = payloadSummary(ev.payload);
+          const tool = summary.tool;
+          const dropped = ev.type === 'dependency_dropped' ? droppedDependencyText(ev.payload) : undefined;
+          const text = dropped ?? completionEventText(ev.type, ev.payload) ?? summary.detail;
+          return (
+            <li key={ev.id} className={`event-item event-src-${ev.source}`}>
+              <div className="event-head">
+                <span className="event-source mono">{ev.source}</span>
+                <span className="event-type mono">{EVENT_LABEL[ev.type] ?? ev.type}</span>
+                {handoffTarget(ev) && (
+                  <Link href={`/runs/${handoffTarget(ev)}/review`} className="badge badge-soft mono">
+                    run {handoffTarget(ev)?.slice(0, 8)} →
+                  </Link>
+                )}
+                {tool && <span className="badge badge-soft mono">{tool}</span>}
+                {ev.state && <RunStatePill state={ev.state} />}
+                <span className="event-time mono">{timeAgo(ev.ts)}</span>
+              </div>
+              {text && <ExpandableText text={text} />}
+            </li>
+          );
+        })}
       </ol>
     </>
   );
@@ -346,7 +358,12 @@ export function RunInspector({
     <aside className="dock-inspector" aria-label="Run inspector">
       <header className="dock-head">
         <div className="dock-head-main">
-          <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
+          <RunStatePill
+            state={run.state}
+            cancelled={run.cancelled}
+            autoRetry={run.autoRetry}
+            handedOffTo={run.handedOffTo}
+          />
           <strong className="dock-title">{run.title ?? projectName ?? 'Agent Run'}</strong>
           {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
           <span className="badge mono">{run.permissionMode}</span>
@@ -394,12 +411,20 @@ export function RunInspector({
             <Globe className="icon" aria-hidden /> Live Browser
           </Link>
           {run.worktreePath && (
-            <Link href={`/runs/${run.id}/review`} className="btn btn-sm btn-ghost" title="Open Diff & Review workspace">
+            <Link
+              href={`/runs/${run.id}/review`}
+              className="btn btn-sm btn-ghost"
+              title="Open Diff & Review workspace"
+            >
               Diff & Review
             </Link>
           )}
           {run.terminalId && (
-            <Link href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost" title="Open full-page terminal">
+            <Link
+              href={`/terminals/${run.terminalId}`}
+              className="btn btn-sm btn-ghost"
+              title="Open full-page terminal"
+            >
               <Maximize2 className="icon" aria-hidden />
             </Link>
           )}

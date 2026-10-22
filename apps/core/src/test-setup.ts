@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { localCommandCanceller, localCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
+import {
+  localCommandCanceller,
+  localCommandExecutor,
+  setCommandCanceller,
+  setCommandExecutor,
+} from './command-exec.js';
 import { installSecretsKey } from './secrets/box.js';
 
 setCommandExecutor(localCommandExecutor);

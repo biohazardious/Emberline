@@ -5,12 +5,20 @@ import { predecessorChain } from './handoff-chain.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 
 /** Notes the completion pipeline writes after a run's switch to `done`; they decide its outcome. */
-export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [...HOLD_EVENTS, 'merged_to_main', 'review_unblocked', 'ticket_removed'];
+export const PIPELINE_OUTCOME_EVENTS: readonly string[] = [
+  ...HOLD_EVENTS,
+  'merged_to_main',
+  'review_unblocked',
+  'ticket_removed',
+];
 
 export type PipelineOutcome = 'held' | 'merged';
 
 /** `review_blocked` holds that a later `review_unblocked` lifted no longer count (the other notes stay). */
-export function withoutUnblocked<T>(items: readonly T[], typeOf: (item: T) => string = (item) => item as string): readonly T[] {
+export function withoutUnblocked<T>(
+  items: readonly T[],
+  typeOf: (item: T) => string = (item) => item as string,
+): readonly T[] {
   let lifted = false;
   const kept: T[] = [];
   for (let i = items.length - 1; i >= 0; i--) {
@@ -38,7 +46,9 @@ export function decidePipelineOutcome(types: readonly string[]): PipelineOutcome
  * the agent is working on it. Should the request not arrive, the gate notes the hold again without it.
  */
 export function isAutoFixHold(payload: unknown): boolean {
-  return Boolean(payload && typeof payload === 'object' && (payload as { autoFix?: unknown }).autoFix === true);
+  return Boolean(
+    payload && typeof payload === 'object' && (payload as { autoFix?: unknown }).autoFix === true,
+  );
 }
 
 /**
@@ -54,7 +64,12 @@ export function currentHold<T extends { type: string; payload?: unknown }>(all: 
   if (decidePipelineOutcome(events.map((e) => e.type)) !== 'held') return null;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i] as T;
-    if (HOLD_EVENTS.includes(event.type) && event.type !== 'completion_nudged' && !isAutoFixHold(event.payload)) return event;
+    if (
+      HOLD_EVENTS.includes(event.type) &&
+      event.type !== 'completion_nudged' &&
+      !isAutoFixHold(event.payload)
+    )
+      return event;
   }
   return null;
 }
@@ -194,7 +209,9 @@ export function branchMergedBefore(db: Db, runId: string): boolean {
     .where(inArray(runs.id, handoffChain(db, runId)))
     .all();
   const branch = chain.find((r) => r.id === runId)?.branch ?? null;
-  const ids = chain.filter((r) => r.id === runId || (branch !== null && r.branch === branch)).map((r) => r.id);
+  const ids = chain
+    .filter((r) => r.id === runId || (branch !== null && r.branch === branch))
+    .map((r) => r.id);
   if (ids.length === 0) return false;
   return Boolean(
     db

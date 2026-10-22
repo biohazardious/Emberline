@@ -1203,10 +1203,7 @@ export function logBridgeErrorOnce(
  * Ensures `/run/emberline/browser-daemon.mjs` and `/run/emberline/playwright-hook.cjs`
  * are written and running inside the `runner` container.
  */
-export async function ensureRunnerBrowserDaemon(
-  ptyd: PtydBridge,
-  socketDir: string,
-): Promise<string | null> {
+export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: string): Promise<string | null> {
   const browserSock = path.join(socketDir, 'browser.sock');
   const scriptPath = path.join(socketDir, 'browser-daemon.mjs');
   const hookPath = path.join(socketDir, 'playwright-hook.cjs');
@@ -1307,9 +1304,7 @@ export type RunnerBrowserSnapshot = Omit<BrowserViewportSnapshot, 'tabs'> & {
   tabMissing?: boolean;
 };
 export type RunnerBrowserActionBody =
-  | BrowserActionBody
-  | { action: 'open_tab'; url?: string }
-  | { action: 'close_project_tabs' };
+  BrowserActionBody | { action: 'open_tab'; url?: string } | { action: 'close_project_tabs' };
 export interface RunnerBrowserDaemon {
   state(q: RunnerBrowserQuery): Promise<RunnerBrowserSnapshot>;
   action(body: RunnerBrowserActionBody, q: RunnerBrowserQuery): Promise<RunnerBrowserSnapshot>;
@@ -1478,7 +1473,13 @@ export async function getRunnerClaudeUsage(params: {
   if (!sock) return fallback;
   try {
     const query = params.forceRefresh ? '?refresh=1' : '';
-    const res = await socketRequest<ClaudeUsageTelemetry>(sock, 'GET', `/claude-usage${query}`, undefined, 6_000);
+    const res = await socketRequest<ClaudeUsageTelemetry>(
+      sock,
+      'GET',
+      `/claude-usage${query}`,
+      undefined,
+      6_000,
+    );
     const fivePct = res.fiveHour?.utilizationPercent ?? 0;
     const sevenPct = res.sevenDay?.utilizationPercent ?? 0;
     lastKnownClaudeUtilizationPercent = Math.max(fivePct, sevenPct);
@@ -1498,5 +1499,3 @@ export async function getRunnerClaudeUsage(params: {
     return fallback;
   }
 }
-
-

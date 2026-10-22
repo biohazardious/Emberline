@@ -10,7 +10,11 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
     <div className="board-page">
       <header className="board-head">
         <div className="board-title">
-          <Link href={`/projects/${projectId}/board`} className="btn btn-ghost btn-sm" aria-label="Back to the board">
+          <Link
+            href={`/projects/${projectId}/board`}
+            className="btn btn-ghost btn-sm"
+            aria-label="Back to the board"
+          >
             ←
           </Link>
           <div>

@@ -9,7 +9,15 @@ export const RUN_PROMPT_MAX = 20_000;
  * Mirrors `AgentState` in @emberline/adapter-sdk. `queued` waits for a free slot (and quota);
  * `rate_limited` waits for the usage window to reset.
  */
-export const RunState = z.enum(['queued', 'starting', 'working', 'waiting_input', 'rate_limited', 'done', 'failed']);
+export const RunState = z.enum([
+  'queued',
+  'starting',
+  'working',
+  'waiting_input',
+  'rate_limited',
+  'done',
+  'failed',
+]);
 export type RunState = z.infer<typeof RunState>;
 
 /** Supported CLI coding agent adapters. */
@@ -82,7 +90,8 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     badge: 'Primary Host CLI / API',
     authKind: 'host_or_key',
     keyConfigField: 'anthropicKeyConfigured',
-    description: 'Official Anthropic Claude Code CLI with deep worktree tool execution and host OAuth / API key support.',
+    description:
+      'Official Anthropic Claude Code CLI with deep worktree tool execution and host OAuth / API key support.',
     terms: {
       url: 'https://code.claude.com/docs/en/legal-and-compliance',
       checked: '2026-10-16',
@@ -138,7 +147,8 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     shortLabel: 'AGY',
     badge: 'Agentic UI/UX & Full-Stack',
     authKind: 'cli_auth',
-    description: 'Google DeepMind Antigravity CLI specialized in visual UI/UX craftsmanship and full-stack flows.',
+    description:
+      'Google DeepMind Antigravity CLI specialized in visual UI/UX craftsmanship and full-stack flows.',
     terms: {
       url: 'https://antigravity.google/docs/faq/',
       checked: '2026-10-16',
@@ -195,12 +205,14 @@ export const PROVIDER_REGISTRY: Record<AgentId, ProviderRegistryEntry> = {
     badge: 'Google Gemini API / CLI',
     authKind: 'api_key',
     keyConfigField: 'geminiKeyConfigured',
-    description: 'Google Gemini CLI with 1M+ token context window for massive repository analysis and coding.',
+    description:
+      'Google Gemini CLI with 1M+ token context window for massive repository analysis and coding.',
     terms: {
       url: 'https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals',
       checked: '2026-10-16',
       risk: 'medium',
-      summary: 'Consumer Google login ended on 2026-06-18; use an API key or Code Assist Standard/Enterprise.',
+      summary:
+        'Consumer Google login ended on 2026-06-18; use an API key or Code Assist Standard/Enterprise.',
     },
     models: [
       {
@@ -502,7 +514,14 @@ export function selectProviderModelByTier(
     }
     return tierMatches[0]!.id;
   }
-  const fallbackRank = tier === 'high' ? (persona ? PERSONA_CAPABILITY_TARGETS[persona].recommendedRank : 4) : tier === 'medium' ? 3 : 2;
+  const fallbackRank =
+    tier === 'high'
+      ? persona
+        ? PERSONA_CAPABILITY_TARGETS[persona].recommendedRank
+        : 4
+      : tier === 'medium'
+        ? 3
+        : 2;
   return selectProviderModelByRank(agent, fallbackRank);
 }
 
@@ -519,8 +538,7 @@ export function coerceModelForProvider(
   if (isModelValidForProvider(agent, currentModel)) return currentModel;
   // Find the rank of currentModel in whichever provider it came from, or use the persona's recommended rank
   const priorInfo = getModelInfoForProvider(agent, currentModel);
-  const targetRank =
-    priorInfo?.rank ?? (persona ? PERSONA_CAPABILITY_TARGETS[persona].recommendedRank : 4);
+  const targetRank = priorInfo?.rank ?? (persona ? PERSONA_CAPABILITY_TARGETS[persona].recommendedRank : 4);
   return selectProviderModelByRank(agent, targetRank);
 }
 
@@ -529,7 +547,6 @@ export function formatRankStars(rank: number): string {
   const filled = Math.max(1, Math.min(5, Math.round(rank)));
   return '★'.repeat(filled) + '☆'.repeat(5 - filled);
 }
-
 
 export const RunTelemetry = z.object({
   runId: z.string(),
@@ -544,7 +561,15 @@ export const RunTelemetry = z.object({
 export type RunTelemetry = z.infer<typeof RunTelemetry>;
 
 /** Why a run needs a person, in the order core checks them (apps/core/src/runs/attention.ts). */
-export const RunAttentionReason = z.enum(['question', 'permission', 'stalled', 'held', 'blocked', 'failed', 'rate_limited']);
+export const RunAttentionReason = z.enum([
+  'question',
+  'permission',
+  'stalled',
+  'held',
+  'blocked',
+  'failed',
+  'rate_limited',
+]);
 export type RunAttentionReason = z.infer<typeof RunAttentionReason>;
 
 export const RunAttention = z.object({
@@ -576,7 +601,12 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
 export function holdLabelOf(type: string, payload: unknown): string {
   if (type === 'build_gate_failed') {
     const p = (payload ?? null) as { check?: unknown; output?: unknown } | null;
-    if (p?.check === 'worktree_yml' || (p?.check === undefined && typeof p?.output === 'string' && p.output.startsWith('.emberline/worktree.yml is not valid:'))) {
+    if (
+      p?.check === 'worktree_yml' ||
+      (p?.check === undefined &&
+        typeof p?.output === 'string' &&
+        p.output.startsWith('.emberline/worktree.yml is not valid:'))
+    ) {
       return 'Worktree config is not valid';
     }
     if (p?.check === 'worktree_commands') return 'Worktree commands are missing';
@@ -654,13 +684,18 @@ export const Run = z.object({
    * Set while the run waits (as `rate_limited`) to retry a turn that died on a temporary provider
    * error: the attempt number (1-based), the most attempts made and when it retries.
    */
-  autoRetry: z.object({ attempt: z.number().int(), max: z.number().int(), at: z.string() }).nullable().optional(),
+  autoRetry: z
+    .object({ attempt: z.number().int(), max: z.number().int(), at: z.string() })
+    .nullable()
+    .optional(),
   /** Model the run was started with; null on runs from before 0.2.0 without a route tag. */
   model: z.string().nullable().default(null),
   credential: z.enum(['login', 'api_key', 'credits']).default('login'),
   /** The run's fallback chain (snapshot at enqueue) and the step it is on. */
   routes: z
-    .array(z.object({ agent: z.string(), model: z.string(), credential: z.enum(['login', 'api_key', 'credits']) }))
+    .array(
+      z.object({ agent: z.string(), model: z.string(), credential: z.enum(['login', 'api_key', 'credits']) }),
+    )
     .default([]),
   routeIndex: z.number().int().default(0),
   /** Run this one continues after a handoff, and the run that took over from this one. */
@@ -756,7 +791,13 @@ export const GarbageCollectRunsResponse = z.object({
     .array(
       z.object({
         runId: z.string(),
-        reason: z.enum(['uncommitted_changes', 'unmerged_commits', 'in_review', 'archive_pending', 'teardown_running']),
+        reason: z.enum([
+          'uncommitted_changes',
+          'unmerged_commits',
+          'in_review',
+          'archive_pending',
+          'teardown_running',
+        ]),
       }),
     )
     .default([]),

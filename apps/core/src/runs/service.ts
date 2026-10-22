@@ -71,9 +71,29 @@ import {
   dockerEngineOffText,
   withHint,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
-import { composeDownArgs, composeLogsArgs, engineHostName, isEmberlineComposeProject } from '../docker/compose.js';
+import {
+  composeDownArgs,
+  composeLogsArgs,
+  engineHostName,
+  isEmberlineComposeProject,
+} from '../docker/compose.js';
 import {
   CLEANUP_DOWN,
   type ComposePreviewTiming,
@@ -159,7 +179,12 @@ import {
   worktreeHasUnmergedCommits,
   worktreeHeadSha,
 } from './git.js';
-import { buildHandoffPrompt, type HandoffPromptInput, successorPrompt, summarizeRecentTools } from './handoff.js';
+import {
+  buildHandoffPrompt,
+  type HandoffPromptInput,
+  successorPrompt,
+  summarizeRecentTools,
+} from './handoff.js';
 import { latestDoneEventId } from './hold-outcome.js';
 import { HOLD_ENDING_EVENTS, HOLD_EVENTS } from './hold-events.js';
 import { providerAdapter } from './providers.js';
@@ -179,7 +204,11 @@ import {
 } from '../worktree-config/lifecycle.js';
 import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
 import { currentRoute as routeOfRow, parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
-import { isAcceptableTranscriptPath, readLastAssistantText, readTranscriptUsage } from './transcript-usage.js';
+import {
+  isAcceptableTranscriptPath,
+  readLastAssistantText,
+  readTranscriptUsage,
+} from './transcript-usage.js';
 
 type RunRow = typeof runs.$inferSelect;
 /** The part of a pino/fastify logger the run service uses. */
@@ -210,7 +239,8 @@ interface StopPreviewOptions {
 const setupExecId = (runId: string) => `setup-${runId}`;
 /** A copy entry left out whole because it is over the copy caps. */
 const overCopyCap = (entry: CopyOutcome) =>
-  entry.status === 'skipped' && /^(more than \d+ files and directories|larger than \d+ MB)$/.test(entry.reason ?? '');
+  entry.status === 'skipped' &&
+  /^(more than \d+ files and directories|larger than \d+ MB)$/.test(entry.reason ?? '');
 type EventSource = RunEvent['source'];
 
 interface RunServiceEvents {
@@ -458,7 +488,11 @@ export const toRun = (row: RunRow): Run => ({
   createdAt: row.createdAt.toISOString(),
   endedAt: row.endedAt?.toISOString() ?? null,
   // A handed-off run's work continues in its successor; resuming it is refused.
-  resumable: row.endedAt !== null && row.agentSessionId !== null && row.cancelledAt === null && row.handedOffTo === null,
+  resumable:
+    row.endedAt !== null &&
+    row.agentSessionId !== null &&
+    row.cancelledAt === null &&
+    row.handedOffTo === null,
   cancelled: row.cancelledAt !== null,
   autoRetry:
     row.state === 'rate_limited' && row.autoRetryAt
@@ -478,7 +512,8 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
   const summary: Record<string, unknown> = {};
   for (const key of PAYLOAD_KEYS) {
     const value = payload[key];
-    if (typeof value === 'string') summary[key] = clip(value, LONG_PAYLOAD_KEYS.has(key) ? LONG_PAYLOAD_MAX : PAYLOAD_MAX);
+    if (typeof value === 'string')
+      summary[key] = clip(value, LONG_PAYLOAD_KEYS.has(key) ? LONG_PAYLOAD_MAX : PAYLOAD_MAX);
     else if (typeof value === 'number' || typeof value === 'boolean') summary[key] = value;
   }
   if (
@@ -496,11 +531,7 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
     }
     const text = parts.length > 0 ? parts.join(' · ') : JSON.stringify(input);
     summary.tool_input_summary = clip(text, TOOL_INPUT_SUMMARY_MAX);
-  } else if (
-    payload.tool_name === 'Bash' &&
-    payload.tool_input &&
-    typeof payload.tool_input === 'object'
-  ) {
+  } else if (payload.tool_name === 'Bash' && payload.tool_input && typeof payload.tool_input === 'object') {
     const input = payload.tool_input as Record<string, unknown>;
     const cmd = typeof input.command === 'string' ? input.command : '';
     if (/(?:playwright|chromium|chrome|e2e|bot\.tmp)/i.test(cmd)) {
@@ -511,7 +542,8 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
 }
 
 /** A run that is live, or parked on a quota limit and still going to resume (not cancelled). */
-const runStillActive = () => or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
+const runStillActive = () =>
+  or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
 
 /** The pipeline's own stop of a finished factory step: the only cancel a successor may continue. */
 export const FINISHED_STEP_STOP = 'factory_step_finished';
@@ -534,12 +566,14 @@ export interface HandOffOptions {
 function handoffBlocker(row: RunRow, continuesHeld = false): string | undefined {
   if (row.cancelledAt && !continuesHeld) return 'this run was stopped';
   if (row.handedOffTo) return 'this run was already handed off';
-  if (row.state === 'queued' || row.state === 'starting' || row.state === 'working') return `a ${row.state} run cannot be handed off`;
+  if (row.state === 'queued' || row.state === 'starting' || row.state === 'working')
+    return `a ${row.state} run cannot be handed off`;
   return undefined;
 }
 
 /** A push failure about access (no credentials, refused), not about the branch. */
-const ACCESS_FAILURE = /could not read (username|password)|authentication|permission denied|access denied|not authorized|\b40[13]\b/i;
+const ACCESS_FAILURE =
+  /could not read (username|password)|authentication|permission denied|access denied|not authorized|\b40[13]\b/i;
 
 /** Said after a failed run push when the project has no connected repository but an account covers its origin. */
 export const CONNECT_FOR_ACCOUNT =
@@ -577,7 +611,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /** Runs whose worktree auto-GC is tearing down in the background before it prunes it. */
   private readonly tearingDown = new Set<string>();
   /** How long a request waits for worktree.yml teardowns (overridable in tests). */
-  readonly teardownBudgets = { request: REQUEST_TEARDOWN_BUDGET_MS, projectDelete: PROJECT_DELETE_TEARDOWN_BUDGET_MS };
+  readonly teardownBudgets = {
+    request: REQUEST_TEARDOWN_BUDGET_MS,
+    projectDelete: PROJECT_DELETE_TEARDOWN_BUDGET_MS,
+  };
   /** Background teardown-then-prune jobs by worktree path, so a project delete can wait for them. */
   private readonly teardownJobs = new Map<string, Promise<void>>();
   private log?: RunServiceLogger;
@@ -634,7 +671,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         switchedOff: config.dockerEngineSwitchedOff,
       });
     this.setMaxListeners(0); // one listener per open UI socket
-    this.gitGateway = new GitGateway({ baseUrl: config.gitGatewayUrl ?? config.hookUrl, runnerHosts: config.runnerHosts ?? ['runner'] });
+    this.gitGateway = new GitGateway({
+      baseUrl: config.gitGatewayUrl ?? config.hookUrl,
+      runnerHosts: config.runnerHosts ?? ['runner'],
+    });
     this.demoTokens = new DemoTokens(db);
     this.mainPreviews = new MainPreviews({
       db,
@@ -647,7 +687,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       framing: this.framing,
       log: () => this.log,
     });
-    this.outputs = new BuildOutputArchive(db, config, { note: (runId, type, payload) => this.note(runId, type, payload) });
+    this.outputs = new BuildOutputArchive(db, config, {
+      note: (runId, type, payload) => this.note(runId, type, payload),
+    });
     // End of a turn (`done`) or of the run (`failed`): archive in the background; nothing waits for it.
     this.on('run', (run, stateChanged) => {
       if (stateChanged && (run.state === 'done' || run.state === 'failed')) this.outputs.archiveSoon(run.id);
@@ -802,20 +844,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .limit(MAX_EVENTS_IN_DETAIL)
       .all()
       .reverse()
-      .map(
-        (e): RunEvent => ({
-          id: e.id,
-          runId: e.runId,
-          ts: e.ts.toISOString(),
-          source: e.source as EventSource,
-          type: e.type,
-          state: (e.state as RunState | null) ?? null,
-          // The saved screen travels once, as `lastScreen`, not with every timeline entry.
-          payload: e.type === 'last_screen' ? {} : (e.payload ?? null),
-        }),
-      );
+      .map((e): RunEvent => ({
+        id: e.id,
+        runId: e.runId,
+        ts: e.ts.toISOString(),
+        source: e.source as EventSource,
+        type: e.type,
+        state: (e.state as RunState | null) ?? null,
+        // The saved screen travels once, as `lastScreen`, not with every timeline entry.
+        payload: e.type === 'last_screen' ? {} : (e.payload ?? null),
+      }));
     const toolCalls = events.filter((e) => e.type === 'PreToolUse').length;
-    const [withAttention] = this.withAttention([{ ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls) }]);
+    const [withAttention] = this.withAttention([
+      { ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls) },
+    ]);
     return {
       ...(withAttention as Run),
       events,
@@ -837,7 +879,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .limit(1)
       .get();
     const payload = (stop?.payload ?? null) as { last_assistant_message?: unknown } | null;
-    const fromHook = typeof payload?.last_assistant_message === 'string' ? payload.last_assistant_message : null;
+    const fromHook =
+      typeof payload?.last_assistant_message === 'string' ? payload.last_assistant_message : null;
     if (fromHook && !fromHook.endsWith('…')) return fromHook;
     const fromTranscript = row.transcriptPath
       ? readLastAssistantText(row.transcriptPath, this.config.transcriptsDir)
@@ -877,7 +920,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** Saves the last screen, removes the ptyd session and ends the run as resumable (no cancel). */
-  private async closeIdleSession(runId: string, sessionId: string, payload?: { reason: string }): Promise<Run> {
+  private async closeIdleSession(
+    runId: string,
+    sessionId: string,
+    payload?: { reason: string },
+  ): Promise<Run> {
     await this.saveLastScreen(runId, sessionId);
     await this.ptyd
       .get()
@@ -915,7 +962,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.db
       .select({ ts: runEvents.ts })
       .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'prompt_sent'), gt(runEvents.id, afterId ?? 0)))
+      .where(
+        and(eq(runEvents.runId, runId), eq(runEvents.type, 'prompt_sent'), gt(runEvents.id, afterId ?? 0)),
+      )
       .orderBy(desc(runEvents.id))
       .limit(1)
       .get()?.ts;
@@ -957,7 +1006,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   usageByDay(projectId: string, days: number): ProjectUsageDay[] {
     const dateOf = (d: Date) =>
-      new Intl.DateTimeFormat('en-CA', { timeZone: this.config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: this.config.timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(d);
     const buckets = new Map<string, ProjectUsageDay>();
     for (let i = days - 1; i >= 0; i--) {
       const date = dateOf(new Date(Date.now() - i * 86_400_000));
@@ -997,7 +1051,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const endMs = row.endedAt ? row.endedAt.getTime() : Date.now();
     const durationSec = Math.max(0, Math.round((endMs - row.createdAt.getTime()) / 1000));
 
-    const usage = row.transcriptPath ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir) : null;
+    const usage = row.transcriptPath
+      ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir)
+      : null;
     if (usage && usage.inputTokens + usage.outputTokens > 0) {
       return {
         runId: row.id,
@@ -1076,7 +1132,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const explicitModel = (body.model && body.model !== 'auto' ? body.model : undefined) ?? tag?.model;
     // An agent picked by hand (no tag) runs only there.
     const resolved = (): Route[] => {
-      const chain = resolveRunRoutes(this.db, persona, explicitAgent || explicitModel ? { agent: explicitAgent, model: explicitModel } : undefined);
+      const chain = resolveRunRoutes(
+        this.db,
+        persona,
+        explicitAgent || explicitModel ? { agent: explicitAgent, model: explicitModel } : undefined,
+      );
       return input.agent && !tag ? chain.slice(0, 1) : chain;
     };
     const routes = origin?.routes ?? resolved();
@@ -1111,7 +1171,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // A fresh worktree (not in place, not a shared one) gets the approved worktree.yml's lifecycle:
     // `copy` now, before the run exists for the scheduler; `setup` at launch (spawnAgent).
     const lifecycle =
-      !origin?.worktree && workspace.path !== project.path ? loadApprovedWorktreeConfig(this.db, project.id) : null;
+      !origin?.worktree && workspace.path !== project.path
+        ? loadApprovedWorktreeConfig(this.db, project.id)
+        : null;
     const copied =
       lifecycle && lifecycle.config.copy.length > 0
         ? await copyIntoWorktree(
@@ -1253,22 +1315,30 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
     let row = this.row(id);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
-    if (row.handedOffTo) throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
-    if (this.settingUp.has(id)) throw conflict('the worktree is still being set up; the agent starts once setup is done');
+    if (row.handedOffTo)
+      throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
+    if (this.settingUp.has(id))
+      throw conflict('the worktree is still being set up; the agent starts once setup is done');
     // A pending automatic retry is taken now (by the scheduler or the user's own resume).
     if (row.autoRetryAt) this.db.update(runs).set({ autoRetryAt: null }).where(eq(runs.id, id)).run();
     if (row.state === 'queued') return this.launch(id);
     row = await this.afterOneShotExit(row);
     if (row.ptydSessionId && !row.endedAt) {
       // Typed into a CLI that is starting or mid-turn, it would be taken as part of that turn (R9).
-      if (!IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; continue it once it is waiting`);
+      if (!IDLE_STATES.has(row.state))
+        throw conflict(`the agent is ${row.state}; continue it once it is waiting`);
       if (this.exitsAfterTurn(row)) throw conflict(SESSION_CLOSING, 'session_closing');
       const live = await this.sessionLock.run(id, async () => {
         const current = this.row(id);
         // A held run's close got there first: the agent is respawned below instead.
         if (!current.ptydSessionId || current.endedAt) return null;
         await this.typePrompt(current.ptydSessionId, text);
-        return this.record(id, { source: 'system', type: 'resumed', state: 'starting', payload: { live: true } });
+        return this.record(id, {
+          source: 'system',
+          type: 'resumed',
+          state: 'starting',
+          payload: { live: true },
+        });
       });
       if (live) return live;
       row = this.row(id);
@@ -1280,7 +1350,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         this.note(id, 'resume_failed', { reason: 'no session' });
       } else {
         // E.g. rate limited without a session: it can never continue, so end it (or the scheduler retries forever).
-        this.record(id, { source: 'system', type: 'resume_failed', state: 'failed', payload: { reason: 'no session' } });
+        this.record(id, {
+          source: 'system',
+          type: 'resume_failed',
+          state: 'failed',
+          payload: { reason: 'no session' },
+        });
       }
       throw conflict('this run has no agent session to resume; start a new run');
     }
@@ -1318,7 +1393,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   private async handOffLocked(id: string, route: Route, opts: HandOffOptions): Promise<Run> {
-    const continuesHeld = () => Boolean(opts.allowSystemFinishedCancel) && this.continuesInSuccessor(this.getRun(id));
+    const continuesHeld = () =>
+      Boolean(opts.allowSystemFinishedCancel) && this.continuesInSuccessor(this.getRun(id));
     const row = this.row(id);
     const blocked = handoffBlocker(row, continuesHeld());
     if (blocked) throw conflict(blocked);
@@ -1329,18 +1405,28 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       routeIndex = routes.length - 1;
     }
     // Within the run prompt limit: the person's text whole, the context shortened (400 when it cannot fit).
-    const prompt = successorPrompt(await this.handoffContext(row, opts.reason, false), opts.extraPrompt?.trim() ?? '');
+    const prompt = successorPrompt(
+      await this.handoffContext(row, opts.reason, false),
+      opts.extraPrompt?.trim() ?? '',
+    );
     // A person's handoff to a headless lane that would ask is refused before the run is retired; an
     // automatic one is checked when the successor spawns, as before (no mode is raised).
-    if (opts.source === 'user') this.refuseHeadlessAsk(route.agent, row.permissionMode as PermissionMode, prompt);
+    if (opts.source === 'user')
+      this.refuseHeadlessAsk(route.agent, row.permissionMode as PermissionMode, prompt);
     // A stop or a resume may have landed while the context was built: re-read before creating the
     // successor, so no orphan successor is left and the kill below reaches the current terminal.
     const current = this.row(id);
     const changed =
-      handoffBlocker(current, continuesHeld()) ?? (current.state !== row.state ? `the run is ${current.state} now` : undefined);
+      handoffBlocker(current, continuesHeld()) ??
+      (current.state !== row.state ? `the run is ${current.state} now` : undefined);
     if (changed) throw conflict(changed);
     const successor = await this.enqueue(
-      { projectId: row.projectId, prompt, persona: row.persona as AgentPersona, permissionMode: row.permissionMode as Run['permissionMode'] },
+      {
+        projectId: row.projectId,
+        prompt,
+        persona: row.persona as AgentPersona,
+        permissionMode: row.permissionMode as Run['permissionMode'],
+      },
       {
         ticketId: row.ticketId ?? undefined,
         title: row.title ?? undefined,
@@ -1362,7 +1448,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       source: opts.source,
       type: 'handed_off',
       state: 'done',
-      payload: { toRunId: successor.id, route, reason: opts.reason, message: `Handed off to ${route.agent} (${route.model}): ${opts.reason}` },
+      payload: {
+        toRunId: successor.id,
+        route,
+        reason: opts.reason,
+        message: `Handed off to ${route.agent} (${route.model}): ${opts.reason}`,
+      },
       patch: { endedAt: latest.endedAt ?? new Date(), handedOffTo: successor.id, autoRetryAt: null },
     });
     if (sessionId) {
@@ -1404,7 +1495,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .all()
       .map((e) => ({ ...e, reason: (e.payload as { reason?: unknown } | null)?.reason }))
       .filter((e) => e.type === 'stop_requested' || e.source !== 'system' || e.reason !== undefined);
-    return decisions.length > 0 && decisions.every((e) => e.source === 'system' && e.reason === FINISHED_STEP_STOP);
+    return (
+      decisions.length > 0 && decisions.every((e) => e.source === 'system' && e.reason === FINISHED_STEP_STOP)
+    );
   }
 
   /** Re-points a queued run at another route of its own chain (the scheduler's fallback for new runs). */
@@ -1417,14 +1510,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.record(id, {
       source: 'system',
       type: 'route_bound',
-      payload: { route, routeIndex, message: `Starting on ${route.agent} (${route.model}) because the first route is out of quota` },
+      payload: {
+        route,
+        routeIndex,
+        message: `Starting on ${route.agent} (${route.model}) because the first route is out of quota`,
+      },
       patch: { agent: route.agent, model: route.model, credential: route.credential, routeIndex },
     });
   }
 
   /** Ticket, last answer, worktree state and recent tool calls for a handoff prompt. */
   private async handoffContext(row: RunRow, reason: string, sameAgent: boolean): Promise<HandoffPromptInput> {
-    const ticket = row.ticketId ? this.db.select().from(tickets).where(eq(tickets.id, row.ticketId)).get() : undefined;
+    const ticket = row.ticketId
+      ? this.db.select().from(tickets).where(eq(tickets.id, row.ticketId)).get()
+      : undefined;
     const [gitStatus, diffStat] = await Promise.all([
       git(row.worktreePath, ['status', '--short']).catch(() => ''),
       git(row.worktreePath, ['diff', '--stat', 'HEAD']).catch(() => ''),
@@ -1439,15 +1538,27 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .reverse();
     const recentTools = summarizeRecentTools(
       toolEvents.map((e) => {
-        const p = (e.payload ?? {}) as { tool_name?: unknown; tool_input_summary?: unknown; message?: unknown };
+        const p = (e.payload ?? {}) as {
+          tool_name?: unknown;
+          tool_input_summary?: unknown;
+          message?: unknown;
+        };
         const detail =
-          typeof p.tool_input_summary === 'string' ? p.tool_input_summary : typeof p.message === 'string' ? p.message : '';
+          typeof p.tool_input_summary === 'string'
+            ? p.tool_input_summary
+            : typeof p.message === 'string'
+              ? p.message
+              : '';
         return { name: typeof p.tool_name === 'string' ? p.tool_name : 'tool', detail: detail.slice(0, 200) };
       }),
     );
     return {
       ticket: ticket
-        ? { key: ticket.key, title: ticket.title, body: ticket.body.replace(new RegExp(ROUTE_TAG.source, 'gi'), '').trim() }
+        ? {
+            key: ticket.key,
+            title: ticket.title,
+            body: ticket.body.replace(new RegExp(ROUTE_TAG.source, 'gi'), '').trim(),
+          }
         : null,
       originalPrompt: row.prompt,
       from: { agent: row.agent, model: runModel(row) },
@@ -1511,7 +1622,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // Enqueue refuses this for the first lane; a lane picked later (a fallback, a handoff) or a run
     // from before that check would deny every command that needs approval, without telling anyone.
-    const headless = headlessModeProblem(row.agent, row.permissionMode as PermissionMode, Boolean(options.prompt));
+    const headless = headlessModeProblem(
+      row.agent,
+      row.permissionMode as PermissionMode,
+      Boolean(options.prompt),
+    );
     if (headless) {
       // A finished run's result stands; only this follow-up is refused.
       if (row.state === 'done') throw conflict(headless, 'headless_needs_auto');
@@ -1541,7 +1656,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       void this.setUpThenSpawn(row, project, options, hookToken, setup);
       return starting;
     }
-    return this.spawnTerminal(row, project, options, hookToken, options.type === 'spawned' ? this.copyNote(row.id) : undefined);
+    return this.spawnTerminal(
+      row,
+      project,
+      options,
+      hookToken,
+      options.type === 'spawned' ? this.copyNote(row.id) : undefined,
+    );
   }
 
   /** The first-prompt line about copied secrets git would not ignore, if any. */
@@ -1568,7 +1689,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .limit(1)
       .get();
     const setup = (event?.payload as { setup?: unknown } | null | undefined)?.setup;
-    return Array.isArray(setup) && setup.length > 0 && setup.every((c) => typeof c === 'string') ? (setup as string[]) : null;
+    return Array.isArray(setup) && setup.length > 0 && setup.every((c) => typeof c === 'string')
+      ? (setup as string[])
+      : null;
   }
 
   /** Whether the run is still the one to set up: not stopped, ended or handed off meanwhile. */
@@ -1599,7 +1722,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const left = deadline - Date.now();
         if (left <= 0) {
           const skipped = setup.slice(index);
-          this.note(row.id, 'worktree_setup_skipped', { commands: skipped, reason: `the whole setup may take ${SETUP_TOTAL_MS / 60_000} min` });
+          this.note(row.id, 'worktree_setup_skipped', {
+            commands: skipped,
+            reason: `the whole setup may take ${SETUP_TOTAL_MS / 60_000} min`,
+          });
           promptPrefix = setupSkippedPrefix(skipped);
           break;
         }
@@ -1613,12 +1739,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         // Stopped meanwhile (its command was killed): nothing failed, and no agent starts.
         if (outcome.cancelled || !this.setupGoesOn(row.id)) return;
         if (!outcome.ok) {
-          this.note(row.id, 'worktree_setup_failed', { command, exitCode: outcome.exitCode, tail: outcome.tail });
+          this.note(row.id, 'worktree_setup_failed', {
+            command,
+            exitCode: outcome.exitCode,
+            tail: outcome.tail,
+          });
           promptPrefix = setupFailurePrefix(outcome);
           break;
         }
       }
-      if (!promptPrefix) this.note(row.id, 'worktree_setup_finished', { commands: setup.length, durationMs: Date.now() - startedAt });
+      if (!promptPrefix)
+        this.note(row.id, 'worktree_setup_finished', {
+          commands: setup.length,
+          durationMs: Date.now() - startedAt,
+        });
       if (!this.setupGoesOn(row.id)) return;
       const note = this.copyNote(row.id);
       const prefix = promptPrefix && note ? `${promptPrefix}\n\n${note}` : (promptPrefix ?? note);
@@ -1654,20 +1788,29 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       resolveModelForPersona(this.db, persona, undefined, row.agent as AgentId)) as AgentModelId;
 
     const dockerEnv = await this.dockerEnvFor(row);
-    const personaPrompt = options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
+    const personaPrompt =
+      options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
     // A fresh start with a task learns about the Docker engine once; a resumed session already knows.
     const decorated =
       personaPrompt && options.type === 'spawned' && dockerEnv.DOCKER_HOST
         ? `${personaPrompt}\n\n${DOCKER_PROMPT_PARAGRAPH}`
         : personaPrompt;
     // A failed worktree setup leads the first prompt, so the agent fixes it as part of the ticket.
-    const effectivePrompt = promptPrefix ? (decorated ? `${promptPrefix}\n\n${decorated}` : promptPrefix) : decorated;
+    const effectivePrompt = promptPrefix
+      ? decorated
+        ? `${promptPrefix}\n\n${decorated}`
+        : promptPrefix
+      : decorated;
 
     // A pre-0.2.0 row has no stored route: it gets the key it would have got then.
-    const credential = row.routes.length === 0 ? defaultCredentialFor(this.db, row.agent as AgentId) : (row.credential as Credential);
+    const credential =
+      row.routes.length === 0
+        ? defaultCredentialFor(this.db, row.agent as AgentId)
+        : (row.credential as Credential);
     const extraEnv = getProviderEnvFromSettings(this.db, row.agent, credential);
     // Antigravity AI credits are a setting in agy's shared settings.json; the CLI seed writes it per run.
-    if (row.agent === 'antigravity') extraEnv.EMBERLINE_USE_CREDITS = row.credential === 'credits' ? '1' : '0';
+    if (row.agent === 'antigravity')
+      extraEnv.EMBERLINE_USE_CREDITS = row.credential === 'credits' ? '1' : '0';
     const provider = providerAdapter(row.agent);
     // Tests substitute a fake `claude`; the Claude-specific extras need the real CLI.
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
@@ -1682,9 +1825,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         process.env.EMBERLINE_PLAYWRIGHT_MCP !== 'false');
 
     if (enablePlaywrightMcp && isRealClaude) {
-      await ensureRunnerBrowserDaemon(this.ptyd, path.dirname(this.config.ptydSocket)).catch(
-        () => null,
-      );
+      await ensureRunnerBrowserDaemon(this.ptyd, path.dirname(this.config.ptydSocket)).catch(() => null);
     }
 
     // The run's own worktree, never main: a QA run checks its own work. hookUrl is how the runner
@@ -1705,19 +1846,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         playwrightMcp: enablePlaywrightMcp,
         // Only a fresh start carries the ticket prompt; a resumed session already has the instruction.
         ticketRun: options.type === 'spawned' && !!row.ticketId,
-        customMcpServers: isRealClaude && Object.keys(customMcpServers).length > 0 ? customMcpServers : undefined,
+        customMcpServers:
+          isRealClaude && Object.keys(customMcpServers).length > 0 ? customMcpServers : undefined,
         extraSystemPrompt: activeSkillPrompt || undefined,
       },
     });
 
     const personaPrefix =
       persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
-    const modelSuffix = isRealClaude && resolvedModel && resolvedModel !== 'auto' ? ` (${resolvedModel})` : '';
+    const modelSuffix =
+      isRealClaude && resolvedModel && resolvedModel !== 'auto' ? ` (${resolvedModel})` : '';
     const hookFile = path.join(path.dirname(this.config.ptydSocket), 'playwright-hook.cjs');
     const playwrightEnv: Record<string, string> =
-      enablePlaywrightMcp && isRealClaude
-        ? { NODE_OPTIONS: `--require ${hookFile}` }
-        : {};
+      enablePlaywrightMcp && isRealClaude ? { NODE_OPTIONS: `--require ${hookFile}` } : {};
     try {
       const session = await ptyd.spawn({
         file: spec.file,
@@ -1799,9 +1940,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const isPlaywrightBash = toolName === 'Bash' && Boolean(detail);
         if (!isPlaywrightMcp && !isPlaywrightBash) continue;
 
-        const shortTool = isPlaywrightMcp
-          ? toolName.replace(/^mcp__playwright__/, '')
-          : 'playwright_cli';
+        const shortTool = isPlaywrightMcp ? toolName.replace(/^mcp__playwright__/, '') : 'playwright_cli';
         const ageMs = nowMs - e.ts.getTime();
         if (r.state === 'working' && ageMs < 60_000) {
           agentActive = true;
@@ -1880,7 +2019,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (live) this.stallWatch.delete(row.id);
     // The run's agent and model decide how its limit messages read and which quota pool they hit.
     const limitCtx = { agent: row.agent, model: runModel(row) };
-    let next = live ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload, limitCtx) : undefined;
+    let next = live
+      ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload, limitCtx)
+      : undefined;
     // A temporary provider error: wait as `rate_limited` (no slot, no quota window) and let the
     // scheduler retry the turn, a few times with growing delays.
     const transient = live ? transientErrorFromHook(envelope.event, envelope.payload, limitCtx) : undefined;
@@ -1923,7 +2064,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     if (next === 'rate_limited') {
-      this.emit('rateLimited', run, rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone, limitCtx));
+      this.emit(
+        'rateLimited',
+        run,
+        rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone, limitCtx),
+      );
     }
     return run;
   }
@@ -1963,7 +2108,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       return stopped;
     }
     // Live, or still spawning (no terminal yet): spawnAgent checks the flag once the terminal exists.
-    const run = this.record(id, { source, type: 'stop_requested', payload: reasonPayload, patch: { cancelledAt } });
+    const run = this.record(id, {
+      source,
+      type: 'stop_requested',
+      payload: reasonPayload,
+      patch: { cancelledAt },
+    });
     const sessionId = row.ptydSessionId;
     if (sessionId) {
       await this.ptyd
@@ -2007,7 +2157,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       this.db.update(tickets).set({ completion, updatedAt: now }).where(eq(tickets.id, row.ticketId)).run();
     }
     // After the ticket row: TicketService broadcasts the ticket on this note.
-    this.note(runId, 'ticket_complete', { summary: body.summary, handoff: body.handoff, blockers: body.blockers });
+    this.note(runId, 'ticket_complete', {
+      summary: body.summary,
+      handoff: body.handoff,
+      blockers: body.blockers,
+    });
   }
 
   /**
@@ -2026,7 +2180,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * {@link agentPreviewWaitMs}) for a container start to end, and answers the runner-side URL. Same
    * credential as hooks, so a run only ever acts on its own preview.
    */
-  async agentPreview(runId: string, token: string | undefined, rawBody: unknown): Promise<AgentPreviewResponse> {
+  async agentPreview(
+    runId: string,
+    token: string | undefined,
+    rawBody: unknown,
+  ): Promise<AgentPreviewResponse> {
     const row = this.liveRunForAgent(runId, token);
     const parsed = AgentPreviewBody.safeParse(rawBody ?? {});
     if (!parsed.success) throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
@@ -2036,18 +2194,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         start: () => this.startPreview(row.id, {}, undefined, 'hook'),
         pendingStart: () => this.composeJobs.get(row.id)?.done,
         nothingToPreview: () =>
-          approvedPreviewService(this.db, row.projectId) || this.detectPreviewCommand(row.projectId, row.worktreePath)
+          approvedPreviewService(this.db, row.projectId) ||
+          this.detectPreviewCommand(row.projectId, row.worktreePath)
             ? null
             : 'this run has no preview: the approved worktree.yml has no preview service and package.json no dev, start or preview script',
         browserUrl: () =>
           resolveBrowserUrl(
-            { db: this.db, config: this.config, runPreviewStatus: (id) => this.previewStatus(id), mainPreviews: this.mainPreviews, demoTokens: this.demoTokens },
+            {
+              db: this.db,
+              config: this.config,
+              runPreviewStatus: (id) => this.previewStatus(id),
+              mainPreviews: this.mainPreviews,
+              demoTokens: this.demoTokens,
+            },
             row.projectId,
             row.id,
           ),
         waitMs: this.agentPreviewWaitMs,
         lastStartAt: () => this.agentPreviewStarts.get(row.id),
-        recordStart: (at) => (at === undefined ? this.agentPreviewStarts.delete(row.id) : this.agentPreviewStarts.set(row.id, at)),
+        recordStart: (at) =>
+          at === undefined ? this.agentPreviewStarts.delete(row.id) : this.agentPreviewStarts.set(row.id, at),
         cooldownMs: this.agentPreviewCooldownMs,
       },
       parsed.data,
@@ -2109,19 +2275,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const row = this.db
       .select()
       .from(runs)
-      .where(
-        and(
-          eq(runs.ticketId, ticketId),
-          runStillActive(),
-        ),
-      )
+      .where(and(eq(runs.ticketId, ticketId), runStillActive()))
       .orderBy(desc(runs.createdAt))
       .get();
     return row ? (this.withAttention([toRun(row)])[0] as Run) : undefined;
   }
 
   latestRunForTicket(ticketId: string): Run | undefined {
-    const row = this.db.select().from(runs).where(eq(runs.ticketId, ticketId)).orderBy(desc(runs.createdAt)).get();
+    const row = this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.ticketId, ticketId))
+      .orderBy(desc(runs.createdAt))
+      .get();
     return row ? (this.withAttention([toRun(row)])[0] as Run) : undefined;
   }
 
@@ -2142,8 +2308,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
       // A one-shot CLI exits after its turn: typed into it, the prompt would be lost with no one told.
       if (this.exitsAfterTurn(row)) throw conflict(SESSION_CLOSING, 'session_closing');
-      if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
-      if (opts.automatic && !IDLE_STATES.has(row.state)) throw conflict(`the agent is ${row.state}; not interrupting it`);
+      if (row.state === 'starting')
+        throw conflict('the agent is still starting; send your prompt once it is ready');
+      if (opts.automatic && !IDLE_STATES.has(row.state))
+        throw conflict(`the agent is ${row.state}; not interrupting it`);
       const stateBefore = this.latestStateEventId(id);
       await this.typePrompt(row.ptydSessionId, text);
       const run = this.record(id, { source: 'user', type: 'prompt_sent', payload: { length: text.length } });
@@ -2181,7 +2349,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     let row = this.row(id);
     if (row.state === 'queued') throw conflict('the agent has not started yet; it is queued');
     // Also while it respawns for a resume: a second resume would start another agent.
-    if (row.state === 'starting') throw conflict('the agent is still starting; send your prompt once it is ready');
+    if (row.state === 'starting')
+      throw conflict('the agent is still starting; send your prompt once it is ready');
     row = await this.afterOneShotExit(row);
     if (row.ptydSessionId && !row.endedAt) return this.sendPrompt(id, text, opts);
     if (!row.agentSessionId) throw conflict('no agent session to continue; start a new run');
@@ -2274,10 +2443,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     // The account goes only to the project's own repository URL, never to an origin an agent set.
     const credential = project?.repoUrl ? gitCredentialForRemote(this.db, project.repoUrl) : null;
-    const account = credential && project?.repoUrl ? { gateway: this.gitGateway, projectId: project.id, url: project.repoUrl, credential } : null;
+    const account =
+      credential && project?.repoUrl
+        ? { gateway: this.gitGateway, projectId: project.id, url: project.repoUrl, credential }
+        : null;
     let res: GitPushResponse;
     try {
-      res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), account);
+      res = await pushWorktreeBranch(
+        row.worktreePath,
+        row.branch,
+        this.defaultBranch(row.projectId),
+        account,
+      );
     } catch (error) {
       if (!project?.repoUrl && error instanceof HttpError) {
         const origin = await execGitFile(['remote', 'get-url', 'origin'], { cwd: row.worktreePath }).then(
@@ -2285,7 +2462,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           () => '',
         );
         if (ACCESS_FAILURE.test(error.message) && origin && accountForGitRemote(this.db, origin)) {
-          throw new HttpError(error.statusCode, error.code, `${error.message} ${CONNECT_FOR_ACCOUNT}`, error.details);
+          throw new HttpError(
+            error.statusCode,
+            error.code,
+            `${error.message} ${CONNECT_FOR_ACCOUNT}`,
+            error.details,
+          );
         }
       }
       throw error;
@@ -2332,7 +2514,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * file is opened once without following links and streamed from that descriptor, so an agent
    * cannot swap a symlink in after the check (the worktree is agent-writable).
    */
-  async openBuildOutput(id: string, relPath: string): Promise<{ stream: Readable; fileName: string; size: number }> {
+  async openBuildOutput(
+    id: string,
+    relPath: string,
+  ): Promise<{ stream: Readable; fileName: string; size: number }> {
     const row = this.row(id);
     const { rel } = resolveSafeWorktreePath(row.worktreePath, relPath);
     const outputs = await this.listOwnBuildOutputs(row.worktreePath);
@@ -2397,7 +2582,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
     }
     // Its teardown runs already (an earlier prune, auto-GC): the prune follows it.
-    if (this.tearingDown.has(id)) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+    if (this.tearingDown.has(id))
+      return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
     // Deliverables in git-ignored build directories exist only here: archive them first.
     if (row.worktreePath !== project.path) await this.outputs.archiveBeforePrune(id);
     const recordPruned = (removed: boolean) => {
@@ -2463,11 +2649,27 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!row.worktreePath || row.worktreePath === project.path || !existsSync(row.worktreePath)) return;
     const teardown = loadApprovedWorktreeConfig(this.db, project.id)?.config.teardown ?? [];
     for (const command of teardown) {
-      const outcome = await runWorktreeCommand(command, row.worktreePath, TEARDOWN_TIMEOUT_MS, undefined, await this.dockerEnvFor(row));
+      const outcome = await runWorktreeCommand(
+        command,
+        row.worktreePath,
+        TEARDOWN_TIMEOUT_MS,
+        undefined,
+        await this.dockerEnvFor(row),
+      );
       if (!outcome.ok) {
-        this.note(row.id, 'worktree_teardown_failed', { command, exitCode: outcome.exitCode, tail: outcome.tail });
+        this.note(row.id, 'worktree_teardown_failed', {
+          command,
+          exitCode: outcome.exitCode,
+          tail: outcome.tail,
+        });
         this.log?.warn(
-          { runId: row.id, projectId: project.id, command, exitCode: outcome.exitCode, tail: outcome.tail.slice(-500) },
+          {
+            runId: row.id,
+            projectId: project.id,
+            command,
+            exitCode: outcome.exitCode,
+            tail: outcome.tail.slice(-500),
+          },
           'worktree.yml teardown command failed; the worktree is pruned anyway',
         );
       }
@@ -2512,7 +2714,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const down = await composeDown(name, env, CLEANUP_DOWN);
         if (down.ok) continue;
         const command = `docker ${composeDownArgs(name, CLEANUP_DOWN).join(' ')}`;
-        if (noteRunId) this.note(noteRunId, 'worktree_teardown_failed', { command, exitCode: down.exitCode, tail: down.output });
+        if (noteRunId)
+          this.note(noteRunId, 'worktree_teardown_failed', {
+            command,
+            exitCode: down.exitCode,
+            tail: down.output,
+          });
         this.log?.warn(
           { runId: noteRunId, project: name, output: down.output.slice(-500) },
           'docker compose down failed; the worktree is pruned anyway',
@@ -2534,7 +2741,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const sharing = this.db.select().from(runs).where(eq(runs.worktreePath, row.worktreePath)).all();
     if (!sharing.some((r) => r.id === row.id)) sharing.push(row);
     for (const r of sharing) {
-      if (this.composeJobs.has(r.id)) await this.previewRunLock.run(r.id, () => this.stopRunningPreview(r)).catch(() => undefined);
+      if (this.composeJobs.has(r.id))
+        await this.previewRunLock.run(r.id, () => this.stopRunningPreview(r)).catch(() => undefined);
     }
     await this.downComposeProjects(
       [composeProjectName(row.id, row.worktreePath), ...sharing.map((r) => this.previewProjectOf(r.id))],
@@ -2549,10 +2757,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   private recordPreviewsTakenDown(runIds: readonly string[]): void {
     for (const id of new Set(runIds)) {
-      const last = this.previewEvents(id).find((e) => e.type === 'preview_started' || e.type === 'preview_stopped');
-      if (last?.type !== 'preview_started' || (last.payload as PreviewPayload | null)?.kind !== 'compose') continue;
+      const last = this.previewEvents(id).find(
+        (e) => e.type === 'preview_started' || e.type === 'preview_stopped',
+      );
+      if (last?.type !== 'preview_started' || (last.payload as PreviewPayload | null)?.kind !== 'compose')
+        continue;
       try {
-        this.record(id, { source: 'system', type: 'preview_stopped', payload: { reason: 'worktree removed' } });
+        this.record(id, {
+          source: 'system',
+          type: 'preview_stopped',
+          payload: { reason: 'worktree removed' },
+        });
       } catch {
         // The run was removed meanwhile.
       }
@@ -2582,7 +2797,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const env = this.docker.cliEnv();
     if (!env.DOCKER_HOST) return false;
     const result = await reclaimFiles(dir, env);
-    if (!result.ok) this.log?.warn({ dir, output: result.output.slice(-500) }, 'could not hand the files back through the Docker engine');
+    if (!result.ok)
+      this.log?.warn(
+        { dir, output: result.output.slice(-500) },
+        'could not hand the files back through the Docker engine',
+      );
     return result.ok;
   }
 
@@ -2597,7 +2816,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       // Only Emberline's own directories in the workspaces volume are ever handed back.
       const root = path.resolve(this.config.workspacesDir);
       if (!path.resolve(dir).startsWith(root + path.sep)) return;
-      if (await this.reclaimEngineFiles(dir)) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      if (await this.reclaimEngineFiles(dir))
+        await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
@@ -2608,7 +2828,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * prunes dangling images and build cache older than 72 h (`forcePrune`: now, for "Clean up now"). A project
    * whose name Emberline did not make is never touched.
    */
-  async sweepDockerProjects(now = Date.now(), { forcePrune = false }: { forcePrune?: boolean } = {}): Promise<DockerCleanupResponse> {
+  async sweepDockerProjects(
+    now = Date.now(),
+    { forcePrune = false }: { forcePrune?: boolean } = {},
+  ): Promise<DockerCleanupResponse> {
     const result: DockerCleanupResponse = { removed: [], listed: false, pruned: false };
     if (!this.docker.host || this.dockerSweeping) return result;
     this.dockerSweeping = true;
@@ -2624,16 +2847,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         result.listed = true;
         // Read after the listing: a project listed there belongs to a run that existed before it.
         const inUse = composeProjectsInUse(this.dockerOwnershipFacts());
-        const stale = listed.names.filter((name) => isEmberlineComposeProject(name) && !inUse.has(name)).slice(0, DOCKER_GC_MAX_DOWNS);
+        const stale = listed.names
+          .filter((name) => isEmberlineComposeProject(name) && !inUse.has(name))
+          .slice(0, DOCKER_GC_MAX_DOWNS);
         for (const name of stale) {
           const down = await composeDown(name, env, CLEANUP_DOWN);
           if (down.ok) result.removed.push(name);
-          else this.log?.warn({ project: name, output: down.output.slice(-500) }, 'compose sweep: down failed');
+          else
+            this.log?.warn({ project: name, output: down.output.slice(-500) }, 'compose sweep: down failed');
         }
         this.lastDockerSweep = { at: now, removed: [...result.removed] };
       } else {
         result.error = listed.error;
-        this.log?.warn({ error: listed.error }, 'docker compose ls failed; the compose sweep tries again later');
+        this.log?.warn(
+          { error: listed.error },
+          'docker compose ls failed; the compose sweep tries again later',
+        );
       }
       // The prune does not need the listing.
       if (forcePrune || now - this.lastImagePruneAt >= DOCKER_IMAGE_PRUNE_INTERVAL_MS) {
@@ -2641,7 +2870,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const prune = await pruneImages(env);
         result.pruned = prune.ok;
         if (prune.ok) this.lastImagePruneOkAt = now;
-        if (!prune.ok) this.log?.warn({ output: prune.output.slice(-500) }, 'compose sweep: image prune failed');
+        if (!prune.ok)
+          this.log?.warn({ output: prune.output.slice(-500) }, 'compose sweep: image prune failed');
       }
     } finally {
       this.dockerSweeping = false;
@@ -2701,12 +2931,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (!this.docker.host) return { engine: this.docker.status, ...empty };
     await this.docker.ready();
     // Still waiting for the first answer: say so, never "not reachable".
-    if (!this.docker.status.checked) return { engine: this.docker.status, ...empty, error: DOCKER_ENGINE_NOT_ANSWERED_TEXT };
+    if (!this.docker.status.checked)
+      return { engine: this.docker.status, ...empty, error: DOCKER_ENGINE_NOT_ANSWERED_TEXT };
     // An engine that came back is listed at this page load, without waiting for the 60 s probe.
     if (!this.docker.status.available) await this.docker.refresh(5_000);
     const unreachable = (): DockerOverview => {
       const why = this.docker.status.error;
-      return { engine: this.docker.status, ...empty, error: `the Docker engine is not reachable${why ? `: ${why}` : ''}` };
+      return {
+        engine: this.docker.status,
+        ...empty,
+        error: `the Docker engine is not reachable${why ? `: ${why}` : ''}`,
+      };
     };
     const env = this.docker.cliEnv();
     if (!env.DOCKER_HOST) return unreachable();
@@ -2750,7 +2985,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * directly. A live agent's project may be stopped too (a runaway container): the answer warns.
    * The owning run gets a `docker_project_stopped`/`_removed` note; its state never changes.
    */
-  private async downDockerProject(name: string, action: 'stop' | 'remove'): Promise<DockerProjectActionResponse> {
+  private async downDockerProject(
+    name: string,
+    action: 'stop' | 'remove',
+  ): Promise<DockerProjectActionResponse> {
     const env = await this.dockerPageEnv(name);
     const owner = resolveDockerOwner(name, this.dockerOwnershipFacts());
     if (action === 'stop' && owner.kind === 'orphan') {
@@ -2765,26 +3003,33 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       owner.kind === 'main' && owner.preview
         ? await this.mainPreviews.takeDown(owner.projectId, name, env, action)
         : owner.kind === 'preview'
-        ? await this.previewRunLock.run(owner.runId, async () => {
-            // Only a compose preview that is still started goes through the run's preview stop (which
-            // takes the project down itself); no preview, a stopped one or a command preview (a
-            // terminal; no `kind` is one too, as in previewStatus) is left alone.
-            const last = this.previewEvents(owner.runId).find((e) => e.type === 'preview_started' || e.type === 'preview_stopped');
-            if (last?.type === 'preview_started' && (last.payload as PreviewPayload | null)?.kind === 'compose') {
-              let taken: Awaited<ReturnType<typeof composeDown>> | undefined;
-              await this.stopPreviewHeld(this.row(owner.runId), undefined, {
-                volumes: action === 'remove',
-                onDown: (project, down) => {
-                  if (project === name) taken = down;
-                },
-              });
-              if (taken) return taken;
-            }
-            return composeDown(name, env, opts);
-          })
-        : await composeDown(name, env, opts);
+          ? await this.previewRunLock.run(owner.runId, async () => {
+              // Only a compose preview that is still started goes through the run's preview stop (which
+              // takes the project down itself); no preview, a stopped one or a command preview (a
+              // terminal; no `kind` is one too, as in previewStatus) is left alone.
+              const last = this.previewEvents(owner.runId).find(
+                (e) => e.type === 'preview_started' || e.type === 'preview_stopped',
+              );
+              if (
+                last?.type === 'preview_started' &&
+                (last.payload as PreviewPayload | null)?.kind === 'compose'
+              ) {
+                let taken: Awaited<ReturnType<typeof composeDown>> | undefined;
+                await this.stopPreviewHeld(this.row(owner.runId), undefined, {
+                  volumes: action === 'remove',
+                  onDown: (project, down) => {
+                    if (project === name) taken = down;
+                  },
+                });
+                if (taken) return taken;
+              }
+              return composeDown(name, env, opts);
+            })
+          : await composeDown(name, env, opts);
     if (!down.ok) {
-      throw new HttpError(502, 'docker_failed', `docker compose down failed for ${name}`, { output: down.output });
+      throw new HttpError(502, 'docker_failed', `docker compose down failed for ${name}`, {
+        output: down.output,
+      });
     }
     if (owner.kind === 'agent' || owner.kind === 'preview') {
       try {
@@ -2796,7 +3041,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       } catch (error) {
         // A run removed meanwhile is fine; anything else is worth a line in the log.
         if (!(error instanceof HttpError && error.statusCode === 404)) {
-          this.log?.warn({ runId: owner.runId, project: name, error: (error as Error).message }, 'could not record a Docker page action on its run');
+          this.log?.warn(
+            { runId: owner.runId, project: name, error: (error as Error).message },
+            'could not record a Docker page action on its run',
+          );
         }
       }
     }
@@ -2809,17 +3057,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** The end of `docker compose logs` of a project (one service, or all), sanitised: untrusted output. */
   async dockerProjectLogs(name: string, service?: string): Promise<DockerProjectLogsResponse> {
-    if (service !== undefined && !COMPOSE_SERVICE_NAME.test(service)) throw badRequest('not a compose service name');
+    if (service !== undefined && !COMPOSE_SERVICE_NAME.test(service))
+      throw badRequest('not a compose service name');
     const env = await this.dockerPageEnv(name);
     const logs = await dockerQuery(composeLogsArgs(name, service), env);
-    if (!logs.ok) throw new HttpError(502, 'docker_failed', `docker compose logs failed (${logs.how})`, { output: logs.output });
+    if (!logs.ok)
+      throw new HttpError(502, 'docker_failed', `docker compose logs failed (${logs.how})`, {
+        output: logs.output,
+      });
     return { project: name, service: service ?? null, logs: logs.output };
   }
 
   /** "Clean up now": the sweep at once, with the image and build cache prune; 409 while one runs. */
   async dockerCleanupNow(): Promise<DockerCleanupResponse> {
     await this.dockerPageEnv(null);
-    if (this.dockerSweeping) throw conflict('a cleanup is running; try again when it finished', 'docker_sweeping');
+    if (this.dockerSweeping)
+      throw conflict('a cleanup is running; try again when it finished', 'docker_sweeping');
     return this.sweepDockerProjects(Date.now(), { forcePrune: true });
   }
 
@@ -2828,7 +3081,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * 409 while the engine is off or does not answer.
    */
   private async dockerPageEnv(name: string | null): Promise<Record<string, string>> {
-    if (name !== null && !isEmberlineComposeProject(name)) throw badRequest('not a compose project Emberline made');
+    if (name !== null && !isEmberlineComposeProject(name))
+      throw badRequest('not a compose project Emberline made');
     if (!this.docker.host) {
       // Switched off (EMBERLINE_DOCKER_ENGINE=0) or not configured (an old compose file): the hint says which.
       throw new HttpError(409, 'docker_off', 'the Docker engine is off', {
@@ -2839,9 +3093,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const env = this.docker.cliEnv();
     // Enabled but not answering: no turn-on hint; the message carries the turn-off hint for hosts that cannot run it.
     if (!env.DOCKER_HOST) {
-      if (!this.docker.status.checked) throw new HttpError(409, 'docker_off', DOCKER_ENGINE_NOT_ANSWERED_TEXT);
+      if (!this.docker.status.checked)
+        throw new HttpError(409, 'docker_off', DOCKER_ENGINE_NOT_ANSWERED_TEXT);
       const why = this.docker.status.error;
-      throw new HttpError(409, 'docker_off', withHint(`the Docker engine is not reachable${why ? `: ${why}` : ''}`, DOCKER_ENGINE_UNREACHABLE_HINT));
+      throw new HttpError(
+        409,
+        'docker_off',
+        withHint(
+          `the Docker engine is not reachable${why ? `: ${why}` : ''}`,
+          DOCKER_ENGINE_UNREACHABLE_HINT,
+        ),
+      );
     }
     return env;
   }
@@ -2858,7 +3120,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   ): Promise<{ finished: boolean; settled: Promise<void> }> {
     const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
     if (!project) return { finished: true, settled: Promise.resolve() };
-    const rows = this.db.select().from(runs).where(eq(runs.projectId, projectId)).orderBy(desc(runs.createdAt)).all();
+    const rows = this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.projectId, projectId))
+      .orderBy(desc(runs.createdAt))
+      .all();
     const inFlight = [...new Set(rows.flatMap((row) => this.teardownJobs.get(row.worktreePath) ?? []))];
     const own = (async () => {
       if (this.hasTeardown(projectId)) {
@@ -2878,12 +3145,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       await this.docker.ready();
       if (!this.docker.status.available) return;
       for (const row of rows) {
-        if (this.composeJobs.has(row.id)) await this.previewRunLock.run(row.id, () => this.stopRunningPreview(row)).catch(() => undefined);
+        if (this.composeJobs.has(row.id))
+          await this.previewRunLock.run(row.id, () => this.stopRunningPreview(row)).catch(() => undefined);
       }
       // Main's container preview: a start still going is cancelled, then it goes with its volumes (CLEANUP_DOWN).
       await this.mainPreviews.removeForProject(projectId).catch(() => undefined);
       await this.downComposeProjects(
-        [...rows.flatMap((row) => [composeProjectName(row.id, row.worktreePath), this.previewProjectOf(row.id)]), mainComposeProjectName(projectId)],
+        [
+          ...rows.flatMap((row) => [
+            composeProjectName(row.id, row.worktreePath),
+            this.previewProjectOf(row.id),
+          ]),
+          mainComposeProjectName(projectId),
+        ],
         null,
       );
       this.recordPreviewsTakenDown(rows.map((row) => row.id));
@@ -2905,7 +3179,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * run's preview already holds it (B16), skipping `exclude`. Callers hold `previewPortLock` until
    * they recorded it.
    */
-  private async allocatePreviewPort(runId: string, kind: PreviewKind, exclude: ReadonlySet<number> = new Set()): Promise<number> {
+  private async allocatePreviewPort(
+    runId: string,
+    kind: PreviewKind,
+    exclude: ReadonlySet<number> = new Set(),
+  ): Promise<number> {
     const taken = this.activeComposePreviewPorts(runId);
     // Main previews hold ports of the docker range too.
     for (const port of this.mainPreviews.reservedPorts()) taken.add(port);
@@ -2913,7 +3191,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (kind === 'command') {
       const { sessions } = await this.ptyd.get().list();
       for (const s of sessions) {
-        if (s.status === 'running' && s.meta.previewPort && s.meta.runId !== runId) taken.add(Number(s.meta.previewPort));
+        if (s.status === 'running' && s.meta.previewPort && s.meta.runId !== runId)
+          taken.add(Number(s.meta.previewPort));
       }
     }
     return this.freePreviewPort(runId, kind, taken);
@@ -2962,7 +3241,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (row.runId === exceptRunId || row.type !== 'preview_started') continue;
       const p = (row.payload ?? {}) as PreviewPayload;
       if (p.kind !== 'compose' || typeof p.port !== 'number') continue;
-      const worktree = this.db.select({ path: runs.worktreePath }).from(runs).where(eq(runs.id, row.runId)).get()?.path;
+      const worktree = this.db
+        .select({ path: runs.worktreePath })
+        .from(runs)
+        .where(eq(runs.id, row.runId))
+        .get()?.path;
       if (worktree && existsSync(worktree)) ports.add(p.port);
     }
     return ports;
@@ -2973,7 +3256,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.db
       .select()
       .from(runEvents)
-      .where(and(eq(runEvents.runId, id), inArray(runEvents.type, ['preview_started', 'preview_stopped', 'preview_ready', 'preview_failed'])))
+      .where(
+        and(
+          eq(runEvents.runId, id),
+          inArray(runEvents.type, ['preview_started', 'preview_stopped', 'preview_ready', 'preview_failed']),
+        ),
+      )
       .orderBy(desc(runEvents.id))
       .all();
   }
@@ -3001,7 +3289,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       error: null,
       logs: null,
     };
-    if (!lastPreview || lastPreview.type === 'preview_stopped' || typeof lastPreview.payload !== 'object' || !lastPreview.payload) {
+    if (
+      !lastPreview ||
+      lastPreview.type === 'preview_stopped' ||
+      typeof lastPreview.payload !== 'object' ||
+      !lastPreview.payload
+    ) {
       return idle;
     }
 
@@ -3013,17 +3306,28 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (p.kind === 'compose') {
       const base: RunPreviewStatus = { ...idle, kind: 'compose', command, port, url };
       // Outcomes of this start only: events newer than it, newest first.
-      const outcome = events.slice(0, lastIndex).find((e) => e.type === 'preview_ready' || e.type === 'preview_failed');
+      const outcome = events
+        .slice(0, lastIndex)
+        .find((e) => e.type === 'preview_ready' || e.type === 'preview_failed');
       if (outcome?.type === 'preview_failed') {
         const f = (outcome.payload ?? {}) as { error?: string; logs?: string | null };
         return { ...base, status: 'failed', error: f.error ?? 'the preview failed', logs: f.logs ?? null };
       }
       if (!outcome) {
         if (this.composeJobs.has(id)) return { ...base, status: 'starting' };
-        return { ...base, status: 'failed', error: 'Emberline restarted before the preview was ready; start it again' };
+        return {
+          ...base,
+          status: 'failed',
+          error: 'Emberline restarted before the preview was ready; start it again',
+        };
       }
-      if (!this.docker.status.available) return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
-      const state = await composeServiceStatus({ project: p.project ?? '', service: p.service ?? '', env: await this.dockerEnvFor(row) });
+      if (!this.docker.status.available)
+        return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
+      const state = await composeServiceStatus({
+        project: p.project ?? '',
+        service: p.service ?? '',
+        env: await this.dockerEnvFor(row),
+      });
       if (state === 'running' || state === 'starting' || state === 'unknown') {
         return { ...base, status: 'running', ...(await this.framingOf(id, lastPreview.id, 'compose', port)) };
       }
@@ -3055,9 +3359,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** `{ framing }` of a running run preview (probed once per start), nothing without a port. */
-  private async framingOf(id: string, startEventId: number, kind: 'compose' | 'command', port: number | null) {
+  private async framingOf(
+    id: string,
+    startEventId: number,
+    kind: 'compose' | 'command',
+    port: number | null,
+  ) {
     if (!port) return {};
-    return { framing: await this.framing.get(`run:${id}`, String(startEventId), runnerPreviewUrl(kind, port, this.config.dockerHost)) };
+    return {
+      framing: await this.framing.get(
+        `run:${id}`,
+        String(startEventId),
+        runnerPreviewUrl(kind, port, this.config.dockerHost),
+      ),
+    };
   }
 
   /** Probes the running preview's headers again. */
@@ -3067,7 +3382,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** `source`: who started it, for the timeline (`hook`: the agent's `preview` tool). */
-  async startPreview(id: string, rawBody: unknown, requestHost?: string, source: EventSource = 'user'): Promise<RunPreviewStatus> {
+  async startPreview(
+    id: string,
+    rawBody: unknown,
+    requestHost?: string,
+    source: EventSource = 'user',
+  ): Promise<RunPreviewStatus> {
     const row = this.row(id);
     if (!existsSync(row.worktreePath)) {
       throw conflict('worktree directory does not exist (was it pruned?)');
@@ -3077,7 +3397,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
     }
     const body: StartPreviewBody = parsed.data;
-    if (this.tearingDown.has(id)) throw conflict("this run's worktree is being removed; it cannot start a preview");
+    if (this.tearingDown.has(id))
+      throw conflict("this run's worktree is being removed; it cannot start a preview");
 
     // One start or stop per run at a time: a second start waits, then cancels the first one's job.
     return this.previewRunLock.run(id, async () => {
@@ -3090,12 +3411,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           return this.startComposePreview(row, service, generation, requestHost, source);
         }
         // A wizard project before its Deploy ticket added the compose file: preview the dev command.
-        const instead = loadApprovedWorktreeConfig(this.db, row.projectId)?.config.services.find((s) => s.command !== undefined);
+        const instead = loadApprovedWorktreeConfig(this.db, row.projectId)?.config.services.find(
+          (s) => s.command !== undefined,
+        );
         const command = instead?.command ?? detectPreviewCommand(row.worktreePath);
         if (!command) {
-          throw conflict(`${service.compose.file} not found in this worktree, and there is no command to preview instead`);
+          throw conflict(
+            `${service.compose.file} not found in this worktree, and there is no command to preview instead`,
+          );
         }
-        fallback = { command, note: `${service.compose.file} not found yet — previewing ${instead?.name ?? 'the detected dev command'}` };
+        fallback = {
+          command,
+          note: `${service.compose.file} not found yet — previewing ${instead?.name ?? 'the detected dev command'}`,
+        };
       }
 
       // Stop any existing preview first (a terminal, or a compose project from an earlier approval).
@@ -3124,7 +3452,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         this.record(id, {
           source,
           type: 'preview_started',
-          payload: { kind: 'command', terminalId: session.id, command, port, ...(fallback ? { note: fallback.note } : {}) },
+          payload: {
+            kind: 'command',
+            terminalId: session.id,
+            command,
+            port,
+            ...(fallback ? { note: fallback.note } : {}),
+          },
         });
         return { session, port };
       });
@@ -3212,11 +3546,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         recordStart(port);
         return port;
       });
-    job.done = runComposePreview(target, this.composePreviewTiming, { execId: job.execId, cancelled: () => job.cancelled, reallocate })
+    job.done = runComposePreview(target, this.composePreviewTiming, {
+      execId: job.execId,
+      cancelled: () => job.cancelled,
+      reallocate,
+    })
       .then(async (outcome) => {
         if (!current()) return;
         if (outcome.ok) {
-          this.record(row.id, { source: 'system', type: 'preview_ready', payload: { port: target.hostPort } });
+          this.record(row.id, {
+            source: 'system',
+            type: 'preview_ready',
+            payload: { port: target.hostPort },
+          });
           return;
         }
         if (outcome.cancelled) return;
@@ -3278,7 +3620,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * Returns that preview's status. Callers hold `previewRunLock` for the run. `volumes` (the run is
    * being deleted) also removes the preview project's volumes and built images, whether or not it runs.
    */
-  private async stopRunningPreview(row: RunRow, { volumes = false, onDown }: StopPreviewOptions = {}): Promise<RunPreviewStatus> {
+  private async stopRunningPreview(
+    row: RunRow,
+    { volumes = false, onDown }: StopPreviewOptions = {},
+  ): Promise<RunPreviewStatus> {
     const current = await this.previewStatus(row.id);
     if (current.terminalId) {
       await this.ptyd
@@ -3305,7 +3650,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const project = this.previewProjectOf(row.id);
         const down = await composeDown(project, env, volumes ? CLEANUP_DOWN : {});
         onDown?.(project, down);
-        if (!down.ok) this.log?.warn({ runId: row.id, output: down.output.slice(-500) }, 'compose preview: down failed');
+        if (!down.ok)
+          this.log?.warn({ runId: row.id, output: down.output.slice(-500) }, 'compose preview: down failed');
       }
     }
     // Only now, with the containers down: until then the status of a start being stopped reads
@@ -3318,7 +3664,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private previewProjectOf(runId: string): string {
     const started = this.previewEvents(runId).find((e) => e.type === 'preview_started');
     const project = (started?.payload as PreviewPayload | null)?.project;
-    return typeof project === 'string' && project.startsWith('emberline-') ? project : previewComposeProjectName(runId);
+    return typeof project === 'string' && project.startsWith('emberline-')
+      ? project
+      : previewComposeProjectName(runId);
   }
 
   async stopPreview(id: string, requestHost?: string): Promise<RunPreviewStatus> {
@@ -3327,7 +3675,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** A person's preview Stop (Review page or Docker page); callers hold `previewRunLock` for the run. */
-  private async stopPreviewHeld(row: RunRow, requestHost?: string, opts: StopPreviewOptions = {}): Promise<RunPreviewStatus> {
+  private async stopPreviewHeld(
+    row: RunRow,
+    requestHost?: string,
+    opts: StopPreviewOptions = {},
+  ): Promise<RunPreviewStatus> {
     const current = await this.stopRunningPreview(row, opts);
     this.record(row.id, {
       source: 'user',
@@ -3367,7 +3719,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const hadComposePreview = this.previewEvents(id).some(
       (e) => e.type === 'preview_started' && (e.payload as PreviewPayload | null)?.kind === 'compose',
     );
-    await this.previewRunLock.run(id, () => this.stopRunningPreview(row, { volumes: hadComposePreview })).catch(() => undefined);
+    await this.previewRunLock
+      .run(id, () => this.stopRunningPreview(row, { volumes: hadComposePreview }))
+      .catch(() => undefined);
     this.previewGenerations.delete(id);
     // The run's own containers too, when no other run works in that compose project (a kept
     // worktree is not a reason to keep them; a handoff successor in the same worktree is).
@@ -3501,12 +3855,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
               ? await this.outputs.archiveBeforePrune(row.id, budgetLeft, { keepOnTimeout: true })
               : 'timeout';
           if (archived === 'timeout') {
-            if (!reportedPaths.has(row.worktreePath)) keptWorktrees.push({ runId: row.id, reason: 'archive_pending' });
+            if (!reportedPaths.has(row.worktreePath))
+              keptWorktrees.push({ runId: row.id, reason: 'archive_pending' });
             reportedPaths.add(row.worktreePath);
             continue;
           }
         }
-        if (body.pruneWorktrees && proj && row.worktreePath && row.worktreePath !== proj.path && !this.worktreeSharedWith(row)) {
+        if (
+          body.pruneWorktrees &&
+          proj &&
+          row.worktreePath &&
+          row.worktreePath !== proj.path &&
+          !this.worktreeSharedWith(row)
+        ) {
           if (this.needsTeardown(proj.id, row.worktreePath)) {
             // Teardowns share one time budget per request; one still running prunes (and removes
             // its run) in the background when it ends.
@@ -3586,7 +3947,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       source: 'system',
       type: 'stall_detected',
       state: 'waiting_input',
-      payload: { message: `No agent activity and an unchanged screen for ${minutesOf(STALL_WATCHDOG_MS)} minutes; it may be stuck` },
+      payload: {
+        message: `No agent activity and an unchanged screen for ${minutesOf(STALL_WATCHDOG_MS)} minutes; it may be stuck`,
+      },
     });
   }
 
@@ -3617,7 +3980,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const stateKeepers = this.db
         .select({ id: sql<number>`min(${runEvents.id})` })
         .from(runEvents)
-        .where(and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'waiting_input', 'done'])))
+        .where(
+          and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'waiting_input', 'done'])),
+        )
         .groupBy(runEvents.state)
         .all()
         .map((r) => r.id);
@@ -3721,13 +4086,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // for over its idle TTL without any follow-up prompt, close & dispose its PTY
           // so it never lingers as a zombie process in Fleet Multiplexer.
           const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
-          if (row.state === 'done' && nowMs - row.stateChangedAt.getTime() > idleTtl && !this.pipelineBusyRuns.has(row.id)) {
+          if (
+            row.state === 'done' &&
+            nowMs - row.stateChangedAt.getTime() > idleTtl &&
+            !this.pipelineBusyRuns.has(row.id)
+          ) {
             const sessionId = row.ptydSessionId;
             // Re-read under the session lock: a prompt typed meanwhile (its hook not here yet) restarts
             // the idle time.
             const closed = await this.sessionLock.run(row.id, async () => {
               const current = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
-              if (!current || current.endedAt || current.ptydSessionId !== sessionId || current.state !== 'done') {
+              if (
+                !current ||
+                current.endedAt ||
+                current.ptydSessionId !== sessionId ||
+                current.state !== 'done'
+              ) {
                 return false;
               }
               const prompted = this.promptSentSince(row.id, latestDoneEventId(this.db, row.id));
@@ -3846,13 +4220,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             // Archived already; its teardown runs, and the prune follows it.
             if (this.tearingDown.has(stale.id)) continue;
             if (await this.mustKeepForReview(stale, proj, { branch, cached: true })) continue;
-            if (proj && stale.worktreePath && stale.worktreePath !== proj.path && !this.worktreeSharedWith(stale)) {
+            if (
+              proj &&
+              stale.worktreePath &&
+              stale.worktreePath !== proj.path &&
+              !this.worktreeSharedWith(stale)
+            ) {
               const budgetLeft = archiveDeadline - Date.now();
               if (budgetLeft < AUTO_GC_MIN_ARCHIVE_MS) break autoGc;
               // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
               // worktree (and row) and is tried again on the next pass. A copy that keeps failing
               // (a worktree reached through a link, unreadable files) holds it for 24 h at most.
-              const archived = await this.outputs.archiveBeforePrune(stale.id, budgetLeft, { keepOnTimeout: true });
+              const archived = await this.outputs.archiveBeforePrune(stale.id, budgetLeft, {
+                keepOnTimeout: true,
+              });
               if (archived === 'timeout') continue;
               if (archived === 'failed') {
                 const firstFailure = this.outputs.firstFailureAt(stale.id);
@@ -3896,7 +4277,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     opts: { branch?: string; cached?: boolean } = {},
   ): Promise<KeptWorktreeReason | null> {
     if (row.ticketId) {
-      const ticket = this.db.select({ status: tickets.status }).from(tickets).where(eq(tickets.id, row.ticketId)).get();
+      const ticket = this.db
+        .select({ status: tickets.status })
+        .from(tickets)
+        .where(eq(tickets.id, row.ticketId))
+        .get();
       if (ticket && ticket.status !== 'done') return 'in_review';
     }
     if (row.worktreePath && row.worktreePath !== project?.path) {
@@ -3947,7 +4332,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /** Appends an event, applies the state change + patch atomically, and broadcasts the run. */
   private record(
     id: string,
-    event: { source: EventSource; type: string; state?: AgentState; payload?: unknown; patch?: Partial<RunRow> },
+    event: {
+      source: EventSource;
+      type: string;
+      state?: AgentState;
+      payload?: unknown;
+      patch?: Partial<RunRow>;
+    },
   ): Run {
     const now = new Date();
     let changed = false;

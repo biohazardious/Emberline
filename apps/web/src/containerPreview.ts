@@ -67,7 +67,9 @@ export function previewBadge(p: PreviewLike): { text: string; className: string 
  * What went wrong with a failed or exited preview; null otherwise. A main preview whose refresh
  * after a merge failed was taken down: its hint says so and how to bring it back.
  */
-export function previewProblem(p: PreviewLike): { title: string; detail: string; hint: string | null } | null {
+export function previewProblem(
+  p: PreviewLike,
+): { title: string; detail: string; hint: string | null } | null {
   if (p.status !== 'failed' && p.status !== 'exited') return null;
   const error = p.error?.trim() || 'no reason was recorded';
   const refreshFailed = error.startsWith(REFRESH_FAILED);
@@ -106,7 +108,10 @@ export const IPV6_FRAME_NOTE =
  */
 export function previewFrameMode(pageProtocol: string, url: string): { frame: boolean; note: string | null } {
   if (pageProtocol === 'https:' && url.startsWith('http:')) {
-    return { frame: false, note: 'The preview is plain HTTP and this page is HTTPS, so it opens in a new tab.' };
+    return {
+      frame: false,
+      note: 'The preview is plain HTTP and this page is HTTPS, so it opens in a new tab.',
+    };
   }
   if (/^https?:\/\/\[/.test(url)) return { frame: true, note: IPV6_FRAME_NOTE };
   return { frame: true, note: null };
@@ -204,7 +209,8 @@ export async function resolveRunnerBrowserUrl(
   deps: RunnerBrowserDeps,
   opts: { timeoutMs: number; pollMs: number } = { timeoutMs: PREVIEW_WAIT_MS, pollMs: PREVIEW_POLL_MS },
 ): Promise<RunnerBrowserUrl> {
-  const describe = deps.describeError ?? ((err: unknown) => (err instanceof Error ? err.message : String(err)));
+  const describe =
+    deps.describeError ?? ((err: unknown) => (err instanceof Error ? err.message : String(err)));
   let previewError: string | null = null;
   if (deps.container) {
     try {

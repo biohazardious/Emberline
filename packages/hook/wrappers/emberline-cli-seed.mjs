@@ -81,7 +81,8 @@ if (agent === 'antigravity') {
   seed(path.join(home, '.gemini', 'antigravity-cli', 'settings.json'), (data) => {
     const current = Array.isArray(data.trustedWorkspaces) ? data.trustedWorkspaces : [];
     const kept = current.filter(
-      (entry) => typeof entry !== 'string' || !entry.startsWith('/workspaces/.worktrees/') || fs.existsSync(entry),
+      (entry) =>
+        typeof entry !== 'string' || !entry.startsWith('/workspaces/.worktrees/') || fs.existsSync(entry),
     );
     const next = kept.includes(cwd) ? kept : [...kept, cwd];
     const trustChanged = !(next.length === current.length && next.every((entry, i) => entry === current[i]));

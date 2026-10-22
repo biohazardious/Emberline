@@ -324,7 +324,12 @@ export function ReviewView({ run, onRunUpdated }: Props) {
   const offDiff = useMemo(() => {
     if (!summary) return [];
     if (!summary.isGitRepo) return commentsOffDiff(comments, []);
-    return scope === 'branch' ? commentsOffDiff(comments, summary.files.map((f) => f.path)) : [];
+    return scope === 'branch'
+      ? commentsOffDiff(
+          comments,
+          summary.files.map((f) => f.path),
+        )
+      : [];
   }, [comments, summary, scope]);
   const offDiffSection =
     offDiff.length > 0 ? (
@@ -367,7 +372,12 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             )}
             .
           </span>{' '}
-          <button type="button" className="btn btn-sm btn-primary" disabled={commentBusy} onClick={handleVerifyCarried}>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={commentBusy}
+            onClick={handleVerifyCarried}
+          >
             Verified
           </button>
         </div>
@@ -395,7 +405,11 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       .catch((e: unknown) => setError(errorMessage(e)));
   };
 
-  const handleRequestChanges = async (note: string, target: 'same' | 'new', permissionMode?: PermissionMode) => {
+  const handleRequestChanges = async (
+    note: string,
+    target: 'same' | 'new',
+    permissionMode?: PermissionMode,
+  ) => {
     const res = await api<{ run: Run; sent: number }>(`/api/runs/${run.id}/review/request-changes`, 'POST', {
       note,
       target,
@@ -665,8 +679,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     run.telemetry.isEstimated ? ' (estimated)' : ''
                   }`}
                 >
-                  <Coins className="icon" aria-hidden /> {(run.telemetry.totalTokens / 1000).toFixed(1)}k tok · <Wrench className="icon" aria-hidden />{' '}
-                  {run.telemetry.toolCalls}
+                  <Coins className="icon" aria-hidden /> {(run.telemetry.totalTokens / 1000).toFixed(1)}k tok
+                  · <Wrench className="icon" aria-hidden /> {run.telemetry.toolCalls}
                 </span>
               )}
 
@@ -696,7 +710,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                       </>
                     ) : (
                       <>
-                        <TriangleAlert className="icon" aria-hidden /> Secret Leak ({slopAudit.secretLeakCount})
+                        <TriangleAlert className="icon" aria-hidden /> Secret Leak (
+                        {slopAudit.secretLeakCount})
                       </>
                     )}
                   </button>
@@ -717,7 +732,12 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     }}
                     title="Click to inspect Anti-AI-Slop & Code Hygiene Audit Scorecard"
                   >
-                    {slopAudit.passed ? <Shield className="icon" aria-hidden /> : <TriangleAlert className="icon" aria-hidden />} Hygiene {slopAudit.grade} · {slopAudit.score}/100
+                    {slopAudit.passed ? (
+                      <Shield className="icon" aria-hidden />
+                    ) : (
+                      <TriangleAlert className="icon" aria-hidden />
+                    )}{' '}
+                    Hygiene {slopAudit.grade} · {slopAudit.score}/100
                     {slopAudit.issues.length > 0 ? ` (${slopAudit.issues.length})` : ''}
                   </button>
                 </>
@@ -825,11 +845,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 </a>
               )}
               {run.branch && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => setPrDrawerOpen((v) => !v)}
-                >
+                <button type="button" className="btn btn-sm" onClick={() => setPrDrawerOpen((v) => !v)}>
                   {prDrawerOpen ? 'Cancel PR' : 'Create PR / MR'}
                 </button>
               )}
@@ -873,14 +889,23 @@ export function ReviewView({ run, onRunUpdated }: Props) {
             borderBottom: '1px solid var(--border)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              flexWrap: 'wrap',
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <strong style={{ fontSize: '0.84rem' }}>
                 <Shield className="icon" aria-hidden /> Anti-AI-Slop &amp; Code Craftsmanship Audit
               </strong>
               {slopAudit && (
                 <span className="badge mono" style={{ fontSize: '0.7rem' }}>
-                  Grade {slopAudit.grade} · {slopAudit.score}/100 · {slopAudit.filesAudited} file(s) · +{slopAudit.addedLinesAudited} lines scanned
+                  Grade {slopAudit.grade} · {slopAudit.score}/100 · {slopAudit.filesAudited} file(s) · +
+                  {slopAudit.addedLinesAudited} lines scanned
                 </span>
               )}
               {crossCritic && (
@@ -968,7 +993,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               <div>
                 <strong>
                   <Scale className="icon" aria-hidden /> Cross-Provider Critic Summary:
-                </strong> {crossCritic.summary}
+                </strong>{' '}
+                {crossCritic.summary}
               </div>
               {crossCritic.followUpPrompt && (
                 <button
@@ -977,7 +1003,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                   disabled={cleaningSlop}
                   onClick={() => void handleAutoCleanSlop(crossCritic.followUpPrompt)}
                 >
-                  <Rocket className="icon" aria-hidden /> Send Critic Fixes to {formatAgentDisplayName(run.agent)}
+                  <Rocket className="icon" aria-hidden /> Send Critic Fixes to{' '}
+                  {formatAgentDisplayName(run.agent)}
                 </button>
               )}
             </div>
@@ -985,11 +1012,20 @@ export function ReviewView({ run, onRunUpdated }: Props) {
 
           {slopAudit && slopAudit.issues.length === 0 ? (
             <div className="muted small" style={{ color: 'var(--ok)' }}>
-              ✓ Clean diff: zero <code>any</code> evasions, zero unfinished <code>TODO</code>/<code>FIXME</code> stubs, zero skipped tests, and zero vibe-coding clichés detected.
+              ✓ Clean diff: zero <code>any</code> evasions, zero unfinished <code>TODO</code>/
+              <code>FIXME</code> stubs, zero skipped tests, and zero vibe-coding clichés detected.
             </div>
           ) : (
             slopAudit && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '190px', overflowY: 'auto' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  maxHeight: '190px',
+                  overflowY: 'auto',
+                }}
+              >
                 {slopAudit.issues.map((iss) => (
                   <div
                     key={iss.id}
@@ -1010,7 +1046,14 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                     }}
                     title="Click to open file in diff viewer"
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                      }}
+                    >
                       <span className="mono" style={{ fontWeight: 600 }}>
                         <span style={{ color: iss.severity === 'error' ? 'var(--bad)' : 'var(--warn)' }}>
                           [{iss.severity.toUpperCase()} · {iss.category}]
@@ -1039,8 +1082,14 @@ export function ReviewView({ run, onRunUpdated }: Props) {
       )}
 
       {previewStatus?.error && (previewStatus.status === 'failed' || previewStatus.status === 'exited') && (
-        <div className="review-actions-bar" role="status" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-          <span>Preview {previewStatus.status}: {previewStatus.error}</span>
+        <div
+          className="review-actions-bar"
+          role="status"
+          style={{ flexDirection: 'column', alignItems: 'stretch' }}
+        >
+          <span>
+            Preview {previewStatus.status}: {previewStatus.error}
+          </span>
           {previewStatus.logs && (
             <details>
               <summary>Container output (untrusted)</summary>
@@ -1114,19 +1163,13 @@ export function ReviewView({ run, onRunUpdated }: Props) {
               placeholder="Optional description / summary…"
             />
             <label className="review-checkbox-label">
-              <input
-                type="checkbox"
-                checked={prDraft}
-                onChange={(e) => setPrDraft(e.target.checked)}
-              />
+              <input type="checkbox" checked={prDraft} onChange={(e) => setPrDraft(e.target.checked)} />
               Draft
             </label>
-            <button
-              type="submit"
-              className="btn btn-sm btn-primary"
-              disabled={prCreating || !prTitle.trim()}
-            >
-              {prCreating ? 'Creating PR…' : `Push & Create ${forgeStatus?.provider === 'gitlab' ? 'MR' : 'PR'}`}
+            <button type="submit" className="btn btn-sm btn-primary" disabled={prCreating || !prTitle.trim()}>
+              {prCreating
+                ? 'Creating PR…'
+                : `Push & Create ${forgeStatus?.provider === 'gitlab' ? 'MR' : 'PR'}`}
             </button>
           </div>
           {!forgeStatus?.tokenConfigured && (
@@ -1244,12 +1287,18 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                         {f.path}
                       </span>
                       {counts.open > 0 && (
-                        <span className="badge badge-soft mono" title={`${counts.open} unresolved comment(s)`}>
+                        <span
+                          className="badge badge-soft mono"
+                          title={`${counts.open} unresolved comment(s)`}
+                        >
                           {counts.open}
                         </span>
                       )}
                       {counts.blocking > 0 && (
-                        <span className="badge comment-badge-blocking mono" title={`${counts.blocking} blocking`}>
+                        <span
+                          className="badge comment-badge-blocking mono"
+                          title={`${counts.blocking} blocking`}
+                        >
                           {counts.blocking}!
                         </span>
                       )}
@@ -1327,8 +1376,8 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                   {fileChips.length > 0 && <div className="diff-file-annotations">{fileChips.map(chip)}</div>}
                   {fileDiff.binary ? (
                     <div className="empty review-empty">
-                      Binary file (`{fileDiff.path}`) — comment on the file above, or switch to the Artifacts tab to
-                      preview or download it.
+                      Binary file (`{fileDiff.path}`) — comment on the file above, or switch to the Artifacts
+                      tab to preview or download it.
                     </div>
                   ) : (
                     <MonacoDiff
@@ -1389,9 +1438,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
 
           <div className="review-diff-pane" style={{ padding: '1rem', overflowY: 'auto' }}>
             {!previewArtifact ? (
-              <div className="empty">
-                Select an artifact from the sidebar to preview or download it.
-              </div>
+              <div className="empty">Select an artifact from the sidebar to preview or download it.</div>
             ) : (
               <div className="stack" style={{ gap: '0.75rem' }}>
                 <div
@@ -1435,9 +1482,7 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 ) : (
                   <iframe
                     title={previewArtifact.path}
-                    src={`/api/runs/${run.id}/artifacts/raw?path=${encodeURIComponent(
-                      previewArtifact.path,
-                    )}`}
+                    src={`/api/runs/${run.id}/artifacts/raw?path=${encodeURIComponent(previewArtifact.path)}`}
                     className="artifact-iframe-preview"
                     sandbox={DEMO_IFRAME_SANDBOX}
                   />

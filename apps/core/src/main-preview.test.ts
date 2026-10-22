@@ -35,7 +35,14 @@ import { agentDemoUrl, demoWorkspacePath } from './factory/demo-target.js';
 import { RunService } from './runs/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
-const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
+const ok = (stdout = ''): ExecResult => ({
+  exitCode: 0,
+  signal: null,
+  stdout,
+  stderr: '',
+  timedOut: false,
+  truncated: false,
+});
 const failed = (stderr: string, exitCode = 1): ExecResult => ({
   exitCode,
   signal: null,
@@ -45,9 +52,29 @@ const failed = (stderr: string, exitCode = 1): ExecResult => ({
   truncated: false,
 });
 
-const COMPOSE_V2 = ['version: 2', 'services:', '  - name: site', '    compose: { service: web, port: 80 }', '    preview: true', ''].join('\n');
-const COMMAND_V1 = ['version: 1', 'services:', '  - name: web', '    command: "sleep 30"', '    preview: true', ''].join('\n');
-const PROJECT_COMPOSE = ['services:', '  web:', '    image: nginx:1.29.3-alpine', '    ports: ["8080:80"]', ''].join('\n');
+const COMPOSE_V2 = [
+  'version: 2',
+  'services:',
+  '  - name: site',
+  '    compose: { service: web, port: 80 }',
+  '    preview: true',
+  '',
+].join('\n');
+const COMMAND_V1 = [
+  'version: 1',
+  'services:',
+  '  - name: web',
+  '    command: "sleep 30"',
+  '    preview: true',
+  '',
+].join('\n');
+const PROJECT_COMPOSE = [
+  'services:',
+  '  web:',
+  '    image: nginx:1.29.3-alpine',
+  '    ports: ["8080:80"]',
+  '',
+].join('\n');
 
 interface DockerCall {
   args: string[];
@@ -111,8 +138,14 @@ class FakeEngine {
     } else {
       return localCommandExecutor(request);
     }
-    if (args[0] === 'version') return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
-    this.calls.push({ args, cwd: request.cwd, env: request.env ?? {}, ...(stdin !== undefined ? { stdin } : {}) });
+    if (args[0] === 'version')
+      return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
+    this.calls.push({
+      args,
+      cwd: request.cwd,
+      env: request.env ?? {},
+      ...(stdin !== undefined ? { stdin } : {}),
+    });
     if (args[0] === 'ps') {
       const lines = [...this.projects].flatMap(([project, services]) =>
         [...services].map(([service, state]) =>
@@ -132,10 +165,19 @@ class FakeEngine {
       return ok(lines.join('\n'));
     }
     if (args[0] === 'system' && args[1] === 'df') return ok('');
-    if ((args[0] === 'image' || args[0] === 'builder') && args[1] === 'prune') return ok('Total reclaimed space: 0B\n');
+    if ((args[0] === 'image' || args[0] === 'builder') && args[1] === 'prune')
+      return ok('Total reclaimed space: 0B\n');
     if (args[0] !== 'compose') return failed(`unexpected docker ${args.join(' ')}`);
     if (args[1] === 'ls') {
-      return ok(JSON.stringify([...this.projects].map(([Name, s]) => ({ Name, Status: `running(${s.size})`, ConfigFiles: '/x/compose.yaml' }))));
+      return ok(
+        JSON.stringify(
+          [...this.projects].map(([Name, s]) => ({
+            Name,
+            Status: `running(${s.size})`,
+            ConfigFiles: '/x/compose.yaml',
+          })),
+        ),
+      );
     }
     const project = args[2] ?? '';
     const verb = args.find((a) => ['config', 'up', 'ps', 'logs', 'down'].includes(a));
@@ -158,7 +200,11 @@ class FakeEngine {
     }
     if (verb === 'ps') {
       const states = this.projects.get(project) ?? new Map();
-      return ok([...states].map(([Service, State]) => JSON.stringify({ Service, State, Health: '', ExitCode: 0 })).join('\n'));
+      return ok(
+        [...states]
+          .map(([Service, State]) => JSON.stringify({ Service, State, Health: '', ExitCode: 0 }))
+          .join('\n'),
+      );
     }
     if (verb === 'logs') return ok('web-1  | \u001b[31mnginx: [emerg] bad config\u001b[0m\n');
     if (verb === 'down') {
@@ -170,7 +216,9 @@ class FakeEngine {
   };
 
   composeCalls(verb: string, project?: string): DockerCall[] {
-    return this.calls.filter((c) => c.args[0] === 'compose' && c.args.includes(verb) && (!project || c.args[2] === project));
+    return this.calls.filter(
+      (c) => c.args[0] === 'compose' && c.args.includes(verb) && (!project || c.args[2] === project),
+    );
   }
   downs(): string[][] {
     return this.composeCalls('down').map((c) => c.args);
@@ -200,7 +248,13 @@ afterEach(async () => {
 
 async function start(dockerHost: string | null = 'tcp://docker:2376', overrides: Partial<CoreConfig> = {}) {
   t = await createTestApp({ ...(dockerHost ? { dockerHost } : {}), ...overrides });
-  t.runs.composePreviewTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20, stopSettleMs: 300, cancelRetryMs: 50 };
+  t.runs.composePreviewTiming = {
+    upTimeoutMs: 5_000,
+    readyTimeoutMs: 1_000,
+    pollMs: 20,
+    stopSettleMs: 300,
+    cancelRetryMs: 50,
+  };
   engine = new FakeEngine();
   setCommandExecutor(engine.exec);
   setCommandCanceller(engine.cancel);
@@ -212,7 +266,12 @@ async function start(dockerHost: string | null = 'tcp://docker:2376', overrides:
 }
 
 const api = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-  t.app.inject({ method, url, ...(method === 'POST' ? { payload: payload ?? {} } : {}), headers: authHeaders(cookie) });
+  t.app.inject({
+    method,
+    url,
+    ...(method === 'POST' ? { payload: payload ?? {} } : {}),
+    headers: authHeaders(cookie),
+  });
 
 /** A git project; `yml` is approved; `composeFile` commits the project's compose.yaml into main. */
 async function createProject(
@@ -231,7 +290,10 @@ async function createProject(
   git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
   if (yml) {
     const { head } = (await api('GET', `/api/projects/${project.id}/worktree-config`)).json();
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: head.sha256 })).statusCode).toBe(200);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: head.sha256 }))
+        .statusCode,
+    ).toBe(200);
   }
   return project;
 }
@@ -251,14 +313,16 @@ async function runningMain(projectId: string): Promise<MainPreviewStatus> {
   expect((await startMain(projectId)).statusCode).toBe(200);
   return waitMain(projectId, 'running');
 }
-const runPreview = async (run: Run) => (await api('GET', `/api/runs/${run.id}/preview`)).json() as RunPreviewStatus;
+const runPreview = async (run: Run) =>
+  (await api('GET', `/api/runs/${run.id}/preview`)).json() as RunPreviewStatus;
 async function runningRunPreview(run: Run): Promise<RunPreviewStatus> {
   const res = await api('POST', `/api/runs/${run.id}/preview/start`);
   expect(res.statusCode).toBe(200);
   await expect.poll(async () => (await runPreview(run)).status, { timeout: 5_000 }).toBe('running');
   return runPreview(run);
 }
-const stored = (projectId: string) => readProjectSettings(t.db, projectId).mainPreview as Record<string, unknown> | undefined;
+const stored = (projectId: string) =>
+  readProjectSettings(t.db, projectId).mainPreview as Record<string, unknown> | undefined;
 const browserUrl = async (projectId: string, target: string) => {
   const res = await api('GET', `/api/projects/${projectId}/browser-url?target=${encodeURIComponent(target)}`);
   expect(res.statusCode).toBe(200);
@@ -270,7 +334,14 @@ describe('without a container preview for main (Review Focus 5)', () => {
     await start(null, { dockerEngineSwitchedOff: true });
     const p = await createProject();
     const status = await mainPreview(p.id);
-    expect(status).toMatchObject({ runId: null, targetId: 'main', status: 'stopped', kind: 'compose', port: null, url: null });
+    expect(status).toMatchObject({
+      runId: null,
+      targetId: 'main',
+      status: 'stopped',
+      kind: 'compose',
+      port: null,
+      url: null,
+    });
     expect(status.unavailable).toContain(DOCKER_ENGINE_OFF_TEXT);
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(409);
@@ -322,10 +393,15 @@ describe('without a container preview for main (Review Focus 5)', () => {
   it('compose.yaml not in main yet: a clear 409 and no command service fallback', async () => {
     await start();
     const p = await createProject('Wizard', { composeFile: false });
-    expect((await mainPreview(p.id)).unavailable).toBe('compose.yaml is not in main yet: merge the work that adds it, then start the preview');
+    expect((await mainPreview(p.id)).unavailable).toBe(
+      'compose.yaml is not in main yet: merge the work that adds it, then start the preview',
+    );
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: 'compose_file_missing', message: 'compose.yaml is not in main yet: merge the work that adds it, then start the preview' });
+    expect(res.json()).toMatchObject({
+      error: 'compose_file_missing',
+      message: 'compose.yaml is not in main yet: merge the work that adds it, then start the preview',
+    });
     expect(engine.composeCalls('up')).toEqual([]);
     expect(stored(p.id)).toBeUndefined();
   });
@@ -335,8 +411,15 @@ describe('without a container preview for main (Review Focus 5)', () => {
     const p = await createProject();
     expect((await api('GET', '/api/projects/nope/preview')).statusCode).toBe(404);
     expect((await api('POST', '/api/projects/nope/preview/start')).statusCode).toBe(404);
-    expect((await t.app.inject({ method: 'GET', url: `/api/projects/${p.id}/preview` })).statusCode).toBe(401);
-    const noCsrf = await t.app.inject({ method: 'POST', url: `/api/projects/${p.id}/preview/start`, payload: {}, headers: { cookie } });
+    expect((await t.app.inject({ method: 'GET', url: `/api/projects/${p.id}/preview` })).statusCode).toBe(
+      401,
+    );
+    const noCsrf = await t.app.inject({
+      method: 'POST',
+      url: `/api/projects/${p.id}/preview/start`,
+      payload: {},
+      headers: { cookie },
+    });
     expect(noCsrf.statusCode).toBe(403);
     expect(engine.composeCalls('up')).toEqual([]);
   });
@@ -351,7 +434,13 @@ describe('start, status and stop', () => {
     const res = await startMain(p.id);
     expect(res.statusCode).toBe(200);
     const started = MainPreviewStatus.parse(res.json());
-    expect(started).toMatchObject({ runId: null, targetId: 'main', status: 'starting', kind: 'compose', terminalId: null });
+    expect(started).toMatchObject({
+      runId: null,
+      targetId: 'main',
+      status: 'starting',
+      kind: 'compose',
+      terminalId: null,
+    });
     const port = started.port!;
     expect(port).toBeGreaterThanOrEqual(4325);
     expect(port).toBeLessThanOrEqual(4349);
@@ -376,7 +465,8 @@ describe('start, status and stop', () => {
     expect(up!.env).toMatchObject({ DOCKER_HOST: 'tcp://docker:2376', DOCKER_TLS_VERIFY: '1' });
     expect(up!.stdin).toContain(`ports: !override ["${port}:80"]`);
     // Every compose command used main's preview project, never Build & Verify's.
-    for (const call of engine.calls.filter((c) => c.args[0] === 'compose')) expect(call.args.slice(0, 3)).toEqual(['compose', '-p', project]);
+    for (const call of engine.calls.filter((c) => c.args[0] === 'compose'))
+      expect(call.args.slice(0, 3)).toEqual(['compose', '-p', project]);
     expect(engine.calls.some((c) => c.args.includes(mainComposeProjectName(p.id)))).toBe(false);
     expect(engine.curls.at(-1)).toBe(`http://docker:${port}/`);
   });
@@ -387,7 +477,12 @@ describe('start, status and stop', () => {
     await runningMain(p.id);
     const res = await stopMain(p.id);
     expect(res.statusCode).toBe(200);
-    expect(MainPreviewStatus.parse(res.json())).toMatchObject({ status: 'stopped', port: null, url: null, error: null });
+    expect(MainPreviewStatus.parse(res.json())).toMatchObject({
+      status: 'stopped',
+      port: null,
+      url: null,
+      error: null,
+    });
     expect(engine.downs()).toEqual([downArgs(mainPreviewComposeProjectName(p.id), false)]);
     expect(engine.published.size).toBe(0);
     expect(stored(p.id)).toMatchObject({ status: 'stopped', port: null });
@@ -426,7 +521,9 @@ describe('start, status and stop', () => {
 });
 
 describe('ports: main and run previews never collide (Review Focus 2)', () => {
-  const twoPorts = { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4326 } } };
+  const twoPorts = {
+    previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4326 } },
+  };
 
   it('main first: a run takes the other port, a third preview finds none until main stops', async () => {
     await start('tcp://docker:2376', twoPorts);
@@ -463,8 +560,11 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     return restarted.mainPreviews.status(projectId);
   };
 
-  const VANISHED = "the preview's containers are gone (the Docker engine was reset or they were removed); start it again";
-  const twoDockerPorts = { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4326 } } };
+  const VANISHED =
+    "the preview's containers are gone (the Docker engine was reset or they were removed); start it again";
+  const twoDockerPorts = {
+    previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4326 } },
+  };
 
   it('a running preview whose containers vanished is taken down and failed, which frees its port', async () => {
     await start('tcp://docker:2376', twoDockerPorts);
@@ -480,15 +580,23 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     // Both ports of the range are free for run previews.
     const a = await t.runs.enqueue({ projectId: p.id, prompt: 'a' });
     const b = await t.runs.enqueue({ projectId: p.id, prompt: 'b' });
-    expect([(await runningRunPreview(a)).port, (await runningRunPreview(b)).port].sort()).toEqual([4325, 4326]);
+    expect([(await runningRunPreview(a)).port, (await runningRunPreview(b)).port].sort()).toEqual([
+      4325, 4326,
+    ]);
   });
 
   it('a running preview whose container exited reads exited and keeps its port', async () => {
-    await start('tcp://docker:2376', { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } } });
+    await start('tcp://docker:2376', {
+      previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } },
+    });
     const p = await createProject();
     const port = (await runningMain(p.id)).port!;
     engine.add(mainPreviewComposeProjectName(p.id), { web: 'exited' });
-    expect(await restartedStatus(p.id)).toMatchObject({ status: 'exited', port, error: 'the "web" container is not running' });
+    expect(await restartedStatus(p.id)).toMatchObject({
+      status: 'exited',
+      port,
+      error: 'the "web" container is not running',
+    });
     expect(stored(p.id)?.status).toBe('running');
     expect(engine.downs()).toEqual([]);
     const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
@@ -506,7 +614,11 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     await docker.probe();
     const restarted = new RunService(t.db, t.config, t.ptyd, docker);
     try {
-      expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'exited', port, error: 'the Docker engine is not reachable' });
+      expect(await restarted.mainPreviews.status(p.id)).toMatchObject({
+        status: 'exited',
+        port,
+        error: 'the Docker engine is not reachable',
+      });
       expect(stored(p.id)?.status).toBe('running');
       expect(engine.downs()).toEqual([]);
     } finally {
@@ -514,7 +626,13 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     }
   });
 
-  const fastTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20, stopSettleMs: 300, cancelRetryMs: 50 };
+  const fastTiming = {
+    upTimeoutMs: 5_000,
+    readyTimeoutMs: 1_000,
+    pollMs: 20,
+    stopSettleMs: 300,
+    cancelRetryMs: 50,
+  };
   const restartedService = () => {
     const restarted = new RunService(t.db, t.config, t.ptyd);
     restarted.composePreviewTiming = fastTiming;
@@ -522,7 +640,9 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
   };
 
   it('a start that never came up is reconciled at boot: taken down, failed with a hint, and its port is free again', async () => {
-    await start('tcp://docker:2376', { previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } } });
+    await start('tcp://docker:2376', {
+      previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } },
+    });
     const p = await createProject();
     engine.upGate = new Promise(() => undefined);
     expect((await startMain(p.id)).statusCode).toBe(200);
@@ -531,7 +651,10 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
 
     const restarted = restartedService();
     await restarted.mainPreviews.reconcileInterrupted();
-    expect(stored(p.id)).toMatchObject({ status: 'failed', error: 'Emberline restarted before the preview was ready; start it again' });
+    expect(stored(p.id)).toMatchObject({
+      status: 'failed',
+      error: 'Emberline restarted before the preview was ready; start it again',
+    });
     expect(engine.downs()).toEqual([downArgs(mainPreviewComposeProjectName(p.id), false)]);
     expect(await restarted.mainPreviews.status(p.id)).toMatchObject({ status: 'failed' });
     // The only port of the range is free for the next preview.
@@ -594,7 +717,9 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
       engine.available = true;
       await docker.probe();
       await expect.poll(() => stored(p.id)?.status, { timeout: 5_000 }).toBe('failed');
-      expect(stored(p.id)).toMatchObject({ error: 'Emberline restarted before the preview was ready; start it again' });
+      expect(stored(p.id)).toMatchObject({
+        error: 'Emberline restarted before the preview was ready; start it again',
+      });
       expect(engine.downs()).toEqual([downArgs(mainPreviewComposeProjectName(p.id), false)]);
     } finally {
       restarted.dispose();
@@ -631,7 +756,9 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
   it("a stored preview whose service is not known any more says so without printing 'undefined'", async () => {
     await start();
     const p = await createProject('Bare', { yml: null });
-    writeProjectSettings(t.db, p.id, { mainPreview: { status: 'running', port: 4330, startedAt: new Date().toISOString() } });
+    writeProjectSettings(t.db, p.id, {
+      mainPreview: { status: 'running', port: 4330, startedAt: new Date().toISOString() },
+    });
     const status = await mainPreview(p.id);
     // No container at all: the vanished case.
     expect(status).toMatchObject({ status: 'failed', error: VANISHED });
@@ -760,8 +887,13 @@ describe('the Docker page lists main previews and acts on them through the main 
     const p = await createProject();
     await runningMain(p.id);
     const res = await api('GET', '/api/docker');
-    const listed = DockerOverview.parse(res.json()).projects.find((x) => x.name === mainPreviewComposeProjectName(p.id));
-    expect(listed).toMatchObject({ owner: { kind: 'main', projectId: p.id, projectName: 'Shop', preview: true }, stale: false });
+    const listed = DockerOverview.parse(res.json()).projects.find(
+      (x) => x.name === mainPreviewComposeProjectName(p.id),
+    );
+    expect(listed).toMatchObject({
+      owner: { kind: 'main', projectId: p.id, projectName: 'Shop', preview: true },
+      stale: false,
+    });
   });
 
   it('Stop: the state says stopped (the port is free) and one down, volumes kept', async () => {
@@ -814,7 +946,10 @@ describe('framing: whether the container preview allows being framed (Task 6)', 
     expect(engine.probes).toEqual([`http://docker:${port}/`]);
     const again = await api('POST', `/api/projects/${p.id}/preview/framing`);
     expect(again.statusCode).toBe(200);
-    expect(MainPreviewStatus.parse(again.json()).framing).toEqual({ state: 'refused', reason: 'X-Frame-Options: DENY' });
+    expect(MainPreviewStatus.parse(again.json()).framing).toEqual({
+      state: 'refused',
+      reason: 'X-Frame-Options: DENY',
+    });
     expect(engine.probes).toHaveLength(2);
     expect((await mainPreview(p.id)).framing?.state).toBe('refused');
     expect(engine.probes).toHaveLength(2);
@@ -890,7 +1025,9 @@ describe('browser-url: the preview as the runner sees it (Review Focus 3)', () =
     const p = await createProject();
     mkdirSync(path.join(p.path, 'dist'), { recursive: true });
     writeFileSync(path.join(p.path, 'dist/index.html'), '<!doctype html>');
-    writeProjectSettings(t.db, p.id, { mainPreview: { status: 'starting', port: 4330, startedAt: new Date().toISOString() } });
+    writeProjectSettings(t.db, p.id, {
+      mainPreview: { status: 'starting', port: 4330, startedAt: new Date().toISOString() },
+    });
     const res = await browserUrl(p.id, 'main');
     expect(res.kind).toBe('static');
     expect(res.url).toMatch(/^http:\/\/core:7420\/api\/demo\//);

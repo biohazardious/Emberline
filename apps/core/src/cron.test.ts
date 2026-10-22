@@ -9,7 +9,8 @@ import { computeNextCronDate, previewCronRuns } from './cron/schedule.js';
 import { quotaWindows, runs as runsTable, scheduledJobs } from './db/schema.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
-const next = (expr: string, from: string, zone = 'UTC') => computeNextCronDate(expr, new Date(from), zone).toISOString();
+const next = (expr: string, from: string, zone = 'UTC') =>
+  computeNextCronDate(expr, new Date(from), zone).toISOString();
 
 describe('cron schedule', () => {
   it('evaluates in the given time zone (B12)', () => {
@@ -45,7 +46,9 @@ describe('cron schedule', () => {
   });
 
   it('previews the next five runs', () => {
-    const runs = previewCronRuns('0 */6 * * *', 'UTC', 5, new Date('2026-10-14T01:00:00Z')).map((d) => d.toISOString());
+    const runs = previewCronRuns('0 */6 * * *', 'UTC', 5, new Date('2026-10-14T01:00:00Z')).map((d) =>
+      d.toISOString(),
+    );
     expect(runs).toEqual([
       '2026-10-14T06:00:00.000Z',
       '2026-10-14T12:00:00.000Z',
@@ -106,10 +109,32 @@ describe('cron jobs', () => {
   it("another provider's quota window does not hold back a Claude job; its own lane queues it and skips the next tick", async () => {
     const { api, projectId } = await start();
     const cron = new CronService(t.db, t.runs, t.scheduler, 'UTC');
-    const job: ScheduledJob = (await api('POST', '/api/cron', { projectId, name: 'nightly', cronExpr: '*/5 * * * *', prompt: 'nightly' })).json();
-    const due = () => t.db.update(scheduledJobs).set({ nextRunAt: new Date(Date.now() - 60_000) }).run();
+    const job: ScheduledJob = (
+      await api('POST', '/api/cron', {
+        projectId,
+        name: 'nightly',
+        cronExpr: '*/5 * * * *',
+        prompt: 'nightly',
+      })
+    ).json();
+    const due = () =>
+      t.db
+        .update(scheduledJobs)
+        .set({ nextRunAt: new Date(Date.now() - 60_000) })
+        .run();
     const window = (agent: string) =>
-      t.db.insert(quotaWindows).values({ id: agent, agent, credential: 'login', pool: '*', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+      t.db
+        .insert(quotaWindows)
+        .values({
+          id: agent,
+          agent,
+          credential: 'login',
+          pool: '*',
+          exhaustedAt: new Date(),
+          resumeAt: new Date(Date.now() + 3_600_000),
+          source: 'hook',
+        })
+        .run();
 
     window('antigravity');
     due();
@@ -118,10 +143,13 @@ describe('cron jobs', () => {
     await expect.poll(() => t.runs.getRun(run!.id).state, { timeout: 5_000 }).toBe('starting');
     await t.runs.stop(run!.id);
     await expect
-      .poll(async () => {
-        await t.runs.reconcile();
-        return t.runs.getRun(run!.id).endedAt;
-      }, { timeout: 5_000 })
+      .poll(
+        async () => {
+          await t.runs.reconcile();
+          return t.runs.getRun(run!.id).endedAt;
+        },
+        { timeout: 5_000 },
+      )
       .not.toBeNull();
 
     // Claude's own lane closed: the job's run waits queued, and the next occurrence is skipped behind it.
@@ -149,11 +177,21 @@ describe('cron jobs', () => {
     expect(job.timeZone).toBe('Europe/Istanbul');
     expect(new Date(job.nextRunAt).getUTCHours()).toBe(23);
     expect(
-      (await api('POST', '/api/cron', { projectId, name: 'x', cronExpr: '0 2 * * *', prompt: 'x', timeZone: 'Nowhere/City' }))
-        .statusCode,
+      (
+        await api('POST', '/api/cron', {
+          projectId,
+          name: 'x',
+          cronExpr: '0 2 * * *',
+          prompt: 'x',
+          timeZone: 'Nowhere/City',
+        })
+      ).statusCode,
     ).toBe(400);
 
-    const preview = await api('POST', '/api/cron/preview', { cronExpr: '0 9 * * MON-FRI', timeZone: 'Europe/Istanbul' });
+    const preview = await api('POST', '/api/cron/preview', {
+      cronExpr: '0 9 * * MON-FRI',
+      timeZone: 'Europe/Istanbul',
+    });
     expect(preview.statusCode).toBe(200);
     expect(preview.json().nextRuns).toHaveLength(5);
     expect(new Date(preview.json().nextRuns[0]).getUTCHours()).toBe(6);
@@ -164,13 +202,19 @@ describe('cron jobs', () => {
     const { api, projectId } = await start();
     const body = { projectId, name: 'n', cronExpr: '*/5 * * * *', prompt: 'p' };
     for (const permissionMode of ['default', 'acceptEdits', 'plan']) {
-      expect((await api('POST', '/api/cron', { ...body, permissionMode })).statusCode, permissionMode).toBe(400);
+      expect((await api('POST', '/api/cron', { ...body, permissionMode })).statusCode, permissionMode).toBe(
+        400,
+      );
     }
-    expect((await api('POST', '/api/cron', { ...body, permissionMode: 'bypassPermissions' })).statusCode).toBe(201);
+    expect(
+      (await api('POST', '/api/cron', { ...body, permissionMode: 'bypassPermissions' })).statusCode,
+    ).toBe(201);
     const job: ScheduledJob = (await api('POST', '/api/cron', body)).json();
     expect(job.permissionMode).toBe('auto');
     expect((await api('PATCH', `/api/cron/${job.id}`, { permissionMode: 'default' })).statusCode).toBe(400);
-    expect((await api('PATCH', `/api/cron/${job.id}`, { permissionMode: 'bypassPermissions' })).statusCode).toBe(200);
+    expect(
+      (await api('PATCH', `/api/cron/${job.id}`, { permissionMode: 'bypassPermissions' })).statusCode,
+    ).toBe(200);
   });
 
   it('pauses a stored job with a prompting mode instead of running it, and says why (R5)', async () => {

@@ -6,7 +6,9 @@ type Blocker = Ticket['blockedBy'][number];
 export function waitingLabel(blockedBy: readonly Blocker[]): string | undefined {
   if (blockedBy.length === 0) return undefined;
   const [only] = blockedBy;
-  return blockedBy.length === 1 && only ? `⏳ waiting for ${only.key}` : `⏳ waiting for ${blockedBy.length} tickets`;
+  return blockedBy.length === 1 && only
+    ? `⏳ waiting for ${only.key}`
+    : `⏳ waiting for ${blockedBy.length} tickets`;
 }
 
 /** Hover text listing each blocker with its title and status. */
@@ -35,7 +37,10 @@ export function dependencyCandidates(ticket: Ticket, all: readonly Ticket[]): Ti
 }
 
 /** Tickets "Run Pipeline" can start now: ready ones (and backlog ones when pickup is on) with nothing blocking them. */
-export function startableCount(tickets: readonly Pick<Ticket, 'status' | 'blockedBy'>[], includeBacklog: boolean): number {
+export function startableCount(
+  tickets: readonly Pick<Ticket, 'status' | 'blockedBy'>[],
+  includeBacklog: boolean,
+): number {
   return tickets.filter(
     (t) => t.blockedBy.length === 0 && (t.status === 'ready' || (includeBacklog && t.status === 'backlog')),
   ).length;

@@ -104,7 +104,10 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
 
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/api/terminals/${encodeURIComponent(terminalId)}/ws`, sessionProtocols());
+      ws = new WebSocket(
+        `${proto}://${location.host}/api/terminals/${encodeURIComponent(terminalId)}/ws`,
+        sessionProtocols(),
+      );
       let opened = false;
       ws.onopen = () => {
         opened = true;
@@ -131,7 +134,9 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
             break;
           case 'exit':
             exited = true;
-            term.write(`\r\n\x1b[2m[process exited${message.exitCode !== null ? ` with code ${message.exitCode}` : ''}]\x1b[0m\r\n`);
+            term.write(
+              `\r\n\x1b[2m[process exited${message.exitCode !== null ? ` with code ${message.exitCode}` : ''}]\x1b[0m\r\n`,
+            );
             update('exited');
             break;
           case 'error':

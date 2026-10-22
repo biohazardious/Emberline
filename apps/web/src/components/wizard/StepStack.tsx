@@ -10,7 +10,14 @@ import {
   VERSION_POLICIES,
 } from '@emberline/protocol';
 import { type Dispatch, useState } from 'react';
-import { branchProblem, choiceHint, choiceProblem, isImport, type WizardAction, type WizardState } from './wizardLogic';
+import {
+  branchProblem,
+  choiceHint,
+  choiceProblem,
+  isImport,
+  type WizardAction,
+  type WizardState,
+} from './wizardLogic';
 
 const OTHER = '__other';
 
@@ -32,7 +39,10 @@ function DimensionRow({
   const id = `wizard-dim-${dimension.id}`;
   const options = optionsForType(dimension.id, type);
   // A value from a draft or detection that is not in the list still shows as itself.
-  const current = typeof value === 'string' && value !== 'none' && value !== 'agent' ? findOption(dimension.id, value) : undefined;
+  const current =
+    typeof value === 'string' && value !== 'none' && value !== 'agent'
+      ? findOption(dimension.id, value)
+      : undefined;
   if (current && !options.includes(current)) options.unshift(current);
   const selectValue = value === undefined ? 'agent' : typeof value === 'string' ? value : OTHER;
   const other = typeof value === 'object' ? value.other : null;
@@ -160,7 +170,11 @@ export function StepStack({ state, dispatch }: { state: WizardState; dispatch: D
 
       <div className="wizard-dims">{basic.map((d, i) => row(d, !imported && i === 0))}</div>
 
-      <details className="wizard-details" open={advancedOpen} onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}>
+      <details
+        className="wizard-details"
+        open={advancedOpen}
+        onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+      >
         <summary>Advanced</summary>
         <div className="wizard-dims">
           {advanced.map((d) => row(d, false))}
@@ -179,7 +193,9 @@ export function StepStack({ state, dispatch }: { state: WizardState; dispatch: D
                     value={state.defaultBranch}
                     aria-invalid={branch ? true : undefined}
                     aria-describedby={branch ? 'wizard-branch-error' : undefined}
-                    onChange={(e) => dispatch({ type: 'field', field: 'defaultBranch', value: e.target.value })}
+                    onChange={(e) =>
+                      dispatch({ type: 'field', field: 'defaultBranch', value: e.target.value })
+                    }
                   />
                   {branch && (
                     <p id="wizard-branch-error" className="form-error" role="alert">
@@ -198,7 +214,9 @@ export function StepStack({ state, dispatch }: { state: WizardState; dispatch: D
                     className="input"
                     value={state.versionPolicy}
                     aria-describedby="wizard-version-policy-hint"
-                    onChange={(e) => dispatch({ type: 'field', field: 'versionPolicy', value: e.target.value })}
+                    onChange={(e) =>
+                      dispatch({ type: 'field', field: 'versionPolicy', value: e.target.value })
+                    }
                   >
                     {VERSION_POLICIES.map((p) => (
                       <option key={p.id} value={p.id}>

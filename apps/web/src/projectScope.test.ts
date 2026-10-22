@@ -96,8 +96,14 @@ describe('fleetBulkTitles', () => {
 
 describe('inboxSubtitle', () => {
   it('names the scope', () => {
-    expect(inboxSubtitle(true, undefined)).toBe('Runs that need you in this project · Alt+N opens the oldest in any project');
-    expect(inboxSubtitle(true, 'Alpha')).toBe('Runs that need you in Alpha · Alt+N opens the oldest in any project');
-    expect(inboxSubtitle(false, 'Alpha')).toBe('Runs that need you, across all projects · Alt+N opens the oldest');
+    expect(inboxSubtitle(true, undefined)).toBe(
+      'Runs that need you in this project · Alt+N opens the oldest in any project',
+    );
+    expect(inboxSubtitle(true, 'Alpha')).toBe(
+      'Runs that need you in Alpha · Alt+N opens the oldest in any project',
+    );
+    expect(inboxSubtitle(false, 'Alpha')).toBe(
+      'Runs that need you, across all projects · Alt+N opens the oldest',
+    );
   });
 });

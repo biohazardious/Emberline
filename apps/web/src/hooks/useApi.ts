@@ -15,7 +15,10 @@ interface ApiQuery<T> {
  * `intervalMs` may be a function of the latest data, re-read after every fetch (e.g. poll faster
  * while the server reports work in progress).
  */
-export function useApi<T>(url: string, intervalMs: number | ((data: T | undefined) => number) = 3_000): ApiQuery<T> {
+export function useApi<T>(
+  url: string,
+  intervalMs: number | ((data: T | undefined) => number) = 3_000,
+): ApiQuery<T> {
   const query = useQuery({
     queryKey: ['api', url],
     queryFn: () => api<T>(url),

@@ -26,7 +26,9 @@ function resetTime(v) {
 
 function usageWindow(w) {
   const used = pct(w?.used_percentage);
-  return used === null ? null : { utilizationPercent: used, resetsAt: resetTime(w.resets_at), severity: 'normal' };
+  return used === null
+    ? null
+    : { utilizationPercent: used, resetsAt: resetTime(w.resets_at), severity: 'normal' };
 }
 
 async function readStdin() {
@@ -65,7 +67,10 @@ async function main() {
   try {
     mkdirSync(dir, { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ updatedAt: new Date().toISOString(), fiveHour, sevenDay, extraUsage }));
+    writeFileSync(
+      tmp,
+      JSON.stringify({ updatedAt: new Date().toISOString(), fiveHour, sevenDay, extraUsage }),
+    );
     renameSync(tmp, file);
   } catch {
     // The status line still prints; the next update tries again.

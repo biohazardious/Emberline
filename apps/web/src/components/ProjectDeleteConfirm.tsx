@@ -68,13 +68,29 @@ export function ProjectDeleteConfirm({
         </p>
       )}
       <div className="actions">
-        <button ref={cancelRef} type="button" className="btn btn-sm" disabled={busy !== null} onClick={onCancel}>
+        <button
+          ref={cancelRef}
+          type="button"
+          className="btn btn-sm"
+          disabled={busy !== null}
+          onClick={onCancel}
+        >
           Cancel
         </button>
-        <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void remove('keep')}>
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={busy !== null}
+          onClick={() => void remove('keep')}
+        >
           {busy === 'keep' ? 'Removing…' : keep.label}
         </button>
-        <button type="button" className="btn btn-sm danger" disabled={busy !== null} onClick={() => void remove('purge')}>
+        <button
+          type="button"
+          className="btn btn-sm danger"
+          disabled={busy !== null}
+          onClick={() => void remove('purge')}
+        >
           {busy === 'purge' ? 'Deleting…' : purge.label}
         </button>
       </div>

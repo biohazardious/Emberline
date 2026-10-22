@@ -69,17 +69,13 @@ const CodeExplorerPage = lazy(() =>
 const LiveBrowserPage = lazy(() =>
   import('./pages/LiveBrowserPage').then((m) => ({ default: m.LiveBrowserPage })),
 );
-const RoadmapPage = lazy(() =>
-  import('./pages/RoadmapPage').then((m) => ({ default: m.RoadmapPage })),
-);
+const RoadmapPage = lazy(() => import('./pages/RoadmapPage').then((m) => ({ default: m.RoadmapPage })));
 const ProjectSettingsPage = lazy(() =>
   import('./pages/ProjectSettingsPage').then((m) => ({ default: m.ProjectSettingsPage })),
 );
 const InboxPage = lazy(() => import('./pages/InboxPage').then((m) => ({ default: m.InboxPage })));
 const DockerPage = lazy(() => import('./pages/DockerPage').then((m) => ({ default: m.DockerPage })));
-const SettingsPage = lazy(() =>
-  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
-);
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'emberline.activeProjectId';
 const THEME_STORAGE_KEY = 'emberline.theme';
@@ -157,19 +153,22 @@ function Shell() {
   /** The theme last seen on the server; a change there (another device) is adopted, a local toggle is not undone. */
   const serverTheme = useRef<'dark' | 'light' | undefined>(undefined);
 
-  const applyTheme = useCallback((next: 'dark' | 'light') => {
-    setTheme(next);
-    serverTheme.current = next;
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch {
-      // ignore storage errors
-    }
-    api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next })
-      .then((saved) => queryClient.setQueryData(['api', '/api/factory/settings'], saved))
-      .catch((e: unknown) => toastError(`Could not save the theme: ${errorMessage(e)}`));
-  }, [queryClient]);
+  const applyTheme = useCallback(
+    (next: 'dark' | 'light') => {
+      setTheme(next);
+      serverTheme.current = next;
+      document.documentElement.dataset.theme = next;
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+      } catch {
+        // ignore storage errors
+      }
+      api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next })
+        .then((saved) => queryClient.setQueryData(['api', '/api/factory/settings'], saved))
+        .catch((e: unknown) => toastError(`Could not save the theme: ${errorMessage(e)}`));
+    },
+    [queryClient],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -205,22 +204,19 @@ function Shell() {
 
   const [serverActiveId, setServerActiveId] = useState<string | null | undefined>(undefined);
   const [serverFailed, setServerFailed] = useState(false);
-  const selectProject = useCallback(
-    (id: string | null) => {
-      setActiveProjectId(id);
-      setServerActiveId(id);
-      try {
-        if (id) localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, id);
-        else localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
-      } catch {
-        // ignore storage errors
-      }
-      void api<ActiveProjectPreference>('/api/projects/active', 'PUT', { activeProjectId: id }).catch((e: unknown) =>
-        toastError(`Could not remember the active project: ${errorMessage(e)}`),
-      );
-    },
-    [],
-  );
+  const selectProject = useCallback((id: string | null) => {
+    setActiveProjectId(id);
+    setServerActiveId(id);
+    try {
+      if (id) localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, id);
+      else localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+    void api<ActiveProjectPreference>('/api/projects/active', 'PUT', { activeProjectId: id }).catch(
+      (e: unknown) => toastError(`Could not remember the active project: ${errorMessage(e)}`),
+    );
+  }, []);
 
   // The server's stored choice, asked once when neither the URL nor this browser names a usable project.
   const askedServer = useRef(false);
@@ -323,7 +319,10 @@ function Shell() {
   const handleCleanupProjectWorktrees = async () => {
     if (!activeProject) return;
     try {
-      const res = await api<GarbageCollectRunsResponse>(`/api/projects/${activeProject.id}/cleanup-worktrees`, 'POST');
+      const res = await api<GarbageCollectRunsResponse>(
+        `/api/projects/${activeProject.id}/cleanup-worktrees`,
+        'POST',
+      );
       const kept = keptWorktreesSummary(res);
       if (kept && res.prunedWorktrees === 0) toastInfo(kept);
       else toastInfo(kept ? `Finished worktrees cleaned up. ${kept}` : 'Finished worktrees cleaned up.');
@@ -366,7 +365,11 @@ function Shell() {
             title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             onClick={() => setSidebarCollapsed((c) => !c)}
           >
-            {sidebarCollapsed ? <ChevronsRight className="icon" aria-hidden /> : <ChevronsLeft className="icon" aria-hidden />}
+            {sidebarCollapsed ? (
+              <ChevronsRight className="icon" aria-hidden />
+            ) : (
+              <ChevronsLeft className="icon" aria-hidden />
+            )}
           </button>
         </div>
 
@@ -379,7 +382,9 @@ function Shell() {
               gap: '6px',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}
+            >
               <span className="eyebrow">Active Project</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 {activeProject && (
@@ -603,7 +608,12 @@ function Shell() {
                     <span className={`dot run-${r.state}`} />
                     <span className="nav-label">{title}</span>
                     {r.persona && r.persona !== 'coder' && <PersonaBadge persona={r.persona} />}
-                    <RunStatePill state={r.state} cancelled={r.cancelled} autoRetry={r.autoRetry} handedOffTo={r.handedOffTo} />
+                    <RunStatePill
+                      state={r.state}
+                      cancelled={r.cancelled}
+                      autoRetry={r.autoRetry}
+                      handedOffTo={r.handedOffTo}
+                    />
                   </button>
                 </li>
               );
@@ -693,10 +703,10 @@ function Shell() {
                               fontFamily: 'inherit',
                               fontWeight: selected ? 700 : 500,
                               borderRadius: 5,
-                              border: selected
-                                ? '1px solid var(--accent)'
-                                : '1px solid transparent',
-                              background: selected ? 'color-mix(in srgb, var(--info) 16%, transparent)' : 'transparent',
+                              border: selected ? '1px solid var(--accent)' : '1px solid transparent',
+                              background: selected
+                                ? 'color-mix(in srgb, var(--info) 16%, transparent)'
+                                : 'transparent',
                               color: selected ? 'var(--text)' : 'var(--text-muted)',
                               cursor: 'pointer',
                               display: 'flex',
@@ -744,12 +754,8 @@ function Shell() {
                       <span>7d: {Math.round(claudeUsage.data.sevenDay?.utilizationPercent ?? 0)}%</span>
                     </div>
                   ) : (
-                    <div
-                      style={{ display: 'flex', justifyContent: 'space-between' }}
-                    >
-                      <span>
-                        Turns: {providerBucket ? providerBucket.weeklyTokens.turnCount : 0}
-                      </span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Turns: {providerBucket ? providerBucket.weeklyTokens.turnCount : 0}</span>
                       <span>
                         Runs: {activeProviderRuns > 0 ? `${activeProviderRuns} live / ` : ''}
                         {doneProviderRuns} done
@@ -758,12 +764,8 @@ function Shell() {
                   )}
 
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>
-                      1h: {formatTokensCompact(providerBucket?.hourlyTokens.totalTokens ?? 0)}
-                    </span>
-                    <span>
-                      7d: {formatTokensCompact(providerBucket?.weeklyTokens.totalTokens ?? 0)}
-                    </span>
+                    <span>1h: {formatTokensCompact(providerBucket?.hourlyTokens.totalTokens ?? 0)}</span>
+                    <span>7d: {formatTokensCompact(providerBucket?.weeklyTokens.totalTokens ?? 0)}</span>
                   </div>
                 </div>
               );
@@ -774,7 +776,11 @@ function Shell() {
               className="btn btn-ghost btn-sm"
               onClick={() => applyTheme(theme === 'dark' ? 'light' : 'dark')}
             >
-              {theme === 'dark' ? <Sun className="icon" aria-hidden /> : <Moon className="icon" aria-hidden />}
+              {theme === 'dark' ? (
+                <Sun className="icon" aria-hidden />
+              ) : (
+                <Moon className="icon" aria-hidden />
+              )}
               {theme === 'dark' ? 'Light theme' : 'Dark theme'}
             </button>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logout()}>
@@ -846,11 +852,19 @@ function Shell() {
                   <Globe className="icon" aria-hidden /> <span className="tab-label">Live Browser</span>
                 </Link>
               )}
-              <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`} title="Fleet">
+              <Link
+                href="/fleet"
+                className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}
+                title="Fleet"
+              >
                 <LayoutGrid className="icon" aria-hidden /> <span className="tab-label">Fleet</span>
                 {attention.count > 0 && <span className="badge mono">{attention.count}</span>}
               </Link>
-              <Link href="/settings" className={`topbar-tab${location === '/settings' ? ' active' : ''}`} title="Settings">
+              <Link
+                href="/settings"
+                className={`topbar-tab${location === '/settings' ? ' active' : ''}`}
+                title="Settings"
+              >
                 <Settings className="icon" aria-hidden /> <span className="tab-label">Settings</span>
               </Link>
             </div>
@@ -1050,7 +1064,9 @@ function Shell() {
         open={cmdOpen}
         onClose={() => setCmdOpen(false)}
         projects={projects.data ?? []}
-        runs={(runs ?? []).filter((r) => inActiveScope(projects.data ? resolution.id : undefined, r.projectId))}
+        runs={(runs ?? []).filter((r) =>
+          inActiveScope(projects.data ? resolution.id : undefined, r.projectId),
+        )}
         scheduler={scheduler}
         onInspectRun={(id) => setInspectRunId(id)}
         onLogout={() => void logout()}

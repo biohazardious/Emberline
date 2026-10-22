@@ -49,7 +49,11 @@ export function StepFactory({
         ? 'Adds a [Factory] ticket from the vision and starts it.'
         : 'Starts the Bootstrap ticket now; the product owner takes the vision once it is merged.',
     },
-    { value: false, label: `${verb} only`, hint: imported ? 'Adopts the project and starts nothing.' : 'Creates the tickets and starts nothing.' },
+    {
+      value: false,
+      label: `${verb} only`,
+      hint: imported ? 'Adopts the project and starts nothing.' : 'Creates the tickets and starts nothing.',
+    },
   ];
 
   return (
@@ -59,8 +63,8 @@ export function StepFactory({
           Gates
         </h4>
         <p className="muted small">
-          Inherit follows the global setting, including later changes to it. Gates are stored in Emberline, never in the
-          repository.
+          Inherit follows the global setting, including later changes to it. Gates are stored in Emberline,
+          never in the repository.
         </p>
         {factoryError && (
           <p className="muted small" role="alert">
@@ -95,7 +99,12 @@ export function StepFactory({
         </h4>
         <div className="wizard-readonly">
           <span>{choiceLabel('deploy', state.choices.deploy)}</span>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={onEditDeploy} aria-label="Edit the deploy target">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={onEditDeploy}
+            aria-label="Edit the deploy target"
+          >
             Edit
           </button>
         </div>
@@ -146,7 +155,8 @@ export function StepFactory({
         state.startFactory &&
         !state.vision.trim() && (
           <p className="muted small">
-            Without a vision only the Bootstrap ticket runs; add one on the Type step to get a [Factory] ticket.
+            Without a vision only the Bootstrap ticket runs; add one on the Type step to get a [Factory]
+            ticket.
           </p>
         )
       )}
@@ -162,7 +172,9 @@ export function StepFactory({
                 <dt>
                   {p.label} <span className="muted">· {p.runs}</span>
                 </dt>
-                <dd className="mono">{(factory.personaRoutes[p.id] ?? []).map(routeLabel).join(' → ') || 'Not set'}</dd>
+                <dd className="mono">
+                  {(factory.personaRoutes[p.id] ?? []).map(routeLabel).join(' → ') || 'Not set'}
+                </dd>
               </div>
             ))}
           </dl>

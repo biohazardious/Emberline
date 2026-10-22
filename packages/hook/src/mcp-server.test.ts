@@ -71,7 +71,8 @@ async function connect(env: Record<string, string | undefined>): Promise<Client>
   return client;
 }
 
-const text = (r: unknown): string => ((r as { content: { text: string }[] }).content[0] as { text: string }).text;
+const text = (r: unknown): string =>
+  ((r as { content: { text: string }[] }).content[0] as { text: string }).text;
 
 describe('emberline MCP server', () => {
   const env = () => ({ EMBERLINE_RUN_ID: 'run 1', EMBERLINE_HOOK_TOKEN: 'tok', EMBERLINE_CORE_URL: coreUrl });
@@ -171,7 +172,9 @@ describe('emberline MCP server', () => {
       expect(seen.auth).toBe('Bearer tok');
       expect(seen.contentType).toContain('application/json');
       expect(seen.body).toEqual({});
-      expect(text(r)).toContain("The preview is running (compose). Open http://docker:4325/ in the browser; it serves this run's own work.");
+      expect(text(r)).toContain(
+        "The preview is running (compose). Open http://docker:4325/ in the browser; it serves this run's own work.",
+      );
       // The whole answer is there for the agent too.
       expect(text(r)).toContain('"url":"http://docker:4325/"');
     });
@@ -189,7 +192,9 @@ describe('emberline MCP server', () => {
       hold = true;
       const client = await connect(env());
       const controller = new AbortController();
-      const call = client.callTool({ name: 'preview', arguments: {} }, undefined, { signal: controller.signal });
+      const call = client.callTool({ name: 'preview', arguments: {} }, undefined, {
+        signal: controller.signal,
+      });
       await expect.poll(() => seen.url).toBe('/api/internal/runs/run%201/preview');
       controller.abort();
       await expect(call).rejects.toThrow();
@@ -211,7 +216,8 @@ describe('emberline MCP server', () => {
           status: 'unavailable',
           url: 'http://core:7420/api/demo/tok/',
           kind: 'static',
-          error: 'the preview service "site" runs in Docker. The Docker engine is turned off (EMBERLINE_DOCKER_ENGINE=0 in .env). Remove that line and restart to turn it on.',
+          error:
+            'the preview service "site" runs in Docker. The Docker engine is turned off (EMBERLINE_DOCKER_ENGINE=0 in .env). Remove that line and restart to turn it on.',
         },
       };
       const client = await connect(env());
@@ -222,7 +228,10 @@ describe('emberline MCP server', () => {
     });
 
     it('without any URL it says to build the project and open $EMBERLINE_DEMO_URL', async () => {
-      reply = { status: 200, body: { status: 'unavailable', url: null, kind: 'static', error: 'this project has no preview' } };
+      reply = {
+        status: 200,
+        body: { status: 'unavailable', url: null, kind: 'static', error: 'this project has no preview' },
+      };
       const client = await connect(env());
       const r = await client.callTool({ name: 'preview', arguments: {} });
       expect(r.isError).toBeFalsy();
@@ -232,7 +241,13 @@ describe('emberline MCP server', () => {
     it('a failed preview gives its error and the logs tail', async () => {
       reply = {
         status: 200,
-        body: { status: 'failed', url: null, kind: 'static', error: 'docker compose up failed (exit 1)', logs: 'npm ci exited 1' },
+        body: {
+          status: 'failed',
+          url: null,
+          kind: 'static',
+          error: 'docker compose up failed (exit 1)',
+          logs: 'npm ci exited 1',
+        },
       };
       const client = await connect(env());
       const r = await client.callTool({ name: 'preview', arguments: {} });
@@ -242,7 +257,15 @@ describe('emberline MCP server', () => {
     });
 
     it('a preview still starting after the wait says to call again', async () => {
-      reply = { status: 200, body: { status: 'starting', url: null, kind: 'static', note: 'the container preview is still starting; this is the static build' } };
+      reply = {
+        status: 200,
+        body: {
+          status: 'starting',
+          url: null,
+          kind: 'static',
+          note: 'the container preview is still starting; this is the static build',
+        },
+      };
       const client = await connect(env());
       const r = await client.callTool({ name: 'preview', arguments: {} });
       expect(r.isError).toBeFalsy();
@@ -272,8 +295,12 @@ describe('emberline MCP server', () => {
     });
 
     it('refuses to run outside Emberline and reports an unreachable core', async () => {
-      expect(text(await (await connect({})).callTool({ name: 'preview', arguments: {} }))).toBe('not running under Emberline');
-      const r = await (await connect({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' })).callTool({ name: 'preview', arguments: {} });
+      expect(text(await (await connect({})).callTool({ name: 'preview', arguments: {} }))).toBe(
+        'not running under Emberline',
+      );
+      const r = await (
+        await connect({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' })
+      ).callTool({ name: 'preview', arguments: {} });
       expect(r.isError).toBe(true);
       expect(text(r)).toContain('Could not reach Emberline');
       expect(seen.url).toBeUndefined();
@@ -301,7 +328,11 @@ describe('emberline MCP server', () => {
 
     it('survives an unreachable core', async () => {
       const logs: string[] = [];
-      expect(await announceCompletionTool({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' }, (m) => logs.push(m))).toBe(false);
+      expect(
+        await announceCompletionTool({ ...env(), EMBERLINE_CORE_URL: 'http://127.0.0.1:1' }, (m) =>
+          logs.push(m),
+        ),
+      ).toBe(false);
       expect(logs.join('')).toContain('emberline-mcp: check-in failed');
     });
 
@@ -325,7 +356,12 @@ describe('emberline MCP server', () => {
     child.stderr.on('data', (d: Buffer) => err.push(d.toString('utf8')));
     const send = (m: unknown) => child.stdin.write(`${JSON.stringify(m)}\n`);
     const listTools = async () => {
-      send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+      send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+      });
       send({ jsonrpc: '2.0', method: 'notifications/initialized' });
       send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
       await expect.poll(() => out.join('').includes('ticket_complete'), { timeout: 15_000 }).toBe(true);
@@ -336,7 +372,9 @@ describe('emberline MCP server', () => {
   it('the entry point checks in on startup', async () => {
     const { child, listTools } = spawnEntry(env());
     try {
-      await expect.poll(() => seen.url, { timeout: 15_000 }).toBe('/api/internal/runs/run%201/completion-tool');
+      await expect
+        .poll(() => seen.url, { timeout: 15_000 })
+        .toBe('/api/internal/runs/run%201/completion-tool');
       expect(seen.auth).toBe('Bearer tok');
       await listTools();
     } finally {
@@ -362,7 +400,12 @@ describe('emberline MCP server', () => {
     const lines: string[] = [];
     child.stdout.on('data', (d: Buffer) => lines.push(d.toString('utf8')));
     const send = (m: unknown) => child.stdin.write(`${JSON.stringify(m)}\n`);
-    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+    send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+    });
     send({ jsonrpc: '2.0', method: 'notifications/initialized' });
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     await new Promise<void>((resolve) => {

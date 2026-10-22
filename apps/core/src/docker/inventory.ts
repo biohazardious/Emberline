@@ -18,7 +18,12 @@ import type {
 import { clipText, stripControlChars } from '../text/control-chars.js';
 import { composeLsArgs, dockerPsArgs, isEmberlineComposeProject, systemDfArgs } from './compose.js';
 import { dockerQuery, type Ran } from './compose-preview.js';
-import { composeProjectName, mainComposeProjectName, mainPreviewComposeProjectName, previewComposeProjectName } from './engine.js';
+import {
+  composeProjectName,
+  mainComposeProjectName,
+  mainPreviewComposeProjectName,
+  previewComposeProjectName,
+} from './engine.js';
 
 /** A parse or a docker call: its value, or why there is none (one line, Emberline's words plus CLI output). */
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -226,7 +231,12 @@ export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerP
       (p) => (preview ? mainPreviewComposeProjectName(p.id) : mainComposeProjectName(p.id)) === name,
     );
     if (!project) return { kind: 'orphan' };
-    return { kind: 'main', projectId: project.id, projectName: project.name, ...(preview ? { preview: true } : {}) };
+    return {
+      kind: 'main',
+      projectId: project.id,
+      projectName: project.name,
+      ...(preview ? { preview: true } : {}),
+    };
   }
   const preview = name.endsWith('-preview');
   const r = facts.runs
@@ -269,12 +279,19 @@ export function dockerProjectIdOf(name: string, facts: OwnershipFacts): string |
   const preview = name.endsWith('-preview');
   if (name.startsWith('emberline-main-')) {
     return known(
-      facts.projects.find((p) => (preview ? mainPreviewComposeProjectName(p.id) : mainComposeProjectName(p.id)) === name)?.id,
+      facts.projects.find(
+        (p) => (preview ? mainPreviewComposeProjectName(p.id) : mainComposeProjectName(p.id)) === name,
+      )?.id,
     );
   }
   const newest = facts.runs
-    .filter((r) => (preview ? previewComposeProjectName(r.id) : composeProjectName(r.id, r.worktreePath)) === name)
-    .reduce<OwnershipRun | undefined>((best, r) => (!best || r.createdAt > best.createdAt ? r : best), undefined);
+    .filter(
+      (r) => (preview ? previewComposeProjectName(r.id) : composeProjectName(r.id, r.worktreePath)) === name,
+    )
+    .reduce<OwnershipRun | undefined>(
+      (best, r) => (!best || r.createdAt > best.createdAt ? r : best),
+      undefined,
+    );
   return known(newest?.projectId);
 }
 
@@ -313,7 +330,10 @@ export function buildDockerProjects(input: {
         (a, b) => (a.service ?? '').localeCompare(b.service ?? '') || a.name.localeCompare(b.name),
       ),
       stale: owner.kind === 'orphan',
-      projectId: owner.kind === 'orphan' ? dockerProjectIdOf(name, input.facts) : knownProjectId(owner.projectId, input.facts),
+      projectId:
+        owner.kind === 'orphan'
+          ? dockerProjectIdOf(name, input.facts)
+          : knownProjectId(owner.projectId, input.facts),
     };
   });
   return {

@@ -55,7 +55,11 @@ export function keySavedFor(settings: SettingsView, agent: AgentId): boolean {
  * else the first sign-in method the provider allows. Never AI credits by default; undefined when the
  * provider can only run on a key and none is saved.
  */
-export function defaultRouteFor(settings: SettingsView, agent: AgentId, persona?: AgentPersona): Route | undefined {
+export function defaultRouteFor(
+  settings: SettingsView,
+  agent: AgentId,
+  persona?: AgentPersona,
+): Route | undefined {
   const allowed = PROVIDER_RUNTIME[agent]?.credentials ?? ['login'];
   const model = persona
     ? selectProviderModelByRank(agent, PERSONA_CAPABILITY_TARGETS[persona].recommendedRank)
@@ -76,12 +80,19 @@ export function handoffCandidates(
   settings: SettingsView | undefined,
   windows: readonly Lane[] = [],
 ): HandoffCandidate[] {
-  const current: Route = { agent: run.agent as AgentId, model: (run.model ?? 'auto') as Route['model'], credential: run.credential };
+  const current: Route = {
+    agent: run.agent as AgentId,
+    model: (run.model ?? 'auto') as Route['model'],
+    credential: run.credential,
+  };
   // Stored routes were validated as Routes when the run was created.
   const sources: [HandoffSource, readonly (Route | undefined)[]][] = [['run', run.routes as Route[]]];
   if (settings) {
     sources.push(['persona', settings.personaRoutes[run.persona] ?? []]);
-    sources.push(['provider', settings.enabledProviders.map((agent) => defaultRouteFor(settings, agent, run.persona))]);
+    sources.push([
+      'provider',
+      settings.enabledProviders.map((agent) => defaultRouteFor(settings, agent, run.persona)),
+    ]);
   }
   const out: HandoffCandidate[] = [];
   for (const [source, routes] of sources) {

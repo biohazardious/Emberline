@@ -32,8 +32,8 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
             <span className="badge badge-soft mono">Shared Runner Chromium + Playwright MCP</span>
           </div>
           <p className="sub">
-            Watch your agents navigate, click, and verify the application in real time, or interact
-            with the live Chromium browser directly.
+            Watch your agents navigate, click, and verify the application in real time, or interact with the
+            live Chromium browser directly.
           </p>
         </div>
 
@@ -43,7 +43,12 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
               className="input"
               value={targetId}
               onChange={(e) => setTargetId(e.target.value)}
-              style={{ width: 'auto', maxWidth: 'min(320px, 100%)', fontSize: '0.78rem', padding: '5px 10px' }}
+              style={{
+                width: 'auto',
+                maxWidth: 'min(320px, 100%)',
+                fontSize: '0.78rem',
+                padding: '5px 10px',
+              }}
             >
               {targets.map((t) => (
                 <option key={t.id} value={t.id}>

@@ -19,7 +19,10 @@ describe('project file download', () => {
   it('serves a file whose name is outside Latin-1 with an RFC 5987 file name', async () => {
     const dir = path.join(t.dir, 'p1');
     mkdirSync(dir, { recursive: true });
-    t.db.insert(projects).values({ id: 'p1', name: 'p1', slug: 'p1', path: dir, createdAt: new Date() }).run();
+    t.db
+      .insert(projects)
+      .values({ id: 'p1', name: 'p1', slug: 'p1', path: dir, createdAt: new Date() })
+      .run();
     writeFileSync(path.join(dir, 'çıktı-🚀.txt'), 'hello');
 
     const res = await t.app.inject({
@@ -29,7 +32,9 @@ describe('project file download', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe('hello');
-    expect(res.headers['content-disposition']).toContain(`filename*=UTF-8''${encodeURIComponent('çıktı-🚀.txt')}`);
+    expect(res.headers['content-disposition']).toContain(
+      `filename*=UTF-8''${encodeURIComponent('çıktı-🚀.txt')}`,
+    );
   });
 });
 
@@ -42,7 +47,10 @@ describe('the explorer never writes .emberline/worktree.yml', () => {
   it('refuses to edit, delete or upload it, and to delete .emberline', async () => {
     const dir = path.join(t.dir, 'p1');
     mkdirSync(path.join(dir, '.emberline'), { recursive: true });
-    t.db.insert(projects).values({ id: 'p1', name: 'p1', slug: 'p1', path: dir, createdAt: new Date() }).run();
+    t.db
+      .insert(projects)
+      .values({ id: 'p1', name: 'p1', slug: 'p1', path: dir, createdAt: new Date() })
+      .run();
     const file = path.join(dir, '.emberline', 'worktree.yml');
     writeFileSync(file, 'version: 1\n');
     const send = (method: 'PUT' | 'DELETE' | 'POST', url: string, payload: object) =>

@@ -2,7 +2,12 @@
  * Core entrypoint. Configuration comes from EMBERLINE_* env vars (see config.ts).
  */
 import path from 'node:path';
-import { ptydCommandCanceller, ptydCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
+import {
+  ptydCommandCanceller,
+  ptydCommandExecutor,
+  setCommandCanceller,
+  setCommandExecutor,
+} from './command-exec.js';
 import { invalidPreviewPortVars, loadConfig, parseAllowedHosts, previewPortRangesOverlap } from './config.js';
 import { DockerEngine } from './docker/engine.js';
 import { openDb } from './db/index.js';
@@ -75,7 +80,10 @@ if (ignoredHosts.length > 0) {
 }
 const invalidPorts = invalidPreviewPortVars(process.env);
 if (invalidPorts.length > 0) {
-  app.log.warn({ variables: invalidPorts }, 'preview ports: not a port range (like 4300-4324); using the default');
+  app.log.warn(
+    { variables: invalidPorts },
+    'preview ports: not a port range (like 4300-4324); using the default',
+  );
 }
 if (previewPortRangesOverlap(config.previewPorts)) {
   app.log.warn(
@@ -90,7 +98,8 @@ if (previewPortList(config.previewPorts) === null) {
   );
 }
 logDocker = (status) => {
-  if (status.available) app.log.info({ host: config.dockerHost, version: status.version }, 'Docker engine available');
+  if (status.available)
+    app.log.info({ host: config.dockerHost, version: status.version }, 'Docker engine available');
   else app.log.warn({ host: config.dockerHost, error: status.error }, 'Docker engine unreachable');
 };
 // A background task that forgot a .catch must not take down every running agent's control plane.

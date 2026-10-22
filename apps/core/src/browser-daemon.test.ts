@@ -28,7 +28,12 @@ describe('browser daemon navigation (S17)', () => {
   });
 
   it('refuses file, javascript, data and browser-internal URLs', () => {
-    for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,<b>x</b>', 'chrome://settings']) {
+    for (const url of [
+      'file:///etc/passwd',
+      'javascript:alert(1)',
+      'data:text/html,<b>x</b>',
+      'chrome://settings',
+    ]) {
       expect(() => normalize(url)).toThrow(/only http\(s\) URLs/);
     }
   });
@@ -38,7 +43,12 @@ describe('browser daemon navigation (S17)', () => {
       expect(isBrowsableUrl(url)).toBe(true);
       expect(() => normalize(url)).not.toThrow();
     }
-    for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,x', 'chrome://settings']) {
+    for (const url of [
+      'file:///etc/passwd',
+      'javascript:alert(1)',
+      'data:text/html,x',
+      'chrome://settings',
+    ]) {
       expect(isBrowsableUrl(url)).toBe(false);
     }
   });
@@ -46,15 +56,28 @@ describe('browser daemon navigation (S17)', () => {
 
 type Follow = { seen: Set<string>; last: string | null; urls: Map<string, string> };
 function loadTabPickers(): {
-  pickAgentTab: (pages: Page[], labels: Map<string, string>, follow: Follow, agentUrl?: string | null, holdNew?: boolean) => Page | null;
-  pickShownTab: (pages: Page[], labels: Map<string, string>, follow: Follow, q: { projectId: string; tabId: string | null; follow: boolean; agentUrl?: string | null }) => { tab: Page; following: boolean } | null;
+  pickAgentTab: (
+    pages: Page[],
+    labels: Map<string, string>,
+    follow: Follow,
+    agentUrl?: string | null,
+    holdNew?: boolean,
+  ) => Page | null;
+  pickShownTab: (
+    pages: Page[],
+    labels: Map<string, string>,
+    follow: Follow,
+    q: { projectId: string; tabId: string | null; follow: boolean; agentUrl?: string | null },
+  ) => { tab: Page; following: boolean } | null;
 } {
   const src = (name: string) => {
     const m = new RegExp(`function ${name}\\(([^)]*)\\) \\{[\\s\\S]*?\\n\\}`).exec(BROWSER_DAEMON_SCRIPT);
     if (!m) throw new Error(`${name} not found in the daemon script`);
     return m[0];
   };
-  return new Function(`let pendingOpens = 0;\n${src('pickAgentTab')}\n${src('pickShownTab')}\nreturn { pickAgentTab, pickShownTab };`)();
+  return new Function(
+    `let pendingOpens = 0;\n${src('pickAgentTab')}\n${src('pickShownTab')}\nreturn { pickAgentTab, pickShownTab };`,
+  )();
 }
 type Page = { id: string; url: string };
 
@@ -65,25 +88,45 @@ describe('browser daemon tabs per project', () => {
     { id: 'ta', url: 'http://core:7420/a' },
     { id: 'tb', url: 'http://core:7420/b' },
   ];
-  const labels = new Map([['ta', 'A'], ['tb', 'B']]);
+  const labels = new Map([
+    ['ta', 'A'],
+    ['tb', 'B'],
+  ]);
   const fresh = (): Follow => ({ seen: new Set<string>(), last: null, urls: new Map() });
 
-  it("shows the requested tab only to its own project", () => {
-    expect(pickShownTab(pages, labels, fresh(), { projectId: 'A', tabId: 'ta', follow: false })).toEqual({ tab: pages[1], following: false });
+  it('shows the requested tab only to its own project', () => {
+    expect(pickShownTab(pages, labels, fresh(), { projectId: 'A', tabId: 'ta', follow: false })).toEqual({
+      tab: pages[1],
+      following: false,
+    });
     expect(pickShownTab(pages, labels, fresh(), { projectId: 'B', tabId: 'ta', follow: false })).toBeNull();
     expect(pickShownTab(pages, labels, fresh(), { projectId: 'A', tabId: 'gone', follow: false })).toBeNull();
-    expect(pickShownTab(pages, labels, fresh(), { projectId: 'A', tabId: 'start', follow: false })).toBeNull();
+    expect(
+      pickShownTab(pages, labels, fresh(), { projectId: 'A', tabId: 'start', follow: false }),
+    ).toBeNull();
   });
   it('follows an unlabelled tab with a page loaded; a newly seen one wins', () => {
     const follow = fresh();
     // Nothing loaded in an agent tab yet: the project's tab.
-    expect(pickShownTab(pages, labels, follow, { projectId: 'A', tabId: 'ta', follow: true })?.tab.id).toBe('ta');
-    const withAgent = [...pages.slice(0, 1).map((p) => ({ ...p, url: 'http://core:7420/x' })), ...pages.slice(1)];
-    expect(pickShownTab(withAgent, labels, follow, { projectId: 'A', tabId: 'ta', follow: true })).toEqual({ tab: withAgent[0], following: true });
+    expect(pickShownTab(pages, labels, follow, { projectId: 'A', tabId: 'ta', follow: true })?.tab.id).toBe(
+      'ta',
+    );
+    const withAgent = [
+      ...pages.slice(0, 1).map((p) => ({ ...p, url: 'http://core:7420/x' })),
+      ...pages.slice(1),
+    ];
+    expect(pickShownTab(withAgent, labels, follow, { projectId: 'A', tabId: 'ta', follow: true })).toEqual({
+      tab: withAgent[0],
+      following: true,
+    });
     const newer = [...withAgent, { id: 'agent2', url: 'http://core:7420/y' }];
-    expect(pickShownTab(newer, labels, follow, { projectId: 'A', tabId: 'ta', follow: true })?.tab.id).toBe('agent2');
+    expect(pickShownTab(newer, labels, follow, { projectId: 'A', tabId: 'ta', follow: true })?.tab.id).toBe(
+      'agent2',
+    );
     // A labelled tab is never followed.
-    expect(pickShownTab(newer, labels, follow, { projectId: 'B', tabId: 'tb', follow: true })?.tab.id).toBe('agent2');
+    expect(pickShownTab(newer, labels, follow, { projectId: 'B', tabId: 'tb', follow: true })?.tab.id).toBe(
+      'agent2',
+    );
   });
   it('the daemon version moved with the script', () => {
     expect(BROWSER_DAEMON_VERSION).toBe('1.5.1');
@@ -98,32 +141,84 @@ describe('browser daemon: which agent tab a following view shows (B-10, B-27)', 
   it('an old unlabelled tab whose URL changes wins over a newer static one', () => {
     const follow = fresh();
     expect(pickAgentTab([{ id: 'old', url: 'http://h/1' }], none, follow)?.id).toBe('old');
-    expect(pickAgentTab([{ id: 'old', url: 'http://h/1' }, { id: 'new', url: 'http://h/static' }], none, follow)?.id).toBe('new');
-    expect(pickAgentTab([{ id: 'old', url: 'http://h/2' }, { id: 'new', url: 'http://h/static' }], none, follow)?.id).toBe('old');
+    expect(
+      pickAgentTab(
+        [
+          { id: 'old', url: 'http://h/1' },
+          { id: 'new', url: 'http://h/static' },
+        ],
+        none,
+        follow,
+      )?.id,
+    ).toBe('new');
+    expect(
+      pickAgentTab(
+        [
+          { id: 'old', url: 'http://h/2' },
+          { id: 'new', url: 'http://h/static' },
+        ],
+        none,
+        follow,
+      )?.id,
+    ).toBe('old');
     // Nothing changed since: the view stays where it is.
-    expect(pickAgentTab([{ id: 'old', url: 'http://h/2' }, { id: 'new', url: 'http://h/static' }], none, follow)?.id).toBe('old');
+    expect(
+      pickAgentTab(
+        [
+          { id: 'old', url: 'http://h/2' },
+          { id: 'new', url: 'http://h/static' },
+        ],
+        none,
+        follow,
+      )?.id,
+    ).toBe('old');
   });
 
   it('a page that only rewrites its hash does not take the view', () => {
     const follow = fresh();
     pickAgentTab([{ id: 'game', url: 'http://h/game#t1' }], none, follow);
-    const both = (hash: string) => [{ id: 'game', url: `http://h/game#${hash}` }, { id: 'new', url: 'http://h/static' }];
+    const both = (hash: string) => [
+      { id: 'game', url: `http://h/game#${hash}` },
+      { id: 'new', url: 'http://h/static' },
+    ];
     expect(pickAgentTab(both('t1'), none, follow)?.id).toBe('new');
     expect(pickAgentTab(both('t2'), none, follow)?.id).toBe('new');
-    expect(pickAgentTab([{ id: 'game', url: 'http://h/level-2#t3' }, { id: 'new', url: 'http://h/static' }], none, follow)?.id).toBe('game');
+    expect(
+      pickAgentTab(
+        [
+          { id: 'game', url: 'http://h/level-2#t3' },
+          { id: 'new', url: 'http://h/static' },
+        ],
+        none,
+        follow,
+      )?.id,
+    ).toBe('game');
   });
 
   it("the tab at the agent's last navigation (hash ignored) wins over everything", () => {
     const follow = fresh();
     pickAgentTab([{ id: 'old', url: 'http://h/app#start' }], none, follow);
-    const pages = [{ id: 'old', url: 'http://h/app#start' }, { id: 'new', url: 'http://h/other' }];
+    const pages = [
+      { id: 'old', url: 'http://h/app#start' },
+      { id: 'new', url: 'http://h/other' },
+    ];
     expect(pickAgentTab(pages, none, follow, 'http://h/app#level-2')?.id).toBe('old');
-    expect(pickShownTab(pages, none, fresh(), { projectId: 'A', tabId: null, follow: true, agentUrl: 'http://h/app' })?.tab.id).toBe('old');
+    expect(
+      pickShownTab(pages, none, fresh(), {
+        projectId: 'A',
+        tabId: null,
+        follow: true,
+        agentUrl: 'http://h/app',
+      })?.tab.id,
+    ).toBe('old');
   });
 
   it('a labelled tab is never picked, not even at the agent URL', () => {
     const labels = new Map([['ta', 'A']]);
-    const pages = [{ id: 'ta', url: 'http://h/app' }, { id: 'agent', url: 'http://h/x' }];
+    const pages = [
+      { id: 'ta', url: 'http://h/app' },
+      { id: 'agent', url: 'http://h/x' },
+    ];
     expect(pickAgentTab(pages, labels, fresh(), 'http://h/app')?.id).toBe('agent');
     expect(pickAgentTab([{ id: 'ta', url: 'http://h/app' }], labels, fresh(), 'http://h/app')).toBeNull();
   });
@@ -131,7 +226,10 @@ describe('browser daemon: which agent tab a following view shows (B-10, B-27)', 
   it('holds a tab that appears while a project tab is being opened until it is labelled or the open is done', () => {
     const follow = fresh();
     expect(pickAgentTab([{ id: 'agent', url: 'http://h/a' }], none, follow)?.id).toBe('agent');
-    const opening = [{ id: 'agent', url: 'http://h/a' }, { id: 'opening', url: 'http://h/demo' }];
+    const opening = [
+      { id: 'agent', url: 'http://h/a' },
+      { id: 'opening', url: 'http://h/demo' },
+    ];
     expect(pickAgentTab(opening, none, follow, null, true)?.id).toBe('agent');
     expect(follow.seen.has('opening')).toBe(false);
     // Still unlabelled once the open is done: an agent's new tab after all.
@@ -194,7 +292,10 @@ describe('browser daemon tab labels', () => {
   const page = (id: string) => ({ id, type: 'page', url: 'http://core:7420/x' });
 
   it('drops the label of a tab that was closed', async () => {
-    const tabProjects = new Map([['ta', 'A'], ['gone', 'A']]);
+    const tabProjects = new Map([
+      ['ta', 'A'],
+      ['gone', 'A'],
+    ]);
     const sharedPages = loadSharedPages({
       fetch: async () => ({ ok: true, json: async () => [page('ta')] }),
       tabProjects,
@@ -241,7 +342,9 @@ describe('browser daemon tab labels', () => {
 });
 
 describe('browser daemon Auto-Interact per project', () => {
-  const src = /function playtestHeldByOther\(running, owner, projectId\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT);
+  const src = /function playtestHeldByOther\(running, owner, projectId\) \{[\s\S]*?\n\}/.exec(
+    BROWSER_DAEMON_SCRIPT,
+  );
   const heldByOther = src
     ? (new Function(`${src[0]}; return playtestHeldByOther;`)() as (
         running: boolean,
@@ -259,12 +362,15 @@ describe('browser daemon Auto-Interact per project', () => {
   });
 
   it('stop_playtest and start_playtest ask before touching the loop', () => {
-    const handle = /async function handleAction\(body, q\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT)?.[0] ?? '';
+    const handle =
+      /async function handleAction\(body, q\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT)?.[0] ?? '';
     const stop = /if \(action === 'stop_playtest'\) \{[\s\S]*?\n {2}\}/.exec(handle)?.[0] ?? '';
     const start = /if \(action === 'start_playtest'\) \{[\s\S]*?\n {2}\}/.exec(handle)?.[0] ?? '';
     for (const branch of [stop, start]) {
       expect(branch.indexOf('playtestHeldByOther(')).toBeGreaterThan(-1);
-      expect(branch.indexOf('playtestHeldByOther(')).toBeLessThan(branch.search(/stopPlaytestLoop\(|startPlaytestLoop\(/));
+      expect(branch.indexOf('playtestHeldByOther(')).toBeLessThan(
+        branch.search(/stopPlaytestLoop\(|startPlaytestLoop\(/),
+      );
     }
   });
 });
@@ -310,7 +416,11 @@ describe('browser daemon console and actions per tab', () => {
 
   it('drops the buffers of closed tabs, but not of a tab opened while the list was on its way', () => {
     const { pruneTabBuffers } = load();
-    const buffers = new Map<string, unknown>([['ta', []], ['gone', []], ['new', []]]);
+    const buffers = new Map<string, unknown>([
+      ['ta', []],
+      ['gone', []],
+      ['new', []],
+    ]);
     pruneTabBuffers(buffers, ['ta', 'gone'], new Set(['ta']));
     expect([...buffers.keys()]).toEqual(['ta', 'new']);
   });
@@ -337,7 +447,9 @@ describe('browser daemon console and actions per tab', () => {
 
 describe('browser daemon localhost:7420 bridge across a daemon upgrade', () => {
   const loadListenWithRetry = () =>
-    new Function(`let bridgeError = null;\n${daemonSource('listenWithRetry')}; return listenWithRetry;`)() as (
+    new Function(
+      `let bridgeError = null;\n${daemonSource('listenWithRetry')}; return listenWithRetry;`,
+    )() as (
       server: Server | EventEmitter,
       port: number,
       host: string,
@@ -393,8 +505,12 @@ describe('browser daemon localhost:7420 bridge across a daemon upgrade', () => {
   });
 
   it('/health reports the bridge error, and core logs it once per daemon start', () => {
-    expect(BROWSER_DAEMON_SCRIPT).toContain('JSON.stringify({ ok: true, version: DAEMON_VERSION, bridgeError })');
-    expect(BROWSER_DAEMON_SCRIPT).toMatch(/listenWithRetry\(bridge, 7420, '127\.0\.0\.1', \d+, \d+, \(err\) => \{\s+bridgeError = /);
+    expect(BROWSER_DAEMON_SCRIPT).toContain(
+      'JSON.stringify({ ok: true, version: DAEMON_VERSION, bridgeError })',
+    );
+    expect(BROWSER_DAEMON_SCRIPT).toMatch(
+      /listenWithRetry\(bridge, 7420, '127\.0\.0\.1', \d+, \d+, \(err\) => \{\s+bridgeError = /,
+    );
     const logged: string[] = [];
     resetBridgeErrorLog();
     logBridgeErrorOnce(null, (m) => logged.push(m));
@@ -410,7 +526,12 @@ describe('browser daemon localhost:7420 bridge across a daemon upgrade', () => {
 
 type ActionQuery = { projectId: string; tabId: string | null; follow: boolean; defaultUrl: string | null };
 /** `handleAction` with its globals injected: CDP calls are recorded, `captureState` echoes its query. */
-function loadHandleAction(over: { tabProjects: Map<string, string>; playtestTabId?: string | null; playtestProjectId?: string | null; playtestTimer?: unknown }) {
+function loadHandleAction(over: {
+  tabProjects: Map<string, string>;
+  playtestTabId?: string | null;
+  playtestProjectId?: string | null;
+  playtestTimer?: unknown;
+}) {
   const fetched: string[] = [];
   const captured: ActionQuery[] = [];
   const stopped: string[] = [];
@@ -432,7 +553,9 @@ function loadHandleAction(over: { tabProjects: Map<string, string>; playtestTabI
     resolveShown: async () => ({ pages: [], tab: null, following: false, ephemeral: false }),
     stopPlaytestLoop: (reason: string) => void stopped.push(reason),
     startPlaytestLoop: async () => undefined,
-    playtestHeldByOther: new Function(`${daemonSource('playtestHeldByOther')}; return playtestHeldByOther;`)(),
+    playtestHeldByOther: new Function(
+      `${daemonSource('playtestHeldByOther')}; return playtestHeldByOther;`,
+    )(),
     normalizeNavigateUrl: (u: string) => u,
     pushDaemonAction: () => undefined,
     withCdpPage: async () => undefined,
@@ -445,7 +568,9 @@ function loadHandleAction(over: { tabProjects: Map<string, string>; playtestTabI
   };
   const handle = /async function handleAction\(body, q\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT)?.[0];
   if (!handle) throw new Error('handleAction not found in the daemon script');
-  const handleAction = new Function(...Object.keys(env), `${handle}; return handleAction;`)(...Object.values(env)) as (
+  const handleAction = new Function(...Object.keys(env), `${handle}; return handleAction;`)(
+    ...Object.values(env),
+  ) as (
     body: Record<string, unknown>,
     q: ActionQuery,
   ) => Promise<{ message?: string | null; q: ActionQuery }>;
@@ -505,7 +630,12 @@ describe('browser daemon actions keep to the project that asks (B-8, B-29)', () 
 
   it("close_project_tabs closes only A's tabs and stops A's Auto-Interact", async () => {
     const tabProjects = labels();
-    const h = loadHandleAction({ tabProjects, playtestTabId: 'ta', playtestProjectId: 'A', playtestTimer: 1 });
+    const h = loadHandleAction({
+      tabProjects,
+      playtestTabId: 'ta',
+      playtestProjectId: 'A',
+      playtestTimer: 1,
+    });
     await h.handleAction({ action: 'close_project_tabs' }, qA);
     expect(h.fetched.sort()).toEqual(['http://cdp/json/close/ta', 'http://cdp/json/close/ta2']);
     expect([...tabProjects]).toEqual([['tb', 'B']]);
@@ -513,7 +643,12 @@ describe('browser daemon actions keep to the project that asks (B-8, B-29)', () 
   });
 
   it("stop_playtest from B leaves A's Auto-Interact running and says why", async () => {
-    const h = loadHandleAction({ tabProjects: labels(), playtestTabId: 'ta', playtestProjectId: 'A', playtestTimer: 1 });
+    const h = loadHandleAction({
+      tabProjects: labels(),
+      playtestTabId: 'ta',
+      playtestProjectId: 'A',
+      playtestTimer: 1,
+    });
     const res = await h.handleAction({ action: 'stop_playtest' }, { ...qA, projectId: 'B', tabId: 'tb' });
     expect(res.message).toBe('Auto-Interact is running for another project.');
     expect(h.stopped).toEqual([]);

@@ -7,7 +7,9 @@ const ev = (type: string, payload: unknown, id = 1): RunEvent =>
 
 describe('completionEventText', () => {
   it('shows the summary of a completion', () => {
-    expect(completionEventText('ticket_complete', { summary: 'Done it', handoff: 'x', blockers: [] })).toBe('Done it');
+    expect(completionEventText('ticket_complete', { summary: 'Done it', handoff: 'x', blockers: [] })).toBe(
+      'Done it',
+    );
   });
   it('lists blockers after the summary', () => {
     expect(completionEventText('ticket_complete', { summary: 'Half', blockers: ['no key', 'no db'] })).toBe(
@@ -25,7 +27,8 @@ describe('completionEventText', () => {
 });
 
 describe('latestCompletionBlockers', () => {
-  it('is empty without a completion', () => expect(latestCompletionBlockers([ev('stall_detected', {})])).toEqual([]));
+  it('is empty without a completion', () =>
+    expect(latestCompletionBlockers([ev('stall_detected', {})])).toEqual([]));
   it('reads the latest completion only', () => {
     const events = [
       ev('ticket_complete', { summary: 'a', blockers: ['old'] }, 1),
@@ -35,6 +38,8 @@ describe('latestCompletionBlockers', () => {
     expect(latestCompletionBlockers([events[1]!, events[0]!])).toEqual([]);
   });
   it('returns the blockers of the latest completion', () => {
-    expect(latestCompletionBlockers([ev('ticket_complete', { summary: 'a', blockers: ['x'] })])).toEqual(['x']);
+    expect(latestCompletionBlockers([ev('ticket_complete', { summary: 'a', blockers: ['x'] })])).toEqual([
+      'x',
+    ]);
   });
 });

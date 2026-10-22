@@ -40,7 +40,9 @@ describe('worktreeBanner', () => {
   });
 
   it('asks for a review of a changed file and approves HEAD by its sha256', () => {
-    const b = worktreeBanner(status({ changed: true, head: { content: 'x', sha256: 'a'.repeat(64) }, diff: '+x' }));
+    const b = worktreeBanner(
+      status({ changed: true, head: { content: 'x', sha256: 'a'.repeat(64) }, diff: '+x' }),
+    );
     expect(b).toMatchObject({ kind: 'changed', title: 'worktree.yml changed — review', canApprove: true });
     expect(b?.approveBody).toEqual({ sha256: 'a'.repeat(64) });
   });
@@ -59,12 +61,22 @@ describe('worktreeBanner', () => {
 
   it('asks to approve a removal', () => {
     const b = worktreeBanner(status({ changed: true, removed: true }));
-    expect(b).toMatchObject({ kind: 'removed', title: 'worktree.yml was removed — approve removal', canApprove: true });
+    expect(b).toMatchObject({
+      kind: 'removed',
+      title: 'worktree.yml was removed — approve removal',
+      canApprove: true,
+    });
     expect(b?.approveBody).toEqual({ removal: true });
   });
 
   it('a HEAD file that cannot be used shows its errors and cannot be approved', () => {
-    const b = worktreeBanner(status({ changed: true, unusable: true, errors: ['.emberline/worktree.yml is a symbolic link in HEAD'] }));
+    const b = worktreeBanner(
+      status({
+        changed: true,
+        unusable: true,
+        errors: ['.emberline/worktree.yml is a symbolic link in HEAD'],
+      }),
+    );
     expect(b).toMatchObject({ kind: 'unusable', canApprove: false, approveBody: null });
     expect(b?.title).toBe("worktree.yml in the repository can't be used — runs keep the approved version");
     expect(b?.errors).toEqual(['.emberline/worktree.yml is a symbolic link in HEAD']);
@@ -72,7 +84,9 @@ describe('worktreeBanner', () => {
 
   it('a truncated diff offers the full file, and Approve waits until it is shown', () => {
     const head = { content: 'version: 1\nsetup:\n  - big\n', sha256: 'c'.repeat(64) };
-    const b = worktreeBanner(status({ changed: true, head, diff: '--- approved\n+++ HEAD\n+x\n… diff truncated\n' }));
+    const b = worktreeBanner(
+      status({ changed: true, head, diff: '--- approved\n+++ HEAD\n+x\n… diff truncated\n' }),
+    );
     expect(b).toMatchObject({ truncated: true, fullFile: head.content, canApprove: true });
     expect(approveEnabled(b!, { busy: false, fullFileShown: false })).toBe(false);
     expect(approveEnabled(b!, { busy: false, fullFileShown: true })).toBe(true);
@@ -134,11 +148,16 @@ describe('gate controls', () => {
 
 describe('worktree.yml editor helpers', () => {
   it('starts from HEAD, or from the template without one', () => {
-    expect(worktreeEditorStart(status({ head: { content: 'version: 2\n', sha256: 'a'.repeat(64) } }))).toEqual({
+    expect(
+      worktreeEditorStart(status({ head: { content: 'version: 2\n', sha256: 'a'.repeat(64) } })),
+    ).toEqual({
       content: 'version: 2\n',
       baseSha256: 'a'.repeat(64),
     });
-    expect(worktreeEditorStart(status({ head: null }))).toEqual({ content: 'version: 1\n', baseSha256: null });
+    expect(worktreeEditorStart(status({ head: null }))).toEqual({
+      content: 'version: 1\n',
+      baseSha256: null,
+    });
     expect(worktreeEditorStart(undefined)).toEqual({ content: 'version: 1\n', baseSha256: null });
   });
 
@@ -155,7 +174,9 @@ describe('worktree.yml editor helpers', () => {
       errors: [],
       reload: true,
     });
-    expect(worktreeSaveFailure(new ApiRequestError(400, 'worktree_config_invalid', 'bad', { errors: ['e1'] }))).toEqual({
+    expect(
+      worktreeSaveFailure(new ApiRequestError(400, 'worktree_config_invalid', 'bad', { errors: ['e1'] })),
+    ).toEqual({
       message: 'bad',
       errors: ['e1'],
       reload: false,
@@ -165,18 +186,30 @@ describe('worktree.yml editor helpers', () => {
       errors: [],
       reload: false,
     });
-    expect(worktreeSaveFailure(new Error('offline'))).toEqual({ message: 'offline', errors: [], reload: false });
+    expect(worktreeSaveFailure(new Error('offline'))).toEqual({
+      message: 'offline',
+      errors: [],
+      reload: false,
+    });
   });
 
   it('the Board banner offers Edit only for an unusable file', () => {
-    expect(bannerOffersEdit(worktreeBanner(status({ changed: true, unusable: true, errors: ['link'] })))).toBe(true);
-    expect(bannerOffersEdit(worktreeBanner(status({ changed: true, head: { content: 'x', sha256: 'a'.repeat(64) } })))).toBe(false);
+    expect(
+      bannerOffersEdit(worktreeBanner(status({ changed: true, unusable: true, errors: ['link'] }))),
+    ).toBe(true);
+    expect(
+      bannerOffersEdit(
+        worktreeBanner(status({ changed: true, head: { content: 'x', sha256: 'a'.repeat(64) } })),
+      ),
+    ).toBe(false);
     expect(bannerOffersEdit(null)).toBe(false);
   });
 
   it("the copy is the spec's", () => {
     expect(WORKTREE_SAVE_LABEL).toBe('Save and approve');
-    expect(WORKTREE_EDIT_HINT).toBe('Saving commits the file to main and approves it. Runs use it from their next start.');
+    expect(WORKTREE_EDIT_HINT).toBe(
+      'Saving commits the file to main and approves it. Runs use it from their next start.',
+    );
   });
 });
 
@@ -190,7 +223,10 @@ describe('worktreeEditAvailable', () => {
 describe('refreshWorktreeConfigViews', () => {
   it('refetches the container preview answer and the repository block of that project', async () => {
     const keys: unknown[] = [];
-    await refreshWorktreeConfigViews({ invalidateQueries: async ({ queryKey }) => void keys.push(queryKey) }, 'p1');
+    await refreshWorktreeConfigViews(
+      { invalidateQueries: async ({ queryKey }) => void keys.push(queryKey) },
+      'p1',
+    );
     expect(keys).toEqual([
       ['api', '/api/projects/p1/container-preview'],
       ['api', '/api/projects/p1/repository'],

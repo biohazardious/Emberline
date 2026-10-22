@@ -161,7 +161,10 @@ describe('scheduler', () => {
   it('reads the reset time from the screen when the hook has none, else probes', async () => {
     const a = await submit('BANNER please');
     const tokenA = await work(a);
-    await hook(a.id, 'StopFailure', tokenA, { error: 'rate_limit', last_assistant_message: 'API Error: Rate limit reached' });
+    await hook(a.id, 'StopFailure', tokenA, {
+      error: 'rate_limit',
+      last_assistant_message: 'API Error: Rate limit reached',
+    });
 
     // Right away the window exists (probe), then the banner refines it.
     expect((await scheduler()).window?.resetSource).toBe('probe');
@@ -173,11 +176,25 @@ describe('scheduler', () => {
 
   it('a screen refine only narrows: a wider screen pool sets the reset on the existing window and keeps its pool', async () => {
     const a = await submit();
-    const recordLimit = (lane: { agent: string; credential: string; pool: string }, info: unknown, refinePool?: string) =>
-      (t.scheduler as unknown as { recordLimit(...args: unknown[]): void }).recordLimit(a.id, lane, info, info ? 'screen' : 'hook', refinePool);
+    const recordLimit = (
+      lane: { agent: string; credential: string; pool: string },
+      info: unknown,
+      refinePool?: string,
+    ) =>
+      (t.scheduler as unknown as { recordLimit(...args: unknown[]): void }).recordLimit(
+        a.id,
+        lane,
+        info,
+        info ? 'screen' : 'hook',
+        refinePool,
+      );
     const base = { agent: a.agent, credential: a.credential };
     recordLimit({ ...base, pool: 'opus' }, undefined);
-    recordLimit({ ...base, pool: '*' }, { resetsAt: new Date(Date.now() + 3_600_000), pool: '*', message: 'wide' }, 'opus');
+    recordLimit(
+      { ...base, pool: '*' },
+      { resetsAt: new Date(Date.now() + 3_600_000), pool: '*', message: 'wide' },
+      'opus',
+    );
     const windows = t.db.select().from(quotaWindows).all();
     expect(windows).toHaveLength(1);
     expect(windows[0]).toMatchObject({ pool: 'opus', source: 'screen' });
@@ -213,7 +230,10 @@ describe('scheduler', () => {
     const tokenA = await work(a);
     await hook(a.id, 'StopFailure', tokenA, { error: 'rate_limit' });
     // Simulate time passing across a core restart: the stored resume time is now in the past.
-    t.db.update(quotaWindows).set({ resumeAt: new Date(Date.now() - 1_000) }).run();
+    t.db
+      .update(quotaWindows)
+      .set({ resumeAt: new Date(Date.now() - 1_000) })
+      .run();
     await t.scheduler.tick();
     expect((await scheduler()).window).toBeNull();
     await expect.poll(() => readLines(a.id), { timeout: 5_000 }).toContain('Continue where you left off.');
@@ -222,7 +242,10 @@ describe('scheduler', () => {
   it('lets the user end the pause early', async () => {
     const a = await submit();
     const tokenA = await work(a);
-    await hook(a.id, 'StopFailure', tokenA, { error: 'rate_limit', last_assistant_message: 'resets 11:59pm (UTC)' });
+    await hook(a.id, 'StopFailure', tokenA, {
+      error: 'rate_limit',
+      last_assistant_message: 'resets 11:59pm (UTC)',
+    });
     expect((await scheduler()).window).not.toBeNull();
     const res = await api('POST', '/api/scheduler/resume');
     expect(res.json().window).toBeNull();
@@ -250,7 +273,14 @@ describe('scheduler', () => {
     expect(resumed).toMatchObject({ state: 'starting', endedAt: null, resumable: false });
     expect(resumed.terminalId).not.toBe(a.terminalId);
     await expect
-      .poll(() => readFileSync(path.join(t.dir, `args-${a.id}`), 'utf8').trim().split('\n').at(-1), { timeout: 5_000 })
+      .poll(
+        () =>
+          readFileSync(path.join(t.dir, `args-${a.id}`), 'utf8')
+            .trim()
+            .split('\n')
+            .at(-1),
+        { timeout: 5_000 },
+      )
       .toContain(`--resume sess-${a.id.slice(0, 4)} -- one more thing`);
     expect((await api('GET', '/api/terminals')).json()).toHaveLength(1);
   });
@@ -314,7 +344,9 @@ describe('scheduler', () => {
 
   it('does not start a second run on a ticket whose rate-limited run is waiting (B11)', async () => {
     await submit();
-    const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Limited', status: 'ready' })).json();
+    const ticket = (
+      await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Limited', status: 'ready' })
+    ).json();
     const started = await api('POST', `/api/tickets/${ticket.id}/start`, {});
     expect(started.statusCode).toBe(201);
     const run: Run = started.json().run;
@@ -355,7 +387,11 @@ describe('scheduler', () => {
     };
     /** Simulates the wait: the stored retry time is now in the past. */
     const retryDue = (id: string) =>
-      t.db.update(runsTable).set({ autoRetryAt: new Date(Date.now() - 1_000) }).where(eq(runsTable.id, id)).run();
+      t.db
+        .update(runsTable)
+        .set({ autoRetryAt: new Date(Date.now() - 1_000) })
+        .where(eq(runsTable.id, id))
+        .run();
 
     it('waits without pausing the queue, then continues the turn', async () => {
       const a = await submit();
@@ -401,7 +437,14 @@ describe('scheduler', () => {
       retryDue(a.id);
       await t.scheduler.tick();
       await expect
-        .poll(() => readFileSync(path.join(t.dir, `args-${a.id}`), 'utf8').trim().split('\n').at(-1), { timeout: 5_000 })
+        .poll(
+          () =>
+            readFileSync(path.join(t.dir, `args-${a.id}`), 'utf8')
+              .trim()
+              .split('\n')
+              .at(-1),
+          { timeout: 5_000 },
+        )
         .toContain(`--resume sess-${a.id.slice(0, 4)} -- Continue where you left off.`);
     });
 
@@ -431,7 +474,10 @@ describe('scheduler', () => {
     it('never retries sign-in errors, and a stop cancels a pending retry', async () => {
       const a = await submit();
       const tokenA = await work(a);
-      await hook(a.id, 'StopFailure', tokenA, { error: 'cli_exit', message: 'Error: 401 Unauthorized, please log in' });
+      await hook(a.id, 'StopFailure', tokenA, {
+        error: 'cli_exit',
+        message: 'Error: 401 Unauthorized, please log in',
+      });
       expect(await getRun(a.id)).toMatchObject({ state: 'waiting_input', autoRetry: null });
 
       await hook(a.id, 'UserPromptSubmit', tokenA);

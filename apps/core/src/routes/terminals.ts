@@ -79,7 +79,12 @@ export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd 
  * and output that ptyd delivers right behind the attach response is held back until the
  * snapshot has been sent, so the browser always sees: snapshot, then output.
  */
-export function attachTerminal(socket: WebSocket, sessionId: string, ptyd: CoreDeps['ptyd'], warn: (m: string) => void) {
+export function attachTerminal(
+  socket: WebSocket,
+  sessionId: string,
+  ptyd: CoreDeps['ptyd'],
+  warn: (m: string) => void,
+) {
   let viewer: PtydClient | undefined;
   let closed = false;
   let ready = false;
@@ -135,7 +140,10 @@ export function attachTerminal(socket: WebSocket, sessionId: string, ptyd: CoreD
     try {
       viewer = await ptyd.openViewer();
       viewer.on('output', (id, data) => id === sessionId && emit({ type: 'output', data }));
-      viewer.on('exit', (id, exitCode, signal) => id === sessionId && emit({ type: 'exit', exitCode, signal }));
+      viewer.on(
+        'exit',
+        (id, exitCode, signal) => id === sessionId && emit({ type: 'exit', exitCode, signal }),
+      );
       viewer.on('close', () => !closed && socket.close(1011, 'runner disconnected'));
 
       const { session, snapshot } = await viewer.attach(sessionId);
@@ -143,7 +151,13 @@ export function attachTerminal(socket: WebSocket, sessionId: string, ptyd: CoreD
         viewer.close();
         return;
       }
-      send({ type: 'snapshot', data: snapshot.data, cols: snapshot.cols, rows: snapshot.rows, status: session.status });
+      send({
+        type: 'snapshot',
+        data: snapshot.data,
+        cols: snapshot.cols,
+        rows: snapshot.rows,
+        status: session.status,
+      });
       ready = true;
       for (const message of heldOutput.splice(0)) send(message);
       for (const message of queuedInput.splice(0)) apply(message);

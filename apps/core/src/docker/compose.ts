@@ -51,7 +51,16 @@ export function composePsArgs(project: string): string[] {
 
 /** The last lines of one service's output, or (no `service`) of every service in the project. */
 export function composeLogsArgs(project: string, service?: string): string[] {
-  return ['compose', '-p', project, 'logs', '--no-color', '--tail', String(COMPOSE_LOGS_TAIL_LINES), ...(service ? ['--', service] : [])];
+  return [
+    'compose',
+    '-p',
+    project,
+    'logs',
+    '--no-color',
+    '--tail',
+    String(COMPOSE_LOGS_TAIL_LINES),
+    ...(service ? ['--', service] : []),
+  ];
 }
 
 /**
@@ -59,8 +68,19 @@ export function composeLogsArgs(project: string, service?: string): string[] {
  * broke the compose file. `volumes` (cleanup) also removes its named volumes, `images` (cleanup) the
  * images it built (`--rmi local`: those without a tag of their own; pulled images stay).
  */
-export function composeDownArgs(project: string, { volumes = false, images = false }: { volumes?: boolean; images?: boolean } = {}): string[] {
-  return ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), ...(images ? ['--rmi', 'local'] : []), '--remove-orphans'];
+export function composeDownArgs(
+  project: string,
+  { volumes = false, images = false }: { volumes?: boolean; images?: boolean } = {},
+): string[] {
+  return [
+    'compose',
+    '-p',
+    project,
+    'down',
+    ...(volumes ? ['-v'] : []),
+    ...(images ? ['--rmi', 'local'] : []),
+    '--remove-orphans',
+  ];
 }
 
 /**
@@ -68,7 +88,10 @@ export function composeDownArgs(project: string, { volumes = false, images = fal
  * only in {@link COMPOSE_OVERRIDE_ENV}.
  */
 export function composeShell(args: string[]): { file: string; args: string[] } {
-  return { file: 'sh', args: ['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`, 'sh', ...args] };
+  return {
+    file: 'sh',
+    args: ['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`, 'sh', ...args],
+  };
 }
 
 /**
@@ -78,7 +101,12 @@ export function composeShell(args: string[]): { file: string; args: string[] } {
  * either: two runs' previews of the same file would collide on it. Names are JSON-quoted (valid YAML
  * keys).
  */
-export function composeOverrideYaml(opts: { service: string; port: number; hostPort: number; services: readonly string[] }): string {
+export function composeOverrideYaml(opts: {
+  service: string;
+  port: number;
+  hostPort: number;
+  services: readonly string[];
+}): string {
   const lines = ['services:'];
   for (const name of new Set([...opts.services, opts.service])) {
     lines.push(`  ${JSON.stringify(name)}:`);
@@ -143,10 +171,14 @@ export function parseComposePs(stdout: string): ComposeContainer[] {
  * The preview service's state: `running` (a container runs and is not unhealthy), `starting`
  * (created or restarting, or health still `starting`), `stopped` (exited or dead), `missing`.
  */
-export function composeServiceState(containers: readonly ComposeContainer[], service: string): 'running' | 'starting' | 'stopped' | 'missing' {
+export function composeServiceState(
+  containers: readonly ComposeContainer[],
+  service: string,
+): 'running' | 'starting' | 'stopped' | 'missing' {
   const own = containers.filter((c) => c.service === service);
   if (own.length === 0) return 'missing';
-  if (own.some((c) => c.state === 'running' && c.health !== 'starting' && c.health !== 'unhealthy')) return 'running';
+  if (own.some((c) => c.state === 'running' && c.health !== 'starting' && c.health !== 'unhealthy'))
+    return 'running';
   if (own.some((c) => ['created', 'restarting', 'running'].includes(c.state))) return 'starting';
   return 'stopped';
 }
@@ -237,7 +269,8 @@ export function builderPruneArgs(): string[] {
  * Image of the throwaway container that hands a worktree's files back (pulled once), pinned by its
  * index digest (from `docker buildx imagetools inspect busybox:1.37.0`).
  */
-export const RECLAIM_IMAGE = 'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
+export const RECLAIM_IMAGE =
+  'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
 
 /**
  * Hands every file under `dir` back to the runner user so the worktree can be removed. The engine is

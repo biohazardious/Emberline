@@ -87,7 +87,10 @@ export class PtySession {
     this.term.loadAddon(this.serializer as unknown as Parameters<HeadlessTerminal['loadAddon']>[0]);
 
     if (config.logDir) {
-      this.log = new RotatingLog(path.join(config.logDir, `${id}.log`), config.maxLogBytes ?? 8 * 1024 * 1024);
+      this.log = new RotatingLog(
+        path.join(config.logDir, `${id}.log`),
+        config.maxLogBytes ?? 8 * 1024 * 1024,
+      );
     }
 
     this.proc = nodePty.spawn(params.file, params.args, {

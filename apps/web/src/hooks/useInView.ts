@@ -9,7 +9,9 @@ export function useInView(ref: RefObject<Element | null>, rootMargin = '0px'): b
       setInView(true);
       return;
     }
-    const observer = new IntersectionObserver(([entry]) => setInView(Boolean(entry?.isIntersecting)), { rootMargin });
+    const observer = new IntersectionObserver(([entry]) => setInView(Boolean(entry?.isIntersecting)), {
+      rootMargin,
+    });
     observer.observe(el);
     return () => observer.disconnect();
   }, [ref, rootMargin]);

@@ -79,7 +79,9 @@ async function waitFile(name: string): Promise<string> {
 }
 
 const wgit = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], { encoding: 'utf8' });
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], {
+    encoding: 'utf8',
+  });
 
 async function createProject(name = 'Gate Project') {
   const { project } = (await api('POST', '/api/projects', { name, initGit: false })).json();
@@ -95,7 +97,8 @@ const runsFor = (ticketId: string) => t.runs.list().filter((r) => r.ticketId ===
 const eventTypes = async (run: Run) =>
   ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
 const eventPayload = async (run: Run, type: string) =>
-  ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find((e) => e.type === type)?.payload;
+  ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find((e) => e.type === type)
+    ?.payload;
 /** A note of the completion gate itself (the tool check-in is not one). */
 const isGateNote = (type: string) => type.startsWith('completion_') && type !== 'completion_tool_ready';
 const followups = (run: Run) => {
@@ -171,7 +174,9 @@ async function oneShotExited(run: Run): Promise<void> {
   const sessionId = run.terminalId as string;
   await t.ptyd.get().kill(sessionId);
   await expect
-    .poll(async () => (await t.ptyd.get().list()).sessions.find((s) => s.id === sessionId)?.status, { timeout: 5_000 })
+    .poll(async () => (await t.ptyd.get().list()).sessions.find((s) => s.id === sessionId)?.status, {
+      timeout: 5_000,
+    })
     .not.toBe('running');
 }
 
@@ -308,7 +313,8 @@ describe('completion gate', () => {
     // person can still continue the session after the ticket reached Done.
     const runsSvc = t.runs as unknown as { stop(id: string, opts?: { reason?: string }): Promise<Run> };
     const realStop = runsSvc.stop.bind(t.runs);
-    runsSvc.stop = async (id, opts) => (opts?.reason === 'factory_step_finished' ? t.runs.get(id) : realStop(id, opts));
+    runsSvc.stop = async (id, opts) =>
+      opts?.reason === 'factory_step_finished' ? t.runs.get(id) : realStop(id, opts);
     await begin(run);
     await stop(run);
     await settled(passes, 1);
@@ -339,7 +345,8 @@ describe('completion gate', () => {
     // Keep the CLI open after the step, so a person can continue the session.
     const runsSvc = t.runs as unknown as { stop(id: string, opts?: { reason?: string }): Promise<Run> };
     const realStop = runsSvc.stop.bind(t.runs);
-    runsSvc.stop = async (id, opts) => (opts?.reason === 'factory_step_finished' ? t.runs.get(id) : realStop(id, opts));
+    runsSvc.stop = async (id, opts) =>
+      opts?.reason === 'factory_step_finished' ? t.runs.get(id) : realStop(id, opts);
     await begin(run);
     await stop(run);
     await settled(passes, 1);
@@ -433,7 +440,9 @@ describe('completion gate', () => {
 
     it('the project overriding the setting off (global still on): Stop alone advances the ticket', async () => {
       const { project, ticket, run } = await factoryTicket();
-      await api('PATCH', `/api/projects/${project.id}/settings`, { gates: { requireCompletionSignal: false } });
+      await api('PATCH', `/api/projects/${project.id}/settings`, {
+        gates: { requireCompletionSignal: false },
+      });
       await begin(run);
       await stop(run);
       await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
@@ -473,8 +482,14 @@ describe('completion gate', () => {
 
     it('the [Factory] product-owner orchestrator ticket (its tickets file is its signal)', async () => {
       const project = await createProject();
-      const po = await createTicket(project.id, { title: '[Factory] Plan it', status: 'ready', persona: 'product_owner' });
-      const { run } = (await api('POST', `/api/tickets/${po.id}/start`, { persona: 'product_owner' })).json() as { run: Run };
+      const po = await createTicket(project.id, {
+        title: '[Factory] Plan it',
+        status: 'ready',
+        persona: 'product_owner',
+      });
+      const { run } = (
+        await api('POST', `/api/tickets/${po.id}/start`, { persona: 'product_owner' })
+      ).json() as { run: Run };
       mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
       writeFileSync(
         path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
@@ -490,7 +505,9 @@ describe('completion gate', () => {
       const project = await createProject();
       t.tickets.setAutoChain(project.id, true);
       const passes = trackPipelines();
-      const run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'look around' })).json() as Run;
+      const run = (
+        await api('POST', '/api/runs', { projectId: project.id, prompt: 'look around' })
+      ).json() as Run;
       await begin(run);
       await stop(run);
       await settled(passes, 1);
@@ -516,7 +533,10 @@ describe('gate re-prompts and the completion tool', () => {
   const AGAIN = 'When finished, call `ticket_complete` again.';
   async function sloppyTicket() {
     const made = await factoryTicket();
-    writeFileSync(path.join(made.run.worktreePath, 'slop.ts'), 'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n');
+    writeFileSync(
+      path.join(made.run.worktreePath, 'slop.ts'),
+      'export const x: any = 1;\n// @ts-ignore\nexport const y = x.z;\n',
+    );
     wgit(made.run.worktreePath, 'add', '-A');
     wgit(made.run.worktreePath, 'commit', '-q', '-m', 'slop');
     return made;
@@ -573,7 +593,11 @@ describe('dependency context in the dependent prompt', () => {
     const a = await createTicket(project.id, { title: 'Schema', status: 'done' });
     const b = await createTicket(project.id, { title: 'API', status: 'done' });
     const c = await createTicket(project.id, { title: 'Auth', status: 'done' });
-    const d = await createTicket(project.id, { title: 'Screen', status: 'backlog', body: 'Build the screen.' });
+    const d = await createTicket(project.id, {
+      title: 'Screen',
+      status: 'backlog',
+      body: 'Build the screen.',
+    });
     await api('PATCH', `/api/tickets/${b.id}`, { dependsOn: [a.id] });
     await api('PATCH', `/api/tickets/${d.id}`, { dependsOn: [b.id, c.id] });
     setCompletion(a.id, 'made the schema', 'tables: users', '2026-10-17T10:00:00.000Z');
@@ -602,19 +626,29 @@ describe('dependency context in the dependent prompt', () => {
     expect(prompt).not.toContain('made the schema');
   });
 
-  it('passes a dependency\'s blockers on to the dependent prompt', async () => {
+  it("passes a dependency's blockers on to the dependent prompt", async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'Schema', status: 'done' });
     const d = await createTicket(project.id, { title: 'Screen', status: 'backlog' });
     await api('PATCH', `/api/tickets/${d.id}`, { dependsOn: [a.id] });
     t.db
       .update(tickets)
-      .set({ completion: { runId: 'r', summary: 'partial', handoff: '', blockers: ['no API key', 'pick a DB'], at: '2026-10-17T10:00:00.000Z' } })
+      .set({
+        completion: {
+          runId: 'r',
+          summary: 'partial',
+          handoff: '',
+          blockers: ['no API key', 'pick a DB'],
+          at: '2026-10-17T10:00:00.000Z',
+        },
+      })
       .where(eq(tickets.id, a.id))
       .run();
     const { run } = (await api('POST', `/api/tickets/${d.id}/start`, {})).json() as { run: Run };
     await waitFile(`token-${run.id}`);
-    expect(t.runs.get(run.id).prompt).toContain(`### ${a.key}: Schema\nSummary: partial\nBlockers: no API key; pick a DB`);
+    expect(t.runs.get(run.id).prompt).toContain(
+      `### ${a.key}: Schema\nSummary: partial\nBlockers: no API key; pick a DB`,
+    );
   });
 
   it('adds nothing when no dependency has a completion', async () => {
@@ -630,7 +664,11 @@ describe('dependency context in the dependent prompt', () => {
   it('keeps the whole prompt within the run prompt limit', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'Schema', status: 'done' });
-    const d = await createTicket(project.id, { title: 'Screen', status: 'backlog', body: 'x'.repeat(15_000) });
+    const d = await createTicket(project.id, {
+      title: 'Screen',
+      status: 'backlog',
+      body: 'x'.repeat(15_000),
+    });
     await api('PATCH', `/api/tickets/${d.id}`, { dependsOn: [a.id] });
     setCompletion(a.id, 's'.repeat(4000), 'h'.repeat(8000), '2026-10-17T10:00:00.000Z');
     const res = await api('POST', `/api/tickets/${d.id}/start`, {});
@@ -649,7 +687,15 @@ describe('the ticket completion and a new run', () => {
     const ticket = await createTicket(project.id, { title: 'Again', status: 'review' });
     t.db
       .update(tickets)
-      .set({ completion: { runId: 'old', summary: 'old work', handoff: '', blockers: ['stuck'], at: '2026-10-17T10:00:00.000Z' } })
+      .set({
+        completion: {
+          runId: 'old',
+          summary: 'old work',
+          handoff: '',
+          blockers: ['stuck'],
+          at: '2026-10-17T10:00:00.000Z',
+        },
+      })
       .where(eq(tickets.id, ticket.id))
       .run();
     const seen: Ticket[] = [];
@@ -669,7 +715,9 @@ describe('the ticket completion and a new run', () => {
     await begin(run);
     await complete(run, { summary: 'kept' });
     await t.tickets.prompt(ticket.id, 'one more thing');
-    expect(((await api('GET', `/api/tickets/${ticket.id}`)).json() as Ticket).completion).toMatchObject({ summary: 'kept' });
+    expect(((await api('GET', `/api/tickets/${ticket.id}`)).json() as Ticket).completion).toMatchObject({
+      summary: 'kept',
+    });
   });
 
   it('a prompt the CLI answered before it was recorded leaves the ticket in Review', async () => {
@@ -747,7 +795,12 @@ describe('dependencyContextSection', () => {
     const blocked: FinishedDependency = {
       key: 'A',
       title: 'Title A',
-      completion: { summary: 'half', handoff: 'see a.ts', blockers: ['no signing key', ' needs a decision '], at: '2026-10-17T10:00:00.000Z' },
+      completion: {
+        summary: 'half',
+        handoff: 'see a.ts',
+        blockers: ['no signing key', ' needs a decision '],
+        at: '2026-10-17T10:00:00.000Z',
+      },
     };
     const clean: FinishedDependency = {
       key: 'B',
@@ -764,7 +817,12 @@ describe('dependencyContextSection', () => {
       {
         key: 'A',
         title: 'Title A',
-        completion: { summary: 's', handoff: 'h', blockers: Array.from({ length: 10 }, () => 'b'.repeat(500)), at: '2026-10-17T10:00:00.000Z' },
+        completion: {
+          summary: 's',
+          handoff: 'h',
+          blockers: Array.from({ length: 10 }, () => 'b'.repeat(500)),
+          at: '2026-10-17T10:00:00.000Z',
+        },
       },
     ]);
     const block = section.split('\n\n').slice(1).join('\n\n');
@@ -774,7 +832,9 @@ describe('dependencyContextSection', () => {
   });
 
   it('caps each dependency at 3000 chars with an ellipsis', () => {
-    const section = dependencyContextSection([dep('A', '2026-10-17T10:00:00.000Z', 's'.repeat(4000), 'h'.repeat(8000))]);
+    const section = dependencyContextSection([
+      dep('A', '2026-10-17T10:00:00.000Z', 's'.repeat(4000), 'h'.repeat(8000)),
+    ]);
     const block = section.split('\n\n').slice(1).join('\n\n');
     expect(block.length).toBe(DEPENDENCY_BLOCK_MAX);
     expect(block.startsWith('### A: Title A\nSummary: sss')).toBe(true);
@@ -789,7 +849,9 @@ describe('dependencyContextSection', () => {
     expect(section.length).toBeLessThanOrEqual(DEPENDENCY_SECTION_MAX);
     const blocks = section.split('\n\n').slice(1);
     // Every dependency still has its heading.
-    expect(blocks.map((b) => b.split('\n')[0])).toEqual(['A', 'B', 'C', 'D', 'E'].map((k) => `### ${k}: Title ${k}`));
+    expect(blocks.map((b) => b.split('\n')[0])).toEqual(
+      ['A', 'B', 'C', 'D', 'E'].map((k) => `### ${k}: Title ${k}`),
+    );
     // The newest ones are whole (at the per-dependency cap), the oldest ones were shortened.
     expect(blocks[4]?.length).toBe(DEPENDENCY_BLOCK_MAX);
     expect(blocks[3]?.length).toBe(DEPENDENCY_BLOCK_MAX);
@@ -801,7 +863,9 @@ describe('dependencyContextSection', () => {
     const deps = [dep('A', '2026-10-17T10:00:00.000Z', 'a'.repeat(2000))];
     const small = dependencyContextSection(deps, 500);
     expect(small.length).toBe(500);
-    expect(small.startsWith('## Context from finished dependencies\n\n### A: Title A\nSummary: aaa')).toBe(true);
+    expect(small.startsWith('## Context from finished dependencies\n\n### A: Title A\nSummary: aaa')).toBe(
+      true,
+    );
     expect(small.endsWith('…')).toBe(true);
     expect(dependencyContextSection(deps, 20)).toBe('');
   });
@@ -811,10 +875,21 @@ describe('issue write-back in the pipeline', () => {
   /** A factory ticket linked to issue #5 of acme/widget, with label sync settings. */
   async function linkedFactoryTicket(settings: Partial<IssueSyncSettings>) {
     const made = await factoryTicket();
-    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, made.project.id)).run();
+    t.db
+      .update(projects)
+      .set({ repoUrl: 'https://github.com/acme/widget.git' })
+      .where(eq(projects.id, made.project.id))
+      .run();
     t.db
       .update(tickets)
-      .set({ externalSource: 'github', externalId: '9005', externalNumber: 5, externalUrl: 'https://github.com/acme/widget/issues/5', externalState: 'open', externalLabels: [] })
+      .set({
+        externalSource: 'github',
+        externalId: '9005',
+        externalNumber: 5,
+        externalUrl: 'https://github.com/acme/widget/issues/5',
+        externalState: 'open',
+        externalLabels: [],
+      })
       .where(eq(tickets.id, made.ticket.id))
       .run();
     writeIssueSync(t.db, made.project.id, IssueSyncSettings.parse({ closeOnDone: true, ...settings }));
@@ -825,7 +900,11 @@ describe('issue write-back in the pipeline', () => {
   it('a merged, Done ticket comments the merge and closes its issue', async () => {
     const seen: { method: string; path: string; body: unknown }[] = [];
     t.forgeFetch.current = async (url, init) => {
-      seen.push({ method: init?.method ?? 'GET', path: new URL(url).pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      seen.push({
+        method: init?.method ?? 'GET',
+        path: new URL(url).pathname,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     };
     const { project, ticket, run } = await linkedFactoryTicket({});
@@ -840,7 +919,9 @@ describe('issue write-back in the pipeline', () => {
         {
           method: 'POST',
           path: '/repos/acme/widget/issues/5/comments',
-          body: { body: `Emberline merged ${ticket.key} into \`main\` locally (${sha}). It reaches the remote when the branch is pushed.` },
+          body: {
+            body: `Emberline merged ${ticket.key} into \`main\` locally (${sha}). It reaches the remote when the branch is pushed.`,
+          },
         },
         { method: 'PATCH', path: '/repos/acme/widget/issues/5', body: { state: 'closed' } },
       ]),
@@ -858,14 +939,20 @@ describe('issue write-back in the pipeline', () => {
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
     await t.issueSync.settled();
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(true);
-    await expect.poll(() => eventTypes(run), { timeout: 5_000 }).toEqual(expect.arrayContaining(['issue_comment_failed', 'issue_close_failed']));
+    await expect
+      .poll(() => eventTypes(run), { timeout: 5_000 })
+      .toEqual(expect.arrayContaining(['issue_comment_failed', 'issue_close_failed']));
   });
 });
 
 describe('issue triage', () => {
   it('auto-pickup never starts an untrusted label-sync import; once a person moves it to Ready it dispatches', async () => {
     const project = await createProject('Triage Project');
-    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, project.id)).run();
+    t.db
+      .update(projects)
+      .set({ repoUrl: 'https://github.com/acme/widget.git' })
+      .where(eq(projects.id, project.id))
+      .run();
     seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     const issue = {
       id: 9001,
@@ -886,7 +973,13 @@ describe('issue triage', () => {
     writeIssueSync(
       t.db,
       project.id,
-      IssueSyncSettings.parse({ enabled: true, label: 'emberline', status: 'ready', trustedAuthors: ['octo'], repo: { provider: 'github', repoPath: 'acme/widget' } }),
+      IssueSyncSettings.parse({
+        enabled: true,
+        label: 'emberline',
+        status: 'ready',
+        trustedAuthors: ['octo'],
+        repo: { provider: 'github', repoPath: 'acme/widget' },
+      }),
     );
     await api('PATCH', '/api/factory/settings', { autoPickupBacklog: true });
     expect((await api('POST', `/api/projects/${project.id}/issue-sync/run`)).json().lastError).toBeNull();
@@ -894,7 +987,9 @@ describe('issue triage', () => {
     expect(ticket).toMatchObject({ status: 'backlog', external: { number: 1, triage: true } });
 
     // "Run pipeline", a chaining dispatch and a restart's resumeChains all pass it by.
-    const run = (await api('POST', `/api/projects/${project.id}/run-pipeline`)).json() as { dispatched: unknown[] };
+    const run = (await api('POST', `/api/projects/${project.id}/run-pipeline`)).json() as {
+      dispatched: unknown[];
+    };
     expect(run.dispatched).toEqual([]);
     t.tickets.setAutoChain(project.id, true);
     expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
@@ -906,7 +1001,9 @@ describe('issue triage', () => {
     // A person moves it to Ready: that is the triage.
     const moved = (await api('PATCH', `/api/tickets/${ticket!.id}`, { status: 'ready' })).json() as Ticket;
     expect(moved.external).toMatchObject({ triage: false });
-    const again = (await api('POST', `/api/projects/${project.id}/run-pipeline`)).json() as { dispatched: { ticket: Ticket }[] };
+    const again = (await api('POST', `/api/projects/${project.id}/run-pipeline`)).json() as {
+      dispatched: { ticket: Ticket }[];
+    };
     expect(again.dispatched.map((d) => d.ticket.id)).toEqual([ticket!.id]);
     expect(runsFor(ticket!.id)).toHaveLength(1);
   });
@@ -916,21 +1013,39 @@ describe('a person’s merge from the Board', () => {
   it('drag to Done (sync-worktree, then the move) comments the merge and closes the issue', async () => {
     const seen: { method: string; path: string; body: unknown }[] = [];
     t.forgeFetch.current = async (url, init) => {
-      seen.push({ method: init?.method ?? 'GET', path: new URL(url).pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      seen.push({
+        method: init?.method ?? 'GET',
+        path: new URL(url).pathname,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     };
     const project = await createProject('Person Merge');
-    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/widget.git' }).where(eq(projects.id, project.id)).run();
+    t.db
+      .update(projects)
+      .set({ repoUrl: 'https://github.com/acme/widget.git' })
+      .where(eq(projects.id, project.id))
+      .run();
     seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     writeIssueSync(t.db, project.id, IssueSyncSettings.parse({ closeOnDone: true }));
     const ticket = await createTicket(project.id, { title: 'Hand work', status: 'backlog' });
     t.db
       .update(tickets)
-      .set({ externalSource: 'github', externalId: '9005', externalNumber: 5, externalUrl: 'https://github.com/acme/widget/issues/5', externalState: 'open', externalLabels: [], externalTriage: true })
+      .set({
+        externalSource: 'github',
+        externalId: '9005',
+        externalNumber: 5,
+        externalUrl: 'https://github.com/acme/widget/issues/5',
+        externalState: 'open',
+        externalLabels: [],
+        externalTriage: true,
+      })
       .where(eq(tickets.id, ticket.id))
       .run();
     // A person starts it by hand: that is its triage too.
-    const started = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json() as { ticket: Ticket; run: Run };
+    const started = (
+      await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })
+    ).json() as { ticket: Ticket; run: Run };
     expect(started.ticket.external).toMatchObject({ triage: false });
     const run = started.run;
     await waitFile(`ready-${run.id}`);
@@ -958,16 +1073,23 @@ describe('a person’s merge from the Board', () => {
         {
           method: 'POST',
           path: '/repos/acme/widget/issues/5/comments',
-          body: { body: `Emberline merged ${ticket.key} into \`main\` locally (${sha}). It reaches the remote when the branch is pushed.` },
+          body: {
+            body: `Emberline merged ${ticket.key} into \`main\` locally (${sha}). It reaches the remote when the branch is pushed.`,
+          },
         },
         { method: 'PATCH', path: '/repos/acme/widget/issues/5', body: { state: 'closed' } },
-        { method: 'POST', path: '/repos/acme/widget/issues/5/comments', body: { body: `Emberline closed this issue because ${ticket.key} is done.` } },
+        {
+          method: 'POST',
+          path: '/repos/acme/widget/issues/5/comments',
+          body: { body: `Emberline closed this issue because ${ticket.key} is done.` },
+        },
       ]),
     );
 
     // Someone reopens the issue and main moves on; the person drags the ticket back and to Done
     // again. Nothing new is merged: no second note, no comment, and the reopened issue stays open.
-    const personNotes = async () => (await eventTypes(run)).filter((type) => type === 'merged_by_person').length;
+    const personNotes = async () =>
+      (await eventTypes(run)).filter((type) => type === 'merged_by_person').length;
     t.tickets.syncIssueLinks(project.id, 'github', [{ externalId: '9005', state: 'open', labels: [] }]);
     writeFileSync(path.join(project.path, 'later.txt'), 'later\n');
     wgit(project.path, 'add', '-A');
@@ -984,7 +1106,9 @@ describe('a person’s merge from the Board', () => {
   it('a merge that fails notes nothing', async () => {
     const project = await createProject('No Ticket Merge');
     const ticket = await createTicket(project.id, { title: 'Conflict', status: 'backlog' });
-    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json() as { run: Run };
+    const { run } = (
+      await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })
+    ).json() as { run: Run };
     await waitFile(`ready-${run.id}`);
     writeFileSync(path.join(run.worktreePath, 'c.txt'), 'run\n');
     wgit(run.worktreePath, 'add', '-A');
@@ -992,7 +1116,9 @@ describe('a person’s merge from the Board', () => {
     writeFileSync(path.join(project.path, 'c.txt'), 'main\n');
     wgit(project.path, 'add', '-A');
     wgit(project.path, 'commit', '-q', '-m', 'main side');
-    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json()).toMatchObject({ ok: false });
+    expect(
+      (await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json(),
+    ).toMatchObject({ ok: false });
     expect(await eventTypes(run)).not.toContain('merged_by_person');
   });
 });
@@ -1022,7 +1148,10 @@ describe('a run that changed nothing', () => {
     expect(await eventPayload(run, 'no_changes')).toEqual({ autoFix: false });
     expect(await statusOf(ticket.id)).toBe('review');
     expect(wgit(project.path, 'rev-parse', 'HEAD').trim()).toBe(mainBefore);
-    expect((await runDetail(run)).attention).toMatchObject({ reason: 'held', detail: 'Finished without changes' });
+    expect((await runDetail(run)).attention).toMatchObject({
+      reason: 'held',
+      detail: 'Finished without changes',
+    });
     // The session is closed like other holds' (kept resumable), and a later dispatch leaves it held.
     await expect.poll(async () => (await runDetail(run)).endedAt, { timeout: 5_000 }).not.toBeNull();
     await t.tickets.dispatchNextReadyTicket(project.id);
@@ -1063,7 +1192,9 @@ describe('a run that changed nothing', () => {
   it('own commits a person already merged before the pipeline ran still reach Done', async () => {
     const { project, ticket, run } = await factoryTicket();
     await begin(run);
-    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json()).toMatchObject({ ok: true });
+    expect(
+      (await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json(),
+    ).toMatchObject({ ok: true });
     asCodex(run);
     await stop(run);
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
@@ -1082,7 +1213,9 @@ describe('a run that changed nothing', () => {
     await stop(run);
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
     expect(await eventTypes(run)).not.toContain('no_changes');
-    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title);
+    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map(
+      (x) => x.title,
+    );
     expect(titles).toContain('Follow-up');
   });
 
@@ -1094,7 +1227,10 @@ describe('a run that changed nothing', () => {
       JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Follow-up' }] }),
     );
     // Something else stops the first pass before the merge: an invalid worktree.yml the agent is asked to fix.
-    writeFileSync(path.join(run.worktreePath, '.emberline', 'worktree.yml'), 'version: 1\nchecks:\n  container: npm run test:container\n');
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'worktree.yml'),
+      'version: 1\nchecks:\n  container: npm run test:container\n',
+    );
     const passes = trackPipelines();
     await begin(run);
     asCodex(run);
@@ -1103,7 +1239,9 @@ describe('a run that changed nothing', () => {
     await stop(run);
     await settled(passes, 1);
     expect(await eventTypes(run)).toContain('build_gate_failed');
-    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title);
+    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map(
+      (x) => x.title,
+    );
     expect(titles).toContain('Follow-up');
 
     // The agent removes its change: the next pass finds no tickets file and no change, only the tickets made before.
@@ -1146,7 +1284,17 @@ describe('a run that changed nothing', () => {
   const mergedPredecessor = (run: Run, branch: string | null) => {
     const row = t.db.select().from(runs).where(eq(runs.id, run.id)).get()!;
     const id = `pred-${run.id}`;
-    t.db.insert(runs).values({ ...row, id, branch, ptydSessionId: null, hookTokenHash: `pred-${row.hookTokenHash}`, handedOffTo: run.id }).run();
+    t.db
+      .insert(runs)
+      .values({
+        ...row,
+        id,
+        branch,
+        ptydSessionId: null,
+        hookTokenHash: `pred-${row.hookTokenHash}`,
+        handedOffTo: run.id,
+      })
+      .run();
     t.db.update(runs).set({ predecessorRunId: id }).where(eq(runs.id, run.id)).run();
     t.runs.note(id, 'merged_to_main', { summary: 'merged' });
   };
@@ -1175,8 +1323,14 @@ describe('a run that changed nothing', () => {
 
   it('the [Factory] orchestrator ticket (only a tickets file) is not held', async () => {
     const project = await createProject();
-    const po = await createTicket(project.id, { title: '[Factory] Plan it', status: 'ready', persona: 'product_owner' });
-    const { run } = (await api('POST', `/api/tickets/${po.id}/start`, { persona: 'product_owner' })).json() as { run: Run };
+    const po = await createTicket(project.id, {
+      title: '[Factory] Plan it',
+      status: 'ready',
+      persona: 'product_owner',
+    });
+    const { run } = (
+      await api('POST', `/api/tickets/${po.id}/start`, { persona: 'product_owner' })
+    ).json() as { run: Run };
     mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
     writeFileSync(
       path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
@@ -1233,7 +1387,11 @@ describe('the worktree config check before the merge', () => {
     const types = await eventTypes(run);
     expect(types).toContain('build_gate_failed');
     expect(types).not.toContain('merged_to_main');
-    const note = (await eventPayload(run, 'build_gate_failed')) as { autoFix: boolean; output: string; check?: string };
+    const note = (await eventPayload(run, 'build_gate_failed')) as {
+      autoFix: boolean;
+      output: string;
+      check?: string;
+    };
     expect(note.autoFix).toBe(true);
     expect(note.check).toBe('worktree_yml');
     expect(note.output).toContain(MESSAGE);
@@ -1277,7 +1435,9 @@ describe('the worktree config check before the merge', () => {
     await begin(run);
     await stop(run, { summary: 'linked the file' });
     await settled(passes, 1);
-    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain('.emberline/worktree.yml is a symbolic link');
+    expect(((await eventPayload(run, 'build_gate_failed')) as { output: string }).output).toContain(
+      '.emberline/worktree.yml is a symbolic link',
+    );
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(ticket.id)).not.toBe('done');
     expect(mainHas(project, YML)).toBe(false);
@@ -1401,7 +1561,7 @@ describe('the worktree config check before the merge', () => {
     }
   });
 
-  it('a file the run inherited unchanged passes after main fixed it meanwhile (the merge keeps main\'s)', async () => {
+  it("a file the run inherited unchanged passes after main fixed it meanwhile (the merge keeps main's)", async () => {
     const { project, ticket, run } = await ymlTicket(INVALID);
     writeFileSync(path.join(project.path, YML), VALID);
     wgit(project.path, 'commit', '-q', '-am', 'fix worktree.yml on main');
@@ -1438,7 +1598,14 @@ describe('the worktree config check before the merge', () => {
     const oid = wgit(project.path, 'rev-parse', `HEAD:${YML}`).trim();
     setCommandExecutor(async (request) =>
       request.args.includes('cat-file') && request.args.includes(oid)
-        ? { exitCode: 128, signal: null, stdout: '', stderr: `fatal: git cat-file ${oid}: bad file`, timedOut: false, truncated: false }
+        ? {
+            exitCode: 128,
+            signal: null,
+            stdout: '',
+            stderr: `fatal: git cat-file ${oid}: bad file`,
+            timedOut: false,
+            truncated: false,
+          }
         : localCommandExecutor(request),
     );
     try {
@@ -1465,7 +1632,14 @@ describe('the worktree config check before the merge', () => {
     const oid = wgit(run.worktreePath, 'rev-parse', `main:${YML}`).trim();
     setCommandExecutor(async (request) =>
       request.args.includes('cat-file') && request.args.includes(oid)
-        ? { exitCode: 128, signal: null, stdout: '', stderr: `fatal: git cat-file ${oid}: bad file`, timedOut: false, truncated: false }
+        ? {
+            exitCode: 128,
+            signal: null,
+            stdout: '',
+            stderr: `fatal: git cat-file ${oid}: bad file`,
+            timedOut: false,
+            truncated: false,
+          }
         : localCommandExecutor(request),
     );
     try {
@@ -1539,7 +1713,9 @@ describe('the worktree config check before the merge', () => {
     await nextTurn(run, { summary: 'still my way' });
     await settled(passes, 2);
     const notes = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
-    const gateNotes = notes.events.filter((e) => e.type === 'build_gate_failed').map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    const gateNotes = notes.events
+      .filter((e) => e.type === 'build_gate_failed')
+      .map((e) => (e.payload as { autoFix: boolean }).autoFix);
     expect(gateNotes).toEqual([true, false]);
     expect(checkPrompts(run)).toBe(1);
     expect(await statusOf(ticket.id)).toBe('review');
@@ -1562,7 +1738,9 @@ describe('the worktree config check before the merge', () => {
     await settled(restartedPasses, 1);
     // Exactly one note says the agent was asked, whichever service decided (the prompt itself may or may not be delivered).
     const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
-    const asked = detail.events.filter((e) => e.type === 'build_gate_failed').map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    const asked = detail.events
+      .filter((e) => e.type === 'build_gate_failed')
+      .map((e) => (e.payload as { autoFix: boolean }).autoFix);
     expect(asked.filter(Boolean)).toHaveLength(1);
     expect(checkPrompts(run)).toBe(1);
   });
@@ -1576,7 +1754,11 @@ describe('an Auto Bootstrap writes the worktree commands', () => {
   const promptCount = (run: Run) => followups(run).filter((line) => line.includes(HEADER)).length;
   async function bootstrapRun(writes = true) {
     const project = await createProject();
-    const ticket = await createTicket(project.id, { title: 'Bootstrap', status: 'ready', persona: 'architect' });
+    const ticket = await createTicket(project.id, {
+      title: 'Bootstrap',
+      status: 'ready',
+      persona: 'architect',
+    });
     writeWizardTickets(t.db, project.id, { bootstrap: ticket.id, bootstrapWritesWorktree: writes });
     await t.tickets.dispatchNextReadyTicket(project.id);
     const run = runsFor(ticket.id)[0] as Run;
@@ -1615,7 +1797,9 @@ describe('an Auto Bootstrap writes the worktree commands', () => {
     await expect
       .poll(
         async () =>
-          ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter((e) => e.type === 'build_gate_failed').map((e) => (e.payload as { autoFix: boolean }).autoFix),
+          ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events
+            .filter((e) => e.type === 'build_gate_failed')
+            .map((e) => (e.payload as { autoFix: boolean }).autoFix),
         { timeout: 10_000 },
       )
       .toEqual([true, false]);

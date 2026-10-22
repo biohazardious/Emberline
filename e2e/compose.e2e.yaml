@@ -4,12 +4,12 @@ services:
   core:
     image: emberline/core:e2e
     ports: !override
-      - "127.0.0.1:${EMBERLINE_E2E_PORT:-7498}:7420"
+      - '127.0.0.1:${EMBERLINE_E2E_PORT:-7498}:7420'
     environment:
       EMBERLINE_SETUP_TOKEN: e2e-setup-token
       EMBERLINE_METRICS_TOKEN: e2e-metrics-token
       # No engine in e2e (no privileged dind on CI runners), whatever .env says.
-      EMBERLINE_DOCKER_ENGINE: "0"
+      EMBERLINE_DOCKER_ENGINE: '0'
   runner:
     image: emberline/runner:e2e
     # Preview ports stay unpublished: a running Emberline already holds them.
@@ -22,16 +22,22 @@ services:
   # reaches it through core's git gateway (core adds the token), so core and runner both need the e2e network.
   forge:
     image: emberline/runner:e2e
-    entrypoint: ["node", "/e2e/fake-forge.mjs"]
+    entrypoint: ['node', '/e2e/fake-forge.mjs']
     # The runner image checks for ptyd's socket; this service only runs the fake.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/_e2e/head/x/y').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/_e2e/head/x/y').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
       interval: 2s
       timeout: 3s
       retries: 15
     environment:
       FAKE_FORGE_USER: e2e
       FAKE_FORGE_TOKEN: e2e-forge-token
-      FAKE_FORGE_PORT: "3000"
+      FAKE_FORGE_PORT: '3000'
     volumes:
       - ./e2e:/e2e:ro

@@ -20,7 +20,16 @@ describe('nextFocusIndex', () => {
 });
 
 /** A stand-in element: visible, enabled, not inert, no tabindex unless set. */
-function el(o: { rects?: number; inert?: boolean; disabled?: boolean; tabindex?: string; visible?: boolean; noCheckVisibility?: boolean } = {}): FocusCandidate {
+function el(
+  o: {
+    rects?: number;
+    inert?: boolean;
+    disabled?: boolean;
+    tabindex?: string;
+    visible?: boolean;
+    noCheckVisibility?: boolean;
+  } = {},
+): FocusCandidate {
   return {
     getClientRects: () => ({ length: o.rects ?? 1 }),
     closest: (selector: string) => (selector === '[inert]' && o.inert ? ({} as Element) : null),

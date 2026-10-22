@@ -12,7 +12,10 @@ const legacy = {
 
 describe('run routes', () => {
   it('parses the legacy route tag', () => {
-    expect(parseRouteTag('x [Preferred Agent: claude · Model: opus]')).toEqual({ agent: 'claude', model: 'opus' });
+    expect(parseRouteTag('x [Preferred Agent: claude · Model: opus]')).toEqual({
+      agent: 'claude',
+      model: 'opus',
+    });
     expect(parseRouteTag('no tag')).toBeUndefined();
   });
 

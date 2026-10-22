@@ -47,9 +47,7 @@ export function McpPluginsPanel({
   const skills = skillPlugins.length > 0 ? skillPlugins : DEFAULT_SKILL_PLUGINS;
 
   const toggleMcpEnabled = (id: string) => {
-    onChangeMcpServers(
-      servers.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)),
-    );
+    onChangeMcpServers(servers.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)));
   };
 
   const toggleMcpPersona = (id: string, persona: AgentPersona) => {
@@ -57,18 +55,14 @@ export function McpPluginsPanel({
       servers.map((s) => {
         if (s.id !== id) return s;
         const exists = s.personas.includes(persona);
-        const nextPersonas = exists
-          ? s.personas.filter((p) => p !== persona)
-          : [...s.personas, persona];
+        const nextPersonas = exists ? s.personas.filter((p) => p !== persona) : [...s.personas, persona];
         return { ...s, personas: nextPersonas };
       }),
     );
   };
 
   const setMcpAllPersonas = (id: string) => {
-    onChangeMcpServers(
-      servers.map((s) => (s.id === id ? { ...s, personas: [] } : s)),
-    );
+    onChangeMcpServers(servers.map((s) => (s.id === id ? { ...s, personas: [] } : s)));
   };
 
   const removeCustomMcp = (id: string) => {
@@ -91,13 +85,7 @@ export function McpPluginsPanel({
       icon: '🔌',
       transport: mcpTransport,
       command: mcpTransport === 'stdio' ? mcpCommand.trim() : '',
-      args:
-        mcpTransport === 'stdio'
-          ? mcpArgs
-              .trim()
-              .split(/\s+/)
-              .filter(Boolean)
-          : [],
+      args: mcpTransport === 'stdio' ? mcpArgs.trim().split(/\s+/).filter(Boolean) : [],
       url: mcpTransport !== 'stdio' ? mcpUrl.trim() || null : null,
       env: {},
       enabled: true,
@@ -113,9 +101,7 @@ export function McpPluginsPanel({
   };
 
   const toggleSkillEnabled = (id: string) => {
-    onChangeSkillPlugins(
-      skills.map((sk) => (sk.id === id ? { ...sk, enabled: !sk.enabled } : sk)),
-    );
+    onChangeSkillPlugins(skills.map((sk) => (sk.id === id ? { ...sk, enabled: !sk.enabled } : sk)));
   };
 
   const toggleSkillPersona = (id: string, persona: AgentPersona) => {
@@ -123,18 +109,14 @@ export function McpPluginsPanel({
       skills.map((sk) => {
         if (sk.id !== id) return sk;
         const exists = sk.personas.includes(persona);
-        const nextPersonas = exists
-          ? sk.personas.filter((p) => p !== persona)
-          : [...sk.personas, persona];
+        const nextPersonas = exists ? sk.personas.filter((p) => p !== persona) : [...sk.personas, persona];
         return { ...sk, personas: nextPersonas };
       }),
     );
   };
 
   const setSkillAllPersonas = (id: string) => {
-    onChangeSkillPlugins(
-      skills.map((sk) => (sk.id === id ? { ...sk, personas: [] } : sk)),
-    );
+    onChangeSkillPlugins(skills.map((sk) => (sk.id === id ? { ...sk, personas: [] } : sk)));
   };
 
   const removeCustomSkill = (id: string) => {
@@ -193,17 +175,16 @@ export function McpPluginsPanel({
           <div>
             <span className="eyebrow">Model Context Protocol (MCP) Hub</span>
             <h3 style={{ margin: '4px 0 4px' }}>
-              <Plug className="icon" aria-hidden /> MCP Tool Servers ({activeMcpCount} of {servers.length} Active)
+              <Plug className="icon" aria-hidden /> MCP Tool Servers ({activeMcpCount} of {servers.length}{' '}
+              Active)
             </h3>
             <p className="muted small" style={{ maxWidth: 740, margin: 0 }}>
-              Enable curated or custom MCP servers and scope them to specific specialist personas. Active MCP servers are automatically wired into <code>--mcp-config</code> and pre-authorized in autonomous runs.
+              Enable curated or custom MCP servers and scope them to specific specialist personas. Active MCP
+              servers are automatically wired into <code>--mcp-config</code> and pre-authorized in autonomous
+              runs.
             </p>
           </div>
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setShowAddMcp((v) => !v)}
-          >
+          <button type="button" className="btn btn-sm" onClick={() => setShowAddMcp((v) => !v)}>
             {showAddMcp ? (
               'Cancel'
             ) : (
@@ -357,16 +338,16 @@ export function McpPluginsPanel({
         >
           {servers.map((srv) => {
             const cmdPreview =
-              srv.transport === 'stdio'
-                ? `${srv.command} ${srv.args.join(' ')}`.trim()
-                : (srv.url ?? '');
+              srv.transport === 'stdio' ? `${srv.command} ${srv.args.join(' ')}`.trim() : (srv.url ?? '');
             return (
               <div
                 key={srv.id}
                 style={{
                   padding: '13px',
                   borderRadius: '8px',
-                  background: srv.enabled ? 'var(--surface-2)' : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
+                  background: srv.enabled
+                    ? 'var(--surface-2)'
+                    : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
                   border: srv.enabled
                     ? '1px solid color-mix(in srgb, var(--info) 45%, transparent)'
                     : '1px dashed var(--border)',
@@ -449,7 +430,8 @@ export function McpPluginsPanel({
                 {/* Persona Scope Pills */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <span className="muted mono" style={{ fontSize: '0.65rem' }}>
-                    Persona Scope ({srv.personas.length === 0 ? 'All Personas' : `${srv.personas.length} Selected`})
+                    Persona Scope (
+                    {srv.personas.length === 0 ? 'All Personas' : `${srv.personas.length} Selected`})
                   </span>
                   <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                     <button
@@ -462,7 +444,9 @@ export function McpPluginsPanel({
                         borderRadius: '4px',
                         cursor: 'pointer',
                         background:
-                          srv.personas.length === 0 ? 'color-mix(in srgb, var(--info) 20%, transparent)' : 'transparent',
+                          srv.personas.length === 0
+                            ? 'color-mix(in srgb, var(--info) 20%, transparent)'
+                            : 'transparent',
                         border:
                           srv.personas.length === 0
                             ? '1px solid color-mix(in srgb, var(--info) 50%, transparent)'
@@ -485,7 +469,9 @@ export function McpPluginsPanel({
                             padding: '2px 6px',
                             borderRadius: '4px',
                             cursor: 'pointer',
-                            background: active ? 'color-mix(in srgb, var(--ok) 18%, transparent)' : 'transparent',
+                            background: active
+                              ? 'color-mix(in srgb, var(--ok) 18%, transparent)'
+                              : 'transparent',
                             border: active
                               ? '1px solid color-mix(in srgb, var(--ok) 50%, transparent)'
                               : '1px solid var(--border)',
@@ -521,17 +507,15 @@ export function McpPluginsPanel({
           <div>
             <span className="eyebrow">Reusable Agent Skills &amp; Craftsmanship Rules</span>
             <h3 style={{ margin: '4px 0 4px' }}>
-              <Puzzle className="icon" aria-hidden /> Skill &amp; Rule Plugins ({activeSkillCount} of {skills.length} Active)
+              <Puzzle className="icon" aria-hidden /> Skill &amp; Rule Plugins ({activeSkillCount} of{' '}
+              {skills.length} Active)
             </h3>
             <p className="muted small" style={{ maxWidth: 740, margin: 0 }}>
-              Modular domain skills and coding standards injected into matching specialist personas on launch. Built-in skills come enabled out of the box; you can also author custom team rules below.
+              Modular domain skills and coding standards injected into matching specialist personas on launch.
+              Built-in skills come enabled out of the box; you can also author custom team rules below.
             </p>
           </div>
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setShowAddSkill((v) => !v)}
-          >
+          <button type="button" className="btn btn-sm" onClick={() => setShowAddSkill((v) => !v)}>
             {showAddSkill ? (
               'Cancel'
             ) : (
@@ -644,7 +628,9 @@ export function McpPluginsPanel({
               style={{
                 padding: '13px',
                 borderRadius: '8px',
-                background: sk.enabled ? 'var(--surface-2)' : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
+                background: sk.enabled
+                  ? 'var(--surface-2)'
+                  : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
                 border: sk.enabled
                   ? '1px solid color-mix(in srgb, var(--ok) 45%, transparent)'
                   : '1px dashed var(--border)',
@@ -706,7 +692,8 @@ export function McpPluginsPanel({
               {/* Persona Scope Pills */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <span className="muted mono" style={{ fontSize: '0.65rem' }}>
-                  Target Personas ({sk.personas.length === 0 ? 'All Personas' : `${sk.personas.length} Selected`})
+                  Target Personas (
+                  {sk.personas.length === 0 ? 'All Personas' : `${sk.personas.length} Selected`})
                 </span>
                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                   <button
@@ -719,7 +706,9 @@ export function McpPluginsPanel({
                       borderRadius: '4px',
                       cursor: 'pointer',
                       background:
-                        sk.personas.length === 0 ? 'color-mix(in srgb, var(--info) 20%, transparent)' : 'transparent',
+                        sk.personas.length === 0
+                          ? 'color-mix(in srgb, var(--info) 20%, transparent)'
+                          : 'transparent',
                       border:
                         sk.personas.length === 0
                           ? '1px solid color-mix(in srgb, var(--info) 50%, transparent)'
@@ -742,7 +731,9 @@ export function McpPluginsPanel({
                           padding: '2px 6px',
                           borderRadius: '4px',
                           cursor: 'pointer',
-                          background: active ? 'color-mix(in srgb, var(--ok) 18%, transparent)' : 'transparent',
+                          background: active
+                            ? 'color-mix(in srgb, var(--ok) 18%, transparent)'
+                            : 'transparent',
                           border: active
                             ? '1px solid color-mix(in srgb, var(--ok) 50%, transparent)'
                             : '1px solid var(--border)',

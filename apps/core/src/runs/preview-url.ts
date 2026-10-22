@@ -14,7 +14,11 @@ export function hostNameOf(hostHeader: string | undefined): string | null {
   return name ? name[1]! : null;
 }
 
-export function previewUrl(port: number, requestHost?: string, override = process.env.EMBERLINE_PREVIEW_HOST): string {
+export function previewUrl(
+  port: number,
+  requestHost?: string,
+  override = process.env.EMBERLINE_PREVIEW_HOST,
+): string {
   const base = override?.trim();
   if (base) {
     try {

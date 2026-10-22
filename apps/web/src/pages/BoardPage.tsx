@@ -38,13 +38,19 @@ import { dependencyCandidates, dropIntoInProgress, waitingLabel, waitingTitle } 
 import { HoldRecovery } from '../components/HoldRecovery';
 import { toastInfo } from '../toast';
 
-const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
+const TerminalView = lazy(() =>
+  import('../components/TerminalView').then((m) => ({ default: m.TerminalView })),
+);
 const ReviewView = lazy(() => import('../components/ReviewView').then((m) => ({ default: m.ReviewView })));
 
 const COLUMNS: { status: TicketStatus; label: string; hint: string }[] = [
   { status: 'backlog', label: 'Backlog', hint: 'Ideas and not-yet-ready work' },
   { status: 'ready', label: 'Ready', hint: 'Specified and ready to hand to an agent' },
-  { status: 'in_progress', label: 'In progress', hint: 'Drop here to dispatch agent (or monitor active run)' },
+  {
+    status: 'in_progress',
+    label: 'In progress',
+    hint: 'Drop here to dispatch agent (or monitor active run)',
+  },
   { status: 'review', label: 'Review', hint: 'Agent finished its turn; review or send a follow-up' },
   { status: 'done', label: 'Done', hint: 'Accepted; runs never move tickets out of here' },
 ];
@@ -76,7 +82,7 @@ function AttemptChain({ run }: { run: Run }) {
   const { runs } = useRuns();
   const chain: { id: string; run?: Run }[] = [];
   const seen = new Set([run.id]);
-  for (let id = run.predecessorRunId; id && !seen.has(id); ) {
+  for (let id = run.predecessorRunId; id && !seen.has(id);) {
     seen.add(id);
     const found = (runs ?? []).find((r) => r.id === id);
     chain.unshift({ id, run: found });
@@ -91,12 +97,24 @@ function AttemptChain({ run }: { run: Run }) {
           <li key={id}>
             {p ? (
               <>
-                <span className="mono">{formatAgentDisplayName(p.agent)}{p.model ? ` · ${p.model}` : ''}</span>{' '}
-                <RunStatePill state={p.state} cancelled={p.cancelled} autoRetry={p.autoRetry} handedOffTo={p.handedOffTo} />{' '}
-                <Link href={`/runs/${id}/review`} className="mono">{id.slice(0, 8)}</Link>
+                <span className="mono">
+                  {formatAgentDisplayName(p.agent)}
+                  {p.model ? ` · ${p.model}` : ''}
+                </span>{' '}
+                <RunStatePill
+                  state={p.state}
+                  cancelled={p.cancelled}
+                  autoRetry={p.autoRetry}
+                  handedOffTo={p.handedOffTo}
+                />{' '}
+                <Link href={`/runs/${id}/review`} className="mono">
+                  {id.slice(0, 8)}
+                </Link>
               </>
             ) : (
-              <span className="mono" title="This run is no longer listed">{id.slice(0, 8)}</span>
+              <span className="mono" title="This run is no longer listed">
+                {id.slice(0, 8)}
+              </span>
             )}
           </li>
         ))}
@@ -159,13 +177,18 @@ export function BoardPage({ projectId }: { projectId: string }) {
    * (the ticket drawer's own buttons) throws a failure instead of putting it in the page's banners,
    * so the drawer's recovery block shows it next to the button that was pressed.
    */
-  const move = async (ticket: Ticket, target: DropTarget, { force = false, skipMerge = false, inDrawer = false } = {}) => {
+  const move = async (
+    ticket: Ticket,
+    target: DropTarget,
+    { force = false, skipMerge = false, inDrawer = false } = {},
+  ) => {
     const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
     const currentRun = latestRun.get(ticket.id);
     const hasLiveRun = Boolean(currentRun && !currentRun.endedAt);
-    const dropAction = target.status === 'in_progress' ? dropIntoInProgress(ticket, { autoStart, hasLiveRun }) : 'move';
+    const dropAction =
+      target.status === 'in_progress' ? dropIntoInProgress(ticket, { autoStart, hasLiveRun }) : 'move';
     setError(undefined);
     setBlockedDrop(undefined);
     setMissingDrop(undefined);
@@ -182,10 +205,14 @@ export function BoardPage({ projectId }: { projectId: string }) {
     // ticket where it is so nothing is marked done that is not actually in main.
     if (target.status === 'done' && ticket.status !== 'done' && currentRun?.branch && !skipMerge) {
       try {
-        const sync = await api<SyncWorktreeResponse>(`/api/projects/${ticket.projectId}/sync-worktree`, 'POST', {
-          runId: currentRun.id,
-          ...(force ? { force: true } : {}),
-        });
+        const sync = await api<SyncWorktreeResponse>(
+          `/api/projects/${ticket.projectId}/sync-worktree`,
+          'POST',
+          {
+            runId: currentRun.id,
+            ...(force ? { force: true } : {}),
+          },
+        );
         if (!sync.ok) {
           if (inDrawer) throw new Error(sync.summary);
           setError(sync.summary);
@@ -211,7 +238,10 @@ export function BoardPage({ projectId }: { projectId: string }) {
 
     patchLocal({ ...ticket, status: target.status, position });
     try {
-      const updated = await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { status: target.status, position });
+      const updated = await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', {
+        status: target.status,
+        position,
+      });
       patchLocal(updated);
       // Pipeline column behavior (herdr-board): dropping into In progress dispatches an agent when idle.
       if (dropAction === 'start') {
@@ -254,7 +284,12 @@ export function BoardPage({ projectId }: { projectId: string }) {
     <div className="board-page">
       <header className="board-head">
         <div className="board-title">
-          <button type="button" className="btn btn-ghost btn-sm" aria-label="Back to the previous page" onClick={goBack}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            aria-label="Back to the previous page"
+            onClick={goBack}
+          >
             ←
           </button>
           <div>
@@ -359,8 +394,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
       {missingDrop && (
         <div className="banner banner-warn board-blocked-drop" role="alert">
           <span>
-            The worktree of {missingDrop.ticket.key}&apos;s run is gone and its work isn&apos;t in main. Nothing was
-            merged.
+            The worktree of {missingDrop.ticket.key}&apos;s run is gone and its work isn&apos;t in main.
+            Nothing was merged.
           </span>
           <button
             type="button"
@@ -395,7 +430,10 @@ export function BoardPage({ projectId }: { projectId: string }) {
                 if (!dragId) return;
                 e.preventDefault();
                 // Over the column background (not a card): drop at the end.
-                if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('board-cards')) {
+                if (
+                  e.target === e.currentTarget ||
+                  (e.target as HTMLElement).classList.contains('board-cards')
+                ) {
                   setDrop({ status: col.status, beforeId: null });
                 }
               }}
@@ -459,7 +497,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
           onMove={(status) => {
             if (status !== open.status) void move(open, { status, beforeId: null });
           }}
-          onDiscard={() => move(open, { status: 'done', beforeId: null }, { skipMerge: true, inDrawer: true })}
+          onDiscard={() =>
+            move(open, { status: 'done', beforeId: null }, { skipMerge: true, inDrawer: true })
+          }
           onAccept={() => move(open, { status: 'done', beforeId: null }, { inDrawer: true })}
         />
       )}
@@ -474,11 +514,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
       )}
 
       {project && (
-        <BlueprintModal
-          project={project}
-          open={blueprintOpen}
-          onClose={() => setBlueprintOpen(false)}
-        />
+        <BlueprintModal project={project} open={blueprintOpen} onClose={() => setBlueprintOpen(false)} />
       )}
     </div>
   );
@@ -635,7 +671,12 @@ function TicketCard({
         )}
         {run && (
           <div className="card-foot">
-            <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
+            <RunStatePill
+              state={run.state}
+              cancelled={run.cancelled}
+              autoRetry={run.autoRetry}
+              handedOffTo={run.handedOffTo}
+            />
             {run.telemetry && run.telemetry.totalTokens > 0 && (
               <span
                 className="card-event mono"
@@ -662,7 +703,6 @@ function TicketCard({
     </>
   );
 }
-
 
 const DRAWER_VIEWS = ['details', 'review', 'terminal', 'events'] as const;
 type DrawerView = (typeof DRAWER_VIEWS)[number];
@@ -700,7 +740,9 @@ function TicketDrawer({
   // The drawer tab lives in the address too (`?view=events`), next to the open ticket.
   const defaultView: DrawerView = ticket.status === 'review' && run?.worktreePath ? 'review' : 'details';
   const [viewParam, setViewParam] = useQueryParam('view');
-  const viewTab: DrawerView = DRAWER_VIEWS.includes(viewParam as DrawerView) ? (viewParam as DrawerView) : defaultView;
+  const viewTab: DrawerView = DRAWER_VIEWS.includes(viewParam as DrawerView)
+    ? (viewParam as DrawerView)
+    : defaultView;
   const setViewTab = (view: DrawerView) => setViewParam(view === defaultView ? null : view);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
@@ -834,7 +876,14 @@ function TicketDrawer({
             {ticket.key}
           </span>
           <PersonaBadge persona={persona} showFull />
-          {run && <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />}
+          {run && (
+            <RunStatePill
+              state={run.state}
+              cancelled={run.cancelled}
+              autoRetry={run.autoRetry}
+              handedOffTo={run.handedOffTo}
+            />
+          )}
           {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
           <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
           {run && (
@@ -888,7 +937,13 @@ function TicketDrawer({
 
         {viewTab === 'review' && run && (
           <div className="drawer-review-pane">
-            <Suspense fallback={<div className="empty" aria-busy="true">Loading diff & review…</div>}>
+            <Suspense
+              fallback={
+                <div className="empty" aria-busy="true">
+                  Loading diff & review…
+                </div>
+              }
+            >
               <ReviewView run={run} />
             </Suspense>
           </div>
@@ -940,7 +995,10 @@ function TicketDrawer({
                 <label className="drawer-label">
                   Completion
                   {ticket.completion.blockers.length > 0 && (
-                    <span className="badge mono" style={{ marginLeft: 8, borderColor: 'var(--warn)', color: 'var(--warn)' }}>
+                    <span
+                      className="badge mono"
+                      style={{ marginLeft: 8, borderColor: 'var(--warn)', color: 'var(--warn)' }}
+                    >
                       blocked
                     </span>
                   )}
@@ -962,7 +1020,9 @@ function TicketDrawer({
                   </>
                 )}
                 <div className="muted small mono">
-                  <Link href={`/runs/${ticket.completion.runId}/review`}>run {ticket.completion.runId.slice(0, 8)}</Link>
+                  <Link href={`/runs/${ticket.completion.runId}/review`}>
+                    run {ticket.completion.runId.slice(0, 8)}
+                  </Link>
                   {' · '}
                   {timeAgo(ticket.completion.at)}
                 </div>
@@ -985,7 +1045,12 @@ function TicketDrawer({
                   </button>
                 ))}
               </div>
-              <button id="drawer-save" className="btn btn-sm" disabled={!dirty || !!busy || !title.trim()} onClick={save}>
+              <button
+                id="drawer-save"
+                className="btn btn-sm"
+                disabled={!dirty || !!busy || !title.trim()}
+                onClick={save}
+              >
                 {busy === 'save' ? 'Saving…' : 'Save'}
               </button>
             </div>
@@ -1002,7 +1067,10 @@ function TicketDrawer({
                     <li key={id} className="dep-item">
                       {dep ? (
                         <>
-                          <Link href={`/projects/${ticket.projectId}/board?ticket=${dep.id}`} className="mono dep-key">
+                          <Link
+                            href={`/projects/${ticket.projectId}/board?ticket=${dep.id}`}
+                            className="mono dep-key"
+                          >
                             {dep.key}
                           </Link>
                           <span className="dep-title">{dep.title}</span>
@@ -1031,7 +1099,9 @@ function TicketDrawer({
                 disabled={!!busy || candidates.length === 0}
                 onChange={(e) => e.target.value && void setDependsOn([...ticket.dependsOn, e.target.value])}
               >
-                <option value="">{candidates.length === 0 ? 'No tickets to add' : 'Add a dependency…'}</option>
+                <option value="">
+                  {candidates.length === 0 ? 'No tickets to add' : 'Add a dependency…'}
+                </option>
                 {candidates.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.key} {c.title}
@@ -1048,7 +1118,12 @@ function TicketDrawer({
             <label className="drawer-label" htmlFor="drawer-status">
               Column
             </label>
-            <div id="drawer-status" className="segmented segmented-wrap" role="radiogroup" aria-label="Column">
+            <div
+              id="drawer-status"
+              className="segmented segmented-wrap"
+              role="radiogroup"
+              aria-label="Column"
+            >
               {COLUMNS.map((c) => (
                 <button
                   key={c.status}
@@ -1070,7 +1145,12 @@ function TicketDrawer({
             <h2>Agent Execution</h2>
             {run && (
               <div className="agent-run">
-                <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
+                <RunStatePill
+                  state={run.state}
+                  cancelled={run.cancelled}
+                  autoRetry={run.autoRetry}
+                  handedOffTo={run.handedOffTo}
+                />
                 <span className="badge badge-soft mono">{formatAgentDisplayName(run.agent)}</span>
                 {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
                 {run.terminalId && (
@@ -1082,7 +1162,11 @@ function TicketDrawer({
                     >
                       {viewTab === 'terminal' ? 'Show spec' : 'Docked terminal'}
                     </button>
-                    <Link id="drawer-terminal" href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost">
+                    <Link
+                      id="drawer-terminal"
+                      href={`/terminals/${run.terminalId}`}
+                      className="btn btn-sm btn-ghost"
+                    >
                       Open terminal →
                     </Link>
                   </>
@@ -1161,7 +1245,9 @@ function TicketDrawer({
               />
               <div className="run-form-foot">
                 <span className="muted small">
-                  {live ? 'Permission prompts are answered in the terminal.' : 'Resumes the same branch and conversation.'}
+                  {live
+                    ? 'Permission prompts are answered in the terminal.'
+                    : 'Resumes the same branch and conversation.'}
                 </span>
                 <button
                   id="drawer-send"
@@ -1178,8 +1264,8 @@ function TicketDrawer({
             <div className="run-form drawer-form">
               <PermissionModePicker value={mode} onChange={setMode} />
               <p className="muted small">
-                {modeHint(mode)}. Works on its own branch and worktree; queued if all slots are busy or the quota is
-                exhausted.
+                {modeHint(mode)}. Works on its own branch and worktree; queued if all slots are busy or the
+                quota is exhausted.
               </p>
               <div className="run-form-foot">
                 {ticket.blockedBy.length > 0 ? (
@@ -1216,7 +1302,12 @@ function TicketDrawer({
         )}
 
         <footer className="drawer-foot">
-          <button id="drawer-delete" className="btn btn-sm btn-ghost danger" disabled={!!busy} onClick={() => void remove()}>
+          <button
+            id="drawer-delete"
+            className="btn btn-sm btn-ghost danger"
+            disabled={!!busy}
+            onClick={() => void remove()}
+          >
             Delete
           </button>
           {ticket.status !== 'done' && (

@@ -27,7 +27,14 @@ describe('ops endpoints', () => {
     expect(body.checks.database.ok).toBe(true);
     expect(body.checks.runner.ok).toBe(false);
     expect(Object.keys(body.checks)).toEqual(
-      expect.arrayContaining(['database', 'runner', 'runnerProtocol', 'workspaces', 'diskData', 'diskWorkspaces']),
+      expect.arrayContaining([
+        'database',
+        'runner',
+        'runnerProtocol',
+        'workspaces',
+        'diskData',
+        'diskWorkspaces',
+      ]),
     );
   });
 
@@ -101,7 +108,10 @@ describe('ops endpoints', () => {
     process.env.EMBERLINE_METRICS_TOKEN = 'scrape-secret';
     const resumeAt = new Date(Date.now() + 3_600_000);
     for (const agent of ['claude', 'antigravity']) {
-      t.db.insert(quotaWindows).values({ id: agent, agent, exhaustedAt: new Date(), resumeAt, source: 'hook' }).run();
+      t.db
+        .insert(quotaWindows)
+        .values({ id: agent, agent, exhaustedAt: new Date(), resumeAt, source: 'hook' })
+        .run();
     }
     const res = await t.app.inject({ url: '/metrics', headers: { authorization: 'Bearer scrape-secret' } });
     expect(res.body).toMatch(/# HELP emberline_quota_paused .*lanes out of quota/);
@@ -117,9 +127,14 @@ describe('backupDatabase', () => {
       openDb(file).close();
       const backups = path.join(dir, 'backups');
       for (let i = 0; i < 4; i++) backupDatabase(file, backups, 2, new Date(Date.UTC(2026, 9, 15, 10, 0, i)));
-      expect(readdirSync(backups).sort()).toEqual(['emberline-20261015T100002Z.db', 'emberline-20261015T100003Z.db']);
+      expect(readdirSync(backups).sort()).toEqual([
+        'emberline-20261015T100002Z.db',
+        'emberline-20261015T100003Z.db',
+      ]);
       const copy = new Database(path.join(backups, 'emberline-20261015T100003Z.db'), { readonly: true });
-      expect(copy.prepare(`select count(*) as n from __drizzle_migrations`).get()).toMatchObject({ n: expect.any(Number) });
+      expect(copy.prepare(`select count(*) as n from __drizzle_migrations`).get()).toMatchObject({
+        n: expect.any(Number),
+      });
       copy.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -58,11 +58,13 @@ describe('recoverErrorText', () => {
     expect(recoverErrorText('lane_exhausted', 'Lane is out of quota')).toBe('Lane is out of quota');
   });
   it("keeps the server's message when the successor's agent needs Autonomous mode", () => {
-    const message = 'Gemini runs without a terminal to answer in, so in Ask mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
+    const message =
+      'Gemini runs without a terminal to answer in, so in Ask mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
     expect(recoverErrorText('headless_needs_auto', message)).toBe(message);
   });
   it("keeps the server's message for a prompt too long for the successor and a closing session", () => {
-    const tooLong = "The prompt is too long to send with the run's handoff context. Keep it under 17998 characters.";
+    const tooLong =
+      "The prompt is too long to send with the run's handoff context. Keep it under 17998 characters.";
     expect(recoverErrorText('prompt_too_long', tooLong)).toBe(tooLong);
     const closing = 'The agent is finishing its turn; try again in a moment.';
     expect(recoverErrorText('session_closing', closing)).toBe(closing);

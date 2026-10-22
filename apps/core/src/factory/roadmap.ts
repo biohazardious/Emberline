@@ -55,9 +55,7 @@ function defaultRoutingForPersona(
   preferredModel: AgentModelId;
 } {
   if (fSettings) {
-    const enabled: AgentId[] = fSettings.enabledProviders?.length
-      ? fSettings.enabledProviders
-      : ['claude'];
+    const enabled: AgentId[] = fSettings.enabledProviders?.length ? fSettings.enabledProviders : ['claude'];
     const route = fSettings.personaRoutes[persona][0]!;
     const preferredAgent: AgentId = enabled.includes(route.agent) ? route.agent : (enabled[0] ?? 'claude');
     const rawModel = route.model;
@@ -93,29 +91,15 @@ export function inferPersonaAndCategoryFromText(text: string): {
   priority: 1 | 2 | 3;
 } {
   const lower = text.toLowerCase();
-  const priority: 1 | 2 | 3 = /\b(urgent|critical|core|blocker|security|crash)\b/.test(lower)
-    ? 3
-    : 2;
+  const priority: 1 | 2 | 3 = /\b(urgent|critical|core|blocker|security|crash)\b/.test(lower) ? 3 : 2;
 
-  if (
-    /\b(test|qa|e2e|playwright|vitest|pytest|regression|coverage|assertion|verify)\b/.test(
-      lower,
-    )
-  ) {
+  if (/\b(test|qa|e2e|playwright|vitest|pytest|regression|coverage|assertion|verify)\b/.test(lower)) {
     return { persona: 'qa', category: 'qa_security', priority };
   }
-  if (
-    /\b(security|auth|oauth|jwt|rbac|permission|csrf|xss|encryption|audit|checksum|sha256)\b/.test(
-      lower,
-    )
-  ) {
+  if (/\b(security|auth|oauth|jwt|rbac|permission|csrf|xss|encryption|audit|checksum|sha256)\b/.test(lower)) {
     return { persona: 'security', category: 'qa_security', priority: 3 };
   }
-  if (
-    /\b(database|sql|sqlite|postgres|schema|migration|query|table|drizzle|prisma|redis)\b/.test(
-      lower,
-    )
-  ) {
+  if (/\b(database|sql|sqlite|postgres|schema|migration|query|table|drizzle|prisma|redis)\b/.test(lower)) {
     return { persona: 'dba', category: 'architecture', priority };
   }
   if (
@@ -223,13 +207,16 @@ function detectPrimaryProjectDomain(
   }
 
   // Inspect only the project name, description, and top heading of PROJECT.md with strict word boundaries
-  const headerSnippet = `${project.name} ${project.description ?? ''} ${blueprintContent.slice(0, 600)}`.toLowerCase();
+  const headerSnippet =
+    `${project.name} ${project.description ?? ''} ${blueprintContent.slice(0, 600)}`.toLowerCase();
 
   if (/\b(flappy|arcade|endless-runner|tower-defense|phaser|pixi|game|gameplay)\b/.test(headerSnippet)) {
     return 'game_interactive';
   }
   if (
-    /\b(esp32|esp8266|arduino|platformio|stm32|firmware|eeprom|i2c|uart|microcontroller)\b/.test(headerSnippet) ||
+    /\b(esp32|esp8266|arduino|platformio|stm32|firmware|eeprom|i2c|uart|microcontroller)\b/.test(
+      headerSnippet,
+    ) ||
     /\bplatformio\.ini\b|\.ino\b/.test(fileNamesLower)
   ) {
     return 'embedded_iot';
@@ -462,8 +449,7 @@ export async function synthesizeBrainstormSuggestions(
         title: `New Interactive Mechanics, Power-Ups & Progression Loop for ${project.name}`,
         rationale:
           'Expands core replayability with collectible power-ups, dynamic difficulty scaling, and milestone rewards.',
-        implementationPrompt:
-          `Read PROJECT.md and inspect ${project.name}. Implement collectible power-ups, smooth difficulty progression, and visual HUD indicators.`,
+        implementationPrompt: `Read PROJECT.md and inspect ${project.name}. Implement collectible power-ups, smooth difficulty progression, and visual HUD indicators.`,
         category: 'feature',
         impact: 'high',
         effort: 'medium',
@@ -476,8 +462,7 @@ export async function synthesizeBrainstormSuggestions(
         title: `Visual Polish, Smooth Animations & Audio Feedback for ${project.name}`,
         rationale:
           'Enhances visual responsiveness, particle feedback, and sound/haptic polish across all screens.',
-        implementationPrompt:
-          `Read PROJECT.md and refine the visual animations, transitions, and sound/particle feedback in ${project.name}.`,
+        implementationPrompt: `Read PROJECT.md and refine the visual animations, transitions, and sound/particle feedback in ${project.name}.`,
         category: 'ui_ux',
         impact: 'high',
         effort: 'small',
@@ -490,8 +475,7 @@ export async function synthesizeBrainstormSuggestions(
         title: `Mobile/Desktop Viewport Responsiveness & Automated QA Check for ${project.name}`,
         rationale:
           'Ensures crisp scaling across mobile and desktop aspect ratios and verifies zero console errors.',
-        implementationPrompt:
-          `Verify responsive scaling, touch/keyboard input handling, and zero runtime errors across ${project.name}.`,
+        implementationPrompt: `Verify responsive scaling, touch/keyboard input handling, and zero runtime errors across ${project.name}.`,
         category: 'qa_security',
         impact: 'high',
         effort: 'small',
@@ -507,8 +491,7 @@ export async function synthesizeBrainstormSuggestions(
         title: `Schema Validation, OpenAPI Contracts & Health Diagnostics for ${project.name}`,
         rationale:
           'Provides strict request/response schema validation, standardized error envelopes, and health endpoints.',
-        implementationPrompt:
-          `Read PROJECT.md and add strict request/response validation, standardized error handling, and API documentation for ${project.name}.`,
+        implementationPrompt: `Read PROJECT.md and add strict request/response validation, standardized error handling, and API documentation for ${project.name}.`,
         category: 'architecture',
         impact: 'high',
         effort: 'medium',
@@ -519,10 +502,8 @@ export async function synthesizeBrainstormSuggestions(
       },
       {
         title: `Integration Test Suite, Rate Limiting & Query Optimization`,
-        rationale:
-          'Verifies all service endpoints under load and hardens security and database performance.',
-        implementationPrompt:
-          `Implement integration tests, rate limiting, and query optimizations for ${project.name}.`,
+        rationale: 'Verifies all service endpoints under load and hardens security and database performance.',
+        implementationPrompt: `Implement integration tests, rate limiting, and query optimizations for ${project.name}.`,
         category: 'qa_security',
         impact: 'high',
         effort: 'small',
@@ -539,8 +520,7 @@ export async function synthesizeBrainstormSuggestions(
         title: `Workflow Validation, Status Pipeline & Data Export for ${project.name}`,
         rationale:
           'Strengthens core user workflows with strict form/input validation, status tracking, and CSV/JSON export.',
-        implementationPrompt:
-          `Read PROJECT.md and implement end-to-end workflow validation, status transitions, and data export for ${project.name}.`,
+        implementationPrompt: `Read PROJECT.md and implement end-to-end workflow validation, status transitions, and data export for ${project.name}.`,
         category: 'feature',
         impact: 'high',
         effort: 'medium',
@@ -553,8 +533,7 @@ export async function synthesizeBrainstormSuggestions(
         title: `Responsive Dashboard UX, Filtering & Error Boundary Polish for ${project.name}`,
         rationale:
           'Improves layout responsiveness, search/filter ergonomics, and loading/error states across all views.',
-        implementationPrompt:
-          `Read PROJECT.md and enhance the UI layout, filtering controls, and responsive states in ${project.name}.`,
+        implementationPrompt: `Read PROJECT.md and enhance the UI layout, filtering controls, and responsive states in ${project.name}.`,
         category: 'ui_ux',
         impact: 'high',
         effort: 'small',
@@ -619,7 +598,8 @@ function buildDomainMilestones(
         id: 'ms-m4',
         code: 'M4',
         title: 'Responsive Controls, Playtest & Release Verification',
-        description: 'Desktop/mobile viewport scaling, 60 FPS optimization, and automated playtest verification.',
+        description:
+          'Desktop/mobile viewport scaling, 60 FPS optimization, and automated playtest verification.',
       },
     ];
   }
@@ -669,7 +649,8 @@ function buildDomainMilestones(
         id: 'ms-m3',
         code: 'M3',
         title: 'Terminal UX, ANSI Progress Telemetry & Structured Output',
-        description: 'Clear progress indicators, human-readable & --json output modes, and actionable error messages.',
+        description:
+          'Clear progress indicators, human-readable & --json output modes, and actionable error messages.',
       },
       {
         id: 'ms-m4',
@@ -988,9 +969,7 @@ async function readOrInitRoadmapFile(
             const normTitle = rawItem.title.trim().toLowerCase();
             if (existingTitles.has(normTitle)) continue;
             existingTitles.add(normTitle);
-            const inferred = inferPersonaAndCategoryFromText(
-              `${rawItem.title} ${rawItem.description ?? ''}`,
-            );
+            const inferred = inferPersonaAndCategoryFromText(`${rawItem.title} ${rawItem.description ?? ''}`);
             const persona: AgentPersona = rawItem.persona ?? inferred.persona;
             const routing = defaultRoutingForPersona(persona, fSettings);
             targetMs.items.push({
@@ -1252,8 +1231,7 @@ async function addRoadmapMilestoneUnlocked(
     code,
     title: input.title.trim(),
     description:
-      input.description?.trim() ||
-      `Delivery milestone ${code} for ${project.name}: ${input.title.trim()}.`,
+      input.description?.trim() || `Delivery milestone ${code} for ${project.name}: ${input.title.trim()}.`,
     status: 'planned',
     items: [],
   });
@@ -1312,9 +1290,7 @@ async function addRoadmapItemUnlocked(
   const chosenAgent = input.preferredAgent ?? routing.preferredAgent;
   const chosenModel = coerceModelForProvider(
     chosenAgent,
-    input.preferredModel && input.preferredModel !== 'auto'
-      ? input.preferredModel
-      : routing.preferredModel,
+    input.preferredModel && input.preferredModel !== 'auto' ? input.preferredModel : routing.preferredModel,
     persona,
   );
   const cleanTitle = input.title.trim();
@@ -1480,8 +1456,7 @@ async function updateRoadmapItemUnlocked(
 
   // 1. Check if itemId refers to a Brainstorm Suggestion (`sug-*`) so users can customize routes on suggestions too!
   const sug = stored.suggestions.find((s) => s.id === itemId) as
-    | (BrainstormSuggestion & { routeCustomized?: boolean })
-    | undefined;
+    (BrainstormSuggestion & { routeCustomized?: boolean }) | undefined;
   if (sug) {
     if (patch.title !== undefined) sug.title = patch.title.trim();
     if (patch.description !== undefined) sug.rationale = patch.description.trim();
@@ -1544,7 +1519,8 @@ async function updateRoadmapItemUnlocked(
       const cleanBody = existingTicket.body
         .replace(/\n*\[Preferred Agent:\s*[a-z0-9_-]+\s*·\s*Model:\s*[a-z0-9_-]+\]/gi, '')
         .trim();
-      const updatedBody = `${cleanBody}\n\n[Preferred Agent: ${found.preferredAgent} · Model: ${found.preferredModel}]`.trim();
+      const updatedBody =
+        `${cleanBody}\n\n[Preferred Agent: ${found.preferredAgent} · Model: ${found.preferredModel}]`.trim();
       ticketService.update(found.ticketId, {
         persona: found.persona,
         body: updatedBody,
@@ -1570,9 +1546,7 @@ async function updateRoadmapItemUnlocked(
   }
 
   if (patch.milestoneId && patch.milestoneId !== sourceMs.id) {
-    const destMs = stored.milestones.find(
-      (m) => m.id === patch.milestoneId || m.code === patch.milestoneId,
-    );
+    const destMs = stored.milestones.find((m) => m.id === patch.milestoneId || m.code === patch.milestoneId);
     if (destMs) {
       sourceMs.items = sourceMs.items.filter((i) => i.id !== itemId);
       found.milestoneId = destMs.id;

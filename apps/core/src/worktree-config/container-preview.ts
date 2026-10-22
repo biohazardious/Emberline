@@ -71,7 +71,13 @@ async function optionsWithStatus(
   const preview = approvedPreviewService(deps.db, project.id);
   const commandPreview = preview !== null && !isComposeService(preview);
   const hidden = (reason: string) => ({
-    options: { available: false, reason, file: null, services: [], commandPreview } as ContainerPreviewOptionsResponse,
+    options: {
+      available: false,
+      reason,
+      file: null,
+      services: [],
+      commandPreview,
+    } as ContainerPreviewOptionsResponse,
     status: null,
   });
   await deps.docker.ready();
@@ -86,7 +92,13 @@ async function optionsWithStatus(
   if (status.headError) return hidden(`git could not read the main workspace's HEAD: ${status.headError}`);
   if (status.changed || status.unusable) {
     return {
-      options: { available: false, reason: WORKTREE_YML_NOT_APPROVED_TEXT, file, services: [], commandPreview },
+      options: {
+        available: false,
+        reason: WORKTREE_YML_NOT_APPROVED_TEXT,
+        file,
+        services: [],
+        commandPreview,
+      },
       status,
     };
   }

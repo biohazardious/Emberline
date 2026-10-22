@@ -12,15 +12,7 @@ import {
 import { ProjectChoices } from '../presets/types.js';
 
 /** Specialized AI Coding Factory agent personas. */
-export const AgentPersona = z.enum([
-  'product_owner',
-  'architect',
-  'ui_ux',
-  'coder',
-  'dba',
-  'qa',
-  'security',
-]);
+export const AgentPersona = z.enum(['product_owner', 'architect', 'ui_ux', 'coder', 'dba', 'qa', 'security']);
 export type AgentPersona = z.infer<typeof AgentPersona>;
 
 export const ProjectAppType = z.enum([
@@ -126,8 +118,14 @@ const CreateProjectFields = z.object({
   /** `import_folder`: name of a direct child of the workspaces directory. */
   folder: FolderName.optional(),
   /** Wizard (new project) only: files committed to docs/reference/ and links listed in PROJECT.md. */
-  materials: z.array(ProjectMaterialInput).max(MATERIALS_MAX_FILES, `Attach at most ${MATERIALS_MAX_FILES} files.`).optional(),
-  referenceUrls: z.array(ReferenceUrl).max(REFERENCE_URLS_MAX, `Add at most ${REFERENCE_URLS_MAX} links.`).optional(),
+  materials: z
+    .array(ProjectMaterialInput)
+    .max(MATERIALS_MAX_FILES, `Attach at most ${MATERIALS_MAX_FILES} files.`)
+    .optional(),
+  referenceUrls: z
+    .array(ReferenceUrl)
+    .max(REFERENCE_URLS_MAX, `Add at most ${REFERENCE_URLS_MAX} links.`)
+    .optional(),
 });
 
 type SourceFields = { source?: ProjectSource; folder?: string; repoUrl?: string };
@@ -136,7 +134,10 @@ const hasRepoUrl = (b: SourceFields) => b.source !== 'import_url' || b.repoUrl !
 const FOLDER_RULE = { path: ['folder'], message: 'folder is required for import_folder' };
 const REPO_URL_RULE = { path: ['repoUrl'], message: 'repoUrl is required for import_url' };
 
-export const CreateProjectBody = CreateProjectFields.refine(hasFolder, FOLDER_RULE).refine(hasRepoUrl, REPO_URL_RULE);
+export const CreateProjectBody = CreateProjectFields.refine(hasFolder, FOLDER_RULE).refine(
+  hasRepoUrl,
+  REPO_URL_RULE,
+);
 export type CreateProjectBody = z.input<typeof CreateProjectBody>;
 
 /** `error` codes of a 409 from `POST /api/projects` that the wizard tells apart. */
@@ -160,7 +161,10 @@ export type CreateProjectResponse = z.infer<typeof CreateProjectResponse>;
 
 /** `POST /api/projects/preview` takes the creation body with each file's name, type and size instead of its bytes. Writes nothing. */
 export const ProjectPreviewBody = CreateProjectFields.extend({
-  materials: z.array(ProjectMaterialInfo).max(MATERIALS_MAX_FILES, `Attach at most ${MATERIALS_MAX_FILES} files.`).optional(),
+  materials: z
+    .array(ProjectMaterialInfo)
+    .max(MATERIALS_MAX_FILES, `Attach at most ${MATERIALS_MAX_FILES} files.`)
+    .optional(),
 })
   .refine(hasFolder, FOLDER_RULE)
   .refine(hasRepoUrl, REPO_URL_RULE);
@@ -265,15 +269,18 @@ export const AdoptProjectBody = z
     /** The person ticked the repo's own worktree.yml on the summary: store it as approved. */
     approveWorktreeYml: z.boolean().default(false),
     /** sha256 of the worktree.yml content the person reviewed (from detection). */
-    worktreeYmlSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    worktreeYmlSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
   })
   .refine((b) => !b.approveWorktreeYml || b.worktreeYmlSha256 !== undefined, {
     path: ['worktreeYmlSha256'],
-    message: 'approving the repo\'s worktree.yml needs the sha256 of the reviewed content',
+    message: "approving the repo's worktree.yml needs the sha256 of the reviewed content",
   })
   .refine((b) => !(b.approveWorktreeYml && b.write.includes('worktreeYml')), {
     path: ['approveWorktreeYml'],
-    message: 'approve the repo\'s worktree.yml or write a new one, not both',
+    message: "approve the repo's worktree.yml or write a new one, not both",
   })
   .refine((b) => !b.startFactory || b.vision.length > 0, {
     path: ['vision'],

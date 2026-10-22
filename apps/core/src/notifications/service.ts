@@ -191,7 +191,11 @@ export class NotificationService {
   /** Id of the run's newest event, the stable part of an occurrence that has no event of its own. */
   private latestEventId(runId: string): number | string {
     try {
-      const row = this.db.select({ id: max(runEvents.id) }).from(runEvents).where(eq(runEvents.runId, runId)).get();
+      const row = this.db
+        .select({ id: max(runEvents.id) })
+        .from(runEvents)
+        .where(eq(runEvents.runId, runId))
+        .get();
       return row?.id ?? `t${this.now()}`;
     } catch {
       return `t${this.now()}`;

@@ -134,7 +134,12 @@ export function ForgeAccountsPanel() {
   };
 
   return (
-    <section className="panel forge-accounts" id="forge-accounts" ref={panelRef} aria-labelledby="forge-accounts-title">
+    <section
+      className="panel forge-accounts"
+      id="forge-accounts"
+      ref={panelRef}
+      aria-labelledby="forge-accounts-title"
+    >
       <header className="panel-head">
         <div>
           <h2 id="forge-accounts-title">Forge accounts</h2>

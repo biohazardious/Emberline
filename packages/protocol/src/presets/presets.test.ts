@@ -30,8 +30,21 @@ describe('preset registry integrity', () => {
 
   it('declares the required dimensions', () => {
     const ids = STACK_DIMENSIONS.map((d) => d.id);
-    expect(ids).toEqual(['frontend', 'backend', 'database', 'auth', 'deploy', 'language', 'styling', 'testing']);
-    expect(STACK_DIMENSIONS.filter((d) => d.advanced).map((d) => d.id)).toEqual(['language', 'styling', 'testing']);
+    expect(ids).toEqual([
+      'frontend',
+      'backend',
+      'database',
+      'auth',
+      'deploy',
+      'language',
+      'styling',
+      'testing',
+    ]);
+    expect(STACK_DIMENSIONS.filter((d) => d.advanced).map((d) => d.id)).toEqual([
+      'language',
+      'styling',
+      'testing',
+    ]);
   });
 
   it('option ids are globally unique and apply to known types', () => {
@@ -67,7 +80,8 @@ describe('preset registry integrity', () => {
         if (choice === 'none' || choice === 'agent') continue;
         const opt = dimension.options.find((o) => o.id === choice);
         if (!opt) problems.push(`${p.id}.${dim} -> ${String(choice)} does not exist`);
-        else if (!opt.types.includes(p.type)) problems.push(`${p.id}.${dim} -> ${String(choice)} not valid for ${p.type}`);
+        else if (!opt.types.includes(p.type))
+          problems.push(`${p.id}.${dim} -> ${String(choice)} not valid for ${p.type}`);
       }
       expect(ProjectChoices.safeParse(p.choices).success).toBe(true);
     }
@@ -79,18 +93,27 @@ describe('preset registry integrity', () => {
       const auth = optionsForType('auth', t.id);
       const deploy = optionsForType('deploy', t.id);
       expect(deploy.length, `${t.id} deploy`).toBeGreaterThan(0);
-      if (t.id !== 'embedded_iot' && t.id !== 'library') expect(auth.length, `${t.id} auth`).toBeGreaterThan(0);
+      if (t.id !== 'embedded_iot' && t.id !== 'library')
+        expect(auth.length, `${t.id} auth`).toBeGreaterThan(0);
     }
     expect(optionsForType('deploy', 'mobile_desktop').some((o) => o.id === 'app-stores')).toBe(true);
   });
 
   it('static_site presets: plain starter and the three agent-built ones', () => {
     const labels = PRESETS.filter((p) => p.type === 'static_site').map((p) => p.label);
-    expect(labels).toEqual(['Auto — let the agent choose', 'Plain HTML/CSS/JS', 'Vite (vanilla)', 'Astro', 'Eleventy']);
+    expect(labels).toEqual([
+      'Auto — let the agent choose',
+      'Plain HTML/CSS/JS',
+      'Vite (vanilla)',
+      'Astro',
+      'Eleventy',
+    ]);
     const plain = getPreset('static-plain')!;
     expect(plain.starter).toBe('static-plain');
     expect(plain.choices.frontend).toBe('plain-html');
-    const opt = STACK_DIMENSIONS.find((d) => d.id === 'frontend')!.options.find((o) => o.id === 'plain-html')!;
+    const opt = STACK_DIMENSIONS.find((d) => d.id === 'frontend')!.options.find(
+      (o) => o.id === 'plain-html',
+    )!;
     expect(opt.worktree?.service).toBe('python3 -m http.server $PORT --bind 0.0.0.0');
     for (const p of PRESETS.filter((x) => x.type === 'static_site' && x.id !== 'static-plain')) {
       expect(p.starter).toBeNull();
@@ -151,7 +174,9 @@ describe('preset registry integrity', () => {
     expect(visionRequired(undefined, { frontend: 'agent', backend: 'agent' })).toBe(false);
     expect(visionRequired(undefined, { frontend: 'agent', backend: 'agent', deploy: 'agent' })).toBe(true);
     // the advanced dimensions do not count
-    expect(visionRequired(undefined, { frontend: 'agent', language: 'agent', styling: 'agent', testing: 'agent' })).toBe(false);
+    expect(
+      visionRequired(undefined, { frontend: 'agent', language: 'agent', styling: 'agent', testing: 'agent' }),
+    ).toBe(false);
     expect(visionRequired('custom-blank', getPreset('custom-blank')!.choices)).toBe(true);
   });
 
@@ -244,6 +269,8 @@ describe('CreateProjectBody back-compat', () => {
     expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_folder' }).success).toBe(false);
     expect(CreateProjectBody.safeParse({ name: 'x', source: 'new' }).success).toBe(true);
     expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_url' }).success).toBe(false);
-    expect(CreateProjectBody.safeParse({ name: 'x', source: 'import_url', repoUrl: 'https://h/r.git' }).success).toBe(true);
+    expect(
+      CreateProjectBody.safeParse({ name: 'x', source: 'import_url', repoUrl: 'https://h/r.git' }).success,
+    ).toBe(true);
   });
 });

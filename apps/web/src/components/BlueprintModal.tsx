@@ -139,7 +139,9 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
         </header>
 
         <p className="muted small" style={{ margin: 0 }}>
-          Every specialized agent persona reads <code className="mono">PROJECT.md</code> as the living source of truth. Edit it directly or dispatch the <PersonaBadge persona="product_owner" showFull /> agent to enrich it.
+          Every specialized agent persona reads <code className="mono">PROJECT.md</code> as the living source
+          of truth. Edit it directly or dispatch the <PersonaBadge persona="product_owner" showFull /> agent
+          to enrich it.
         </p>
 
         {loading ? (

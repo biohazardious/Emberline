@@ -197,7 +197,11 @@ export class CronService {
     const timeZone = body.timeZone ?? existing.timeZone;
 
     let nextRunAt = existing.nextRunAt;
-    if (body.cronExpr !== undefined || body.timeZone !== undefined || (body.enabled === true && !existing.enabled)) {
+    if (
+      body.cronExpr !== undefined ||
+      body.timeZone !== undefined ||
+      (body.enabled === true && !existing.enabled)
+    ) {
       nextRunAt = this.next({ cronExpr: nextCron, timeZone }, now);
     }
 
@@ -273,11 +277,7 @@ export class CronService {
         } catch {
           // Advance nextRunAt even if spawning failed (e.g. missing repo) so we don't spin every tick
           const nextRunAt = this.next(row, now);
-          this.db
-            .update(scheduledJobs)
-            .set({ nextRunAt })
-            .where(eq(scheduledJobs.id, row.id))
-            .run();
+          this.db.update(scheduledJobs).set({ nextRunAt }).where(eq(scheduledJobs.id, row.id)).run();
         }
       }
     } finally {
@@ -304,7 +304,9 @@ export class CronService {
       permissionMode: row.permissionMode as PermissionMode,
     };
     const origin = { unattended: 'cron' } as const;
-    const run = this.scheduler ? await this.scheduler.submit(input, origin) : await this.runs.enqueue(input, origin);
+    const run = this.scheduler
+      ? await this.scheduler.submit(input, origin)
+      : await this.runs.enqueue(input, origin);
     const nextRunAt = this.next(row, now);
     this.db
       .update(scheduledJobs)

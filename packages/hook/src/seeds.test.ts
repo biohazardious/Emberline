@@ -23,9 +23,17 @@ describe('claude-seed', () => {
     writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ numStartups: 7, theme: 'dark' }));
     run('claude-seed.mjs', home);
     const config = json(path.join(home, '.claude.json'));
-    expect(config).toMatchObject({ numStartups: 7, theme: 'dark', resumeReturnDismissed: true, lspRecommendationDisabled: true });
+    expect(config).toMatchObject({
+      numStartups: 7,
+      theme: 'dark',
+      resumeReturnDismissed: true,
+      lspRecommendationDisabled: true,
+    });
     expect(config.hasCompletedOnboarding).toBeUndefined();
-    expect(config).toMatchObject({ hasCompletedClaudeInChromeOnboarding: true, claudeInChromeDefaultEnabled: false });
+    expect(config).toMatchObject({
+      hasCompletedClaudeInChromeOnboarding: true,
+      claudeInChromeDefaultEnabled: false,
+    });
 
     mkdirSync(path.join(home, '.claude'));
     writeFileSync(path.join(home, '.claude', '.credentials.json'), '{}');
@@ -36,7 +44,10 @@ describe('claude-seed', () => {
   it('approves the API key Emberline injects (by its last 20 characters)', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
     const key = 'sk-ant-api03-0123456789abcdefghijKLMNOPQRSTUVWXYZ';
-    writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ customApiKeyResponses: { approved: [], rejected: [key.slice(-20)] } }));
+    writeFileSync(
+      path.join(home, '.claude.json'),
+      JSON.stringify({ customApiKeyResponses: { approved: [], rejected: [key.slice(-20)] } }),
+    );
     run('claude-seed.mjs', home, { ANTHROPIC_API_KEY: key });
     expect(json(path.join(home, '.claude.json'))).toMatchObject({
       hasCompletedOnboarding: true,
@@ -66,7 +77,10 @@ describe('emberline-cli-seed', () => {
   it('gemini: no update offers, API-key auth preselected, user choices kept', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
     mkdirSync(path.join(home, '.gemini'));
-    writeFileSync(path.join(home, '.gemini', 'settings.json'), JSON.stringify({ general: { enableAutoUpdate: true }, ui: { theme: 'x' } }));
+    writeFileSync(
+      path.join(home, '.gemini', 'settings.json'),
+      JSON.stringify({ general: { enableAutoUpdate: true }, ui: { theme: 'x' } }),
+    );
     run('emberline-cli-seed.mjs', home, { GEMINI_API_KEY: 'k' }, ['gemini']);
     expect(json(path.join(home, '.gemini', 'settings.json'))).toEqual({
       general: { enableAutoUpdate: true, enableAutoUpdateNotification: false },
@@ -83,8 +97,15 @@ describe('emberline-cli-seed', () => {
     run('emberline-cli-seed.mjs', home, {}, ['copilot']);
     const text = readFileSync(file, 'utf8');
     expect(text.startsWith('// managed by copilot\n')).toBe(true);
-    expect(JSON.parse(text.split('\n').slice(1).join('\n')).trustedFolders).toEqual(['/home/node/x', '/workspaces']);
-    expect(json(path.join(home, '.copilot', 'settings.json'))).toEqual({ banner: 'never', showTipsOnStartup: false, autoUpdate: false });
+    expect(JSON.parse(text.split('\n').slice(1).join('\n')).trustedFolders).toEqual([
+      '/home/node/x',
+      '/workspaces',
+    ]);
+    expect(json(path.join(home, '.copilot', 'settings.json'))).toEqual({
+      banner: 'never',
+      showTipsOnStartup: false,
+      autoUpdate: false,
+    });
   });
 
   it('antigravity: trusts the run worktree and forgets worktrees that are gone', () => {
@@ -92,7 +113,10 @@ describe('emberline-cli-seed', () => {
     const worktree = mkdtempSync(path.join(tmpdir(), 'wt-'));
     mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true });
     const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
-    writeFileSync(file, JSON.stringify({ trustedWorkspaces: ['/workspaces', '/workspaces/.worktrees/gone/1234'], theme: 'x' }));
+    writeFileSync(
+      file,
+      JSON.stringify({ trustedWorkspaces: ['/workspaces', '/workspaces/.worktrees/gone/1234'], theme: 'x' }),
+    );
     const res = spawnSync(process.execPath, [path.join(wrappers, 'emberline-cli-seed.mjs'), 'antigravity'], {
       cwd: worktree,
       env: { PATH: process.env.PATH ?? '', HOME: home },
@@ -149,9 +173,19 @@ describe('claude-statusline', () => {
     expect(out).toBe('5h 42% · 7d 18% · spend $2.50\n');
     const saved = json(limitsFile(home));
     expect(saved).toMatchObject({
-      fiveHour: { utilizationPercent: 42.4, resetsAt: new Date(1792171200 * 1000).toISOString(), severity: 'normal' },
+      fiveHour: {
+        utilizationPercent: 42.4,
+        resetsAt: new Date(1792171200 * 1000).toISOString(),
+        severity: 'normal',
+      },
       sevenDay: { utilizationPercent: 18, resetsAt: '2026-10-20T08:00:00.000Z', severity: 'normal' },
-      extraUsage: { enabled: true, usedUsd: 2.5, limitUsd: 20, utilizationPercent: 12.5, disabledReason: null },
+      extraUsage: {
+        enabled: true,
+        usedUsd: 2.5,
+        limitUsd: 20,
+        utilizationPercent: 12.5,
+        disabledReason: null,
+      },
     });
     expect(typeof saved.updatedAt).toBe('string');
   });
@@ -165,7 +199,13 @@ describe('claude-statusline', () => {
 
   it('records only the windows the CLI reports', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'statusline-'));
-    expect(statusline(home, JSON.stringify({ rate_limits: { seven_day: { used_percentage: 130 } } }))).toBe('7d 100%\n');
-    expect(json(limitsFile(home))).toMatchObject({ fiveHour: null, sevenDay: { utilizationPercent: 100, resetsAt: null }, extraUsage: null });
+    expect(statusline(home, JSON.stringify({ rate_limits: { seven_day: { used_percentage: 130 } } }))).toBe(
+      '7d 100%\n',
+    );
+    expect(json(limitsFile(home))).toMatchObject({
+      fiveHour: null,
+      sevenDay: { utilizationPercent: 100, resetsAt: null },
+      extraUsage: null,
+    });
   });
 });

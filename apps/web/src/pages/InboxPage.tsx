@@ -1,4 +1,10 @@
-import { type Project, type RecoverResponse, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
+import {
+  type Project,
+  type RecoverResponse,
+  type Run,
+  type RunAttentionReason,
+  type Ticket,
+} from '@emberline/protocol';
 import { useQueries } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../api';
@@ -84,7 +90,11 @@ function InboxItem({
       }
       setText('');
     } catch (err) {
-      setError(recovering ? recoverErrorText(err instanceof ApiRequestError ? err.code : '', errorMessage(err)) : errorMessage(err));
+      setError(
+        recovering
+          ? recoverErrorText(err instanceof ApiRequestError ? err.code : '', errorMessage(err))
+          : errorMessage(err),
+      );
     } finally {
       setBusy(false);
     }
@@ -174,7 +184,11 @@ export function InboxPage({
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const [all, setAll] = useAllProjects('inbox');
   const groups = useMemo(
-    () => groupAttention(inScope(runs ?? [], (r) => r.projectId, { activeProjectId, all }), seen),
+    () =>
+      groupAttention(
+        inScope(runs ?? [], (r) => r.projectId, { activeProjectId, all }),
+        seen,
+      ),
     [runs, seen, activeProjectId, all],
   );
   // The badges count every project; say what this view leaves out.
@@ -183,7 +197,8 @@ export function InboxPage({
   // Ticket key and current title from the live tickets cache (the Board's), one read per project
   // that has a ticket run in the Inbox; ticket events keep it current.
   const ticketProjects = useMemo(
-    () => [...new Set(groups.flatMap((g) => g.runs.filter((r) => r.ticketId).map((r) => r.projectId)))].sort(),
+    () =>
+      [...new Set(groups.flatMap((g) => g.runs.filter((r) => r.ticketId).map((r) => r.projectId)))].sort(),
     [groups],
   );
   const ticketsById = useQueries({
@@ -199,9 +214,7 @@ export function InboxPage({
       <header className="workspace-bar">
         <div className="workspace-bar-title">
           <h1>Inbox</h1>
-          <span className="muted small">
-            {inboxSubtitle(scoped, projectName)}
-          </span>
+          <span className="muted small">{inboxSubtitle(scoped, projectName)}</span>
         </div>
         {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
         {notificationsSupported() && permission === 'default' && (

@@ -43,7 +43,11 @@ export const TerminalServerMessage = z.discriminatedUnion('type', [
     status: z.enum(['running', 'exited']),
   }),
   z.object({ type: z.literal('output'), data: z.string() }),
-  z.object({ type: z.literal('exit'), exitCode: z.number().int().nullable(), signal: z.number().int().nullable() }),
+  z.object({
+    type: z.literal('exit'),
+    exitCode: z.number().int().nullable(),
+    signal: z.number().int().nullable(),
+  }),
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type TerminalServerMessage = z.infer<typeof TerminalServerMessage>;

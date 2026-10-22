@@ -200,7 +200,12 @@ export class RepositoryService {
   private async originStill(projectId: string, ws: Snapshot): Promise<boolean> {
     const { fetch, push } = await originUrls(ws.path);
     const row = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
-    return row !== undefined && sameRepository(row.repoUrl, ws.origin) && fetch === ws.origin && (!push || push === fetch);
+    return (
+      row !== undefined &&
+      sameRepository(row.repoUrl, ws.origin) &&
+      fetch === ws.origin &&
+      (!push || push === fetch)
+    );
   }
 
   async connect(projectId: string, raw: unknown): Promise<RepositoryStatus> {
@@ -270,7 +275,8 @@ export class RepositoryService {
       reason = DIVERGED_MESSAGE;
     } catch (error) {
       // Nothing was decided: the push is tried again once the runner is back.
-      if (isRunnerUnavailable(error)) return { ok: false, reason: remoteErrorText(error), runnerUnavailable: true };
+      if (isRunnerUnavailable(error))
+        return { ok: false, reason: remoteErrorText(error), runnerUnavailable: true };
       reason = remoteErrorText(error);
     }
     try {
@@ -307,7 +313,10 @@ export class RepositoryService {
         const tip = await branchTip(ws.path, ws.defaultBranch);
         if (mergeOid === undefined) {
           if (ws.branch !== ws.defaultBranch) {
-            throw conflict(`The main workspace is on ${ws.branch}, not ${ws.defaultBranch}.`, 'branch_differs');
+            throw conflict(
+              `The main workspace is on ${ws.branch}, not ${ws.defaultBranch}.`,
+              'branch_differs',
+            );
           }
           if (!tip) throw conflict('Main has no commits yet.', 'no_commits');
         } else {
@@ -372,7 +381,10 @@ export class RepositoryService {
    * repository: without an account git reaches origin as configured (with that token); an account
    * only ever goes to projects.repoUrl, through the gateway.
    */
-  private async access(projectId: string, mainPath: string): Promise<{ access: RemoteAccess; origin: string }> {
+  private async access(
+    projectId: string,
+    mainPath: string,
+  ): Promise<{ access: RemoteAccess; origin: string }> {
     const { fetch, push } = await originUrls(mainPath);
     if (!fetch) throw conflict('Connect a repository first.', 'no_remote');
     if (push && push !== fetch) {
@@ -422,7 +434,11 @@ export class RepositoryService {
           await setRemoteTracking(ws.path, branch, remoteOid);
         } catch (error) {
           if (isRunnerUnavailable(error)) throw error;
-          check = { ...check, published: false, error: describeGitError(error, ws.access.account?.credential) };
+          check = {
+            ...check,
+            published: false,
+            error: describeGitError(error, ws.access.account?.credential),
+          };
         }
       }
       try {

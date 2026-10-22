@@ -43,17 +43,24 @@ const MAX_MANIFEST_BYTES = 1024 * 1024;
 type SafeRead = { kind: 'ok'; text: string } | { kind: 'missing' } | { kind: 'unsafe'; reason: string };
 
 /** Reads `rel` under the project through a verified, no-follow descriptor, refusing files over `max` bytes. */
-async function readUnder(workspacesDir: string, projectPath: string, rel: string, max: number): Promise<SafeRead> {
+async function readUnder(
+  workspacesDir: string,
+  projectPath: string,
+  rel: string,
+  max: number,
+): Promise<SafeRead> {
   let opened;
   try {
     opened = await openFileUnder(workspacesDir, projectPath, rel);
   } catch (error) {
     if (isMissing(error)) return { kind: 'missing' };
-    if (error instanceof UnsafePathError) return { kind: 'unsafe', reason: error.message.replace(projectPath + path.sep, '') };
+    if (error instanceof UnsafePathError)
+      return { kind: 'unsafe', reason: error.message.replace(projectPath + path.sep, '') };
     throw error;
   }
   try {
-    if (opened.size > max) return { kind: 'unsafe', reason: `${rel} is larger than ${Math.round(max / 1024)} KB` };
+    if (opened.size > max)
+      return { kind: 'unsafe', reason: `${rel} is larger than ${Math.round(max / 1024)} KB` };
     const buffer = Buffer.alloc(opened.size);
     const { bytesRead } = await opened.handle.read(buffer, 0, opened.size, 0);
     return { kind: 'ok', text: buffer.subarray(0, bytesRead).toString('utf8') };
@@ -132,7 +139,8 @@ async function headWorktreeYml(
     workingTreeDiffers: true,
   });
   if (entry.mode === '120000') return fail(`${rel} is a symbolic link in HEAD`);
-  if (entry.type !== 'blob' || !/^[0-9a-f]{40,64}$/.test(entry.oid)) return fail(`${rel} is not a file in HEAD`);
+  if (entry.type !== 'blob' || !/^[0-9a-f]{40,64}$/.test(entry.oid))
+    return fail(`${rel} is not a file in HEAD`);
   if (entry.size === null || entry.size > MAX_WORKTREE_YML_BYTES) {
     return fail(`${rel} is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`);
   }
@@ -171,12 +179,22 @@ export interface GitReadOptions {
  * commit `ref` of that repository, read the hardened way above. Unlike detection, a git failure is
  * reported as such, never as "no file". `git` adds arguments and environment to each git read.
  */
-export async function readHeadWorktreeYml(dir: string, ref = 'HEAD', git: GitReadOptions = {}): Promise<HeadWorktreeYml> {
+export async function readHeadWorktreeYml(
+  dir: string,
+  ref = 'HEAD',
+  git: GitReadOptions = {},
+): Promise<HeadWorktreeYml> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
-  if (!(await entryExists(path.join(dir, '.git')))) return { kind: 'unknown', error: 'the main workspace is not a git repository' };
+  if (!(await entryExists(path.join(dir, '.git'))))
+    return { kind: 'unknown', error: 'the main workspace is not a git repository' };
   let stdout: string;
   try {
-    stdout = (await execGitFile([...(git.args ?? []), 'ls-tree', '-l', '-z', ref, '--', rel], { cwd: dir, env: git.env })).stdout;
+    stdout = (
+      await execGitFile([...(git.args ?? []), 'ls-tree', '-l', '-z', ref, '--', rel], {
+        cwd: dir,
+        env: git.env,
+      })
+    ).stdout;
   } catch (error) {
     const message = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
     return { kind: 'unknown', error: `git could not read ${ref}: ${message.slice(0, 300)}` };
@@ -309,7 +327,10 @@ function detectStack(s: Signals): Partial<Record<StackDimensionId, string>> {
       ? 'fly-io'
       : s.has('netlify.toml')
         ? 'static-hosting'
-        : s.has('compose.yaml') || s.has('compose.yml') || s.has('docker-compose.yml') || s.has('docker-compose.yaml')
+        : s.has('compose.yaml') ||
+            s.has('compose.yml') ||
+            s.has('docker-compose.yml') ||
+            s.has('docker-compose.yaml')
           ? 'docker-compose'
           : undefined;
 
@@ -333,7 +354,13 @@ function detectStack(s: Signals): Partial<Record<StackDimensionId, string>> {
                 ? 'javascript'
                 : undefined;
 
-  out.styling = anyDep(s, 'tailwindcss') ? 'tailwind' : anyDep(s, '@mui/material') ? 'mui' : anyDep(s, '@mantine/core') ? 'mantine' : undefined;
+  out.styling = anyDep(s, 'tailwindcss')
+    ? 'tailwind'
+    : anyDep(s, '@mui/material')
+      ? 'mui'
+      : anyDep(s, '@mantine/core')
+        ? 'mantine'
+        : undefined;
 
   out.testing =
     anyDep(s, 'vitest') && anyDep(s, '@playwright/test')
@@ -356,19 +383,38 @@ function detectStack(s: Signals): Partial<Record<StackDimensionId, string>> {
   return out;
 }
 
-const WEB_FRONTENDS = new Set(['nextjs', 'nuxt', 'sveltekit', 'angular', 'solid-vite', 'vue-vite', 'react-vite', 'react']);
+const WEB_FRONTENDS = new Set([
+  'nextjs',
+  'nuxt',
+  'sveltekit',
+  'angular',
+  'solid-vite',
+  'vue-vite',
+  'react-vite',
+  'react',
+]);
 
 function detectAppType(s: Signals, stack: Partial<Record<StackDimensionId, string>>): ProjectAppType {
   if (s.has('platformio.ini')) return 'embedded_iot';
   if (s.has('pubspec.yaml') || s.has('src-tauri') || anyDep(s, ...NATIVE_LIBS)) return 'mobile_desktop';
   if (anyDep(s, ...GAME_LIBS)) return 'game_interactive';
-  if (['plain-html', 'eleventy', 'astro', 'vite-vanilla'].includes(stack.frontend ?? '')) return 'static_site';
+  if (['plain-html', 'eleventy', 'astro', 'vite-vanilla'].includes(stack.frontend ?? ''))
+    return 'static_site';
   const web = WEB_FRONTENDS.has(stack.frontend ?? '');
   if (web && stack.backend) return 'fullstack';
   if (web) return 'web_saas';
-  if (anyDep(s, '@modelcontextprotocol/sdk', '@anthropic-ai/sdk', 'openai', 'langchain') || s.py.has('langchain')) return 'ai_agents';
-  if (stack.backend && !['platformio-arduino', 'tauri-core', 'electron-main', 'capacitor-bridge'].includes(stack.backend)) return 'api_service';
-  if (anyDep(s, 'commander', '@clack/prompts', 'yargs', 'ink') || s.py.has('typer') || s.py.has('click')) return 'cli_tool';
+  if (
+    anyDep(s, '@modelcontextprotocol/sdk', '@anthropic-ai/sdk', 'openai', 'langchain') ||
+    s.py.has('langchain')
+  )
+    return 'ai_agents';
+  if (
+    stack.backend &&
+    !['platformio-arduino', 'tauri-core', 'electron-main', 'capacitor-bridge'].includes(stack.backend)
+  )
+    return 'api_service';
+  if (anyDep(s, 'commander', '@clack/prompts', 'yargs', 'ink') || s.py.has('typer') || s.py.has('click'))
+    return 'cli_tool';
   // The status view's layer scan as a last hint.
   if (s.layers.includes('CLI / System Automation') && !s.hasPackageJson) return 'cli_tool';
   return 'custom';
@@ -385,7 +431,11 @@ function toChoices(
     let choice: StackChoice = 'agent';
     if (id) {
       const option = findOption(dim, id);
-      choice = option ? (option.types.includes(appType) ? id : { other: option.label }) : { other: id[0]!.toUpperCase() + id.slice(1) };
+      choice = option
+        ? option.types.includes(appType)
+          ? id
+          : { other: option.label }
+        : { other: id[0]!.toUpperCase() + id.slice(1) };
     }
     choices[dim] = choice;
   }
@@ -427,12 +477,16 @@ interface DetectionCore {
 }
 
 /** Reads the repository: stack, commands and the Emberline files it has. Never runs anything. */
-export async function inspectImportedProject(workspacesDir: string, projectPath: string): Promise<DetectionCore> {
+export async function inspectImportedProject(
+  workspacesDir: string,
+  projectPath: string,
+): Promise<DetectionCore> {
   let root: string | null;
   try {
     root = await realDirUnder(workspacesDir, projectPath);
   } catch (error) {
-    if (error instanceof UnsafePathError) throw conflict(`the project folder cannot be read safely: ${error.message}`);
+    if (error instanceof UnsafePathError)
+      throw conflict(`the project folder cannot be read safely: ${error.message}`);
     throw error;
   }
   if (!root) throw conflict('the project folder does not exist (yet): wait for the clone to finish');
@@ -441,11 +495,34 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
   const present = new Map<string, boolean>();
   const probe = async (rel: string) => present.set(rel, await entryExists(path.join(dir, rel)));
   const PROBED = [
-    'index.html', 'tsconfig.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'yarn.lock', 'package-lock.json',
-    'requirements.txt', 'pyproject.toml', 'setup.py', 'pytest.ini', 'conftest.py', 'tests', 'go.mod', 'Cargo.toml',
-    'pubspec.yaml', 'src-tauri', 'CMakeLists.txt', 'Makefile', 'vercel.json', 'fly.toml', 'netlify.toml',
-    'compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml',
-    ...MANIFESTS, ...Object.values(ADOPT_FILE_PATHS), 'AGENTS.md',
+    'index.html',
+    'tsconfig.json',
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    'yarn.lock',
+    'package-lock.json',
+    'requirements.txt',
+    'pyproject.toml',
+    'setup.py',
+    'pytest.ini',
+    'conftest.py',
+    'tests',
+    'go.mod',
+    'Cargo.toml',
+    'pubspec.yaml',
+    'src-tauri',
+    'CMakeLists.txt',
+    'Makefile',
+    'vercel.json',
+    'fly.toml',
+    'netlify.toml',
+    'compose.yaml',
+    'compose.yml',
+    'docker-compose.yml',
+    'docker-compose.yaml',
+    ...MANIFESTS,
+    ...Object.values(ADOPT_FILE_PATHS),
+    'AGENTS.md',
   ];
   await Promise.all(PROBED.map(probe));
   const has = (rel: string) => present.get(rel) === true;
@@ -459,7 +536,11 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
   const deps = new Set<string>();
   if (pkgRead.kind === 'ok') {
     try {
-      const pkg = JSON.parse(pkgRead.text) as { dependencies?: object; devDependencies?: object; peerDependencies?: object };
+      const pkg = JSON.parse(pkgRead.text) as {
+        dependencies?: object;
+        devDependencies?: object;
+        peerDependencies?: object;
+      };
       for (const block of [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies]) {
         if (block && typeof block === 'object') for (const name of Object.keys(block)) deps.add(name);
       }
@@ -477,7 +558,11 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
   const cargoRead = await read('Cargo.toml', 256 * 1024);
 
   const { topFiles } = await collectWorkspaceFiles(dir);
-  const hasPython = has('requirements.txt') || has('pyproject.toml') || has('setup.py') || topFiles.some((f) => f.endsWith('.py'));
+  const hasPython =
+    has('requirements.txt') ||
+    has('pyproject.toml') ||
+    has('setup.py') ||
+    topFiles.some((f) => f.endsWith('.py'));
   const inspection = manifestsSafe ? await inspectWorkspaceProject(dir, topFiles) : null;
 
   const signals: Signals = {
@@ -518,8 +603,10 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
       }
     }
   }
-  if (hasPython && (py.has('pytest') || has('pytest.ini') || has('conftest.py') || has('tests'))) add('test', 'pytest');
-  if (byKind.build.length === 0 && inspection?.buildCommand && !inspection.buildCommand.includes('*')) add('build', inspection.buildCommand);
+  if (hasPython && (py.has('pytest') || has('pytest.ini') || has('conftest.py') || has('tests')))
+    add('test', 'pytest');
+  if (byKind.build.length === 0 && inspection?.buildCommand && !inspection.buildCommand.includes('*'))
+    add('build', inspection.buildCommand);
 
   const services: DetectedCommands['services'] = [];
   const preview = pkgRead.kind === 'ok' && manifestsSafe ? detectPreviewCommand(dir) : null;
@@ -543,7 +630,9 @@ export async function inspectImportedProject(workspacesDir: string, projectPath:
   const worktreeYml = await headWorktreeYml(
     dir,
     head.get(ADOPT_FILE_PATHS.worktreeYml),
-    has(ADOPT_FILE_PATHS.worktreeYml) ? await read(ADOPT_FILE_PATHS.worktreeYml, MAX_WORKTREE_YML_BYTES) : { kind: 'missing' },
+    has(ADOPT_FILE_PATHS.worktreeYml)
+      ? await read(ADOPT_FILE_PATHS.worktreeYml, MAX_WORKTREE_YML_BYTES)
+      : { kind: 'missing' },
   );
 
   return {

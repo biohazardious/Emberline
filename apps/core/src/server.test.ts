@@ -78,27 +78,40 @@ describe('host allow-list (DNS rebinding)', () => {
     }
   });
 
-  it.each(['192.168.1.16:7420', '[::1]:7420', '[fe80::1]', 'localhost:7420', 'LOCALHOST.:7420', 'core:7420', '10.0.0.5'])(
-    'lets %s through',
-    async (host) => {
-      t = await createTestApp({ hookUrl: 'http://core:7420' });
-      expect((await t.app.inject({ url: '/api/health', headers: { host } })).statusCode).toBe(200);
-    },
-  );
+  it.each([
+    '192.168.1.16:7420',
+    '[::1]:7420',
+    '[fe80::1]',
+    'localhost:7420',
+    'LOCALHOST.:7420',
+    'core:7420',
+    '10.0.0.5',
+  ])('lets %s through', async (host) => {
+    t = await createTestApp({ hookUrl: 'http://core:7420' });
+    expect((await t.app.inject({ url: '/api/health', headers: { host } })).statusCode).toBe(200);
+  });
 
   it("lets the git gateway URL's host through", async () => {
     t = await createTestApp({ hookUrl: 'http://core:7420', gitGatewayUrl: 'http://emberline-core:7420' });
-    expect((await t.app.inject({ url: '/api/health', headers: { host: 'emberline-core:7420' } })).statusCode).toBe(200);
-    expect((await t.app.inject({ url: '/api/health', headers: { host: 'other-core:7420' } })).statusCode).toBe(421);
+    expect(
+      (await t.app.inject({ url: '/api/health', headers: { host: 'emberline-core:7420' } })).statusCode,
+    ).toBe(200);
+    expect(
+      (await t.app.inject({ url: '/api/health', headers: { host: 'other-core:7420' } })).statusCode,
+    ).toBe(421);
   });
 
   it('allows names from EMBERLINE_ALLOWED_HOSTS and "*" disables the check', async () => {
     t = await createTestApp({ allowedHosts: ['emberline.lan'] });
-    expect((await t.app.inject({ url: '/api/health', headers: { host: 'Emberline.LAN:8080' } })).statusCode).toBe(200);
+    expect(
+      (await t.app.inject({ url: '/api/health', headers: { host: 'Emberline.LAN:8080' } })).statusCode,
+    ).toBe(200);
     expect((await t.app.inject({ url: '/api/health', headers: { host: 'other.lan' } })).statusCode).toBe(421);
     await t.close();
     t = await createTestApp({ allowedHosts: ['*'] });
-    expect((await t.app.inject({ url: '/api/health', headers: { host: 'anything.example' } })).statusCode).toBe(200);
+    expect(
+      (await t.app.inject({ url: '/api/health', headers: { host: 'anything.example' } })).statusCode,
+    ).toBe(200);
   });
 
   it('checks X-Forwarded-Host instead of Host when behind a trusted proxy', async () => {
@@ -110,7 +123,11 @@ describe('host allow-list (DNS rebinding)', () => {
   });
 
   it('parses EMBERLINE_ALLOWED_HOSTS from the environment', () => {
-    expect(loadConfig({ EMBERLINE_ALLOWED_HOSTS: ' a.lan, B.lan. ,,*' }).allowedHosts).toEqual(['a.lan', 'b.lan', '*']);
+    expect(loadConfig({ EMBERLINE_ALLOWED_HOSTS: ' a.lan, B.lan. ,,*' }).allowedHosts).toEqual([
+      'a.lan',
+      'b.lan',
+      '*',
+    ]);
     expect(loadConfig({}).allowedHosts).toEqual([]);
   });
 
@@ -180,7 +197,9 @@ describe('hardening', () => {
       // CSP host sources cannot name an IPv6 literal: the scheme source instead (the panel says so).
       expect(await frameSrc('[::1]:7420')).toBe("'self' http:");
       // A malformed Host never reaches the policy.
-      expect(appCsp("evil; script-src 'unsafe-inline'", DEFAULT_PREVIEW_PORTS)).toContain("frame-src 'self';");
+      expect(appCsp("evil; script-src 'unsafe-inline'", DEFAULT_PREVIEW_PORTS)).toContain(
+        "frame-src 'self';",
+      );
       expect(appCsp(undefined, DEFAULT_PREVIEW_PORTS)).toContain("frame-src 'self';");
       process.env.EMBERLINE_PREVIEW_HOST = 'http://previews.lan/';
       expect(await frameSrc('192.168.1.16:7420')).toBe(`'self' ${portSources('previews.lan')}`);
@@ -206,14 +225,22 @@ describe('hardening', () => {
         t = undefined;
         return /frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1];
       };
-      expect(await frameSrc({ runner: { first: 4300, last: 4301 }, docker: { first: 4325, last: 4325 } })).toBe(
-        "'self' http://h:4300 http://h:4301 http://h:4325",
-      );
-      expect(await frameSrc({ runner: { first: 4300, last: 5300 }, docker: { first: 5400, last: 5400 } })).toBe("'self' http://h:*");
+      expect(
+        await frameSrc({ runner: { first: 4300, last: 4301 }, docker: { first: 4325, last: 4325 } }),
+      ).toBe("'self' http://h:4300 http://h:4301 http://h:4325");
+      expect(
+        await frameSrc({ runner: { first: 4300, last: 5300 }, docker: { first: 5400, last: 5400 } }),
+      ).toBe("'self' http://h:*");
       // Exactly 100 ports are still listed; overlapping ranges count each port once.
-      expect(previewPortList({ runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4399 } })).toHaveLength(100);
-      expect(previewPortList({ runner: { first: 4300, last: 4302 }, docker: { first: 4301, last: 4303 } })).toEqual([4300, 4301, 4302, 4303]);
-      expect(previewPortList({ runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4400 } })).toBeNull();
+      expect(
+        previewPortList({ runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4399 } }),
+      ).toHaveLength(100);
+      expect(
+        previewPortList({ runner: { first: 4300, last: 4302 }, docker: { first: 4301, last: 4303 } }),
+      ).toEqual([4300, 4301, 4302, 4303]);
+      expect(
+        previewPortList({ runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4400 } }),
+      ).toBeNull();
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
@@ -249,7 +276,10 @@ describe('hardening', () => {
     try {
       delete process.env.EMBERLINE_PREVIEW_HOST;
       t = await createTestApp({ webDir, trustProxy: true, allowedHosts: ['emberline.lan'] });
-      const page = await t.app.inject({ url: '/', headers: { host: '127.0.0.1:7420', 'x-forwarded-host': 'emberline.lan' } });
+      const page = await t.app.inject({
+        url: '/',
+        headers: { host: '127.0.0.1:7420', 'x-forwarded-host': 'emberline.lan' },
+      });
       expect(/frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1]).toBe(
         `'self' ${portSources('emberline.lan')}`,
       );
@@ -389,7 +419,9 @@ describe('auth', () => {
     t = await createTestApp();
     const cookie = await setupAndLogin(t.app);
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
     await new Promise((resolve, reject) => {
       ws.once('open', resolve);
       ws.once('error', reject);
@@ -452,7 +484,9 @@ describe('auth', () => {
     const { connect } = await import('node:net');
     const status = await new Promise<string>((resolve, reject) => {
       const socket = connect(port, '127.0.0.1', () => {
-        socket.write(`GET http://127.0.0.1:${port}/api/projects HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+        socket.write(
+          `GET http://127.0.0.1:${port}/api/projects HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+        );
       });
       let data = '';
       socket.on('data', (chunk) => {

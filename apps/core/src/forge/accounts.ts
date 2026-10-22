@@ -73,7 +73,11 @@ export const rateLimited = (res: Response): boolean =>
       res.headers.get('ratelimit-remaining') === '0'));
 
 const rateLimitedError = (host: string): HttpError =>
-  new HttpError(429, 'forge_rate_limited', `${host} is limiting requests right now. Try again in a few minutes.`);
+  new HttpError(
+    429,
+    'forge_rate_limited',
+    `${host} is limiting requests right now. Try again in a few minutes.`,
+  );
 
 /** zod issues without input values: a token must never be echoed in a 400. */
 function invalid(issues: { path: PropertyKey[]; message: string }[]): HttpError {
@@ -109,7 +113,9 @@ export class ForgeAccountsService {
         );
       }
     } catch (error) {
-      log(`forge: could not move the earlier forge token into an account: ${error instanceof Error ? error.message : String(error)}`);
+      log(
+        `forge: could not move the earlier forge token into an account: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     await this.fillMissingUsernames(log).catch(() => undefined);
   }
@@ -232,8 +238,11 @@ export class ForgeAccountsService {
     const generation = this.ownersGeneration.get(id) ?? 0;
     const account = this.record(id);
     const user = account.username ?? (await this.check(id)).username!;
-    const path = account.provider === 'gitlab' ? '/groups?min_access_level=30&per_page=100' : '/user/orgs?per_page=100';
-    const res = await forgeFetch(this.fetch, `${account.apiUrl}${path}`, { headers: authHeaders(account.provider, account.token) });
+    const path =
+      account.provider === 'gitlab' ? '/groups?min_access_level=30&per_page=100' : '/user/orgs?per_page=100';
+    const res = await forgeFetch(this.fetch, `${account.apiUrl}${path}`, {
+      headers: authHeaders(account.provider, account.token),
+    });
     if (rateLimited(res)) throw rateLimitedError(serverHost(account.serverUrl));
     if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
     let readable = res.ok;
@@ -271,17 +280,34 @@ export class ForgeAccountsService {
     let body: Record<string, unknown>;
     if (account.provider === 'gitlab') {
       url = `${account.apiUrl}/projects`;
-      body = { name: input.name, path: input.name, visibility: input.private ? 'private' : 'public', description: input.description ?? '' };
+      body = {
+        name: input.name,
+        path: input.name,
+        visibility: input.private ? 'private' : 'public',
+        description: input.description ?? '',
+      };
       if (!forUser) {
-        const ns = await forgeFetch(this.fetch, `${account.apiUrl}/namespaces/${encodeURIComponent(input.owner)}`, { headers });
+        const ns = await forgeFetch(
+          this.fetch,
+          `${account.apiUrl}/namespaces/${encodeURIComponent(input.owner)}`,
+          { headers },
+        );
         if (rateLimited(ns)) throw rateLimitedError(serverHost(account.serverUrl));
         const nsData = ns.ok ? await readJson<{ id?: unknown }>(ns).catch((): { id?: unknown } => ({})) : {};
-        if (typeof nsData.id !== 'number') throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
+        if (typeof nsData.id !== 'number')
+          throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
         body.namespace_id = nsData.id;
       }
     } else {
-      url = forUser ? `${account.apiUrl}/user/repos` : `${account.apiUrl}/orgs/${encodeURIComponent(input.owner)}/repos`;
-      body = { name: input.name, private: input.private, description: input.description ?? '', auto_init: false };
+      url = forUser
+        ? `${account.apiUrl}/user/repos`
+        : `${account.apiUrl}/orgs/${encodeURIComponent(input.owner)}/repos`;
+      body = {
+        name: input.name,
+        private: input.private,
+        description: input.description ?? '',
+        auto_init: false,
+      };
     }
     const res = await forgeFetch(this.fetch, url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (rateLimited(res)) throw rateLimitedError(serverHost(account.serverUrl));
@@ -289,17 +315,32 @@ export class ForgeAccountsService {
     if (res.ok) {
       const fullPath = account.provider === 'gitlab' ? data.path_with_namespace : data.full_name;
       // Only a plain owner[/group…]/name path becomes part of origin; anything else falls back to what was asked for.
-      const plain = typeof fullPath === 'string' && /^[\w.-]+(\/[\w.-]+)+$/.test(fullPath) && !/(^|\/)\.+(\/|$)/.test(fullPath);
+      const plain =
+        typeof fullPath === 'string' &&
+        /^[\w.-]+(\/[\w.-]+)+$/.test(fullPath) &&
+        !/(^|\/)\.+(\/|$)/.test(fullPath);
       return { fullPath: plain ? fullPath : `${input.owner}/${input.name}` };
     }
     const text = JSON.stringify(data).split(account.token).join('[redacted]');
     if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
     if (res.status === 409 || /already (exists|been taken)/i.test(text)) {
-      throw new HttpError(409, 'repo_name_taken', `A repository named ${input.name} already exists for ${input.owner}.`);
+      throw new HttpError(
+        409,
+        'repo_name_taken',
+        `A repository named ${input.name} already exists for ${input.owner}.`,
+      );
     }
-    if (res.status === 403 || res.status === 404) throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
-    const message = typeof data.message === 'string' ? `: ${data.message.split(account.token).join('[redacted]').slice(0, 200)}` : '';
-    throw new HttpError(502, 'forge_error', `The forge could not create the repository (HTTP ${res.status})${message}.`);
+    if (res.status === 403 || res.status === 404)
+      throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
+    const message =
+      typeof data.message === 'string'
+        ? `: ${data.message.split(account.token).join('[redacted]').slice(0, 200)}`
+        : '';
+    throw new HttpError(
+      502,
+      'forge_error',
+      `The forge could not create the repository (HTTP ${res.status})${message}.`,
+    );
   }
 
   private createRefused(account: ForgeAccountRecord, owner: string): string {

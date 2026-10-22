@@ -25,8 +25,10 @@ afterEach(async () => {
   await h.close();
 });
 
-const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) => h.api(method, url, payload);
-const hook = (runId: string, event: string, token: string, payload: object = {}) => h.hook(runId, event, token, payload);
+const api = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
+  h.api(method, url, payload);
+const hook = (runId: string, event: string, token: string, payload: object = {}) =>
+  h.hook(runId, event, token, payload);
 const waitFile = (name: string) => h.waitFile(name);
 
 async function createProject() {
@@ -37,7 +39,8 @@ async function createProject() {
   return project;
 }
 
-const draftsFile = (titles: string[]) => JSON.stringify({ autoDispatch: false, tickets: titles.map((title) => ({ title })) });
+const draftsFile = (titles: string[]) =>
+  JSON.stringify({ autoDispatch: false, tickets: titles.map((title) => ({ title })) });
 
 function writeTickets(cwd: string, content: string): void {
   mkdirSync(path.join(cwd, '.emberline'), { recursive: true });
@@ -50,7 +53,9 @@ const eventsOf = async (run: Run) => ((await api('GET', `/api/runs/${run.id}`)).
 const eventTypes = async (run: Run) => (await eventsOf(run)).map((e) => e.type);
 
 async function startTicket(projectId: string, title: string, persona?: string): Promise<Run> {
-  const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title, status: 'ready', persona })).json() as Ticket;
+  const ticket = (
+    await api('POST', `/api/projects/${projectId}/tickets`, { title, status: 'ready', persona })
+  ).json() as Ticket;
   const res = await api('POST', `/api/tickets/${ticket.id}/start`, persona ? { persona } : {});
   expect(res.statusCode).toBe(201);
   return (res.json() as { run: Run }).run;
@@ -95,7 +100,9 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
     const first = await startTicket(project.id, 'Plan one');
     writeTickets(first.worktreePath, content);
     await finishTurn(first);
-    await expect.poll(() => titles(project.id), { timeout: 10_000 }).toEqual(expect.arrayContaining(['Child A', 'Child B']));
+    await expect
+      .poll(() => titles(project.id), { timeout: 10_000 })
+      .toEqual(expect.arrayContaining(['Child A', 'Child B']));
     await expect.poll(() => eventTypes(first), { timeout: 10_000 }).toContain('merged_to_main');
 
     const second = await startTicket(project.id, 'Plan two');
@@ -119,9 +126,14 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
     writeTickets(po.worktreePath, draftsFile(['Core: store', 'QA: tests']));
     await finishTurn(po);
 
-    await expect.poll(() => titles(project.id), { timeout: 10_000 }).toEqual(expect.arrayContaining(['Core: store', 'QA: tests']));
+    await expect
+      .poll(() => titles(project.id), { timeout: 10_000 })
+      .toEqual(expect.arrayContaining(['Core: store', 'QA: tests']));
     await expect.poll(() => eventTypes(po), { timeout: 10_000 }).toContain('merged_to_main');
-    expect((await titles(project.id)).filter((x) => x !== '[Factory] Plan the studio site').sort()).toEqual(['Core: store', 'QA: tests']);
+    expect((await titles(project.id)).filter((x) => x !== '[Factory] Plan the studio site').sort()).toEqual([
+      'Core: store',
+      'QA: tests',
+    ]);
     const types = await eventTypes(po);
     expect(types).not.toContain('tickets_file_inherited');
     expect(types).not.toContain('tickets_file_duplicate');
@@ -158,12 +170,15 @@ describe('agent tickets files are imported once', { timeout: 30_000 }, () => {
   });
 });
 
-
 describe('wizard projects have one planner', { timeout: 30_000 }, () => {
   async function wizardProject() {
     const project = await createProject();
     const factory = (
-      await api('POST', `/api/projects/${project.id}/tickets`, { title: '[Factory] Build it', status: 'ready', persona: 'product_owner' })
+      await api('POST', `/api/projects/${project.id}/tickets`, {
+        title: '[Factory] Build it',
+        status: 'ready',
+        persona: 'product_owner',
+      })
     ).json() as Ticket;
     return { project, factory };
   }
@@ -178,12 +193,18 @@ describe('wizard projects have one planner', { timeout: 30_000 }, () => {
   it("Bootstrap's tickets file while [Factory] is open creates no tickets", async () => {
     const { project, factory } = await wizardProject();
     const run = await startTicket(project.id, 'Bootstrap: skeleton', 'architect');
-    writeWizardTickets(t.db, project.id, { bootstrap: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeWizardTickets(t.db, project.id, {
+      bootstrap: run.ticketId!,
+      factory: factory.id,
+      bootstrapWritesWorktree: false,
+    });
     writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
     writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
     await finishTurn(run);
     await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_file_left_to_factory');
-    expect((await eventsOf(run)).find((e) => e.type === 'tickets_file_left_to_factory')?.payload).toEqual({ drafts: 2 });
+    expect((await eventsOf(run)).find((e) => e.type === 'tickets_file_left_to_factory')?.payload).toEqual({
+      drafts: 2,
+    });
     expect(await eventTypes(run)).not.toContain('tickets_imported');
     expect((await titles(project.id)).sort()).toEqual(['Bootstrap: skeleton', '[Factory] Build it'].sort());
     expect(existsSync(path.join(run.worktreePath, TICKETS))).toBe(false);
@@ -194,7 +215,12 @@ describe('wizard projects have one planner', { timeout: 30_000 }, () => {
   it('the Deploy ticket is held to the same rule', async () => {
     const { project, factory } = await wizardProject();
     const run = await startTicket(project.id, 'Deploy: prepare', 'architect');
-    writeWizardTickets(t.db, project.id, { bootstrap: factory.id, deploy: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeWizardTickets(t.db, project.id, {
+      bootstrap: factory.id,
+      deploy: run.ticketId!,
+      factory: factory.id,
+      bootstrapWritesWorktree: false,
+    });
     writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
     writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
     await finishTurn(run);
@@ -207,7 +233,11 @@ describe('wizard projects have one planner', { timeout: 30_000 }, () => {
     const { project, factory } = await wizardProject();
     await api('PATCH', `/api/tickets/${factory.id}`, { status: 'done' });
     const run = await startTicket(project.id, 'Bootstrap: skeleton', 'architect');
-    writeWizardTickets(t.db, project.id, { bootstrap: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeWizardTickets(t.db, project.id, {
+      bootstrap: run.ticketId!,
+      factory: factory.id,
+      bootstrapWritesWorktree: false,
+    });
     writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
     writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
     await finishTurn(run);
@@ -218,7 +248,11 @@ describe('wizard projects have one planner', { timeout: 30_000 }, () => {
   it('a deleted [Factory] ticket no longer blocks the import', async () => {
     const { project, factory } = await wizardProject();
     const run = await startTicket(project.id, 'Bootstrap: skeleton', 'architect');
-    writeWizardTickets(t.db, project.id, { bootstrap: run.ticketId!, factory: factory.id, bootstrapWritesWorktree: false });
+    writeWizardTickets(t.db, project.id, {
+      bootstrap: run.ticketId!,
+      factory: factory.id,
+      bootstrapWritesWorktree: false,
+    });
     expect((await api('DELETE', `/api/tickets/${factory.id}`)).statusCode).toBeLessThan(300);
     writeTickets(run.worktreePath, draftsFile(['Core: store', 'UI: page']));
     writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
@@ -244,11 +278,17 @@ describe('same-title drafts are skipped', { timeout: 30_000 }, () => {
     await finishTurn(run);
     return run;
   }
-  const listTickets = async (projectId: string) => (await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[];
+  const listTickets = async (projectId: string) =>
+    (await api('GET', `/api/projects/${projectId}/tickets`)).json() as Ticket[];
 
   it('a draft with the title of an open ticket is skipped; its dependents depend on that ticket', async () => {
     const project = await createProject();
-    const open = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'Core: booking store', status: 'ready' })).json() as Ticket;
+    const open = (
+      await api('POST', `/api/projects/${project.id}/tickets`, {
+        title: 'Core: booking store',
+        status: 'ready',
+      })
+    ).json() as Ticket;
     const run = await runWith(project.id, [
       { ref: 'core', title: '  core:   Booking store.' },
       { ref: 'ui', title: 'UI: page', dependsOn: ['core'] },
@@ -265,7 +305,9 @@ describe('same-title drafts are skipped', { timeout: 30_000 }, () => {
 
   it('a done ticket with the same title does not block the draft', async () => {
     const project = await createProject();
-    const old = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'Core: store', status: 'ready' })).json() as Ticket;
+    const old = (
+      await api('POST', `/api/projects/${project.id}/tickets`, { title: 'Core: store', status: 'ready' })
+    ).json() as Ticket;
     await api('PATCH', `/api/tickets/${old.id}`, { status: 'done' });
     const run = await runWith(project.id, [{ title: 'Core: store' }]);
     await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
@@ -283,7 +325,12 @@ describe('same-title drafts are skipped', { timeout: 30_000 }, () => {
     await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_imported');
     const all = await listTickets(project.id);
     const store = all.find((x) => x.title === 'Store')!;
-    expect(all.map((x) => x.title).filter((x) => x === 'Store' || x === 'store' || x === 'Page').sort()).toEqual(['Page', 'Store']);
+    expect(
+      all
+        .map((x) => x.title)
+        .filter((x) => x === 'Store' || x === 'store' || x === 'Page')
+        .sort(),
+    ).toEqual(['Page', 'Store']);
     expect(all.find((x) => x.title === 'Page')?.dependsOn).toEqual([store.id]);
     const dups = (await eventsOf(run)).filter((e) => e.type === 'ticket_draft_duplicate');
     expect(dups.map((e) => e.payload)).toEqual([{ title: 'store', existing: store.key }]);

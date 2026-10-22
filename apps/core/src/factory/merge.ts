@@ -48,7 +48,9 @@ const SCRATCH_PATHSPECS = EMBERLINE_SCRATCH_PATHS.map((p) => `:(glob)**/${p}`);
  */
 export async function unstageScratchFiles(cwd: string): Promise<void> {
   // -f: the staged content may differ from both HEAD and the file on disk; only the index changes.
-  await execGitFile(['rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', ...SCRATCH_PATHSPECS], { cwd });
+  await execGitFile(['rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', ...SCRATCH_PATHSPECS], {
+    cwd,
+  });
 }
 
 /**
@@ -131,7 +133,9 @@ function gitLines(stdout: string): string[] {
 
 /** The branch checked out in the main workspace (what runs are merged into); null when detached or unknown. */
 export async function mainWorkspaceBranch(mainWorkspacePath: string): Promise<string | null> {
-  const res = await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainWorkspacePath }).catch(() => ({ stdout: '' }));
+  const res = await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainWorkspacePath }).catch(
+    () => ({ stdout: '' }),
+  );
   const branch = res.stdout.trim();
   return branch && branch !== 'HEAD' ? branch : null;
 }
@@ -159,11 +163,16 @@ export async function runProducedChanges(worktreePath: string, mainWorkspacePath
   if (!existsSync(worktreePath)) return true;
   try {
     const inWorktree = { cwd: worktreePath };
-    const status = await execGitFile(['status', '--porcelain', '--untracked-files=all', '--', '.', ...RUN_OUTPUT_EXCLUDES], inWorktree);
+    const status = await execGitFile(
+      ['status', '--porcelain', '--untracked-files=all', '--', '.', ...RUN_OUTPUT_EXCLUDES],
+      inWorktree,
+    );
     if (status.stdout.trim()) return true;
     const tip = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
     // Main's first-parent line down to where the branch started: the walk stops at the tip's parents.
-    const mainLine = await execGitFile(['rev-list', '--first-parent', 'HEAD', '--not', `${tip}^@`], { cwd: mainWorkspacePath });
+    const mainLine = await execGitFile(['rev-list', '--first-parent', 'HEAD', '--not', `${tip}^@`], {
+      cwd: mainWorkspacePath,
+    });
     return !gitLines(mainLine.stdout).includes(tip);
   } catch {
     return true;
@@ -189,7 +198,11 @@ export async function syncWorktreeToMainWorkspace(params: {
 }): Promise<SyncWorktreeResult> {
   const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
   const label = ticketKey ?? runId.slice(0, 8);
-  const result = (ok: boolean, summary: string, extra: Partial<SyncWorktreeResult> = {}): SyncWorktreeResult => ({
+  const result = (
+    ok: boolean,
+    summary: string,
+    extra: Partial<SyncWorktreeResult> = {},
+  ): SyncWorktreeResult => ({
     ok,
     runId,
     filesSynced: 0,
@@ -207,13 +220,20 @@ export async function syncWorktreeToMainWorkspace(params: {
     const inMain =
       Boolean(branch) &&
       existsSync(path.join(mainWorkspacePath, '.git')) &&
-      (await execGitFile(['merge-base', '--is-ancestor', `refs/heads/${branch}`, 'HEAD'], { cwd: mainWorkspacePath }).then(
+      (await execGitFile(['merge-base', '--is-ancestor', `refs/heads/${branch}`, 'HEAD'], {
+        cwd: mainWorkspacePath,
+      }).then(
         () => true,
         () => false,
       ));
-    if (!inMain) throw new HttpError(409, 'worktree_missing', "the run's worktree is gone and its work isn't in main");
-    const head = (await execGitFile(['rev-parse', '--short', 'HEAD'], { cwd: mainWorkspacePath })).stdout.trim() || null;
-    return result(true, `${label} is already merged into the main workspace (its worktree is gone).`, { commitSha: head, alreadyMerged: true });
+    if (!inMain)
+      throw new HttpError(409, 'worktree_missing', "the run's worktree is gone and its work isn't in main");
+    const head =
+      (await execGitFile(['rev-parse', '--short', 'HEAD'], { cwd: mainWorkspacePath })).stdout.trim() || null;
+    return result(true, `${label} is already merged into the main workspace (its worktree is gone).`, {
+      commitSha: head,
+      alreadyMerged: true,
+    });
   }
   if (!existsSync(path.join(worktreePath, '.git')) || !existsSync(path.join(mainWorkspacePath, '.git'))) {
     return result(false, `Cannot merge ${label}: the project is not a git repository.`);
@@ -228,18 +248,25 @@ export async function syncWorktreeToMainWorkspace(params: {
     await unstageScratchFiles(worktreePath);
     const staged = await execGitFile(['diff', '--cached', '--name-only'], inWorktree);
     if (staged.stdout.trim()) {
-      await execGitFile([...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `feat(${label}): factory run output`], inWorktree);
+      await execGitFile(
+        [...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `feat(${label}): factory run output`],
+        inWorktree,
+      );
     }
     const tip = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
     const branch = (await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], inWorktree)).stdout.trim();
-    const shortHead = async () => (await execGitFile(['rev-parse', '--short', 'HEAD'], inMain)).stdout.trim() || null;
+    const shortHead = async () =>
+      (await execGitFile(['rev-parse', '--short', 'HEAD'], inMain)).stdout.trim() || null;
 
     const alreadyMerged = await execGitFile(['merge-base', '--is-ancestor', tip, 'HEAD'], inMain).then(
       () => true,
       () => false,
     );
     if (alreadyMerged) {
-      return result(true, `${label} is already merged into the main workspace.`, { commitSha: await shortHead(), alreadyMerged: true });
+      return result(true, `${label} is already merged into the main workspace.`, {
+        commitSha: await shortHead(),
+        alreadyMerged: true,
+      });
     }
 
     beforeMerge?.();
@@ -255,7 +282,13 @@ export async function syncWorktreeToMainWorkspace(params: {
       const snapshot = await execGitFile(['diff', '--cached', '--name-only'], inMain);
       if (snapshot.stdout.trim()) {
         await execGitFile(
-          [...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `chore: snapshot workspace edits before merging ${label}`],
+          [
+            ...FACTORY_GIT_IDENTITY,
+            'commit',
+            '-q',
+            '-m',
+            `chore: snapshot workspace edits before merging ${label}`,
+          ],
           inMain,
         );
       }
@@ -270,18 +303,24 @@ export async function syncWorktreeToMainWorkspace(params: {
       );
     } catch (error) {
       const conflicts = gitLines(
-        (await execGitFile(['diff', '--name-only', '--diff-filter=U'], inMain).catch(() => ({ stdout: '' }))).stdout,
+        (await execGitFile(['diff', '--name-only', '--diff-filter=U'], inMain).catch(() => ({ stdout: '' })))
+          .stdout,
       );
       await execGitFile(['merge', '--abort'], inMain).catch(() => undefined);
       const detail =
         conflicts.length > 0
           ? `conflicts in ${conflicts.slice(0, 10).join(', ')}${conflicts.length > 10 ? ', …' : ''}`
-          : (gitLines(String((error as { stderr?: string }).stderr ?? (error as Error).message))[0] ?? 'git merge failed');
-      return result(false, `Could not merge ${label} into the main workspace (${detail}); it was left unchanged.`, {
-        conflicts,
-        commitSha: await shortHead(),
-        mainHead: before,
-      });
+          : (gitLines(String((error as { stderr?: string }).stderr ?? (error as Error).message))[0] ??
+            'git merge failed');
+      return result(
+        false,
+        `Could not merge ${label} into the main workspace (${detail}); it was left unchanged.`,
+        {
+          conflicts,
+          commitSha: await shortHead(),
+          mainHead: before,
+        },
+      );
     }
 
     const changed = gitLines((await execGitFile(['diff', '--name-only', before, 'HEAD'], inMain)).stdout);
@@ -290,11 +329,15 @@ export async function syncWorktreeToMainWorkspace(params: {
     // its commit); an unverified one is never recorded, so Keep main pushed never publishes it.
     const commitOid = await verifiedMergeCommit(mainWorkspacePath, before, tip);
     if (commitOid) recordMergeCommit(mainWorkspacePath, commitOid);
-    return result(true, `Merged ${changed.length} changed files from ${label} (${branch}) into the main workspace${commitSha ? ` (commit ${commitSha})` : ''}.`, {
-      filesSynced: changed.length,
-      commitSha,
-      commitOid,
-      commitUnverified: !commitOid,
-    });
+    return result(
+      true,
+      `Merged ${changed.length} changed files from ${label} (${branch}) into the main workspace${commitSha ? ` (commit ${commitSha})` : ''}.`,
+      {
+        filesSynced: changed.length,
+        commitSha,
+        commitOid,
+        commitUnverified: !commitOid,
+      },
+    );
   });
 }

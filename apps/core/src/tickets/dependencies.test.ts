@@ -1,14 +1,30 @@
 import { AgentTicketDraft, UpdateTicketBody } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { defaultTierEdges, normalizeTicketTitle, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
+import {
+  defaultTierEdges,
+  normalizeTicketTitle,
+  resolveBatchDependencies,
+  wouldCreateCycle,
+} from './dependencies.js';
 
-const t = (id: string, persona: string, ref?: string, dependsOn?: string[]) => ({ id, key: id.toUpperCase(), persona: persona as never, ref, dependsOn });
+const t = (id: string, persona: string, ref?: string, dependsOn?: string[]) => ({
+  id,
+  key: id.toUpperCase(),
+  persona: persona as never,
+  ref,
+  dependsOn,
+});
 const keys = new Map([['MPG-38', 'old38']]);
 
 describe('ticket dependencies', () => {
   it('resolves refs and existing keys, case-insensitively', () => {
     const { edges, dropped } = resolveBatchDependencies(
-      [t('a', 'ui_ux', 'brand-assets'), t('b', 'coder', 'android-shell'), t('c', 'coder', 'apk-build', ['Brand-Assets', 'android-shell']), t('d', 'qa', 'qa', ['apk-build', 'mpg-38'])],
+      [
+        t('a', 'ui_ux', 'brand-assets'),
+        t('b', 'coder', 'android-shell'),
+        t('c', 'coder', 'apk-build', ['Brand-Assets', 'android-shell']),
+        t('d', 'qa', 'qa', ['apk-build', 'mpg-38']),
+      ],
       keys,
       [],
     );
@@ -35,9 +51,13 @@ describe('ticket dependencies', () => {
     ]);
   });
 
-  it('reports a ref that normalizes to an earlier ticket\'s ref; the first one wins', () => {
+  it("reports a ref that normalizes to an earlier ticket's ref; the first one wins", () => {
     const { edges, dropped } = resolveBatchDependencies(
-      [t('a', 'coder', 'Brand_Assets'), t('b', 'ui_ux', 'brand-assets'), t('c', 'qa', 'qa', ['brand-assets'])],
+      [
+        t('a', 'coder', 'Brand_Assets'),
+        t('b', 'ui_ux', 'brand-assets'),
+        t('c', 'qa', 'qa', ['brand-assets']),
+      ],
       keys,
       [],
     );
@@ -61,7 +81,10 @@ describe('ticket dependencies', () => {
       keys,
       [],
     );
-    expect(edges).toEqual([{ ticketId: 'b', dependsOnId: 'a' }, { ticketId: 'b', dependsOnId: 'c' }]);
+    expect(edges).toEqual([
+      { ticketId: 'b', dependsOnId: 'a' },
+      { ticketId: 'b', dependsOnId: 'c' },
+    ]);
     expect(dropped).toEqual([
       { ticketId: 'b', ref: 'nope', reason: 'unknown' },
       { ticketId: 'c', ref: 'c', reason: 'self' },
@@ -69,15 +92,32 @@ describe('ticket dependencies', () => {
   });
 
   it('applies the default persona tiers when no draft states dependencies', () => {
-    expect(defaultTierEdges([{ id: 'arch', persona: 'architect' }, { id: 'c', persona: 'coder' }, { id: 'u', persona: 'ui_ux' }, { id: 'q', persona: 'qa' }])).toEqual([
+    expect(
+      defaultTierEdges([
+        { id: 'arch', persona: 'architect' },
+        { id: 'c', persona: 'coder' },
+        { id: 'u', persona: 'ui_ux' },
+        { id: 'q', persona: 'qa' },
+      ]),
+    ).toEqual([
       { ticketId: 'c', dependsOnId: 'arch' },
       { ticketId: 'u', dependsOnId: 'arch' },
       { ticketId: 'q', dependsOnId: 'c' },
       { ticketId: 'q', dependsOnId: 'u' },
     ]);
     // Missing tier 1: qa depends on tier 0 directly; a single tier gets no edges.
-    expect(defaultTierEdges([{ id: 'd', persona: 'dba' }, { id: 'q', persona: 'qa' }])).toEqual([{ ticketId: 'q', dependsOnId: 'd' }]);
-    expect(defaultTierEdges([{ id: 'c', persona: 'coder' }, { id: 'u', persona: 'ui_ux' }])).toEqual([]);
+    expect(
+      defaultTierEdges([
+        { id: 'd', persona: 'dba' },
+        { id: 'q', persona: 'qa' },
+      ]),
+    ).toEqual([{ ticketId: 'q', dependsOnId: 'd' }]);
+    expect(
+      defaultTierEdges([
+        { id: 'c', persona: 'coder' },
+        { id: 'u', persona: 'ui_ux' },
+      ]),
+    ).toEqual([]);
   });
 
   it('uses the default tiers through resolveBatchDependencies when no draft has dependsOn', () => {
@@ -86,8 +126,18 @@ describe('ticket dependencies', () => {
   });
 
   it('detects cycles through existing edges', () => {
-    expect(wouldCreateCycle([{ ticketId: 'b', dependsOnId: 'a' }, { ticketId: 'c', dependsOnId: 'b' }], { ticketId: 'a', dependsOnId: 'c' })).toBe(true);
-    expect(wouldCreateCycle([{ ticketId: 'b', dependsOnId: 'a' }], { ticketId: 'c', dependsOnId: 'a' })).toBe(false);
+    expect(
+      wouldCreateCycle(
+        [
+          { ticketId: 'b', dependsOnId: 'a' },
+          { ticketId: 'c', dependsOnId: 'b' },
+        ],
+        { ticketId: 'a', dependsOnId: 'c' },
+      ),
+    ).toBe(true);
+    expect(wouldCreateCycle([{ ticketId: 'b', dependsOnId: 'a' }], { ticketId: 'c', dependsOnId: 'a' })).toBe(
+      false,
+    );
   });
 });
 
@@ -141,7 +191,9 @@ describe('dependency protocol fields', () => {
 
   it('accepts dependsOn on ticket updates', () => {
     expect(UpdateTicketBody.parse({ dependsOn: ['MPG-1'] }).dependsOn).toEqual(['MPG-1']);
-    expect(UpdateTicketBody.safeParse({ dependsOn: Array.from({ length: 21 }, (_, i) => `k${i}`) }).success).toBe(false);
+    expect(
+      UpdateTicketBody.safeParse({ dependsOn: Array.from({ length: 21 }, (_, i) => `k${i}`) }).success,
+    ).toBe(false);
   });
 });
 

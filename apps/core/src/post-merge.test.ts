@@ -390,7 +390,9 @@ describe('post-merge jobs after a person syncs a run without a ticket', () => {
     await expect.poll(() => seen).toEqual([project.id]);
     await t.postMerge.idle();
     // Nothing new to merge: no second job.
-    expect((await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: 'run-loose' })).json()).toMatchObject({
+    expect(
+      (await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: 'run-loose' })).json(),
+    ).toMatchObject({
       ok: true,
       alreadyMerged: true,
     });

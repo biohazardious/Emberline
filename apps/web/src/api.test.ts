@@ -15,6 +15,10 @@ describe('api errors', () => {
   });
   it('a JSON error body keeps its code and message', async () => {
     respond(409, 'Conflict', JSON.stringify({ error: 'name_taken', message: 'Taken' }));
-    await expect(api('/api/projects', 'POST', {})).rejects.toMatchObject({ status: 409, code: 'name_taken', message: 'Taken' });
+    await expect(api('/api/projects', 'POST', {})).rejects.toMatchObject({
+      status: 409,
+      code: 'name_taken',
+      message: 'Taken',
+    });
   });
 });

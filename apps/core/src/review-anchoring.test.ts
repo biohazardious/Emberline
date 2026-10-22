@@ -48,9 +48,11 @@ async function setup(): Promise<{ run: Run; wt: string }> {
   return { run, wt: run.worktreePath };
 }
 
-const diff = async (run: Run): Promise<RunDiffSummary> => (await api('GET', `/api/runs/${run.id}/diff`)).json();
+const diff = async (run: Run): Promise<RunDiffSummary> =>
+  (await api('GET', `/api/runs/${run.id}/diff`)).json();
 const hashOf = async (run: Run, file: string) => (await diff(run)).files.find((f) => f.path === file)?.hash;
-const state = async (run: Run): Promise<RunReviewState> => (await api('GET', `/api/runs/${run.id}/review`)).json();
+const state = async (run: Run): Promise<RunReviewState> =>
+  (await api('GET', `/api/runs/${run.id}/review`)).json();
 const comment = async (run: Run, body: object): Promise<ReviewComment> => {
   const res = await api('POST', `/api/runs/${run.id}/review/comments`, body);
   expect(res.statusCode).toBe(201);
@@ -83,8 +85,21 @@ describe('typed and file-level comments', () => {
     writeFileSync(path.join(wt, 'a.txt'), SRC.replace('line 3', 'line three'));
     rmSync(path.join(wt, 'gone.txt'));
     const hash = await hashOf(run, 'a.txt');
-    const c = await comment(run, { filePath: 'a.txt', line: 3, body: 'why?', intent: 'question', priority: 'blocking' });
-    expect(c).toMatchObject({ intent: 'question', priority: 'blocking', anchorText: 'line three', anchorHash: hash, round: 0, line: 3 });
+    const c = await comment(run, {
+      filePath: 'a.txt',
+      line: 3,
+      body: 'why?',
+      intent: 'question',
+      priority: 'blocking',
+    });
+    expect(c).toMatchObject({
+      intent: 'question',
+      priority: 'blocking',
+      anchorText: 'line three',
+      anchorHash: hash,
+      round: 0,
+      line: 3,
+    });
     const d = await comment(run, { filePath: 'a.txt', line: 5, body: 'plain' });
     expect(d).toMatchObject({ intent: 'fix', priority: 'important' });
 
@@ -93,8 +108,20 @@ describe('typed and file-level comments', () => {
     const bin = await comment(run, { filePath: 'img.bin', line: null, body: 'binary' });
     expect(bin.line).toBeNull();
 
-    expect((await api('POST', `/api/runs/${run.id}/review/comments`, { filePath: 'a.txt', line: 1, body: 'x', intent: 'nope' })).statusCode).toBe(400);
-    const patched = await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { intent: 'change', priority: 'suggestion' });
+    expect(
+      (
+        await api('POST', `/api/runs/${run.id}/review/comments`, {
+          filePath: 'a.txt',
+          line: 1,
+          body: 'x',
+          intent: 'nope',
+        })
+      ).statusCode,
+    ).toBe(400);
+    const patched = await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, {
+      intent: 'change',
+      priority: 'suggestion',
+    });
     expect(patched.json()).toMatchObject({ intent: 'change', priority: 'suggestion' });
 
     const s = await state(run);
@@ -125,7 +152,10 @@ describe('re-anchoring on read', () => {
     const gone = await comment(run, { filePath: 'a.txt', line: 3, side: 'original', body: 'orig' });
     const removed = await comment(run, { filePath: 'a.txt', line: 8, body: 'removed' });
     // insert two lines on top, delete "line 8"
-    writeFileSync(path.join(wt, 'a.txt'), 'new 1\nnew 2\n' + SRC.replace('line 3', 'line three').replace('line 8\n', ''));
+    writeFileSync(
+      path.join(wt, 'a.txt'),
+      'new 1\nnew 2\n' + SRC.replace('line 3', 'line three').replace('line 8\n', ''),
+    );
     let s = await state(run);
     const by = (id: string) => s.comments.find((x) => x.id === id)!;
     expect(by(moved.id)).toMatchObject({ currentLine: 5, outdated: false, line: 3 });
@@ -144,7 +174,10 @@ describe('re-anchoring on read', () => {
     writeFileSync(path.join(wt, 'a.txt'), SRC.replace('line 3', 'line three'));
     const c = await comment(run, { filePath: 'a.txt', line: 3, body: 'x' });
     writeFileSync(path.join(wt, 'a.txt'), 'line three\n' + 'z'.repeat(2 * 1024 * 1024 + 10));
-    expect((await state(run)).comments.find((x) => x.id === c.id)).toMatchObject({ currentLine: 3, outdated: false });
+    expect((await state(run)).comments.find((x) => x.id === c.id)).toMatchObject({
+      currentLine: 3,
+      outdated: false,
+    });
   });
 
   it('stores no anchor for a blank line and returns re-anchored fields from PATCH', async () => {
@@ -154,7 +187,9 @@ describe('re-anchoring on read', () => {
     expect(blank.anchorText).toBeNull();
     const c = await comment(run, { filePath: 'a.txt', line: 3, body: 'x' });
     writeFileSync(path.join(wt, 'a.txt'), 'new\nfirst\n\nthird\n');
-    const patched = (await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { priority: 'blocking' })).json();
+    const patched = (
+      await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { priority: 'blocking' })
+    ).json();
     expect(patched).toMatchObject({ priority: 'blocking', currentLine: 4, outdated: false });
   });
 
@@ -166,7 +201,10 @@ describe('re-anchoring on read', () => {
     const open = await comment(run, { filePath: 'a.txt', line: 3, body: 'open' });
     const done = await comment(run, { filePath: 'a.txt', line: 5, body: 'done' });
     const fresh = await comment(run, { filePath: 'new.txt', line: 2, body: 'untracked' });
-    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${done.id}`, { status: 'resolved' })).statusCode).toBe(200);
+    expect(
+      (await api('PATCH', `/api/runs/${run.id}/review/comments/${done.id}`, { status: 'resolved' }))
+        .statusCode,
+    ).toBe(200);
     writeFileSync(path.join(wt, 'a.txt'), 'new 1\nnew 2\n' + SRC.replace('line 3', 'line three'));
     writeFileSync(path.join(wt, 'new.txt'), 'zero\nalpha\nbeta\n');
 
@@ -182,7 +220,15 @@ describe('re-anchoring on read', () => {
     expect([...(hashed.mock.calls[0]?.[1] ?? [])].sort()).toEqual(['a.txt', 'new.txt']);
 
     // Marking a file viewed reads the state the same way.
-    expect((await api('PUT', `/api/runs/${run.id}/review/viewed`, { filePath: 'other.txt', signature: 'x', viewed: true })).statusCode).toBe(200);
+    expect(
+      (
+        await api('PUT', `/api/runs/${run.id}/review/viewed`, {
+          filePath: 'other.txt',
+          signature: 'x',
+          viewed: true,
+        })
+      ).statusCode,
+    ).toBe(200);
     expect(fullDiff).not.toHaveBeenCalled();
 
     // A commented file that left the diff is outdated.

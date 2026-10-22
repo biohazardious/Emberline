@@ -90,7 +90,14 @@ describe('parseMergeTree', () => {
     ]);
   });
   it('does not take a longer path for a shorter one', () => {
-    const out = ['tree', 'a', 'a.ts', '', 'CONFLICT (file/directory): directory in the way of a.ts from main.', ''].join('\n');
+    const out = [
+      'tree',
+      'a',
+      'a.ts',
+      '',
+      'CONFLICT (file/directory): directory in the way of a.ts from main.',
+      '',
+    ].join('\n');
     expect(parseMergeTree(out)).toEqual([
       { path: 'a', kind: 'unknown' },
       { path: 'a.ts', kind: 'file/directory' },
@@ -162,8 +169,12 @@ describe('probeMerge', () => {
   it('a cached probe cannot be changed by a caller', async () => {
     branchAdding('b', 'EL-2', ['new.txt']);
     const a = await probeMerge(dir, 'main', 'b');
-    expect(() => (a as unknown as { conflicts: unknown[] }).conflicts.push({ path: 'x', kind: 'content' })).toThrow();
-    expect(((await probeMerge(dir, 'main', 'b')) as MergeProbe).conflicts.map((c) => c.path)).not.toContain('x');
+    expect(() =>
+      (a as unknown as { conflicts: unknown[] }).conflicts.push({ path: 'x', kind: 'content' }),
+    ).toThrow();
+    expect(((await probeMerge(dir, 'main', 'b')) as MergeProbe).conflicts.map((c) => c.path)).not.toContain(
+      'x',
+    );
   });
 
   it('fails softly when the branch is missing', async () => {
@@ -254,7 +265,12 @@ describe('supersedingFor', () => {
 describe('mainMoversFor', () => {
   it('names the tickets whose commits on main touched the conflicted paths, newest first, without the own key', async () => {
     branchAdding('b', 'EL-9', ['f']);
-    for (const [key, body] of [['EL-12', '1'], ['EL-14', '2'], ['EL-9', '3'], ['EL-12', '4']] as const) {
+    for (const [key, body] of [
+      ['EL-12', '1'],
+      ['EL-14', '2'],
+      ['EL-9', '3'],
+      ['EL-12', '4'],
+    ] as const) {
       write('f', `${body}\n`);
       git(dir, 'commit', '-q', '-am', `feat(${key}): change`);
     }

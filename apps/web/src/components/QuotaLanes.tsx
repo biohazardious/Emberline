@@ -22,7 +22,7 @@ const providerLabel = (agent: string) => PROVIDER_REGISTRY[agent as AgentId]?.sh
 
 const laneLabel = (w: QuotaWindow) => {
   const pool = w.pool === '*' ? 'all models' : w.pool;
-  return `${providerLabel(w.agent)} · ${pool}${w.credential === 'login' ? '' : ` · ${(CREDENTIAL_LABEL[w.credential as Credential] ?? w.credential)}`}`;
+  return `${providerLabel(w.agent)} · ${pool}${w.credential === 'login' ? '' : ` · ${CREDENTIAL_LABEL[w.credential as Credential] ?? w.credential}`}`;
 };
 
 /** One row per exhausted lane, each with its own countdown and "Try now". */
@@ -64,12 +64,20 @@ export function QuotaLanes({ windows, compact = false }: { windows: QuotaWindow[
           </li>
         ))}
       </ul>
-      {error && <p className="form-error quota-error" role="alert">{error}</p>}
+      {error && (
+        <p className="form-error quota-error" role="alert">
+          {error}
+        </p>
+      )}
     </>
   );
 }
 
-const SOURCE_LABEL = { run: "This run's chain", persona: 'Persona chain', provider: 'Other providers' } as const;
+const SOURCE_LABEL = {
+  run: "This run's chain",
+  persona: 'Persona chain',
+  provider: 'Other providers',
+} as const;
 
 const routeKey = (r: Route) => `${r.agent}|${r.model}|${r.credential}`;
 
@@ -94,7 +102,9 @@ export function HandoffMenu({ run }: { run: Run }) {
   const candidates = handoffCandidates(run, settings, scheduler?.windows);
   if (candidates.length === 0) return null;
   const selected =
-    candidates.find((c) => routeKey(c.route) === picked) ?? candidates.find((c) => !c.exhausted) ?? candidates[0]!;
+    candidates.find((c) => routeKey(c.route) === picked) ??
+    candidates.find((c) => !c.exhausted) ??
+    candidates[0]!;
   const groups = (['run', 'persona', 'provider'] as const)
     .map((source) => [source, candidates.filter((c) => c.source === source)] as const)
     .filter(([, list]) => list.length > 0);
@@ -139,9 +149,13 @@ export function HandoffMenu({ run }: { run: Run }) {
             setConfirming(false);
             setError(null);
             setBusy(true);
-            const successor = await api<Run>(`/api/runs/${run.id}/handoff`, 'POST', { route: selected.route });
+            const successor = await api<Run>(`/api/runs/${run.id}/handoff`, 'POST', {
+              route: selected.route,
+            });
             // Flip the predecessor to "handed off" now instead of waiting for the SSE event.
-            client.setQueryData<Run[]>(liveKeys.runs, (list) => (list ? withHandoff(list, run, successor) : list));
+            client.setQueryData<Run[]>(liveKeys.runs, (list) =>
+              list ? withHandoff(list, run, successor) : list,
+            );
           } catch (e) {
             setError(errorMessage(e));
           } finally {
@@ -156,7 +170,11 @@ export function HandoffMenu({ run }: { run: Run }) {
           Hand off ends this live session — click again to confirm
         </span>
       )}
-      {error && <span className="error-text" role="alert">{error}</span>}
+      {error && (
+        <span className="error-text" role="alert">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

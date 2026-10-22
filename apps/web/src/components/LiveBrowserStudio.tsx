@@ -76,9 +76,7 @@ export function LiveBrowserStudio({
   const [urlInput, setUrlInput] = useState('');
   const [editingUrl, setEditingUrl] = useState(false);
   const [typeInput, setTypeInput] = useState('');
-  const [clickMarker, setClickMarker] = useState<{ xPct: number; yPct: number; id: number } | null>(
-    null,
-  );
+  const [clickMarker, setClickMarker] = useState<{ xPct: number; yPct: number; id: number } | null>(null);
   const [banner, setBanner] = useState<LiveBanner>();
   // Shared with the shell's poll: whether the Docker engine can run container previews.
   const systemPoll = useApi<SystemStatus>('/api/system', 5_000);
@@ -127,11 +125,10 @@ export function LiveBrowserStudio({
   const sendAction = async (body: BrowserActionBody): Promise<BrowserViewportSnapshot | null> => {
     setActing(true);
     try {
-      const res = await api<BrowserViewportSnapshot>(
-        `/api/projects/${project.id}/browser-action`,
-        'POST',
-        { ...body, targetId },
-      );
+      const res = await api<BrowserViewportSnapshot>(`/api/projects/${project.id}/browser-action`, 'POST', {
+        ...body,
+        targetId,
+      });
       setSnap(res);
       if (res.targetUrl) setUrlInput(res.targetUrl);
       if (res.message === PLAYTEST_HELD_MESSAGE) setBanner({ kind: 'info', text: res.message });
@@ -158,7 +155,10 @@ export function LiveBrowserStudio({
    * built first. Null, with the reason in the banner, when there is nothing to open.
    */
   const targetBrowserUrl = async (): Promise<string | null> => {
-    const path = previewApiPath(project.id, { id: targetId, kind: targetId === 'main' ? 'main' : 'worktree' });
+    const path = previewApiPath(project.id, {
+      id: targetId,
+      kind: targetId === 'main' ? 'main' : 'worktree',
+    });
     const first = await api<PreviewLike>(path).catch(() => undefined);
     const container =
       choosePrimaryView(
@@ -167,7 +167,10 @@ export function LiveBrowserStudio({
         systemPoll.data?.docker.available ?? false,
       ) === 'container';
     if (container && first?.status !== 'running') {
-      setBanner({ kind: 'info', text: 'Starting the container preview; the browser opens it once it answers…' });
+      setBanner({
+        kind: 'info',
+        text: 'Starting the container preview; the browser opens it once it answers…',
+      });
     }
     const res = await resolveRunnerBrowserUrl({
       container,
@@ -177,7 +180,9 @@ export function LiveBrowserStudio({
         await api<BuildDemoResponse>(`/api/projects/${project.id}/build-demo`, 'POST', { targetId });
       },
       browserUrl: () =>
-        api<BrowserUrlResponse>(`/api/projects/${project.id}/browser-url?target=${encodeURIComponent(targetId)}`),
+        api<BrowserUrlResponse>(
+          `/api/projects/${project.id}/browser-url?target=${encodeURIComponent(targetId)}`,
+        ),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: () => Date.now(),
       describeError: errorMessage,
@@ -252,16 +257,12 @@ export function LiveBrowserStudio({
       // Show the person the target meanwhile; the QA run opens its own work with the `preview` tool.
       const url = await targetBrowserUrl().catch(() => null);
       if (url) await sendAction({ action: 'navigate', url }).catch(() => null);
-      const res = await api<FactoryRequestResponse>(
-        `/api/projects/${project.id}/factory-request`,
-        'POST',
-        {
-          prompt: qaRequestPrompt(),
-          leadPersona: 'qa',
-          permissionMode: 'auto',
-          autoDispatch: true,
-        },
-      );
+      const res = await api<FactoryRequestResponse>(`/api/projects/${project.id}/factory-request`, 'POST', {
+        prompt: qaRequestPrompt(),
+        leadPersona: 'qa',
+        permissionMode: 'auto',
+        autoDispatch: true,
+      });
       setLiveFollow(true);
       setSideTab('activity');
       setBanner({
@@ -282,16 +283,12 @@ export function LiveBrowserStudio({
     setLaunchingQa(true);
     setBanner(undefined);
     try {
-      const res = await api<FactoryRequestResponse>(
-        `/api/projects/${project.id}/factory-request`,
-        'POST',
-        {
-          prompt: `[Live Browser Console Error Fix] The shared Live Browser reported the following error on ${snap?.targetUrl ?? 'the active page'}:\n\n\`\`\`\n${entry.text}\n\`\`\`\n\nPlease diagnose and fix the root cause in the codebase and run \`npm run build\`.`,
-          leadPersona: 'coder',
-          permissionMode: 'auto',
-          autoDispatch: true,
-        },
-      );
+      const res = await api<FactoryRequestResponse>(`/api/projects/${project.id}/factory-request`, 'POST', {
+        prompt: `[Live Browser Console Error Fix] The shared Live Browser reported the following error on ${snap?.targetUrl ?? 'the active page'}:\n\n\`\`\`\n${entry.text}\n\`\`\`\n\nPlease diagnose and fix the root cause in the codebase and run \`npm run build\`.`,
+        leadPersona: 'coder',
+        permissionMode: 'auto',
+        autoDispatch: true,
+      });
       setBanner({
         kind: 'ok',
         text: `Console error sent to Coder Agent (${res.ticket.key}) for self-healing.`,
@@ -404,12 +401,7 @@ export function LiveBrowserStudio({
           >
             {liveFollow ? (
               <>
-                <Circle
-                  className="icon"
-                  fill="currentColor"
-                  style={{ color: 'var(--danger)' }}
-                  aria-hidden
-                />{' '}
+                <Circle className="icon" fill="currentColor" style={{ color: 'var(--danger)' }} aria-hidden />{' '}
                 Live Follow: ON
               </>
             ) : (
@@ -452,7 +444,7 @@ export function LiveBrowserStudio({
             title={
               targetId === 'main'
                 ? 'Dispatch the QA Agent to open and interact with the app in this Live Browser while you watch'
-                : "Dispatch the QA Agent: its run previews its own fresh worktree from main, not the selected run"
+                : 'Dispatch the QA Agent: its run previews its own fresh worktree from main, not the selected run'
             }
           >
             {launchingQa ? (
@@ -471,11 +463,7 @@ export function LiveBrowserStudio({
           >
             <Camera className="icon" aria-hidden /> Snapshot
           </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setFullscreen((f) => !f)}
-          >
+          <button type="button" className="btn btn-sm" onClick={() => setFullscreen((f) => !f)}>
             {fullscreen ? (
               <>
                 <Minimize2 className="icon" aria-hidden /> Exit Fullscreen
@@ -524,7 +512,8 @@ export function LiveBrowserStudio({
                 padding: '4px 10px',
                 borderRadius: 'var(--radius-sm)',
                 background: tab.active && !snap?.following ? 'var(--surface-2)' : 'transparent',
-                border: tab.active && !snap?.following ? '1px solid var(--ember-1)' : '1px solid var(--border)',
+                border:
+                  tab.active && !snap?.following ? '1px solid var(--ember-1)' : '1px solid var(--border)',
                 fontSize: '0.75rem',
                 cursor: 'pointer',
                 maxWidth: 220,
@@ -734,7 +723,7 @@ export function LiveBrowserStudio({
               <div className="muted small" style={{ padding: 24, textAlign: 'center' }}>
                 {loading
                   ? 'Connecting to shared Chromium CDP instance inside runner…'
-                  : snap?.message ?? 'No browser frame available yet.'}
+                  : (snap?.message ?? 'No browser frame available yet.')}
               </div>
             )}
           </div>
@@ -752,10 +741,7 @@ export function LiveBrowserStudio({
               flexWrap: 'wrap',
             }}
           >
-            <form
-              onSubmit={(e) => void handleTypeSubmit(e, true)}
-              className="browser-type-form"
-            >
+            <form onSubmit={(e) => void handleTypeSubmit(e, true)} className="browser-type-form">
               <input
                 type="text"
                 className="input browser-type-input"
@@ -771,11 +757,7 @@ export function LiveBrowserStudio({
               >
                 Type
               </button>
-              <button
-                type="submit"
-                className="btn btn-sm btn-primary"
-                disabled={acting || !typeInput}
-              >
+              <button type="submit" className="btn btn-sm btn-primary" disabled={acting || !typeInput}>
                 Type + ↵
               </button>
             </form>
@@ -823,8 +805,7 @@ export function LiveBrowserStudio({
                 flex: 1,
                 padding: '8px 10px',
                 border: 'none',
-                borderBottom:
-                  sideTab === 'activity' ? '2px solid var(--ember-1)' : '2px solid transparent',
+                borderBottom: sideTab === 'activity' ? '2px solid var(--ember-1)' : '2px solid transparent',
                 background: 'transparent',
                 color: sideTab === 'activity' ? 'var(--text)' : 'var(--muted)',
                 fontWeight: 600,
@@ -841,8 +822,7 @@ export function LiveBrowserStudio({
                 flex: 1,
                 padding: '8px 10px',
                 border: 'none',
-                borderBottom:
-                  sideTab === 'console' ? '2px solid var(--ember-1)' : '2px solid transparent',
+                borderBottom: sideTab === 'console' ? '2px solid var(--ember-1)' : '2px solid transparent',
                 background: 'transparent',
                 color: sideTab === 'console' ? 'var(--text)' : 'var(--muted)',
                 fontWeight: 600,
@@ -889,8 +869,8 @@ export function LiveBrowserStudio({
                     <span className="mono">--cdp-endpoint http://127.0.0.1:9222</span>. Click{' '}
                     <strong>
                       <Bot className="icon" aria-hidden /> Run QA Browser Check
-                    </strong> above to watch an agent navigate and
-                    test your app live!
+                    </strong>{' '}
+                    above to watch an agent navigate and test your app live!
                   </p>
                 </div>
               ) : (
@@ -943,16 +923,13 @@ export function LiveBrowserStudio({
                       {act.summary}
                     </div>
                     <div className="mono muted" style={{ fontSize: '0.66rem' }}>
-                      {new Date(act.timestamp).toLocaleTimeString()} ·{' '}
-                      {act.runTitle ?? act.runId.slice(0, 8)}
+                      {new Date(act.timestamp).toLocaleTimeString()} · {act.runTitle ?? act.runId.slice(0, 8)}
                     </div>
                   </div>
                 ))
               )
             ) : consoleLogs.length === 0 ? (
-              <div className="muted small">
-                No console output captured yet from the active browser tab.
-              </div>
+              <div className="muted small">No console output captured yet from the active browser tab.</div>
             ) : (
               consoleLogs.map((entry, idx) => {
                 const isErr = entry.level === 'error';
@@ -988,11 +965,7 @@ export function LiveBrowserStudio({
                         style={{
                           fontWeight: 600,
                           fontSize: '0.68rem',
-                          color: isErr
-                            ? 'var(--danger)'
-                            : isWarn
-                              ? 'var(--warn)'
-                              : 'var(--muted)',
+                          color: isErr ? 'var(--danger)' : isWarn ? 'var(--warn)' : 'var(--muted)',
                         }}
                       >
                         [{entry.level.toUpperCase()}] {new Date(entry.timestamp).toLocaleTimeString()}

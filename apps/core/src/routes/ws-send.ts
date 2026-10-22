@@ -12,7 +12,11 @@ export const PRE_READY_CAP = 1024 * 1024;
  * socket (1013, try again later) instead of letting a slow reader grow core's memory. Returns
  * whether the message was sent.
  */
-export function sendBounded(socket: Pick<WebSocket, 'readyState' | 'OPEN' | 'bufferedAmount' | 'send' | 'close'>, message: unknown, cap: number): boolean {
+export function sendBounded(
+  socket: Pick<WebSocket, 'readyState' | 'OPEN' | 'bufferedAmount' | 'send' | 'close'>,
+  message: unknown,
+  cap: number,
+): boolean {
   if (socket.readyState !== socket.OPEN) return false;
   if (socket.bufferedAmount > cap) {
     socket.close(1013, 'client too slow');

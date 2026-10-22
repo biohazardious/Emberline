@@ -1,12 +1,31 @@
 import type { WorkspaceFolder } from '@emberline/protocol';
 import type { Dispatch } from 'react';
 import { NameField } from './StepType';
-import { branchProblem, urlProblem, type WizardAction, type WizardDraft, type WizardSource, type WizardState } from './wizardLogic';
+import {
+  branchProblem,
+  urlProblem,
+  type WizardAction,
+  type WizardDraft,
+  type WizardSource,
+  type WizardState,
+} from './wizardLogic';
 
 const SOURCES: { id: WizardSource; label: string; hint: string }[] = [
-  { id: 'preset', label: 'New from a preset', hint: 'Pick a project type and a stack; the agent builds the skeleton.' },
-  { id: 'import_url', label: 'Import a Git URL', hint: 'Clone a repository and add the Emberline project files.' },
-  { id: 'import_folder', label: 'Use a folder in workspaces', hint: 'Register a folder that is already in the workspaces directory.' },
+  {
+    id: 'preset',
+    label: 'New from a preset',
+    hint: 'Pick a project type and a stack; the agent builds the skeleton.',
+  },
+  {
+    id: 'import_url',
+    label: 'Import a Git URL',
+    hint: 'Clone a repository and add the Emberline project files.',
+  },
+  {
+    id: 'import_folder',
+    label: 'Use a folder in workspaces',
+    hint: 'Register a folder that is already in the workspaces directory.',
+  },
   { id: 'blank', label: 'Blank', hint: 'Only the project docs; the agent proposes the stack.' },
 ];
 
@@ -32,7 +51,8 @@ export function StepStart({
       {savedDraft && (
         <div className="wizard-draft" role="status">
           <span>
-            You closed a wizard{savedDraft.name.trim() ? ` for “${savedDraft.name.trim()}”` : ''} before finishing it.
+            You closed a wizard{savedDraft.name.trim() ? ` for “${savedDraft.name.trim()}”` : ''} before
+            finishing it.
           </span>
           <div className="actions">
             <button type="button" className="btn btn-sm btn-primary" onClick={onRestore}>

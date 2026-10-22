@@ -143,7 +143,9 @@ describe('an origin with a user name or token in it', () => {
 
 describe('replaceOriginQuestion', () => {
   it('uses the question core wrote', () => {
-    expect(replaceOriginQuestion(new ApiRequestError(409, 'origin_exists', 'Q?', { origin: 'u' }))).toBe('Q?');
+    expect(replaceOriginQuestion(new ApiRequestError(409, 'origin_exists', 'Q?', { origin: 'u' }))).toBe(
+      'Q?',
+    );
     expect(replaceOriginQuestion(new ApiRequestError(409, 'other', 'x'))).toBeNull();
     expect(replaceOriginQuestion(new Error('x'))).toBeNull();
   });

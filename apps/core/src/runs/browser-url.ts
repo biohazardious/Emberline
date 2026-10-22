@@ -17,8 +17,14 @@ import { detectDemoEntryRelPath } from '../factory/workspace-status.js';
 import type { MainPreviews } from './main-preview.js';
 
 /** Where the runner reaches a running preview: a compose one on the engine's name, a command one on its own localhost. */
-export function runnerPreviewUrl(kind: 'compose' | 'command', port: number, dockerHost: string | null | undefined): string {
-  return kind === 'compose' ? `http://${engineHostName(dockerHost ?? '')}:${port}/` : `http://localhost:${port}/`;
+export function runnerPreviewUrl(
+  kind: 'compose' | 'command',
+  port: number,
+  dockerHost: string | null | undefined,
+): string {
+  return kind === 'compose'
+    ? `http://${engineHostName(dockerHost ?? '')}:${port}/`
+    : `http://localhost:${port}/`;
 }
 
 export interface BrowserUrlDeps {
@@ -38,7 +44,11 @@ export interface BrowserUrlDeps {
  * when the target has no demo entry. 400 without a target, 404 for an unknown project or a run
  * that is not one of the project's.
  */
-export async function resolveBrowserUrl(deps: BrowserUrlDeps, projectId: string, target: string | undefined): Promise<BrowserUrlResponse> {
+export async function resolveBrowserUrl(
+  deps: BrowserUrlDeps,
+  projectId: string,
+  target: string | undefined,
+): Promise<BrowserUrlResponse> {
   if (!target) throw badRequest('target is required: main or a run id of this project');
   const project = deps.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get();
   if (!project) throw notFound('no such project');
@@ -56,7 +66,11 @@ export async function resolveBrowserUrl(deps: BrowserUrlDeps, projectId: string,
       ? 'the container preview is still starting; this is the static build'
       : undefined;
   if (!(await detectDemoEntryRelPath(workspacePath))) {
-    return { url: null, kind: 'static', note: note ?? 'no preview is running and there is no demo build yet: run Build & Verify' };
+    return {
+      url: null,
+      kind: 'static',
+      note: note ?? 'no preview is running and there is no demo build yet: run Build & Verify',
+    };
   }
   const url = agentDemoUrl(deps.config, deps.demoTokens ?? new DemoTokens(deps.db), project.id, target);
   return { url, kind: 'static', ...(note ? { note } : {}) };

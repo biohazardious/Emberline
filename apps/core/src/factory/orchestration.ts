@@ -44,9 +44,31 @@ export async function persistFactoryAttachments(
     const isTextLike =
       att.mimeType.startsWith('text/') ||
       att.mimeType === 'application/json' ||
-      ['.md', '.txt', '.json', '.csv', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.yaml', '.yml', '.xml', '.svg', '.py', '.sh', '.go', '.rs', '.c', '.cpp', '.h', '.ino', '.ini'].includes(
-        ext,
-      );
+      [
+        '.md',
+        '.txt',
+        '.json',
+        '.csv',
+        '.ts',
+        '.tsx',
+        '.js',
+        '.jsx',
+        '.css',
+        '.html',
+        '.yaml',
+        '.yml',
+        '.xml',
+        '.svg',
+        '.py',
+        '.sh',
+        '.go',
+        '.rs',
+        '.c',
+        '.cpp',
+        '.h',
+        '.ino',
+        '.ini',
+      ].includes(ext);
 
     if (isImage) {
       sections.push(
@@ -188,18 +210,35 @@ export async function ingestAgentTicketsFile(
  * `cat-file`; the size from the tree is checked before the blob is read). False when it is not
  * committed there, or on any git error.
  */
-export async function committedWithContent(workspacePath: string, ref: string, relPath: string, raw: Buffer): Promise<boolean> {
+export async function committedWithContent(
+  workspacePath: string,
+  ref: string,
+  relPath: string,
+  raw: Buffer,
+): Promise<boolean> {
   const inDir = { cwd: workspacePath };
-  const tree = await execGitFile(['ls-tree', '-l', '-z', ref, '--', relPath], inDir).catch(() => ({ stdout: '' }));
+  const tree = await execGitFile(['ls-tree', '-l', '-z', ref, '--', relPath], inDir).catch(() => ({
+    stdout: '',
+  }));
   const record = tree.stdout.split('\0').find(Boolean);
   if (!record) return false;
   const tab = record.indexOf('\t');
   const [mode, type, oid, size] = record.slice(0, tab).split(/\s+/);
-  if (record.slice(tab + 1) !== relPath || mode === '120000' || type !== 'blob' || !oid || !/^[0-9a-f]{40,64}$/.test(oid)) {
+  if (
+    record.slice(tab + 1) !== relPath ||
+    mode === '120000' ||
+    type !== 'blob' ||
+    !oid ||
+    !/^[0-9a-f]{40,64}$/.test(oid)
+  ) {
     return false;
   }
   if (Number(size) !== raw.length) return false;
-  const blob = await execGitFile(['cat-file', 'blob', oid], { ...inDir, encoding: 'buffer', maxBuffer: Math.max(raw.length + 1, 64 * 1024) });
+  const blob = await execGitFile(['cat-file', 'blob', oid], {
+    ...inDir,
+    encoding: 'buffer',
+    maxBuffer: Math.max(raw.length + 1, 64 * 1024),
+  });
   return blob.stdout.equals(raw);
 }
 
@@ -209,6 +248,8 @@ export async function committedWithContent(workspacePath: string, ref: string, r
  */
 export async function runBranchBase(worktreePath: string, mainBranch: string | null): Promise<string> {
   if (!mainBranch) return 'HEAD';
-  const res = await execGitFile(['merge-base', 'HEAD', `refs/heads/${mainBranch}`], { cwd: worktreePath }).catch(() => ({ stdout: '' }));
+  const res = await execGitFile(['merge-base', 'HEAD', `refs/heads/${mainBranch}`], {
+    cwd: worktreePath,
+  }).catch(() => ({ stdout: '' }));
   return res.stdout.trim() || 'HEAD';
 }

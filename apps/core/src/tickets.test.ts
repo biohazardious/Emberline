@@ -91,7 +91,9 @@ describe('ticket helpers', () => {
 
   it('builds the agent prompt from title and body', () => {
     expect(ticketPrompt({ key: 'DP-1', title: 'Fix it', body: '' })).toBe('DP-1: Fix it');
-    expect(ticketPrompt({ key: 'DP-1', title: 'Fix it', body: ' details \n' })).toBe('DP-1: Fix it\n\ndetails');
+    expect(ticketPrompt({ key: 'DP-1', title: 'Fix it', body: ' details \n' })).toBe(
+      'DP-1: Fix it\n\ndetails',
+    );
   });
 
   it('maps run states to columns', () => {
@@ -113,7 +115,9 @@ describe('tickets', () => {
 
     const moved: Ticket = (await api('PATCH', `/api/tickets/${b.id}`, { status: 'ready' })).json();
     expect(moved.status).toBe('ready');
-    const reordered: Ticket = (await api('PATCH', `/api/tickets/${a.id}`, { position: -5, title: 'Renamed' })).json();
+    const reordered: Ticket = (
+      await api('PATCH', `/api/tickets/${a.id}`, { position: -5, title: 'Renamed' })
+    ).json();
     expect(reordered).toMatchObject({ position: -5, title: 'Renamed', key: 'DP-1' });
 
     const list: Ticket[] = (await api('GET', `/api/projects/${project.id}/tickets`)).json();
@@ -132,7 +136,11 @@ describe('tickets', () => {
     expect(res.statusCode).toBe(201);
     const { ticket: started, run } = res.json() as { ticket: Ticket; run: Run };
     expect(started.status).toBe('in_progress');
-    expect(run).toMatchObject({ ticketId: ticket.id, branch: 'emberline/dp-1-add-a-readme', permissionMode: 'plan' });
+    expect(run).toMatchObject({
+      ticketId: ticket.id,
+      branch: 'emberline/dp-1-add-a-readme',
+      permissionMode: 'plan',
+    });
     expect(run.prompt).toBe('DP-1: Add a README!\n\nShort one.');
 
     expect((await api('POST', `/api/tickets/${ticket.id}/start`, {})).statusCode).toBe(409);
@@ -174,7 +182,9 @@ describe('tickets', () => {
     await hook(run.id, 'Stop', token);
 
     await expect
-      .poll(async () => ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title))
+      .poll(async () =>
+        ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map((x) => x.title),
+      )
       .toEqual(expect.arrayContaining(['Huge draft', 'Normal draft']));
     const huge = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).find(
       (x) => x.title === 'Huge draft',
@@ -199,7 +209,7 @@ describe('tickets', () => {
       await hook(run.id, 'Stop', token);
       return run;
     };
-    const titles = async () => ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]);
+    const titles = async () => (await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[];
 
     const root = await createTicket(project.id, { title: 'Human ticket', status: 'ready' });
     expect(root.depth).toBe(0);
@@ -213,7 +223,9 @@ describe('tickets', () => {
     const grandchild = (await titles()).find((t) => t.title === 'Grandchild')!;
     const run = await runTicketWithDrafts(grandchild, ['Too deep']);
     await expect
-      .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type))
+      .poll(async () =>
+        ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type),
+      )
       .toContain('ticket_depth_limit');
     expect((await titles()).some((t) => t.title === 'Too deep')).toBe(false);
   });
@@ -260,7 +272,10 @@ describe('tickets', () => {
   it('refuses a second start of the same ticket while the first is still preparing', async () => {
     const project = await createProject();
     const ticket = await createTicket(project.id, { title: 'Only once', status: 'ready' });
-    const results = await Promise.allSettled([t.tickets.start(ticket.id, {}), t.tickets.start(ticket.id, {})]);
+    const results = await Promise.allSettled([
+      t.tickets.start(ticket.id, {}),
+      t.tickets.start(ticket.id, {}),
+    ]);
     expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
     const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
     expect((rejected.reason as Error).message).toMatch(/already has a running agent/);
@@ -305,14 +320,22 @@ describe('tickets', () => {
     await createTicket(project.id, { title: 'One' });
     await createTicket(project.id, { title: 'Two' });
     // A database from before the sequence existed.
-    t.db.delete(settings).where(eq(settings.key, `tickets.seq.${project.id}`)).run();
+    t.db
+      .delete(settings)
+      .where(eq(settings.key, `tickets.seq.${project.id}`))
+      .run();
     expect((await createTicket(project.id, { title: 'Three' })).key).toBe('DP-3');
   });
 
-  it('drops a deleted project\'s ticket number sequence', async () => {
+  it("drops a deleted project's ticket number sequence", async () => {
     const project = await createProject();
     await createTicket(project.id, { title: 'One' });
-    const seq = () => t.db.select().from(settings).where(eq(settings.key, `tickets.seq.${project.id}`)).get();
+    const seq = () =>
+      t.db
+        .select()
+        .from(settings)
+        .where(eq(settings.key, `tickets.seq.${project.id}`))
+        .get();
     expect(seq()?.value).toBe(1);
     expect((await api('DELETE', `/api/projects/${project.id}?deleteFiles=0`)).statusCode).toBe(200);
     expect(seq()).toBeUndefined();
@@ -332,7 +355,9 @@ describe('tickets', () => {
   it('pushes ticket updates over /api/events', async () => {
     const project = await createProject();
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), { headers: { cookie, origin: address } });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
     const events: { type: string; ticket?: Ticket; id?: string }[] = [];
     ws.on('message', (raw) => events.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => {
@@ -369,11 +394,15 @@ describe('tickets', () => {
     await createTicket(project.id, { title: 'Auto', status: 'ready' });
     const [started] = await t.tickets.dispatchNextReadyTicket(project.id);
     const runId = started!.run.id;
-    expect(t.runs.get(runId).events.find((e) => e.type === 'queued')?.payload).toMatchObject({ unattended: 'factory' });
+    expect(t.runs.get(runId).events.find((e) => e.type === 'queued')?.payload).toMatchObject({
+      unattended: 'factory',
+    });
     // A manually started ticket run is attended.
     const manual = await createTicket(project.id, { title: 'Manual', status: 'backlog' });
     const manualRun: Run = (await api('POST', `/api/tickets/${manual.id}/start`, {})).json().run;
-    expect(t.runs.get(manualRun.id).events.find((e) => e.type === 'queued')?.payload ?? {}).not.toHaveProperty('unattended');
+    expect(
+      t.runs.get(manualRun.id).events.find((e) => e.type === 'queued')?.payload ?? {},
+    ).not.toHaveProperty('unattended');
 
     const token = await waitFile(`token-${runId}`);
     await hook(runId, 'SessionStart', token, { session_id: 's' });
@@ -426,7 +455,11 @@ describe('tickets', () => {
     expect(t.runs.getRun(runId).lastEvent).not.toBe('Notification');
 
     const age = (ms: number) =>
-      t.db.update(runs).set({ stateChangedAt: new Date(Date.now() - ms) }).where(eq(runs.id, runId)).run();
+      t.db
+        .update(runs)
+        .set({ stateChangedAt: new Date(Date.now() - ms) })
+        .where(eq(runs.id, runId))
+        .run();
     age(10 * 60_000);
     await t.runs.reconcile();
     expect(t.runs.getRun(runId).state).toBe('waiting_input');

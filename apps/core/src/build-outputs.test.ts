@@ -33,8 +33,15 @@ function addRun(id: string, projectId: string, ticketId?: string): string {
   t.db
     .insert(runs)
     .values({
-      id, projectId, agent: 'claude', state: 'done', worktreePath: wt, hookTokenHash: 'x',
-      stateChangedAt: new Date(), createdAt: new Date(), ...(ticketId ? { ticketId } : {}),
+      id,
+      projectId,
+      agent: 'claude',
+      state: 'done',
+      worktreePath: wt,
+      hookTokenHash: 'x',
+      stateChangedAt: new Date(),
+      createdAt: new Date(),
+      ...(ticketId ? { ticketId } : {}),
     })
     .run();
   return wt;
@@ -53,20 +60,57 @@ async function archiveFrom(runId: string): Promise<void> {
 describe('build outputs API', () => {
   it('requires a session, and CSRF on mutations', async () => {
     addProject();
-    expect((await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs' })).statusCode).toBe(401);
-    expect((await t.app.inject({ method: 'GET', url: '/api/build-outputs/x/download' })).statusCode).toBe(401);
-    expect((await t.app.inject({ method: 'PATCH', url: '/api/build-outputs/x', headers: CSRF, payload: { pinned: true } })).statusCode).toBe(401);
-    expect((await t.app.inject({ method: 'PATCH', url: '/api/build-outputs/x', headers: auth, payload: { pinned: true } })).statusCode).toBe(403);
-    expect((await t.app.inject({ method: 'DELETE', url: '/api/build-outputs/x', headers: auth })).statusCode).toBe(403);
-    expect((await t.app.inject({ method: 'POST', url: '/api/projects/p1/build-outputs/collect', headers: auth })).statusCode).toBe(403);
+    expect((await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs' })).statusCode).toBe(
+      401,
+    );
+    expect((await t.app.inject({ method: 'GET', url: '/api/build-outputs/x/download' })).statusCode).toBe(
+      401,
+    );
+    expect(
+      (
+        await t.app.inject({
+          method: 'PATCH',
+          url: '/api/build-outputs/x',
+          headers: CSRF,
+          payload: { pinned: true },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await t.app.inject({
+          method: 'PATCH',
+          url: '/api/build-outputs/x',
+          headers: auth,
+          payload: { pinned: true },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (await t.app.inject({ method: 'DELETE', url: '/api/build-outputs/x', headers: auth })).statusCode,
+    ).toBe(403);
+    expect(
+      (await t.app.inject({ method: 'POST', url: '/api/projects/p1/build-outputs/collect', headers: auth }))
+        .statusCode,
+    ).toBe(403);
   });
 
   it('lists newest first with run and ticket enrichment, and keeps rows after the run is removed', async () => {
     addProject();
-    t.db.insert(tickets).values({
-      id: 'tk1', projectId: 'p1', number: 7, key: 'EMB-7', title: 'Ship the APK', status: 'review', position: 1,
-      createdAt: new Date(), updatedAt: new Date(),
-    }).run();
+    t.db
+      .insert(tickets)
+      .values({
+        id: 'tk1',
+        projectId: 'p1',
+        number: 7,
+        key: 'EMB-7',
+        title: 'Ship the APK',
+        status: 'review',
+        position: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .run();
     const wt1 = addRun('r1', 'p1', 'tk1');
     const wt2 = addRun('r2', 'p1');
     put(wt1, 'build/app.apk', 'one');
@@ -82,18 +126,33 @@ describe('build outputs API', () => {
     expect(body.usedBytes).toBe(9);
     expect(body.hostArchiveDir).toBe(`/srv/emberline/workspaces/${ARCHIVE_DIR_NAME}/p1`);
     const app = body.outputs[1];
-    expect(app).toMatchObject({ runId: 'r1', runExists: true, ticketId: 'tk1', ticketKey: 'EMB-7', ticketTitle: 'Ship the APK', agent: 'claude' });
+    expect(app).toMatchObject({
+      runId: 'r1',
+      runExists: true,
+      ticketId: 'tk1',
+      ticketKey: 'EMB-7',
+      ticketTitle: 'Ship the APK',
+      agent: 'claude',
+    });
     expect(app.hostPath.startsWith(`/srv/emberline/workspaces/${ARCHIVE_DIR_NAME}/p1/`)).toBe(true);
 
     t.db.delete(runs).where(eq(runs.id, 'r1')).run();
-    const after = (await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs', headers: auth })).json();
+    const after = (
+      await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs', headers: auth })
+    ).json();
     const kept = after.outputs.find((o: { name: string }) => o.name === 'app.apk');
     expect(kept).toMatchObject({ runExists: false, agent: null });
   });
 
   it('404s for an unknown project', async () => {
-    expect((await t.app.inject({ method: 'GET', url: '/api/projects/nope/build-outputs', headers: auth })).statusCode).toBe(404);
-    expect((await t.app.inject({ method: 'POST', url: '/api/projects/nope/build-outputs/collect', headers: mut })).statusCode).toBe(404);
+    expect(
+      (await t.app.inject({ method: 'GET', url: '/api/projects/nope/build-outputs', headers: auth }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await t.app.inject({ method: 'POST', url: '/api/projects/nope/build-outputs/collect', headers: mut }))
+        .statusCode,
+    ).toBe(404);
   });
 
   it('downloads as an attachment with the untrusted-content headers', async () => {
@@ -102,11 +161,17 @@ describe('build outputs API', () => {
     put(wt, 'build/we"ird.apk', 'APKDATA');
     await archiveFrom('r1');
     const id = t.db.select().from(buildOutputs).get()!.id;
-    const res = await t.app.inject({ method: 'GET', url: `/api/build-outputs/${id}/download`, headers: auth });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/api/build-outputs/${id}/download`,
+      headers: auth,
+    });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/octet-stream');
     expect(res.headers['content-length']).toBe('7');
-    expect(res.headers['content-disposition']).toBe('attachment; filename="we_ird.apk"; filename*=UTF-8\'\'we%22ird.apk');
+    expect(res.headers['content-disposition']).toBe(
+      'attachment; filename="we_ird.apk"; filename*=UTF-8\'\'we%22ird.apk',
+    );
     expect(res.headers['content-security-policy']).toBeTruthy();
     expect(res.body).toBe('APKDATA');
   });
@@ -118,10 +183,17 @@ describe('build outputs API', () => {
     await archiveFrom('r1');
     const row = t.db.select().from(buildOutputs).get()!;
     rmSync(path.join(t.dir, ARCHIVE_DIR_NAME, row.storedPath));
-    const res = await t.app.inject({ method: 'GET', url: `/api/build-outputs/${row.id}/download`, headers: auth });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/api/build-outputs/${row.id}/download`,
+      headers: auth,
+    });
     expect(res.statusCode).toBe(404);
     expect(t.db.select().from(buildOutputs).all()).toHaveLength(0);
-    expect((await t.app.inject({ method: 'GET', url: '/api/build-outputs/unknown/download', headers: auth })).statusCode).toBe(404);
+    expect(
+      (await t.app.inject({ method: 'GET', url: '/api/build-outputs/unknown/download', headers: auth }))
+        .statusCode,
+    ).toBe(404);
   });
 
   it('pins and unpins', async () => {
@@ -130,12 +202,35 @@ describe('build outputs API', () => {
     put(wt, 'a.apk', 'x');
     await archiveFrom('r1');
     const id = t.db.select().from(buildOutputs).get()!.id;
-    const res = await t.app.inject({ method: 'PATCH', url: `/api/build-outputs/${id}`, headers: mut, payload: { pinned: true } });
+    const res = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/build-outputs/${id}`,
+      headers: mut,
+      payload: { pinned: true },
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ id, pinned: true, name: 'a.apk' });
     expect(t.db.select().from(buildOutputs).get()!.pinned).toBe(true);
-    expect((await t.app.inject({ method: 'PATCH', url: `/api/build-outputs/${id}`, headers: mut, payload: { pinned: 'yes' } })).statusCode).toBe(400);
-    expect((await t.app.inject({ method: 'PATCH', url: '/api/build-outputs/nope', headers: mut, payload: { pinned: true } })).statusCode).toBe(404);
+    expect(
+      (
+        await t.app.inject({
+          method: 'PATCH',
+          url: `/api/build-outputs/${id}`,
+          headers: mut,
+          payload: { pinned: 'yes' },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await t.app.inject({
+          method: 'PATCH',
+          url: '/api/build-outputs/nope',
+          headers: mut,
+          payload: { pinned: true },
+        })
+      ).statusCode,
+    ).toBe(404);
   });
 
   it('deletes the file and hides the row (kept as a tombstone)', async () => {
@@ -149,13 +244,24 @@ describe('build outputs API', () => {
     const res = await t.app.inject({ method: 'DELETE', url: `/api/build-outputs/${row.id}`, headers: mut });
     expect(res.statusCode).toBe(204);
     expect(existsSync(file)).toBe(false);
-    expect(t.db.select().from(buildOutputs).all().map((o) => o.evictedAt !== null)).toEqual([true]);
+    expect(
+      t.db
+        .select()
+        .from(buildOutputs)
+        .all()
+        .map((o) => o.evictedAt !== null),
+    ).toEqual([true]);
     expect((await listOf()).outputs).toEqual([]);
-    expect((await t.app.inject({ method: 'DELETE', url: `/api/build-outputs/${row.id}`, headers: mut })).statusCode).toBe(404);
+    expect(
+      (await t.app.inject({ method: 'DELETE', url: `/api/build-outputs/${row.id}`, headers: mut }))
+        .statusCode,
+    ).toBe(404);
   });
 
-  const collect = (id = 'p1') => t.app.inject({ method: 'POST', url: `/api/projects/${id}/build-outputs/collect`, headers: mut });
-  const listOf = async (id = 'p1') => (await t.app.inject({ method: 'GET', url: `/api/projects/${id}/build-outputs`, headers: auth })).json();
+  const collect = (id = 'p1') =>
+    t.app.inject({ method: 'POST', url: `/api/projects/${id}/build-outputs/collect`, headers: mut });
+  const listOf = async (id = 'p1') =>
+    (await t.app.inject({ method: 'GET', url: `/api/projects/${id}/build-outputs`, headers: auth })).json();
 
   it('collects in the background: 202 at once, coalesced, progress and counts on the list', async () => {
     addProject();
@@ -183,7 +289,14 @@ describe('build outputs API', () => {
     expect(done.collecting).toBe(false);
     expect(done.lastCollect).toMatchObject({ archived: 2, skipped: 0, failed: 0 });
     expect(typeof done.lastCollect.finishedAt).toBe('string');
-    expect(t.db.select().from(buildOutputs).all().map((o) => o.name).sort()).toEqual(['a.apk', 'b.apk']);
+    expect(
+      t.db
+        .select()
+        .from(buildOutputs)
+        .all()
+        .map((o) => o.name)
+        .sort(),
+    ).toEqual(['a.apk', 'b.apk']);
 
     expect((await collect()).json()).toEqual({ status: 'started' });
     await t.runs.outputs.idle();
@@ -195,12 +308,23 @@ describe('build outputs API', () => {
     const states = ['starting', 'working', 'waiting_input', 'failed', 'done'];
     states.forEach((state, i) => {
       const wt = addRun(`r${i}`, 'p1');
-      t.db.update(runs).set({ state }).where(eq(runs.id, `r${i}`)).run();
+      t.db
+        .update(runs)
+        .set({ state })
+        .where(eq(runs.id, `r${i}`))
+        .run();
       put(wt, `build/${state}.apk`, state);
     });
     await collect();
     await t.runs.outputs.idle();
-    expect(t.db.select().from(buildOutputs).all().map((o) => o.name).sort()).toEqual(['done.apk', 'failed.apk', 'waiting_input.apk']);
+    expect(
+      t.db
+        .select()
+        .from(buildOutputs)
+        .all()
+        .map((o) => o.name)
+        .sort(),
+    ).toEqual(['done.apk', 'failed.apk', 'waiting_input.apk']);
   });
 
   it('a worktree that vanishes before its pass is skipped without failing the collect', async () => {
@@ -225,7 +349,11 @@ describe('build outputs API', () => {
     put(wt, 'build/🚀 app.apk', 'y');
     await archiveFrom('r1');
     for (const o of t.db.select().from(buildOutputs).all()) {
-      const res = await t.app.inject({ method: 'GET', url: `/api/build-outputs/${o.id}/download`, headers: auth });
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/build-outputs/${o.id}/download`,
+        headers: auth,
+      });
       expect(res.statusCode).toBe(200);
       const cd = res.headers['content-disposition'] as string;
       expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent(o.name)}`);
@@ -240,32 +368,55 @@ describe('build outputs API', () => {
     const wt = path.join(t.dir, '.worktrees', 'r1');
     mkdirSync(path.dirname(wt), { recursive: true });
     symlinkSync(outside, wt);
-    t.db.insert(runs).values({
-      id: 'r1', projectId: 'p1', agent: 'claude', state: 'done', worktreePath: wt, hookTokenHash: 'x',
-      stateChangedAt: new Date(), createdAt: new Date(),
-    }).run();
+    t.db
+      .insert(runs)
+      .values({
+        id: 'r1',
+        projectId: 'p1',
+        agent: 'claude',
+        state: 'done',
+        worktreePath: wt,
+        hookTokenHash: 'x',
+        stateChangedAt: new Date(),
+        createdAt: new Date(),
+      })
+      .run();
     await collect();
     await t.runs.outputs.idle();
     expect((await listOf()).lastCollect).toMatchObject({ archived: 0 });
     expect(t.db.select().from(buildOutputs).all()).toHaveLength(0);
   });
 
-  it('a run\'s build outputs count what its handoff chain archived, and ?run= reports the chain', async () => {
+  it("a run's build outputs count what its handoff chain archived, and ?run= reports the chain", async () => {
     addProject();
     const wt = addRun('r1', 'p1');
-    t.db.insert(runs).values({
-      id: 'r2', projectId: 'p1', agent: 'claude', state: 'done', worktreePath: wt, hookTokenHash: 'x',
-      stateChangedAt: new Date(), createdAt: new Date(), predecessorRunId: 'r1',
-    }).run();
+    t.db
+      .insert(runs)
+      .values({
+        id: 'r2',
+        projectId: 'p1',
+        agent: 'claude',
+        state: 'done',
+        worktreePath: wt,
+        hookTokenHash: 'x',
+        stateChangedAt: new Date(),
+        createdAt: new Date(),
+        predecessorRunId: 'r1',
+      })
+      .run();
     t.db.update(runs).set({ handedOffTo: 'r2' }).where(eq(runs.id, 'r1')).run();
     put(wt, 'build/app.apk', 'apk');
     await archiveFrom('r1');
     await archiveFrom('r2');
     rmSync(wt, { recursive: true });
 
-    const run = (await t.app.inject({ method: 'GET', url: '/api/runs/r2/build-outputs', headers: auth })).json();
+    const run = (
+      await t.app.inject({ method: 'GET', url: '/api/runs/r2/build-outputs', headers: auth })
+    ).json();
     expect(run).toMatchObject({ outputs: [], archivedCount: 1 });
-    const filtered = (await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs?run=r2', headers: auth })).json();
+    const filtered = (
+      await t.app.inject({ method: 'GET', url: '/api/projects/p1/build-outputs?run=r2', headers: auth })
+    ).json();
     expect(filtered.runChain.sort()).toEqual(['r1', 'r2']);
     expect(filtered.outputs.map((o: { runId: string }) => o.runId)).toEqual(['r1']);
     expect((await listOf()).runChain).toBeNull();
@@ -274,7 +425,12 @@ describe('build outputs API', () => {
   it('saving a lower quota applies it at once; a higher or unchanged one does not', async () => {
     const enforce = vi.spyOn(t.runs.outputs, 'enforceQuota');
     const patch = (buildOutputsQuotaGb: number) =>
-      t.app.inject({ method: 'PATCH', url: '/api/factory/settings', headers: mut, payload: { buildOutputsQuotaGb } });
+      t.app.inject({
+        method: 'PATCH',
+        url: '/api/factory/settings',
+        headers: mut,
+        payload: { buildOutputsQuotaGb },
+      });
     expect((await patch(10)).statusCode).toBe(200);
     expect((await patch(10)).statusCode).toBe(200);
     expect(enforce).not.toHaveBeenCalled();

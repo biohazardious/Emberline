@@ -6,7 +6,11 @@ import { buildRecovery, type RecoveryInput } from './recovery.js';
 const REMINDER = '\n\nWhen finished, call `ticket_complete` again.';
 const WT = '/workspaces/landing/.worktrees/el-6';
 
-const input = (type: string, payload: Record<string, unknown> | null = {}, more: Partial<RecoveryInput> = {}): RecoveryInput => ({
+const input = (
+  type: string,
+  payload: Record<string, unknown> | null = {},
+  more: Partial<RecoveryInput> = {},
+): RecoveryInput => ({
   hold: { type, payload },
   ticketKey: 'EL-6',
   mainBranch: 'main',
@@ -46,7 +50,13 @@ function expectWellFormed(type: string, r: ReturnType<typeof buildRecovery>): vo
 describe('buildRecovery: merge_failed', () => {
   it('conflicts now: Resolve conflicts with the current list, Discard, Resolve by hand', () => {
     const r = buildRecovery(
-      input('merge_failed', { conflicts: ['old.txt'] }, { probe: probe(['.gitignore', 'content'], ['PROJECT.md', 'content'], ['astro.config.ts', 'add/add']) }),
+      input(
+        'merge_failed',
+        { conflicts: ['old.txt'] },
+        {
+          probe: probe(['.gitignore', 'content'], ['PROJECT.md', 'content'], ['astro.config.ts', 'add/add']),
+        },
+      ),
     );
     expectWellFormed('merge_failed', r);
     expect(r.why).toBe('main moved on and 3 files now conflict: .gitignore, PROJECT.md, astro.config.ts');
@@ -68,12 +78,20 @@ describe('buildRecovery: merge_failed', () => {
   });
 
   it('names the tickets that moved main', () => {
-    const one = buildRecovery(input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12'] }));
+    const one = buildRecovery(
+      input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12'] }),
+    );
     expect(one.why).toBe('main moved on (EL-12) and 1 file now conflicts: app.js');
-    const two = buildRecovery(input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12', 'EL-14'] }));
+    const two = buildRecovery(
+      input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12', 'EL-14'] }),
+    );
     expect(two.why).toBe('main moved on (EL-12, EL-14) and 1 file now conflicts: app.js');
     const many = buildRecovery(
-      input('merge_failed', {}, { probe: probe(['app.js', 'content']), movedBy: ['EL-12', 'EL-14', 'EL-15', 'EL-16'] }),
+      input(
+        'merge_failed',
+        {},
+        { probe: probe(['app.js', 'content']), movedBy: ['EL-12', 'EL-14', 'EL-15', 'EL-16'] },
+      ),
     );
     expect(many.why).toBe('main moved on (EL-12, EL-14 and 2 more) and 1 file now conflicts: app.js');
   });
@@ -91,25 +109,53 @@ describe('buildRecovery: merge_failed', () => {
   it('superseded by a done ticket at half or more: Discard first, naming it', () => {
     const files = Array.from({ length: 11 }, (_, i): [string, string] => [`f${i}.ts`, 'add/add']);
     const r = buildRecovery(
-      input('merge_failed', {}, { probe: probe(...files), superseding: { key: 'EL-10', files: 11, of: 11, done: true } }),
+      input(
+        'merge_failed',
+        {},
+        { probe: probe(...files), superseding: { key: 'EL-10', files: 11, of: 11, done: true } },
+      ),
     );
     expectWellFormed('merge_failed', r);
-    expect(r.suggestions[0]).toMatchObject({ kind: 'discard', detail: 'EL-10 already added these files (11 of 11 conflicts).' });
+    expect(r.suggestions[0]).toMatchObject({
+      kind: 'discard',
+      detail: 'EL-10 already added these files (11 of 11 conflicts).',
+    });
     expect(r.suggestions.map((s) => s.kind)).toEqual(['discard', 'prompt', 'manual']);
   });
 
   it('exactly half is enough; less is not', () => {
-    const files: [string, string][] = [['a', 'add/add'], ['b', 'add/add'], ['c', 'content'], ['d', 'content']];
-    const half = buildRecovery(input('merge_failed', {}, { probe: probe(...files), superseding: { key: 'EL-10', files: 2, of: 4, done: true } }));
+    const files: [string, string][] = [
+      ['a', 'add/add'],
+      ['b', 'add/add'],
+      ['c', 'content'],
+      ['d', 'content'],
+    ];
+    const half = buildRecovery(
+      input(
+        'merge_failed',
+        {},
+        { probe: probe(...files), superseding: { key: 'EL-10', files: 2, of: 4, done: true } },
+      ),
+    );
     expect(half.suggestions[0]!.kind).toBe('discard');
-    const less = buildRecovery(input('merge_failed', {}, { probe: probe(...files), superseding: { key: 'EL-10', files: 1, of: 4, done: true } }));
+    const less = buildRecovery(
+      input(
+        'merge_failed',
+        {},
+        { probe: probe(...files), superseding: { key: 'EL-10', files: 1, of: 4, done: true } },
+      ),
+    );
     expect(less.suggestions[0]!.kind).toBe('prompt');
   });
 
   it('superseded by a ticket that is not done: Discard is not first', () => {
     const files = Array.from({ length: 4 }, (_, i): [string, string] => [`f${i}.ts`, 'add/add']);
     const r = buildRecovery(
-      input('merge_failed', {}, { probe: probe(...files), superseding: { key: 'EL-10', files: 4, of: 4, done: false } }),
+      input(
+        'merge_failed',
+        {},
+        { probe: probe(...files), superseding: { key: 'EL-10', files: 4, of: 4, done: false } },
+      ),
     );
     expect(r.suggestions[0]!.kind).toBe('prompt');
     expect(r.suggestions.map((s) => s.kind)).toEqual(['prompt', 'discard', 'manual']);
@@ -117,9 +163,16 @@ describe('buildRecovery: merge_failed', () => {
 
   it('probe error: why "could not compare with main: …", generic suggestions from the stored conflicts', () => {
     const r = buildRecovery(
-      input('merge_failed', { conflicts: ['app.js'] }, {
-        probe: { ok: false, error: 'git -c core.hooksPath=/dev/null exited with code 128: fatal: Needed a single revision' },
-      }),
+      input(
+        'merge_failed',
+        { conflicts: ['app.js'] },
+        {
+          probe: {
+            ok: false,
+            error: 'git -c core.hooksPath=/dev/null exited with code 128: fatal: Needed a single revision',
+          },
+        },
+      ),
     );
     expectWellFormed('merge_failed', r);
     expect(r.why).toBe('could not compare with main: Needed a single revision');
@@ -134,14 +187,20 @@ describe('buildRecovery: merge_failed', () => {
   });
 
   it('quotes a worktree path with spaces in the manual commands', () => {
-    const r = buildRecovery(input('merge_failed', {}, { worktreePath: '/w/my project', probe: probe(['a', 'content']) }));
-    expect(r.suggestions.find((s) => s.kind === 'manual')!.commands[0]).toBe("git -C '/w/my project' merge main");
+    const r = buildRecovery(
+      input('merge_failed', {}, { worktreePath: '/w/my project', probe: probe(['a', 'content']) }),
+    );
+    expect(r.suggestions.find((s) => s.kind === 'manual')!.commands[0]).toBe(
+      "git -C '/w/my project' merge main",
+    );
   });
 });
 
 describe('buildRecovery: the other holds', () => {
   it('build_gate_failed: Fix the checks with the stored output, Run Build & Verify', () => {
-    const r = buildRecovery(input('build_gate_failed', { output: 'src/a.ts(3,1): error TS2304\nFound 1 error.\n' }));
+    const r = buildRecovery(
+      input('build_gate_failed', { output: 'src/a.ts(3,1): error TS2304\nFound 1 error.\n' }),
+    );
     expectWellFormed('build_gate_failed', r);
     expect(r.why).toBe('the checks failed: Found 1 error.');
     expect(r.suggestions.map((s) => [s.kind, s.id])).toEqual([
@@ -167,7 +226,11 @@ describe('buildRecovery: the other holds', () => {
   });
 
   it('critic_blocked: the code audit, its stored follow-up prompt, Open review', () => {
-    const r = buildRecovery(input('critic_blocked', { followUpPrompt: 'Deterministic code audit: handle the null case in parse().' }));
+    const r = buildRecovery(
+      input('critic_blocked', {
+        followUpPrompt: 'Deterministic code audit: handle the null case in parse().',
+      }),
+    );
     expectWellFormed('critic_blocked', r);
     expect(r.why).toBe('the code audit asked for changes');
     expect(r.suggestions.map((s) => [s.kind, s.id])).toEqual([
@@ -191,12 +254,19 @@ describe('buildRecovery: the other holds', () => {
     expect(text).toContain('history');
     expect(text).toContain('environment variables');
     expect(text).toContain('.env');
-    expect(buildRecovery(input('secret_guard_blocked', { secretLeakCount: 1 })).why).toBe('1 possible secret in the diff');
+    expect(buildRecovery(input('secret_guard_blocked', { secretLeakCount: 1 })).why).toBe(
+      '1 possible secret in the diff',
+    );
     expect(buildRecovery(input('secret_guard_blocked', null)).why).toBe('possible secrets in the diff');
   });
 
   it("secret_guard_blocked keeps the guard's findings in the prompt when stored", () => {
-    const r = buildRecovery(input('secret_guard_blocked', { secretLeakCount: 1, autoFixPrompt: 'config.ts:3 looks like an API key' }));
+    const r = buildRecovery(
+      input('secret_guard_blocked', {
+        secretLeakCount: 1,
+        autoFixPrompt: 'config.ts:3 looks like an API key',
+      }),
+    );
     expect(r.suggestions[0]!.prompt).toContain('config.ts:3 looks like an API key');
   });
 
@@ -206,7 +276,9 @@ describe('buildRecovery: the other holds', () => {
     expect(r.why).toBe('the quality guard found problems');
     expect(r.suggestions.map((s) => s.kind)).toEqual(['prompt', 'open_review']);
     expect(r.suggestions[0]!.prompt).toMatch(/^Remove the TODO in a\.ts:4\./);
-    expect(buildRecovery(input('slop_guard_blocked', {})).suggestions[0]!.prompt).toMatch(/^Fix the problems the quality guard found/);
+    expect(buildRecovery(input('slop_guard_blocked', {})).suggestions[0]!.prompt).toMatch(
+      /^Fix the problems the quality guard found/,
+    );
   });
 
   it('completion_missing: Ask for completion', () => {
@@ -226,7 +298,13 @@ describe('buildRecovery: the other holds', () => {
   });
 
   it('review_blocked: Open review first, then Address the comments listing them', () => {
-    const r = buildRecovery(input('review_blocked', { count: 2 }, { reviewComments: ['src/a.ts:3: use the helper', 'README.md: typo'] }));
+    const r = buildRecovery(
+      input(
+        'review_blocked',
+        { count: 2 },
+        { reviewComments: ['src/a.ts:3: use the helper', 'README.md: typo'] },
+      ),
+    );
     expectWellFormed('review_blocked', r);
     expect(r.why).toBe('2 blocking review comments are open');
     expect(r.suggestions.map((s) => [s.kind, s.id])).toEqual([
@@ -234,7 +312,9 @@ describe('buildRecovery: the other holds', () => {
       ['prompt', 'address_comments'],
     ]);
     expect(r.suggestions[1]!.prompt).toContain('- src/a.ts:3: use the helper\n- README.md: typo');
-    expect(buildRecovery(input('review_blocked', { count: 1 })).why).toBe('1 blocking review comment is open');
+    expect(buildRecovery(input('review_blocked', { count: 1 })).why).toBe(
+      '1 blocking review comment is open',
+    );
   });
 
   it('no_changes: Do the ticket, Mark done anyway (merge), Discard', () => {
@@ -249,7 +329,9 @@ describe('buildRecovery: the other holds', () => {
     ]);
     const [, merge, discard] = r.suggestions;
     expect(merge!.detail).toBe('Move EL-6 to Done as finished. There is nothing to merge.');
-    expect(discard!.detail).toBe('Move EL-6 to Done as not needed. Nothing is merged, and the branch is kept until the next cleanup.');
+    expect(discard!.detail).toBe(
+      'Move EL-6 to Done as not needed. Nothing is merged, and the branch is kept until the next cleanup.',
+    );
     expect(r.suggestions[0]!.prompt).toMatch(/^The ticket asks for changes, but you made none\./);
     expect(r.suggestions[0]!.prompt).toContain('explain why nothing is needed');
   });
@@ -281,7 +363,9 @@ describe('buildRecovery: the worktree config holds', () => {
   it('build_gate_failed from the worktree config check: its own label and suggestions, no Build & Verify', () => {
     const r = buildRecovery(input('build_gate_failed', yml));
     expect(r.label).toBe('Worktree config is not valid');
-    expect(r.why).toBe('the run\'s .emberline/worktree.yml is not valid: checks: Unrecognized key: "container"');
+    expect(r.why).toBe(
+      'the run\'s .emberline/worktree.yml is not valid: checks: Unrecognized key: "container"',
+    );
     expect(r.suggestions.map((s) => s.id)).toEqual(['fix_worktree_yml', 'open_review', 'discard']);
     expect(r.suggestions[0]!.prompt).toContain('checks: Unrecognized key: "container"');
     expect(r.suggestions[0]!.prompt!.endsWith(REMINDER)).toBe(true);
@@ -295,9 +379,13 @@ describe('buildRecovery: the worktree config holds', () => {
   });
 
   it('missing worktree commands: their own label and why', () => {
-    const r = buildRecovery(input('build_gate_failed', { check: 'worktree_commands', autoFix: false, output: 'no commands' }));
+    const r = buildRecovery(
+      input('build_gate_failed', { check: 'worktree_commands', autoFix: false, output: 'no commands' }),
+    );
     expect(r.label).toBe('Worktree commands are missing');
-    expect(r.why).toBe('the bootstrap left .emberline/worktree.yml without setup, build, lint or test commands');
+    expect(r.why).toBe(
+      'the bootstrap left .emberline/worktree.yml without setup, build, lint or test commands',
+    );
     expect(r.suggestions.map((s) => s.id)).toEqual(['fix_worktree_yml', 'open_review', 'discard']);
   });
 

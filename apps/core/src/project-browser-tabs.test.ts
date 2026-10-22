@@ -303,7 +303,10 @@ describe('ProjectBrowserTabs', () => {
 
     it("another project's agent starting (no following for anyone) keeps the pin", async () => {
       const { tabs, own } = await pinnedTo();
-      expect(await tabs.state('A', opts(null, false, true))).toMatchObject({ following: false, activeTabId: own });
+      expect(await tabs.state('A', opts(null, false, true))).toMatchObject({
+        following: false,
+        activeTabId: own,
+      });
       expect(await tabs.state('A', opts(null, true, true))).toMatchObject({
         following: false,
         activeTabId: own,
@@ -314,7 +317,10 @@ describe('ProjectBrowserTabs', () => {
     it("this project's agent stopping releases it", async () => {
       const { tabs } = await pinnedTo();
       await tabs.state('A', opts(null, false, false));
-      expect(await tabs.state('A', opts(null, true, true))).toMatchObject({ following: true, activeTabId: 'start' });
+      expect(await tabs.state('A', opts(null, true, true))).toMatchObject({
+        following: true,
+        activeTabId: 'start',
+      });
     });
   });
 
@@ -328,10 +334,13 @@ describe('ProjectBrowserTabs', () => {
   });
 
   describe("deleted projects' tabs are cleaned up (B-7)", () => {
-    it("a poll closes the tabs of a project that no longer exists", async () => {
+    it('a poll closes the tabs of a project that no longer exists', async () => {
       const d = new FakeDaemon();
       d.pages.push({ id: 'orphan', url: 'http://core:7420/gone', projectId: 'gone' });
-      const tabs = new ProjectBrowserTabs(async () => d, (ids) => new Set(ids.filter((id) => id === 'A')));
+      const tabs = new ProjectBrowserTabs(
+        async () => d,
+        (ids) => new Set(ids.filter((id) => id === 'A')),
+      );
       await tabs.state('A', opts(null));
       await vi.waitFor(() =>
         expect(d.actions).toContainEqual({ action: 'close_project_tabs', projectId: 'gone' }),
@@ -358,11 +367,15 @@ describe('ProjectBrowserTabs', () => {
       let land!: () => void;
       d.closeGate = new Promise((r) => (land = r));
       d.pages.push({ id: 'orphan', url: 'http://core:7420/gone', projectId: 'gone' });
-      const tabs = new ProjectBrowserTabs(async () => d, (ids) => new Set(ids.filter((id) => id !== 'gone')));
+      const tabs = new ProjectBrowserTabs(
+        async () => d,
+        (ids) => new Set(ids.filter((id) => id !== 'gone')),
+      );
       await tabs.state('A', opts(null));
       await tabs.state('B', opts(null)); // B's tab is new: the list changed
       await tabs.state('A', opts(null));
-      const closes = () => d.actions.filter((a) => a.action === 'close_project_tabs' && a.projectId === 'gone');
+      const closes = () =>
+        d.actions.filter((a) => a.action === 'close_project_tabs' && a.projectId === 'gone');
       await vi.waitFor(() => expect(closes()).toHaveLength(1));
       land();
       await vi.waitFor(() => expect(d.pages.some((p) => p.projectId === 'gone')).toBe(false));
@@ -411,7 +424,10 @@ describe('ProjectBrowserTabs', () => {
 
     it("another existing project's tabs are left alone", async () => {
       const d = new FakeDaemon();
-      const tabs = new ProjectBrowserTabs(async () => d, (ids) => new Set(ids));
+      const tabs = new ProjectBrowserTabs(
+        async () => d,
+        (ids) => new Set(ids),
+      );
       await tabs.state('B', opts(null));
       await tabs.state('A', opts(null));
       await Promise.resolve();

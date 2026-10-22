@@ -17,7 +17,13 @@ import type { Run, Ticket, WorktreeConfigStatusResponse } from '@emberline/proto
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type CommandExecutor, localCommandCanceller, localCommandExecutor, setCommandCanceller, setCommandExecutor } from './command-exec.js';
+import {
+  type CommandExecutor,
+  localCommandCanceller,
+  localCommandExecutor,
+  setCommandCanceller,
+  setCommandExecutor,
+} from './command-exec.js';
 import { projectWorktreeConfig, runs } from './db/schema.js';
 import { syncWorktreeToMainWorkspace } from './factory/merge.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -103,7 +109,16 @@ function commitYml(project: { path: string }, yml: string) {
   writeFileSync(path.join(project.path, YML), yml);
   const git = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
   git('add', YML);
-  git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'agent: change worktree.yml');
+  git(
+    '-c',
+    'user.email=t@example.com',
+    '-c',
+    'user.name=t',
+    'commit',
+    '-q',
+    '-m',
+    'agent: change worktree.yml',
+  );
 }
 
 const status = async (projectId: string) =>
@@ -111,7 +126,9 @@ const status = async (projectId: string) =>
 
 async function approveHead(projectId: string) {
   const { head } = await status(projectId);
-  const res = await api('POST', `/api/projects/${projectId}/worktree-config/approve`, { sha256: head!.sha256 });
+  const res = await api('POST', `/api/projects/${projectId}/worktree-config/approve`, {
+    sha256: head!.sha256,
+  });
   expect(res.statusCode).toBe(200);
   return res.json() as WorktreeConfigStatusResponse;
 }
@@ -124,7 +141,8 @@ async function waitFile(file: string): Promise<string> {
 // Read from the service: a test that moves the clock would outlive its login session.
 const eventsOf = async (id: string) => t.runs.get(id).events;
 const typesOf = async (id: string) => (await eventsOf(id)).map((e) => e.type);
-const payloadOf = async (id: string, type: string) => (await eventsOf(id)).find((e) => e.type === type)?.payload;
+const payloadOf = async (id: string, type: string) =>
+  (await eventsOf(id)).find((e) => e.type === type)?.payload;
 
 /** Starts a run and waits until its agent got a terminal. */
 async function startRun(projectId: string, prompt = 'do the ticket'): Promise<Run> {
@@ -142,11 +160,20 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     const yml = setupYml('echo ok > setup-ran');
     const project = await createProject(yml);
     const before = await status(project.id);
-    expect(before).toMatchObject({ approved: null, head: { content: yml, sha256: sha(yml) }, changed: true, errors: [] });
+    expect(before).toMatchObject({
+      approved: null,
+      head: { content: yml, sha256: sha(yml) },
+      changed: true,
+      errors: [],
+    });
     expect(before.diff).toContain('+setup:');
 
     const approved = await approveHead(project.id);
-    expect(approved).toMatchObject({ approved: { content: yml, sha256: sha(yml), approvedBy: 'person' }, changed: false, diff: '' });
+    expect(approved).toMatchObject({
+      approved: { content: yml, sha256: sha(yml), approvedBy: 'person' },
+      changed: false,
+      diff: '',
+    });
     expect(Date.parse(approved.approved!.approvedAt)).not.toBeNaN();
   });
 
@@ -190,18 +217,43 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     const project = await createProject(setupYml('echo ok > setup-ran'));
     await approveHead(project.id);
     const wt = path.join(t.dir, 'agent-wt');
-    execFileSync('git', ['-C', project.path, 'worktree', 'add', '-q', '-b', 'emberline/run-agent', wt, 'HEAD']);
+    execFileSync('git', [
+      '-C',
+      project.path,
+      'worktree',
+      'add',
+      '-q',
+      '-b',
+      'emberline/run-agent',
+      wt,
+      'HEAD',
+    ]);
     writeFileSync(path.join(wt, YML), setupYml('echo new > new-ran'));
-    for (const scratch of ['new-tickets.json', 'tickets.json', 'brainstorm-suggestions.json', 'roadmap.json', 'roadmap-generated.json', 'cross-critic-r1.json']) {
+    for (const scratch of [
+      'new-tickets.json',
+      'tickets.json',
+      'brainstorm-suggestions.json',
+      'roadmap.json',
+      'roadmap-generated.json',
+      'cross-critic-r1.json',
+    ]) {
       writeFileSync(path.join(wt, '.emberline', scratch), '{}\n');
     }
     mkdirSync(path.join(wt, '.emberline', 'attachments'));
     writeFileSync(path.join(wt, '.emberline', 'attachments', 'shot.png'), 'png');
     writeFileSync(path.join(wt, '.emberline', 'notes.md'), 'kept\n');
 
-    const res = await syncWorktreeToMainWorkspace({ worktreePath: wt, mainWorkspacePath: project.path, ticketKey: 'T-1', runId: 'run-agent' });
+    const res = await syncWorktreeToMainWorkspace({
+      worktreePath: wt,
+      mainWorkspacePath: project.path,
+      ticketKey: 'T-1',
+      runId: 'run-agent',
+    });
     expect(res.ok).toBe(true);
-    const tracked = execFileSync('git', ['-C', project.path, 'ls-files', '.emberline'], { encoding: 'utf8' }).trim().split('\n').sort();
+    const tracked = execFileSync('git', ['-C', project.path, 'ls-files', '.emberline'], { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .sort();
     expect(tracked).toEqual(['.emberline/notes.md', YML]);
     const s = await status(project.id);
     expect(s.changed).toBe(true);
@@ -216,7 +268,9 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     expect(s.changed).toBe(true);
     expect(s.errors.length).toBeGreaterThan(0);
     expect(s.errors.join('\n')).toContain('unknown');
-    const res = await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: s.head!.sha256 });
+    const res = await api('POST', `/api/projects/${project.id}/worktree-config/approve`, {
+      sha256: s.head!.sha256,
+    });
     expect(res.statusCode).toBe(400);
     const run = await startRun(project.id);
     expect(existsSync(path.join(run.worktreePath, 'setup-ran'))).toBe(true);
@@ -227,9 +281,23 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     const project = await createProject(setupYml('echo ok > setup-ran'));
     await approveHead(project.id);
     // Not while HEAD still has the file.
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true }))
+        .statusCode,
+    ).toBe(409);
     execFileSync('git', ['-C', project.path, 'rm', '-q', YML]);
-    execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'drop']);
+    execFileSync('git', [
+      '-C',
+      project.path,
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-q',
+      '-m',
+      'drop',
+    ]);
     const s = await status(project.id);
     expect(s).toMatchObject({ head: null, headError: null, changed: true, removed: true, errors: [] });
     expect(s.diff).toContain('-setup:');
@@ -251,12 +319,18 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     const broken = await status(project.id);
     expect(broken).toMatchObject({ head: null, changed: false, removed: false });
     expect(broken.headError).toBeTruthy();
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true }))
+        .statusCode,
+    ).toBe(409);
     rmSync(path.join(project.path, '.git'), { recursive: true, force: true });
     const noGit = await status(project.id);
     expect(noGit).toMatchObject({ head: null, changed: false, removed: false });
     expect(noGit.headError).toBeTruthy();
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true }))
+        .statusCode,
+    ).toBe(409);
     expect((await status(project.id)).approved).not.toBeNull();
   });
 
@@ -265,11 +339,25 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     mkdirSync(path.join(project.path, '.emberline'));
     execFileSync('ln', ['-s', '/etc/passwd', path.join(project.path, YML)]);
     execFileSync('git', ['-C', project.path, 'add', YML]);
-    execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'link']);
+    execFileSync('git', [
+      '-C',
+      project.path,
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-q',
+      '-m',
+      'link',
+    ]);
     const s = await status(project.id);
     expect(s).toMatchObject({ head: null, changed: false, removed: false });
     expect(s.errors.join()).toContain('symbolic link');
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true }))
+        .statusCode,
+    ).toBe(409);
   });
 
   it('a HEAD file that cannot be used while an approval exists is reported as changed and unusable', async () => {
@@ -277,7 +365,18 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     await approveHead(project.id);
     const commit = (msg: string) => {
       execFileSync('git', ['-C', project.path, 'add', '-A']);
-      execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', msg]);
+      execFileSync('git', [
+        '-C',
+        project.path,
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=t',
+        'commit',
+        '-q',
+        '-m',
+        msg,
+      ]);
     };
     rmSync(path.join(project.path, YML));
     execFileSync('ln', ['-s', '/etc/passwd', path.join(project.path, YML)]);
@@ -285,7 +384,10 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     const linked = await status(project.id);
     expect(linked).toMatchObject({ head: null, changed: true, removed: false, unusable: true, diff: '' });
     expect(linked.errors.join()).toContain('symbolic link');
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true })).statusCode).toBe(409);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true }))
+        .statusCode,
+    ).toBe(409);
 
     rmSync(path.join(project.path, YML));
     writeFileSync(path.join(project.path, YML), `version: 1\n# ${'x'.repeat(70 * 1024)}\n`);
@@ -303,20 +405,26 @@ describe('worktree.yml trust (Review Focus 1)', () => {
   it('answers 404 for an unknown project and 400 for a bad body', async () => {
     expect((await api('GET', '/api/projects/nope/worktree-config')).statusCode).toBe(404);
     const project = await createProject(setupYml('true'));
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: 'x' })).statusCode).toBe(400);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: 'x' })).statusCode,
+    ).toBe(400);
   });
 });
 
 describe('run worktree lifecycle', () => {
   it('copies (default) and links entries from the main workspace before the run starts', async () => {
-    const project = await createProject('version: 1\ncopy:\n  - .env\n  - { path: .env.local, mode: symlink }\n  - missing.txt\n');
+    const project = await createProject(
+      'version: 1\ncopy:\n  - .env\n  - { path: .env.local, mode: symlink }\n  - missing.txt\n',
+    );
     writeFileSync(path.join(project.path, '.env'), 'A=1\n');
     writeFileSync(path.join(project.path, '.env.local'), 'B=2\n');
     await approveHead(project.id);
     const run = await startRun(project.id);
     expect(readFileSync(path.join(run.worktreePath, '.env'), 'utf8')).toBe('A=1\n');
     expect(lstatSync(path.join(run.worktreePath, '.env')).isSymbolicLink()).toBe(false);
-    expect(readlinkSync(path.join(run.worktreePath, '.env.local'))).toBe(path.join(project.path, '.env.local'));
+    expect(readlinkSync(path.join(run.worktreePath, '.env.local'))).toBe(
+      path.join(project.path, '.env.local'),
+    );
     expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({
       entries: [
         { path: '.env', status: 'copied' },
@@ -333,19 +441,35 @@ describe('run worktree lifecycle', () => {
     await approveHead(project.id);
     const run = await startRun(project.id);
     expect(existsSync(path.join(run.worktreePath, 'big.bin'))).toBe(false);
-    expect(await payloadOf(run.id, 'worktree_copy_skipped')).toEqual({ path: 'big.bin', reason: 'larger than 200 MB' });
+    expect(await payloadOf(run.id, 'worktree_copy_skipped')).toEqual({
+      path: 'big.bin',
+      reason: 'larger than 200 MB',
+    });
   });
 
   it('flags copied files the worktree does not ignore, and warns about secrets in the first prompt', async () => {
     const project = await createProject('version: 1\ncopy:\n  - .env\n  - .env.local\n  - notes.txt\n');
     writeFileSync(path.join(project.path, '.gitignore'), '.env.local\n');
     execFileSync('git', ['-C', project.path, 'add', '.gitignore']);
-    execFileSync('git', ['-C', project.path, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'ignore']);
+    execFileSync('git', [
+      '-C',
+      project.path,
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-q',
+      '-m',
+      'ignore',
+    ]);
     for (const f of ['.env', '.env.local', 'notes.txt']) writeFileSync(path.join(project.path, f), 'x');
     await approveHead(project.id);
     const run = await startRun(project.id, 'work');
     expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({ notIgnored: ['.env', 'notes.txt'] });
-    expect(await promptOf(run.id)).toBe('Note: the copied `.env` is not in .gitignore — don\'t commit it.\n\nwork');
+    expect(await promptOf(run.id)).toBe(
+      "Note: the copied `.env` is not in .gitignore — don't commit it.\n\nwork",
+    );
   });
 
   it('warns about a .env inside a copied directory that git does not ignore', async () => {
@@ -354,8 +478,12 @@ describe('run worktree lifecycle', () => {
     writeFileSync(path.join(project.path, 'config', '.env.production'), 'X=1');
     await approveHead(project.id);
     const run = await startRun(project.id, 'work');
-    expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({ notIgnored: ['config', 'config/.env.production'] });
-    expect(await promptOf(run.id)).toBe('Note: the copied `config/.env.production` is not in .gitignore — don\'t commit it.\n\nwork');
+    expect(await payloadOf(run.id, 'worktree_copied')).toMatchObject({
+      notIgnored: ['config', 'config/.env.production'],
+    });
+    expect(await promptOf(run.id)).toBe(
+      "Note: the copied `config/.env.production` is not in .gitignore — don't commit it.\n\nwork",
+    );
   });
 
   it('runs setup in order in the worktree, with started and finished events', async () => {
@@ -394,7 +522,13 @@ describe('run worktree lifecycle', () => {
     const { project } = (await api('POST', '/api/projects', { name: 'Plain', initGit: false })).json();
     t.db
       .insert(projectWorktreeConfig)
-      .values({ projectId: project.id, content: setupYml('echo x > setup-ran'), sha256: 'x', approvedAt: new Date(), approvedBy: 'wizard' })
+      .values({
+        projectId: project.id,
+        content: setupYml('echo x > setup-ran'),
+        sha256: 'x',
+        approvedAt: new Date(),
+        approvedBy: 'wizard',
+      })
       .run();
     const run = await startRun(project.id);
     expect(run.worktreePath).toBe(project.path);
@@ -543,7 +677,9 @@ describe('run worktree lifecycle', () => {
         }
         return localCommandExecutor(request);
       });
-      const project = await createProject('version: 1\nsetup:\n  - echo step-one\n  - echo step-two\n  - echo step-three\n');
+      const project = await createProject(
+        'version: 1\nsetup:\n  - echo step-one\n  - echo step-two\n  - echo step-three\n',
+      );
       await approveHead(project.id);
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'go' })).json();
       await expect.poll(() => seen.length).toBe(1);
@@ -585,7 +721,10 @@ describe('teardown before prune', () => {
     expect(res.json()).toMatchObject({ removed: true });
     expect(existsSync(run.worktreePath)).toBe(false);
     expect(readFileSync(log, 'utf8')).toBe('first\nsecond\n');
-    expect(await payloadOf(run.id, 'worktree_teardown_failed')).toMatchObject({ command: `echo first >> ${log}; exit 3`, exitCode: 3 });
+    expect(await payloadOf(run.id, 'worktree_teardown_failed')).toMatchObject({
+      command: `echo first >> ${log}; exit 3`,
+      exitCode: 3,
+    });
     const types = await typesOf(run.id);
     expect(types.indexOf('worktree_pruned')).toBeGreaterThan(types.indexOf('worktree_teardown_failed'));
   });
@@ -595,7 +734,12 @@ describe('teardown before prune', () => {
     const project = await createProject(teardownYml(log));
     await approveHead(project.id);
     const run = await endedRun(project.id);
-    const res = await api('POST', '/api/runs/gc', { projectId: project.id, keepRecent: 0, includeFailed: true, pruneWorktrees: true });
+    const res = await api('POST', '/api/runs/gc', {
+      projectId: project.id,
+      keepRecent: 0,
+      includeFailed: true,
+      pruneWorktrees: true,
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ prunedWorktrees: 1 });
     expect(existsSync(run.worktreePath)).toBe(false);
@@ -604,7 +748,9 @@ describe('teardown before prune', () => {
 
   it('runs teardown on an auto-GC prune', async () => {
     const log = path.join(t.dir, 'teardown.log');
-    const project = await createProject(`version: 1\nteardown:\n  - ${JSON.stringify(`basename "$PWD" >> ${log}`)}\n`);
+    const project = await createProject(
+      `version: 1\nteardown:\n  - ${JSON.stringify(`basename "$PWD" >> ${log}`)}\n`,
+    );
     await approveHead(project.id);
     const ended: Run[] = [];
     for (let i = 0; i < 11; i++) ended.push(await endedRun(project.id));
@@ -664,7 +810,10 @@ describe('teardown before prune', () => {
     const ended: Run[] = [];
     for (let i = 0; i < 11; i++) ended.push(await endedRun(project.id));
     await t.runs.enqueue({ projectId: project.id, prompt: 'open' });
-    vi.spyOn(t.runs as unknown as { teardownWorktree: () => Promise<void> }, 'teardownWorktree').mockRejectedValue(new Error('boom'));
+    vi.spyOn(
+      t.runs as unknown as { teardownWorktree: () => Promise<void> },
+      'teardownWorktree',
+    ).mockRejectedValue(new Error('boom'));
     await t.runs.reconcile();
     await expect.poll(() => existsSync(ended[0]!.worktreePath), { timeout: 8_000 }).toBe(false);
   });
@@ -710,7 +859,8 @@ describe('teardown before prune', () => {
     });
     return { release, order };
   }
-  const budgets = () => (t.runs as unknown as { teardownBudgets: { request: number; projectDelete: number } }).teardownBudgets;
+  const budgets = () =>
+    (t.runs as unknown as { teardownBudgets: { request: number; projectDelete: number } }).teardownBudgets;
 
   it('a per-run prune answers within its time budget; the teardown and the prune finish in the background', async () => {
     const { release } = holdTeardowns();
@@ -725,7 +875,9 @@ describe('teardown before prune', () => {
     expect(res.json()).toMatchObject({ removed: false, pending: true });
     expect(existsSync(run.worktreePath)).toBe(true);
     // A second prune meanwhile does not start the teardown again.
-    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({ pending: true });
+    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
     release();
     await expect.poll(() => existsSync(run.worktreePath), { timeout: 8_000 }).toBe(false);
     await expect.poll(() => typesOf(run.id)).toContain('worktree_pruned');
@@ -739,7 +891,12 @@ describe('teardown before prune', () => {
     const a = await endedRun(project.id);
     const b = await endedRun(project.id);
     const startedAt = Date.now();
-    const res = await api('POST', '/api/runs/gc', { projectId: project.id, keepRecent: 0, includeFailed: true, pruneWorktrees: true });
+    const res = await api('POST', '/api/runs/gc', {
+      projectId: project.id,
+      keepRecent: 0,
+      includeFailed: true,
+      pruneWorktrees: true,
+    });
     expect(Date.now() - startedAt).toBeLessThan(3_000);
     expect(res.statusCode).toBe(200);
     expect(res.json().keptWorktrees).toEqual(
@@ -747,8 +904,12 @@ describe('teardown before prune', () => {
     );
     expect(existsSync(a.worktreePath)).toBe(true);
     release();
-    await expect.poll(() => existsSync(a.worktreePath) || existsSync(b.worktreePath), { timeout: 8_000 }).toBe(false);
-    await expect.poll(() => t.runs.list().filter((r) => r.projectId === project.id).length, { timeout: 8_000 }).toBe(0);
+    await expect
+      .poll(() => existsSync(a.worktreePath) || existsSync(b.worktreePath), { timeout: 8_000 })
+      .toBe(false);
+    await expect
+      .poll(() => t.runs.list().filter((r) => r.projectId === project.id).length, { timeout: 8_000 })
+      .toBe(0);
     expect(order.length).toBe(2);
   });
 
@@ -781,17 +942,24 @@ describe('teardown before prune', () => {
     await approveHead(project.id);
     const run = await endedRun(project.id);
     await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
-    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ runId: run.id, command: 'exit 5', exitCode: 5 }), expect.stringContaining('teardown'));
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: run.id, command: 'exit 5', exitCode: 5 }),
+      expect.stringContaining('teardown'),
+    );
   });
 
   it('a project delete runs teardown in each run worktree first', async () => {
     const log = path.join(t.dir, 'teardown.log');
-    const project = await createProject(`version: 1\nteardown:\n  - ${JSON.stringify(`basename "$PWD" >> ${log}`)}\n`);
+    const project = await createProject(
+      `version: 1\nteardown:\n  - ${JSON.stringify(`basename "$PWD" >> ${log}`)}\n`,
+    );
     await approveHead(project.id);
     const a = await endedRun(project.id);
     const b = await t.runs.enqueue({ projectId: project.id, prompt: 'x' });
     expect((await api('DELETE', `/api/projects/${project.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
-    expect(readFileSync(log, 'utf8').trim().split('\n').sort()).toEqual([path.basename(a.worktreePath), path.basename(b.worktreePath)].sort());
+    expect(readFileSync(log, 'utf8').trim().split('\n').sort()).toEqual(
+      [path.basename(a.worktreePath), path.basename(b.worktreePath)].sort(),
+    );
     expect(existsSync(a.worktreePath)).toBe(false);
   });
 });
@@ -822,7 +990,9 @@ describe('services and checks', () => {
     await approveHead(project.id);
     const run = await t.runs.enqueue({ projectId: project.id, prompt: 'x' });
     writeFileSync(path.join(run.worktreePath, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
-    expect((await api('GET', `/api/runs/${run.id}/preview`)).json()).toMatchObject({ detectedCommand: 'npm run dev' });
+    expect((await api('GET', `/api/runs/${run.id}/preview`)).json()).toMatchObject({
+      detectedCommand: 'npm run dev',
+    });
   });
 
   it('the build gate runs the approved checks in order build, lint, test — even without a detected target', async () => {
@@ -838,7 +1008,9 @@ describe('services and checks', () => {
       ].join('\n'),
     );
     await approveHead(project.id);
-    const ticket: Ticket = (await api('POST', `/api/projects/${project.id}/tickets`, { title: 'A', status: 'ready' })).json();
+    const ticket: Ticket = (
+      await api('POST', `/api/projects/${project.id}/tickets`, { title: 'A', status: 'ready' })
+    ).json();
     await t.tickets.dispatchNextReadyTicket(project.id);
     const run = t.runs.list().find((r) => r.ticketId === ticket.id) as Run;
     const token = await waitFile(path.join(t.dir, `token-${run.id}`));
@@ -846,9 +1018,16 @@ describe('services and checks', () => {
     await hook(run.id, 'UserPromptSubmit', token);
     const headers = { authorization: `Bearer ${token}` };
     await t.app.inject({ method: 'POST', url: `/api/internal/runs/${run.id}/completion-tool`, headers });
-    await t.app.inject({ method: 'POST', url: `/api/internal/runs/${run.id}/complete`, headers, payload: { summary: 'done' } });
+    await t.app.inject({
+      method: 'POST',
+      url: `/api/internal/runs/${run.id}/complete`,
+      headers,
+      payload: { summary: 'done' },
+    });
     await hook(run.id, 'Stop', token);
-    await expect.poll(() => (existsSync(log) ? readFileSync(log, 'utf8') : ''), { timeout: 10_000 }).toBe('build\nlint\ntest\n');
+    await expect
+      .poll(() => (existsSync(log) ? readFileSync(log, 'utf8') : ''), { timeout: 10_000 })
+      .toBe('build\nlint\ntest\n');
   });
 });
 
@@ -870,12 +1049,20 @@ describe('editing worktree.yml from Project settings', () => {
 
   it('validate answers the banner errors', async () => {
     const project = await createProject('version: 1\n');
-    const res = await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: INVALID });
-    expect(res.json()).toEqual({ errors: ['checks: Unrecognized key: "container" (allowed: build, lint, test)'] });
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: NEXT })).json()).toEqual({
+    const res = await api('POST', `/api/projects/${project.id}/worktree-config/validate`, {
+      content: INVALID,
+    });
+    expect(res.json()).toEqual({
+      errors: ['checks: Unrecognized key: "container" (allowed: build, lint, test)'],
+    });
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: NEXT })).json(),
+    ).toEqual({
       errors: [],
     });
-    expect((await api('POST', '/api/projects/nope/worktree-config/validate', { content: NEXT })).statusCode).toBe(404);
+    expect(
+      (await api('POST', '/api/projects/nope/worktree-config/validate', { content: NEXT })).statusCode,
+    ).toBe(404);
   });
 
   it('saves: one commit on main with only that path, approved, status unchanged', async () => {
@@ -884,7 +1071,11 @@ describe('editing worktree.yml from Project settings', () => {
     const before = (await status(project.id)).head!.sha256;
     const res = await save(project.id, NEXT, before);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ changed: false, approved: { content: NEXT, approvedBy: 'person' }, head: { content: NEXT } });
+    expect(res.json()).toMatchObject({
+      changed: false,
+      approved: { content: NEXT, approvedBy: 'person' },
+      head: { content: NEXT },
+    });
     const git = gitIn(project);
     expect(git('log', '-1', '--format=%s')).toBe('chore: edit .emberline/worktree.yml from project settings');
     expect(git('log', '-1', '--format=%an <%ae>')).toBe('Emberline AI Factory <factory@emberline.local>');
@@ -899,7 +1090,11 @@ describe('editing worktree.yml from Project settings', () => {
     expect((await status(project.id)).head).toBeNull();
     const res = await save(project.id, NEXT, null);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ changed: false, approved: { content: NEXT, sha256: sha(NEXT) }, head: { content: NEXT } });
+    expect(res.json()).toMatchObject({
+      changed: false,
+      approved: { content: NEXT, sha256: sha(NEXT) },
+      head: { content: NEXT },
+    });
     expect(gitIn(project)('show', `HEAD:${YML}`)).toBe(NEXT.trim());
   });
 
@@ -908,7 +1103,9 @@ describe('editing worktree.yml from Project settings', () => {
     const count = commitCount(project);
     const res = await save(project.id, INVALID, (await status(project.id)).head!.sha256);
     expect(res.statusCode).toBe(400);
-    const validate = await api('POST', `/api/projects/${project.id}/worktree-config/validate`, { content: INVALID });
+    const validate = await api('POST', `/api/projects/${project.id}/worktree-config/validate`, {
+      content: INVALID,
+    });
     expect(res.json()).toMatchObject({ error: 'worktree_config_invalid', errors: validate.json().errors });
     expect(commitCount(project)).toBe(count);
     expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe('version: 1\n');
@@ -1092,7 +1289,12 @@ describe('editing worktree.yml from Project settings', () => {
     const head = (await status(project.id)).head!.sha256;
     const { saveWorktreeConfig } = await import('./worktree-config/edit.js');
     await expect(
-      saveWorktreeConfig(t.db, project, { content: NEXT, baseSha256: head }, { approvedSha256: 'f'.repeat(64), message: 'chore: x' }),
+      saveWorktreeConfig(
+        t.db,
+        project,
+        { content: NEXT, baseSha256: head },
+        { approvedSha256: 'f'.repeat(64), message: 'chore: x' },
+      ),
     ).rejects.toMatchObject({ statusCode: 409, code: 'worktree_config_changed' });
     expect(gitIn(project)('log', '-1', '--format=%s')).toBe('init');
   });

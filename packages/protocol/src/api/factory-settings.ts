@@ -70,14 +70,7 @@ export const McpServerEntry = z.object({
 });
 export type McpServerEntry = z.infer<typeof McpServerEntry>;
 
-export const SkillPluginCategory = z.enum([
-  'ui_ux',
-  'architecture',
-  'security',
-  'qa',
-  'workflow',
-  'custom',
-]);
+export const SkillPluginCategory = z.enum(['ui_ux', 'architecture', 'security', 'qa', 'workflow', 'custom']);
 export type SkillPluginCategory = z.infer<typeof SkillPluginCategory>;
 
 export const SkillPluginEntry = z.object({

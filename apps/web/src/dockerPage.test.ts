@@ -322,7 +322,9 @@ describe('dockerErrorDetails', () => {
   });
 
   it('puts the hint in its own sentence after a message that ends in a full stop', () => {
-    const e = new ApiRequestError(409, 'docker_off', 'The Docker engine is off.', { hint: DOCKER_ENGINE_OFF_TEXT });
+    const e = new ApiRequestError(409, 'docker_off', 'The Docker engine is off.', {
+      hint: DOCKER_ENGINE_OFF_TEXT,
+    });
     expect(dockerErrorDetails(e).message).toBe(`The Docker engine is off. ${DOCKER_ENGINE_OFF_TEXT}`);
   });
 
@@ -425,7 +427,9 @@ describe('dockerEmptyText', () => {
   });
   it('says the unscoped or the scoped sentence for empty listings', () => {
     expect(dockerEmptyText(base, false)).toBe('Emberline runs no compose projects in the engine right now.');
-    expect(dockerEmptyText(base, true)).toBe('This project runs no compose projects in the engine right now.');
+    expect(dockerEmptyText(base, true)).toBe(
+      'This project runs no compose projects in the engine right now.',
+    );
   });
 });
 

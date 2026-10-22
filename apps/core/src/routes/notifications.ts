@@ -13,12 +13,17 @@ function toView({ token, ...rest }: NotificationSettings): NotificationSettingsV
 }
 
 export function registerNotificationRoutes(app: FastifyInstance, notifications: NotificationService): void {
-  app.get('/api/notifications', async (): Promise<NotificationSettingsView> => toView(notifications.getSettings()));
+  app.get('/api/notifications', async (): Promise<NotificationSettingsView> =>
+    toView(notifications.getSettings()),
+  );
 
   app.patch<{ Body: UpdateNotificationSettingsBody }>(
     '/api/notifications',
-    async (request): Promise<NotificationSettingsView> => toView(notifications.updateSettings(request.body ?? {})),
+    async (request): Promise<NotificationSettingsView> =>
+      toView(notifications.updateSettings(request.body ?? {})),
   );
 
-  app.post('/api/notifications/test', async (): Promise<TestNotificationResponse> => notifications.sendTest());
+  app.post('/api/notifications/test', async (): Promise<TestNotificationResponse> =>
+    notifications.sendTest(),
+  );
 }

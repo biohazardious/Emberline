@@ -19,7 +19,19 @@ import { errorMessage } from '../../api';
 import { ReferenceMaterial } from './ReferenceMaterial';
 import { nameProblem, type WizardAction, type WizardState } from './wizardLogic';
 
-const ICONS: Record<string, LucideIcon> = { Bot, Building, Cpu, FileText, Gamepad2, Globe, Layers, Package, Smartphone, Terminal, Zap };
+const ICONS: Record<string, LucideIcon> = {
+  Bot,
+  Building,
+  Cpu,
+  FileText,
+  Gamepad2,
+  Globe,
+  Layers,
+  Package,
+  Smartphone,
+  Terminal,
+  Zap,
+};
 
 /** Shared by the type step and the import repository step. */
 export function NameField({
@@ -82,9 +94,14 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
     e.target.value = '';
     setFileError(null);
     try {
-      const parts = await Promise.all(files.map(async (f) => `### Reference file: ${f.name}\n\n${(await f.text()).slice(0, 12_000)}`));
+      const parts = await Promise.all(
+        files.map(async (f) => `### Reference file: ${f.name}\n\n${(await f.text()).slice(0, 12_000)}`),
+      );
       const joined = [state.referenceDocs.trim(), ...parts].filter(Boolean).join('\n\n');
-      if (joined.length > REFERENCE_DOCS_MAX) setFileError(`Reference docs are limited to ${REFERENCE_DOCS_MAX.toLocaleString()} characters; the end was cut.`);
+      if (joined.length > REFERENCE_DOCS_MAX)
+        setFileError(
+          `Reference docs are limited to ${REFERENCE_DOCS_MAX.toLocaleString()} characters; the end was cut.`,
+        );
       dispatch({ type: 'field', field: 'referenceDocs', value: joined.slice(0, REFERENCE_DOCS_MAX) });
     } catch (err) {
       setFileError(`Couldn't read the file: ${errorMessage(err)}`);
@@ -181,7 +198,11 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
         </div>
       </div>
 
-      <details className="wizard-details" open={materialOpen} onToggle={(e) => setMaterialOpen(e.currentTarget.open)}>
+      <details
+        className="wizard-details"
+        open={materialOpen}
+        onToggle={(e) => setMaterialOpen(e.currentTarget.open)}
+      >
         <summary>Reference material (optional)</summary>
         <div className="field">
           <label htmlFor="wizard-ref-docs">Reference material for the agents</label>

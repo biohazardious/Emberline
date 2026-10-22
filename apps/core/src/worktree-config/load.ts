@@ -11,7 +11,8 @@ export type WorktreeYmlParse = { ok: true; config: WorktreeConfig } | { ok: fals
 export function parseWorktreeYml(text: string): WorktreeYmlParse {
   // Aliases expand data; a hostile file could nest them to blow up memory (billion laughs).
   const doc = parseDocument(text, { prettyErrors: false });
-  if (doc.errors.length > 0) return { ok: false, errors: doc.errors.map((e) => `YAML: ${e.message.split('\n')[0]}`) };
+  if (doc.errors.length > 0)
+    return { ok: false, errors: doc.errors.map((e) => `YAML: ${e.message.split('\n')[0]}`) };
   let data: unknown;
   try {
     data = doc.toJS({ maxAliasCount: 100 });
@@ -49,7 +50,8 @@ function objectOf(node: SchemaNode | undefined): SchemaNode | null {
   while (node && WRAPPERS.has(node.def.type)) node = node.def.innerType;
   if (!node) return null;
   if (node.def.type === 'object') return node;
-  if (node.def.type === 'union') return node.def.options?.map(objectOf).find((option) => option !== null) ?? null;
+  if (node.def.type === 'union')
+    return node.def.options?.map(objectOf).find((option) => option !== null) ?? null;
   return null;
 }
 
@@ -83,7 +85,11 @@ export interface ApprovedConfig {
  * parses (it was valid when approved).
  */
 export function loadApprovedWorktreeConfig(db: Db, projectId: string): ApprovedConfig | null {
-  const row = db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, projectId)).get();
+  const row = db
+    .select()
+    .from(projectWorktreeConfig)
+    .where(eq(projectWorktreeConfig.projectId, projectId))
+    .get();
   if (!row) return null;
   const parsed = parseWorktreeYml(row.content);
   return parsed.ok ? { sha256: row.sha256, config: parsed.config } : null;
@@ -107,6 +113,8 @@ export function approvedSetup(db: Db, projectId: string): string[] {
 
 /** Whether a run worktree's setup finished: the newest setup outcome event is `worktree_setup_finished`. */
 export function setupFinishedIn(eventTypes: readonly string[]): boolean {
-  const last = [...eventTypes].reverse().find((t) => ['worktree_setup_finished', 'worktree_setup_failed', 'worktree_setup_skipped'].includes(t));
+  const last = [...eventTypes]
+    .reverse()
+    .find((t) => ['worktree_setup_finished', 'worktree_setup_failed', 'worktree_setup_skipped'].includes(t));
   return last === 'worktree_setup_finished';
 }

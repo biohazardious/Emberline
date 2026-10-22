@@ -56,7 +56,6 @@ interface OpenTab {
   sizeBytes: number;
 }
 
-
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
@@ -201,12 +200,7 @@ function describeFileType(filePath: string): {
   }
 }
 
-function getFileDownloadUrl(
-  projectId: string,
-  targetId: string,
-  relPath: string,
-  inline = false,
-): string {
+function getFileDownloadUrl(projectId: string, targetId: string, relPath: string, inline = false): string {
   const params = new URLSearchParams({
     targetId,
     path: relPath,
@@ -310,10 +304,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     () => (projects.data ?? []).find((p) => p.id === projectId),
     [projects.data, projectId],
   );
-  const projectRuns = useMemo(
-    () => (runs ?? []).filter((r) => r.projectId === projectId),
-    [runs, projectId],
-  );
+  const projectRuns = useMemo(() => (runs ?? []).filter((r) => r.projectId === projectId), [runs, projectId]);
 
   const [targetId, setTargetId] = useState<string>('main');
   const [filterText, setFilterText] = useState('');
@@ -391,9 +382,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   // Auto-open index.html or PROJECT.md or first file on initial load
   useEffect(() => {
     if (tabs.length > 0 || activePath) return;
-    const files = (fileList.data?.entries ?? []).filter(
-      (f: WorkspaceFileEntry) => f.kind === 'file',
-    );
+    const files = (fileList.data?.entries ?? []).filter((f: WorkspaceFileEntry) => f.kind === 'file');
     if (files.length === 0) return;
     const preferred =
       files.find((f: WorkspaceFileEntry) => f.path === 'PROJECT.md') ??
@@ -409,10 +398,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     }
   }, [fileList.data, tabs.length, activePath, openFile]);
 
-  const activeTab = useMemo(
-    () => tabs.find((t) => t.path === activePath) ?? null,
-    [tabs, activePath],
-  );
+  const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
 
   const saveActiveFile = useCallback(async () => {
     if (!activeTab || activeTab.binary || isWorktreeYmlPath(activeTab.path)) return;
@@ -420,20 +406,14 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     setError(null);
     setStatusMessage(null);
     try {
-      const res = await api<WorkspaceFileContentResponse>(
-        `/api/projects/${projectId}/files/content`,
-        'PUT',
-        {
-          targetId,
-          path: activeTab.path,
-          content: activeTab.content,
-        },
-      );
+      const res = await api<WorkspaceFileContentResponse>(`/api/projects/${projectId}/files/content`, 'PUT', {
+        targetId,
+        path: activeTab.path,
+        content: activeTab.content,
+      });
       setTabs((prev) =>
         prev.map((t) =>
-          t.path === activeTab.path
-            ? { ...t, savedContent: res.content, sizeBytes: res.sizeBytes }
-            : t,
+          t.path === activeTab.path ? { ...t, savedContent: res.content, sizeBytes: res.sizeBytes } : t,
         ),
       );
       setStatusMessage(`Saved ${activeTab.path}`);
@@ -487,9 +467,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
             files: payloadFiles,
           },
         );
-        setStatusMessage(
-          `Uploaded ${res.uploadedPaths.length} file(s): ${res.uploadedPaths.join(', ')}`,
-        );
+        setStatusMessage(`Uploaded ${res.uploadedPaths.length} file(s): ${res.uploadedPaths.join(', ')}`);
         setShowUploadBox(false);
         await fileList.refresh();
         const firstUploaded = res.uploadedPaths[0];
@@ -515,15 +493,11 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     if (!cleaned) return;
     setError(null);
     try {
-      await api<WorkspaceFileContentResponse>(
-        `/api/projects/${projectId}/files/content`,
-        'PUT',
-        {
-          targetId,
-          path: cleaned,
-          content: '',
-        },
-      );
+      await api<WorkspaceFileContentResponse>(`/api/projects/${projectId}/files/content`, 'PUT', {
+        targetId,
+        path: cleaned,
+        content: '',
+      });
       setNewFilePath('');
       setCreatingFile(false);
       await fileList.refresh();
@@ -561,16 +535,12 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     setStatusMessage(null);
     try {
       const contextualPrompt = `Target File: \`${activeTab.path}\`\n\nTask: ${agentPrompt.trim()}`;
-      const res = await api<FactoryRequestResponse>(
-        `/api/projects/${projectId}/factory-request`,
-        'POST',
-        {
-          prompt: contextualPrompt,
-          leadPersona: agentPersona,
-          permissionMode: 'auto',
-          autoDispatch: true,
-        },
-      );
+      const res = await api<FactoryRequestResponse>(`/api/projects/${projectId}/factory-request`, 'POST', {
+        prompt: contextualPrompt,
+        leadPersona: agentPersona,
+        permissionMode: 'auto',
+        autoDispatch: true,
+      });
       setAgentPrompt('');
       setStatusMessage(
         `Dispatched ${res.ticket.key} (${PERSONA_BY_ID[agentPersona].label}) for ${activeTab.path}`,
@@ -655,7 +625,16 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: 'wrap',
+            minWidth: 0,
+            maxWidth: '100%',
+          }}
+        >
           <label className="small muted" htmlFor="code-target-select">
             Target:
           </label>
@@ -758,9 +737,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           >
             <span className="eyebrow">
               Files (
-              {(fileList.data?.entries ?? []).filter((f: WorkspaceFileEntry) => f.kind === 'file')
-                .length}
-              )
+              {(fileList.data?.entries ?? []).filter((f: WorkspaceFileEntry) => f.kind === 'file').length})
             </span>
             <div style={{ display: 'flex', gap: '4px' }}>
               <button
@@ -921,20 +898,18 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                       color: isDir ? 'var(--ember-2)' : 'var(--text)',
                       flex: 1,
                     }}
-                    title={
-                      isDir
-                        ? `${entry.path}/`
-                        : `${entry.path} (${formatBytes(entry.sizeBytes)})`
-                    }
+                    title={isDir ? `${entry.path}/` : `${entry.path} (${formatBytes(entry.sizeBytes)})`}
                   >
                     {isDir ? (
                       isCollapsed ? (
                         <>
-                          <ChevronRight className="icon" aria-hidden /> <Folder className="icon" aria-hidden />
+                          <ChevronRight className="icon" aria-hidden />{' '}
+                          <Folder className="icon" aria-hidden />
                         </>
                       ) : (
                         <>
-                          <ChevronDown className="icon" aria-hidden /> <FolderOpen className="icon" aria-hidden />
+                          <ChevronDown className="icon" aria-hidden />{' '}
+                          <FolderOpen className="icon" aria-hidden />
                         </>
                       )
                     ) : (
@@ -952,10 +927,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                       }}
                     >
                       {entry.sizeBytes >= 100 * 1024 && (
-                        <span
-                          className="muted mono"
-                          style={{ fontSize: '0.66rem', marginRight: '2px' }}
-                        >
+                        <span className="muted mono" style={{ fontSize: '0.66rem', marginRight: '2px' }}>
                           {formatBytes(entry.sizeBytes)}
                         </span>
                       )}
@@ -975,19 +947,19 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                         <Download className="icon" aria-hidden />
                       </a>
                       {!isWorktreeYmlPath(entry.path) && !isEmberlineDirPath(entry.path) && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        style={{ padding: '0 4px', fontSize: '0.68rem', opacity: 0.6 }}
-                        title={`Delete ${entry.path}`}
-                        aria-label={`Delete ${entry.path}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDeleteFile(entry.path);
-                        }}
-                      >
-                        <X className="icon" aria-hidden />
-                      </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ padding: '0 4px', fontSize: '0.68rem', opacity: 0.6 }}
+                          title={`Delete ${entry.path}`}
+                          aria-label={`Delete ${entry.path}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteFile(entry.path);
+                          }}
+                        >
+                          <X className="icon" aria-hidden />
+                        </button>
                       )}
                     </span>
                   )}
@@ -1051,10 +1023,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                     </span>
                     <span className="mono">{tab.path}</span>
                     {isDirty && (
-                      <span
-                        style={{ color: 'var(--ember-1)', fontWeight: 700 }}
-                        title="Unsaved changes"
-                      >
+                      <span style={{ color: 'var(--ember-1)', fontWeight: 700 }} title="Unsaved changes">
                         ●
                       </span>
                     )}
@@ -1086,9 +1055,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 <span className="badge mono" title="File size">
                   {formatBytes(activeTab.sizeBytes)}
                 </span>
-                {!activeTab.binary && (
-                  <span className="badge mono">{detectLanguage(activeTab.path)}</span>
-                )}
+                {!activeTab.binary && <span className="badge mono">{detectLanguage(activeTab.path)}</span>}
                 <a
                   href={getFileDownloadUrl(projectId, targetId, activeTab.path)}
                   download={activeTab.path.split('/').pop() ?? activeTab.path}
@@ -1214,9 +1181,8 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                     )}
 
                     <p className="muted small" style={{ margin: 0, maxWidth: '460px' }}>
-                      This file is a binary, package, or media artifact and cannot be displayed or
-                      edited as plain text in the code editor. You can download it directly to your
-                      device below.
+                      This file is a binary, package, or media artifact and cannot be displayed or edited as
+                      plain text in the code editor. You can download it directly to your device below.
                     </p>
 
                     <div
@@ -1252,7 +1218,10 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   {isWorktreeYmlPath(activeTab.path) && (
-                    <p className="muted small worktree-readonly-note" style={{ margin: 0, padding: '6px 12px' }}>
+                    <p
+                      className="muted small worktree-readonly-note"
+                      style={{ margin: 0, padding: '6px 12px' }}
+                    >
                       {worktreeYmlExplorerNote(targetId).text}{' '}
                       <Link href={`/projects/${projectId}/settings?${WORKTREE_EDIT_PARAM}`}>
                         {worktreeYmlExplorerNote(targetId).link}
@@ -1310,7 +1279,12 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               </span>
               <select
                 className="input"
-                style={{ width: 'auto', maxWidth: 'min(320px, 100%)', padding: '4px 8px', fontSize: '0.76rem' }}
+                style={{
+                  width: 'auto',
+                  maxWidth: 'min(320px, 100%)',
+                  padding: '4px 8px',
+                  fontSize: '0.76rem',
+                }}
                 value={agentPersona}
                 onChange={(e) => setAgentPersona(e.target.value as AgentPersona)}
               >

@@ -30,7 +30,8 @@ import {
   worktreeYmlImportNote,
 } from './wizardLogic';
 
-const run = (actions: WizardAction[], from: WizardState = initialWizardState()) => actions.reduce(wizardReducer, from);
+const run = (actions: WizardAction[], from: WizardState = initialWizardState()) =>
+  actions.reduce(wizardReducer, from);
 
 /** A new project with a valid name, type and a concrete preset, standing on the type step. */
 const typed = () =>
@@ -88,7 +89,10 @@ describe('per-step validation', () => {
   it('picks the Auto preset of a type by default and refuses a preset of another type', () => {
     const s = run([{ type: 'appType', appType: 'web_saas' }], typed());
     expect(s.presetId).toBe('web-react-fastify');
-    const fresh = run([{ type: 'source', source: 'preset' }, { type: 'appType', appType: 'static_site' }]);
+    const fresh = run([
+      { type: 'source', source: 'preset' },
+      { type: 'appType', appType: 'static_site' },
+    ]);
     expect(fresh.presetId).toBe('auto-static_site');
     expect(fresh.choices.frontend).toBe('agent');
     expect(fresh.choices.auth).toBe('agent');
@@ -123,9 +127,14 @@ describe('per-step validation', () => {
     const three = wizardReducer(two, { type: 'choice', dimension: 'deploy', value: 'agent' });
     expect(stepProblem(three, 'stack')).toMatch(/vision/i);
     expect(stepProblem(three, 'type')).toMatch(/vision/i);
-    expect(stepProblem(wizardReducer(three, { type: 'field', field: 'vision', value: VISION }), 'stack')).toBeNull();
+    expect(
+      stepProblem(wizardReducer(three, { type: 'field', field: 'vision', value: VISION }), 'stack'),
+    ).toBeNull();
     // a blank project leaves everything to the agent
-    const blank = run([{ type: 'source', source: 'blank' }, { type: 'field', field: 'name', value: 'Lab' }]);
+    const blank = run([
+      { type: 'source', source: 'blank' },
+      { type: 'field', field: 'name', value: 'Lab' },
+    ]);
     expect(stepProblem(blank, 'type')).toMatch(/vision/i);
   });
 
@@ -146,7 +155,11 @@ describe('per-step validation', () => {
       { type: 'field', field: 'repoUrl', value: 'ftp://example.com/x.git' },
     ]);
     expect(stepProblem(s, 'repo')).toMatch(/url/i);
-    const ok = wizardReducer(s, { type: 'field', field: 'repoUrl', value: 'https://github.com/acme/shop.git' });
+    const ok = wizardReducer(s, {
+      type: 'field',
+      field: 'repoUrl',
+      value: 'https://github.com/acme/shop.git',
+    });
     expect(isStepValid(ok, 'repo')).toBe(true);
     expect(stepProblem({ ...ok, defaultBranch: '-bad' }, 'repo')).toMatch(/branch/i);
   });
@@ -165,7 +178,9 @@ describe('per-step validation', () => {
       { type: 'importCreated', projectId: 'p1' },
     ]);
     expect(isStepValid(s, 'import')).toBe(false);
-    expect(isStepValid(wizardReducer(s, { type: 'detected', detect: detectResponse() }), 'import')).toBe(true);
+    expect(isStepValid(wizardReducer(s, { type: 'detected', detect: detectResponse() }), 'import')).toBe(
+      true,
+    );
   });
 
   it('refuses an empty or multi-line Other choice on the stack step', () => {
@@ -188,8 +203,12 @@ describe('per-step validation', () => {
       { type: 'field', field: 'startFactory', value: true },
     ]);
     expect(stepProblem(s, 'factory')).toMatch(/vision/i);
-    expect(isStepValid(wizardReducer(s, { type: 'field', field: 'vision', value: 'Add a cart' }), 'factory')).toBe(true);
-    expect(isStepValid(wizardReducer(s, { type: 'field', field: 'startFactory', value: false }), 'factory')).toBe(true);
+    expect(
+      isStepValid(wizardReducer(s, { type: 'field', field: 'vision', value: 'Add a cart' }), 'factory'),
+    ).toBe(true);
+    expect(
+      isStepValid(wizardReducer(s, { type: 'field', field: 'startFactory', value: false }), 'factory'),
+    ).toBe(true);
   });
 });
 
@@ -208,7 +227,14 @@ describe('rail reachability', () => {
   });
 
   it('goes back freely and forward again only up to the furthest step while the steps before are valid', () => {
-    const at = run([{ type: 'go', step: 'stack' }, { type: 'go', step: 'factory' }, { type: 'go', step: 'type' }], typed());
+    const at = run(
+      [
+        { type: 'go', step: 'stack' },
+        { type: 'go', step: 'factory' },
+        { type: 'go', step: 'type' },
+      ],
+      typed(),
+    );
     expect(at.step).toBe('type');
     expect(canVisit(at, 'start')).toBe(true);
     expect(canVisit(at, 'factory')).toBe(true);
@@ -268,13 +294,23 @@ describe('dirty-dimension merge', () => {
   });
 
   it('keeps an edited dimension that is valid for the new type', () => {
-    const out = mergeDefaults({ deploy: 'docker-compose' }, ['deploy'], { deploy: 'static-hosting' }, 'web_saas');
+    const out = mergeDefaults(
+      { deploy: 'docker-compose' },
+      ['deploy'],
+      { deploy: 'static-hosting' },
+      'web_saas',
+    );
     expect(out.choices.deploy).toBe('docker-compose');
     expect(out.dirty).toEqual(['deploy']);
   });
 
   it('drops an edited option id that does not apply to the new type', () => {
-    const out = mergeDefaults({ frontend: 'nextjs' }, ['frontend'], { frontend: 'plain-html' }, 'static_site');
+    const out = mergeDefaults(
+      { frontend: 'nextjs' },
+      ['frontend'],
+      { frontend: 'plain-html' },
+      'static_site',
+    );
     expect(out.choices.frontend).toBe('plain-html');
     expect(out.dirty).toEqual([]);
   });
@@ -362,9 +398,17 @@ describe('body building', () => {
   });
 
   it('builds a blank project as the custom-blank preset', () => {
-    const s = run([{ type: 'source', source: 'blank' }, { type: 'field', field: 'name', value: 'Lab' }]);
+    const s = run([
+      { type: 'source', source: 'blank' },
+      { type: 'field', field: 'name', value: 'Lab' },
+    ]);
     expect(s.appType).toBe('custom');
-    expect(buildCreateBody(s)).toMatchObject({ source: 'new', appType: 'custom', presetId: 'custom-blank', startFactory: true });
+    expect(buildCreateBody(s)).toMatchObject({
+      source: 'new',
+      appType: 'custom',
+      presetId: 'custom-blank',
+      startFactory: true,
+    });
   });
 
   it('builds an import_url body with the branch and an import_folder body with the folder', () => {
@@ -374,9 +418,17 @@ describe('body building', () => {
       { type: 'field', field: 'defaultBranch', value: 'develop' },
     ]);
     expect(url.name).toBe('shop');
-    expect(buildCreateBody(url)).toEqual({ name: 'shop', source: 'import_url', repoUrl: 'https://github.com/acme/shop.git', defaultBranch: 'develop' });
+    expect(buildCreateBody(url)).toEqual({
+      name: 'shop',
+      source: 'import_url',
+      repoUrl: 'https://github.com/acme/shop.git',
+      defaultBranch: 'develop',
+    });
 
-    const folder = run([{ type: 'source', source: 'import_folder' }, { type: 'field', field: 'folder', value: 'old-app' }]);
+    const folder = run([
+      { type: 'source', source: 'import_folder' },
+      { type: 'field', field: 'folder', value: 'old-app' },
+    ]);
     expect(folder.name).toBe('old-app');
     expect(buildCreateBody(folder)).toEqual({ name: 'old-app', source: 'import_folder', folder: 'old-app' });
   });
@@ -388,10 +440,13 @@ describe('body building', () => {
       { type: 'field', field: 'repoUrl', value: 'git@github.com:acme/store.git' },
     ]);
     expect(s.name).toBe('store');
-    const typedName = run([
-      { type: 'field', field: 'name', value: 'Mine' },
-      { type: 'field', field: 'repoUrl', value: 'https://x.org/a/other' },
-    ], s);
+    const typedName = run(
+      [
+        { type: 'field', field: 'name', value: 'Mine' },
+        { type: 'field', field: 'repoUrl', value: 'https://x.org/a/other' },
+      ],
+      s,
+    );
     expect(typedName.name).toBe('Mine');
     expect(repoNameFromUrl('https://github.com/acme/shop.git/')).toBe('shop');
     expect(repoNameFromUrl('')).toBe('');
@@ -421,8 +476,17 @@ describe('body building', () => {
 
   it('approves the repository worktree.yml by its sha256 only when it is approvable and never also writes one', () => {
     const sha = 'c'.repeat(64);
-    const own = { content: 'version: 1\n', sha256: sha, errors: [], notCommitted: false, workingTreeDiffers: false };
-    const detect = detectResponse({ files: { projectMd: false, claudeMd: false, agentsMd: false, worktreeYml: true }, worktreeYml: own });
+    const own = {
+      content: 'version: 1\n',
+      sha256: sha,
+      errors: [],
+      notCommitted: false,
+      workingTreeDiffers: false,
+    };
+    const detect = detectResponse({
+      files: { projectMd: false, claudeMd: false, agentsMd: false, worktreeYml: true },
+      worktreeYml: own,
+    });
     const s = run([
       { type: 'source', source: 'import_folder' },
       { type: 'field', field: 'folder', value: 'old-app' },
@@ -437,10 +501,16 @@ describe('body building', () => {
     expect(body.write).not.toContain('worktreeYml');
 
     const broken = { ...detect, detected: { ...detect.detected, worktreeYml: { ...own, errors: ['bad'] } } };
-    const s2 = run([{ type: 'detected', detect: broken }, { type: 'approveWorktreeYml', on: true }], {
-      ...s,
-      approveWorktreeYml: false,
-    });
+    const s2 = run(
+      [
+        { type: 'detected', detect: broken },
+        { type: 'approveWorktreeYml', on: true },
+      ],
+      {
+        ...s,
+        approveWorktreeYml: false,
+      },
+    );
     expect(buildAdoptBody(s2).approveWorktreeYml).toBe(false);
     expect('worktreeYmlSha256' in buildAdoptBody(s2)).toBe(false);
   });
@@ -460,7 +530,13 @@ describe('drafts', () => {
   });
 
   it('round-trips a draft and restores it into the reducer', () => {
-    const s = run([{ type: 'go', step: 'stack' }, { type: 'choice', dimension: 'auth', value: { other: 'Passkeys' } }], typed());
+    const s = run(
+      [
+        { type: 'go', step: 'stack' },
+        { type: 'choice', dimension: 'auth', value: { other: 'Passkeys' } },
+      ],
+      typed(),
+    );
     const raw = JSON.stringify(draftOf(s));
     const draft = parseDraft(raw);
     expect(draft).not.toBeNull();
@@ -506,10 +582,18 @@ describe('drafts', () => {
 
 describe('credentials never reach the draft', () => {
   it('strips userinfo from scheme URLs and keeps an ssh user name', () => {
-    expect(stripUrlCredentials('https://user:ghp_secret@github.com/acme/shop.git')).toBe('https://github.com/acme/shop.git');
-    expect(stripUrlCredentials('https://ghp_secret@github.com/acme/shop.git')).toBe('https://github.com/acme/shop.git');
-    expect(stripUrlCredentials('ssh://git:pw@host.example/acme/shop.git')).toBe('ssh://git@host.example/acme/shop.git');
-    expect(stripUrlCredentials('ssh://git@host.example/acme/shop.git')).toBe('ssh://git@host.example/acme/shop.git');
+    expect(stripUrlCredentials('https://user:ghp_secret@github.com/acme/shop.git')).toBe(
+      'https://github.com/acme/shop.git',
+    );
+    expect(stripUrlCredentials('https://ghp_secret@github.com/acme/shop.git')).toBe(
+      'https://github.com/acme/shop.git',
+    );
+    expect(stripUrlCredentials('ssh://git:pw@host.example/acme/shop.git')).toBe(
+      'ssh://git@host.example/acme/shop.git',
+    );
+    expect(stripUrlCredentials('ssh://git@host.example/acme/shop.git')).toBe(
+      'ssh://git@host.example/acme/shop.git',
+    );
     expect(stripUrlCredentials('git@github.com:acme/shop.git')).toBe('git@github.com:acme/shop.git');
     expect(stripUrlCredentials('https://github.com/a/b?x=a@b')).toBe('https://github.com/a/b?x=a@b');
   });
@@ -523,7 +607,11 @@ describe('credentials never reach the draft', () => {
     const raw = JSON.stringify(draftOf(s));
     expect(raw).not.toContain('tok');
     expect(draftOf(s)?.repoUrl).toBe('https://github.com/acme/shop.git');
-    const planted = JSON.stringify({ v: 1, source: 'import_url', repoUrl: 'https://me:tok@github.com/x.git' });
+    const planted = JSON.stringify({
+      v: 1,
+      source: 'import_url',
+      repoUrl: 'https://me:tok@github.com/x.git',
+    });
     expect(parseDraft(planted)?.repoUrl).toBe('https://github.com/x.git');
   });
 });
@@ -547,7 +635,11 @@ describe('import helpers', () => {
 });
 
 describe('worktreeYmlImportNote', () => {
-  const base = (o: Partial<WizardState>): WizardState => ({ ...initialWizardState(), source: 'import_folder', ...o });
+  const base = (o: Partial<WizardState>): WizardState => ({
+    ...initialWizardState(),
+    source: 'import_folder',
+    ...o,
+  });
 
   it('says the generated worktree.yml is approved and its setup may run the repo install scripts', () => {
     const note = worktreeYmlImportNote(base({ detect: detectResponse(), write: ['worktreeYml'] }));
@@ -556,8 +648,17 @@ describe('worktreeYmlImportNote', () => {
   });
 
   it("says the same of the repository's own file when it is approved", () => {
-    const own = { content: 'version: 1\n', sha256: 'a'.repeat(64), errors: [], notCommitted: false, workingTreeDiffers: false };
-    const detect = detectResponse({ files: { projectMd: false, claudeMd: true, agentsMd: false, worktreeYml: true }, worktreeYml: own });
+    const own = {
+      content: 'version: 1\n',
+      sha256: 'a'.repeat(64),
+      errors: [],
+      notCommitted: false,
+      workingTreeDiffers: false,
+    };
+    const detect = detectResponse({
+      files: { projectMd: false, claudeMd: true, agentsMd: false, worktreeYml: true },
+      worktreeYml: own,
+    });
     const note = worktreeYmlImportNote(base({ detect, approveWorktreeYml: true }));
     expect(note).toContain("repository's .emberline/worktree.yml is approved");
     expect(note).toContain('install scripts');
@@ -574,9 +675,20 @@ describe('reference material state', () => {
     let s = wizardReducer(initialWizardState(), { type: 'source', source: 'preset' });
     s = wizardReducer(s, { type: 'field', field: 'name', value: 'Shop' });
     s = wizardReducer(s, { type: 'appType', appType: 'static_site' });
-    return wizardReducer(s, { type: 'field', field: 'vision', value: 'A shop for handmade mugs and plates.' });
+    return wizardReducer(s, {
+      type: 'field',
+      field: 'vision',
+      value: 'A shop for handmade mugs and plates.',
+    });
   };
-  const m = { id: 'm1', file: new Blob(['x']), name: 'a.png', sizeBytes: 1, mimeType: 'image/png', kind: 'image' as const };
+  const m = {
+    id: 'm1',
+    file: new Blob(['x']),
+    name: 'a.png',
+    sizeBytes: 1,
+    mimeType: 'image/png',
+    kind: 'image' as const,
+  };
 
   it('adds and removes files; a core error is cleared by either', () => {
     let s = wizardReducer(typed(), { type: 'materialsError', message: 'a.png is not a PNG file.' });
@@ -589,26 +701,48 @@ describe('reference material state', () => {
     expect(s.materialsError).toBeNull();
   });
   it('a bad link line keeps the Type step from being valid', () => {
-    const s = wizardReducer(typed(), { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example\nnot a link' });
+    const s = wizardReducer(typed(), {
+      type: 'field',
+      field: 'referenceUrlsText',
+      value: 'https://ok.example\nnot a link',
+    });
     expect(stepProblem(s, 'type')).toBe('Line 2: Use a link that starts with http:// or https://.');
-    expect(stepProblem(wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example note' }), 'type')).toBeNull();
+    expect(
+      stepProblem(
+        wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://ok.example note' }),
+        'type',
+      ),
+    ).toBeNull();
   });
 });
 
 describe('reference material: bodies and draft', () => {
   const bytes = new TextEncoder().encode('SECRET-BYTES');
-  const m = { id: 'm1', file: new Blob([bytes]), name: 'a.png', sizeBytes: bytes.length, mimeType: 'image/png', kind: 'image' as const };
+  const m = {
+    id: 'm1',
+    file: new Blob([bytes]),
+    name: 'a.png',
+    sizeBytes: bytes.length,
+    mimeType: 'image/png',
+    kind: 'image' as const,
+  };
   const withMaterial = (): WizardState => {
     let s = wizardReducer(initialWizardState(), { type: 'source', source: 'preset' });
     s = wizardReducer(s, { type: 'field', field: 'name', value: 'Shop' });
     s = wizardReducer(s, { type: 'appType', appType: 'static_site' });
     s = wizardReducer(s, { type: 'materialsAdded', materials: [m] });
-    return wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://example.com/app like this one' });
+    return wizardReducer(s, {
+      type: 'field',
+      field: 'referenceUrlsText',
+      value: 'https://example.com/app like this one',
+    });
   };
 
   it('create body: links parsed, no files; preview body: file metadata, never bytes', () => {
     const s = withMaterial();
-    expect(buildCreateBody(s)).toMatchObject({ referenceUrls: [{ url: 'https://example.com/app', note: 'like this one' }] });
+    expect(buildCreateBody(s)).toMatchObject({
+      referenceUrls: [{ url: 'https://example.com/app', note: 'like this one' }],
+    });
     expect(buildCreateBody(s)).not.toHaveProperty('materials');
     const preview = buildPreviewBody(s);
     expect(preview.materials).toEqual([{ name: 'a.png', mimeType: 'image/png', sizeBytes: bytes.length }]);
@@ -616,13 +750,19 @@ describe('reference material: bodies and draft', () => {
   });
   it('the create request carries the bytes as base64', async () => {
     const body = await buildCreateBodyWithFiles(withMaterial());
-    expect(body.materials).toEqual([{ name: 'a.png', mimeType: 'image/png', dataBase64: Buffer.from(bytes).toString('base64') }]);
+    expect(body.materials).toEqual([
+      { name: 'a.png', mimeType: 'image/png', dataBase64: Buffer.from(bytes).toString('base64') },
+    ]);
   });
   it('imports never send material', async () => {
     let s = withMaterial();
     s = { ...s, source: 'import_folder', folder: 'old-app' };
     expect(buildCreateBody(s)).toEqual({ name: 'Shop', source: 'import_folder', folder: 'old-app' });
-    expect(await buildCreateBodyWithFiles(s)).toEqual({ name: 'Shop', source: 'import_folder', folder: 'old-app' });
+    expect(await buildCreateBodyWithFiles(s)).toEqual({
+      name: 'Shop',
+      source: 'import_folder',
+      folder: 'old-app',
+    });
   });
   it('the draft keeps the links and the file names, never the bytes; restoring asks to add the files again', () => {
     const raw = JSON.stringify(draftOf(withMaterial()));
@@ -657,7 +797,10 @@ describe('reference material: bodies and draft', () => {
     delete old.referenceUrlsText;
     delete old.materialNames;
     expect(parseDraft(JSON.stringify(old))).toMatchObject({ referenceUrlsText: '', materialNames: [] });
-    expect(parseDraft(JSON.stringify({ ...old, materialNames: ['ok.png', 42, '', 'x'.repeat(300)] }))?.materialNames).toEqual(['ok.png']);
+    expect(
+      parseDraft(JSON.stringify({ ...old, materialNames: ['ok.png', 42, '', 'x'.repeat(300)] }))
+        ?.materialNames,
+    ).toEqual(['ok.png']);
     expect(parseDraft(JSON.stringify({ ...old, referenceUrlsText: 7 }))).toBeNull();
   });
 });

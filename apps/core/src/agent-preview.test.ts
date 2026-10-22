@@ -27,11 +27,38 @@ import { mainPreviewComposeProjectName, previewComposeProjectName } from './dock
 import { agentPreview } from './runs/agent-preview.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
-const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
-const failed = (stderr: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout: '', stderr, timedOut: false, truncated: false });
+const ok = (stdout = ''): ExecResult => ({
+  exitCode: 0,
+  signal: null,
+  stdout,
+  stderr: '',
+  timedOut: false,
+  truncated: false,
+});
+const failed = (stderr: string, exitCode = 1): ExecResult => ({
+  exitCode,
+  signal: null,
+  stdout: '',
+  stderr,
+  timedOut: false,
+  truncated: false,
+});
 
-const COMPOSE_V2 = ['version: 2', 'services:', '  - name: site', '    compose: { service: web, port: 80 }', '    preview: true', ''].join('\n');
-const PROJECT_COMPOSE = ['services:', '  web:', '    image: nginx:1.29.3-alpine', '    ports: ["8080:80"]', ''].join('\n');
+const COMPOSE_V2 = [
+  'version: 2',
+  'services:',
+  '  - name: site',
+  '    compose: { service: web, port: 80 }',
+  '    preview: true',
+  '',
+].join('\n');
+const PROJECT_COMPOSE = [
+  'services:',
+  '  web:',
+  '    image: nginx:1.29.3-alpine',
+  '    ports: ["8080:80"]',
+  '',
+].join('\n');
 
 interface DockerCall {
   args: string[];
@@ -56,7 +83,8 @@ class FakeEngine {
   };
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
-    if (request.file === 'curl') return ok(this.published.has(Number(new URL(request.args.at(-1) ?? '').port)) ? '200' : '000');
+    if (request.file === 'curl')
+      return ok(this.published.has(Number(new URL(request.args.at(-1) ?? '').port)) ? '200' : '000');
     let args: string[];
     let stdin: string | undefined;
     if (request.file === 'docker') args = request.args;
@@ -64,7 +92,8 @@ class FakeEngine {
       args = request.args.slice(3);
       stdin = request.env?.[COMPOSE_OVERRIDE_ENV];
     } else return localCommandExecutor(request);
-    if (args[0] === 'version') return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
+    if (args[0] === 'version')
+      return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
     this.calls.push({ args, cwd: request.cwd });
     if (args[0] !== 'compose') return ok('');
     const project = args[2] ?? '';
@@ -117,8 +146,18 @@ afterEach(async () => {
 });
 
 async function start(dockerHost: string | null = 'tcp://docker:2376', overrides: Partial<CoreConfig> = {}) {
-  t = await createTestApp({ ...(dockerHost ? { dockerHost } : {}), hookUrl: 'http://core:7420', ...overrides });
-  t.runs.composePreviewTiming = { upTimeoutMs: 5_000, readyTimeoutMs: 1_000, pollMs: 20, stopSettleMs: 300, cancelRetryMs: 50 };
+  t = await createTestApp({
+    ...(dockerHost ? { dockerHost } : {}),
+    hookUrl: 'http://core:7420',
+    ...overrides,
+  });
+  t.runs.composePreviewTiming = {
+    upTimeoutMs: 5_000,
+    readyTimeoutMs: 1_000,
+    pollMs: 20,
+    stopSettleMs: 300,
+    cancelRetryMs: 50,
+  };
   engine = new FakeEngine();
   setCommandExecutor(engine.exec);
   setCommandCanceller(engine.cancel);
@@ -130,10 +169,18 @@ async function start(dockerHost: string | null = 'tcp://docker:2376', overrides:
 }
 
 const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
-  t.app.inject({ method, url, ...(method === 'POST' ? { payload: payload ?? {} } : {}), headers: authHeaders(cookie) });
+  t.app.inject({
+    method,
+    url,
+    ...(method === 'POST' ? { payload: payload ?? {} } : {}),
+    headers: authHeaders(cookie),
+  });
 
 /** A git project; `yml` is approved; main gets an untracked static build saying MAIN. */
-async function createProject(yml: string | null = COMPOSE_V2, files: Record<string, string> = { 'compose.yaml': PROJECT_COMPOSE }) {
+async function createProject(
+  yml: string | null = COMPOSE_V2,
+  files: Record<string, string> = { 'compose.yaml': PROJECT_COMPOSE },
+) {
   const { project } = (await api('POST', '/api/projects', { name: 'Shop', initGit: false })).json();
   const git = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
   git('init', '-q', '-b', 'main');
@@ -146,7 +193,10 @@ async function createProject(yml: string | null = COMPOSE_V2, files: Record<stri
   git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
   if (yml) {
     const { head } = (await api('GET', `/api/projects/${project.id}/worktree-config`)).json();
-    expect((await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: head.sha256 })).statusCode).toBe(200);
+    expect(
+      (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { sha256: head.sha256 }))
+        .statusCode,
+    ).toBe(200);
   }
   writeDemo(project.path, 'MAIN');
   return project as { id: string; path: string };
@@ -162,7 +212,11 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 /** A queued run of the project whose hook token is `token`. */
 async function runWithToken(projectId: string, token = 'tok'): Promise<Run> {
   const run = await t.runs.enqueue({ projectId, prompt: 'check it' });
-  t.db.update(runs).set({ hookTokenHash: sha256(token) }).where(eq(runs.id, run.id)).run();
+  t.db
+    .update(runs)
+    .set({ hookTokenHash: sha256(token) })
+    .where(eq(runs.id, run.id))
+    .run();
   return run;
 }
 
@@ -192,7 +246,13 @@ describe("EMBERLINE_DEMO_URL is the run's own demo (Review Focus 4)", () => {
     const script = path.join(t.dir, 'env-claude.sh');
     writeFileSync(
       script,
-      ['#!/bin/sh', `printf %s "$EMBERLINE_DEMO_URL" > "${t.dir}/.demo-$EMBERLINE_RUN_ID"`, `mv "${t.dir}/.demo-$EMBERLINE_RUN_ID" "${t.dir}/demo-$EMBERLINE_RUN_ID"`, 'while read line; do :; done', ''].join('\n'),
+      [
+        '#!/bin/sh',
+        `printf %s "$EMBERLINE_DEMO_URL" > "${t.dir}/.demo-$EMBERLINE_RUN_ID"`,
+        `mv "${t.dir}/.demo-$EMBERLINE_RUN_ID" "${t.dir}/demo-$EMBERLINE_RUN_ID"`,
+        'while read line; do :; done',
+        '',
+      ].join('\n'),
       { mode: 0o755 },
     );
     t.config.claudeCommand = script;
@@ -254,7 +314,9 @@ describe('the preview tool endpoint: compose', () => {
     expect(ups).toHaveLength(1);
     expect(ups[0]!.args[2]).toBe(previewComposeProjectName(run.id));
     expect(ups[0]!.cwd).toBe(run.worktreePath);
-    expect(ups.some((c) => c.cwd === p.path || c.args[2] === mainPreviewComposeProjectName(p.id))).toBe(false);
+    expect(ups.some((c) => c.cwd === p.path || c.args[2] === mainPreviewComposeProjectName(p.id))).toBe(
+      false,
+    );
   });
 
   it('a running preview is reused; restart starts it again, at most once per cooldown', async () => {
@@ -320,7 +382,9 @@ describe('the preview tool endpoint: compose', () => {
     const run = await runWithToken(p.id);
     await previewOk(run.id);
     expect((await api('POST', `/api/runs/${run.id}/preview/start`)).statusCode).toBe(200);
-    const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter((e) => e.type === 'preview_started');
+    const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter(
+      (e) => e.type === 'preview_started',
+    );
     expect(started.map((e) => e.source).sort()).toEqual(['hook', 'user']);
   });
 
@@ -384,20 +448,30 @@ describe('the preview tool endpoint: unavailable', () => {
     const answer = await previewOk(run.id);
     expect(answer).toMatchObject({ status: 'unavailable', kind: 'static', url: null });
     expect(answer.error).toContain('no preview');
-    expect((await api('GET', `/api/runs/${run.id}/preview`)).json()).toMatchObject({ status: 'stopped', terminalId: null });
+    expect((await api('GET', `/api/runs/${run.id}/preview`)).json()).toMatchObject({
+      status: 'stopped',
+      terminalId: null,
+    });
   });
 });
 
 describe('the preview tool endpoint: command', () => {
   it("a command preview runs in the runner: the URL is the runner's localhost", async () => {
     await start(null);
-    const p = await createProject(['version: 1', 'services:', '  - name: web', '    command: "sleep 30"', '    preview: true', ''].join('\n'), {});
+    const p = await createProject(
+      ['version: 1', 'services:', '  - name: web', '    command: "sleep 30"', '    preview: true', ''].join(
+        '\n',
+      ),
+      {},
+    );
     const run = await runWithToken(p.id);
     const answer = await previewOk(run.id);
     expect(answer.status).toBe('running');
     expect(answer.kind).toBe('command');
     expect(answer.url).toMatch(/^http:\/\/localhost:43(0\d|1\d|2[0-4])\/$/);
-    const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find((e) => e.type === 'preview_started');
+    const started = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.find(
+      (e) => e.type === 'preview_started',
+    );
     expect(started?.source).toBe('hook');
     await t.runs.stopPreview(run.id);
   });
@@ -405,7 +479,18 @@ describe('the preview tool endpoint: command', () => {
 
 describe('agentPreview (unit)', () => {
   it('two calls at once start the preview once: the cooldown is taken before the start is awaited', async () => {
-    const stopped = { runId: 'r', status: 'stopped', kind: 'compose', terminalId: null, command: null, port: null, url: null, detectedCommand: null, error: null, logs: null } as const;
+    const stopped = {
+      runId: 'r',
+      status: 'stopped',
+      kind: 'compose',
+      terminalId: null,
+      command: null,
+      port: null,
+      url: null,
+      detectedCommand: null,
+      error: null,
+      logs: null,
+    } as const;
     let last: number | undefined;
     let starts = 0;
     let release!: () => void;

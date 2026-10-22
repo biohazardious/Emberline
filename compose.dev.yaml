@@ -50,7 +50,7 @@ services:
     command: pnpm --filter @emberline/core dev
     environment:
       EMBERLINE_HOST: 0.0.0.0
-      EMBERLINE_PORT: "7420"
+      EMBERLINE_PORT: '7420'
       EMBERLINE_PTYD_SOCKET: /run/emberline/ptyd.sock
       EMBERLINE_DATA_DIR: /data
       EMBERLINE_WORKSPACES_DIR: /workspaces
@@ -58,7 +58,7 @@ services:
       # The dev runner is the `ptyd` service: only it may use the git gateway.
       EMBERLINE_RUNNER_HOSTS: ptyd
     ports:
-      - "127.0.0.1:7420:7420"
+      - '127.0.0.1:7420:7420'
     depends_on: *after-install
 
   web:
@@ -67,7 +67,7 @@ services:
     environment:
       EMBERLINE_CORE_URL: http://core:7420
     ports:
-      - "127.0.0.1:5173:5173"
+      - '127.0.0.1:5173:5173'
     depends_on: *after-install
 
   # Ad-hoc commands: `make test`, `make shell`, ...

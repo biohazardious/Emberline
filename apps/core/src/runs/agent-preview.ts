@@ -5,7 +5,12 @@
  * URL the runner's browser opens (runs/browser-url.ts). A run that cannot have a preview gets
  * `unavailable` with the reason, never an error status. RunService authenticates the run first.
  */
-import type { AgentPreviewBody, AgentPreviewResponse, BrowserUrlResponse, RunPreviewStatus } from '@emberline/protocol';
+import type {
+  AgentPreviewBody,
+  AgentPreviewResponse,
+  BrowserUrlResponse,
+  RunPreviewStatus,
+} from '@emberline/protocol';
 import { HttpError } from '../errors.js';
 
 /**
@@ -42,7 +47,10 @@ export interface AgentPreviewDeps {
 
 const needsStart = (status: RunPreviewStatus['status']) => status !== 'running' && status !== 'starting';
 
-export async function agentPreview(deps: AgentPreviewDeps, body: AgentPreviewBody): Promise<AgentPreviewResponse> {
+export async function agentPreview(
+  deps: AgentPreviewDeps,
+  body: AgentPreviewBody,
+): Promise<AgentPreviewResponse> {
   let current = await deps.status();
   let cooling: string | undefined;
   // A restart while a start is still going waits for that start instead of cancelling it.
@@ -73,7 +81,10 @@ export async function agentPreview(deps: AgentPreviewDeps, body: AgentPreviewBod
   const pending = deps.pendingStart();
   if (pending) {
     let timer: NodeJS.Timeout | undefined;
-    await Promise.race([pending.catch(() => undefined), new Promise<void>((resolve) => (timer = setTimeout(resolve, deps.waitMs)))]);
+    await Promise.race([
+      pending.catch(() => undefined),
+      new Promise<void>((resolve) => (timer = setTimeout(resolve, deps.waitMs))),
+    ]);
     clearTimeout(timer);
     current = await deps.status();
   }

@@ -99,11 +99,14 @@ export async function announceCompletionTool(
   if (!runId || !token) return false;
   const base = env.EMBERLINE_CORE_URL || 'http://127.0.0.1:7420';
   try {
-    const res = await fetch(new URL(`/api/internal/runs/${encodeURIComponent(runId)}/completion-tool`, base), {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(CHECK_IN_TIMEOUT_MS),
-    });
+    const res = await fetch(
+      new URL(`/api/internal/runs/${encodeURIComponent(runId)}/completion-tool`, base),
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(CHECK_IN_TIMEOUT_MS),
+      },
+    );
     if (res.ok) return true;
     log(`emberline-mcp: check-in failed: HTTP ${res.status}\n`);
   } catch (err) {
@@ -206,7 +209,8 @@ export function createEmberlineMcpServer(env: Record<string, string | undefined>
       } finally {
         clearInterval(progress);
       }
-      if (!res.ok) return toolError(PREVIEW_HTTP_MESSAGES[res.status] ?? `Emberline answered HTTP ${res.status}.`);
+      if (!res.ok)
+        return toolError(PREVIEW_HTTP_MESSAGES[res.status] ?? `Emberline answered HTTP ${res.status}.`);
       const parsed = PreviewAnswer.safeParse(await res.json().catch(() => null));
       if (!parsed.success) return toolError('Emberline answered with an unexpected preview response.');
       return toolText(describePreview(parsed.data));

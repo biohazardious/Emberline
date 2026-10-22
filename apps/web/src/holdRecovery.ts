@@ -71,7 +71,10 @@ export function sentenceCase(text: string): string {
  * The head of the recovery block: the hold's label (none in a compact row that already shows it)
  * and why, as a sentence.
  */
-export function recoveryHeading(rec: Pick<RunRecovery, 'label' | 'why'>, compact: boolean): { label: string | null; why: string } {
+export function recoveryHeading(
+  rec: Pick<RunRecovery, 'label' | 'why'>,
+  compact: boolean,
+): { label: string | null; why: string } {
   return { label: compact ? null : rec.label, why: sentenceCase(rec.why) };
 }
 

@@ -19,7 +19,13 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe('transcript usage', () => {
   it('only accepts .jsonl files under the transcripts root (S9)', () => {
     expect(isAcceptableTranscriptPath(`${root}/proj/a.jsonl`, root)).toBe(true);
-    for (const bad of ['/dev/zero', `${root}/../secret.jsonl`, `${root}/proj/a.txt`, 'relative/a.jsonl', `${root}x/a.jsonl`]) {
+    for (const bad of [
+      '/dev/zero',
+      `${root}/../secret.jsonl`,
+      `${root}/proj/a.txt`,
+      'relative/a.jsonl',
+      `${root}x/a.jsonl`,
+    ]) {
       expect(isAcceptableTranscriptPath(bad, root)).toBe(false);
     }
   });

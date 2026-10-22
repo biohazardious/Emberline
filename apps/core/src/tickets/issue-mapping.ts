@@ -69,7 +69,11 @@ function neutraliseRouteTags(text: string): string {
  * The ticket fields for an issue (the issue's own content, never the client's). The issue text is
  * framed as untrusted: the agent reads it as a request, not as instructions.
  */
-export function mapIssueToTicket(issue: ForgeIssue, source: ForgeProvider, status: 'backlog' | 'ready'): MappedTicket {
+export function mapIssueToTicket(
+  issue: ForgeIssue,
+  source: ForgeProvider,
+  status: 'backlog' | 'ready',
+): MappedTicket {
   const title = neutraliseRouteTags(oneLine(issue.title, TICKET_TITLE_MAX)) || `Issue #${issue.number}`;
   // The header is ours: an author or URL must not be able to add lines to it.
   const authorName = issue.author ? oneLine(issue.author, AUTHOR_MAX) : '';

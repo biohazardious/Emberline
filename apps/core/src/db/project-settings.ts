@@ -16,7 +16,11 @@ export function readProjectSettings(db: Db, projectId: string): ProjectSettingsD
 }
 
 /** Merges `patch` into the stored document (other keys are kept). */
-export function writeProjectSettings(db: Db, projectId: string, patch: ProjectSettingsDoc): ProjectSettingsDoc {
+export function writeProjectSettings(
+  db: Db,
+  projectId: string,
+  patch: ProjectSettingsDoc,
+): ProjectSettingsDoc {
   const next = { ...readProjectSettings(db, projectId), ...patch };
   db.insert(projectSettings)
     .values({ projectId, settings: next })
@@ -90,7 +94,13 @@ export interface RepositorySettings {
   lastRemoteCheck: RemoteCheck | null;
   pendingMainPush: PendingMainPush | null;
 }
-const RemoteCheckSchema = z.object({ url: z.string(), branch: z.string(), at: z.string(), published: z.boolean(), error: z.string().nullable() });
+const RemoteCheckSchema = z.object({
+  url: z.string(),
+  branch: z.string(),
+  at: z.string(),
+  published: z.boolean(),
+  error: z.string().nullable(),
+});
 const RepositorySettingsSchema = z.object({
   keepMainPushed: z.boolean().catch(false).default(false),
   lastMainPushError: z.string().nullable().catch(null).default(null),
@@ -100,7 +110,11 @@ const RepositorySettingsSchema = z.object({
 export function readRepositorySettings(db: Db, projectId: string): RepositorySettings {
   return RepositorySettingsSchema.parse(readProjectSettings(db, projectId).repository ?? {});
 }
-export function writeRepositorySettings(db: Db, projectId: string, patch: Partial<RepositorySettings>): RepositorySettings {
+export function writeRepositorySettings(
+  db: Db,
+  projectId: string,
+  patch: Partial<RepositorySettings>,
+): RepositorySettings {
   const next = { ...readRepositorySettings(db, projectId), ...patch };
   writeProjectSettings(db, projectId, { repository: next });
   return next;

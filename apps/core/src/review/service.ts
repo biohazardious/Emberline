@@ -20,14 +20,22 @@ import { reviewBlockedIsCurrent } from '../runs/hold-outcome.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { RunService } from '../runs/service.js';
 import { anchorTextOf, type Anchored, reanchor } from './anchor.js';
-import { CARRIED_BLOCKING_EVENT, CARRIED_VERIFIED_EVENT, openBlockingCount, openCarriedBlocking } from './blocking.js';
+import {
+  CARRIED_BLOCKING_EVENT,
+  CARRIED_VERIFIED_EVENT,
+  openBlockingCount,
+  openCarriedBlocking,
+} from './blocking.js';
 import { type BatchComment, type BatchKind, newRunFeedbackSection, sameRunPrompt } from './batch.js';
 
 type CommentRow = typeof reviewComments.$inferSelect;
 /** A comment as it goes out, with the status it had when the batch was built. */
 type Batched = BatchComment & Pick<ReviewComment, 'status'>;
 
-const toComment = (row: CommentRow, anchored: Anchored = { currentLine: row.line, outdated: false }): ReviewComment => ({
+const toComment = (
+  row: CommentRow,
+  anchored: Anchored = { currentLine: row.line, outdated: false },
+): ReviewComment => ({
   id: row.id,
   runId: row.runId,
   filePath: row.filePath,
@@ -49,7 +57,14 @@ const toComment = (row: CommentRow, anchored: Anchored = { currentLine: row.line
   outdated: row.line === null ? false : anchored.outdated,
 });
 
-function parse<T>(schema: { safeParse(v: unknown): { success: true; data: T } | { success: false; error: { issues: { message: string }[] } } }, raw: unknown): T {
+function parse<T>(
+  schema: {
+    safeParse(
+      v: unknown,
+    ): { success: true; data: T } | { success: false; error: { issues: { message: string }[] } };
+  },
+  raw: unknown,
+): T {
   const res = schema.safeParse(raw ?? {});
   if (!res.success) throw badRequest(res.error.issues.map((i) => i.message).join('; '));
   return res.data;
@@ -82,7 +97,14 @@ export interface ReviewServiceOptions {
  * A `done` from these is not the agent finishing a turn: it never addresses comments. A CLI that
  * exits cleanly mid-turn reports SessionEnd (working -> done) before its process exit is noticed.
  */
-const NOT_A_TURN = new Set(['handed_off', 'process_exited', 'session_lost', 'cancelled', 'SessionEnd', 'idle_session_closed']);
+const NOT_A_TURN = new Set([
+  'handed_off',
+  'process_exited',
+  'session_lost',
+  'cancelled',
+  'SessionEnd',
+  'idle_session_closed',
+]);
 
 /**
  * Line comments and per-file "viewed" marks on a run's diff, stored in SQLite so a review survives
@@ -141,14 +163,26 @@ export class ReviewService {
     const pending = this.db
       .select({ sentAt: reviewComments.sentAt })
       .from(reviewComments)
-      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'sent'), isNotNull(reviewComments.sentAt)))
+      .where(
+        and(
+          eq(reviewComments.runId, runId),
+          eq(reviewComments.status, 'sent'),
+          isNotNull(reviewComments.sentAt),
+        ),
+      )
       .all();
     if (pending.length === 0) return;
     const since = new Date(Math.min(...pending.map((p) => p.sentAt!.getTime())));
     const events = this.db
       .select({ runId: runEvents.runId, ts: runEvents.ts, type: runEvents.type, state: runEvents.state })
       .from(runEvents)
-      .where(and(inArray(runEvents.runId, this.chain(runId)), isNotNull(runEvents.state), gte(runEvents.ts, since)))
+      .where(
+        and(
+          inArray(runEvents.runId, this.chain(runId)),
+          isNotNull(runEvents.state),
+          gte(runEvents.ts, since),
+        ),
+      )
       .orderBy(asc(runEvents.ts), asc(runEvents.id))
       .all();
     const handedOff = new Set<string>();
@@ -164,7 +198,13 @@ export class ReviewService {
     this.db
       .update(reviewComments)
       .set({ status: 'addressed' })
-      .where(and(eq(reviewComments.runId, runId), eq(reviewComments.status, 'sent'), lt(reviewComments.sentAt, addressedBefore)))
+      .where(
+        and(
+          eq(reviewComments.runId, runId),
+          eq(reviewComments.status, 'sent'),
+          lt(reviewComments.sentAt, addressedBefore),
+        ),
+      )
       .run();
   }
 
@@ -198,9 +238,13 @@ export class ReviewService {
    * and is logged.
    */
   private async anchor(runId: string, rows: CommentRow[]): Promise<ReviewComment[]> {
-    const anchorable = (r: CommentRow) => r.status !== 'resolved' && r.line !== null && r.anchorText !== null && r.anchorHash !== null;
+    const anchorable = (r: CommentRow) =>
+      r.status !== 'resolved' && r.line !== null && r.anchorText !== null && r.anchorHash !== null;
     const lineRows = rows.filter(anchorable);
-    const hashes = lineRows.length > 0 ? await this.fileHashes(runId, [...new Set(lineRows.map((r) => r.filePath))]) : null;
+    const hashes =
+      lineRows.length > 0
+        ? await this.fileHashes(runId, [...new Set(lineRows.map((r) => r.filePath))])
+        : null;
     const sides = new Map<string, Promise<string[] | null>>();
     const lines = (filePath: string, side: 'modified' | 'original') => {
       const key = `${side}:${filePath}`;
@@ -221,13 +265,21 @@ export class ReviewService {
     const out: ReviewComment[] = [];
     for (const row of rows) {
       let anchored: Anchored = { currentLine: row.line, outdated: false };
-      if (row.status !== 'resolved' && row.line !== null && row.anchorText !== null && row.anchorHash !== null && hashes) {
+      if (
+        row.status !== 'resolved' &&
+        row.line !== null &&
+        row.anchorText !== null &&
+        row.anchorHash !== null &&
+        hashes
+      ) {
         const hash = hashes.get(row.filePath);
         if (hash === undefined) anchored = { currentLine: null, outdated: true };
         else if (hash !== row.anchorHash) {
           try {
             const fileLines = await lines(row.filePath, row.side as 'modified' | 'original');
-            anchored = fileLines ? reanchor(row.line, row.anchorText, fileLines) : { currentLine: null, outdated: true };
+            anchored = fileLines
+              ? reanchor(row.line, row.anchorText, fileLines)
+              : { currentLine: null, outdated: true };
           } catch {
             // already logged; keep the stored line
           }
@@ -253,7 +305,11 @@ export class ReviewService {
       .from(reviewFileViews)
       .where(eq(reviewFileViews.runId, runId))
       .all()
-      .map((row) => ({ filePath: row.filePath, signature: row.signature, viewedAt: row.viewedAt.toISOString() }));
+      .map((row) => ({
+        filePath: row.filePath,
+        signature: row.signature,
+        viewedAt: row.viewedAt.toISOString(),
+      }));
     return {
       comments,
       viewed,
@@ -270,7 +326,8 @@ export class ReviewService {
    */
   verifyCarried(runId: string): void {
     this.runs.getRun(runId);
-    if (!openCarriedBlocking(this.db, runId)) throw conflict('this run carries no blocking feedback to verify');
+    if (!openCarriedBlocking(this.db, runId))
+      throw conflict('this run carries no blocking feedback to verify');
     this.runs.note(runId, CARRIED_VERIFIED_EVENT, {});
     this.noteUnblocked(runId);
   }
@@ -409,7 +466,9 @@ export class ReviewService {
     const { note, target, permissionMode } = parse(RequestChangesBody, raw);
     this.runs.getRun(runId);
     if (permissionMode && target !== 'new') throw badRequest('a mode can be chosen only for a new run');
-    return this.sending.run(runId, () => (target === 'new' ? this.sendToNewRun(runId, note, permissionMode) : this.sendToSameRun(runId, note)));
+    return this.sending.run(runId, () =>
+      target === 'new' ? this.sendToNewRun(runId, note, permissionMode) : this.sendToSameRun(runId, note),
+    );
   }
 
   private async sendToSameRun(runId: string, note: string): Promise<RequestChangesResponse> {
@@ -430,7 +489,11 @@ export class ReviewService {
     return { run: prompted, sent: comments.length };
   }
 
-  private async sendToNewRun(runId: string, note: string, permissionMode?: PermissionMode): Promise<RequestChangesResponse> {
+  private async sendToNewRun(
+    runId: string,
+    note: string,
+    permissionMode?: PermissionMode,
+  ): Promise<RequestChangesResponse> {
     const run = this.runs.getRun(runId);
     if (!run.ticketId || !this.startTicketRun) throw conflict('only a ticket run can start a new run');
     const comments = await this.batch(run);
@@ -454,7 +517,8 @@ export class ReviewService {
     this.markAll(included, { status: 'resolved', sentAt, resolvedAt: sentAt, carriedTo: fresh.id });
     // Resolved here, the blocking ones still hold the new run's merge gate until a person checks it.
     const carriedBlocking = included.filter((c) => c.priority === 'blocking').length;
-    if (carriedBlocking > 0) this.runs.note(fresh.id, CARRIED_BLOCKING_EVENT, { count: carriedBlocking, fromRun: run.id });
+    if (carriedBlocking > 0)
+      this.runs.note(fresh.id, CARRIED_BLOCKING_EVENT, { count: carriedBlocking, fromRun: run.id });
     return { run: fresh, sent: included.length };
   }
 

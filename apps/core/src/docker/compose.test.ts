@@ -25,38 +25,102 @@ import {
 describe('compose command lines', () => {
   it('up: the project from the run, the project file, the override from stdin, then the service', () => {
     expect(composeUpArgs('emberline-abcd1234', 'compose.yaml', 'web')).toEqual([
-      'compose', '-p', 'emberline-abcd1234', '-f', 'compose.yaml', '-f', '-', 'up', '-d', '--build', '--', 'web',
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      '-f',
+      'compose.yaml',
+      '-f',
+      '-',
+      'up',
+      '-d',
+      '--build',
+      '--',
+      'web',
     ]);
   });
   it('config --services reads only the project file, with every profile', () => {
     expect(composeServicesArgs('emberline-abcd1234', 'deploy/compose.yml')).toEqual([
-      'compose', '-p', 'emberline-abcd1234', '-f', 'deploy/compose.yml', '--profile', '*', 'config', '--services',
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      '-f',
+      'deploy/compose.yml',
+      '--profile',
+      '*',
+      'config',
+      '--services',
     ]);
   });
   it('ps, logs and down go by project name only (they work when the file changed or is gone)', () => {
-    expect(composePsArgs('emberline-abcd1234')).toEqual(['compose', '-p', 'emberline-abcd1234', 'ps', '--all', '--format', 'json']);
-    expect(composeLogsArgs('emberline-abcd1234', 'web')).toEqual([
-      'compose', '-p', 'emberline-abcd1234', 'logs', '--no-color', '--tail', '200', '--', 'web',
+    expect(composePsArgs('emberline-abcd1234')).toEqual([
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      'ps',
+      '--all',
+      '--format',
+      'json',
     ]);
-    expect(composeDownArgs('emberline-abcd1234')).toEqual(['compose', '-p', 'emberline-abcd1234', 'down', '--remove-orphans']);
+    expect(composeLogsArgs('emberline-abcd1234', 'web')).toEqual([
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      'logs',
+      '--no-color',
+      '--tail',
+      '200',
+      '--',
+      'web',
+    ]);
+    expect(composeDownArgs('emberline-abcd1234')).toEqual([
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      'down',
+      '--remove-orphans',
+    ]);
     expect(composeDownArgs('emberline-abcd1234', { volumes: true })).toEqual([
-      'compose', '-p', 'emberline-abcd1234', 'down', '-v', '--remove-orphans',
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      'down',
+      '-v',
+      '--remove-orphans',
     ]);
     // Cleanup also removes the images the project built (not pulled ones with their own tag).
     expect(composeDownArgs('emberline-abcd1234', { volumes: true, images: true })).toEqual([
-      'compose', '-p', 'emberline-abcd1234', 'down', '-v', '--rmi', 'local', '--remove-orphans',
+      'compose',
+      '-p',
+      'emberline-abcd1234',
+      'down',
+      '-v',
+      '--rmi',
+      'local',
+      '--remove-orphans',
     ]);
   });
   it('the override reaches compose on stdin from a variable, never as a file or an argument', () => {
     const { file, args } = composeShell(['compose', 'up']);
     expect(file).toBe('sh');
-    expect(args).toEqual(['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`, 'sh', 'compose', 'up']);
+    expect(args).toEqual([
+      '-c',
+      `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`,
+      'sh',
+      'compose',
+      'up',
+    ]);
   });
 });
 
 describe('composeOverrideYaml', () => {
   it('publishes only <hostPort>:<port> for the preview service and no host port for the others', () => {
-    const yaml = composeOverrideYaml({ service: 'web', port: 80, hostPort: 4331, services: ['db', 'web', 'cache'] });
+    const yaml = composeOverrideYaml({
+      service: 'web',
+      port: 80,
+      hostPort: 4331,
+      services: ['db', 'web', 'cache'],
+    });
     expect(yaml).toBe(
       [
         'services:',
@@ -87,7 +151,13 @@ describe('parsing compose output', () => {
   it('ps: NDJSON (compose v5) and a JSON array (older compose)', () => {
     const line = (o: object) => JSON.stringify(o);
     const ndjson = [
-      line({ Service: 'web', State: 'running', Health: '', ExitCode: 0, Publishers: [{ PublishedPort: 4330, TargetPort: 80 }] }),
+      line({
+        Service: 'web',
+        State: 'running',
+        Health: '',
+        ExitCode: 0,
+        Publishers: [{ PublishedPort: 4330, TargetPort: 80 }],
+      }),
       line({ Service: 'db', State: 'exited', Health: '', ExitCode: 1 }),
     ].join('\n');
     expect(parseComposePs(ndjson)).toEqual([
@@ -137,26 +207,48 @@ describe('parsing compose output', () => {
 
 describe('cleanup builders', () => {
   it('only the names Emberline makes count as its compose projects', () => {
-    for (const name of ['emberline-deadbeef', 'emberline-0a1b2c3d-preview', 'emberline-main-12345678', 'emberline-main-12345678-preview']) {
+    for (const name of [
+      'emberline-deadbeef',
+      'emberline-0a1b2c3d-preview',
+      'emberline-main-12345678',
+      'emberline-main-12345678-preview',
+    ]) {
       expect(isEmberlineComposeProject(name), name).toBe(true);
     }
     for (const name of [
-      'emberline', 'emberline-verify-docker', 'emberline-e2e', 'emberline-DEADBEEF', 'emberline-deadbeef-extra', 'emberline-deadbeef0', 'shop', 'x-emberline-deadbeef',
-      'emberline-main-preview', 'emberline-main-1234567-preview', 'emberline-main-12345678-preview-x', 'emberline-main-12345678-previews',
-      'emberline-deadbeef-preview-preview', 'emberline-main-main-12345678',
+      'emberline',
+      'emberline-verify-docker',
+      'emberline-e2e',
+      'emberline-DEADBEEF',
+      'emberline-deadbeef-extra',
+      'emberline-deadbeef0',
+      'shop',
+      'x-emberline-deadbeef',
+      'emberline-main-preview',
+      'emberline-main-1234567-preview',
+      'emberline-main-12345678-preview-x',
+      'emberline-main-12345678-previews',
+      'emberline-deadbeef-preview-preview',
+      'emberline-main-main-12345678',
     ]) {
       expect(isEmberlineComposeProject(name), name).toBe(false);
     }
   });
 
   it('reads project names from `compose ls --format json`', () => {
-    expect(parseComposeLs('[{"Name":"emberline-deadbeef","Status":"exited(1)","ConfigFiles":"/w/compose.yaml"},{"Name":3},{}]\n')).toEqual(['emberline-deadbeef']);
+    expect(
+      parseComposeLs(
+        '[{"Name":"emberline-deadbeef","Status":"exited(1)","ConfigFiles":"/w/compose.yaml"},{"Name":3},{}]\n',
+      ),
+    ).toEqual(['emberline-deadbeef']);
     expect(parseComposeLs('')).toEqual([]);
     expect(parseComposeLs('not json')).toEqual([]);
   });
 
   it('the reclaim container mounts only an absolute path without commas', () => {
-    expect(reclaimArgs('/workspaces/.worktrees/shop/deadbeef')).toContain('type=bind,source=/workspaces/.worktrees/shop/deadbeef,target=/w');
+    expect(reclaimArgs('/workspaces/.worktrees/shop/deadbeef')).toContain(
+      'type=bind,source=/workspaces/.worktrees/shop/deadbeef,target=/w',
+    );
     expect(() => reclaimArgs('/workspaces/a,b')).toThrow();
     expect(() => reclaimArgs('relative')).toThrow();
   });

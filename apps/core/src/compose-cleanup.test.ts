@@ -12,13 +12,32 @@ import type { Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type ExecRequest, type ExecResult, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import {
+  type ExecRequest,
+  type ExecResult,
+  localCommandExecutor,
+  setCommandExecutor,
+} from './command-exec.js';
 import { runs } from './db/schema.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
-const ok = (stdout = ''): ExecResult => ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, truncated: false });
-const failed = (stderr: string, exitCode = 1): ExecResult => ({ exitCode, signal: null, stdout: '', stderr, timedOut: false, truncated: false });
+const ok = (stdout = ''): ExecResult => ({
+  exitCode: 0,
+  signal: null,
+  stdout,
+  stderr: '',
+  timedOut: false,
+  truncated: false,
+});
+const failed = (stderr: string, exitCode = 1): ExecResult => ({
+  exitCode,
+  signal: null,
+  stdout: '',
+  stderr,
+  timedOut: false,
+  truncated: false,
+});
 
 /** The engine as far as cleanup sees it: `compose ls/down`, `image prune`, `run` (reclaim). */
 class FakeEngine {
@@ -39,11 +58,16 @@ class FakeEngine {
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
     if (request.file !== 'docker') return localCommandExecutor(request);
     const args = request.args;
-    if (args[0] === 'version') return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
+    if (args[0] === 'version')
+      return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
     this.calls.push(args);
     if (args[0] === 'compose' && args[1] === 'ls') {
       if (this.lsGate) await this.lsGate;
-      return ok(JSON.stringify([...this.projects].map((Name) => ({ Name, Status: 'running(1)', ConfigFiles: '/x/compose.yaml' }))));
+      return ok(
+        JSON.stringify(
+          [...this.projects].map((Name) => ({ Name, Status: 'running(1)', ConfigFiles: '/x/compose.yaml' })),
+        ),
+      );
     }
     if (args[0] === 'compose' && args.includes('down')) {
       const project = args[2]!;
@@ -52,7 +76,8 @@ class FakeEngine {
       this.projects.delete(project);
       return ok();
     }
-    if ((args[0] === 'image' || args[0] === 'builder') && args[1] === 'prune') return ok('Total reclaimed space: 0B\n');
+    if ((args[0] === 'image' || args[0] === 'builder') && args[1] === 'prune')
+      return ok('Total reclaimed space: 0B\n');
     if (args[0] === 'run') {
       this.reclaims.push(request);
       // What the throwaway container does to the files the engine's containers left: make them the
@@ -114,11 +139,23 @@ async function endedRun(projectId: string): Promise<Run> {
 function successorOf(run: Run): string {
   const row = t.db.select().from(runs).where(eq(runs.id, run.id)).get()!;
   const id = randomUUID();
-  t.db.insert(runs).values({ ...row, id, createdAt: new Date(row.createdAt.getTime() + 1000) }).run();
+  t.db
+    .insert(runs)
+    .values({ ...row, id, createdAt: new Date(row.createdAt.getTime() + 1000) })
+    .run();
   return id;
 }
 
-const downArgs = (project: string) => ['compose', '-p', project, 'down', '-v', '--rmi', 'local', '--remove-orphans'];
+const downArgs = (project: string) => [
+  'compose',
+  '-p',
+  project,
+  'down',
+  '-v',
+  '--rmi',
+  'local',
+  '--remove-orphans',
+];
 const typesOf = (id: string) => t.runs.get(id).events.map((e) => e.type);
 
 describe('compose cleanup on every prune path (Review Focus 3)', () => {
@@ -146,11 +183,17 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     const p = await createProject();
     const first = await endedRun(p.id);
     const second = successorOf(first);
-    expect(composeProjectName(second, first.worktreePath)).toBe(composeProjectName(first.id, first.worktreePath));
+    expect(composeProjectName(second, first.worktreePath)).toBe(
+      composeProjectName(first.id, first.worktreePath),
+    );
     const res = await api('POST', `/api/runs/${second}/worktree/prune`, {});
     expect(res.json()).toMatchObject({ removed: true });
     expect(engine.downs().sort()).toEqual(
-      [composeProjectName(first.id, first.worktreePath), previewComposeProjectName(first.id), previewComposeProjectName(second)].sort(),
+      [
+        composeProjectName(first.id, first.worktreePath),
+        previewComposeProjectName(first.id),
+        previewComposeProjectName(second),
+      ].sort(),
     );
   });
 
@@ -158,9 +201,16 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     await start();
     const p = await createProject();
     const run = await endedRun(p.id);
-    const res = await api('POST', '/api/runs/gc', { projectId: p.id, keepRecent: 0, includeFailed: true, pruneWorktrees: true });
+    const res = await api('POST', '/api/runs/gc', {
+      projectId: p.id,
+      keepRecent: 0,
+      includeFailed: true,
+      pruneWorktrees: true,
+    });
     expect(res.json()).toMatchObject({ prunedWorktrees: 1 });
-    expect(engine.downs().sort()).toEqual([composeProjectName(run.id, run.worktreePath), previewComposeProjectName(run.id)].sort());
+    expect(engine.downs().sort()).toEqual(
+      [composeProjectName(run.id, run.worktreePath), previewComposeProjectName(run.id)].sort(),
+    );
     expect(existsSync(run.worktreePath)).toBe(false);
   });
 
@@ -173,9 +223,15 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     await t.runs.reconcile();
     const oldest = ended[0]!;
     await expect.poll(() => existsSync(oldest.worktreePath), { timeout: 8_000 }).toBe(false);
-    expect(engine.downs()).toEqual(expect.arrayContaining([composeProjectName(oldest.id, oldest.worktreePath), previewComposeProjectName(oldest.id)]));
+    expect(engine.downs()).toEqual(
+      expect.arrayContaining([
+        composeProjectName(oldest.id, oldest.worktreePath),
+        previewComposeProjectName(oldest.id),
+      ]),
+    );
     // The ten newest keep their worktrees and their containers.
-    for (const run of ended.slice(1)) expect(engine.downs()).not.toContain(composeProjectName(run.id, run.worktreePath));
+    for (const run of ended.slice(1))
+      expect(engine.downs()).not.toContain(composeProjectName(run.id, run.worktreePath));
   });
 
   it("a project delete takes down every run's projects and the main workspace's project", async () => {
@@ -208,7 +264,9 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     const note = t.runs.get(run.id).events.find((e) => e.type === 'worktree_teardown_failed');
     expect(note?.payload).toMatchObject({ command: `docker ${downArgs(agent).join(' ')}`, exitCode: 1 });
     expect(String((note?.payload as { tail: string }).tail)).toContain('is stuck');
-    expect(typesOf(run.id).indexOf('worktree_pruned')).toBeGreaterThan(typesOf(run.id).indexOf('worktree_teardown_failed'));
+    expect(typesOf(run.id).indexOf('worktree_pruned')).toBeGreaterThan(
+      typesOf(run.id).indexOf('worktree_teardown_failed'),
+    );
   });
 
   it('with the engine off no prune path runs a docker command (Review Focus 2)', async () => {
@@ -217,14 +275,19 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     const a = await endedRun(p.id);
     await api('POST', `/api/runs/${a.id}/worktree/prune`, {});
     await endedRun(p.id);
-    await api('POST', '/api/runs/gc', { projectId: p.id, keepRecent: 0, includeFailed: true, pruneWorktrees: true });
+    await api('POST', '/api/runs/gc', {
+      projectId: p.id,
+      keepRecent: 0,
+      includeFailed: true,
+      pruneWorktrees: true,
+    });
     await endedRun(p.id);
     await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`);
     expect((await t.runs.sweepDockerProjects()).removed).toEqual([]);
     expect(engine.calls).toEqual([]);
   });
 
-  it("deleting a run takes down its agent project unless another run shares the worktree", async () => {
+  it('deleting a run takes down its agent project unless another run shares the worktree', async () => {
     await start();
     const p = await createProject();
     const alone = await endedRun(p.id);
@@ -257,7 +320,14 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
       expect(existsSync(run.worktreePath)).toBe(false);
       expect(engine.reclaims).toHaveLength(1);
       const reclaim = engine.reclaims[0]!;
-      expect(reclaim.args.slice(0, 6)).toEqual(['run', '--rm', '--network', 'none', '--mount', `type=bind,source=${run.worktreePath},target=/w`]);
+      expect(reclaim.args.slice(0, 6)).toEqual([
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '--mount',
+        `type=bind,source=${run.worktreePath},target=/w`,
+      ]);
       expect(reclaim.env).toMatchObject({ DOCKER_HOST: 'tcp://docker:2376', DOCKER_TLS_VERIFY: '1' });
     },
   );
@@ -270,35 +340,43 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     chmodSync(path.join(dir, 'pgdata'), 0o555);
   }
 
-  it.skipIf(process.getuid?.() === 0)('a project delete reclaims such files too, then removes the worktrees', async () => {
-    await start();
-    const p = await createProject();
-    const run = await endedRun(p.id);
-    stuckDir(run.worktreePath);
-    expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
-    await expect.poll(() => existsSync(path.dirname(run.worktreePath)), { timeout: 8_000 }).toBe(false);
-    expect(engine.reclaims.length).toBeGreaterThanOrEqual(1);
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'a project delete reclaims such files too, then removes the worktrees',
+    async () => {
+      await start();
+      const p = await createProject();
+      const run = await endedRun(p.id);
+      stuckDir(run.worktreePath);
+      expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+      await expect.poll(() => existsSync(path.dirname(run.worktreePath)), { timeout: 8_000 }).toBe(false);
+      expect(engine.reclaims.length).toBeGreaterThanOrEqual(1);
+    },
+  );
 
-  it.skipIf(process.getuid?.() === 0)('never reclaims outside .worktrees, the project directory, or outside the workspaces', async () => {
-    await start();
-    const p = await createProject();
-    // Outside the workspaces volume (the test's workspaces are its temp dir).
-    const outside = mkdtempSync(path.join(tmpdir(), 'not-a-worktree-'));
-    stuckDir(outside);
-    const internals = t.runs as unknown as { pruneRunWorktree: (project: string, worktree: string) => Promise<boolean> };
-    await expect(internals.pruneRunWorktree(p.path, outside)).rejects.toThrow();
-    await expect(internals.pruneRunWorktree(p.path, p.path)).rejects.toThrow();
-    await t.runs.removeTree(outside);
-    expect(engine.reclaims).toEqual([]);
-    chmodSync(path.join(outside, 'pgdata'), 0o755);
-    chmodSync(path.join(outside, 'pgdata', 'base'), 0o755);
-    rmSync(outside, { recursive: true, force: true });
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'never reclaims outside .worktrees, the project directory, or outside the workspaces',
+    async () => {
+      await start();
+      const p = await createProject();
+      // Outside the workspaces volume (the test's workspaces are its temp dir).
+      const outside = mkdtempSync(path.join(tmpdir(), 'not-a-worktree-'));
+      stuckDir(outside);
+      const internals = t.runs as unknown as {
+        pruneRunWorktree: (project: string, worktree: string) => Promise<boolean>;
+      };
+      await expect(internals.pruneRunWorktree(p.path, outside)).rejects.toThrow();
+      await expect(internals.pruneRunWorktree(p.path, p.path)).rejects.toThrow();
+      await t.runs.removeTree(outside);
+      expect(engine.reclaims).toEqual([]);
+      chmodSync(path.join(outside, 'pgdata'), 0o755);
+      chmodSync(path.join(outside, 'pgdata', 'base'), 0o755);
+      rmSync(outside, { recursive: true, force: true });
+    },
+  );
 });
 
 describe('GC sweep of compose projects', () => {
-  it("removes Emberline projects whose run is gone or ended without a worktree, keeps live, review and other projects", async () => {
+  it('removes Emberline projects whose run is gone or ended without a worktree, keeps live, review and other projects', async () => {
     await start();
     const p = await createProject();
     const live = await t.runs.enqueue({ projectId: p.id, prompt: 'live' });
@@ -317,11 +395,18 @@ describe('GC sweep of compose projects', () => {
       'emberline-deadbeef-extra',
       'shop',
     ];
-    const remove = ['emberline-deadbeef', composeProjectName(gone.id, gone.worktreePath), previewComposeProjectName(gone.id), 'emberline-main-00000000'];
+    const remove = [
+      'emberline-deadbeef',
+      composeProjectName(gone.id, gone.worktreePath),
+      previewComposeProjectName(gone.id),
+      'emberline-main-00000000',
+    ];
     for (const name of [...keep, ...remove]) engine.projects.add(name);
     const { removed } = await t.runs.sweepDockerProjects();
     expect(removed.sort()).toEqual([...remove].sort());
-    expect(engine.calls.filter((a) => a.includes('down'))).toEqual(expect.arrayContaining(remove.map(downArgs)));
+    expect(engine.calls.filter((a) => a.includes('down'))).toEqual(
+      expect.arrayContaining(remove.map(downArgs)),
+    );
     expect(engine.downs().sort()).toEqual([...remove].sort());
     expect([...engine.projects].sort()).toEqual([...keep].sort());
     expect(engine.calls[0]).toEqual(['compose', 'ls', '-a', '--format', 'json']);
@@ -352,7 +437,9 @@ describe('GC sweep of compose projects', () => {
   it('runs a minute after start (leftovers from before a restart), then every 30 minutes', async () => {
     await start();
     vi.spyOn(t.runs, 'reconcile').mockResolvedValue(undefined);
-    const sweep = vi.spyOn(t.runs, 'sweepDockerProjects').mockResolvedValue({ removed: [], listed: true, pruned: false });
+    const sweep = vi
+      .spyOn(t.runs, 'sweepDockerProjects')
+      .mockResolvedValue({ removed: [], listed: true, pruned: false });
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
     try {
       t.runs.startReconciler();

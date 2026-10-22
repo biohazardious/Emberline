@@ -1,5 +1,12 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import type { CronOverlapPolicy, CronPermissionMode, CronPreviewResponse, Project, Run, ScheduledJob } from '@emberline/protocol';
+import type {
+  CronOverlapPolicy,
+  CronPermissionMode,
+  CronPreviewResponse,
+  Project,
+  Run,
+  ScheduledJob,
+} from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -86,7 +93,10 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
     if (!formOpen || !cronExpr.trim()) return;
     let stale = false;
     const timer = setTimeout(() => {
-      api<CronPreviewResponse>('/api/cron/preview', 'POST', { cronExpr: cronExpr.trim(), timeZone: timeZone.trim() })
+      api<CronPreviewResponse>('/api/cron/preview', 'POST', {
+        cronExpr: cronExpr.trim(),
+        timeZone: timeZone.trim(),
+      })
         .then((res) => {
           if (!stale) setPreview({ runs: res.nextRuns, error: null });
         })
@@ -185,7 +195,8 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
         <div>
           <h2 id="cron-title">Scheduled Agent Jobs (Cron)</h2>
           <p className="muted">
-            Recurring maintenance, nightly test runs, and automated audits. Quota-aware: pauses automatically during rate limits.
+            Recurring maintenance, nightly test runs, and automated audits. Quota-aware: pauses automatically
+            during rate limits.
           </p>
         </div>
         <div className="actions">
@@ -308,7 +319,11 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
         </form>
       )}
 
-      {notice && <p className="muted small mono" style={{ padding: '0 0.25rem' }}>{notice}</p>}
+      {notice && (
+        <p className="muted small mono" style={{ padding: '0 0.25rem' }}>
+          {notice}
+        </p>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -319,7 +334,8 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
         <div className="empty">
           <p>No scheduled jobs configured.</p>
           <p className="muted">
-            Click <strong>+ Schedule Job</strong> to run Claude on a recurring cron schedule (`0 2 * * *`, `@daily`, etc.).
+            Click <strong>+ Schedule Job</strong> to run Claude on a recurring cron schedule (`0 2 * * *`,
+            `@daily`, etc.).
           </p>
         </div>
       ) : (
@@ -338,7 +354,10 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
                   {MODE_LABELS[job.permissionMode]}
                 </span>
                 {job.overlapPolicy === 'queue' && (
-                  <span className="badge badge-soft" title="Due runs are queued even while the previous one runs">
+                  <span
+                    className="badge badge-soft"
+                    title="Due runs are queued even while the previous one runs"
+                  >
                     queues overlaps
                   </span>
                 )}

@@ -16,7 +16,13 @@ import path from 'node:path';
 import type { WorktreeCopyEntry } from '@emberline/protocol';
 import { CommandFailedError, execCommand } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
-import { copyBetweenHandles, createExclusiveFile, isMissing, openVerifiedFile, realDirUnder } from '../outputs/safe-fs.js';
+import {
+  copyBetweenHandles,
+  createExclusiveFile,
+  isMissing,
+  openVerifiedFile,
+  realDirUnder,
+} from '../outputs/safe-fs.js';
 import { stripControlChars } from '../text/control-chars.js';
 
 export const SETUP_TIMEOUT_MS = 10 * 60_000;
@@ -31,7 +37,10 @@ export interface CopyLimits {
   maxEntries: number;
   maxBytes: number;
 }
-export const COPY_LIMITS: Readonly<CopyLimits> = Object.freeze({ maxEntries: COPY_MAX_FILES, maxBytes: COPY_MAX_BYTES });
+export const COPY_LIMITS: Readonly<CopyLimits> = Object.freeze({
+  maxEntries: COPY_MAX_FILES,
+  maxBytes: COPY_MAX_BYTES,
+});
 export const TEARDOWN_TIMEOUT_MS = 2 * 60_000;
 /** Output kept from a failed setup command (event and prompt prefix). */
 export const SETUP_TAIL_CHARS = 2000;
@@ -50,7 +59,8 @@ export interface CopyOutcome {
 
 /** Path components of a relative entry, or null when it is absolute or climbs out with "..". */
 function segmentsOf(rel: string): string[] | null {
-  if (rel.includes('\0') || path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel) || rel.startsWith('~')) return null;
+  if (rel.includes('\0') || path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel) || rel.startsWith('~'))
+    return null;
   const parts = rel.split(/[/\\]/).filter((p) => p !== '' && p !== '.');
   if (parts.length === 0 || parts.includes('..')) return null;
   return parts;
@@ -95,9 +105,11 @@ async function prepareDestination(worktreeReal: string, parts: string[]): Promis
       await mkdir(current);
       continue;
     }
-    if (stat.isSymbolicLink()) return { skip: `${parts.slice(0, i + 1).join('/')} is a symbolic link in the worktree` };
+    if (stat.isSymbolicLink())
+      return { skip: `${parts.slice(0, i + 1).join('/')} is a symbolic link in the worktree` };
     if (last) return { skip: 'already exists in the worktree' };
-    if (!stat.isDirectory()) return { skip: `${parts.slice(0, i + 1).join('/')} is not a directory in the worktree` };
+    if (!stat.isDirectory())
+      return { skip: `${parts.slice(0, i + 1).join('/')} is not a directory in the worktree` };
   }
   return null;
 }
@@ -160,7 +172,12 @@ async function copyVerifiedFile(srcReal: string, destDirReal: string, name: stri
  * Copies a directory tree: directories and regular files only. Counts the entries left out and
  * collects the `.env*` files copied (as `rel/...` paths).
  */
-async function copyVerifiedDir(srcReal: string, destReal: string, rel: string, found: { leftOut: number; secrets: string[] }): Promise<void> {
+async function copyVerifiedDir(
+  srcReal: string,
+  destReal: string,
+  rel: string,
+  found: { leftOut: number; secrets: string[] },
+): Promise<void> {
   await mkdir(destReal);
   await verifiedDir(destReal, destReal);
   const dir = await opendir(await verifiedDir(srcReal, srcReal));
@@ -190,7 +207,12 @@ export async function copyIntoWorktree(
   if (!mainReal || !worktreeReal) throw new Error('the main workspace or the worktree is missing');
   const outcomes: CopyOutcome[] = [];
   for (const entry of entries) {
-    const skip = (reason: string): CopyOutcome => ({ path: entry.path, mode: entry.mode, status: 'skipped', reason });
+    const skip = (reason: string): CopyOutcome => ({
+      path: entry.path,
+      mode: entry.mode,
+      status: 'skipped',
+      reason,
+    });
     const parts = segmentsOf(entry.path);
     if (!parts) {
       outcomes.push(skip('must stay inside the main workspace'));
@@ -253,12 +275,17 @@ export async function copyIntoWorktree(
  * The copied paths git would not ignore in the worktree (hardened `git check-ignore`, run in the
  * runner); null when git could not tell.
  */
-export async function notIgnoredPaths(worktreePath: string, paths: readonly string[]): Promise<string[] | null> {
+export async function notIgnoredPaths(
+  worktreePath: string,
+  paths: readonly string[],
+): Promise<string[] | null> {
   if (paths.length === 0) return [];
   let stdout = '';
   try {
     // Unquoted output, one path per line (a path git still quotes simply counts as not ignored).
-    stdout = (await execGitFile(['-C', worktreePath, '-c', 'core.quotePath=false', 'check-ignore', '--', ...paths])).stdout;
+    stdout = (
+      await execGitFile(['-C', worktreePath, '-c', 'core.quotePath=false', 'check-ignore', '--', ...paths])
+    ).stdout;
   } catch (error) {
     // Exit 1: none of them is ignored.
     if (!(error instanceof CommandFailedError && error.code === 1)) return null;

@@ -31,7 +31,10 @@ export interface AttentionFacts {
   failure: AttentionEvent | null;
 }
 
-type AttentionRun = Pick<Run, 'id' | 'state' | 'lastEvent' | 'autoRetry' | 'cancelled' | 'handedOffTo' | 'endedAt' | 'stateChangedAt'> & {
+type AttentionRun = Pick<
+  Run,
+  'id' | 'state' | 'lastEvent' | 'autoRetry' | 'cancelled' | 'handedOffTo' | 'endedAt' | 'stateChangedAt'
+> & {
   ticketId?: string | null;
 };
 
@@ -57,7 +60,13 @@ const message = (event: AttentionEvent | undefined): string | null => {
  * The occurrence names the triggering event; without one (a run that never logged its state change)
  * it falls back to the state's time, which is just as stable across reads.
  */
-const make = (run: AttentionRun, reason: RunAttention['reason'], detail: string | null, since: string, eventId: number | null) => ({
+const make = (
+  run: AttentionRun,
+  reason: RunAttention['reason'],
+  detail: string | null,
+  since: string,
+  eventId: number | null,
+) => ({
   reason,
   detail,
   since,
@@ -67,7 +76,9 @@ const make = (run: AttentionRun, reason: RunAttention['reason'], detail: string 
 /** Blockers of a `completion_blocked` note, joined into one text. */
 function blockersOf(event: AttentionEvent): string | null {
   const raw = event.payload?.blockers;
-  const list = Array.isArray(raw) ? raw.filter((b): b is string => typeof b === 'string' && b.length > 0) : [];
+  const list = Array.isArray(raw)
+    ? raw.filter((b): b is string => typeof b === 'string' && b.length > 0)
+    : [];
   return list.length > 0 ? list.join('\n') : null;
 }
 
@@ -91,7 +102,8 @@ export function computeAttention(
       const entered = waiting.find((e) => e.id === enteredId);
       // stateChangedAt is written with the entering event, so it is that event's time.
       const since = entered?.ts.toISOString() ?? run.stateChangedAt;
-      const at = (reason: RunAttention['reason'], detail: string | null) => make(run, reason, detail, since, enteredId);
+      const at = (reason: RunAttention['reason'], detail: string | null) =>
+        make(run, reason, detail, since, enteredId);
       const latest = waiting.at(-1);
       // A stall enters its own wait (from working); a later Notification of that wait takes over.
       if (latest?.type === 'stall_detected') return at('stalled', message(latest));
@@ -105,23 +117,38 @@ export function computeAttention(
       return at('question', message(asked ?? (entered?.type === 'Notification' ? entered : undefined)));
     }
     case 'rate_limited':
-      return run.autoRetry ? null : make(run, 'rate_limited', null, run.stateChangedAt, facts?.enteredId ?? null);
+      return run.autoRetry
+        ? null
+        : make(run, 'rate_limited', null, run.stateChangedAt, facts?.enteredId ?? null);
     case 'failed': {
       if (run.cancelled || run.handedOffTo) return null;
       const failure = facts?.failure ?? null;
       const endedAt = Date.parse(run.endedAt ?? failure?.ts.toISOString() ?? run.stateChangedAt);
       if (now - endedAt > FAILURE_WINDOW_MS) return null;
-      return make(run, 'failed', failure?.type ?? null, failure?.ts.toISOString() ?? run.endedAt ?? run.stateChangedAt, failure?.id ?? facts?.enteredId ?? null);
+      return make(
+        run,
+        'failed',
+        failure?.type ?? null,
+        failure?.ts.toISOString() ?? run.endedAt ?? run.stateChangedAt,
+        failure?.id ?? facts?.enteredId ?? null,
+      );
     }
     case 'done': {
       const hold = currentHold(facts?.pipeline ?? []);
       if (!hold) return null;
       // A hold waits in Review: once the ticket moved on, or a newer run took it over, nobody is
       // asked any more. Without a ticket, it fades like a failure.
-      if (run.ticketId ? !(ticket?.inReview && ticket.latest) : now - hold.ts.getTime() > HOLD_WINDOW_MS) return null;
+      if (run.ticketId ? !(ticket?.inReview && ticket.latest) : now - hold.ts.getTime() > HOLD_WINDOW_MS)
+        return null;
       const since = hold.ts.toISOString();
       if (hold.type === 'completion_blocked') return make(run, 'blocked', blockersOf(hold), since, hold.id);
-      return make(run, 'held', Object.hasOwn(HOLD_LABELS, hold.type) ? holdLabelOf(hold.type, hold.payload) : hold.type, since, hold.id);
+      return make(
+        run,
+        'held',
+        Object.hasOwn(HOLD_LABELS, hold.type) ? holdLabelOf(hold.type, hold.payload) : hold.type,
+        since,
+        hold.id,
+      );
     }
     default:
       return null;
@@ -132,7 +159,11 @@ export function computeAttention(
 const pipelineClear = (facts: AttentionFacts | undefined): boolean =>
   decidePipelineOutcome((facts?.pipeline ?? []).map((e) => e.type)) !== 'held';
 
-const idList = (ids: string[]) => sql.join(ids.map((id) => sql`${id}`), sql`, `);
+const idList = (ids: string[]) =>
+  sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
 
 interface Bounds {
   run_id: string;
@@ -164,7 +195,9 @@ const parse = (raw: string | null): Record<string, unknown> | null => {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as unknown;
-    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -187,9 +220,17 @@ export function loadAttentionFacts(db: Db, runIds: string[]): Map<string, Attent
       boundRows.map((b) => sql`(${b.run_id}, ${b.entered}, ${b.last_done}, ${b.last_failed})`),
       sql`, `,
     );
-    const outcomeTypes = sql.join(PIPELINE_OUTCOME_EVENTS.map((t) => sql`${t}`), sql`, `);
-    const waitingTypes = sql.join(WAITING_TYPES.map((t) => sql`${t}`), sql`, `);
-    const rows = db.all<EventRow & { entered: number | null; last_done: number | null; last_failed: number | null }>(sql`
+    const outcomeTypes = sql.join(
+      PIPELINE_OUTCOME_EVENTS.map((t) => sql`${t}`),
+      sql`, `,
+    );
+    const waitingTypes = sql.join(
+      WAITING_TYPES.map((t) => sql`${t}`),
+      sql`, `,
+    );
+    const rows = db.all<
+      EventRow & { entered: number | null; last_done: number | null; last_failed: number | null }
+    >(sql`
       WITH b(run_id, entered, last_done, last_failed) AS (VALUES ${values})
       SELECT e.id, e.run_id, e.ts, e.type, e.payload, b.entered, b.last_done, b.last_failed
       FROM run_events e JOIN b ON b.run_id = e.run_id
@@ -222,12 +263,18 @@ export function attachAttention(
   const needing = list.filter((r) => FACT_STATES.has(r.state)).map((r) => r.id);
   const facts = needing.length > 0 ? load(needing) : new Map<string, AttentionFacts>();
 
-  const ticketIds = [...new Set(list.filter((r) => r.state === 'done' && r.ticketId).map((r) => r.ticketId as string))];
+  const ticketIds = [
+    ...new Set(list.filter((r) => r.state === 'done' && r.ticketId).map((r) => r.ticketId as string)),
+  ];
   const status = new Map<string, string>();
   const latestRun = new Map<string, string>();
   for (let i = 0; i < ticketIds.length; i += CHUNK) {
     const ids = ticketIds.slice(i, i + CHUNK);
-    for (const t of db.select({ id: tickets.id, status: tickets.status }).from(tickets).where(inArray(tickets.id, ids)).all()) {
+    for (const t of db
+      .select({ id: tickets.id, status: tickets.status })
+      .from(tickets)
+      .where(inArray(tickets.id, ids))
+      .all()) {
       status.set(t.id, t.status);
     }
     const rows = db
@@ -257,8 +304,13 @@ export function attachAttention(
     return {
       ...run,
       attention: computeAttention(run, f, now, ticket),
-      reviewReady: run.state === 'done' && ticket !== undefined && ticket.inReview && ticket.latest && pipelineClear(f) && !blocking.has(run.id),
+      reviewReady:
+        run.state === 'done' &&
+        ticket !== undefined &&
+        ticket.inReview &&
+        ticket.latest &&
+        pipelineClear(f) &&
+        !blocking.has(run.id),
     };
   });
 }
-

@@ -38,7 +38,12 @@ describe('browser agents', () => {
     const activity = browserAgentActivity(
       [
         { projectId: 'a', toolName: nav, detail: 'url: http://localhost:5173/new', at: now - 1_000 },
-        { projectId: 'a', toolName: nav, detail: 'url: http://localhost:5173/old · element: x', at: now - 9_000 },
+        {
+          projectId: 'a',
+          toolName: nav,
+          detail: 'url: http://localhost:5173/old · element: x',
+          at: now - 9_000,
+        },
         { projectId: 'a', toolName: 'mcp__playwright__browser_click', detail: 'element: Play', at: now },
         { projectId: 'b', toolName: 'mcp__playwright__browser_click', detail: 'element: Go', at: now },
         { projectId: 'c', toolName: nav, detail: 'url: http://x/', at: now - BROWSER_AGENT_WINDOW_MS - 1 },
@@ -59,7 +64,9 @@ describe('browser agents', () => {
         now,
       ).get('a')?.lastUrl;
     expect(lastUrl('url: localhost:5173')).toBe('http://localhost:5173/');
-    expect(lastUrl('url: localhost:5173/play?level=2 · element: x')).toBe('http://localhost:5173/play?level=2');
+    expect(lastUrl('url: localhost:5173/play?level=2 · element: x')).toBe(
+      'http://localhost:5173/play?level=2',
+    );
     expect(lastUrl('url: example.com')).toBe('http://example.com/');
     expect(lastUrl('url: https://example.com')).toBe('https://example.com/');
     expect(lastUrl('url: file:///etc/passwd')).toBeNull();

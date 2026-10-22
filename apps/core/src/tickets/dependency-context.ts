@@ -39,7 +39,8 @@ export function dependencyContextSection(deps: FinishedDependency[], max = DEPEN
     if (blockers.length > 0) lines.push(`Blockers: ${blockers.join('; ')}`);
     return clip(lines.join('\n'), DEPENDENCY_BLOCK_MAX);
   });
-  const total = () => HEADING.length + blocks.reduce((sum, block) => sum + SEPARATOR.length + block.length, 0);
+  const total = () =>
+    HEADING.length + blocks.reduce((sum, block) => sum + SEPARATOR.length + block.length, 0);
   let excess = total() - max;
   for (let i = 0; i < blocks.length && excess > 0; i += 1) {
     const block = blocks[i] as string;

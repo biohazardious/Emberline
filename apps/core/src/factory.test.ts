@@ -113,7 +113,10 @@ describe('AI Coding Factory (F1–F4)', () => {
       method: 'PUT',
       url: `/api/projects/${project.id}/blueprint`,
       headers,
-      payload: { content: '# Updated Blueprint\n\nCustom updated content for Pulse Analytics with more than eighty characters so advisor sees a complete spec.' },
+      payload: {
+        content:
+          '# Updated Blueprint\n\nCustom updated content for Pulse Analytics with more than eighty characters so advisor sees a complete spec.',
+      },
     });
     expect(bpPut.statusCode).toBe(200);
     expect((bpPut.json() as ProjectBlueprintResponse).content).toContain('# Updated Blueprint');
@@ -188,8 +191,11 @@ describe('AI Coding Factory (F1–F4)', () => {
     });
     const p2 = (p2Res.json() as CreateProjectResponse).project;
     expect(
-      ((await t.app.inject({ url: '/api/projects/active', headers: { cookie } })).json() as ActiveProjectPreference)
-        .activeProjectId,
+      (
+        (
+          await t.app.inject({ url: '/api/projects/active', headers: { cookie } })
+        ).json() as ActiveProjectPreference
+      ).activeProjectId,
     ).toBe(p2.id);
 
     const switchRes = await t.app.inject({
@@ -379,7 +385,9 @@ describe('AI Coding Factory (F1–F4)', () => {
     expect(secretReport.passed).toBe(false);
     expect(secretReport.secretGuardPassed).toBe(false);
     expect(secretReport.secretLeakCount).toBeGreaterThanOrEqual(1);
-    const leakIssue = secretReport.issues.find((i) => i.category === 'secret_leak' && i.snippet.includes('REDACTED'));
+    const leakIssue = secretReport.issues.find(
+      (i) => i.category === 'secret_leak' && i.snippet.includes('REDACTED'),
+    );
     expect(leakIssue).toBeDefined();
     expect(leakIssue?.snippet).not.toContain('1234567890abcdefghijklmnop');
     expect(secretReport.autoFixPrompt).toContain('PRE-COMMIT SECRET & CREDENTIAL GUARD BLOCK');
@@ -435,15 +443,21 @@ describe('dependency-aware PO prompt', () => {
     expect(prompt).not.toContain('Priority 3 - High');
     expect(prompt).toContain('Order the work');
     expect(prompt).toContain('Autonomous Execution Rule');
-    expect(prompt).toContain('priority (0–3) only breaks ties between tickets that are ready at the same time');
-    expect(prompt).toContain('lowercase letters, digits and hyphens, start with a letter or digit, up to 40 characters');
+    expect(prompt).toContain(
+      'priority (0–3) only breaks ties between tickets that are ready at the same time',
+    );
+    expect(prompt).toContain(
+      'lowercase letters, digits and hyphens, start with a letter or digit, up to 40 characters',
+    );
     expect(prompt).toContain('up to 10 `dependsOn` entries');
     expect(prompt).toContain('e.g. `MPG-12`');
   });
 
   it('defaults the prompt to the default parallel ticket limit', async () => {
     const { buildFactoryOrchestratorPrompt } = await import('./factory/orchestration.js');
-    expect(buildFactoryOrchestratorPrompt('Build an APK')).toContain('up to 2 tickets of this project at once');
+    expect(buildFactoryOrchestratorPrompt('Build an APK')).toContain(
+      'up to 2 tickets of this project at once',
+    );
   });
 
   it('blueprint instructions no longer promise sequential dispatch', async () => {

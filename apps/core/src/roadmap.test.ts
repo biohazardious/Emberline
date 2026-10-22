@@ -23,7 +23,8 @@ async function createProject(): Promise<{ id: string; path: string }> {
   return (await api('POST', '/api/projects', { name: 'Roadmap App' })).json().project;
 }
 
-const itemTitles = (state: ProjectRoadmapState) => state.milestones.flatMap((m) => m.items.map((i) => i.title));
+const itemTitles = (state: ProjectRoadmapState) =>
+  state.milestones.flatMap((m) => m.items.map((i) => i.title));
 
 describe('roadmap.json', () => {
   it('keeps every item when edits arrive concurrently', async () => {

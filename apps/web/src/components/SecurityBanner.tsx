@@ -27,10 +27,13 @@ export function SecurityBanner({ floating = false }: { floating?: boolean }) {
   };
 
   return (
-    <div className={`banner banner-warn security-banner${floating ? ' security-banner-floating' : ''}`} role="status">
+    <div
+      className={`banner banner-warn security-banner${floating ? ' security-banner-floating' : ''}`}
+      role="status"
+    >
       <span>
-        You are using Emberline over plain HTTP on the network. Passwords and session cookies travel unencrypted; use
-        a VPN or a TLS reverse proxy.{' '}
+        You are using Emberline over plain HTTP on the network. Passwords and session cookies travel
+        unencrypted; use a VPN or a TLS reverse proxy.{' '}
         <a href={SECURITY_URL} target="_blank" rel="noreferrer">
           Security notes
         </a>

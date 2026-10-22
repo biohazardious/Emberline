@@ -48,7 +48,16 @@ export function BrandLogo({ size = 24, className = 'brand-mark' }: BrandLogoProp
           <stop offset="100%" stopColor="#f43f5e" />
         </linearGradient>
       </defs>
-      <rect x="1" y="1" width="30" height="30" rx="7" fill={`url(#${bgId})`} stroke={`url(#${strokeId})`} strokeWidth="1.25" />
+      <rect
+        x="1"
+        y="1"
+        width="30"
+        height="30"
+        rx="7"
+        fill={`url(#${bgId})`}
+        stroke={`url(#${strokeId})`}
+        strokeWidth="1.25"
+      />
       <circle cx="16" cy="15" r="9.5" fill="#f97316" fillOpacity="0.1" />
       <path
         d="M8.5 9.25L16.25 15.25L8.5 21.25"

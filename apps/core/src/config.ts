@@ -126,7 +126,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     webDir: env.EMBERLINE_WEB_DIR || undefined,
     ptydSocket: env.EMBERLINE_PTYD_SOCKET ?? '/run/emberline/ptyd.sock',
     workspacesDir: env.EMBERLINE_WORKSPACES_DIR ?? '/workspaces',
-    workspacesHostDir: env.EMBERLINE_WORKSPACES_HOST_DIR?.startsWith('/') ? env.EMBERLINE_WORKSPACES_HOST_DIR : undefined,
+    workspacesHostDir: env.EMBERLINE_WORKSPACES_HOST_DIR?.startsWith('/')
+      ? env.EMBERLINE_WORKSPACES_HOST_DIR
+      : undefined,
     secureCookies: env.EMBERLINE_SECURE_COOKIES === 'true',
     trustProxy: env.EMBERLINE_TRUST_PROXY === 'true',
     sessionTtlMs: Number(env.EMBERLINE_SESSION_TTL_DAYS ?? 30) * 86_400_000,

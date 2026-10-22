@@ -51,8 +51,13 @@ async function setupFrom(app: TestApp, remoteAddress: string, forwardedFor?: str
   return sessionFrom(res);
 }
 
-const get = (app: TestApp, url: string, cookie: string, remoteAddress: string, headers: Record<string, string> = {}) =>
-  app.app.inject({ method: 'GET', url, remoteAddress, headers: { cookie, ...headers } });
+const get = (
+  app: TestApp,
+  url: string,
+  cookie: string,
+  remoteAddress: string,
+  headers: Record<string, string> = {},
+) => app.app.inject({ method: 'GET', url, remoteAddress, headers: { cookie, ...headers } });
 
 describe('sessions are bound to the client address', () => {
   it('accepts the address that signed in and refuses another one with a clear reason', async () => {
@@ -65,7 +70,9 @@ describe('sessions are bound to the client address', () => {
     // The login screen can say why.
     const state = await get(t, '/api/auth/state', cookie, '198.51.100.7');
     expect(state.json()).toMatchObject({ authenticated: false, signedOut: ADDRESS_CHANGED });
-    expect((await get(t, '/api/auth/state', cookie, '192.0.2.10')).json()).toMatchObject({ authenticated: true });
+    expect((await get(t, '/api/auth/state', cookie, '192.0.2.10')).json()).toMatchObject({
+      authenticated: true,
+    });
     // The owner's session keeps working: a replay from elsewhere does not end it.
     expect((await get(t, '/api/projects', cookie, '192.0.2.10')).statusCode).toBe(200);
   });
@@ -73,14 +80,20 @@ describe('sessions are bound to the client address', () => {
   it('uses X-Forwarded-For only with EMBERLINE_TRUST_PROXY', async () => {
     t = await createTestApp({ trustProxy: true });
     const cookie = await setupFrom(t, '127.0.0.1', '203.0.113.5');
-    expect((await get(t, '/api/projects', cookie, '127.0.0.1', { 'x-forwarded-for': '203.0.113.5' })).statusCode).toBe(200);
-    expect((await get(t, '/api/projects', cookie, '127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })).statusCode).toBe(401);
+    expect(
+      (await get(t, '/api/projects', cookie, '127.0.0.1', { 'x-forwarded-for': '203.0.113.5' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await get(t, '/api/projects', cookie, '127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })).statusCode,
+    ).toBe(401);
     await t.close();
 
     t = await createTestApp({ trustProxy: false });
     const plain = await setupFrom(t, '127.0.0.1', '203.0.113.5');
     // Without a trusted proxy the header is ignored: the socket address is the client.
-    expect((await get(t, '/api/projects', plain, '127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })).statusCode).toBe(200);
+    expect(
+      (await get(t, '/api/projects', plain, '127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })).statusCode,
+    ).toBe(200);
   });
 
   it('can be turned off with EMBERLINE_SESSION_BIND_IP=false', async () => {
@@ -162,7 +175,10 @@ describe('a per-login key', () => {
         headers: { cookie, [CSRF_HEADER]: k },
         payload: { name: 'K', initGit: false },
       });
-    expect((await post('1')).json()).toMatchObject({ error: 'session_key_missing', message: SESSION_KEY_MISSING_MESSAGE });
+    expect((await post('1')).json()).toMatchObject({
+      error: 'session_key_missing',
+      message: SESSION_KEY_MISSING_MESSAGE,
+    });
     expect((await post('1')).statusCode).toBe(401);
     expect((await post(key)).statusCode).toBe(201);
     expect((await get(t, '/api/projects', cookie, '192.0.2.10')).statusCode).toBe(200);
@@ -199,7 +215,9 @@ describe('a per-login key', () => {
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
     expect((await wsStatus(address, cookie)).status).toBe(401);
     expect((await wsStatus(address, cookie, [WS_PROTOCOL])).status).toBe(401);
-    expect((await wsStatus(address, cookie, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}wrong`])).status).toBe(401);
+    expect(
+      (await wsStatus(address, cookie, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}wrong`])).status,
+    ).toBe(401);
     expect(await wsStatus(address, cookie, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${key}`])).toEqual({
       status: 101,
       protocol: 'emberline',
@@ -212,8 +230,13 @@ describe('a per-login key', () => {
     t.db.update(sessions).set({ keyHash: null }).run();
     const projects = await t.app.inject({ method: 'GET', url: '/api/projects', headers: { cookie } });
     expect(projects.statusCode).toBe(401);
-    expect(projects.json()).toMatchObject({ error: 'session_key_missing', message: SESSION_KEY_MISSING_MESSAGE });
-    expect((await t.app.inject({ method: 'GET', url: '/api/auth/state', headers: { cookie } })).json()).toEqual({
+    expect(projects.json()).toMatchObject({
+      error: 'session_key_missing',
+      message: SESSION_KEY_MISSING_MESSAGE,
+    });
+    expect(
+      (await t.app.inject({ method: 'GET', url: '/api/auth/state', headers: { cookie } })).json(),
+    ).toEqual({
       authenticated: false,
       signedOut: SESSION_KEY_MISSING_MESSAGE,
       setupRequired: false,
@@ -224,9 +247,14 @@ describe('a per-login key', () => {
     t = await createTestApp();
     const cookie = await setupAndLogin(t.app);
     const state = (headers: Record<string, string>) =>
-      t!.app.inject({ method: 'GET', url: '/api/auth/state', headers: { cookie, ...headers } }).then((r) => r.json());
+      t!.app
+        .inject({ method: 'GET', url: '/api/auth/state', headers: { cookie, ...headers } })
+        .then((r) => r.json());
     expect(await state({})).toEqual({ authenticated: true, setupRequired: false });
-    expect(await state({ [CSRF_HEADER]: keyOf(cookie) })).toEqual({ authenticated: true, setupRequired: false });
+    expect(await state({ [CSRF_HEADER]: keyOf(cookie) })).toEqual({
+      authenticated: true,
+      setupRequired: false,
+    });
     expect(await state({ [CSRF_HEADER]: 'a-key-from-another-sign-in' })).toEqual({
       authenticated: false,
       signedOut: SESSION_KEY_MISSING_MESSAGE,
@@ -261,12 +289,19 @@ describe('a per-login key', () => {
           headers: { cookie: a, [CSRF_HEADER]: key },
           payload: {},
         });
-        expect(res.statusCode, `${method} with ${key === '1' ? 'no key' : "another sign-in's key"}`).toBe(401);
+        expect(res.statusCode, `${method} with ${key === '1' ? 'no key' : "another sign-in's key"}`).toBe(
+          401,
+        );
         expect(res.json()).toMatchObject({ error: 'session_key_missing' });
       }
     }
     const logout = (key: string) =>
-      t!.app.inject({ method: 'POST', url: '/api/auth/logout', remoteAddress: '192.0.2.10', headers: { cookie: a, [CSRF_HEADER]: key } });
+      t!.app.inject({
+        method: 'POST',
+        url: '/api/auth/logout',
+        remoteAddress: '192.0.2.10',
+        headers: { cookie: a, [CSRF_HEADER]: key },
+      });
     expect((await logout(keyOf(other))).statusCode).toBe(401);
     expect((await logout(keyOf(a))).statusCode).toBe(200);
   });
@@ -291,7 +326,7 @@ describe('a per-login key', () => {
     expect((await get(t, '/api/projects', c, '203.0.113.9')).statusCode).toBe(200);
   });
 
-  it("a sign-in closes the WebSockets of the session it revokes", async () => {
+  it('a sign-in closes the WebSockets of the session it revokes', async () => {
     t = await createTestApp();
     const res = await t.app.inject({
       method: 'POST',
@@ -302,9 +337,13 @@ describe('a per-login key', () => {
     const cookie = sessionFrom(res);
     const key = (res.json() as SessionIssued).sessionKey;
     const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
-    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${key}`], {
-      headers: { cookie, origin: address },
-    });
+    const ws = new WebSocket(
+      `${address.replace('http', 'ws')}/api/events`,
+      [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${key}`],
+      {
+        headers: { cookie, origin: address },
+      },
+    );
     await new Promise((resolve, reject) => {
       ws.once('open', resolve);
       ws.once('error', reject);
@@ -324,7 +363,9 @@ describe("session cookies from Emberline's own containers", () => {
     const res = await get(t, '/api/projects', cookie, '127.0.0.1');
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ error: 'session_from_container' });
-    expect((await get(t, '/api/auth/state', cookie, '127.0.0.1')).json()).toMatchObject({ authenticated: false });
+    expect((await get(t, '/api/auth/state', cookie, '127.0.0.1')).json()).toMatchObject({
+      authenticated: false,
+    });
 
     const browser = await setupFromLogin(t, '192.0.2.10');
     expect((await get(t, '/api/projects', browser, '192.0.2.10')).statusCode).toBe(200);
@@ -386,7 +427,11 @@ describe("session cookies from Emberline's own containers", () => {
     expect(wrong.statusCode).toBe(401);
     expect(wrong.json().error).not.toBe('session_from_container');
     // Capability demo URLs carry no session and stay open to the runner's browser.
-    const demo = await t.app.inject({ method: 'GET', url: '/api/demo/not-a-token/', remoteAddress: '127.0.0.1' });
+    const demo = await t.app.inject({
+      method: 'GET',
+      url: '/api/demo/not-a-token/',
+      remoteAddress: '127.0.0.1',
+    });
     expect(demo.statusCode).not.toBe(403);
   });
 });
@@ -504,7 +549,9 @@ describe('container addresses', () => {
       lookup: lookupFrom({ runner: ['172.18.0.3'], localhost: ['127.0.0.1'] }),
       refreshMs: 60_000, // the first resolution starts in the constructor
       localNetworks: () => {
-        throw Object.assign(new Error('uv_interface_addresses returned Unknown system error 1'), { code: 'ERR_SYSTEM_ERROR' });
+        throw Object.assign(new Error('uv_interface_addresses returned Unknown system error 1'), {
+          code: 'ERR_SYSTEM_ERROR',
+        });
       },
     });
     try {
@@ -518,7 +565,10 @@ describe('container addresses', () => {
 
   it('defaults to the compose service names and can be set', () => {
     expect(loadConfig({}).containerHosts).toEqual(['runner', 'docker']);
-    expect(loadConfig({ EMBERLINE_CONTAINER_HOSTS: 'agents, engine' }).containerHosts).toEqual(['agents', 'engine']);
+    expect(loadConfig({ EMBERLINE_CONTAINER_HOSTS: 'agents, engine' }).containerHosts).toEqual([
+      'agents',
+      'engine',
+    ]);
     expect(loadConfig({ EMBERLINE_CONTAINER_HOSTS: '' }).containerHosts).toEqual([]);
   });
 });

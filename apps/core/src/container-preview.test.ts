@@ -37,7 +37,11 @@ const CONFIG = JSON.stringify({
 });
 const engine = { up: true };
 /** What `docker compose config` answers next (a result, or a thrown error), and every request it got. */
-const compose: { next: ExecResult | Error; requests: ExecRequest[]; gate: Promise<void> | null } = { next: ok(CONFIG), requests: [], gate: null };
+const compose: { next: ExecResult | Error; requests: ExecRequest[]; gate: Promise<void> | null } = {
+  next: ok(CONFIG),
+  requests: [],
+  gate: null,
+};
 
 beforeEach(async () => {
   engine.up = true;

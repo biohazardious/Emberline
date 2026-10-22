@@ -14,7 +14,9 @@ import type { RunService } from '../runs/service.js';
  */
 export function registerDockerRoutes(app: FastifyInstance, runs: RunService): void {
   // The Host header was checked by the auth hook; port links use it, as preview links do.
-  app.get('/api/docker', async (request): Promise<DockerOverview> => runs.dockerOverview(request.headers.host));
+  app.get('/api/docker', async (request): Promise<DockerOverview> =>
+    runs.dockerOverview(request.headers.host),
+  );
 
   app.post<{ Params: { name: string } }>(
     '/api/docker/projects/:name/stop',

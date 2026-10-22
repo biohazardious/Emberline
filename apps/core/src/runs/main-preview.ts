@@ -35,10 +35,7 @@ import {
   runComposePreview,
   settlesWithin,
 } from '../docker/compose-preview.js';
-import {
-  type DockerEngine,
-  mainPreviewComposeProjectName,
-} from '../docker/engine.js';
+import { type DockerEngine, mainPreviewComposeProjectName } from '../docker/engine.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { approvedPreviewService } from '../worktree-config/load.js';
@@ -69,10 +66,12 @@ type MainPreviewState = z.infer<typeof MainPreviewState>;
 const RESTARTED = 'Emberline restarted before the preview was ready; start it again';
 
 /** A stored `running` whose compose project has no container left (an engine reset, or removed outside Emberline). */
-const VANISHED = "the preview's containers are gone (the Docker engine was reset or they were removed); start it again";
+const VANISHED =
+  "the preview's containers are gone (the Docker engine was reset or they were removed); start it again";
 
 /** Why main has no container preview service; the start's 409 says the same. */
-const NO_COMPOSE_SERVICE = 'the approved worktree.yml has no compose preview service, so main has no container preview';
+const NO_COMPOSE_SERVICE =
+  'the approved worktree.yml has no compose preview service, so main has no container preview';
 
 /**
  * The 409 of a compose preview without the engine (run previews say the same): why it is off
@@ -169,10 +168,17 @@ export class MainPreviews {
       port,
       url: port ? previewUrl(port, requestHost) : null,
     };
-    if (state.status === 'failed') return { ...base, status: 'failed', error: state.error ?? 'the preview failed', logs: state.logs ?? null };
+    if (state.status === 'failed')
+      return {
+        ...base,
+        status: 'failed',
+        error: state.error ?? 'the preview failed',
+        logs: state.logs ?? null,
+      };
     if (state.status === 'starting' && this.jobs.has(projectId)) return { ...base, status: 'starting' };
     await this.deps.docker.ready();
-    if (!this.deps.docker.status.available) return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
+    if (!this.deps.docker.status.available)
+      return { ...base, status: 'exited', error: 'the Docker engine is not reachable' };
     const engine = await composeServiceStatus({
       project: mainPreviewComposeProjectName(projectId),
       service: state.service ?? service?.compose.service ?? '',
@@ -181,19 +187,29 @@ export class MainPreviews {
     if (engineRuns(engine)) {
       if (!port) return { ...base, status: 'running' };
       const startKey = `${state.startedAt}|${state.refreshedAt ?? ''}|${port}`;
-      const framing = await this.deps.framing.get(`main:${projectId}`, startKey, runnerPreviewUrl('compose', port, this.deps.config.dockerHost));
+      const framing = await this.deps.framing.get(
+        `main:${projectId}`,
+        startKey,
+        runnerPreviewUrl('compose', port, this.deps.config.dockerHost),
+      );
       return { ...base, status: 'running', framing };
     }
     // `starting` without a job here: a restart left it and the engine could not be asked yet.
     if (state.status === 'starting') return { ...base, status: 'failed', error: RESTARTED };
     if (
       state.status === 'running' &&
-      (held ? await this.releaseVanishedHeld(projectId) : await this.lock.run(projectId, () => this.releaseVanishedHeld(projectId)))
+      (held
+        ? await this.releaseVanishedHeld(projectId)
+        : await this.lock.run(projectId, () => this.releaseVanishedHeld(projectId)))
     ) {
       return { ...base, status: 'failed', error: VANISHED, logs: null };
     }
     const name = state.service ?? service?.compose.service;
-    return { ...base, status: 'exited', error: name ? `the "${name}" container is not running` : 'the preview container is not running' };
+    return {
+      ...base,
+      status: 'exited',
+      error: name ? `the "${name}" container is not running` : 'the preview container is not running',
+    };
   }
 
   /** Probes the running preview's headers again (the app may have changed since the last probe). */
@@ -209,11 +225,16 @@ export class MainPreviews {
    * {@link status} and {@link refresh}.
    */
   async reconcileInterrupted(): Promise<void> {
-    for (const row of this.deps.db.select({ projectId: projectSettings.projectId }).from(projectSettings).all()) {
+    for (const row of this.deps.db
+      .select({ projectId: projectSettings.projectId })
+      .from(projectSettings)
+      .all()) {
       if (this.interrupted(row.projectId)) {
         await this.lock.run(row.projectId, () => this.reconcileHeld(row.projectId)).catch(() => undefined);
       } else if (this.read(row.projectId)?.status === 'running') {
-        await this.lock.run(row.projectId, () => this.releaseVanishedHeld(row.projectId)).catch(() => undefined);
+        await this.lock
+          .run(row.projectId, () => this.releaseVanishedHeld(row.projectId))
+          .catch(() => undefined);
       }
     }
   }
@@ -304,8 +325,21 @@ export class MainPreviews {
           return null;
         }
         const env = await this.deps.envForMain(projectId);
-        this.write(projectId, { ...state, file: service.compose.file, service: service.compose.service, containerPort: service.compose.port });
-        return this.launch(projectId, project.path, service, state.port, env, this.nextGeneration(projectId), true);
+        this.write(projectId, {
+          ...state,
+          file: service.compose.file,
+          service: service.compose.service,
+          containerPort: service.compose.port,
+        });
+        return this.launch(
+          projectId,
+          project.path,
+          service,
+          state.port,
+          env,
+          this.nextGeneration(projectId),
+          true,
+        );
       })
       .catch(() => null);
     await job?.done;
@@ -315,7 +349,12 @@ export class MainPreviews {
    * A Docker page Stop or Remove of `name` (the main preview project): through the main preview stop
    * when it is started (state stopped, port free), then the project's `down` if that did not run it.
    */
-  takeDown(projectId: string, name: string, env: Record<string, string>, action: 'stop' | 'remove'): Promise<DownResult> {
+  takeDown(
+    projectId: string,
+    name: string,
+    env: Record<string, string>,
+    action: 'stop' | 'remove',
+  ): Promise<DownResult> {
     const opts = action === 'remove' ? CLEANUP_DOWN : {};
     return this.lock.run(projectId, async () => {
       const state = this.read(projectId);
@@ -355,7 +394,9 @@ export class MainPreviews {
     const ports = new Set<number>();
     for (const row of this.deps.db.select().from(projectSettings).all()) {
       if (row.projectId === exceptProjectId) continue;
-      const parsed = MainPreviewState.safeParse((row.settings as Record<string, unknown> | null)?.[MAIN_PREVIEW_KEY]);
+      const parsed = MainPreviewState.safeParse(
+        (row.settings as Record<string, unknown> | null)?.[MAIN_PREVIEW_KEY],
+      );
       if (!parsed.success || parsed.data.port === null) continue;
       if (parsed.data.status === 'starting' || parsed.data.status === 'running') ports.add(parsed.data.port);
     }
@@ -376,7 +417,13 @@ export class MainPreviews {
     refresh: boolean,
   ): Job {
     const project = mainPreviewComposeProjectName(projectId);
-    const job: Job = { execId: `main-preview-${projectId}-${randomUUID()}`, cancelled: false, abandoned: false, generation, done: Promise.resolve() };
+    const job: Job = {
+      execId: `main-preview-${projectId}-${randomUUID()}`,
+      cancelled: false,
+      abandoned: false,
+      generation,
+      done: Promise.resolve(),
+    };
     const target = {
       worktreePath: mainPath,
       project,
@@ -399,20 +446,42 @@ export class MainPreviews {
         patch({ port });
         return port;
       });
-    job.done = runComposePreview(target, this.deps.timing(), { execId: job.execId, cancelled: () => job.cancelled, reallocate })
+    job.done = runComposePreview(target, this.deps.timing(), {
+      execId: job.execId,
+      cancelled: () => job.cancelled,
+      reallocate,
+    })
       .then(async (outcome) => {
         if (!current()) return;
         if (outcome.ok) {
-          const { error: _error, logs: _logs, ...rest } = this.read(projectId) ?? { status: 'running', port: null, startedAt: null };
-          this.write(projectId, { ...rest, status: 'running', port: target.hostPort, ...(refresh ? { refreshedAt: new Date().toISOString() } : {}) });
+          const {
+            error: _error,
+            logs: _logs,
+            ...rest
+          } = this.read(projectId) ?? { status: 'running', port: null, startedAt: null };
+          this.write(projectId, {
+            ...rest,
+            status: 'running',
+            port: target.hostPort,
+            ...(refresh ? { refreshedAt: new Date().toISOString() } : {}),
+          });
           return;
         }
         if (outcome.cancelled) return;
         // Take down what it left (a container that exited, a half-built project) and free its port.
         await composeDown(project, env);
         if (!current()) return;
-        patch({ status: 'failed', error: refresh ? `the refresh after a merge failed: ${outcome.error}` : outcome.error, logs: outcome.logs });
-        this.deps.log?.()?.warn({ projectId, project, error: outcome.error }, refresh ? 'main preview refresh failed' : 'main preview failed');
+        patch({
+          status: 'failed',
+          error: refresh ? `the refresh after a merge failed: ${outcome.error}` : outcome.error,
+          logs: outcome.logs,
+        });
+        this.deps
+          .log?.()
+          ?.warn(
+            { projectId, project, error: outcome.error },
+            refresh ? 'main preview refresh failed' : 'main preview failed',
+          );
       })
       .catch(() => undefined)
       .finally(() => {
@@ -442,7 +511,10 @@ export class MainPreviews {
    */
   private async stopHeld(
     projectId: string,
-    { volumes = false, onDown }: { volumes?: boolean; onDown?: (project: string, down: DownResult) => void } = {},
+    {
+      volumes = false,
+      onDown,
+    }: { volumes?: boolean; onDown?: (project: string, down: DownResult) => void } = {},
   ): Promise<void> {
     const state = this.read(projectId);
     const job = this.jobs.get(projectId);
@@ -464,7 +536,10 @@ export class MainPreviews {
         const project = mainPreviewComposeProjectName(projectId);
         const down = await composeDown(project, env, volumes ? CLEANUP_DOWN : {});
         onDown?.(project, down);
-        if (!down.ok) this.deps.log?.()?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down failed');
+        if (!down.ok)
+          this.deps
+            .log?.()
+            ?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down failed');
       }
     }
     if (job && this.jobs.get(projectId) === job) this.jobs.delete(projectId);
@@ -504,7 +579,10 @@ export class MainPreviews {
       return;
     }
     const down = await composeDown(project, env);
-    if (!down.ok) this.deps.log?.()?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down after a restart failed');
+    if (!down.ok)
+      this.deps
+        .log?.()
+        ?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down after a restart failed');
     this.write(projectId, { ...state, status: 'failed', error: RESTARTED, logs: null });
   }
 
@@ -522,18 +600,28 @@ export class MainPreviews {
     const project = mainPreviewComposeProjectName(projectId);
     if ((await composeProjectGone(project, env)) !== true) return false;
     const down = await composeDown(project, env);
-    if (!down.ok) this.deps.log?.()?.warn({ projectId, output: down.output.slice(-500) }, 'main preview: down after its containers vanished failed');
+    if (!down.ok)
+      this.deps
+        .log?.()
+        ?.warn(
+          { projectId, output: down.output.slice(-500) },
+          'main preview: down after its containers vanished failed',
+        );
     this.write(projectId, { ...state, status: 'failed', error: VANISHED, logs: null });
     return true;
   }
 
-  private async unavailableReason(mainPath: string, service: WorktreeComposeService | null): Promise<string | null> {
+  private async unavailableReason(
+    mainPath: string,
+    service: WorktreeComposeService | null,
+  ): Promise<string | null> {
     if (!service) return NO_COMPOSE_SERVICE;
     if (this.deps.config.dockerHost) await this.deps.docker.ready();
     if (!this.deps.docker.status.available || !this.deps.config.dockerHost) {
       return composeEngineOffMessage(service.name, this.deps.docker.status);
     }
-    if (!existsSync(path.join(mainPath, service.compose.file))) return missingComposeFile(service.compose.file);
+    if (!existsSync(path.join(mainPath, service.compose.file)))
+      return missingComposeFile(service.compose.file);
     return null;
   }
 
@@ -549,13 +637,19 @@ export class MainPreviews {
   }
 
   private project(projectId: string): { id: string; path: string } {
-    const row = this.deps.db.select({ id: projects.id, path: projects.path }).from(projects).where(eq(projects.id, projectId)).get();
+    const row = this.deps.db
+      .select({ id: projects.id, path: projects.path })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .get();
     if (!row) throw notFound('no such project');
     return row;
   }
 
   private hasProject(projectId: string): boolean {
-    return Boolean(this.deps.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get());
+    return Boolean(
+      this.deps.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get(),
+    );
   }
 
   private read(projectId: string): MainPreviewState | null {

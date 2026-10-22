@@ -16,7 +16,6 @@ import {
 import { execGitFile } from '../git-exec.js';
 import { buildRivalPrompt, collectReviewDiff, runRivalReview, supportsRivalReview } from './rival-critic.js';
 
-
 const IGNORED_PATH_SEGMENTS = [
   'node_modules/',
   'dist/',
@@ -27,12 +26,7 @@ const IGNORED_PATH_SEGMENTS = [
   'coverage/',
 ];
 
-const IGNORED_FILENAMES = new Set([
-  'package-lock.json',
-  'pnpm-lock.yaml',
-  'yarn.lock',
-  'bun.lockb',
-]);
+const IGNORED_FILENAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb']);
 
 const SOURCE_EXTENSIONS = new Set([
   '.ts',
@@ -239,11 +233,7 @@ interface DiffAddedLine {
   content: string;
 }
 
-async function walkWorkspaceAuditableFiles(
-  rootDir: string,
-  relPrefix = '',
-  depth = 0,
-): Promise<string[]> {
+async function walkWorkspaceAuditableFiles(rootDir: string, relPrefix = '', depth = 0): Promise<string[]> {
   if (depth > 4) return [];
   const found: string[] = [];
   let entries;
@@ -277,10 +267,14 @@ async function walkWorkspaceAuditableFiles(
  * main line itself or has no such branch.
  */
 export async function branchBase(workspacePath: string): Promise<string | null> {
-  const head = (await execGitFile(['rev-parse', 'HEAD'], { cwd: workspacePath }).catch(() => ({ stdout: '' }))).stdout.trim();
+  const head = (
+    await execGitFile(['rev-parse', 'HEAD'], { cwd: workspacePath }).catch(() => ({ stdout: '' }))
+  ).stdout.trim();
   for (const candidate of ['main', 'master']) {
     const base = (
-      await execGitFile(['merge-base', 'HEAD', candidate], { cwd: workspacePath }).catch(() => ({ stdout: '' }))
+      await execGitFile(['merge-base', 'HEAD', candidate], { cwd: workspacePath }).catch(() => ({
+        stdout: '',
+      }))
     ).stdout.trim();
     if (base) return base === head ? null : base;
   }
@@ -302,10 +296,10 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
       // B18: audit everything the branch changed since it left main (all its commits plus
       // uncommitted work), not just the last commit: a secret committed early stays found.
       const base = await branchBase(workspacePath);
-      const { stdout: wtDiff } = await execGitFile(
-        ['diff', base ?? 'HEAD', '--unified=0', '--no-color'],
-        { cwd: workspacePath, maxBuffer: 8 * 1024 * 1024 },
-      );
+      const { stdout: wtDiff } = await execGitFile(['diff', base ?? 'HEAD', '--unified=0', '--no-color'], {
+        cwd: workspacePath,
+        maxBuffer: 8 * 1024 * 1024,
+      });
       rawDiff = wtDiff;
       if (!rawDiff.trim()) {
         const { stdout: headDiff } = await execGitFile(
@@ -481,7 +475,8 @@ export async function auditWorktreeSlop(params: {
           line: entry.line,
           snippet: trimmed.slice(0, 140),
           message: 'Type safety bypassed with `any`.',
-          fixHint: 'Replace `any` with an explicit interface, generic type, `unknown` + type guard, or Zod schema.',
+          fixHint:
+            'Replace `any` with an explicit interface, generic type, `unknown` + type guard, or Zod schema.',
         });
       } else if (/@ts-ignore\b|@ts-nocheck\b|eslint-disable/.test(trimmed)) {
         pushIssue({
@@ -499,9 +494,7 @@ export async function auditWorktreeSlop(params: {
     // 2. Unfinished stubs / TODO / FIXME / placeholder comments
     if (
       /(?:\/\/|\/\*|#)\s*(?:TODO|FIXME|HACK|PLACEHOLDER|XXX)\b/i.test(trimmed) ||
-      /\/\/\s*(?:implement later|rest of (?:code|implementation)|add implementation here)/i.test(
-        trimmed,
-      ) ||
+      /\/\/\s*(?:implement later|rest of (?:code|implementation)|add implementation here)/i.test(trimmed) ||
       /throw new Error\(['"`]not implemented/i.test(trimmed)
     ) {
       pushIssue({
@@ -606,7 +599,8 @@ export async function auditWorktreeSlop(params: {
           line: lineCount,
           snippet: `${relFile} (${lineCount} lines)`,
           message: `Monolithic file bloat: \`${relFile}\` has grown to ${lineCount} lines.`,
-          fixHint: 'Keep modules focused (< 450 lines) by extracting cohesive sub-components or domain helpers.',
+          fixHint:
+            'Keep modules focused (< 450 lines) by extracting cohesive sub-components or domain helpers.',
         });
       }
     } catch {
@@ -631,10 +625,12 @@ export async function auditWorktreeSlop(params: {
             : `[Anti-AI-Slop & Code Hygiene Gate — Score ${score}/100 (Grade ${grade})]`,
           `Our automated pre-commit security & hygiene scanner detected ${errorCount} error(s) (${secretLeakCount} secret leak(s)) and ${warningCount} warning(s) in your changes:`,
           '',
-          ...issues.slice(0, 15).map(
-            (iss, idx) =>
-              `${idx + 1}. [${iss.severity.toUpperCase()} · ${iss.category}] \`${iss.file}:${iss.line}\` — ${iss.message}\n   Snippet: \`${iss.snippet}\`\n   Fix: ${iss.fixHint}`,
-          ),
+          ...issues
+            .slice(0, 15)
+            .map(
+              (iss, idx) =>
+                `${idx + 1}. [${iss.severity.toUpperCase()} · ${iss.category}] \`${iss.file}:${iss.line}\` — ${iss.message}\n   Snippet: \`${iss.snippet}\`\n   Fix: ${iss.fixHint}`,
+            ),
           '',
           secretLeakCount > 0
             ? 'CRITICAL: Immediately remove all hardcoded secrets/tokens/keys and any tracked `.env` or private key files. Move configuration to `process.env.<NAME>`, document safe placeholders in `.env.example`, and ensure `.env` is listed in `.gitignore` before finishing.'
@@ -732,11 +728,7 @@ export async function runCrossProviderCritic(params: {
 }): Promise<CrossCriticResult> {
   const { run, workspacePath, settings, preferredReviewer } = params;
   const authorAgent = (run.agent as AgentId) ?? 'claude';
-  const { reviewerAgent, reviewerModel } = selectRivalCriticAgent(
-    authorAgent,
-    settings,
-    preferredReviewer,
-  );
+  const { reviewerAgent, reviewerModel } = selectRivalCriticAgent(authorAgent, settings, preferredReviewer);
 
   const slopReport = await auditWorktreeSlop({ runId: run.id, workspacePath });
 
@@ -797,10 +789,12 @@ export async function runCrossProviderCritic(params: {
           header,
           summary,
           '',
-          ...criticIssues.slice(0, 15).map(
-            (c, i) =>
-              `${i + 1}. [${c.severity.toUpperCase()} · ${c.category}] ${c.file ? `\`${c.file}\` — ` : ''}${c.description}\n   Recommendation: ${c.fixRecommendation}`,
-          ),
+          ...criticIssues
+            .slice(0, 15)
+            .map(
+              (c, i) =>
+                `${i + 1}. [${c.severity.toUpperCase()} · ${c.category}] ${c.file ? `\`${c.file}\` — ` : ''}${c.description}\n   Recommendation: ${c.fixRecommendation}`,
+            ),
           '',
           'Please resolve each critic finding above and verify the build and tests pass.',
         ].join('\n')
@@ -823,11 +817,7 @@ export async function runCrossProviderCritic(params: {
   try {
     const dir = path.join(workspacePath, '.emberline');
     await mkdir(dir, { recursive: true });
-    await writeFile(
-      path.join(dir, `cross-critic-${run.id}.json`),
-      JSON.stringify(result, null, 2),
-      'utf8',
-    );
+    await writeFile(path.join(dir, `cross-critic-${run.id}.json`), JSON.stringify(result, null, 2), 'utf8');
   } catch {
     // non-fatal
   }

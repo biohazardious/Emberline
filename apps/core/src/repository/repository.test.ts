@@ -85,9 +85,14 @@ describe('repository status', () => {
     });
   });
 
-  it('an http remote outside the account\'s sub-path has no account', async () => {
+  it("an http remote outside the account's sub-path has no account", async () => {
     t.db.delete(forgeAccounts).run();
-    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: `${forge.url}/gitea`, token: TOKEN, username: 'alice' });
+    seedForgeAccount(t.db, {
+      provider: 'gitea',
+      serverUrl: `${forge.url}/gitea`,
+      token: TOKEN,
+      username: 'alice',
+    });
     git(projectPath, 'remote', 'add', 'origin', `${forge.url}/other/app.git`);
     expect((await status()).account).toBeNull();
     git(projectPath, 'remote', 'set-url', 'origin', `${forge.url}/gitea/acme/app.git`);
@@ -501,7 +506,8 @@ describe('a token typed into the connected origin, on a host with an account', (
     expect(res.statusCode, res.body).toBe(200);
     const basic = forge.seen.filter((r) => r.authorization?.startsWith('Basic '));
     expect(basic.length).toBeGreaterThan(0);
-    for (const r of basic) expect(Buffer.from(r.authorization!.slice(6), 'base64').toString()).toBe(`alice:${TOKEN}`);
+    for (const r of basic)
+      expect(Buffer.from(r.authorization!.slice(6), 'base64').toString()).toBe(`alice:${TOKEN}`);
     expect(JSON.stringify(readRepositorySettings(t.db, projectId))).not.toContain('typed-by-hand');
   });
 });
@@ -530,20 +536,29 @@ describe('an import whose URL holds a token, on a host without an account', () =
       const { project } = made.json();
       expect(made.body).not.toContain(secret);
       const repoUrlOf = () =>
-        (t.db.$client.prepare('select repo_url from projects where id = ?').get(project.id) as { repo_url: string })
-          .repo_url;
+        (
+          t.db.$client.prepare('select repo_url from projects where id = ?').get(project.id) as {
+            repo_url: string;
+          }
+        ).repo_url;
       // Stored clean from the start: the token never reaches the database.
       expect(repoUrlOf()).toBe(clean);
       await vi.waitFor(
         async () =>
-          expect((await send('GET', `/api/projects/${project.id}/import-status`)).json().status).toBe('ready'),
+          expect((await send('GET', `/api/projects/${project.id}/import-status`)).json().status).toBe(
+            'ready',
+          ),
         { timeout: 10_000 },
       );
       // origin keeps what the person typed, so git still authenticates.
       expect(git(project.path, 'remote', 'get-url', 'origin')).toBe(withToken);
       const statusOf = async (): Promise<RepositoryStatus> =>
         (await send('GET', `/api/projects/${project.id}/repository`)).json();
-      expect(await statusOf()).toMatchObject({ originUrl: clean, originHasCredentials: true, connected: true });
+      expect(await statusOf()).toMatchObject({
+        originUrl: clean,
+        originHasCredentials: true,
+        connected: true,
+      });
 
       const refreshed = await send('POST', `/api/projects/${project.id}/repository/refresh`);
       expect(refreshed.statusCode, refreshed.body).toBe(200);
@@ -561,7 +576,10 @@ describe('an import whose URL holds a token, on a host without an account', () =
       const sqlite = t.db.$client;
       const exec = vi.spyOn(sqlite, 'exec');
       try {
-        expect(encryptStoredSecrets(sqlite, installedSecretsKey())).toEqual({ encrypted: 0, cleanedRepoUrls: 0 });
+        expect(encryptStoredSecrets(sqlite, installedSecretsKey())).toEqual({
+          encrypted: 0,
+          cleanedRepoUrls: 0,
+        });
         expect(exec).not.toHaveBeenCalled();
       } finally {
         exec.mockRestore();

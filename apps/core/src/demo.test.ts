@@ -23,7 +23,10 @@ beforeEach(async () => {
   projectId = project.id;
   projectPath = project.path;
   mkdirSync(path.join(projectPath, 'dist', 'assets'), { recursive: true });
-  writeFileSync(path.join(projectPath, 'dist', 'index.html'), '<!doctype html><html><head></head><body>hi</body></html>');
+  writeFileSync(
+    path.join(projectPath, 'dist', 'index.html'),
+    '<!doctype html><html><head></head><body>hi</body></html>',
+  );
   writeFileSync(path.join(projectPath, 'dist', 'assets', 'app.js'), 'console.log(1);');
   writeFileSync(path.join(projectPath, 'secret.txt'), 'top secret');
 });

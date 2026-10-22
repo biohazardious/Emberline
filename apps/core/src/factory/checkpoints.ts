@@ -57,14 +57,7 @@ export async function exportProjectTarGz(workspacePath: string): Promise<Buffer>
     // archived as links, never followed), so nothing from the workspace executes.
     await execFileAsync(
       'tar',
-      [
-        '-czf',
-        tmpFile,
-        '--exclude=.git',
-        '--exclude=node_modules',
-        '--exclude=.emberline',
-        '.',
-      ],
+      ['-czf', tmpFile, '--exclude=.git', '--exclude=node_modules', '--exclude=.emberline', '.'],
       { cwd: workspacePath, timeout: 60_000 },
     );
     return await readFile(tmpFile);

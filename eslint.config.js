@@ -5,7 +5,16 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', 'workspaces/**', '.wolf/**', '.claude/**', '.codex/**', '.opencode/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      'workspaces/**',
+      '.wolf/**',
+      '.claude/**',
+      '.codex/**',
+      '.opencode/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

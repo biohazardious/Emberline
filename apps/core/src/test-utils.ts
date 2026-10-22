@@ -115,24 +115,29 @@ export async function createTestApp(
   const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
   const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
   const postMerge = new PostMergeJobs(opened.db, runs);
-  const recovery = new RecoveryService(opened.db, runs, scheduler, { completionReminder: (run) => tickets.completionReminder(run, '\n\n') });
+  const recovery = new RecoveryService(opened.db, runs, scheduler, {
+    completionReminder: (run) => tickets.completionReminder(run, '\n\n'),
+  });
   const repository = new RepositoryService(opened.db, forge.accounts, runs.gitGateway);
   const mainPush = new KeepMainPushed(opened.db, runs, repository);
-  const app = await buildServer({
-    config,
-    db: opened.db,
-    ptyd,
-    runs,
-    tickets,
-    scheduler,
-    presence,
-    forge,
-    issueSync,
-    postMerge,
-    recovery,
-    repository,
-    mainPush,
-  }, fastifyOptions);
+  const app = await buildServer(
+    {
+      config,
+      db: opened.db,
+      ptyd,
+      runs,
+      tickets,
+      scheduler,
+      presence,
+      forge,
+      issueSync,
+      postMerge,
+      recovery,
+      repository,
+      mainPush,
+    },
+    fastifyOptions,
+  );
   return {
     app,
     config,
@@ -171,7 +176,10 @@ export const CSRF = { [CSRF_HEADER]: '1' };
 const sessionKeys = new Map<string, string>();
 
 /** The cookie header of a setup/login response; remembers its key for authHeaders/wsProtocols. */
-export function sessionFrom(res: { cookies: { name: string; value: string }[]; json: () => unknown }): string {
+export function sessionFrom(res: {
+  cookies: { name: string; value: string }[];
+  json: () => unknown;
+}): string {
   const cookie = res.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
   sessionKeys.set(cookie, (res.json() as SessionIssued).sessionKey);
   return cookie;
@@ -185,15 +193,24 @@ export const keyOf = (cookie: string): string => {
 };
 
 /** Headers of a signed-in mutation: the cookie and its per-login key. */
-export const authHeaders = (cookie: string): Record<string, string> => ({ cookie, [CSRF_HEADER]: keyOf(cookie) });
+export const authHeaders = (cookie: string): Record<string, string> => ({
+  cookie,
+  [CSRF_HEADER]: keyOf(cookie),
+});
 
 /** The subprotocols a signed-in WebSocket offers (`ws` client's second argument). */
-export const wsProtocols = (cookie: string): string[] => [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${keyOf(cookie)}`];
+export const wsProtocols = (cookie: string): string[] => [
+  WS_PROTOCOL,
+  `${SESSION_KEY_PROTOCOL_PREFIX}${keyOf(cookie)}`,
+];
 
 /** Runs first-time setup and returns the session cookie header value. */
 export const TEST_SETUP_TOKEN = 'test-setup-token';
 
-export async function setupAndLogin(app: FastifyInstance, password = 'correct horse battery'): Promise<string> {
+export async function setupAndLogin(
+  app: FastifyInstance,
+  password = 'correct horse battery',
+): Promise<string> {
   const res = await app.inject({
     method: 'POST',
     url: '/api/auth/setup',
@@ -208,7 +225,13 @@ export async function setupAndLogin(app: FastifyInstance, password = 'correct ho
 /** A forge account without a forge call (tests); `apiUrl` defaults to the derived one. */
 export function seedForgeAccount(
   db: OpenedDb['db'],
-  input: { provider: ForgeProvider; serverUrl: string; token: string; username?: string | null; apiUrl?: string },
+  input: {
+    provider: ForgeProvider;
+    serverUrl: string;
+    token: string;
+    username?: string | null;
+    apiUrl?: string;
+  },
 ): string {
   const serverUrl = normalizeServerUrl(input.serverUrl);
   if (!serverUrl) throw new Error(`bad server URL ${input.serverUrl}`);

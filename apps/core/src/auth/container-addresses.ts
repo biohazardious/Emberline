@@ -130,7 +130,10 @@ export class ContainerAddresses {
   /** Whether `ip` is one of the containers' addresses (after the first resolution, bounded). */
   async has(ip: string | undefined): Promise<boolean> {
     if (this.hosts.length === 0 || !ip) return false;
-    await Promise.race([this.first, new Promise((resolve) => setTimeout(resolve, FIRST_RESOLVE_WAIT_MS).unref())]);
+    await Promise.race([
+      this.first,
+      new Promise((resolve) => setTimeout(resolve, FIRST_RESOLVE_WAIT_MS).unref()),
+    ]);
     const wanted = normalizeIp(ip);
     for (const set of this.byHost.values()) if (set.has(wanted)) return true;
     return false;

@@ -1,9 +1,18 @@
-import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncResponse, IssueSyncStatus } from '@emberline/protocol';
+import type {
+  ForgeIssueListResponse,
+  ImportIssuesResponse,
+  IssueSyncResponse,
+  IssueSyncStatus,
+} from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { IssueSyncService } from '../forge/issue-sync.js';
 import type { IssueImportService } from '../tickets/issue-import.js';
 
-export function registerIssueRoutes(app: FastifyInstance, issues: IssueImportService, sync: IssueSyncService): void {
+export function registerIssueRoutes(
+  app: FastifyInstance,
+  issues: IssueImportService,
+  sync: IssueSyncService,
+): void {
   app.get<{ Params: { id: string } }>(
     '/api/projects/:id/issues',
     async (request): Promise<ForgeIssueListResponse> => issues.list(request.params.id, request.query),

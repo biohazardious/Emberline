@@ -80,7 +80,10 @@ const asString = (value: unknown) => (typeof value === 'string' ? value : '');
  * A hook text field, trimmed. The wrapper cuts its error detail with `tail -c`, which can split a
  * multi-byte character; the leftover bytes decode to U+FFFD at the start, so those are dropped.
  */
-const cleanField = (value: unknown) => asString(value).replace(/^[\s\uFFFD]+/, '').trim();
+const cleanField = (value: unknown) =>
+  asString(value)
+    .replace(/^[\s\uFFFD]+/, '')
+    .trim();
 
 /** Where the CLI's raw error detail starts: Antigravity's `AGY_ERROR:` dump or a JSON blob. */
 const ERROR_DETAIL = /\s*(?:\bAGY_ERROR:|\{)/g;
@@ -92,7 +95,11 @@ const RESET_CLAUSE = /\bresets?\b/gi;
 const SENTENCE_END = /[.!?](?=\s|$)|\n| — /g;
 
 /** The first match of the global `pattern` at or after `from`, or -1. */
-function indexFrom(pattern: RegExp, text: string, from: number): { index: number; length: number } | undefined {
+function indexFrom(
+  pattern: RegExp,
+  text: string,
+  from: number,
+): { index: number; length: number } | undefined {
   pattern.lastIndex = from;
   const match = pattern.exec(text);
   return match ? { index: match.index, length: match[0].length } : undefined;
@@ -181,7 +188,12 @@ const PERMANENT_ERROR_PATTERN =
 
 /** Claude Code's `StopFailure` error kinds. */
 const TRANSIENT_ERROR_KINDS = new Set(['server_error', 'overloaded', 'api_error', 'network_error']);
-const PERMANENT_ERROR_KINDS = new Set(['authentication_failed', 'billing_error', 'invalid_request', 'max_output_tokens']);
+const PERMANENT_ERROR_KINDS = new Set([
+  'authentication_failed',
+  'billing_error',
+  'invalid_request',
+  'max_output_tokens',
+]);
 
 export interface TransientErrorInfo {
   /** The error as reported (trimmed, single line). */
@@ -253,13 +265,18 @@ export function rateLimitFromScreen(
 }
 
 /** Parses the reset time out of a limit message; undefined when there is none. */
-export function parseResetTime(text: string, now: Date = new Date(), defaultTimeZone = 'UTC'): Date | undefined {
+export function parseResetTime(
+  text: string,
+  now: Date = new Date(),
+  defaultTimeZone = 'UTC',
+): Date | undefined {
   const epoch = /\|(\d{10})\b/.exec(text);
   if (epoch) return new Date(Number(epoch[1]) * 1000);
 
-  const relative = /resets?\s+in\s+(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?|s)?)?)?(?:\s*\d+\s*s(?:ec(?:onds?)?)?)?/i.exec(
-    text,
-  );
+  const relative =
+    /resets?\s+in\s+(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?|s)?)?)?(?:\s*\d+\s*s(?:ec(?:onds?)?)?)?/i.exec(
+      text,
+    );
   if (relative && (relative[1] || relative[2])) {
     const minutes = Number(relative[1] ?? 0) * 60 + Number(relative[2] ?? 0);
     return new Date(now.getTime() + minutes * 60_000);
@@ -352,7 +369,14 @@ function zoneOffset(ts: number, zone: string): number {
 }
 
 /** The instant at which the wall clock in `zone` shows the given time. Day overflow is allowed. */
-function zonedToUtc(year: number, month: number, day: number, hour: number, minute: number, zone: string): Date {
+function zonedToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  zone: string,
+): Date {
   const guess = Date.UTC(year, month, day, hour, minute);
   let ts = guess - zoneOffset(guess, zone);
   // Re-check once across DST boundaries.

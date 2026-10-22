@@ -182,7 +182,17 @@ export function planNewProject(
   });
   const composePreview = previewsComposeService(choices, preset, { dockerEngine });
   const startFactory = body.startFactory ?? true;
-  const ctx = { name: body.name, appType, choices, preset, vision, composePreview, factoryPlans: startFactory && vision.length > 0, materialsText, referenceFiles: materials.length > 0 };
+  const ctx = {
+    name: body.name,
+    appType,
+    choices,
+    preset,
+    vision,
+    composePreview,
+    factoryPlans: startFactory && vision.length > 0,
+    materialsText,
+    referenceFiles: materials.length > 0,
+  };
   const tickets = [bootstrapTicket(ctx), deployTicket(ctx)].filter((x): x is WizardTicketSpec => x !== null);
 
   return {
@@ -208,9 +218,19 @@ export function planNewProject(
 
 /** The ticket list the summary shows; the `[Factory]` ticket exists only when the factory starts and there is a vision. */
 export function plannedTickets(plan: ProjectPlan): PlannedTicket[] {
-  const list: PlannedTicket[] = plan.tickets.map(({ key, title, persona, dependsOn }) => ({ key, title, persona, dependsOn }));
+  const list: PlannedTicket[] = plan.tickets.map(({ key, title, persona, dependsOn }) => ({
+    key,
+    title,
+    persona,
+    dependsOn,
+  }));
   if (plan.startFactory && plan.vision) {
-    list.push({ key: 'factory', title: factoryTicketTitle(plan.vision), persona: 'product_owner', dependsOn: ['bootstrap'] });
+    list.push({
+      key: 'factory',
+      title: factoryTicketTitle(plan.vision),
+      persona: 'product_owner',
+      dependsOn: ['bootstrap'],
+    });
   }
   return list;
 }

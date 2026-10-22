@@ -101,8 +101,11 @@ export function supportsRivalReview(agent: AgentId): boolean {
 }
 
 /** The run's changes against the branch it started from, plus untracked files, capped in size. */
-export async function collectReviewDiff(workspacePath: string): Promise<{ diff: string; truncated: boolean }> {
-  const git = (args: string[]) => execGitFile(['-C', workspacePath, ...args], { timeout: 30_000 }).then((r) => r.stdout);
+export async function collectReviewDiff(
+  workspacePath: string,
+): Promise<{ diff: string; truncated: boolean }> {
+  const git = (args: string[]) =>
+    execGitFile(['-C', workspacePath, ...args], { timeout: 30_000 }).then((r) => r.stdout);
   const base = (await branchBase(workspacePath)) ?? 'HEAD';
   let diff = await git(['diff', '--no-color', base]).catch(() => '');
   const untracked = (await git(['ls-files', '--others', '--exclude-standard']).catch(() => ''))
@@ -176,7 +179,10 @@ export async function runRivalReview(params: {
     envelope = JSON.parse(result.stdout.trim()) as typeof envelope;
   } catch {
     const detail = (result.stderr || result.stdout).trim().split('\n').at(-1)?.slice(0, 200) ?? '';
-    return { ok: false, reason: `${params.reviewer} exited ${result.exitCode}${detail ? `: ${detail}` : ''}` };
+    return {
+      ok: false,
+      reason: `${params.reviewer} exited ${result.exitCode}${detail ? `: ${detail}` : ''}`,
+    };
   }
   if (envelope.is_error) return { ok: false, reason: `${params.reviewer} reported an error` };
   const parsed = RivalReview.safeParse(envelope.structured_output);

@@ -308,7 +308,9 @@ describe('wizard materials: committed and listed', () => {
     expect(res.statusCode).toBe(201);
     const { project } = res.json() as CreateProjectResponse;
     const deploy = t.tickets.list(project.id).find((x) => x.title.startsWith('Deploy'))!;
-    expect(deploy.body).toContain('Add `docs/reference/` to `.dockerignore`, so the reference files stay out of the image.');
+    expect(deploy.body).toContain(
+      'Add `docs/reference/` to `.dockerignore`, so the reference files stay out of the image.',
+    );
   });
 
   it('links are never opened: no fetch, no runner command carries them', async () => {

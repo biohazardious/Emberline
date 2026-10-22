@@ -61,7 +61,19 @@ describe('WorktreeConfig v1', () => {
     expect(bad({ setup: [''] }).success).toBe(false);
   });
   it('rejects absolute, parent-escaping and malformed copy paths', () => {
-    for (const p of ['/etc/passwd', '../x', 'a/../../x', 'a/..', '..', '~/x', 'C:\\x', '\\\\srv\\x', 'a\\..\\b', '', 'a\0b']) {
+    for (const p of [
+      '/etc/passwd',
+      '../x',
+      'a/../../x',
+      'a/..',
+      '..',
+      '~/x',
+      'C:\\x',
+      '\\\\srv\\x',
+      'a\\..\\b',
+      '',
+      'a\0b',
+    ]) {
       expect(bad({ copy: [p] }).success, p).toBe(false);
       expect(bad({ copy: [{ path: p }] }).success, `obj ${p}`).toBe(false);
     }
@@ -69,10 +81,22 @@ describe('WorktreeConfig v1', () => {
   });
   it('rejects bad copy mode and duplicate or bad service names, and two preview services', () => {
     expect(bad({ copy: [{ path: '.env', mode: 'move' }] }).success).toBe(false);
-    expect(bad({ services: [{ name: 'a', command: 'x' }, { name: 'a', command: 'y' }] }).success).toBe(false);
+    expect(
+      bad({
+        services: [
+          { name: 'a', command: 'x' },
+          { name: 'a', command: 'y' },
+        ],
+      }).success,
+    ).toBe(false);
     expect(bad({ services: [{ name: 'a b', command: 'x' }] }).success).toBe(false);
     expect(
-      bad({ services: [{ name: 'a', command: 'x', preview: true }, { name: 'b', command: 'y', preview: true }] }).success,
+      bad({
+        services: [
+          { name: 'a', command: 'x', preview: true },
+          { name: 'b', command: 'y', preview: true },
+        ],
+      }).success,
     ).toBe(false);
   });
   it('trims commands and rejects whitespace-only ones', () => {
@@ -99,14 +123,21 @@ describe('WorktreeConfig v2: compose services', () => {
     expect(r.success).toBe(true);
     if (!r.success) return;
     expect(r.data.version).toBe(2);
-    expect(r.data.services[1]).toEqual({ name: 'web', compose: { file: 'compose.yaml', service: 'web', port: 8080 }, preview: true });
+    expect(r.data.services[1]).toEqual({
+      name: 'web',
+      compose: { file: 'compose.yaml', service: 'web', port: 8080 },
+      preview: true,
+    });
     expect(r.data.services[2]?.compose?.file).toBe('deploy/compose.dev.yml');
   });
   it('v1 files stay valid and unchanged', () => {
     expect(WorktreeConfig.parse(SPEC_EXAMPLE)).toMatchObject({ version: 1, services: SPEC_EXAMPLE.services });
   });
   it('rejects a compose entry in a version 1 file', () => {
-    const r = WorktreeConfig.safeParse({ version: 1, services: [{ name: 'web', compose: { service: 'web', port: 80 } }] });
+    const r = WorktreeConfig.safeParse({
+      version: 1,
+      services: [{ name: 'web', compose: { service: 'web', port: 80 } }],
+    });
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error.issues.map((i) => i.message).join()).toMatch(/version: 2/);
   });
@@ -115,15 +146,29 @@ describe('WorktreeConfig v2: compose services', () => {
     expect(v2([{ name: 'web', command: 'x', compose: { service: 'web', port: 80 } }]).success).toBe(false);
   });
   it('keeps keys strict in compose entries', () => {
-    expect(v2([{ name: 'web', compose: { service: 'web', port: 80, ports: ['80:80'] } }]).success).toBe(false);
+    expect(v2([{ name: 'web', compose: { service: 'web', port: 80, ports: ['80:80'] } }]).success).toBe(
+      false,
+    );
     expect(v2([{ name: 'web', compose: { service: 'web', port: 80 }, extra: true }]).success).toBe(false);
     expect(WorktreeConfig.safeParse({ version: 2, extra: 1 }).success).toBe(false);
   });
   it('validates the compose file, service and port', () => {
-    const entry = (compose: Record<string, unknown>) => v2([{ name: 'web', compose: { service: 'web', port: 80, ...compose } }]).success;
-    for (const file of ['/etc/compose.yaml', '../compose.yaml', 'a/../../c.yml', '-', '-f', '~/c.yml', 'C:\\c.yml', '', 'a\0b'])
+    const entry = (compose: Record<string, unknown>) =>
+      v2([{ name: 'web', compose: { service: 'web', port: 80, ...compose } }]).success;
+    for (const file of [
+      '/etc/compose.yaml',
+      '../compose.yaml',
+      'a/../../c.yml',
+      '-',
+      '-f',
+      '~/c.yml',
+      'C:\\c.yml',
+      '',
+      'a\0b',
+    ])
       expect(entry({ file }), file).toBe(false);
-    for (const service of ['', '-web', 'a b', 'web;rm', 'x'.repeat(64)]) expect(entry({ service }), service).toBe(false);
+    for (const service of ['', '-web', 'a b', 'web;rm', 'x'.repeat(64)])
+      expect(entry({ service }), service).toBe(false);
     for (const port of [0, 65536, 80.5, '80', -1]) expect(entry({ port }), String(port)).toBe(false);
     expect(entry({ port: 1 })).toBe(true);
     expect(entry({ port: 65535 })).toBe(true);
@@ -153,7 +198,12 @@ describe('editing worktree.yml from Project settings', () => {
     ]) {
       expect(isWorktreeYmlPath(rel), rel).toBe(true);
     }
-    for (const rel of ['.emberline/worktree.yaml', 'x/.emberline/worktree.yml', '.emberline', 'worktree.yml']) {
+    for (const rel of [
+      '.emberline/worktree.yaml',
+      'x/.emberline/worktree.yml',
+      '.emberline',
+      'worktree.yml',
+    ]) {
       expect(isWorktreeYmlPath(rel), rel).toBe(false);
     }
   });
@@ -169,27 +219,65 @@ describe('editing worktree.yml from Project settings', () => {
 
   it('SaveWorktreeConfigBody caps the content at the worktree.yml size and wants a full sha or null', () => {
     const sha = 'a'.repeat(64);
-    expect(SaveWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES), baseSha256: sha }).success).toBe(true);
-    expect(SaveWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1), baseSha256: sha }).success).toBe(false);
+    expect(
+      SaveWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES), baseSha256: sha })
+        .success,
+    ).toBe(true);
+    expect(
+      SaveWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1), baseSha256: sha })
+        .success,
+    ).toBe(false);
     // The cap counts bytes: 2-byte characters reach it at half the length.
-    expect(SaveWorktreeConfigBody.safeParse({ content: 'é'.repeat(MAX_WORKTREE_YML_BYTES / 2 + 1), baseSha256: null }).success).toBe(false);
-    expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: 'a'.repeat(63) }).success).toBe(false);
-    expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: null }).success).toBe(true);
-    expect(ValidateWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1) }).success).toBe(false);
+    expect(
+      SaveWorktreeConfigBody.safeParse({
+        content: 'é'.repeat(MAX_WORKTREE_YML_BYTES / 2 + 1),
+        baseSha256: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: 'a'.repeat(63) }).success,
+    ).toBe(false);
+    expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: null }).success).toBe(
+      true,
+    );
+    expect(
+      ValidateWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1) }).success,
+    ).toBe(false);
   });
 });
 
 describe('container preview bodies', () => {
   it('take only the four compose file names, a compose service name and a port', () => {
-    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 8080 }).success).toBe(true);
-    expect(ContainerPreviewChoice.safeParse({ file: 'deploy/compose.yaml', service: 'web', port: 8080 }).success).toBe(false);
-    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: '-x', port: 8080 }).success).toBe(false);
-    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 0 }).success).toBe(false);
-    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 8080, extra: 1 }).success).toBe(false);
-    expect(UseContainerPreviewBody.safeParse({ file: 'compose.yml', service: 'web', port: 80, baseSha256: null }).success).toBe(true);
-    expect(UseContainerPreviewBody.safeParse({ file: 'compose.yml', service: 'web', port: 80 }).success).toBe(false);
+    expect(
+      ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 8080 }).success,
+    ).toBe(true);
+    expect(
+      ContainerPreviewChoice.safeParse({ file: 'deploy/compose.yaml', service: 'web', port: 8080 }).success,
+    ).toBe(false);
+    expect(
+      ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: '-x', port: 8080 }).success,
+    ).toBe(false);
+    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 0 }).success).toBe(
+      false,
+    );
+    expect(
+      ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 8080, extra: 1 })
+        .success,
+    ).toBe(false);
+    expect(
+      UseContainerPreviewBody.safeParse({ file: 'compose.yml', service: 'web', port: 80, baseSha256: null })
+        .success,
+    ).toBe(true);
+    expect(UseContainerPreviewBody.safeParse({ file: 'compose.yml', service: 'web', port: 80 }).success).toBe(
+      false,
+    );
   });
   it('lists the file names in the spec order', () => {
-    expect(COMPOSE_FILE_NAMES).toEqual(['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml']);
+    expect(COMPOSE_FILE_NAMES).toEqual([
+      'compose.yaml',
+      'compose.yml',
+      'docker-compose.yaml',
+      'docker-compose.yml',
+    ]);
   });
 });

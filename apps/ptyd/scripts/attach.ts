@@ -14,7 +14,8 @@ import { PtydClient } from '../src/client.js';
 const DETACH_KEY = '\x1d'; // Ctrl-]
 
 const socketPath =
-  process.env.EMBERLINE_PTYD_SOCKET ?? path.join(process.env.XDG_RUNTIME_DIR ?? os.tmpdir(), 'emberline', 'ptyd.sock');
+  process.env.EMBERLINE_PTYD_SOCKET ??
+  path.join(process.env.XDG_RUNTIME_DIR ?? os.tmpdir(), 'emberline', 'ptyd.sock');
 
 const client = await PtydClient.connect(socketPath);
 const arg = process.argv[2];

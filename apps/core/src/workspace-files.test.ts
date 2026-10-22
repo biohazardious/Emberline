@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -45,7 +53,9 @@ describe('workspace file explorer containment', () => {
   it('refuses to write through a symlinked file or directory', async () => {
     symlinkSync(path.join(outside, 'secret.txt'), path.join(root, 'link.txt'));
     symlinkSync(outside, path.join(root, 'linked-dir'));
-    await expect(writeWorkspaceFileContent(root, 'main', 'link.txt', 'pwned')).rejects.toThrow(/symlink|outside/i);
+    await expect(writeWorkspaceFileContent(root, 'main', 'link.txt', 'pwned')).rejects.toThrow(
+      /symlink|outside/i,
+    );
     await expect(writeWorkspaceFileContent(root, 'main', 'linked-dir/new.txt', 'pwned')).rejects.toThrow(
       /symlink|outside/i,
     );
@@ -77,7 +87,10 @@ describe('the explorer lists .emberline/worktree.yml and nothing else under .emb
     const listed = await paths();
     expect(listed).toContain('directory:.emberline');
     expect(listed).toContain('file:.emberline/worktree.yml');
-    expect(listed.filter((p) => p.includes('.emberline'))).toEqual(['directory:.emberline', 'file:.emberline/worktree.yml']);
+    expect(listed.filter((p) => p.includes('.emberline'))).toEqual([
+      'directory:.emberline',
+      'file:.emberline/worktree.yml',
+    ]);
     const entry = (await listWorkspaceFilesFlat(root)).find((e) => e.path === '.emberline/worktree.yml');
     expect(entry).toMatchObject({ name: 'worktree.yml', kind: 'file', sizeBytes: 'version: 1\n'.length });
   });

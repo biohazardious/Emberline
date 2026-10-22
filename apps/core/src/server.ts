@@ -95,7 +95,10 @@ function withRequestRedaction(logger: FastifyServerOptions['logger']): FastifySe
   return { ...options, serializers: { ...options.serializers, req: requestLogSerializer } };
 }
 
-export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
+export async function buildServer(
+  deps: CoreDeps,
+  fastifyOptions: FastifyServerOptions = {},
+): Promise<FastifyInstance> {
   const app = Fastify({
     bodyLimit: DEFAULT_BODY_LIMIT,
     // Demo capability tokens travel as a path parameter.
@@ -107,14 +110,19 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   const startedAt = Date.now();
   const presence = deps.presence ?? new PresenceRegistry();
   deps.runs.setLogger(app.log);
-  const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, { presence, log: (message, err) => app.log.error({ err }, message) });
+  const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, {
+    presence,
+    log: (message, err) => app.log.error({ err }, message),
+  });
   const forge = deps.forge ?? new ForgeService(deps.db, deps.runs);
   void forge.accounts.start((message) => app.log.warn(message));
   const cron = new CronService(deps.db, deps.runs, deps.scheduler, deps.config.timeZone);
   const updates = new UpdateService(deps.db, { version: VERSION });
   const issueSync =
     deps.issueSync ??
-    new IssueSyncService(deps.db, deps.tickets, deps.runs, forge, { log: (message, err) => app.log.warn({ err }, message) });
+    new IssueSyncService(deps.db, deps.tickets, deps.runs, forge, {
+      log: (message, err) => app.log.warn({ err }, message),
+    });
   const postMerge =
     deps.postMerge ??
     new PostMergeJobs(deps.db, deps.runs, {
@@ -122,7 +130,8 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     });
   const repository = deps.repository ?? new RepositoryService(deps.db, forge.accounts, deps.runs.gitGateway);
   const mainPush =
-    deps.mainPush ?? new KeepMainPushed(deps.db, deps.runs, repository, { log: (message) => app.log.warn(message) });
+    deps.mainPush ??
+    new KeepMainPushed(deps.db, deps.runs, repository, { log: (message) => app.log.warn(message) });
   // A person's review feedback for a fresh attempt starts the ticket like the Board's Start does.
   const review = new ReviewService(deps.db, deps.runs, {
     log: (message, err) => app.log.warn({ err }, message),
@@ -131,7 +140,11 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
         await deps.tickets.start(
           ticketId,
           { permissionMode, persona },
-          { byPerson: true, extraPromptSection: section, replaceIdleRun: { ids: replaceIdleRuns, reason: 'review_new_run' } },
+          {
+            byPerson: true,
+            extraPromptSection: section,
+            replaceIdleRun: { ids: replaceIdleRuns, reason: 'review_new_run' },
+          },
         )
       ).run,
     // Review feedback asks for more work: a run with the completion tool must signal again.
@@ -139,14 +152,18 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   });
   const recovery =
     deps.recovery ??
-    new RecoveryService(deps.db, deps.runs, deps.scheduler, { completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n') });
+    new RecoveryService(deps.db, deps.runs, deps.scheduler, {
+      completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n'),
+    });
   cron.start();
   notifications.start();
   review.start();
   updates.start();
   issueSync.start();
   // After a merge into main, a running main container preview is rebuilt on its port.
-  postMerge.registerPostMergeStep('refresh main preview', ({ projectId }) => deps.runs.mainPreviews.refresh(projectId));
+  postMerge.registerPostMergeStep('refresh main preview', ({ projectId }) =>
+    deps.runs.mainPreviews.refresh(projectId),
+  );
   postMerge.start();
   mainPush.start();
   // Stored pushes (from before a restart, or kept while the runner was away) run once core listens
@@ -180,7 +197,10 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   // Browsers offer `emberline` plus `emberline.key.<key>` (the per-login key, see auth/plugin.ts);
   // only `emberline` is echoed, so the key never comes back in a response.
   await app.register(websocket, {
-    options: { maxPayload: 1024 * 1024, handleProtocols: (p: Set<string>) => (p.has(WS_PROTOCOL) ? WS_PROTOCOL : false) },
+    options: {
+      maxPayload: 1024 * 1024,
+      handleProtocols: (p: Set<string>) => (p.has(WS_PROTOCOL) ? WS_PROTOCOL : false),
+    },
   });
 
   app.get('/api/health', async (): Promise<HealthResponse> => ({
@@ -196,7 +216,8 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     version: VERSION,
     apiVersion: API_VERSION,
     ptyd: deps.ptyd.status,
-    runnerOutdated: deps.ptyd.status === 'connected' && (deps.ptyd.protocolVersion ?? 0) < PTYD_MIN_PROTOCOL_VERSION,
+    runnerOutdated:
+      deps.ptyd.status === 'connected' && (deps.ptyd.protocolVersion ?? 0) < PTYD_MIN_PROTOCOL_VERSION,
     runnerUpdateAvailable:
       deps.ptyd.status === 'connected' &&
       (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&

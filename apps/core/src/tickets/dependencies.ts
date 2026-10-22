@@ -69,7 +69,12 @@ export function defaultTierEdges(batch: Pick<BatchTicket, 'id' | 'persona'>[]): 
 
 /** Trimmed, lowercased, whitespace collapsed, trailing `.`/`:` removed: the key two drafts or tickets are "the same title" by. */
 export function normalizeTicketTitle(title: string): string {
-  return title.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.:]+$/, '').trimEnd();
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[.:]+$/, '')
+    .trimEnd();
 }
 
 /**
@@ -99,7 +104,9 @@ export function resolveBatchDependencies(
     for (const ref of ticket.dependsOn ?? []) {
       // A ref the schema rewrote (`brand_assets` → `brand-assets`) is still found under its old spelling.
       const dependsOnId =
-        refs.get(ref.toLowerCase()) ?? refs.get(normalizeTicketRef(ref) ?? '') ?? projectKeys.get(ref.toUpperCase());
+        refs.get(ref.toLowerCase()) ??
+        refs.get(normalizeTicketRef(ref) ?? '') ??
+        projectKeys.get(ref.toUpperCase());
       if (!dependsOnId) {
         dropped.push({ ticketId: ticket.id, ref, reason: 'unknown' });
         continue;

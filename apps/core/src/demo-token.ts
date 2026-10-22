@@ -41,7 +41,9 @@ export class DemoTokens {
     const actual = Buffer.from(sig);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
     try {
-      const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Partial<DemoTokenPayload>;
+      const payload = JSON.parse(
+        Buffer.from(body, 'base64url').toString('utf8'),
+      ) as Partial<DemoTokenPayload>;
       if (typeof payload.p !== 'string' || typeof payload.t !== 'string' || typeof payload.e !== 'number') {
         return null;
       }

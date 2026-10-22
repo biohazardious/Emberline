@@ -39,7 +39,13 @@ describe('attachTerminal pre-ready buffers', () => {
       attach: () => new Promise(() => undefined),
       close: vi.fn(),
     });
-    const socket = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() });
+    const socket = Object.assign(new EventEmitter(), {
+      OPEN: 1,
+      readyState: 1,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    });
     attachTerminal(socket as never, 's1', { openViewer: async () => viewer } as never, () => undefined);
     await new Promise((r) => setTimeout(r, 10));
 
@@ -52,8 +58,17 @@ describe('attachTerminal pre-ready buffers', () => {
   it('closes the socket when input piles up before the snapshot is sent', async () => {
     const { EventEmitter } = await import('node:events');
     const { attachTerminal } = await import('./routes/terminals.js');
-    const viewer = Object.assign(new EventEmitter(), { attach: () => new Promise(() => undefined), close: vi.fn() });
-    const socket = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() });
+    const viewer = Object.assign(new EventEmitter(), {
+      attach: () => new Promise(() => undefined),
+      close: vi.fn(),
+    });
+    const socket = Object.assign(new EventEmitter(), {
+      OPEN: 1,
+      readyState: 1,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    });
     attachTerminal(socket as never, 's1', { openViewer: async () => viewer } as never, () => undefined);
     const input = JSON.stringify({ type: 'input', data: 'y'.repeat(60 * 1024) });
     for (let i = 0; i < 10; i++) socket.emit('message', input);

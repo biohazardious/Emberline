@@ -23,7 +23,6 @@ import { describeGitError } from '../git-gateway/gateway.js';
 import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
-
 const MAX_TEXT_BYTES = 512 * 1024;
 const MAX_ARTIFACTS = 200;
 const ARTIFACT_DIRS = ['artifacts', 'screenshots', 'test-results', 'playwright-report'];
@@ -58,7 +57,11 @@ export interface Workspace {
  * Gives a run an isolated git worktree on a fresh branch (PROJECT.md §5.6).
  * Projects that are plain directories (no `.git`) run in place.
  */
-export async function prepareWorkspace(projectPath: string, worktreePath: string, branch: string): Promise<Workspace> {
+export async function prepareWorkspace(
+  projectPath: string,
+  worktreePath: string,
+  branch: string,
+): Promise<Workspace> {
   if (!existsSync(projectPath)) {
     throw conflict('project directory does not exist (is the clone still running, or did it fail?)');
   }
@@ -216,7 +219,11 @@ async function readOpened({ handle, size }: OpenedFile, onChunk: (chunk: Buffer)
 }
 
 /** The whole content of a regular worktree file of at most `max` bytes (null when larger). */
-export async function readWorktreeBytes(worktreePath: string, rel: string, max: number): Promise<Buffer | null> {
+export async function readWorktreeBytes(
+  worktreePath: string,
+  rel: string,
+  max: number,
+): Promise<Buffer | null> {
   const opened = await openWorktreeFile(worktreePath, rel);
   try {
     if (opened.size > max) return null;
@@ -265,7 +272,12 @@ async function contentHashes(worktreePath: string, relPaths: string[]): Promise<
       // Not a regular file reached directly: a link inside the worktree is hashed by its text.
       try {
         if ((await lstat(abs)).isSymbolicLink() && (await parentInside(root, abs))) {
-          result.set(rel, `link:${createHash('sha1').update(await readlink(abs)).digest('hex')}`);
+          result.set(
+            rel,
+            `link:${createHash('sha1')
+              .update(await readlink(abs))
+              .digest('hex')}`,
+          );
         }
       } catch {
         // swapped again or gone: stays null
@@ -287,7 +299,10 @@ export async function assignHashes(worktreePath: string, files: DiffFile[], rawO
     if (blob) f.hash = `deleted:${blob}`;
     else if (f.status !== 'deleted') present.push(f);
   }
-  const hashes = await contentHashes(worktreePath, present.map((f) => f.path));
+  const hashes = await contentHashes(
+    worktreePath,
+    present.map((f) => f.path),
+  );
   for (const f of files) {
     if (f.hash) continue;
     f.hash = hashes.get(f.path) ?? `unhashed:${f.status}:${f.additions}:${f.deletions}`;
@@ -298,13 +313,25 @@ export async function assignHashes(worktreePath: string, files: DiffFile[], rawO
  * Hash of a single file as `inspectDiff` would report it (null when unhashable), without listing the
  * whole diff. A file missing from the worktree reports `deleted:<blob at the base>`.
  */
-export async function hashWorktreeFile(worktreePath: string, baseBranch: string, relPath: string): Promise<string | null> {
+export async function hashWorktreeFile(
+  worktreePath: string,
+  baseBranch: string,
+  relPath: string,
+): Promise<string | null> {
   const { rel } = resolveSafeWorktreePath(worktreePath, relPath);
   const present = (await contentHashes(worktreePath, [rel])).get(rel) ?? null;
   if (present) return present;
-  if (await lstat(path.join(worktreePath, rel)).then(() => true, () => false)) return null;
+  if (
+    await lstat(path.join(worktreePath, rel)).then(
+      () => true,
+      () => false,
+    )
+  )
+    return null;
   const baseRef = await resolveBaseRef(worktreePath, baseBranch);
-  const blob = (await gitRaw(worktreePath, ['rev-parse', '--verify', '-q', `${baseRef}:${rel}`]).catch(() => '')).trim();
+  const blob = (
+    await gitRaw(worktreePath, ['rev-parse', '--verify', '-q', `${baseRef}:${rel}`]).catch(() => '')
+  ).trim();
   return blob ? `deleted:${blob}` : null;
 }
 
@@ -359,7 +386,13 @@ export async function readReviewSide(
       if (isMissing(error)) return null;
       if (error instanceof UnsafePathError) {
         const info = await lstat(abs).catch(() => null);
-        if (info && !info.isSymbolicLink() && !info.isFile() && (await parentInside(path.resolve(worktreePath), abs))) return null;
+        if (
+          info &&
+          !info.isSymbolicLink() &&
+          !info.isFile() &&
+          (await parentInside(path.resolve(worktreePath), abs))
+        )
+          return null;
         throw new Error(`${rel} is a symlink, lies behind one or is not a regular file`);
       }
       throw error;
@@ -370,10 +403,16 @@ export async function readReviewSide(
   }
   const baseRef = await resolveBaseRef(worktreePath, baseBranch);
   let basePath = rel;
-  const exists = (p: string) => gitRaw(worktreePath, ['cat-file', '-e', `${baseRef}:${p}`]).then(() => true, () => false);
+  const exists = (p: string) =>
+    gitRaw(worktreePath, ['cat-file', '-e', `${baseRef}:${p}`]).then(
+      () => true,
+      () => false,
+    );
   if (!(await exists(rel))) {
     // A renamed file's original lives under its old path.
-    const tokens = (await gitRaw(worktreePath, ['diff', baseRef, '--name-status', '-z', '-M']).catch(() => '')).split('\0');
+    const tokens = (
+      await gitRaw(worktreePath, ['diff', baseRef, '--name-status', '-z', '-M']).catch(() => '')
+    ).split('\0');
     let old: string | null = null;
     for (let i = 0; i < tokens.length; i++) {
       const code = tokens[i];
@@ -451,7 +490,8 @@ export async function inspectDiff(
     if (code.startsWith('R') || code.startsWith('C')) {
       const oldP = nameTokens[++i];
       const newP = nameTokens[++i];
-      if (oldP && newP) statusByPath.set(newP, { status: code.startsWith('R') ? 'renamed' : 'added', oldPath: oldP });
+      if (oldP && newP)
+        statusByPath.set(newP, { status: code.startsWith('R') ? 'renamed' : 'added', oldPath: oldP });
     } else {
       const p = nameTokens[++i];
       if (p) statusByPath.set(p, { status: statusFromCode(code), oldPath: null });
@@ -540,7 +580,10 @@ export async function inspectDiff(
   };
 }
 
-async function readGitBlob(worktreePath: string, spec: string): Promise<{ text: string; binary: boolean } | null> {
+async function readGitBlob(
+  worktreePath: string,
+  spec: string,
+): Promise<{ text: string; binary: boolean } | null> {
   try {
     const { stdout } = await execGitFile(['-C', worktreePath, 'show', spec], {
       timeout: 15_000,
@@ -590,7 +633,8 @@ export async function inspectFileDiff(
     modBlob = await readGitBlob(worktreePath, `:${rel}`);
     patch = await gitRaw(worktreePath, ['diff', '--cached', '--', rel]).catch(() => '');
   } else if (scope === 'unstaged') {
-    origBlob = (await readGitBlob(worktreePath, `:${rel}`)) ?? (await readGitBlob(worktreePath, `HEAD:${rel}`));
+    origBlob =
+      (await readGitBlob(worktreePath, `:${rel}`)) ?? (await readGitBlob(worktreePath, `HEAD:${rel}`));
     modBlob = await readWorktreeFile(abs);
     patch = await gitRaw(worktreePath, ['diff', '--', rel]).catch(() => '');
   } else {
@@ -600,7 +644,8 @@ export async function inspectFileDiff(
   }
 
   const binary = Boolean(origBlob?.binary || modBlob?.binary);
-  const status: DiffFileStatus = !origBlob && modBlob ? 'added' : origBlob && !modBlob ? 'deleted' : 'modified';
+  const status: DiffFileStatus =
+    !origBlob && modBlob ? 'added' : origBlob && !modBlob ? 'deleted' : 'modified';
 
   return {
     path: rel,
@@ -683,9 +728,14 @@ export async function pushWorktreeBranch(
 
   if (account) {
     // The account pushes the run's own branch only: an agent may have switched its worktree.
-    if (!branch) throw conflict('this run has no branch of its own; Emberline pushes only a run branch with the forge account');
+    if (!branch)
+      throw conflict(
+        'this run has no branch of its own; Emberline pushes only a run branch with the forge account',
+      );
     if (currentBranch && currentBranch !== branch) {
-      throw conflict(`refusing to push: the run's worktree is on "${currentBranch}", not on its branch "${branch}"`);
+      throw conflict(
+        `refusing to push: the run's worktree is on "${currentBranch}", not on its branch "${branch}"`,
+      );
     }
     let result: 'pushed' | 'rejected';
     try {
@@ -693,10 +743,13 @@ export async function pushWorktreeBranch(
     } catch (error) {
       throw conflict(`git push failed: ${describeGitError(error, account.credential)}`);
     }
-    if (result === 'rejected') throw conflict(`git push failed: the remote ${branch} has commits this run doesn't have`);
+    if (result === 'rejected')
+      throw conflict(`git push failed: the remote ${branch} has commits this run doesn't have`);
     // What `push -u` wrote before: the runner's git, no network.
     await git(worktreePath, ['config', `branch.${branch}.remote`, 'origin']).catch(() => undefined);
-    await git(worktreePath, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]).catch(() => undefined);
+    await git(worktreePath, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]).catch(
+      () => undefined,
+    );
     return { branch, remote: 'origin', output: `Pushed ${branch} to ${account.url}` };
   }
 
@@ -707,7 +760,15 @@ export async function pushWorktreeBranch(
 
   try {
     const { stdout, stderr } = await execGitFile(
-      ['-C', worktreePath, 'push', '--porcelain', '-u', 'origin', `refs/heads/${branchToPush}:refs/heads/${branchToPush}`],
+      [
+        '-C',
+        worktreePath,
+        'push',
+        '--porcelain',
+        '-u',
+        'origin',
+        `refs/heads/${branchToPush}:refs/heads/${branchToPush}`,
+      ],
       { timeout: 60_000 },
     );
     return {
@@ -753,7 +814,10 @@ async function walkRelativeFiles(root: string, subDir: string, out: Set<string>,
  * Lists artifacts (screenshots, traces, reports, and files created/modified during the run)
  * inside the run's worktree.
  */
-export async function listWorktreeArtifacts(worktreePath: string, baseBranch: string): Promise<RunArtifact[]> {
+export async function listWorktreeArtifacts(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<RunArtifact[]> {
   if (!existsSync(worktreePath)) return [];
   const candidates = new Set<string>();
 
@@ -796,7 +860,9 @@ export async function listWorktreeArtifacts(worktreePath: string, baseBranch: st
   }
 
   const kindRank: Record<ArtifactKind, number> = { image: 0, trace: 1, log: 2, document: 3, file: 4 };
-  return artifacts.sort((a, b) => kindRank[a.kind] - kindRank[b.kind] || Date.parse(b.mtime) - Date.parse(a.mtime));
+  return artifacts.sort(
+    (a, b) => kindRank[a.kind] - kindRank[b.kind] || Date.parse(b.mtime) - Date.parse(a.mtime),
+  );
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -817,16 +883,47 @@ const MIME_BY_EXT: Record<string, string> = {
 
 /** Deliverables people install or flash, by extension (lowercase). */
 const BUILD_OUTPUT_EXTENSIONS = new Set([
-  '.apk', '.aab', '.ipa', '.appimage', '.deb', '.rpm', '.snap', '.flatpak', '.exe', '.msi', '.dmg', '.pkg',
-  '.elf', '.hex', '.uf2',
+  '.apk',
+  '.aab',
+  '.ipa',
+  '.appimage',
+  '.deb',
+  '.rpm',
+  '.snap',
+  '.flatpak',
+  '.exe',
+  '.msi',
+  '.dmg',
+  '.pkg',
+  '.elf',
+  '.hex',
+  '.uf2',
 ]);
 /** `.bin` is too generic on its own; it counts inside build output directories (firmware images). */
 const FIRMWARE_BIN_DIR = /(^|\/)(\.pio\/build|build|firmware|out|dist)\//;
 /** Dependency, cache and intermediate directories: never deliverables, and often huge. */
 const BUILD_OUTPUT_SKIP_DIRS = new Set([
-  '.git', 'node_modules', '.pnpm-store', '.gradle', 'intermediates', 'tmp', 'generated', 'kotlin',
-  '.dart_tool', '.pub-cache', 'Pods', '.venv', 'venv', '__pycache__', '.next', '.turbo', '.cache',
-  'libdeps', 'deps', 'incremental', '.fingerprint',
+  '.git',
+  'node_modules',
+  '.pnpm-store',
+  '.gradle',
+  'intermediates',
+  'tmp',
+  'generated',
+  'kotlin',
+  '.dart_tool',
+  '.pub-cache',
+  'Pods',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.next',
+  '.turbo',
+  '.cache',
+  'libdeps',
+  'deps',
+  'incremental',
+  '.fingerprint',
 ]);
 const MAX_BUILD_OUTPUTS = 50;
 const MAX_BUILD_OUTPUT_DIRS = 5000;
@@ -865,7 +962,9 @@ export async function listBuildOutputs(worktreePath: string): Promise<RunBuildOu
   const outputs = found.slice(0, MAX_BUILD_OUTPUTS);
   let tracked = new Set<string>();
   if (outputs.length > 0 && existsSync(path.join(worktreePath, '.git'))) {
-    const listed = await git(worktreePath, ['ls-files', '-z', '--', ...outputs.map((o) => o.rel)]).catch(() => '');
+    const listed = await git(worktreePath, ['ls-files', '-z', '--', ...outputs.map((o) => o.rel)]).catch(
+      () => '',
+    );
     tracked = new Set(listed.split('\0').filter(Boolean));
   }
   return outputs.map((o) => ({
@@ -887,7 +986,8 @@ export async function readWorktreeArtifact(
   if (info.size > 25 * 1024 * 1024) throw conflict('artifact exceeds 25 MB preview limit');
   const buffer = await readFile(abs);
   const ext = path.extname(rel).toLowerCase();
-  const contentType = MIME_BY_EXT[ext] ?? (isBinaryBuffer(buffer) ? 'application/octet-stream' : 'text/plain; charset=utf-8');
+  const contentType =
+    MIME_BY_EXT[ext] ?? (isBinaryBuffer(buffer) ? 'application/octet-stream' : 'text/plain; charset=utf-8');
   return { buffer, contentType, fileName: path.basename(rel) };
 }
 
@@ -908,7 +1008,10 @@ export async function worktreeHasUncommittedWork(worktreePath: string): Promise<
  * removing it would strand them on a branch nobody merged. Fail-closed: any git error (missing
  * default branch, unreadable repo) counts as unmerged.
  */
-export async function worktreeHasUnmergedCommits(worktreePath: string, defaultBranch: string): Promise<boolean> {
+export async function worktreeHasUnmergedCommits(
+  worktreePath: string,
+  defaultBranch: string,
+): Promise<boolean> {
   if (!existsSync(path.join(worktreePath, '.git'))) return false;
   try {
     await git(worktreePath, ['rev-parse', '--verify', '--quiet', `refs/heads/${defaultBranch}`]);
@@ -954,7 +1057,10 @@ async function headShaIn(gitDir: string, commonDir: string): Promise<string | nu
   }
   const packed = await readGitFile(commonDir, 'packed-refs', PACKED_REFS_MAX);
   if (!packed) return null;
-  const sha = packed.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
+  const sha = packed
+    .split('\n')
+    .find((l) => l.endsWith(` ${ref}`))
+    ?.split(' ')[0];
   return sha && GIT_SHA.test(sha) ? sha : null;
 }
 
@@ -965,7 +1071,11 @@ async function headShaIn(gitDir: string, commonDir: string): Promise<string | nu
  * file goes through a verified, capped read and any other layout (a gitdir or commondir elsewhere,
  * odd ref names or shas, links, FIFOs) gives null.
  */
-async function checkedOutSha(workspacePath: string, projectPath: string, linkedOnly: boolean): Promise<string | null> {
+async function checkedOutSha(
+  workspacePath: string,
+  projectPath: string,
+  linkedOnly: boolean,
+): Promise<string | null> {
   try {
     const projectGit = path.join(await realpath(projectPath), '.git');
     if ((await realpath(projectGit)) !== projectGit) return null;
@@ -1009,7 +1119,10 @@ export async function workspaceHeadSha(workspacePath: string, projectPath: strin
 export async function pruneWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
   const resolvedProject = path.resolve(projectPath);
   const resolvedWorktree = path.resolve(worktreePath);
-  if (resolvedWorktree === resolvedProject || !resolvedWorktree.includes(`${path.sep}.worktrees${path.sep}`)) {
+  if (
+    resolvedWorktree === resolvedProject ||
+    !resolvedWorktree.includes(`${path.sep}.worktrees${path.sep}`)
+  ) {
     throw conflict('cannot prune the main project directory; only linked run worktrees can be pruned');
   }
   if (!existsSync(resolvedWorktree)) {
@@ -1024,4 +1137,3 @@ export async function pruneWorktree(projectPath: string, worktreePath: string): 
   }
   return true;
 }
-

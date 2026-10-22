@@ -2474,7 +2474,6 @@ a {
   text-decoration: none;
 }
 
-
 .link-btn {
   padding: 0;
   border: 0;
@@ -3722,11 +3721,19 @@ dialog.cmd-dialog::backdrop {
   flex-shrink: 0;
   background: var(--muted);
 }
-.provider-mark-claude { background: var(--violet); }
+.provider-mark-claude {
+  background: var(--violet);
+}
 .provider-mark-antigravity,
-.provider-mark-gemini { background: var(--info); }
-.provider-mark-codex { background: var(--ok); }
-.provider-mark-aider { background: var(--warn); }
+.provider-mark-gemini {
+  background: var(--info);
+}
+.provider-mark-codex {
+  background: var(--ok);
+}
+.provider-mark-aider {
+  background: var(--warn);
+}
 
 /* Settings > Quota: per-provider limit gauges (QuotaPanel.tsx) */
 .quota-provider-head {
@@ -3782,7 +3789,6 @@ dialog.cmd-dialog::backdrop {
   gap: 8px;
   font-size: 0.73rem;
 }
-
 
 /* --- updates ----------------------------------------------------------------- */
 

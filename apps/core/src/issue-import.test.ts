@@ -1,5 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import type { ForgeIssueListResponse, ImportIssuesResponse, IssueSyncResponse, IssueSyncSettings, Ticket } from '@emberline/protocol';
+import type {
+  ForgeIssueListResponse,
+  ImportIssuesResponse,
+  IssueSyncResponse,
+  IssueSyncSettings,
+  Ticket,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { forgeAccounts, projects, tickets } from './db/schema.js';
@@ -54,7 +60,9 @@ const get = (url: string) => t.app.inject({ method: 'GET', url, headers: { cooki
 const patch = (url: string, payload: unknown) =>
   t.app.inject({ method: 'PATCH', url, headers: authHeaders(cookie), payload: payload as object });
 
-const sel = (...numbers: number[]) => ({ issues: numbers.map((n) => ({ externalId: String(9000 + n), number: n })) });
+const sel = (...numbers: number[]) => ({
+  issues: numbers.map((n) => ({ externalId: String(9000 + n), number: n })),
+});
 
 beforeEach(async () => {
   t = await createTestApp();
@@ -64,7 +72,14 @@ beforeEach(async () => {
   execFileSync('mkdir', ['-p', dir]);
   t.db
     .insert(projects)
-    .values({ id: 'p1', name: 'Demo Project', slug: 'demo-project', repoUrl: 'https://github.com/acme/widget.git', path: dir, createdAt: new Date() })
+    .values({
+      id: 'p1',
+      name: 'Demo Project',
+      slug: 'demo-project',
+      repoUrl: 'https://github.com/acme/widget.git',
+      path: dir,
+      createdAt: new Date(),
+    })
     .run();
   seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
   installForge();
@@ -132,17 +147,36 @@ describe('POST /api/projects/:id/issues/import', () => {
     const [one, four] = out.created as [Ticket, Ticket];
     expect(one).toMatchObject({
       title: 'Issue 1',
-      body: expect.stringMatching(/^Imported from github issue #1 by @octo\. .*\n\n---\nBody 1\n---\n\nSource: https:\/\/github\.com\/acme\/widget\/issues\/1$/s),
+      body: expect.stringMatching(
+        /^Imported from github issue #1 by @octo\. .*\n\n---\nBody 1\n---\n\nSource: https:\/\/github\.com\/acme\/widget\/issues\/1$/s,
+      ),
       persona: 'coder',
       priority: 1,
       status: 'ready',
-      external: { source: 'github', number: 1, url: 'https://github.com/acme/widget/issues/1', state: 'open', labels: ['bug'] },
+      external: {
+        source: 'github',
+        number: 1,
+        url: 'https://github.com/acme/widget/issues/1',
+        state: 'open',
+        labels: ['bug'],
+      },
     });
-    expect(four).toMatchObject({ persona: 'qa', priority: 3, external: { number: 4, labels: ['P0', 'persona:qa'] } });
-    expect(four.body).toContain(`\n---\n${'x'.repeat(18_000)}…\n---\n\nSource: https://github.com/acme/widget/issues/4`);
+    expect(four).toMatchObject({
+      persona: 'qa',
+      priority: 3,
+      external: { number: 4, labels: ['P0', 'persona:qa'] },
+    });
+    expect(four.body).toContain(
+      `\n---\n${'x'.repeat(18_000)}…\n---\n\nSource: https://github.com/acme/widget/issues/4`,
+    );
     expect(events.map((e) => e.key)).toEqual(['DP-1', 'DP-2']);
     const row = t.db.select().from(tickets).where(eq(tickets.id, one.id)).get()!;
-    expect(row).toMatchObject({ externalSource: 'github', externalId: '9001', externalNumber: 1, externalState: 'open' });
+    expect(row).toMatchObject({
+      externalSource: 'github',
+      externalId: '9001',
+      externalNumber: 1,
+      externalState: 'open',
+    });
     expect(row.externalSyncedAt).toBeInstanceOf(Date);
     // Board-created tickets have no link.
     const board = await post('/api/projects/p1/tickets', { title: 'by hand' });
@@ -189,7 +223,17 @@ describe('POST /api/projects/:id/issues/import', () => {
   });
 
   it('a unique violation from a concurrent writer resolves to the existing ticket', () => {
-    const issue = { externalId: '9001', number: 1, title: 'a', body: '', labels: [], url: 'u', author: null, updatedAt: '', state: 'open' as const };
+    const issue = {
+      externalId: '9001',
+      number: 1,
+      title: 'a',
+      body: '',
+      labels: [],
+      url: 'u',
+      author: null,
+      updatedAt: '',
+      state: 'open' as const,
+    };
     const first = t.tickets.importIssues('p1', 'github', [issue], 'backlog');
     const lookup = vi.spyOn(t.tickets, 'linkedTickets').mockImplementationOnce(() => new Map());
     const again = t.tickets.importIssues('p1', 'github', [issue], 'backlog');
@@ -200,23 +244,61 @@ describe('POST /api/projects/:id/issues/import', () => {
   });
 
   it('validates every mapped ticket before creating any', () => {
-    const ok = { externalId: '1', number: 1, title: 'a', body: '', labels: [], url: 'u', author: null, updatedAt: '', state: 'open' as const };
+    const ok = {
+      externalId: '1',
+      number: 1,
+      title: 'a',
+      body: '',
+      labels: [],
+      url: 'u',
+      author: null,
+      updatedAt: '',
+      state: 'open' as const,
+    };
     const bad = { ...ok, externalId: '2', number: 2 };
-    Object.defineProperty(bad, 'labels', { get: () => { throw new Error('boom'); } });
+    Object.defineProperty(bad, 'labels', {
+      get: () => {
+        throw new Error('boom');
+      },
+    });
     expect(() => t.tickets.importIssues('p1', 'github', [ok, bad], 'backlog')).toThrow('boom');
     expect(t.db.select().from(tickets).all()).toHaveLength(0);
   });
 
   it('the unique index rejects a second link for the same issue', () => {
-    t.tickets.importIssues('p1', 'github', [
-      { externalId: '9001', number: 1, title: 'a', body: '', labels: [], url: 'u', author: null, updatedAt: '', state: 'open' },
-    ], 'backlog');
+    t.tickets.importIssues(
+      'p1',
+      'github',
+      [
+        {
+          externalId: '9001',
+          number: 1,
+          title: 'a',
+          body: '',
+          labels: [],
+          url: 'u',
+          author: null,
+          updatedAt: '',
+          state: 'open',
+        },
+      ],
+      'backlog',
+    );
     expect(() =>
       t.db
         .insert(tickets)
         .values({
-          id: 'dup', projectId: 'p1', number: 99, key: 'DP-99', title: 'x', status: 'backlog', position: 1,
-          externalSource: 'github', externalId: '9001', createdAt: new Date(), updatedAt: new Date(),
+          id: 'dup',
+          projectId: 'p1',
+          number: 99,
+          key: 'DP-99',
+          title: 'x',
+          status: 'backlog',
+          position: 1,
+          externalSource: 'github',
+          externalId: '9001',
+          createdAt: new Date(),
+          updatedAt: new Date(),
         })
         .run(),
     ).toThrow(/UNIQUE/i);
@@ -241,8 +323,13 @@ describe('POST /api/projects/:id/issues/import', () => {
 
   it('validates the body: 1 to 50 issues, known status', async () => {
     expect((await post('/api/projects/p1/issues/import', { issues: [] })).statusCode).toBe(400);
-    expect((await post('/api/projects/p1/issues/import', sel(...Array.from({ length: 51 }, (_, i) => i + 1)))).statusCode).toBe(400);
-    expect((await post('/api/projects/p1/issues/import', { ...sel(1), status: 'done' })).statusCode).toBe(400);
+    expect(
+      (await post('/api/projects/p1/issues/import', sel(...Array.from({ length: 51 }, (_, i) => i + 1))))
+        .statusCode,
+    ).toBe(400);
+    expect((await post('/api/projects/p1/issues/import', { ...sel(1), status: 'done' })).statusCode).toBe(
+      400,
+    );
     expect((await post('/api/projects/p1/issues/import', { externalIds: ['9001'] })).statusCode).toBe(400);
   });
 
@@ -250,7 +337,9 @@ describe('POST /api/projects/:id/issues/import', () => {
     const all: Record<number, Record<string, unknown>> = {};
     for (let n = 1; n <= 50; n++) all[n] = ghIssue(n);
     installForge(all);
-    const out = (await post('/api/projects/p1/issues/import', sel(...Array.from({ length: 50 }, (_, i) => i + 1)))).json<ImportIssuesResponse>();
+    const out = (
+      await post('/api/projects/p1/issues/import', sel(...Array.from({ length: 50 }, (_, i) => i + 1)))
+    ).json<ImportIssuesResponse>();
     expect(out.created).toHaveLength(50);
   });
 
@@ -260,11 +349,20 @@ describe('POST /api/projects/:id/issues/import', () => {
     seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'secret' });
     // An origin the agent pointed at another host is not sent the token.
     execFileSync('git', ['-C', `${t.dir}/proj`, 'init', '-q', '-b', 'main']);
-    execFileSync('git', ['-C', `${t.dir}/proj`, 'remote', 'add', 'origin', 'https://evil.example.org/acme/widget.git']);
+    execFileSync('git', [
+      '-C',
+      `${t.dir}/proj`,
+      'remote',
+      'add',
+      'origin',
+      'https://evil.example.org/acme/widget.git',
+    ]);
     t.db.update(projects).set({ repoUrl: null }).where(eq(projects.id, 'p1')).run();
     const res = await post('/api/projects/p1/issues/import', sel(1));
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toMatch(/Add a forge account for evil\.example\.org in Settings → Forge accounts\./);
+    expect(res.json().message).toMatch(
+      /Add a forge account for evil\.example\.org in Settings → Forge accounts\./,
+    );
     expect(seen).toEqual([]);
   });
 });
@@ -278,30 +376,82 @@ const settingsOf = (res: { json(): IssueSyncResponse }): IssueSyncSettings => {
 describe('issue-sync settings', () => {
   it('defaults, round trip and partial updates', async () => {
     const def = settingsOf(await get('/api/projects/p1/issue-sync'));
-    expect(def).toEqual({ enabled: false, label: '', status: 'backlog', closeOnDone: false, commentOnProgress: true, trustedAuthors: [], repo: null });
-    const set = await patch('/api/projects/p1/issue-sync', { enabled: true, label: ' emberline ', status: 'ready' });
+    expect(def).toEqual({
+      enabled: false,
+      label: '',
+      status: 'backlog',
+      closeOnDone: false,
+      commentOnProgress: true,
+      trustedAuthors: [],
+      repo: null,
+    });
+    const set = await patch('/api/projects/p1/issue-sync', {
+      enabled: true,
+      label: ' emberline ',
+      status: 'ready',
+    });
     expect(set.statusCode).toBe(200);
     const pinned = { provider: 'github', repoPath: 'acme/widget' };
-    expect(settingsOf(set)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: false, commentOnProgress: true, trustedAuthors: [], repo: pinned });
+    expect(settingsOf(set)).toEqual({
+      enabled: true,
+      label: 'emberline',
+      status: 'ready',
+      closeOnDone: false,
+      commentOnProgress: true,
+      trustedAuthors: [],
+      repo: pinned,
+    });
     const more = await patch('/api/projects/p1/issue-sync', { closeOnDone: true });
-    expect(settingsOf(more)).toEqual({ enabled: true, label: 'emberline', status: 'ready', closeOnDone: true, commentOnProgress: true, trustedAuthors: [], repo: pinned });
+    expect(settingsOf(more)).toEqual({
+      enabled: true,
+      label: 'emberline',
+      status: 'ready',
+      closeOnDone: true,
+      commentOnProgress: true,
+      trustedAuthors: [],
+      repo: pinned,
+    });
     const trusted = await patch('/api/projects/p1/issue-sync', { trustedAuthors: ['octo'] });
     expect(trusted.json().trustedAuthors).toEqual(['octo']);
-    expect((await patch('/api/projects/p1/issue-sync', { trustedAuthors: Array.from({ length: 51 }, (_, i) => `u${i}`) })).statusCode).toBe(400);
+    expect(
+      (
+        await patch('/api/projects/p1/issue-sync', {
+          trustedAuthors: Array.from({ length: 51 }, (_, i) => `u${i}`),
+        })
+      ).statusCode,
+    ).toBe(400);
     await patch('/api/projects/p1/issue-sync', { trustedAuthors: [] });
     expect(settingsOf(await get('/api/projects/p1/issue-sync'))).toEqual(settingsOf(more));
   });
 
   it('enabling pins the repository of origin; the pin is not writable, and enabling again pins anew', async () => {
-    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x', repo: { provider: 'gitlab', repoPath: 'evil/x' } })).repo).toEqual({
+    expect(
+      settingsOf(
+        await patch('/api/projects/p1/issue-sync', {
+          enabled: true,
+          label: 'x',
+          repo: { provider: 'gitlab', repoPath: 'evil/x' },
+        }),
+      ).repo,
+    ).toEqual({
       provider: 'github',
       repoPath: 'acme/widget',
     });
-    t.db.update(projects).set({ repoUrl: 'https://github.com/acme/renamed.git' }).where(eq(projects.id, 'p1')).run();
+    t.db
+      .update(projects)
+      .set({ repoUrl: 'https://github.com/acme/renamed.git' })
+      .where(eq(projects.id, 'p1'))
+      .run();
     // Still enabled: the pin stays (label sync refuses the other repository).
-    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { label: 'y' })).repo).toEqual({ provider: 'github', repoPath: 'acme/widget' });
+    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { label: 'y' })).repo).toEqual({
+      provider: 'github',
+      repoPath: 'acme/widget',
+    });
     expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: false })).repo).toBeNull();
-    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: true })).repo).toEqual({ provider: 'github', repoPath: 'acme/renamed' });
+    expect(settingsOf(await patch('/api/projects/p1/issue-sync', { enabled: true })).repo).toEqual({
+      provider: 'github',
+      repoPath: 'acme/renamed',
+    });
   });
 
   it('409 "connect the forge first" when enabling without a usable remote; nothing is stored', async () => {
@@ -319,11 +469,22 @@ describe('issue-sync settings', () => {
     // An origin on a host the token is not trusted with.
     const dir = `${t.dir}/proj`;
     execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'main']);
-    execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://git.unknown.example/acme/widget.git']);
+    execFileSync('git', [
+      '-C',
+      dir,
+      'remote',
+      'add',
+      'origin',
+      'https://git.unknown.example/acme/widget.git',
+    ]);
     const untrusted = await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
     expect(untrusted.statusCode).toBe(409);
     expect(untrusted.json().message).toMatch(/^connect the forge first: /);
-    expect(settingsOf(await get('/api/projects/p1/issue-sync'))).toMatchObject({ enabled: false, label: '', repo: null });
+    expect(settingsOf(await get('/api/projects/p1/issue-sync'))).toMatchObject({
+      enabled: false,
+      label: '',
+      repo: null,
+    });
     // Settings that do not enable sync need no forge.
     expect((await patch('/api/projects/p1/issue-sync', { label: 'later' })).statusCode).toBe(200);
   });
@@ -332,7 +493,9 @@ describe('issue-sync settings', () => {
     const bad = await patch('/api/projects/p1/issue-sync', { enabled: true });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().message).toMatch(/label/);
-    expect((await patch('/api/projects/p1/issue-sync', { enabled: true, label: '   ' })).statusCode).toBe(400);
+    expect((await patch('/api/projects/p1/issue-sync', { enabled: true, label: '   ' })).statusCode).toBe(
+      400,
+    );
     expect((await get('/api/projects/p1/issue-sync')).json().enabled).toBe(false);
     await patch('/api/projects/p1/issue-sync', { enabled: true, label: 'x' });
     expect((await patch('/api/projects/p1/issue-sync', { label: '' })).statusCode).toBe(400);

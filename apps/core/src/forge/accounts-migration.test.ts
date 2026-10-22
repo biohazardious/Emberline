@@ -311,7 +311,10 @@ describe('account views and sub-path servers', () => {
     project('s2', 'git@host.example:gitea/widget.git');
     seedForgeAccount(t.db, { provider: 'gitea', serverUrl: 'https://host.example/gitea', token: 'tok' });
     const target = await new ForgeService(t.db, t.runs).projectRemote('s2');
-    expect(target.remote).toMatchObject({ repoPath: 'gitea/widget', apiBaseUrl: 'https://host.example/gitea/api/v1' });
+    expect(target.remote).toMatchObject({
+      repoPath: 'gitea/widget',
+      apiBaseUrl: 'https://host.example/gitea/api/v1',
+    });
   });
 });
 

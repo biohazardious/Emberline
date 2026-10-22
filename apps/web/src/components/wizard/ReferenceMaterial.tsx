@@ -1,7 +1,15 @@
 import { Upload } from 'lucide-react';
 import { type ChangeEvent, type Dispatch, type DragEvent, useState } from 'react';
 import { MaterialList } from './MaterialList';
-import { addMaterials, capLine, filesToAddAgain, leavesDropZone, type MaterialCandidate, notKeptText, parseReferenceUrls } from './materials';
+import {
+  addMaterials,
+  capLine,
+  filesToAddAgain,
+  leavesDropZone,
+  type MaterialCandidate,
+  notKeptText,
+  parseReferenceUrls,
+} from './materials';
 import type { WizardAction, WizardState } from './wizardLogic';
 
 export function ReferenceMaterial({
@@ -15,7 +23,10 @@ export function ReferenceMaterial({
   const [dragging, setDragging] = useState(false);
   const [linksTouched, setLinksTouched] = useState(false);
   const links = parseReferenceUrls(state.referenceUrlsText);
-  const linkProblems = [...(state.linksError ? [state.linksError] : []), ...(linksTouched ? links.problems : [])];
+  const linkProblems = [
+    ...(state.linksError ? [state.linksError] : []),
+    ...(linksTouched ? links.problems : []),
+  ];
   const showLinkErrors = linkProblems.length > 0;
   const toAddAgain = filesToAddAgain(state.materialsNotKept, state.materials);
   const errors = [...(state.materialsError ? [state.materialsError] : []), ...problems];
@@ -84,7 +95,11 @@ export function ReferenceMaterial({
         {toAddAgain.length > 0 && (
           <div className="notice-box">
             <p>{notKeptText(toAddAgain)}</p>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => dispatch({ type: 'materialsNotKeptDismissed' })}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => dispatch({ type: 'materialsNotKeptDismissed' })}
+            >
               Dismiss
             </button>
           </div>

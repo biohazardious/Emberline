@@ -36,7 +36,7 @@ export const ANTI_SLOP_ENGINEERING_RULES = [
 export const ANTI_VIBE_UI_RULES = [
   '[ANTI-VIBE-CODING & DESIGN CRAFTSMANSHIP CONSTITUTION — STRICTLY ENFORCED]:',
   '1. BAN COOKIE-CUTTER AI AESTHETICS: Never default to generic purple/indigo-to-pink linear gradients (`#6366f1`, `#8b5cf6`, `#ec4899`), glowing neon glassmorphic slop, or 3 identical emoji-titled marketing cards.',
-  '2. USE PROJECT DESIGN TOKENS: Always inspect the project\'s existing CSS variables (`var(--...)`), theme palette, spacing scale, and typography first. Avoid scattering hardcoded hex colors when CSS tokens exist.',
+  "2. USE PROJECT DESIGN TOKENS: Always inspect the project's existing CSS variables (`var(--...)`), theme palette, spacing scale, and typography first. Avoid scattering hardcoded hex colors when CSS tokens exist.",
   '3. INTENTIONAL INFORMATION DENSITY: Build high-craft, functional interfaces (Linear / Raycast / Stripe / GitHub Workbench caliber) with clear typographic hierarchy, tabular numerals (`font-variant-numeric: tabular-nums`), keyboard accessibility, and real interactive states (loading, empty, error, active).',
 ].join('\n');
 
@@ -54,8 +54,7 @@ export const RUNNER_ENVIRONMENT = [
   '- Anything that never exits on its own (serial monitors, dev servers, emulators) must run with `timeout` or in the background and be stopped before your turn ends.',
 ].join('\n');
 
-export const AUTONOMOUS_EXECUTION_POLICY =
-  `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}`;
+export const AUTONOMOUS_EXECUTION_POLICY = `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}`;
 
 export const AUTONOMOUS_ALLOWED_TOOLS = [
   'Bash',
@@ -85,7 +84,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'ARCH',
     roleTitle: 'Principal Software & Systems Architect',
     systemPrompt:
-      'You are acting as the Principal Systems Architect for this project. Read PROJECT.md first. Focus on clean module boundaries, API contracts, data flow, scalability, and idiomatic directory structure. Spawn follow-up specialist tickets by writing `.emberline/new-tickets.json` only when your ticket asks for them; the `[Factory]` ticket plans the project\'s feature work. Execute autonomously without asking clarifying questions.',
+      "You are acting as the Principal Systems Architect for this project. Read PROJECT.md first. Focus on clean module boundaries, API contracts, data flow, scalability, and idiomatic directory structure. Spawn follow-up specialist tickets by writing `.emberline/new-tickets.json` only when your ticket asks for them; the `[Factory]` ticket plans the project's feature work. Execute autonomously without asking clarifying questions.",
   },
   ui_ux: {
     id: 'ui_ux',
@@ -93,7 +92,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'UI/UX',
     roleTitle: 'Staff Design Systems & Frontend UX Engineer',
     systemPrompt:
-      'You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project\'s build after your changes (for a web UI with a `build` script this also updates the Live Demo). For a web app, call the `preview` tool and open the URL it returns (it serves this run\'s own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.',
+      "You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project's build after your changes (for a web UI with a `build` script this also updates the Live Demo). For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.",
   },
   coder: {
     id: 'coder',
@@ -101,7 +100,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'DEV',
     roleTitle: 'Senior Full-Stack Software Engineer',
     systemPrompt:
-      'You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. When done, run the project\'s own build and tests for its stack (for example `npm run build`, `pio run`, `cargo check`, `flutter test` or `./gradlew assembleDebug`). Execute autonomously without asking clarifying questions or asking whether to commit.',
+      "You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. When done, run the project's own build and tests for its stack (for example `npm run build`, `pio run`, `cargo check`, `flutter test` or `./gradlew assembleDebug`). Execute autonomously without asking clarifying questions or asking whether to commit.",
   },
   dba: {
     id: 'dba',
@@ -117,7 +116,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'QA',
     roleTitle: 'Staff Quality Assurance & Verification Engineer',
     systemPrompt:
-      'You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and the build for the project\'s stack. For a web app, call the `preview` tool and open the URL it returns (it serves this run\'s own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it using `mcp__playwright__browser_navigate`, interact with it via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. For a desktop app, run it and its UI tests under `xvfb-run -a`. For firmware, build it and, when no board is attached, run it in QEMU and check its serial output. Execute autonomously without asking whether to commit.',
+      "You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and the build for the project's stack. For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it using `mcp__playwright__browser_navigate`, interact with it via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. For a desktop app, run it and its UI tests under `xvfb-run -a`. For firmware, build it and, when no board is attached, run it in QEMU and check its serial output. Execute autonomously without asking whether to commit.",
   },
   security: {
     id: 'security',
@@ -133,7 +132,10 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
  * Prepends role-specific instructions for non-default personas (or when explicitly requested)
  * so the CLI coding agent operates with the chosen specialist mindset.
  */
-export function decoratePromptWithPersona(prompt: string | undefined, persona: AgentPersona = 'coder'): string | undefined {
+export function decoratePromptWithPersona(
+  prompt: string | undefined,
+  persona: AgentPersona = 'coder',
+): string | undefined {
   if (!prompt) return prompt;
   if (persona === 'coder') return prompt;
   const spec = PERSONA_CATALOG[persona] ?? PERSONA_CATALOG.coder;
@@ -400,7 +402,11 @@ const ASKING_MODE_LABELS: ReadonlyMap<ClaudePermissionMode, string> = new Map([
  * Why `agent` cannot run a prompt in `mode`, or null. A headless CLI denies, silently, every action
  * that needs approval; `plan` is read-only by request, and without a prompt the CLI runs interactively.
  */
-export function headlessModeProblem(agent: string, mode: ClaudePermissionMode | undefined, hasPrompt: boolean): string | null {
+export function headlessModeProblem(
+  agent: string,
+  mode: ClaudePermissionMode | undefined,
+  hasPrompt: boolean,
+): string | null {
   const name = HEADLESS_AGENT_NAMES.get(agent);
   const label = ASKING_MODE_LABELS.get(mode ?? 'default');
   if (!hasPrompt || !name || !label) return null;
@@ -533,7 +539,8 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   let cliCmd: string;
   if (options.agent === 'antigravity') {
     const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
-    const modelFlag = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
+    const modelFlag =
+      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
     const continueFlag = options.resumeSessionId ? '-c ' : '';
     // The agy wrapper may fall back to Gemini CLI, which refuses untrusted folders.
     extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
@@ -561,7 +568,11 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     // Gemini CLI refuses (exit 55) or downgrades --yolo in folders it does not trust; every run is a
     // fresh worktree. In -p mode, tools that need approval are denied rather than asked.
     extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
-    const approval = autoApprove ? '--yolo ' : options.permissionMode === 'acceptEdits' ? '--approval-mode auto_edit ' : '';
+    const approval = autoApprove
+      ? '--yolo '
+      : options.permissionMode === 'acceptEdits'
+        ? '--approval-mode auto_edit '
+        : '';
     const flags = `${approval}${geminiModel}`;
     cliCmd = options.prompt ? `${bin} ${flags}-p "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
   } else if (options.agent === 'codex') {
@@ -572,7 +583,8 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     const access = autoApprove ? '--dangerously-bypass-approvals-and-sandbox ' : '-s danger-full-access ';
     const noUpdate = '-c check_for_update_on_startup=false ';
     // `codex exec` reads CODEX_API_KEY, not OPENAI_API_KEY.
-    const apiKey = 'if [ -n "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then export CODEX_API_KEY="$OPENAI_API_KEY"; fi; ';
+    const apiKey =
+      'if [ -n "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then export CODEX_API_KEY="$OPENAI_API_KEY"; fi; ';
     // The interactive UI asks to trust the repository root (where the worktree's .git lives).
     const trust =
       '-c "projects.\\"$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)")\\".trust_level=\\"trusted\\"" ';
@@ -609,9 +621,7 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     // Merges the per-CLI config entries that pre-answer first-run questions (never blocks the run).
     `emberline-cli-seed.mjs ${options.agent} >/dev/null 2>&1 || true`,
     `echo '{"session_id":"'${options.agent}-${options.runId.slice(0, 8)}'"}' | ${hook} SessionStart >/dev/null 2>&1 || true`,
-    options.prompt
-      ? `echo '{"prompt":"started"}' | ${hook} UserPromptSubmit >/dev/null 2>&1 || true`
-      : '',
+    options.prompt ? `echo '{"prompt":"started"}' | ${hook} UserPromptSubmit >/dev/null 2>&1 || true` : '',
     options.prompt
       ? `echo '{"tool_name":"${options.agent}","message":"Executing ${options.agent} CLI task"}' | ${hook} PreToolUse >/dev/null 2>&1 || true`
       : '',

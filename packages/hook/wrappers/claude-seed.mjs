@@ -36,7 +36,9 @@ const ensure = (key, value) => {
 
 const apiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
 const signedIn =
-  existsSync(path.join(home, '.claude', '.credentials.json')) || Boolean(config.oauthAccount) || apiKey !== '';
+  existsSync(path.join(home, '.claude', '.credentials.json')) ||
+  Boolean(config.oauthAccount) ||
+  apiKey !== '';
 // Without credentials the onboarding is where the user logs in; never skip it then.
 if (signedIn) ensure('hasCompletedOnboarding', true);
 
@@ -49,9 +51,10 @@ ensure('lspRecommendationDisabled', true);
 ensure('hasSeenEffortMediumNudge', true);
 ensure('hasSeenAutoDefaultNudge', true);
 ensure('hasSeenAutoModeOutsideReadPrompt', true);
-const byModel = config.hasSeenEffortMediumNudgeByModel && typeof config.hasSeenEffortMediumNudgeByModel === 'object'
-  ? config.hasSeenEffortMediumNudgeByModel
-  : {};
+const byModel =
+  config.hasSeenEffortMediumNudgeByModel && typeof config.hasSeenEffortMediumNudgeByModel === 'object'
+    ? config.hasSeenEffortMediumNudgeByModel
+    : {};
 for (const model of ['claude-opus-5', 'claude-fable-5-1']) {
   if (byModel[model] !== true) {
     byModel[model] = true;
@@ -64,9 +67,10 @@ config.hasSeenEffortMediumNudgeByModel = byModel;
 // answer by the key's last 20 characters).
 if (apiKey !== '') {
   const tail = apiKey.slice(-20);
-  const responses = config.customApiKeyResponses && typeof config.customApiKeyResponses === 'object'
-    ? config.customApiKeyResponses
-    : {};
+  const responses =
+    config.customApiKeyResponses && typeof config.customApiKeyResponses === 'object'
+      ? config.customApiKeyResponses
+      : {};
   const approved = Array.isArray(responses.approved) ? responses.approved : [];
   const rejected = Array.isArray(responses.rejected) ? responses.rejected : [];
   if (!approved.includes(tail) || rejected.includes(tail)) {

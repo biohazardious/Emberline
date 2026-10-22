@@ -55,22 +55,42 @@ export function CommentChip({ comment, focused, busy, onDelete, onResolve, onVer
       {actions.length > 0 && (
         <div className="comment-chip-actions">
           {actions.includes('verify') && (
-            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => onVerify(comment.id)}>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              onClick={() => onVerify(comment.id)}
+            >
               Verify
             </button>
           )}
           {actions.includes('notDone') && (
-            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onNotDone(comment.id)}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() => onNotDone(comment.id)}
+            >
               Not done
             </button>
           )}
           {actions.includes('resolve') && (
-            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onResolve(comment.id)}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() => onResolve(comment.id)}
+            >
               Mark resolved
             </button>
           )}
           {actions.includes('delete') && (
-            <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => onDelete(comment.id)}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={busy}
+              onClick={() => onDelete(comment.id)}
+            >
               Delete
             </button>
           )}

@@ -100,7 +100,9 @@ export function BuildOutputsList({ runId, refreshKey }: { runId: string; refresh
                 type="button"
                 className="icon-btn"
                 title="Copy the full path"
-                onClick={() => void copyText(fullPath(o)).then((ok) => setManualCopy(ok ? null : fullPath(o)))}
+                onClick={() =>
+                  void copyText(fullPath(o)).then((ok) => setManualCopy(ok ? null : fullPath(o)))
+                }
               >
                 <Copy className="icon" aria-hidden />
               </button>

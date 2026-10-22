@@ -1,6 +1,14 @@
 /** The wizard's reducer plus its sessionStorage draft (an accidental close can be undone). */
 import { useCallback, useEffect, useReducer, useState } from 'react';
-import { DRAFT_KEY, draftOf, initialWizardState, isDirty, parseDraft, type WizardDraft, wizardReducer } from './wizardLogic';
+import {
+  DRAFT_KEY,
+  draftOf,
+  initialWizardState,
+  isDirty,
+  parseDraft,
+  type WizardDraft,
+  wizardReducer,
+} from './wizardLogic';
 
 function readDraft(): WizardDraft | null {
   try {

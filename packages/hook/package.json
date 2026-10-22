@@ -9,7 +9,10 @@
     "emberline-hook": "./dist/main.js",
     "emberline-mcp": "./dist/mcp.js"
   },
-  "files": ["dist", "wrappers"],
+  "files": [
+    "dist",
+    "wrappers"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"

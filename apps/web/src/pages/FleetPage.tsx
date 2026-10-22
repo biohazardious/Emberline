@@ -1,4 +1,10 @@
-import type { GarbageCollectRunsResponse, Project, Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
+import type {
+  GarbageCollectRunsResponse,
+  Project,
+  Run,
+  RunBuildOutputsResponse,
+  RunDetail,
+} from '@emberline/protocol';
 import { latestCompletionBlockers } from '../completionSignal';
 import {
   Check,
@@ -44,7 +50,9 @@ import { useInView } from '../hooks/useInView';
 import { toastError, toastInfo } from '../toast';
 import { timeAgo } from '../time';
 
-const TerminalView = lazy(() => import('../components/TerminalView').then((m) => ({ default: m.TerminalView })));
+const TerminalView = lazy(() =>
+  import('../components/TerminalView').then((m) => ({ default: m.TerminalView })),
+);
 
 type FleetFilter = 'active' | 'queued' | 'completed' | 'all';
 type GridLayout = 'grid' | 'cols' | 'single';
@@ -90,7 +98,11 @@ function FinishedOutcome({ run }: { run: Run }) {
     <div className="fleet-outcome">
       {detail.data?.finalMessage && <FinalAnswer text={detail.data.finalMessage} />}
       {blockers.length > 0 && (
-        <span className="badge mono" title={blockers.join('\n')} style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}>
+        <span
+          className="badge mono"
+          title={blockers.join('\n')}
+          style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}
+        >
           blocked
         </span>
       )}
@@ -194,7 +206,9 @@ export function FleetPage({
     });
   }, [visibleRuns, sectionOf]);
 
-  const selectableIds = new Set(visibleRuns.filter((r) => !isRunCompleted(r) && r.state !== 'queued').map((r) => r.id));
+  const selectableIds = new Set(
+    visibleRuns.filter((r) => !isRunCompleted(r) && r.state !== 'queued').map((r) => r.id),
+  );
   const selectedIds = [...selected].filter((id) => selectableIds.has(id));
   const toggleSelected = (id: string) =>
     setSelected((prev) => {
@@ -332,7 +346,8 @@ export function FleetPage({
               onClick={() => setFilter('active')}
               title="Only live running, waiting, or queued sessions"
             >
-              <Circle className="icon" aria-hidden fill="currentColor" style={{ color: 'var(--ok)' }} /> Live ({counts.active})
+              <Circle className="icon" aria-hidden fill="currentColor" style={{ color: 'var(--ok)' }} /> Live
+              ({counts.active})
             </button>
             <button
               id="fleet-filter-queued"
@@ -497,7 +512,13 @@ export function FleetPage({
           </p>
           <p
             className="muted small"
-            style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}
+            style={{
+              display: 'flex',
+              gap: 10,
+              justifyContent: 'center',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
           >
             <span>
               Start a ticket from a project board or launch a run from the{' '}
@@ -522,36 +543,50 @@ export function FleetPage({
         </div>
       ) : (
         <div className="fleet-sections">
-          {(filter === 'active' ? sections : [{ section: null, runs: visibleRuns }]).map(({ section, runs: list }) => (
-            <section key={section ?? 'all'} className="fleet-section" aria-label={section ? FLEET_SECTION_LABELS[section] : undefined}>
-              {section && (
-                <h2 className="fleet-section-head">
-                  {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
-                  {section === 'needs' && elsewhere > 0 && (
-                    <button type="button" className="link-btn fleet-section-more" onClick={() => setAll(true)}>
-                      {moreInOtherProjects(elsewhere)}
-                    </button>
-                  )}
-                </h2>
-              )}
-              <div className={`fleet-grid fleet-grid-${layout}`}>
-                {list.map((run) => (
-                  <FleetPane
-                    key={run.id}
-                    run={run}
-                    view={view}
-                    selectable={selectableIds.has(run.id)}
-                    selected={selected.has(run.id)}
-                    onToggleSelected={() => toggleSelected(run.id)}
-                    project={projectById.get(run.projectId)}
-                    onInspect={() => onInspectRun(run.id)}
-                    onError={setError}
-                    onDismiss={filter === 'active' && section !== 'needs' && isRunCompleted(run) ? () => dismiss(run.id) : undefined}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+          {(filter === 'active' ? sections : [{ section: null, runs: visibleRuns }]).map(
+            ({ section, runs: list }) => (
+              <section
+                key={section ?? 'all'}
+                className="fleet-section"
+                aria-label={section ? FLEET_SECTION_LABELS[section] : undefined}
+              >
+                {section && (
+                  <h2 className="fleet-section-head">
+                    {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
+                    {section === 'needs' && elsewhere > 0 && (
+                      <button
+                        type="button"
+                        className="link-btn fleet-section-more"
+                        onClick={() => setAll(true)}
+                      >
+                        {moreInOtherProjects(elsewhere)}
+                      </button>
+                    )}
+                  </h2>
+                )}
+                <div className={`fleet-grid fleet-grid-${layout}`}>
+                  {list.map((run) => (
+                    <FleetPane
+                      key={run.id}
+                      run={run}
+                      view={view}
+                      selectable={selectableIds.has(run.id)}
+                      selected={selected.has(run.id)}
+                      onToggleSelected={() => toggleSelected(run.id)}
+                      project={projectById.get(run.projectId)}
+                      onInspect={() => onInspectRun(run.id)}
+                      onError={setError}
+                      onDismiss={
+                        filter === 'active' && section !== 'needs' && isRunCompleted(run)
+                          ? () => dismiss(run.id)
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ),
+          )}
         </div>
       )}
     </div>
@@ -643,9 +678,19 @@ function FleetPane({
             aria-label={`Select ${run.title ?? 'run'} for a bulk prompt`}
           />
         )}
-        <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
+        <RunStatePill
+          state={run.state}
+          cancelled={run.cancelled}
+          autoRetry={run.autoRetry}
+          handedOffTo={run.handedOffTo}
+        />
         <PersonaBadge persona={run.persona} />
-        <button type="button" className="fleet-pane-title" onClick={onInspect} title="Open run inspector & timeline">
+        <button
+          type="button"
+          className="fleet-pane-title"
+          onClick={onInspect}
+          title="Open run inspector & timeline"
+        >
           {run.title ?? project?.name ?? 'Agent Run'}
         </button>
         {project && run.title && (
@@ -660,11 +705,20 @@ function FleetPane({
         </span>
         <div className="fleet-pane-actions">
           {run.worktreePath && (
-            <Link href={`/runs/${run.id}/review`} className="btn btn-sm btn-ghost" title="Inspect git diff & review">
+            <Link
+              href={`/runs/${run.id}/review`}
+              className="btn btn-sm btn-ghost"
+              title="Inspect git diff & review"
+            >
               Review
             </Link>
           )}
-          <button type="button" className="btn btn-sm btn-ghost" onClick={onInspect} title="Inspect events & details">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={onInspect}
+            title="Inspect events & details"
+          >
             Timeline
           </button>
           {run.state === 'rate_limited' && (
@@ -720,7 +774,11 @@ function FleetPane({
             </button>
           )}
           {live && run.terminalId && (
-            <Link href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost" title="Full-screen terminal">
+            <Link
+              href={`/terminals/${run.terminalId}`}
+              className="btn btn-sm btn-ghost"
+              title="Full-screen terminal"
+            >
               <Maximize2 className="icon" aria-hidden />
             </Link>
           )}
@@ -737,7 +795,9 @@ function FleetPane({
           <TerminalThumbnail runId={run.id} />
         ) : (
           <div className="fleet-placeholder" style={{ padding: '18px 20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}
+            >
               <span
                 className="badge mono"
                 style={{
@@ -751,7 +811,8 @@ function FleetPane({
                   </>
                 ) : run.state === 'done' ? (
                   <>
-                    <Check className="icon" aria-hidden /> {run.handedOffTo ? 'Handed off to another route' : 'Completed & Terminal Closed'}
+                    <Check className="icon" aria-hidden />{' '}
+                    {run.handedOffTo ? 'Handed off to another route' : 'Completed & Terminal Closed'}
                   </>
                 ) : (
                   <>
@@ -762,34 +823,30 @@ function FleetPane({
               <span className="muted small mono">
                 Provider: <strong>{run.agent}</strong>
               </span>
-              {run.endedAt && (
-                <span className="muted small mono">Ended {timeAgo(run.endedAt)}</span>
-              )}
+              {run.endedAt && <span className="muted small mono">Ended {timeAgo(run.endedAt)}</span>}
             </div>
             <p className="mono" style={{ margin: '0 0 8px', fontSize: '0.82rem' }}>
-              {run.state === 'queued'
-                ? 'Waiting in scheduler queue for an execution slot…'
-                : run.state === 'done' && run.handedOffTo
-                  ? (
-                    <>
-                      Handed off: run{' '}
-                      <Link href={`/runs/${run.handedOffTo}/review`}>{run.handedOffTo.slice(0, 8)}</Link> continues this work in the same worktree. Click Timeline to
-                      follow it, or <Trash className="icon" aria-hidden /> to remove.
-                    </>
-                  )
-                : run.state === 'done'
-                  ? (
-                    <>
-                      Task finished and changes synced. Click Review to inspect git changes,{' '}
-                      <RotateCw className="icon" aria-hidden /> Re-open to send a follow-up prompt, or{' '}
-                      <Trash className="icon" aria-hidden /> to remove.
-                    </>
-                  ) : (
-                    <>
-                      Session stopped or exited with an error. Click Timeline to inspect events or{' '}
-                      <Trash className="icon" aria-hidden /> to remove.
-                    </>
-                  )}
+              {run.state === 'queued' ? (
+                'Waiting in scheduler queue for an execution slot…'
+              ) : run.state === 'done' && run.handedOffTo ? (
+                <>
+                  Handed off: run{' '}
+                  <Link href={`/runs/${run.handedOffTo}/review`}>{run.handedOffTo.slice(0, 8)}</Link>{' '}
+                  continues this work in the same worktree. Click Timeline to follow it, or{' '}
+                  <Trash className="icon" aria-hidden /> to remove.
+                </>
+              ) : run.state === 'done' ? (
+                <>
+                  Task finished and changes synced. Click Review to inspect git changes,{' '}
+                  <RotateCw className="icon" aria-hidden /> Re-open to send a follow-up prompt, or{' '}
+                  <Trash className="icon" aria-hidden /> to remove.
+                </>
+              ) : (
+                <>
+                  Session stopped or exited with an error. Click Timeline to inspect events or{' '}
+                  <Trash className="icon" aria-hidden /> to remove.
+                </>
+              )}
             </p>
             {run.prompt && (
               <p className="muted small mono" style={{ margin: 0, opacity: 0.8 }}>
@@ -841,7 +898,9 @@ function FleetPane({
 /** Badge colours of a run's placeholder card: handed-off runs read as info, distinct from muted. */
 function placeholderTone(run: Run): { border: string; text: string } {
   if (run.state === 'done' && run.handedOffTo) return { border: 'var(--border)', text: 'var(--info)' };
-  if (run.state === 'done') return { border: 'color-mix(in srgb, var(--ok) 45%, transparent)', text: 'var(--ok)' };
-  if (run.state === 'failed') return { border: 'color-mix(in srgb, var(--bad) 45%, transparent)', text: 'var(--bad)' };
+  if (run.state === 'done')
+    return { border: 'color-mix(in srgb, var(--ok) 45%, transparent)', text: 'var(--ok)' };
+  if (run.state === 'failed')
+    return { border: 'color-mix(in srgb, var(--bad) 45%, transparent)', text: 'var(--bad)' };
   return { border: 'var(--border)', text: 'var(--muted)' };
 }

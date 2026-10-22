@@ -10,7 +10,8 @@ import { assignHashes, blobHashNoFollow, inspectDiff, readReviewSide } from './g
 
 let dir: string;
 let outside: string;
-const git = (...args: string[]) => execFileSync('git', ['-C', dir, '-c', 'user.email=t@e.com', '-c', 'user.name=t', ...args]);
+const git = (...args: string[]) =>
+  execFileSync('git', ['-C', dir, '-c', 'user.email=t@e.com', '-c', 'user.name=t', ...args]);
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'hash-'));
@@ -22,8 +23,20 @@ afterEach(() => {
   rmSync(outside, { recursive: true, force: true });
 });
 
-const file = (p: string, status: DiffFile['status'] = 'modified', additions = 1, deletions = 0): DiffFile => ({
-  path: p, oldPath: null, status, additions, deletions, hash: '', staged: false, unstaged: true,
+const file = (
+  p: string,
+  status: DiffFile['status'] = 'modified',
+  additions = 1,
+  deletions = 0,
+): DiffFile => ({
+  path: p,
+  oldPath: null,
+  status,
+  additions,
+  deletions,
+  hash: '',
+  staged: false,
+  unstaged: true,
 });
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
 const body = Array.from({ length: 30 }, (_, i) => `content line ${i}`).join('\n') + '\n';

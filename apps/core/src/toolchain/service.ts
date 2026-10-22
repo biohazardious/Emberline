@@ -36,16 +36,20 @@ const TOOL_SPECS: Record<AgentId, ToolSpec> = {
     binaryName: 'claude',
     installMethod: 'npm',
     npmPackage: '@anthropic-ai/claude-code',
-    installCommand: 'npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest',
-    updateCommand: 'npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest',
+    installCommand:
+      'npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest',
+    updateCommand:
+      'npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest',
     uninstallCommand: 'npm uninstall -g @anthropic-ai/claude-code',
   },
   antigravity: {
     provider: 'antigravity',
     binaryName: 'agy',
     installMethod: 'script',
-    installCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /opt/ai-tools/bin',
-    updateCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /opt/ai-tools/bin',
+    installCommand:
+      'curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /opt/ai-tools/bin',
+    updateCommand:
+      'curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /opt/ai-tools/bin',
     uninstallCommand: 'rm -f /opt/ai-tools/bin/agy',
   },
   gemini: {
@@ -81,7 +85,8 @@ const TOOL_SPECS: Record<AgentId, ToolSpec> = {
     installMethod: 'pipx',
     // aider-chat does not support the runner's Python (3.14); pipx fetches a standalone 3.12.
     installCommand: 'pipx install --force --python 3.12 --fetch-missing-python aider-chat',
-    updateCommand: 'pipx upgrade aider-chat || pipx install --force --python 3.12 --fetch-missing-python aider-chat',
+    updateCommand:
+      'pipx upgrade aider-chat || pipx install --force --python 3.12 --fetch-missing-python aider-chat',
     uninstallCommand: 'pipx uninstall aider-chat',
   },
 };
@@ -104,7 +109,8 @@ const SDK_SPECS: Record<SdkId, Pick<SdkStatus, 'label' | 'description' | 'sizeHi
   },
   'esp-qemu': {
     label: 'ESP32 QEMU',
-    description: "Espressif's QEMU: run, flash and read ESP32 / ESP32-S3 / ESP32-C3 firmware without a board.",
+    description:
+      "Espressif's QEMU: run, flash and read ESP32 / ESP32-S3 / ESP32-C3 firmware without a board.",
     sizeHint: '~150 MB',
   },
 };
@@ -113,7 +119,11 @@ const SDK_SPECS: Record<SdkId, Pick<SdkStatus, 'label' | 'description' | 'sizeHi
 export const CLI_PACKAGES: Record<AgentId, { npm?: string; pypi?: string }> = Object.fromEntries(
   (Object.keys(TOOL_SPECS) as AgentId[]).map((id) => [
     id,
-    TOOL_SPECS[id].npmPackage ? { npm: TOOL_SPECS[id].npmPackage } : id === 'aider' ? { pypi: 'aider-chat' } : {},
+    TOOL_SPECS[id].npmPackage
+      ? { npm: TOOL_SPECS[id].npmPackage }
+      : id === 'aider'
+        ? { pypi: 'aider-chat' }
+        : {},
   ]),
 ) as Record<AgentId, { npm?: string; pypi?: string }>;
 
@@ -166,7 +176,11 @@ export class ToolchainService {
    * anything from the runner-tools volume itself: agents can write there, and core holds the
    * database, tokens and API keys.
    */
-  private async runInRunner(script: string, title: string, timeoutMs: number): Promise<{ exitCode: number | null; output: string }> {
+  private async runInRunner(
+    script: string,
+    title: string,
+    timeoutMs: number,
+  ): Promise<{ exitCode: number | null; output: string }> {
     const client = this.ptyd.get();
     const session = await client.spawn({
       file: 'bash',
@@ -232,7 +246,14 @@ export class ToolchainService {
 
     // Fast path for npm global packages: read package.json in /opt/ai-tools/npm/lib/node_modules/<pkg>
     if (spec.npmPackage) {
-      const pkgJsonPath = path.join(this.toolsDir, 'npm', 'lib', 'node_modules', spec.npmPackage, 'package.json');
+      const pkgJsonPath = path.join(
+        this.toolsDir,
+        'npm',
+        'lib',
+        'node_modules',
+        spec.npmPackage,
+        'package.json',
+      );
       if (existsSync(pkgJsonPath)) {
         try {
           const parsed = JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as { version?: string };
@@ -322,7 +343,10 @@ export class ToolchainService {
   async executeSdkAction(id: SdkId, body: SdkActionBody): Promise<SdkActionResponse> {
     const action = body.action ?? 'install';
     const busyCli = [...this.state.entries()].find(([, state]) => state.installing);
-    if (busyCli) throw conflict(`${PROVIDER_REGISTRY[busyCli[0]].label} CLI install is still running; wait for it to finish`);
+    if (busyCli)
+      throw conflict(
+        `${PROVIDER_REGISTRY[busyCli[0]].label} CLI install is still running; wait for it to finish`,
+      );
     const busySdk = (await this.getSdkStatuses()).find((sdk) => sdk.installing);
     if (busySdk) throw conflict(`${busySdk.label} ${action} is still running; wait for it to finish`);
 
@@ -357,10 +381,7 @@ export class ToolchainService {
     };
   }
 
-  async executeAction(
-    provider: AgentId,
-    rawBody: ToolchainActionBody,
-  ): Promise<ToolchainActionResponse> {
+  async executeAction(provider: AgentId, rawBody: ToolchainActionBody): Promise<ToolchainActionResponse> {
     const spec = TOOL_SPECS[provider];
     const entry = PROVIDER_REGISTRY[provider];
     const rt = this.state.get(provider)!;
@@ -440,7 +461,9 @@ export class ToolchainService {
         180_000,
       );
       if (exitCode !== 0) {
-        throw Object.assign(new Error(`exited with code ${exitCode ?? 'unknown'}`), { stdout: output.slice(-2000) });
+        throw Object.assign(new Error(`exited with code ${exitCode ?? 'unknown'}`), {
+          stdout: output.slice(-2000),
+        });
       }
       rt.installing = false;
       rt.lastUpdatedAt = new Date().toISOString();
@@ -464,9 +487,7 @@ export class ToolchainService {
   async updateAllInstalled(): Promise<{ updated: AgentId[]; errors: Record<string, string> }> {
     const status = await this.getStatus();
     const settings = getFactorySettings(this.db);
-    const targets = status.tools.filter(
-      (t) => t.installed || settings.enabledProviders.includes(t.provider),
-    );
+    const targets = status.tools.filter((t) => t.installed || settings.enabledProviders.includes(t.provider));
     const updated: AgentId[] = [];
     const errors: Record<string, string> = {};
 

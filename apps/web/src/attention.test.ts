@@ -104,7 +104,9 @@ describe('seen by occurrence', () => {
   });
 
   it('only failed and rate_limited are dismissable', () => {
-    expect(['permission', 'question', 'blocked', 'held', 'stalled'].some((r) => dismissable(r as never))).toBe(false);
+    expect(
+      ['permission', 'question', 'blocked', 'held', 'stalled'].some((r) => dismissable(r as never)),
+    ).toBe(false);
     expect(dismissable('failed')).toBe(true);
     expect(dismissable('rate_limited')).toBe(true);
   });
@@ -130,22 +132,23 @@ describe('fleetSection', () => {
   const ctx = { now: NOW, seen: {}, hidden: new Set<string>() };
 
   it('assigns needs, review, working and recent', () => {
-    expect(fleetSection(run('a', { state: 'waiting_input', attention: attn('question', 1, 'a') }), ctx)).toBe('needs');
+    expect(fleetSection(run('a', { state: 'waiting_input', attention: attn('question', 1, 'a') }), ctx)).toBe(
+      'needs',
+    );
     expect(fleetSection(run('b', { state: 'done', endedAt: iso(1), reviewReady: true }), ctx)).toBe('review');
     expect(fleetSection(run('c', { state: 'queued' }), ctx)).toBe('working');
     expect(fleetSection(run('d', { state: 'starting' }), ctx)).toBe('working');
     expect(
-      fleetSection(
-        run('e', { state: 'rate_limited', autoRetry: { attempt: 1, max: 3, at: iso(-1) } }),
-        ctx,
-      ),
+      fleetSection(run('e', { state: 'rate_limited', autoRetry: { attempt: 1, max: 3, at: iso(-1) } }), ctx),
     ).toBe('working');
     expect(fleetSection(run('f', { state: 'done', endedAt: iso(5) }), ctx)).toBe('recent');
   });
 
   it('drops finished runs past the 15 minute window or hidden by the user', () => {
     expect(fleetSection(run('a', { state: 'done', endedAt: iso(16) }), ctx)).toBeNull();
-    expect(fleetSection(run('b', { state: 'done', endedAt: iso(1) }), { ...ctx, hidden: new Set(['b']) })).toBeNull();
+    expect(
+      fleetSection(run('b', { state: 'done', endedAt: iso(1) }), { ...ctx, hidden: new Set(['b']) }),
+    ).toBeNull();
   });
 
   it('a dismissed failure leaves Needs you and falls back to the recent window', () => {
@@ -164,7 +167,10 @@ describe('holdLabel', () => {
 });
 
 describe('attentionDetail', () => {
-  const at = (reason: RunAttention['reason'], detail: string | null): RunAttention => ({ ...attn(reason, 0, 'x'), detail });
+  const at = (reason: RunAttention['reason'], detail: string | null): RunAttention => ({
+    ...attn(reason, 0, 'x'),
+    detail,
+  });
   it('says what a headless agent outside Autonomous mode needs instead of its failure code', () => {
     const text = attentionDetail(at('failed', 'headless_needs_auto'));
     expect(text).not.toContain('headless_needs_auto');
@@ -181,7 +187,10 @@ describe('attentionDetail', () => {
 describe('inboxHeading', () => {
   it('names the ticket by key and current title, else the run title', () => {
     const ticketRun = run('a', { ticketId: 't1', title: 'EMB-4 Old name' });
-    expect(inboxHeading(ticketRun, new Map([['t1', { key: 'EMB-4', title: 'New name' }]]))).toEqual({ key: 'EMB-4', title: 'New name' });
+    expect(inboxHeading(ticketRun, new Map([['t1', { key: 'EMB-4', title: 'New name' }]]))).toEqual({
+      key: 'EMB-4',
+      title: 'New name',
+    });
     // Tickets not loaded (yet): the run title, which starts with the key.
     expect(inboxHeading(ticketRun, new Map())).toEqual({ key: null, title: 'EMB-4 Old name' });
     expect(inboxHeading(run('b'), new Map())).toEqual({ key: null, title: 'Ad-hoc run' });

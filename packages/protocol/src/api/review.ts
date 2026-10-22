@@ -188,7 +188,9 @@ export const RunReviewState = z.object({
    * Blocking feedback on an earlier attempt that this run carried in its prompt, waiting for a
    * person to check it was done (POST /api/runs/:id/review/verify-carried); null when none.
    */
-  carriedBlocking: z.object({ count: z.number().int().positive(), fromRun: z.string().nullable() }).nullable(),
+  carriedBlocking: z
+    .object({ count: z.number().int().positive(), fromRun: z.string().nullable() })
+    .nullable(),
 });
 export type RunReviewState = z.infer<typeof RunReviewState>;
 

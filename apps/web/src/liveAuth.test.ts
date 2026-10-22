@@ -24,13 +24,11 @@ describe('afterSocketClose', () => {
 
   it('a refused handshake while core says the key is gone stops reconnecting', async () => {
     setSessionKey('k');
-    const probe = vi
-      .fn()
-      .mockResolvedValue({
-        setupRequired: false,
-        authenticated: false,
-        signedOut: SESSION_KEY_MISSING_MESSAGE,
-      });
+    const probe = vi.fn().mockResolvedValue({
+      setupRequired: false,
+      authenticated: false,
+      signedOut: SESSION_KEY_MISSING_MESSAGE,
+    });
     expect(await afterSocketClose(false, probe)).toBe('signed_out');
   });
 

@@ -198,7 +198,9 @@ describe('sending the files', () => {
   });
   it('encodes each file as { name, mimeType, dataBase64 }', async () => {
     const m = { ...material('a.png', 3, 'image/png', 'image'), file: new Blob([new Uint8Array([1, 2, 3])]) };
-    expect(await encodeMaterials([m])).toEqual([{ name: 'a.png', mimeType: 'image/png', dataBase64: 'AQID' }]);
+    expect(await encodeMaterials([m])).toEqual([
+      { name: 'a.png', mimeType: 'image/png', dataBase64: 'AQID' },
+    ]);
   });
   it('a file that cannot be read any more names itself', async () => {
     const broken = {
@@ -213,9 +215,12 @@ describe('sending the files', () => {
 
 describe('errors next to the area', () => {
   it("maps core's invalid_materials, a 413 and a read failure; anything else stays with the dialog", () => {
-    expect(materialsErrorMessage({ status: 400, code: 'invalid_materials', message: 'photo.png is not a PNG file.' }, true)).toBe(
-      'photo.png is not a PNG file.',
-    );
+    expect(
+      materialsErrorMessage(
+        { status: 400, code: 'invalid_materials', message: 'photo.png is not a PNG file.' },
+        true,
+      ),
+    ).toBe('photo.png is not a PNG file.');
     const proxy = { status: 413, code: 'http_error', message: 'Payload Too Large' };
     // HTML 413 from a proxy, files were sent: the files text, which mentions the proxy.
     expect(materialsErrorMessage(proxy, true)).toBe(
@@ -223,9 +228,9 @@ describe('errors next to the area', () => {
     );
     // Nothing was sent: not a files problem.
     expect(materialsErrorMessage(proxy, false)).toBeNull();
-    expect(materialsErrorMessage(new MaterialReadError("Couldn't read a.png. Remove it and add it again."), true)).toBe(
-      "Couldn't read a.png. Remove it and add it again.",
-    );
+    expect(
+      materialsErrorMessage(new MaterialReadError("Couldn't read a.png. Remove it and add it again."), true),
+    ).toBe("Couldn't read a.png. Remove it and add it again.");
     expect(materialsErrorMessage({ status: 400, code: 'bad_request', message: 'x' }, true)).toBeNull();
     expect(materialsErrorMessage({ status: 409, code: 'name_taken', message: 'x' }, true)).toBeNull();
   });
@@ -233,8 +238,12 @@ describe('errors next to the area', () => {
 
 describe('which field an error belongs to', () => {
   it('a link refusal goes to the links, everything else to the files', () => {
-    expect(materialsErrorField({ status: 400, code: 'invalid_materials', field: 'links', message: 'x' })).toBe('links');
-    expect(materialsErrorField({ status: 400, code: 'invalid_materials', field: 'files', message: 'x' })).toBe('files');
+    expect(
+      materialsErrorField({ status: 400, code: 'invalid_materials', field: 'links', message: 'x' }),
+    ).toBe('links');
+    expect(
+      materialsErrorField({ status: 400, code: 'invalid_materials', field: 'files', message: 'x' }),
+    ).toBe('files');
     expect(materialsErrorField({ status: 400, code: 'invalid_materials', message: 'x' })).toBe('files');
     expect(materialsErrorField(new MaterialReadError('x'))).toBe('files');
   });
@@ -256,7 +265,9 @@ describe('the summary note', () => {
     expect(summaryMaterialsNote(0, 1)).toBe(
       'The links are listed in PROJECT.md, which is committed too. Emberline never opens the links.',
     );
-    expect(summaryMaterialsNote(1, 0)).toBe('The files are committed to docs/reference/ with the first commit.');
+    expect(summaryMaterialsNote(1, 0)).toBe(
+      'The files are committed to docs/reference/ with the first commit.',
+    );
   });
 });
 

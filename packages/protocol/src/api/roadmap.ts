@@ -4,13 +4,7 @@ import { AgentPersona } from './projects.js';
 import { AgentId, AgentModelId, Run } from './runs.js';
 import { Ticket, TicketPriority } from './tickets.js';
 
-export const RoadmapCategory = z.enum([
-  'feature',
-  'ui_ux',
-  'architecture',
-  'performance',
-  'qa_security',
-]);
+export const RoadmapCategory = z.enum(['feature', 'ui_ux', 'architecture', 'performance', 'qa_security']);
 export type RoadmapCategory = z.infer<typeof RoadmapCategory>;
 
 export const RoadmapItemStatus = z.enum(['idea', 'planned', 'in_progress', 'done']);

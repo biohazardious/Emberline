@@ -10,7 +10,10 @@ import { loadConfig } from './config.js';
 
 export function backupDatabase(dbFile: string, backupDir: string, keep: number, now = new Date()): string {
   mkdirSync(backupDir, { recursive: true });
-  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const stamp = now
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
   const target = path.join(backupDir, `emberline-${stamp}.db`);
   const sqlite = new Database(dbFile, { readonly: true, fileMustExist: true });
   try {

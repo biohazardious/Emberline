@@ -18,6 +18,8 @@ describe('projectDeleteChoices', () => {
   });
 
   it('a project from before the source was recorded gets the plain wording', () => {
-    expect(projectDeleteChoices({ ...project, importSource: undefined }).purge.description).not.toContain('repository folder');
+    expect(projectDeleteChoices({ ...project, importSource: undefined }).purge.description).not.toContain(
+      'repository folder',
+    );
   });
 });

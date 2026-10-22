@@ -20,7 +20,13 @@ import {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound, unavailable } from '../errors.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
-import { createExclusiveFile, isMissing, openFileUnder, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
+import {
+  createExclusiveFile,
+  isMissing,
+  openFileUnder,
+  realDirUnder,
+  UnsafePathError,
+} from '../outputs/safe-fs.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { parseWorktreeYml } from '../worktree-config/load.js';
 import { importFileContents, inspectImportedProject } from './detect.js';
@@ -63,7 +69,10 @@ async function hasRemote(workspacesDir: string, dir: string): Promise<boolean> {
  * Direct children of the workspaces directory that can be imported: real directories (no links),
  * not hidden and not a project's folder already.
  */
-export async function listWorkspaceFolders(workspacesDir: string, projectPaths: readonly string[]): Promise<WorkspaceFolder[]> {
+export async function listWorkspaceFolders(
+  workspacesDir: string,
+  projectPaths: readonly string[],
+): Promise<WorkspaceFolder[]> {
   const base = await realpath(workspacesDir);
   const taken = new Set(projectPaths.map((p) => path.resolve(p)));
   const entries = await readdir(workspacesDir, { withFileTypes: true });
@@ -76,7 +85,12 @@ export async function listWorkspaceFolders(workspacesDir: string, projectPaths: 
     const real = await realpath(abs).catch(() => null);
     if (real !== path.join(base, entry.name) || taken.has(real)) continue;
     const repo = await isGitRepo(abs);
-    folders.push({ name: entry.name, path: abs, isGitRepo: repo, hasRemote: repo && (await hasRemote(workspacesDir, abs)) });
+    folders.push({
+      name: entry.name,
+      path: abs,
+      isGitRepo: repo,
+      hasRemote: repo && (await hasRemote(workspacesDir, abs)),
+    });
   }
   return folders.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -94,7 +108,8 @@ export async function resolveWorkspaceFolder(workspacesDir: string, folder: stri
     if (isMissing(error)) throw notFound(`no folder "${folder}" in the workspaces directory`);
     throw error;
   }
-  if (stats.isSymbolicLink() || !stats.isDirectory()) throw badRequest(`"${folder}" is not a folder (links are not imported)`);
+  if (stats.isSymbolicLink() || !stats.isDirectory())
+    throw badRequest(`"${folder}" is not a folder (links are not imported)`);
   try {
     await realDirUnder(workspacesDir, abs);
   } catch (error) {
@@ -142,7 +157,10 @@ async function terminalTail(ptyd: PtydBridge, sessionId: string): Promise<string
 }
 
 /** Latest clone terminal of a project, if ptyd knows one. */
-function latestClone<T extends { meta: Record<string, string>; createdAt: string }>(sessions: T[], projectId: string): T | undefined {
+function latestClone<T extends { meta: Record<string, string>; createdAt: string }>(
+  sessions: T[],
+  projectId: string,
+): T | undefined {
   return sessions
     .filter((s) => s.meta.kind === 'clone' && s.meta.projectId === projectId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -157,7 +175,8 @@ export async function assertNotCloning(ptyd: PtydBridge, projectId: string): Pro
     // Runner unreachable: the clone state is unknown here; the folder checks that follow still apply.
     return;
   }
-  if (latestClone(sessions, projectId)?.status === 'running') throw conflict('the repository is still being cloned');
+  if (latestClone(sessions, projectId)?.status === 'running')
+    throw conflict('the repository is still being cloned');
 }
 
 /**
@@ -170,10 +189,14 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
   try {
     sessions = (await ptyd.get().list()).sessions;
   } catch (error) {
-    if (await hasHeadCommit(project.path)) return { status: 'ready', exitCode: null, terminalId: null, tail: '' };
+    if (await hasHeadCommit(project.path))
+      return { status: 'ready', exitCode: null, terminalId: null, tail: '' };
     if (error instanceof HttpError) throw error;
     // A connected client that times out or drops mid-request: same answer as an unreachable runner.
-    throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable, so the clone status is unknown');
+    throw unavailable(
+      'ptyd_unavailable',
+      'the runner (ptyd) is not reachable, so the clone status is unknown',
+    );
   }
   const clone = latestClone(sessions, project.id);
   if (!clone) {
@@ -189,7 +212,12 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
   const base = { exitCode: clone.exitCode, terminalId: clone.id, tail };
   if (clone.status === 'running') return { ...base, status: 'cloning' };
   if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) return { ...base, status: 'ready' };
-  if (clone.exitCode === 0) return { ...base, status: 'failed', tail: `${tail}\nThe clone has no commit (empty repository?).`.trim() };
+  if (clone.exitCode === 0)
+    return {
+      ...base,
+      status: 'failed',
+      tail: `${tail}\nThe clone has no commit (empty repository?).`.trim(),
+    };
   return { ...base, status: 'failed' };
 }
 
@@ -203,14 +231,20 @@ export interface AdoptPlan extends AdoptPreviewResponse {
 }
 
 /** What adopt writes and approves; refuses (409/400) before anything is touched. No side effects. */
-export async function planAdopt(workspacesDir: string, project: Project, body: AdoptInput): Promise<AdoptPlan> {
+export async function planAdopt(
+  workspacesDir: string,
+  project: Project,
+  body: AdoptInput,
+): Promise<AdoptPlan> {
   const appType = body.appType ?? project.appType;
   validateChoices(body.choices, appType);
   const detected = await inspectImportedProject(workspacesDir, project.path);
   const write = ADOPT_ORDER.filter((key) => body.write.includes(key));
   for (const key of write) {
     if (detected.files[key]) {
-      throw conflict(`${ADOPT_FILE_PATHS[key]} already exists in the repository; Emberline never overwrites it`);
+      throw conflict(
+        `${ADOPT_FILE_PATHS[key]} already exists in the repository; Emberline never overwrites it`,
+      );
     }
   }
   const contents = importFileContents({
@@ -228,9 +262,14 @@ export async function planAdopt(workspacesDir: string, project: Project, body: A
     // Emberline's own file counts as approved, so it has to pass the same schema as any other.
     const generated = parseWorktreeYml(contents.worktreeYml);
     if (!generated.ok) {
-      throw new HttpError(400, 'invalid_worktree_yml', `the generated .emberline/worktree.yml is not valid: ${generated.errors.join('; ')}`, {
-        errors: generated.errors,
-      });
+      throw new HttpError(
+        400,
+        'invalid_worktree_yml',
+        `the generated .emberline/worktree.yml is not valid: ${generated.errors.join('; ')}`,
+        {
+          errors: generated.errors,
+        },
+      );
     }
     worktreeConfig = 'generated';
     approvedWorktreeYml = contents.worktreeYml;
@@ -238,9 +277,15 @@ export async function planAdopt(workspacesDir: string, project: Project, body: A
     const own = detected.worktreeYml;
     if (!own) throw badRequest('the repository has no .emberline/worktree.yml to approve');
     // Only HEAD's committed blob is approvable: runs branch from HEAD.
-    if (own.notCommitted) throw conflict('.emberline/worktree.yml is not committed in HEAD; commit it, then review it again');
+    if (own.notCommitted)
+      throw conflict('.emberline/worktree.yml is not committed in HEAD; commit it, then review it again');
     if (own.content === null) {
-      throw new HttpError(400, 'invalid_worktree_yml', `.emberline/worktree.yml cannot be approved: ${own.errors.join('; ')}`, { errors: own.errors });
+      throw new HttpError(
+        400,
+        'invalid_worktree_yml',
+        `.emberline/worktree.yml cannot be approved: ${own.errors.join('; ')}`,
+        { errors: own.errors },
+      );
     }
     if (own.sha256 !== body.worktreeYmlSha256) {
       throw conflict('.emberline/worktree.yml changed since you reviewed it; review it again');
@@ -248,7 +293,12 @@ export async function planAdopt(workspacesDir: string, project: Project, body: A
     // Detection parsed this very blob; re-check so a stale schema result can never slip through.
     const parsed = parseWorktreeYml(own.content);
     if (!parsed.ok) {
-      throw new HttpError(400, 'invalid_worktree_yml', `.emberline/worktree.yml is not valid: ${parsed.errors.join('; ')}`, { errors: parsed.errors });
+      throw new HttpError(
+        400,
+        'invalid_worktree_yml',
+        `.emberline/worktree.yml is not valid: ${parsed.errors.join('; ')}`,
+        { errors: parsed.errors },
+      );
     }
     worktreeConfig = 'existing';
     approvedWorktreeYml = own.content;
@@ -264,7 +314,11 @@ export async function planAdopt(workspacesDir: string, project: Project, body: A
 }
 
 /** Creates each file exclusively (never replacing anything) through verified directories. */
-async function writeNewFiles(workspacesDir: string, projectPath: string, files: Record<string, string>): Promise<() => Promise<void>> {
+async function writeNewFiles(
+  workspacesDir: string,
+  projectPath: string,
+  files: Record<string, string>,
+): Promise<() => Promise<void>> {
   const created: string[] = [];
   const createdDirs: string[] = [];
   const undo = async () => {
@@ -302,8 +356,10 @@ async function writeNewFiles(workspacesDir: string, projectPath: string, files: 
     }
   } catch (error) {
     await undo();
-    if (error instanceof UnsafePathError) throw conflict(`cannot write into the repository safely: ${error.message}`);
-    if ((error as { code?: string }).code === 'ENOTDIR') throw conflict('.emberline exists in the repository and is not a folder');
+    if (error instanceof UnsafePathError)
+      throw conflict(`cannot write into the repository safely: ${error.message}`);
+    if ((error as { code?: string }).code === 'ENOTDIR')
+      throw conflict('.emberline exists in the repository and is not a folder');
     throw error;
   }
   return undo;
@@ -318,7 +374,11 @@ export interface AdoptResult extends AdoptPlan {
  * commit; nothing is pushed). Other staged or unstaged work in the repository is left as it was.
  * Runs under the main-workspace lock so it never interleaves with a merge.
  */
-export async function executeAdopt(workspacesDir: string, project: Project, body: AdoptInput): Promise<AdoptResult> {
+export async function executeAdopt(
+  workspacesDir: string,
+  project: Project,
+  body: AdoptInput,
+): Promise<AdoptResult> {
   return withMainWorkspaceLock(project.path, async () => {
     const plan = await planAdopt(workspacesDir, project, body);
     const paths = Object.keys(plan.files);
@@ -332,7 +392,10 @@ export async function executeAdopt(workspacesDir: string, project: Project, body
       // -f: a repo that ignores .emberline/ still gets the file the person asked to commit.
       await execGitFile(['add', '-f', '--', ...paths], inRepo);
       // A commit with paths takes only those paths, whatever else is staged.
-      await execGitFile([...FACTORY_GIT_IDENTITY, 'commit', '-q', '--no-verify', '-m', plan.commitMessage, '--', ...paths], inRepo);
+      await execGitFile(
+        [...FACTORY_GIT_IDENTITY, 'commit', '-q', '--no-verify', '-m', plan.commitMessage, '--', ...paths],
+        inRepo,
+      );
     } catch (error) {
       await execGitFile(['reset', '-q', '--', ...paths], inRepo).catch(() => undefined);
       await undo();

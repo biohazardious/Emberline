@@ -85,16 +85,29 @@ describe('filterOutputs', () => {
     expect(filterOutputs(list, { group: 'all', query: '', runIds: null })).toHaveLength(3);
   });
   it('filters by group', () => {
-    expect(filterOutputs(list, { group: 'firmware', query: '', runIds: null }).map((o) => o.id)).toEqual(['o3']);
+    expect(filterOutputs(list, { group: 'firmware', query: '', runIds: null }).map((o) => o.id)).toEqual([
+      'o3',
+    ]);
   });
   it('searches name, ticket key and title case-insensitively', () => {
-    expect(filterOutputs(list, { group: 'all', query: 'SETUP', runIds: null }).map((o) => o.id)).toEqual(['o2']);
-    expect(filterOutputs(list, { group: 'all', query: 'emb-7', runIds: null }).map((o) => o.id)).toEqual(['o1']);
-    expect(filterOutputs(list, { group: 'all', query: 'installer', runIds: null }).map((o) => o.id)).toEqual(['o2']);
+    expect(filterOutputs(list, { group: 'all', query: 'SETUP', runIds: null }).map((o) => o.id)).toEqual([
+      'o2',
+    ]);
+    expect(filterOutputs(list, { group: 'all', query: 'emb-7', runIds: null }).map((o) => o.id)).toEqual([
+      'o1',
+    ]);
+    expect(filterOutputs(list, { group: 'all', query: 'installer', runIds: null }).map((o) => o.id)).toEqual([
+      'o2',
+    ]);
   });
   it('filters by run, matching every run of its handoff chain', () => {
-    expect(filterOutputs(list, { group: 'all', query: '', runIds: ['run-2'] }).map((o) => o.id)).toEqual(['o2', 'o3']);
-    expect(filterOutputs(list, { group: 'all', query: '', runIds: ['run-3', 'run-1'] }).map((o) => o.id)).toEqual(['o1']);
+    expect(filterOutputs(list, { group: 'all', query: '', runIds: ['run-2'] }).map((o) => o.id)).toEqual([
+      'o2',
+      'o3',
+    ]);
+    expect(
+      filterOutputs(list, { group: 'all', query: '', runIds: ['run-3', 'run-1'] }).map((o) => o.id),
+    ).toEqual(['o1']);
     expect(filterOutputs(list, { group: 'all', query: '', runIds: [] })).toEqual([]);
   });
 });
@@ -130,6 +143,9 @@ describe('outputsBadge', () => {
 describe('outputPath', () => {
   it('prefers the host path and falls back to the container path', () => {
     expect(outputPath(out())).toEqual({ path: '/srv/x/app-release.apk', where: 'host' });
-    expect(outputPath(out({ hostPath: null }))).toEqual({ path: '/workspaces/x/app-release.apk', where: 'container' });
+    expect(outputPath(out({ hostPath: null }))).toEqual({
+      path: '/workspaces/x/app-release.apk',
+      where: 'container',
+    });
   });
 });

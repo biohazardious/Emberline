@@ -18,10 +18,18 @@ describe('dockerEngineLine', () => {
 
   it('says off, on with the version, or unreachable with the reason', () => {
     expect(dockerEngineLine(SWITCHED_OFF)).toBe('Docker engine: off');
-    expect(dockerEngineLine({ enabled: true, checked: true, available: true, version: '29.8.2' })).toBe('Docker engine: on (29.8.2)');
-    expect(dockerEngineLine({ enabled: true, checked: true, available: false, version: null, error: 'connection refused' })).toBe(
-      `Docker engine: unreachable — connection refused. ${DOCKER_ENGINE_UNREACHABLE_HINT}`,
+    expect(dockerEngineLine({ enabled: true, checked: true, available: true, version: '29.8.2' })).toBe(
+      'Docker engine: on (29.8.2)',
     );
+    expect(
+      dockerEngineLine({
+        enabled: true,
+        checked: true,
+        available: false,
+        version: null,
+        error: 'connection refused',
+      }),
+    ).toBe(`Docker engine: unreachable — connection refused. ${DOCKER_ENGINE_UNREACHABLE_HINT}`);
     expect(dockerEngineLine({ enabled: true, checked: true, available: false, version: null })).toBe(
       `Docker engine: unreachable. ${DOCKER_ENGINE_UNREACHABLE_HINT}`,
     );
@@ -33,13 +41,15 @@ describe('dockerEngineLine', () => {
   });
 
   it('does not double the full stop after an error that ends in one', () => {
-    expect(dockerEngineLine({ enabled: true, checked: true, available: false, version: null, error: 'refused.' })).toBe(
-      `Docker engine: unreachable — refused. ${DOCKER_ENGINE_UNREACHABLE_HINT}`,
-    );
+    expect(
+      dockerEngineLine({ enabled: true, checked: true, available: false, version: null, error: 'refused.' }),
+    ).toBe(`Docker engine: unreachable — refused. ${DOCKER_ENGINE_UNREACHABLE_HINT}`);
   });
 
   it('says checking until the first probe answered', () => {
-    expect(dockerEngineLine({ enabled: true, checked: false, available: false, version: null })).toBe('Docker engine: checking…');
+    expect(dockerEngineLine({ enabled: true, checked: false, available: false, version: null })).toBe(
+      'Docker engine: checking…',
+    );
   });
 });
 
@@ -58,7 +68,10 @@ describe('dockerEngineTitle', () => {
 
 describe('dockerEngineOffState (the Docker page without an engine)', () => {
   it('switched off: the turn-on text', () => {
-    expect(dockerEngineOffState(SWITCHED_OFF)).toEqual({ title: 'The Docker engine is off.', text: DOCKER_ENGINE_OFF_TEXT });
+    expect(dockerEngineOffState(SWITCHED_OFF)).toEqual({
+      title: 'The Docker engine is off.',
+      text: DOCKER_ENGINE_OFF_TEXT,
+    });
   });
 
   it('not configured: the current compose file, never a line in .env', () => {

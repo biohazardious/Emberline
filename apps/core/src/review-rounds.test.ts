@@ -77,7 +77,9 @@ async function adHocRun(): Promise<Run> {
 
 async function ticketRun(): Promise<{ ticket: Ticket; run: Run }> {
   const p = await project('Ticketed');
-  const ticket: Ticket = (await api('POST', `/api/projects/${p.id}/tickets`, { title: 'Add a parser', body: 'Parse it.' })).json();
+  const ticket: Ticket = (
+    await api('POST', `/api/projects/${p.id}/tickets`, { title: 'Add a parser', body: 'Parse it.' })
+  ).json();
   const res = await api('POST', `/api/tickets/${ticket.id}/start`, {});
   expect(res.statusCode).toBe(201);
   return res.json();
@@ -145,7 +147,9 @@ describe('review rounds (target same)', () => {
       'Blocking — Must be fixed before this can merge:\nFrom the previous round — please check this is done:\n- `src/a.ts:3` (fix) Null deref',
     );
     expect(sent[1]).toContain('Important:\n- `src/a.ts:12` (fix) Add a test');
-    expect(sent[1]).toContain('Suggestions:\nFrom the previous round — please check this is done:\n- `src/a.ts:9` (change) Rename');
+    expect(sent[1]).toContain(
+      'Suggestions:\nFrom the previous round — please check this is done:\n- `src/a.ts:9` (change) Rename',
+    );
     all = await byBody(run);
     expect(all['Null deref']).toMatchObject({ status: 'sent', round: 2 });
     expect(all['Add a test']).toMatchObject({ status: 'sent', round: 1 });
@@ -155,7 +159,9 @@ describe('review rounds (target same)', () => {
     all = await byBody(run);
     // Verify: resolved and verified, never sent again.
     const verified: ReviewComment = (
-      await api('PATCH', `/api/runs/${run.id}/review/comments/${all['Null deref']!.id}`, { status: 'resolved' })
+      await api('PATCH', `/api/runs/${run.id}/review/comments/${all['Null deref']!.id}`, {
+        status: 'resolved',
+      })
     ).json();
     expect(verified.status).toBe('resolved');
     expect(verified.verifiedAt).toBeTruthy();
@@ -169,7 +175,9 @@ describe('review rounds (target same)', () => {
     expect(third.json().sent).toBe(2);
     expect(sent[2]).not.toContain('Null deref');
     expect(sent[2]).toContain('Suggestions:\n- `src/a.ts:9` (change) Rename');
-    expect(sent[2]).toContain('Important:\nFrom the previous round — please check this is done:\n- `src/a.ts:12` (fix) Add a test');
+    expect(sent[2]).toContain(
+      'Important:\nFrom the previous round — please check this is done:\n- `src/a.ts:12` (fix) Add a test',
+    );
     all = await byBody(run);
     expect(all['Rename']).toMatchObject({ status: 'sent', round: 3 });
   });
@@ -200,7 +208,9 @@ describe('review rounds (target same)', () => {
     // The run fails without addressing them: both come back as reminders.
     t.db.update(runs).set({ state: 'failed', endedAt: new Date() }).where(eq(runs.id, run.id)).run();
     await requestChanges(run, { note: 'Try again' });
-    expect(sent[2]).toContain('From the previous round — not yet addressed:\n- `src/a.ts:1` (fix) First\n- `src/a.ts:2` (fix) Second');
+    expect(sent[2]).toContain(
+      'From the previous round — not yet addressed:\n- `src/a.ts:1` (fix) First\n- `src/a.ts:2` (fix) Second',
+    );
     expect((await byBody(run))['First']).toMatchObject({ status: 'sent', round: 2 });
   });
 
@@ -235,11 +245,17 @@ describe('review rounds (send target)', () => {
     expect(sent).toBe(2);
     expect(fresh.id).not.toBe(run.id);
     expect(fresh.ticketId).toBe(ticket.id);
-    expect(fresh.prompt.startsWith(`${ticket.key}: Add a parser\n\nParse it.\n\n## Review feedback`)).toBe(true);
-    expect(fresh.prompt).toContain(`## Review feedback from the previous attempt (run ${run.id.slice(0, 8)})`);
+    expect(fresh.prompt.startsWith(`${ticket.key}: Add a parser\n\nParse it.\n\n## Review feedback`)).toBe(
+      true,
+    );
+    expect(fresh.prompt).toContain(
+      `## Review feedback from the previous attempt (run ${run.id.slice(0, 8)})`,
+    );
     expect(fresh.prompt).toContain('not in this worktree');
     expect(fresh.prompt).toContain('Overall note: Start over');
-    expect(fresh.prompt).toContain('Blocking — Must be fixed before this can merge:\n- `src/a.ts:4` (fix) Validate input');
+    expect(fresh.prompt).toContain(
+      'Blocking — Must be fixed before this can merge:\n- `src/a.ts:4` (fix) Validate input',
+    );
     expect(fresh.prompt).toContain('- `src/a.ts` (whole file) (fix) Split this file');
 
     for (const c of await comments(run)) {
@@ -269,8 +285,14 @@ describe('review rounds (send target)', () => {
 
   it('clips a long feedback section to the run prompt limit instead of failing', async () => {
     const p = await project('Long');
-    const ticket: Ticket = (await api('POST', `/api/projects/${p.id}/tickets`, { title: 'Big', body: 'b'.repeat(15_000) })).json();
-    const { run } = await t.tickets.start(ticket.id, {}, { extraPromptSection: `## Feedback\n${'f'.repeat(30_000)}` });
+    const ticket: Ticket = (
+      await api('POST', `/api/projects/${p.id}/tickets`, { title: 'Big', body: 'b'.repeat(15_000) })
+    ).json();
+    const { run } = await t.tickets.start(
+      ticket.id,
+      {},
+      { extraPromptSection: `## Feedback\n${'f'.repeat(30_000)}` },
+    );
     expect(run.prompt.length).toBeLessThanOrEqual(20_000);
     expect(run.prompt).toContain('## Feedback\nfff');
     expect(run.prompt.startsWith(`${ticket.key}: Big\n\n${'b'.repeat(15_000)}\n\n## Feedback`)).toBe(true);
@@ -278,8 +300,10 @@ describe('review rounds (send target)', () => {
 });
 
 /** Records a run event the way core's own bookkeeping does (process exits are not reachable from a hook). */
-const record = (runId: string, event: { source: 'system'; type: string; state?: Run['state']; patch?: object }) =>
-  (t.runs as unknown as { record(id: string, e: typeof event): Run }).record(runId, event);
+const record = (
+  runId: string,
+  event: { source: 'system'; type: string; state?: Run['state']; patch?: object },
+) => (t.runs as unknown as { record(id: string, e: typeof event): Run }).record(runId, event);
 
 describe('review rounds (fix round 1)', () => {
   async function ticketWithBody(body: string, title = 'Big'): Promise<Ticket> {
@@ -331,7 +355,12 @@ describe('review rounds (fix round 1)', () => {
     const fresh = res.json().run as Run;
     expect(fresh.id).not.toBe(run.id);
     expect(t.runs.getRun(run.id).cancelled).toBe(true);
-    const stop = t.db.select().from(runEvents).where(eq(runEvents.runId, run.id)).all().find((e) => e.type === 'stop_requested');
+    const stop = t.db
+      .select()
+      .from(runEvents)
+      .where(eq(runEvents.runId, run.id))
+      .all()
+      .find((e) => e.type === 'stop_requested');
     expect(stop).toMatchObject({ source: 'system', payload: { reason: 'review_new_run' } });
   });
 
@@ -348,7 +377,12 @@ describe('review rounds (fix round 1)', () => {
     await hook(run, 'Stop');
     vi.spyOn(t.tickets, 'start').mockRejectedValue(new Error('scheduler down'));
     expect((await requestChanges(run, { target: 'new' })).statusCode).toBe(500);
-    expect((await byBody(run))['Later']).toMatchObject({ status: 'open', round: 0, carriedTo: null, resolvedAt: null });
+    expect((await byBody(run))['Later']).toMatchObject({
+      status: 'open',
+      round: 0,
+      carriedTo: null,
+      resolvedAt: null,
+    });
     expect(t.runs.activeRunForTicket(ticket.id)?.id).toBe(run.id);
   });
 
@@ -359,11 +393,15 @@ describe('review rounds (fix round 1)', () => {
     await requestChanges(run);
     await hook(run, 'UserPromptSubmit');
     t.db.update(runs).set({ state: 'rate_limited' }).where(eq(runs.id, run.id)).run();
-    const successor = await t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, {
-      reason: 'Individual quota reached',
-      source: 'system',
-      automatic: true,
-    });
+    const successor = await t.runs.handOff(
+      run.id,
+      { agent: 'claude', model: 'opus', credential: 'login' },
+      {
+        reason: 'Individual quota reached',
+        source: 'system',
+        automatic: true,
+      },
+    );
     expect(t.runs.getRun(run.id)).toMatchObject({ state: 'done', handedOffTo: successor.id });
     expect((await byBody(run))['Carry on']!.status).toBe('sent');
     await t.scheduler.tick();
@@ -393,7 +431,12 @@ describe('review rounds (fix round 1)', () => {
     await comment(run, { line: 1, body: 'Exit' });
     await requestChanges(run);
     await hook(run, 'UserPromptSubmit');
-    record(run.id, { source: 'system', type: 'process_exited', state: 'done', patch: { endedAt: new Date(), ptydSessionId: null } });
+    record(run.id, {
+      source: 'system',
+      type: 'process_exited',
+      state: 'done',
+      patch: { endedAt: new Date(), ptydSessionId: null },
+    });
     expect((await byBody(run))['Exit']!.status).toBe('sent');
   });
 
@@ -464,17 +507,28 @@ describe('review rounds (fix round 1)', () => {
     const run = await adHocRun();
     capturePrompts();
     const open = await comment(run, { line: 1, body: 'o' });
-    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).statusCode).toBe(409);
+    expect(
+      (await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).statusCode,
+    ).toBe(409);
     await requestChanges(run);
-    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).statusCode).toBe(409);
+    expect(
+      (await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).statusCode,
+    ).toBe(409);
     await hook(run, 'UserPromptSubmit');
     await hook(run, 'Stop');
-    expect((await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).json().status).toBe('open');
+    expect(
+      (await api('PATCH', `/api/runs/${run.id}/review/comments/${open.id}`, { status: 'open' })).json()
+        .status,
+    ).toBe('open');
   });
 
   it('clips an extra section without splitting a character', async () => {
     const ticket = await ticketWithBody('b'.repeat(15_001));
-    const { run } = await t.tickets.start(ticket.id, {}, { extraPromptSection: `## Feedback\n${'😀'.repeat(10_000)}` });
+    const { run } = await t.tickets.start(
+      ticket.id,
+      {},
+      { extraPromptSection: `## Feedback\n${'😀'.repeat(10_000)}` },
+    );
     expect(run.prompt.length).toBeLessThanOrEqual(20_000);
     expect(run.prompt.endsWith('…')).toBe(true);
     expect(run.prompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);

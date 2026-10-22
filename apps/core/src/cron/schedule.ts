@@ -76,17 +76,28 @@ export function parseCronExpression(expr: string): ParsedCron {
   const normalized = ALIASES[expr.trim().toLowerCase()] ?? expr.trim();
   const fields = normalized.split(/\s+/);
   if (fields.length !== 5) {
-    throw badRequest('cron expression must have 5 fields (minute hour day-of-month month day-of-week) or an alias such as @daily');
+    throw badRequest(
+      'cron expression must have 5 fields (minute hour day-of-month month day-of-week) or an alias such as @daily',
+    );
   }
-  const dow = parseField(fields[4]!, { label: 'day-of-week', min: 0, max: 7, names: { list: DAY_NAMES, offset: 0 } });
+  const dow = parseField(fields[4]!, {
+    label: 'day-of-week',
+    min: 0,
+    max: 7,
+    names: { list: DAY_NAMES, offset: 0 },
+  });
   // 7 is Sunday as well.
   if (dow.values.delete(7)) dow.values.add(0);
   return {
     minutes: parseField(fields[0]!, { label: 'minute', min: 0, max: 59 }).values,
     hours: parseField(fields[1]!, { label: 'hour', min: 0, max: 23 }).values,
     daysOfMonth: parseField(fields[2]!, { label: 'day-of-month', min: 1, max: 31 }),
-    months: parseField(fields[3]!, { label: 'month', min: 1, max: 12, names: { list: MONTH_NAMES, offset: 1 } })
-      .values,
+    months: parseField(fields[3]!, {
+      label: 'month',
+      min: 1,
+      max: 12,
+      names: { list: MONTH_NAMES, offset: 1 },
+    }).values,
     daysOfWeek: dow,
   };
 }
@@ -188,7 +199,12 @@ export function computeNextCronDate(cronExpr: string, from: Date = new Date(), t
 }
 
 /** The next `count` fire times, for previews. */
-export function previewCronRuns(cronExpr: string, timeZone: string, count = 5, from: Date = new Date()): Date[] {
+export function previewCronRuns(
+  cronExpr: string,
+  timeZone: string,
+  count = 5,
+  from: Date = new Date(),
+): Date[] {
   const runs: Date[] = [];
   let cursor = from;
   for (let i = 0; i < count; i++) {

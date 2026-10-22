@@ -145,7 +145,8 @@ function resolveSafeWorkspaceFile(workspacePath: string, relPath: string): strin
   return resolved;
 }
 
-const isInside = (root: string, candidate: string) => candidate === root || candidate.startsWith(root + path.sep);
+const isInside = (root: string, candidate: string) =>
+  candidate === root || candidate.startsWith(root + path.sep);
 
 /**
  * `resolveSafeWorkspaceFile` plus symlink checks. Agents control the workspace, so a planted link
@@ -173,7 +174,8 @@ async function resolveContainedWorkspaceFile(
 }
 
 /** Creates or truncates without following a symlink swapped in after the containment check. */
-const WRITE_NO_FOLLOW = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
+const WRITE_NO_FOLLOW =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
 
 /**
  * The one file the explorer shows under `.emberline` (scratch files stay hidden): the folder and
@@ -333,9 +335,7 @@ export async function uploadWorkspaceFiles(
     const cleanRel = item.path.replace(/\\/g, '/').replace(/^\/+/, '');
     const absFile = await resolveContainedWorkspaceFile(workspacePath, cleanRel);
     await mkdir(path.dirname(absFile), { recursive: true });
-    const rawBase64 = item.dataBase64.includes(',')
-      ? (item.dataBase64.split(',')[1] ?? '')
-      : item.dataBase64;
+    const rawBase64 = item.dataBase64.includes(',') ? (item.dataBase64.split(',')[1] ?? '') : item.dataBase64;
     const buf = Buffer.from(rawBase64, 'base64');
     await writeFile(absFile, buf, { flag: WRITE_NO_FOLLOW });
     uploadedPaths.push(cleanRel);
@@ -366,10 +366,15 @@ export async function writeWorkspaceFileContent(
 }
 
 /** Creates a file that must not exist yet; O_EXCL also refuses a link planted at the path. */
-const CREATE_NEW_NO_FOLLOW = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW;
+const CREATE_NEW_NO_FOLLOW =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW;
 
 /** A new file inside the workspace (wizard reference files): contained, no link followed, never overwritten. */
-export async function writeNewWorkspaceFile(workspacePath: string, relPath: string, data: Uint8Array): Promise<void> {
+export async function writeNewWorkspaceFile(
+  workspacePath: string,
+  relPath: string,
+  data: Uint8Array,
+): Promise<void> {
   const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath);
   await mkdir(path.dirname(absFile), { recursive: true });
   // mkdir walks the folder chain: check it again before the write.

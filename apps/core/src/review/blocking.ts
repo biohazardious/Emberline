@@ -37,7 +37,13 @@ const chainCte = (ids: ReturnType<typeof sql.join>) => sql`
 
 const chunks = (runIds: string[]) => {
   const out: ReturnType<typeof sql.join>[] = [];
-  for (let i = 0; i < runIds.length; i += CHUNK) out.push(sql.join(runIds.slice(i, i + CHUNK).map((id) => sql`${id}`), sql`, `));
+  for (let i = 0; i < runIds.length; i += CHUNK)
+    out.push(
+      sql.join(
+        runIds.slice(i, i + CHUNK).map((id) => sql`${id}`),
+        sql`, `,
+      ),
+    );
   return out;
 };
 
@@ -67,7 +73,8 @@ export function openBlockingCounts(db: Db, runIds: string[]): Map<string, number
 }
 
 /** Open blocking feedback of one run and its handoff predecessors. */
-export const openBlockingCount = (db: Db, runId: string): number => openBlockingCounts(db, [runId]).get(runId) ?? 0;
+export const openBlockingCount = (db: Db, runId: string): number =>
+  openBlockingCounts(db, [runId]).get(runId) ?? 0;
 
 /** The carried blocking feedback still waiting for a person's check on this run (or its predecessors); null when none. */
 export function openCarriedBlocking(db: Db, runId: string): { count: number; fromRun: string | null } | null {

@@ -131,7 +131,8 @@ describe('run push through the gateway', () => {
   describe('a project without a connected repository', () => {
     const pushWithoutRepoUrl = async (withAccount: boolean) => {
       const wt = setupRun();
-      if (withAccount) seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+      if (withAccount)
+        seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
       t.db
         .insert(projects)
         .values({ id: 'p1', name: 'Work', slug: 'work', repoUrl: null, path: repo, createdAt: new Date() })
@@ -158,7 +159,8 @@ describe('run push through the gateway', () => {
         (error: unknown) => (error instanceof Error ? error.message : String(error)),
       );
     };
-    const hint = "Connect this project's repository in Project settings → Repository to push with a forge account.";
+    const hint =
+      "Connect this project's repository in Project settings → Repository to push with a forge account.";
 
     it('a failed push names where to connect it when an account covers the origin', async () => {
       expect(await pushWithoutRepoUrl(true)).toContain(hint);

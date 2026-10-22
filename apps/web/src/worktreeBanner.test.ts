@@ -26,7 +26,9 @@ const html = (s: WorktreeConfigStatusResponse) =>
 
 describe('WorktreeConfigBanner', () => {
   it('the Board banner offers Edit for an unusable file only', () => {
-    expect(html(status({ changed: true, unusable: true, errors: ['x'] }))).toMatch(/<button[^>]*>Edit<\/button>/);
+    expect(html(status({ changed: true, unusable: true, errors: ['x'] }))).toMatch(
+      /<button[^>]*>Edit<\/button>/,
+    );
     expect(html(status({ changed: true, head: { content: 'x', sha256: 'a'.repeat(64) } }))).not.toMatch(
       />Edit<\/button>/,
     );

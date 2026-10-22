@@ -225,7 +225,10 @@ afterEach(async () => {
 });
 
 async function start(dockerHost: string | null = 'tcp://docker:2376', dockerEngineSwitchedOff = false) {
-  t = await createTestApp({ ...(dockerHost ? { dockerHost } : {}), ...(dockerEngineSwitchedOff ? { dockerEngineSwitchedOff } : {}) });
+  t = await createTestApp({
+    ...(dockerHost ? { dockerHost } : {}),
+    ...(dockerEngineSwitchedOff ? { dockerEngineSwitchedOff } : {}),
+  });
   // An agent that stays alive: a live run stays live for the whole test.
   const fake = path.join(t.dir, 'fake-claude.sh');
   writeFileSync(fake, '#!/bin/sh\nexec sleep 60\n');
@@ -406,7 +409,13 @@ describe('engine off', () => {
     expect(await overview()).toMatchObject({
       engine: { enabled: false, available: false, reason: 'not_configured' },
       disk: { rows: [] },
-      cleanup: { lastSweepAt: null, lastSweepRemoved: [], lastPruneAt: null, lastPruneOkAt: null, sweeping: false },
+      cleanup: {
+        lastSweepAt: null,
+        lastSweepRemoved: [],
+        lastPruneAt: null,
+        lastPruneOkAt: null,
+        sweeping: false,
+      },
       projects: [],
     });
     for (const [method, url] of [
@@ -961,7 +970,9 @@ describe('Clean up now (Review Focus 5)', () => {
     await start();
     await t.runs.sweepDockerProjects(Date.parse('2026-10-18T08:00:00Z'));
     engine.failPrune = true;
-    expect(await t.runs.sweepDockerProjects(Date.parse('2026-10-18T09:00:00Z'), { forcePrune: true })).toMatchObject({
+    expect(
+      await t.runs.sweepDockerProjects(Date.parse('2026-10-18T09:00:00Z'), { forcePrune: true }),
+    ).toMatchObject({
       pruned: false,
     });
     expect((await overview()).cleanup).toMatchObject({

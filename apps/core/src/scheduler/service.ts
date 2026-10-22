@@ -123,7 +123,9 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     runs.on('rateLimited', (run, info) => {
       // A failure (e.g. the DB) is noted on the run instead of escaping as an unhandled rejection.
       this.onRateLimited(run, info).catch((error: unknown) =>
-        this.runs.note(run.id, 'rate_limit_failed', { message: error instanceof Error ? error.message : String(error) }),
+        this.runs.note(run.id, 'rate_limit_failed', {
+          message: error instanceof Error ? error.message : String(error),
+        }),
       );
     });
     runs.on('run', (run, stateChanged) => {
@@ -174,7 +176,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       queued: count('queued'),
       // Rate-limited runs may have lost their process (endedAt set) and still wait to resume.
       rateLimited:
-        this.db.select({ n: sql<number>`count(*)` }).from(runs).where(eq(runs.state, 'rate_limited')).get()?.n ?? 0,
+        this.db
+          .select({ n: sql<number>`count(*)` })
+          .from(runs)
+          .where(eq(runs.state, 'rate_limited'))
+          .get()?.n ?? 0,
       window: windows[0] ?? null,
       windows,
     };
@@ -219,13 +225,25 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   async handOff(runId: string, route: Route): Promise<Run> {
     const run = this.runs.getRun(runId); // 404 for an unknown run first
     if (!MANUAL_HANDOFF_STATES.has(run.state)) {
-      throw new HttpError(409, 'run_not_waiting', `a ${run.state} run cannot be handed off; only a waiting, failed or limited one`);
+      throw new HttpError(
+        409,
+        'run_not_waiting',
+        `a ${run.state} run cannot be handed off; only a waiting, failed or limited one`,
+      );
     }
     if (!existsSync(run.worktreePath)) {
-      throw new HttpError(409, 'worktree_missing', "this run's worktree was removed; start a new run instead");
+      throw new HttpError(
+        409,
+        'worktree_missing',
+        "this run's worktree was removed; start a new run instead",
+      );
     }
     this.assertRouteOpen(route);
-    const successor = await this.runs.handOff(runId, route, { reason: 'handed off by you', source: 'user', automatic: false });
+    const successor = await this.runs.handOff(runId, route, {
+      reason: 'handed off by you',
+      source: 'user',
+      automatic: false,
+    });
     await this.tick();
     return this.runs.getRun(successor.id);
   }
@@ -233,10 +251,18 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   /** Refuses a route a person's handoff cannot start on: one the agent cannot sign in with, without its API key, or out of quota. */
   assertRouteOpen(route: Route): void {
     if (!PROVIDER_RUNTIME[route.agent]?.credentials.includes(route.credential)) {
-      throw new HttpError(400, 'route_unsupported', `${route.agent} cannot run with credential ${route.credential}`);
+      throw new HttpError(
+        400,
+        'route_unsupported',
+        `${route.agent} cannot run with credential ${route.credential}`,
+      );
     }
     if (!routeUsable(this.db, route)) {
-      throw new HttpError(409, 'route_unusable', `${route.agent} (${route.model}) needs an API key; none is saved`);
+      throw new HttpError(
+        409,
+        'route_unusable',
+        `${route.agent} (${route.model}) needs an API key; none is saved`,
+      );
     }
     if (this.laneClosed(laneOf(route), this.openWindows())) {
       throw new HttpError(409, 'lane_exhausted', `${route.agent} (${route.model}) is out of quota too`);
@@ -316,7 +342,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   private candidates(): { id: string; state: string }[] {
     const priority = sql<number>`coalesce(${tickets.priority}, 1)`;
     const successor = sql<number>`${runs.predecessorRunId} is not null`;
-    const select = (state: string, order: typeof runs.createdAt | typeof runs.stateChangedAt, successorsFirst: boolean) =>
+    const select = (
+      state: string,
+      order: typeof runs.createdAt | typeof runs.stateChangedAt,
+      successorsFirst: boolean,
+    ) =>
       this.db
         .select({ id: runs.id, state: runs.state })
         .from(runs)
@@ -356,7 +386,13 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       .map((w) => `${w.id}:${w.pool}`)
       .join(',');
     for (const row of waiting) {
-      if (row.cancelledAt || row.autoRetryAt || row.handoffCount >= MAX_HANDOFFS || this.handingOff.has(row.id)) continue;
+      if (
+        row.cancelledAt ||
+        row.autoRetryAt ||
+        row.handoffCount >= MAX_HANDOFFS ||
+        this.handingOff.has(row.id)
+      )
+        continue;
       const current = currentRoute(row);
       const lane = laneOf(current);
       if (!this.laneClosed(lane, closed)) continue; // its own lane reopened: the run resumes there
@@ -365,10 +401,19 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       const key = `${windows}|${others.map((r) => (routeUsable(this.db, r) ? 1 : 0)).join('')}`;
       if (this.fallbackChecked.get(row.id) === key) continue;
       this.fallbackChecked.set(row.id, key);
-      const reason = closed.find((w) => w.resumeAt.getTime() > now && laneCovers(w, lane))?.message ?? 'usage limit reached';
+      const reason =
+        closed.find((w) => w.resumeAt.getTime() > now && laneCovers(w, lane))?.message ??
+        'usage limit reached';
       // An earlier handoff of this pass awaited: the run and the windows may have changed meanwhile.
       const fresh = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
-      if (!fresh || fresh.state !== 'rate_limited' || fresh.cancelledAt || fresh.handedOffTo || this.handingOff.has(fresh.id)) continue;
+      if (
+        !fresh ||
+        fresh.state !== 'rate_limited' ||
+        fresh.cancelledAt ||
+        fresh.handedOffTo ||
+        this.handingOff.has(fresh.id)
+      )
+        continue;
       const freshClosed = this.openWindows();
       if (!this.laneClosed(laneOf(currentRoute(fresh)), freshClosed)) continue;
       await this.autoHandOff(fresh, freshClosed, reason);
@@ -408,7 +453,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   private closeExpired(now: Date): WindowRow[] {
     const open = this.openWindows();
     const due = open.filter((w) => w.resumeAt.getTime() <= now.getTime());
-    for (const w of due) this.db.update(quotaWindows).set({ resumedAt: now }).where(eq(quotaWindows.id, w.id)).run();
+    for (const w of due)
+      this.db.update(quotaWindows).set({ resumedAt: now }).where(eq(quotaWindows.id, w.id)).run();
     return open.filter((w) => w.resumeAt.getTime() > now.getTime());
   }
 
@@ -426,7 +472,10 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     const key = `${runId}|${route.agent}|${route.model}|${route.credential}`;
     if (!this.skipped.has(key)) {
       this.skipped.add(key);
-      this.runs.note(runId, 'route_skipped', { route, message: `Skipped ${route.agent} (${route.model}): no API key saved` });
+      this.runs.note(runId, 'route_skipped', {
+        route,
+        message: `Skipped ${route.agent} (${route.model}): no API key saved`,
+      });
     }
     return false;
   }
@@ -450,14 +499,22 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     const onScreen = screen
       ? rateLimitFromScreen(screen, new Date(), this.config.timeZone, { agent: run.agent, model: run.model })
       : undefined;
-    if (onScreen?.resetsAt) this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen', lane.pool);
+    if (onScreen?.resetsAt)
+      this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen', lane.pool);
   }
 
   /** Policy `inFlight = fallback`: move the limited run to the first route whose lane is open. */
   private async maybeHandOff(run: Run, info: RateLimitInfo | undefined): Promise<void> {
     if (getQuotaPolicy(this.db).inFlight !== 'fallback') return;
     const row = this.db.select().from(runs).where(eq(runs.id, run.id)).get();
-    if (!row || row.cancelledAt || row.handedOffTo || row.handoffCount >= MAX_HANDOFFS || this.handingOff.has(row.id)) return;
+    if (
+      !row ||
+      row.cancelledAt ||
+      row.handedOffTo ||
+      row.handoffCount >= MAX_HANDOFFS ||
+      this.handingOff.has(row.id)
+    )
+      return;
     await this.autoHandOff(row, this.openWindows(), info?.message ?? 'usage limit reached');
   }
 
@@ -465,7 +522,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
    * Hands `row` off to the first other route of its chain whose lane is open (none: it keeps
    * waiting). Marked synchronously, so the hook and a dispatch pass never race for the same run.
    */
-  private async autoHandOff(row: typeof runs.$inferSelect, closed: readonly WindowRow[], reason: string): Promise<void> {
+  private async autoHandOff(
+    row: typeof runs.$inferSelect,
+    closed: readonly WindowRow[],
+    reason: string,
+  ): Promise<void> {
     const current = currentRoute(row);
     const next = runRoutes(row).find((r) => !sameRoute(r, current) && this.routeOpen(row.id, r, closed));
     if (!next) return;
@@ -508,7 +569,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       eq(quotaWindows.credential, lane.credential),
       eq(quotaWindows.pool, lane.pool),
     );
-    const open = this.db.select().from(quotaWindows).where(and(sameLane, isNull(quotaWindows.resumedAt))).get();
+    const open = this.db
+      .select()
+      .from(quotaWindows)
+      .where(and(sameLane, isNull(quotaWindows.resumedAt)))
+      .get();
     if (!open && known && refinePool !== undefined && refinePool !== lane.pool) {
       // The hook opened a window without a reset; the banner names another pool. Only a `*` window is narrowed; any other keeps its pool and just gets the reset.
       const probe = this.db
@@ -525,7 +590,11 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         )
         .get();
       if (probe) {
-        this.db.update(quotaWindows).set({ ...fields, pool: refinePool === '*' ? lane.pool : refinePool }).where(eq(quotaWindows.id, probe.id)).run();
+        this.db
+          .update(quotaWindows)
+          .set({ ...fields, pool: refinePool === '*' ? lane.pool : refinePool })
+          .where(eq(quotaWindows.id, probe.id))
+          .run();
         this.publish(true);
         return;
       }
@@ -539,7 +608,12 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       return;
     }
 
-    const latest = this.db.select().from(quotaWindows).where(sameLane).orderBy(desc(quotaWindows.exhaustedAt)).get();
+    const latest = this.db
+      .select()
+      .from(quotaWindows)
+      .where(sameLane)
+      .orderBy(desc(quotaWindows.exhaustedAt))
+      .get();
     if (latest?.resumedAt && now.getTime() - latest.resumedAt.getTime() < this.options.reopenWithinMs) {
       // The resume (or probe) came too early: same window, try again later.
       this.db
@@ -550,7 +624,15 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     } else {
       this.db
         .insert(quotaWindows)
-        .values({ id: randomUUID(), exhaustedAt: now, runId, agent: lane.agent, credential: lane.credential, pool: lane.pool, ...fields })
+        .values({
+          id: randomUUID(),
+          exhaustedAt: now,
+          runId,
+          agent: lane.agent,
+          credential: lane.credential,
+          pool: lane.pool,
+          ...fields,
+        })
         .run();
     }
     this.publish(true);

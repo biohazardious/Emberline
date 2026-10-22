@@ -22,7 +22,10 @@ export function AccountPanel() {
     setError(undefined);
     setDone(false);
     try {
-      const issued = await api<SessionIssued>('/api/auth/password', 'POST', { currentPassword: current, newPassword: next });
+      const issued = await api<SessionIssued>('/api/auth/password', 'POST', {
+        currentPassword: current,
+        newPassword: next,
+      });
       setSessionKey(issued.sessionKey);
       setCurrent('');
       setNext('');
@@ -30,7 +33,9 @@ export function AccountPanel() {
       setDone(true);
     } catch (e) {
       setError(
-        e instanceof ApiRequestError && e.status === 403 ? 'The current password is not correct.' : errorMessage(e),
+        e instanceof ApiRequestError && e.status === 403
+          ? 'The current password is not correct.'
+          : errorMessage(e),
       );
     } finally {
       setBusy(false);
@@ -45,8 +50,8 @@ export function AccountPanel() {
             <KeyRound className="icon" aria-hidden /> Admin password
           </h2>
           <p className="muted">
-            Changing it signs out every other browser and device. Forgot it? Run <code>make reset-password</code> on
-            the server.
+            Changing it signs out every other browser and device. Forgot it? Run{' '}
+            <code>make reset-password</code> on the server.
           </p>
         </div>
       </header>

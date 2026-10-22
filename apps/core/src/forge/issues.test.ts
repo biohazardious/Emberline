@@ -31,7 +31,11 @@ function fakeFetch(respond: (call: Call) => Response | Promise<Response>) {
 }
 
 const json = (data: unknown, init: ResponseInit = {}) =>
-  new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' }, ...init });
+  new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    ...init,
+  });
 
 const gh = parseForgeRemote('git@github.com:acme/widget.git')!;
 const gl = parseForgeRemote('https://gitlab.example.com/group/sub/app.git')!;
@@ -87,7 +91,11 @@ describe('IssuesClient GitHub', () => {
     const { fn, calls } = fakeFetch(() =>
       json([ghIssue(1)], { headers: { link: '<https://api.github.com/x?page=3>; rel="next"' } }),
     );
-    const res = await new IssuesClient({ fetch: fn }).list(target(gh), { labels: 'emberline,bug', page: 2, state: 'all' });
+    const res = await new IssuesClient({ fetch: fn }).list(target(gh), {
+      labels: 'emberline,bug',
+      page: 2,
+      state: 'all',
+    });
     expect(res.nextPage).toBe(3);
     const url = new URL(calls[0]!.url);
     expect(url.searchParams.get('labels')).toBe('emberline,bug');
@@ -105,7 +113,11 @@ describe('IssuesClient GitHub', () => {
 
   it('uses the search API when a search term is given', async () => {
     const { fn, calls } = fakeFetch(() => json({ total_count: 1, items: [ghIssue(7)] }));
-    const res = await new IssuesClient({ fetch: fn }).list(target(gh), { search: 'crash', labels: 'bug', state: 'open' });
+    const res = await new IssuesClient({ fetch: fn }).list(target(gh), {
+      search: 'crash',
+      labels: 'bug',
+      state: 'open',
+    });
     expect(res.items.map((i) => i.number)).toEqual([7]);
     const url = new URL(calls[0]!.url);
     expect(url.pathname).toBe('/search/issues');
@@ -118,7 +130,9 @@ describe('IssuesClient GitHub', () => {
   });
 
   it('sends If-None-Match and reports a 304 as not modified', async () => {
-    const { fn, calls } = fakeFetch(() => new Response(null, { status: 304, headers: { 'x-ratelimit-remaining': '4999' } }));
+    const { fn, calls } = fakeFetch(
+      () => new Response(null, { status: 304, headers: { 'x-ratelimit-remaining': '4999' } }),
+    );
     const res = await new IssuesClient({ fetch: fn }).list(target(gh), { etag: 'W/"abc"' });
     expect(calls[0]!.headers['If-None-Match']).toBe('W/"abc"');
     expect(res).toMatchObject({ notModified: true, items: [], nextPage: null, etag: 'W/"abc"' });
@@ -126,7 +140,9 @@ describe('IssuesClient GitHub', () => {
   });
 
   it('flags low remaining quota', async () => {
-    const { fn } = fakeFetch(() => json([], { headers: { 'x-ratelimit-remaining': '49', 'x-ratelimit-reset': '1800000000' } }));
+    const { fn } = fakeFetch(() =>
+      json([], { headers: { 'x-ratelimit-remaining': '49', 'x-ratelimit-reset': '1800000000' } }),
+    );
     const res = await new IssuesClient({ fetch: fn }).list(target(gh), {});
     expect(res.rateLimit.low).toBe(true);
     const ok = fakeFetch(() => json([], { headers: { 'x-ratelimit-remaining': '50' } }));
@@ -142,7 +158,11 @@ describe('IssuesClient GitHub', () => {
     expect(err.statusCode).toBe(429);
 
     const b = fakeFetch(
-      () => new Response('limit', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1700000500' } }),
+      () =>
+        new Response('limit', {
+          status: 403,
+          headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1700000500' },
+        }),
     );
     const err2 = await new IssuesClient({ fetch: b.fn, now: () => now }).list(target(gh), {}).catch((e) => e);
     expect(err2).toBeInstanceOf(RateLimitError);
@@ -180,16 +200,26 @@ describe('IssuesClient GitHub', () => {
 
   it('gets one issue by number, comments and closes', async () => {
     const { fn, calls } = fakeFetch((c) =>
-      c.method === 'GET' ? json(ghIssue(5)) : c.method === 'POST' ? json({ id: 1 }, { status: 201 }) : json(ghIssue(5, { state: 'closed' })),
+      c.method === 'GET'
+        ? json(ghIssue(5))
+        : c.method === 'POST'
+          ? json({ id: 1 }, { status: 201 })
+          : json(ghIssue(5, { state: 'closed' })),
     );
     const client = new IssuesClient({ fetch: fn });
     expect((await client.get(target(gh), 5)).externalId).toBe('9005');
     await client.comment(target(gh), 5, 'hello');
     await client.close(target(gh), 5);
     expect(calls[0]!.url).toBe('https://api.github.com/repos/acme/widget/issues/5');
-    expect(calls[1]).toMatchObject({ method: 'POST', url: 'https://api.github.com/repos/acme/widget/issues/5/comments' });
+    expect(calls[1]).toMatchObject({
+      method: 'POST',
+      url: 'https://api.github.com/repos/acme/widget/issues/5/comments',
+    });
     expect(JSON.parse(calls[1]!.body!)).toEqual({ body: 'hello' });
-    expect(calls[2]).toMatchObject({ method: 'PATCH', url: 'https://api.github.com/repos/acme/widget/issues/5' });
+    expect(calls[2]).toMatchObject({
+      method: 'PATCH',
+      url: 'https://api.github.com/repos/acme/widget/issues/5',
+    });
     expect(JSON.parse(calls[2]!.body!)).toEqual({ state: 'closed' });
     for (const c of calls) expect(c.signal).toBeInstanceOf(AbortSignal);
   });
@@ -218,10 +248,19 @@ describe('IssuesClient GitLab', () => {
   it('uses iid as number and id as externalId, encodes the project path and reads x-next-page', async () => {
     const { fn, calls } = fakeFetch(() =>
       json([glIssue(555, 12), glIssue(556, 13, { state: 'closed', description: null })], {
-        headers: { 'x-next-page': '2', 'ratelimit-remaining': '10', 'ratelimit-reset': '1800000000', etag: '"e1"' },
+        headers: {
+          'x-next-page': '2',
+          'ratelimit-remaining': '10',
+          'ratelimit-reset': '1800000000',
+          etag: '"e1"',
+        },
       }),
     );
-    const res = await new IssuesClient({ fetch: fn }).list(target(gl), { state: 'open', labels: 'emberline', search: 'foo' });
+    const res = await new IssuesClient({ fetch: fn }).list(target(gl), {
+      state: 'open',
+      labels: 'emberline',
+      search: 'foo',
+    });
     expect(res.items[0]).toEqual({
       externalId: '555',
       number: 12,
@@ -245,13 +284,21 @@ describe('IssuesClient GitLab', () => {
   });
 
   it('comments via notes and closes with state_event', async () => {
-    const { fn, calls } = fakeFetch((c) => json(c.method === 'GET' ? glIssue(1, 4) : {}, { status: c.method === 'POST' ? 201 : 200 }));
+    const { fn, calls } = fakeFetch((c) =>
+      json(c.method === 'GET' ? glIssue(1, 4) : {}, { status: c.method === 'POST' ? 201 : 200 }),
+    );
     const client = new IssuesClient({ fetch: fn });
     await client.comment(target(gl), 4, 'hi');
     await client.close(target(gl), 4);
     await client.get(target(gl), 4);
-    expect(calls[0]).toMatchObject({ method: 'POST', url: 'https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fapp/issues/4/notes' });
-    expect(calls[1]).toMatchObject({ method: 'PUT', url: 'https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fapp/issues/4' });
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      url: 'https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fapp/issues/4/notes',
+    });
+    expect(calls[1]).toMatchObject({
+      method: 'PUT',
+      url: 'https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fapp/issues/4',
+    });
     expect(JSON.parse(calls[1]!.body!)).toEqual({ state_event: 'close' });
     expect(calls[2]!.method).toBe('GET');
   });
@@ -265,7 +312,10 @@ describe('IssuesClient GitLab', () => {
 describe('IssuesClient Gitea', () => {
   it('mirrors the GitHub paths, asks for type=issues and uses the token header', async () => {
     const { fn, calls } = fakeFetch(() =>
-      json([ghIssue(1, { html_url: 'https://gitea.example.com/acme/widget/issues/1', pull_request: null }), ghIssue(2, { pull_request: { merged: false } })]),
+      json([
+        ghIssue(1, { html_url: 'https://gitea.example.com/acme/widget/issues/1', pull_request: null }),
+        ghIssue(2, { pull_request: { merged: false } }),
+      ]),
     );
     const res = await new IssuesClient({ fetch: fn }).list(target(gitea), { search: 'x', labels: 'bug' });
     expect(res.items.map((i) => i.number)).toEqual([1]);
@@ -285,7 +335,10 @@ describe('IssuesClient Gitea', () => {
     await client.comment(target(gitea), 3, 'yo');
     await client.close(target(gitea), 3);
     expect(calls[0]!.url).toBe('https://gitea.example.com/api/v1/repos/acme/widget/issues/3/comments');
-    expect(calls[1]).toMatchObject({ method: 'PATCH', url: 'https://gitea.example.com/api/v1/repos/acme/widget/issues/3' });
+    expect(calls[1]).toMatchObject({
+      method: 'PATCH',
+      url: 'https://gitea.example.com/api/v1/repos/acme/widget/issues/3',
+    });
   });
 });
 
@@ -295,7 +348,19 @@ describe('issue URLs', () => {
     async (bad) => {
       const { fn } = fakeFetch((c) =>
         c.url.includes('gitlab')
-          ? json([{ id: 1, iid: 1, title: 't', description: '', state: 'opened', labels: [], web_url: bad, author: null, updated_at: '' }])
+          ? json([
+              {
+                id: 1,
+                iid: 1,
+                title: 't',
+                description: '',
+                state: 'opened',
+                labels: [],
+                web_url: bad,
+                author: null,
+                updated_at: '',
+              },
+            ])
           : json([ghIssue(1, { html_url: bad })]),
       );
       const client = new IssuesClient({ fetch: fn });
@@ -306,9 +371,14 @@ describe('issue URLs', () => {
   );
 
   it('keeps http and https URLs as they are', async () => {
-    const { fn } = fakeFetch(() => json([ghIssue(1, { html_url: 'http://gitea.lan:3000/acme/widget/issues/1' }), ghIssue(2)]));
+    const { fn } = fakeFetch(() =>
+      json([ghIssue(1, { html_url: 'http://gitea.lan:3000/acme/widget/issues/1' }), ghIssue(2)]),
+    );
     const res = await new IssuesClient({ fetch: fn }).list(target(gitea), {});
-    expect(res.items.map((i) => i.url)).toEqual(['http://gitea.lan:3000/acme/widget/issues/1', 'https://github.com/acme/widget/issues/2']);
+    expect(res.items.map((i) => i.url)).toEqual([
+      'http://gitea.lan:3000/acme/widget/issues/1',
+      'https://github.com/acme/widget/issues/2',
+    ]);
   });
 });
 
@@ -355,9 +425,15 @@ describe('ForgeService.projectRemote', () => {
     addProject('p3', null, 'git@github.com:acme/widget.git');
     addProject('p4', null, '');
     const forge = new ForgeService(t.db, t.runs);
-    await expect(forge.projectRemote('p3')).rejects.toMatchObject({ statusCode: 409, message: 'Add a forge account for github.com in Settings → Forge accounts.' });
+    await expect(forge.projectRemote('p3')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Add a forge account for github.com in Settings → Forge accounts.',
+    });
     account('github', 'https://github.com');
-    await expect(forge.projectRemote('p4')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/remote/i) });
+    await expect(forge.projectRemote('p4')).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/remote/i),
+    });
     await expect(forge.projectRemote('nope')).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -384,18 +460,37 @@ describe('ForgeService.projectRemote', () => {
 
   it('409 when projects.repoUrl cannot be parsed, and when only the port differs', async () => {
     addProject('p8', 'not a url', 'git@github.com:acme/widget.git');
-    addProject('p9', 'https://git.example.com:8443/acme/widget.git', 'https://git.example.com/acme/widget.git');
+    addProject(
+      'p9',
+      'https://git.example.com:8443/acme/widget.git',
+      'https://git.example.com/acme/widget.git',
+    );
     const forge = new ForgeService(t.db, t.runs);
     account('github', 'https://github.com');
     account('github', 'https://git.example.com');
-    await expect(forge.projectRemote('p8')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/repository URL/) });
+    await expect(forge.projectRemote('p8')).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/repository URL/),
+    });
     await expect(forge.projectRemote('p9')).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('an ssh origin on a custom port is the same server as an https repoUrl on that host', async () => {
-    addProject('p10', 'https://git.example.com/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
-    addProject('p11', 'https://git.example.com:8443/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
-    addProject('p12', 'https://git.example.com/acme/widget.git', 'ssh://git@other.example.com:2222/acme/widget.git');
+    addProject(
+      'p10',
+      'https://git.example.com/acme/widget.git',
+      'ssh://git@git.example.com:2222/acme/widget.git',
+    );
+    addProject(
+      'p11',
+      'https://git.example.com:8443/acme/widget.git',
+      'ssh://git@git.example.com:2222/acme/widget.git',
+    );
+    addProject(
+      'p12',
+      'https://git.example.com/acme/widget.git',
+      'ssh://git@other.example.com:2222/acme/widget.git',
+    );
     const forge = new ForgeService(t.db, t.runs);
     account('gitea', 'https://git.example.com', 'https://git.example.com/api/v1');
     const target = await forge.projectRemote('p10');
@@ -405,7 +500,11 @@ describe('ForgeService.projectRemote', () => {
   });
 
   it('trusts the host of an ssh repoUrl on a custom port without an API URL', async () => {
-    addProject('p13', 'ssh://git@git.example.com:2222/acme/widget.git', 'ssh://git@git.example.com:2222/acme/widget.git');
+    addProject(
+      'p13',
+      'ssh://git@git.example.com:2222/acme/widget.git',
+      'ssh://git@git.example.com:2222/acme/widget.git',
+    );
     const forge = new ForgeService(t.db, t.runs);
     account('github', 'https://git.example.com');
     const target = await forge.projectRemote('p13');
@@ -426,13 +525,21 @@ describe('ForgeService fetch plumbing', () => {
     try {
       const calls: Call[] = [];
       const fn = (async (url: string | URL | Request, init?: RequestInit) => {
-        calls.push({ url: String(url), method: init?.method ?? 'GET', headers: {}, body: undefined, signal: init?.signal });
+        calls.push({
+          url: String(url),
+          method: init?.method ?? 'GET',
+          headers: {},
+          body: undefined,
+          signal: init?.signal,
+        });
         return json({ state: 'success' });
       }) as typeof fetch;
       const forge = new ForgeService(t.db, t.runs, { fetch: fn });
-      const res = await (forge as unknown as {
-        fetchGithubCiStatus(r: ParsedForgeRemote, tok: string, sha: string): Promise<string>;
-      }).fetchGithubCiStatus(gh, 'tok', 'abc');
+      const res = await (
+        forge as unknown as {
+          fetchGithubCiStatus(r: ParsedForgeRemote, tok: string, sha: string): Promise<string>;
+        }
+      ).fetchGithubCiStatus(gh, 'tok', 'abc');
       expect(res).toBe('success');
       expect(calls[0]!.signal).toBeInstanceOf(AbortSignal);
     } finally {
@@ -449,22 +556,61 @@ describe('ForgeService pull requests through a redirect', () => {
       let renamedTo = '/repositories/42/pulls';
       const fn = (async (url: string | URL | Request, init?: RequestInit) => {
         const u = new URL(String(url));
-        calls.push({ url: String(url), method: init?.method ?? 'GET', headers: {}, body: init?.body as string, signal: init?.signal });
+        calls.push({
+          url: String(url),
+          method: init?.method ?? 'GET',
+          headers: {},
+          body: init?.body as string,
+          signal: init?.signal,
+        });
         // GitHub answers a non-GET request to a renamed repository with a 307.
-        if (u.pathname === '/repos/acme/old/pulls') return new Response(null, { status: 307, headers: { location: renamedTo } });
-        return json({ number: 7, title: 'T', html_url: 'https://github.com/acme/new/pull/7', state: 'open', head: { sha: 'abc' } }, { status: 201 });
+        if (u.pathname === '/repos/acme/old/pulls')
+          return new Response(null, { status: 307, headers: { location: renamedTo } });
+        return json(
+          {
+            number: 7,
+            title: 'T',
+            html_url: 'https://github.com/acme/new/pull/7',
+            state: 'open',
+            head: { sha: 'abc' },
+          },
+          { status: 201 },
+        );
       }) as typeof fetch;
       const forge = new ForgeService(t.db, t.runs, { fetch: fn });
       seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'tok' });
       const now = new Date();
-      t.db.insert(projects).values({ id: 'p1', name: 'p1', slug: 'p1', repoUrl: 'https://github.com/acme/old.git', path: `${t.dir}/none`, createdAt: now }).run();
+      t.db
+        .insert(projects)
+        .values({
+          id: 'p1',
+          name: 'p1',
+          slug: 'p1',
+          repoUrl: 'https://github.com/acme/old.git',
+          path: `${t.dir}/none`,
+          createdAt: now,
+        })
+        .run();
       t.db
         .insert(runs)
-        .values({ id: 'r1', projectId: 'p1', agent: 'claude', state: 'done', worktreePath: `${t.dir}/none`, branch: 'emberline/x', hookTokenHash: 'h', stateChangedAt: now, createdAt: now, title: 'T' })
+        .values({
+          id: 'r1',
+          projectId: 'p1',
+          agent: 'claude',
+          state: 'done',
+          worktreePath: `${t.dir}/none`,
+          branch: 'emberline/x',
+          hookTokenHash: 'h',
+          stateChangedAt: now,
+          createdAt: now,
+          title: 'T',
+        })
         .run();
       const res = await forge.createPullRequest('r1', { title: 'T' });
       expect(res.pullRequest?.number).toBe(7);
-      expect(calls.filter((c) => c.method === 'POST').map((c) => [c.method, new URL(c.url).pathname])).toEqual([
+      expect(
+        calls.filter((c) => c.method === 'POST').map((c) => [c.method, new URL(c.url).pathname]),
+      ).toEqual([
         ['POST', '/repos/acme/old/pulls'],
         ['POST', '/repositories/42/pulls'],
       ]);
@@ -472,7 +618,9 @@ describe('ForgeService pull requests through a redirect', () => {
       renamedTo = 'https://other.example.com/acme/new/pulls';
       await expect(forge.createPullRequest('r1', { title: 'T' })).rejects.toMatchObject({
         statusCode: 502,
-        message: expect.stringContaining('the forge redirected to https://other.example.com/acme/new/pulls — has the repository moved?'),
+        message: expect.stringContaining(
+          'the forge redirected to https://other.example.com/acme/new/pulls — has the repository moved?',
+        ),
       });
     } finally {
       await t.close();
@@ -485,21 +633,32 @@ describe('forge fetch hardening', () => {
     const { fn, calls } = fakeFetch((c) => {
       const u = new URL(c.url);
       if (u.pathname === '/repos/acme/widget/issues') {
-        return new Response(null, { status: 301, headers: { location: `/repositories/42/issues${u.search}` } });
+        return new Response(null, {
+          status: 301,
+          headers: { location: `/repositories/42/issues${u.search}` },
+        });
       }
       if (u.pathname === '/repos/acme/widget/issues/3/comments') {
-        return new Response(null, { status: 307, headers: { location: 'https://api.github.com/repositories/42/issues/3/comments' } });
+        return new Response(null, {
+          status: 307,
+          headers: { location: 'https://api.github.com/repositories/42/issues/3/comments' },
+        });
       }
       return c.method === 'POST' ? json({ id: 1 }, { status: 201 }) : json([ghIssue(1)]);
     });
     const client = new IssuesClient({ fetch: fn });
     const res = await client.list(target(gh), { labels: 'bug' });
     expect(res.items.map((i) => i.number)).toEqual([1]);
-    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/repos/acme/widget/issues', '/repositories/42/issues']);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      '/repos/acme/widget/issues',
+      '/repositories/42/issues',
+    ]);
     expect(new URL(calls[1]!.url).searchParams.get('labels')).toBe('bug');
     expect(calls[1]!.headers.Authorization).toBe('Bearer tok');
     await client.comment(target(gh), 3, 'hello');
-    expect(calls.slice(2).map((c) => [c.method, new URL(c.url).pathname, c.body, c.headers.Authorization])).toEqual([
+    expect(
+      calls.slice(2).map((c) => [c.method, new URL(c.url).pathname, c.body, c.headers.Authorization]),
+    ).toEqual([
       ['POST', '/repos/acme/widget/issues/3/comments', JSON.stringify({ body: 'hello' }), 'Bearer tok'],
       ['POST', '/repositories/42/issues/3/comments', JSON.stringify({ body: 'hello' }), 'Bearer tok'],
     ]);
@@ -507,10 +666,14 @@ describe('forge fetch hardening', () => {
 
   it('a 301/302/303 for a request with a body is a 502: the body is never re-sent on those', async () => {
     for (const status of [301, 302, 303]) {
-      const { fn, calls } = fakeFetch(() => new Response(null, { status, headers: { location: '/repositories/42/issues/3/comments' } }));
+      const { fn, calls } = fakeFetch(
+        () => new Response(null, { status, headers: { location: '/repositories/42/issues/3/comments' } }),
+      );
       await expect(new IssuesClient({ fetch: fn }).comment(target(gh), 3, 'hello')).rejects.toMatchObject({
         statusCode: 502,
-        message: expect.stringContaining('the forge redirected to https://api.github.com/repositories/42/issues/3/comments — has the repository moved?'),
+        message: expect.stringContaining(
+          'the forge redirected to https://api.github.com/repositories/42/issues/3/comments — has the repository moved?',
+        ),
       });
       expect(calls).toHaveLength(1);
     }
@@ -531,10 +694,14 @@ describe('forge fetch hardening', () => {
 
   it('gives up after 3 same-origin hops, and on a redirect without a Location', async () => {
     let n = 0;
-    const { fn, calls } = fakeFetch(() => new Response(null, { status: 301, headers: { location: `/hop/${++n}` } }));
+    const { fn, calls } = fakeFetch(
+      () => new Response(null, { status: 301, headers: { location: `/hop/${++n}` } }),
+    );
     await expect(new IssuesClient({ fetch: fn }).list(target(gh), {})).rejects.toMatchObject({
       statusCode: 502,
-      message: expect.stringMatching(/^the forge redirected to https:\/\/api\.github\.com\/hop\/4 — has the repository moved\?/),
+      message: expect.stringMatching(
+        /^the forge redirected to https:\/\/api\.github\.com\/hop\/4 — has the repository moved\?/,
+      ),
     });
     expect(calls).toHaveLength(4);
     const bare = fakeFetch(() => new Response(null, { status: 302 }));
@@ -587,7 +754,9 @@ describe('forge fetch hardening', () => {
       statusCode: 504,
       code: 'forge_timeout',
     });
-    await expect(new IssuesClient({ fetch: fn }).get(target(gh), 1)).rejects.toMatchObject({ statusCode: 504 });
+    await expect(new IssuesClient({ fetch: fn }).get(target(gh), 1)).rejects.toMatchObject({
+      statusCode: 504,
+    });
   });
 
   it('PR calls in the service map a body timeout to 504 too', async () => {
@@ -604,7 +773,11 @@ describe('forge fetch hardening', () => {
         }) as unknown as Response) as typeof fetch;
       const forge = new ForgeService(t.db, t.runs, { fetch: fn });
       await expect(
-        (forge as unknown as { fetchGithubCiStatus(r: ParsedForgeRemote, tok: string, sha: string): Promise<string> }).fetchGithubCiStatus(gh, 'tok', 'abc'),
+        (
+          forge as unknown as {
+            fetchGithubCiStatus(r: ParsedForgeRemote, tok: string, sha: string): Promise<string>;
+          }
+        ).fetchGithubCiStatus(gh, 'tok', 'abc'),
       ).rejects.toMatchObject({ statusCode: 504 });
     } finally {
       await t.close();

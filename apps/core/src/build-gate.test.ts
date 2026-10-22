@@ -146,7 +146,10 @@ describe('build gate execution', () => {
 
 describe('approved worktree.yml checks', () => {
   it('replace the planned steps and run in the order build, lint, test (sh -c, in the worktree)', async () => {
-    files({ 'package.json': JSON.stringify({ scripts: { build: 'vite build', test: 'vitest' } }), 'node_modules/.keep': '' });
+    files({
+      'package.json': JSON.stringify({ scripts: { build: 'vite build', test: 'vitest' } }),
+      'node_modules/.keep': '',
+    });
     const seen: ExecRequest[] = [];
     setCommandExecutor(async (request) => {
       seen.push(request);
@@ -159,7 +162,11 @@ describe('approved worktree.yml checks', () => {
       checks: { test: 'make test', build: 'make all', lint: 'make lint' },
     });
     expect(res.ok).toBe(true);
-    expect(seen.map((r) => [r.file, ...r.args].join(' '))).toEqual(['sh -c make all', 'sh -c make lint', 'sh -c make test']);
+    expect(seen.map((r) => [r.file, ...r.args].join(' '))).toEqual([
+      'sh -c make all',
+      'sh -c make lint',
+      'sh -c make test',
+    ]);
     expect(seen.every((r) => r.cwd === ws)).toBe(true);
   });
 
@@ -168,9 +175,21 @@ describe('approved worktree.yml checks', () => {
     setCommandExecutor(async (request) => {
       seen.push(request.args[1] ?? '');
       const failed = request.args[1] === 'make lint';
-      return { exitCode: failed ? 2 : 0, signal: null, stdout: '', stderr: failed ? 'lint error' : '', timedOut: false, truncated: false };
+      return {
+        exitCode: failed ? 2 : 0,
+        signal: null,
+        stdout: '',
+        stderr: failed ? 'lint error' : '',
+        timedOut: false,
+        truncated: false,
+      };
     });
-    const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { build: 'make all', lint: 'make lint', test: 'make test' } });
+    const res = await buildWorkspaceDemo({
+      projectId: 'p',
+      targetId: 'main',
+      workspacePath: ws,
+      checks: { build: 'make all', lint: 'make lint', test: 'make test' },
+    });
     expect(res.ok).toBe(false);
     expect(res.output).toContain('lint error');
     expect(seen).toEqual(['make all', 'make lint']);
@@ -183,7 +202,12 @@ describe('approved worktree.yml checks', () => {
       seen.push([request.file, ...request.args].join(' '));
       return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
     });
-    await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { test: 'pytest' } });
+    await buildWorkspaceDemo({
+      projectId: 'p',
+      targetId: 'main',
+      workspacePath: ws,
+      checks: { test: 'pytest' },
+    });
     expect(seen).toEqual(['sh -c pytest']);
   });
 
@@ -222,7 +246,13 @@ describe('approved setup before the checks', () => {
       seen.push(cmdOf(request));
       return cmdOf(request) === 'npm ci' ? { ...ok, exitCode: 1, stdout: 'ERR! lockfile out of date' } : ok;
     });
-    const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws, checks: { build: 'npm run build' }, setup: ['npm ci'] });
+    const res = await buildWorkspaceDemo({
+      projectId: 'p',
+      targetId: 'main',
+      workspacePath: ws,
+      checks: { build: 'npm run build' },
+      setup: ['npm ci'],
+    });
     expect(res.ok).toBe(false);
     expect(res.output).toContain('exit 1');
     expect(res.output).toContain('lockfile out of date');

@@ -23,7 +23,12 @@ describe('Docker engine texts', () => {
   });
 
   it('are plain text', () => {
-    for (const text of [DOCKER_ENGINE_OFF_TEXT, DOCKER_ENGINE_NOT_CONFIGURED_TEXT, DOCKER_ENGINE_NOT_ANSWERED_TEXT, DOCKER_ENGINE_UNREACHABLE_HINT]) {
+    for (const text of [
+      DOCKER_ENGINE_OFF_TEXT,
+      DOCKER_ENGINE_NOT_CONFIGURED_TEXT,
+      DOCKER_ENGINE_NOT_ANSWERED_TEXT,
+      DOCKER_ENGINE_UNREACHABLE_HINT,
+    ]) {
       expect(text).not.toContain('`');
     }
   });

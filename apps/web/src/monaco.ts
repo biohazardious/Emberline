@@ -56,4 +56,5 @@ export function loadMonaco(): Promise<typeof Monaco> {
   return monacoPromise;
 }
 
-export const monacoTheme = (mode: 'dark' | 'light') => (mode === 'light' ? 'emberline-light' : 'emberline-dark');
+export const monacoTheme = (mode: 'dark' | 'light') =>
+  mode === 'light' ? 'emberline-light' : 'emberline-dark';

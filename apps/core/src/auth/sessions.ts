@@ -5,7 +5,8 @@ import type { Db } from '../db/index.js';
 import { sessions } from '../db/schema.js';
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
-const sameHash = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const sameHash = (a: string, b: string) =>
+  a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 /**
  * `ok`; `none`: no valid session; `address_changed`: the session belongs to another client address;

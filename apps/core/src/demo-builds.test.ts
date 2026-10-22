@@ -179,9 +179,9 @@ describe('staleness', () => {
     expect(isDemoStale({ head: build.commit, build: { ...build, commit: null }, hasDemoEntry: true })).toBe(
       false,
     );
-    expect(isDemoStale({ head: build.commit, build: { ...build, commit: null, ok: false }, hasDemoEntry: false })).toBe(
-      false,
-    );
+    expect(
+      isDemoStale({ head: build.commit, build: { ...build, commit: null, ok: false }, hasDemoEntry: false }),
+    ).toBe(false);
   });
 });
 

@@ -120,12 +120,19 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
       .all();
     metric('emberline_tickets', 'gauge', 'Tickets by board column.', count(ticketStatuses, 'status'));
     const scheduler = deps.scheduler.state();
-    metric('emberline_scheduler_slots', 'gauge', 'Maximum concurrent runs.', [['', scheduler.maxConcurrentRuns]]);
-    metric('emberline_scheduler_busy', 'gauge', 'Runs holding a slot.', [['', scheduler.busy]]);
-    metric('emberline_scheduler_queued', 'gauge', 'Runs waiting for a slot or quota.', [['', scheduler.queued]]);
-    metric('emberline_quota_paused', 'gauge', 'Quota lanes out of quota (agent, credential, model pool); 0 when none.', [
-      ['', scheduler.windows.length],
+    metric('emberline_scheduler_slots', 'gauge', 'Maximum concurrent runs.', [
+      ['', scheduler.maxConcurrentRuns],
     ]);
+    metric('emberline_scheduler_busy', 'gauge', 'Runs holding a slot.', [['', scheduler.busy]]);
+    metric('emberline_scheduler_queued', 'gauge', 'Runs waiting for a slot or quota.', [
+      ['', scheduler.queued],
+    ]);
+    metric(
+      'emberline_quota_paused',
+      'gauge',
+      'Quota lanes out of quota (agent, credential, model pool); 0 when none.',
+      [['', scheduler.windows.length]],
+    );
     metric('emberline_runner_connected', 'gauge', 'Core is connected to the runner (ptyd).', [
       ['', deps.ptyd.status === 'connected' ? 1 : 0],
     ]);
@@ -133,7 +140,12 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
       ['', deps.ptyd.protocolVersion ?? 0],
     ]);
     const dbSize = await Promise.all(
-      ['', '-wal'].map((suffix) => stat(`${dbFile}${suffix}`).then((s) => s.size, () => 0)),
+      ['', '-wal'].map((suffix) =>
+        stat(`${dbFile}${suffix}`).then(
+          (s) => s.size,
+          () => 0,
+        ),
+      ),
     );
     metric('emberline_db_size_bytes', 'gauge', 'SQLite database size including the WAL.', [
       ['', dbSize.reduce((a, b) => a + b, 0)],
@@ -141,8 +153,12 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
     metric('emberline_http_requests_total', 'counter', 'HTTP responses by method and status class.', [
       ...http.entries(),
     ]);
-    metric('emberline_http_request_duration_seconds_sum', 'counter', 'Total response time.', [['', durationSum]]);
-    metric('emberline_http_request_duration_seconds_count', 'counter', 'Responses timed.', [['', durationCount]]);
+    metric('emberline_http_request_duration_seconds_sum', 'counter', 'Total response time.', [
+      ['', durationSum],
+    ]);
+    metric('emberline_http_request_duration_seconds_count', 'counter', 'Responses timed.', [
+      ['', durationCount],
+    ]);
 
     reply.type('text/plain; version=0.0.4; charset=utf-8');
     return `${lines.join('\n')}\n`;

@@ -137,7 +137,10 @@ describe('buildLaunchSpec', () => {
       // The mode is always stated (it stops Claude Code's "make auto the default" nudge). Only the
       // completion signal is pre-allowed: `preview` runs the worktree's dev script or compose build,
       // which the agent can edit, so it asks like Bash does.
-      expect(settings.permissions).toEqual({ defaultMode: permissionMode, allow: ['mcp__emberline__ticket_complete'] });
+      expect(settings.permissions).toEqual({
+        defaultMode: permissionMode,
+        allow: ['mcp__emberline__ticket_complete'],
+      });
       expect(spec.args).not.toContain('auto');
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
@@ -148,7 +151,11 @@ describe('buildLaunchSpec', () => {
 
   it('only auto-approves secondary CLIs in auto or bypassPermissions mode', () => {
     const secondary = { runId: 'r1', hookToken: 't', coreUrl: 'http://core:7420', prompt: 'go' };
-    const careful = buildSecondaryCliLaunchSpec({ ...secondary, agent: 'gemini', permissionMode: 'acceptEdits' });
+    const careful = buildSecondaryCliLaunchSpec({
+      ...secondary,
+      agent: 'gemini',
+      permissionMode: 'acceptEdits',
+    });
     expect(careful.args[1]).not.toContain('--yolo');
     expect(careful.env.EMBERLINE_AUTO_APPROVE).toBe('0');
     const unattended = buildSecondaryCliLaunchSpec({ ...secondary, agent: 'gemini', permissionMode: 'auto' });
@@ -211,15 +218,18 @@ describe('nextStateFromHook', () => {
 
   it('ignores idle reminders once the turn is done, but not permission prompts', () => {
     expect(nextStateFromHook('done', 'Notification', { notification_type: 'idle_prompt' })).toBeUndefined();
-    expect(nextStateFromHook('done', 'Notification', { message: 'Claude needs your permission to use Bash' })).toBe(
-      'waiting_input',
-    );
+    expect(
+      nextStateFromHook('done', 'Notification', { message: 'Claude needs your permission to use Bash' }),
+    ).toBe('waiting_input');
   });
 
   it('leaves a turn that failed for another reason than a limit waiting for the user', () => {
-    expect(nextStateFromHook('working', 'StopFailure', { error: 'invalid_request', error_details: 'prompt is too long' })).toBe(
-      'waiting_input',
-    );
+    expect(
+      nextStateFromHook('working', 'StopFailure', {
+        error: 'invalid_request',
+        error_details: 'prompt is too long',
+      }),
+    ).toBe('waiting_input');
   });
 
   it('treats the end of a live session as done, but keeps a limit wait', () => {
@@ -286,7 +296,9 @@ describe('secondary CLIs start without first-run questions', () => {
   it('codex: no removed --full-auto, no inner sandbox, no update offer', () => {
     const auto = buildSecondaryCliLaunchSpec({ ...base, agent: 'codex', permissionMode: 'auto' });
     expect(script(auto)).not.toContain('--full-auto');
-    expect(script(auto)).toContain('exec -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox');
+    expect(script(auto)).toContain(
+      'exec -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox',
+    );
     const ask = buildSecondaryCliLaunchSpec({ ...base, agent: 'codex', permissionMode: 'default' });
     expect(script(ask)).toContain('-s danger-full-access');
     expect(script(ask)).toContain('export CODEX_API_KEY="$OPENAI_API_KEY"');
@@ -296,7 +308,9 @@ describe('secondary CLIs start without first-run questions', () => {
     const gemini = buildSecondaryCliLaunchSpec({ ...base, agent: 'gemini', permissionMode: 'acceptEdits' });
     expect(gemini.env.GEMINI_CLI_TRUST_WORKSPACE).toBe('true');
     expect(script(gemini)).toContain('--approval-mode auto_edit');
-    expect(buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity' }).env.GEMINI_CLI_TRUST_WORKSPACE).toBe('true');
+    expect(
+      buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity' }).env.GEMINI_CLI_TRUST_WORKSPACE,
+    ).toBe('true');
   });
 
   it('copilot: unattended runs may use every tool and never ask; no auto-update', () => {
@@ -308,7 +322,13 @@ describe('secondary CLIs start without first-run questions', () => {
 
   it('aider: first-run questions are switched off', () => {
     const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'aider' });
-    for (const flag of ['--no-gitignore', '--no-show-release-notes', '--no-show-model-warnings', '--no-check-update', '--analytics-disable']) {
+    for (const flag of [
+      '--no-gitignore',
+      '--no-show-release-notes',
+      '--no-show-model-warnings',
+      '--no-check-update',
+      '--analytics-disable',
+    ]) {
       expect(script(spec)).toContain(flag);
     }
   });
@@ -347,12 +367,18 @@ describe('secondary CLIs start without first-run questions', () => {
   it('codex UI trusts the repository root, quoted for its config syntax', () => {
     const { dir } = runWithFake('codex', 'for a in "$@"; do printf "%s\\n" "$a"; done > "$PWD/args.txt"');
     const args = readFileSync(path.join(dir, 'args.txt'), 'utf8').split('\n');
-    expect(args).toContain(`projects."${execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel']).toString().trim()}".trust_level="trusted"`);
+    expect(args).toContain(
+      `projects."${execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel']).toString().trim()}".trust_level="trusted"`,
+    );
     expect(args).toContain('check_for_update_on_startup=false');
   });
 
   it('an aider run that could not authenticate fails although aider exits 0', () => {
-    const { status } = runWithFake('aider', 'echo "The API provider is not able to authenticate you."; exit 0', 'do it');
+    const { status } = runWithFake(
+      'aider',
+      'echo "The API provider is not able to authenticate you."; exit 0',
+      'do it',
+    );
     expect(status).toBe(1);
   });
 
@@ -362,11 +388,18 @@ describe('secondary CLIs start without first-run questions', () => {
     const quota =
       'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s. AGY_ERROR: RESOURCE_EXHAUSTED (code 429)';
     const fake = path.join(dir, 'fake-agy');
-    const work = 'agy: step - reading files, editing components and running the build to check the layout still renders';
-    writeFileSync(fake, `#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8; do echo "${work} $i"; done\necho "${quota}"\nexit 3\n`, { mode: 0o755 });
+    const work =
+      'agy: step - reading files, editing components and running the build to check the layout still renders';
+    writeFileSync(
+      fake,
+      `#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8; do echo "${work} $i"; done\necho "${quota}"\nexit 3\n`,
+      { mode: 0o755 },
+    );
     // Records each hook event with its payload instead of posting it to core.
     const hook = path.join(dir, 'fake-hook');
-    writeFileSync(hook, `#!/bin/sh\nprintf '%s %s\\n' "$1" "$(cat)" >> "${dir}/hooks.txt"\n`, { mode: 0o755 });
+    writeFileSync(hook, `#!/bin/sh\nprintf '%s %s\\n' "$1" "$(cat)" >> "${dir}/hooks.txt"\n`, {
+      mode: 0o755,
+    });
     process.env.EMBERLINE_ANTIGRAVITY_COMMAND = fake;
     try {
       const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity', hookCommand: hook });
@@ -386,13 +419,16 @@ describe('secondary CLIs start without first-run questions', () => {
     const payload = JSON.parse(failure?.slice('StopFailure '.length) ?? '{}');
     expect(payload.message).toContain('Resets in 31h43m5s. AGY_ERROR: RESOURCE_EXHAUSTED (code 429)');
     expect(payload.message.length).toBeLessThanOrEqual(420);
-    expect(nextStateFromHook('working', 'StopFailure', payload, { agent: 'antigravity' })).toBe('rate_limited');
+    expect(nextStateFromHook('working', 'StopFailure', payload, { agent: 'antigravity' })).toBe(
+      'rate_limited',
+    );
   }, 20_000);
 });
 
 describe('emberline completion tool', () => {
   const base = { runId: 'r1', hookToken: 'tok', coreUrl: 'http://core:7420' };
-  const mcpServers = (args: string[]) => JSON.parse(args[args.indexOf('--mcp-config') + 1] ?? '{}').mcpServers;
+  const mcpServers = (args: string[]) =>
+    JSON.parse(args[args.indexOf('--mcp-config') + 1] ?? '{}').mcpServers;
 
   it.each(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'] as const)(
     'always wires the emberline stdio server and allows its tool in %s mode',
@@ -419,7 +455,9 @@ describe('emberline completion tool', () => {
   );
 
   it('keeps the token out of the command line', () => {
-    expect(buildLaunchSpec({ ...base, hookToken: 'secret-token' }).args.join(' ')).not.toContain('secret-token');
+    expect(buildLaunchSpec({ ...base, hookToken: 'secret-token' }).args.join(' ')).not.toContain(
+      'secret-token',
+    );
   });
 
   it('keeps emberline next to Playwright and custom servers', () => {
@@ -462,12 +500,15 @@ describe('persona preview instructions', () => {
   const PREVIEW_SENTENCE =
     "For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`.";
 
-  it.each(['qa', 'ui_ux'] as const)('%s opens its own preview through the preview tool, with $EMBERLINE_DEMO_URL as the fallback', (persona) => {
-    const text = PERSONA_CATALOG[persona].systemPrompt;
-    expect(text).toContain(PREVIEW_SENTENCE);
-    // The demo URL is only the fallback now: no sentence opens it first.
-    expect(text.indexOf('$EMBERLINE_DEMO_URL')).toBeGreaterThan(text.indexOf('`preview` tool'));
-  });
+  it.each(['qa', 'ui_ux'] as const)(
+    '%s opens its own preview through the preview tool, with $EMBERLINE_DEMO_URL as the fallback',
+    (persona) => {
+      const text = PERSONA_CATALOG[persona].systemPrompt;
+      expect(text).toContain(PREVIEW_SENTENCE);
+      // The demo URL is only the fallback now: no sentence opens it first.
+      expect(text.indexOf('$EMBERLINE_DEMO_URL')).toBeGreaterThan(text.indexOf('`preview` tool'));
+    },
+  );
 });
 
 describe('architect follow-up tickets', () => {

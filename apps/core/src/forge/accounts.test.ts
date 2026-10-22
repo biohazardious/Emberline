@@ -326,16 +326,33 @@ describe('forge accounts API', () => {
   });
 
   it('an API URL typed as the server URL is read as its server', async () => {
-    const res = await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com/api/v1/', token: 't' });
+    const res = await send('POST', '/api/forge/accounts', {
+      provider: 'gitea',
+      serverUrl: 'https://git.example.com/api/v1/',
+      token: 't',
+    });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toMatchObject({ serverUrl: 'https://git.example.com', apiUrl: 'https://git.example.com/api/v1' });
+    expect(res.json()).toMatchObject({
+      serverUrl: 'https://git.example.com',
+      apiUrl: 'https://git.example.com/api/v1',
+    });
     expect(calls.at(-1)?.url).toBe('https://git.example.com/api/v1/user');
-    const gh = await send('POST', '/api/forge/accounts', { provider: 'github', serverUrl: 'https://api.github.com', token: 't2' });
+    const gh = await send('POST', '/api/forge/accounts', {
+      provider: 'github',
+      serverUrl: 'https://api.github.com',
+      token: 't2',
+    });
     expect(gh.json()).toMatchObject({ serverUrl: 'https://github.com', apiUrl: 'https://api.github.com' });
   });
 
   it('a check that started with the old token never overwrites the name a new token gave', async () => {
-    const id = (await send('POST', '/api/forge/accounts', { provider: 'github', serverUrl: 'https://github.com', token: 'tok-OLD' })).json().id;
+    const id = (
+      await send('POST', '/api/forge/accounts', {
+        provider: 'github',
+        serverUrl: 'https://github.com',
+        token: 'tok-OLD',
+      })
+    ).json().id;
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let checking!: () => void;
@@ -358,7 +375,13 @@ describe('forge accounts API', () => {
   });
 
   it('a 403 with retry-after on owners or repository creation is a rate limit, not an empty list or a refusal', async () => {
-    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't' })).json().id;
+    const id = (
+      await send('POST', '/api/forge/accounts', {
+        provider: 'gitea',
+        serverUrl: 'https://git.example.com',
+        token: 't',
+      })
+    ).json().id;
     answer = (url) =>
       url.endsWith('/user')
         ? reply({ login: 'octo' })
@@ -366,16 +389,26 @@ describe('forge accounts API', () => {
     const owners = await send('GET', `/api/forge/accounts/${id}/owners`);
     expect(owners.statusCode).toBe(429);
     expect(owners.json().error).toBe('forge_rate_limited');
-    const record = new ForgeAccountsService(t.db, (url, init) => t.forgeFetch.current(url, init), {}).record(id);
+    const record = new ForgeAccountsService(t.db, (url, init) => t.forgeFetch.current(url, init), {}).record(
+      id,
+    );
     const svc = new ForgeAccountsService(t.db, (url, init) => t.forgeFetch.current(url, init), {});
-    await expect(svc.createRepository(record, { owner: 'acme', name: 'x', private: true })).rejects.toMatchObject({
+    await expect(
+      svc.createRepository(record, { owner: 'acme', name: 'x', private: true }),
+    ).rejects.toMatchObject({
       statusCode: 429,
       code: 'forge_rate_limited',
     });
   });
 
   it('an owners read that started before a token change never fills the cache afterwards', async () => {
-    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 'tok-OLD' })).json().id;
+    const id = (
+      await send('POST', '/api/forge/accounts', {
+        provider: 'gitea',
+        serverUrl: 'https://git.example.com',
+        token: 'tok-OLD',
+      })
+    ).json().id;
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let reading!: () => void;
@@ -403,10 +436,20 @@ describe('forge accounts API', () => {
   });
 
   it('an organizations read that fails is not kept: the next read asks again', async () => {
-    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't1' })).json().id;
+    const id = (
+      await send('POST', '/api/forge/accounts', {
+        provider: 'gitea',
+        serverUrl: 'https://git.example.com',
+        token: 't1',
+      })
+    ).json().id;
     let failing = true;
     answer = (url) =>
-      url.includes('/user/orgs') ? (failing ? reply({}, 500) : reply([{ username: 'acme' }])) : reply({ login: 'octo' });
+      url.includes('/user/orgs')
+        ? failing
+          ? reply({}, 500)
+          : reply([{ username: 'acme' }])
+        : reply({ login: 'octo' });
     const first = await send('GET', `/api/forge/accounts/${id}/owners`);
     expect(JSON.stringify(first.json())).not.toContain('acme');
     failing = false;
@@ -415,7 +458,13 @@ describe('forge accounts API', () => {
   });
 
   it('owners are read once per account for a few minutes; a new token reads them again', async () => {
-    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't1' })).json().id;
+    const id = (
+      await send('POST', '/api/forge/accounts', {
+        provider: 'gitea',
+        serverUrl: 'https://git.example.com',
+        token: 't1',
+      })
+    ).json().id;
     answer = (url) => (url.includes('/user/orgs') ? reply([{ username: 'acme' }]) : reply({ login: 'octo' }));
     const orgCalls = () => calls.filter((c) => c.url.includes('/user/orgs')).length;
     await send('GET', `/api/forge/accounts/${id}/owners`);
@@ -570,7 +619,11 @@ describe('environment account usernames', () => {
     try {
       a.forgeFetch.current = async () => reply({ login: 'robot' });
       const cookie = await setupAndLogin(a.app);
-      const res = await a.app.inject({ method: 'POST', url: '/api/forge/accounts/env/check', headers: authHeaders(cookie) });
+      const res = await a.app.inject({
+        method: 'POST',
+        url: '/api/forge/accounts/env/check',
+        headers: authHeaders(cookie),
+      });
       expect(res.statusCode).toBe(200);
       expect(listAccountRecords(a.db)[0]?.username).toBe('robot');
       expect(listAccountRecords(b.db)[0]?.username).toBeNull();

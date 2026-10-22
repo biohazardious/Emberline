@@ -5,3 +5,12 @@ pnpm-lock.yaml
 .claude/
 .codex/
 .opencode/
+reports/
+research_notes/
+docs/superpowers/
+.worktrees/
+backups/
+workspaces/
+.superpowers/
+# drizzle-kit writes these with JSON.stringify on every migration
+apps/core/drizzle/meta/

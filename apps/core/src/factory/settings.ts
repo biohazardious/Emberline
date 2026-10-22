@@ -92,9 +92,15 @@ function normalizeChain(
   for (const step of chain) {
     const agent = AgentId.safeParse(step.agent);
     if (!agent.success || !enabled.has(agent.data)) continue;
-    const model = coerceModelForProvider(agent.data, AgentModelId.safeParse(step.model).data ?? 'auto', persona);
+    const model = coerceModelForProvider(
+      agent.data,
+      AgentModelId.safeParse(step.model).data ?? 'auto',
+      persona,
+    );
     const allowed = PROVIDER_RUNTIME[agent.data].credentials;
-    const credential = allowed.includes(step.credential as Credential) ? (step.credential as Credential) : allowed[0]!;
+    const credential = allowed.includes(step.credential as Credential)
+      ? (step.credential as Credential)
+      : allowed[0]!;
     const route: Route = { agent: agent.data, model, credential };
     if (!out.some((r) => sameRoute(r, route))) out.push(route);
     if (out.length === MAX_ROUTES) break;
@@ -191,7 +197,9 @@ function hasValidGeminiOAuth(home: string): boolean {
 
 function hasClaudeAccount(home: string): boolean {
   try {
-    const config = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8')) as { oauthAccount?: unknown };
+    const config = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8')) as {
+      oauthAccount?: unknown;
+    };
     return Boolean(config.oauthAccount);
   } catch {
     return false;
@@ -508,8 +516,13 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     enabledSet.add('claude');
   }
   const enabledProviders = Array.from(enabledSet);
-  const antigravityTermsAcknowledged = body.antigravityTermsAcknowledged ?? current.antigravityTermsAcknowledged;
-  if (enabledSet.has('antigravity') && !current.enabledProviders.includes('antigravity') && !antigravityTermsAcknowledged) {
+  const antigravityTermsAcknowledged =
+    body.antigravityTermsAcknowledged ?? current.antigravityTermsAcknowledged;
+  if (
+    enabledSet.has('antigravity') &&
+    !current.enabledProviders.includes('antigravity') &&
+    !antigravityTermsAcknowledged
+  ) {
     throw new HttpError(409, 'antigravity_terms', ANTIGRAVITY_TERMS_NOTE);
   }
 
@@ -527,7 +540,10 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     const legacyModel = body.personaModels?.[p];
     nextRoutes[p] =
       !body.personaRoutes?.[p] && (legacyAgent || legacyModel)
-        ? [{ ...chain[0]!, agent: legacyAgent ?? chain[0]!.agent, model: legacyModel ?? chain[0]!.model }, ...chain.slice(1)]
+        ? [
+            { ...chain[0]!, agent: legacyAgent ?? chain[0]!.agent, model: legacyModel ?? chain[0]!.model },
+            ...chain.slice(1),
+          ]
         : chain;
   }
 
@@ -566,10 +582,8 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     const nextKeys: StoredProviderKeys = {
       anthropicApiKey:
         body.anthropicApiKey === undefined ? prevKeys.anthropicApiKey : body.anthropicApiKey || null,
-      openaiApiKey:
-        body.openaiApiKey === undefined ? prevKeys.openaiApiKey : body.openaiApiKey || null,
-      geminiApiKey:
-        body.geminiApiKey === undefined ? prevKeys.geminiApiKey : body.geminiApiKey || null,
+      openaiApiKey: body.openaiApiKey === undefined ? prevKeys.openaiApiKey : body.openaiApiKey || null,
+      geminiApiKey: body.geminiApiKey === undefined ? prevKeys.geminiApiKey : body.geminiApiKey || null,
     };
     setSetting(db, FACTORY_KEYS_KEY, nextKeys);
   }
@@ -578,7 +592,11 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
 }
 
 /** The chain a new run follows: an explicit/tagged route first, then the persona's chain. */
-export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { agent?: string; model?: string }): Route[] {
+export function resolveRunRoutes(
+  db: Db,
+  persona: AgentPersona,
+  preferred?: { agent?: string; model?: string },
+): Route[] {
   const cfg = getFactorySettings(db);
   const chain = cfg.personaRoutes[persona];
   const enabled = new Set<string>(cfg.enabledProviders);
@@ -593,14 +611,16 @@ export function resolveRunRoutes(db: Db, persona: AgentPersona, preferred?: { ag
     // the persona's model mapped onto the tagged agent.
     const explicitModel = preferredModel ?? (preferred?.model as AgentModelId | undefined);
     const sameAgent = chain.find((r) => r.agent === tagged.data && r.model !== 'auto');
-    const personaModel = chain[0] && chain[0].model !== 'auto' ? chain[0].model : DEFAULT_PERSONA_MODELS[persona];
+    const personaModel =
+      chain[0] && chain[0].model !== 'auto' ? chain[0].model : DEFAULT_PERSONA_MODELS[persona];
     head = {
       agent: tagged.data,
       model:
         explicitModel && explicitModel !== 'auto'
           ? explicitModel
           : (sameAgent?.model ?? coerceModelForProvider(tagged.data, personaModel, persona)),
-      credential: chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
+      credential:
+        chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
     };
   } else if (preferredModel && preferredModel !== 'auto' && chain[0]) {
     head = { ...chain[0], model: coerceModelForProvider(chain[0].agent, preferredModel, persona) };
@@ -645,11 +665,7 @@ export function getProviderEnvFromSettings(
   return env;
 }
 
-export function resolveAgentForPersona(
-  db: Db,
-  persona: AgentPersona,
-  explicitAgent?: AgentId,
-): AgentId {
+export function resolveAgentForPersona(db: Db, persona: AgentPersona, explicitAgent?: AgentId): AgentId {
   const cfg = getFactorySettings(db);
   if (explicitAgent && cfg.enabledProviders.includes(explicitAgent)) return explicitAgent;
   const personaAgent = cfg.personaAgents[persona];
@@ -680,14 +696,26 @@ export function resolveMcpServersForPersona(
   playwrightEnabled: boolean;
   customMcpServers: Record<
     string,
-    { command?: string; args?: string[]; env?: Record<string, string>; url?: string; type?: 'stdio' | 'sse' | 'http' }
+    {
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      type?: 'stdio' | 'sse' | 'http';
+    }
   >;
 } {
   const cfg = getFactorySettings(db);
   let playwrightEnabled = true;
   const customMcpServers: Record<
     string,
-    { command?: string; args?: string[]; env?: Record<string, string>; url?: string; type?: 'stdio' | 'sse' | 'http' }
+    {
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      type?: 'stdio' | 'sse' | 'http';
+    }
   > = {};
 
   for (const srv of cfg.mcpServers ?? []) {

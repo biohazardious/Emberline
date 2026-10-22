@@ -70,7 +70,8 @@ export function isComposeService(service: WorktreeService): service is WorktreeC
   return service.compose !== undefined;
 }
 
-const List = <T extends z.ZodType>(item: T) => z.array(item).max(WORKTREE_CONFIG_LIMITS.maxEntries).default([]);
+const List = <T extends z.ZodType>(item: T) =>
+  z.array(item).max(WORKTREE_CONFIG_LIMITS.maxEntries).default([]);
 
 export const WorktreeChecks = z
   .object({ build: Command.optional(), lint: Command.optional(), test: Command.optional() })
@@ -91,13 +92,22 @@ export const WorktreeConfig = z
     const seen = new Set<string>();
     cfg.services.forEach((s, i) => {
       if (s.compose && cfg.version < 2) {
-        ctx.addIssue({ code: 'custom', path: ['services', i, 'compose'], message: 'compose services need version: 2' });
+        ctx.addIssue({
+          code: 'custom',
+          path: ['services', i, 'compose'],
+          message: 'compose services need version: 2',
+        });
       }
-      if (seen.has(s.name)) ctx.addIssue({ code: 'custom', path: ['services', i, 'name'], message: 'duplicate service name' });
+      if (seen.has(s.name))
+        ctx.addIssue({ code: 'custom', path: ['services', i, 'name'], message: 'duplicate service name' });
       seen.add(s.name);
     });
     if (cfg.services.filter((s) => s.preview).length > 1) {
-      ctx.addIssue({ code: 'custom', path: ['services'], message: 'at most one service may set preview: true' });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['services'],
+        message: 'at most one service may set preview: true',
+      });
     }
   });
 export type WorktreeConfig = z.output<typeof WorktreeConfig>;
@@ -146,7 +156,8 @@ export const ApproveWorktreeConfigBody = z.union([
 export type ApproveWorktreeConfigBody = z.infer<typeof ApproveWorktreeConfigBody>;
 
 /** The explorer's answer for `.emberline/worktree.yml`: it is edited in Project settings only. */
-export const WORKTREE_YML_EDIT_IN_SETTINGS = 'Edit this file from Project settings so it is committed and approved.';
+export const WORKTREE_YML_EDIT_IN_SETTINGS =
+  'Edit this file from Project settings so it is committed and approved.';
 
 /** `rel` as a repository path: `/` separators, no empty, `.` or resolved `..` segments. */
 function normalizedRepoPath(rel: string): string {
@@ -166,7 +177,10 @@ export function isWorktreeYmlPath(rel: string): boolean {
 
 /** `rel` is `.emberline` itself (deleting it would delete worktree.yml). */
 export function isEmberlineDirPath(rel: string): boolean {
-  return normalizedRepoPath(rel) === ADOPT_FILE_PATHS.worktreeYml.slice(0, ADOPT_FILE_PATHS.worktreeYml.lastIndexOf('/'));
+  return (
+    normalizedRepoPath(rel) ===
+    ADOPT_FILE_PATHS.worktreeYml.slice(0, ADOPT_FILE_PATHS.worktreeYml.lastIndexOf('/'))
+  );
 }
 
 /** Error codes of the worktree.yml editor's save. */
@@ -180,9 +194,11 @@ export const WORKTREE_CONFIG_CODES = {
   editInSettings: 'worktree_config_edit_in_settings',
 } as const;
 
-const WorktreeYmlContent = z.string().refine((s) => new TextEncoder().encode(s).length <= MAX_WORKTREE_YML_BYTES, {
-  message: `content is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`,
-});
+const WorktreeYmlContent = z
+  .string()
+  .refine((s) => new TextEncoder().encode(s).length <= MAX_WORKTREE_YML_BYTES, {
+    message: `content is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`,
+  });
 
 /** `POST /api/projects/:id/worktree-config/validate`: the editor's content, checked without saving. */
 export const ValidateWorktreeConfigBody = z.object({ content: WorktreeYmlContent }).strict();
@@ -196,12 +212,23 @@ export type ValidateWorktreeConfigResponse = z.infer<typeof ValidateWorktreeConf
  * approves it. `baseSha256` is HEAD's file sha256 when the editor opened (null when there was none).
  */
 export const SaveWorktreeConfigBody = z
-  .object({ content: WorktreeYmlContent, baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable() })
+  .object({
+    content: WorktreeYmlContent,
+    baseSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .nullable(),
+  })
   .strict();
 export type SaveWorktreeConfigBody = z.infer<typeof SaveWorktreeConfigBody>;
 
 /** The compose files the Container preview box looks for in HEAD, in this order (the first present wins). */
-export const COMPOSE_FILE_NAMES = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'] as const;
+export const COMPOSE_FILE_NAMES = [
+  'compose.yaml',
+  'compose.yml',
+  'docker-compose.yaml',
+  'docker-compose.yml',
+] as const;
 export const ComposeFileName = z.enum(COMPOSE_FILE_NAMES);
 export type ComposeFileName = z.infer<typeof ComposeFileName>;
 
@@ -238,7 +265,10 @@ export type ContainerPreviewChoice = z.infer<typeof ContainerPreviewChoice>;
 export const ContainerPreviewDiffResponse = z.object({
   content: z.string(),
   diff: z.string(),
-  baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  baseSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
 });
 export type ContainerPreviewDiffResponse = z.infer<typeof ContainerPreviewDiffResponse>;
 
@@ -248,7 +278,10 @@ export const UseContainerPreviewBody = z
     file: ComposeFileName,
     service: z.string().regex(COMPOSE_SERVICE_NAME),
     port: z.number().int().min(1).max(65535),
-    baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    baseSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .nullable(),
   })
   .strict();
 export type UseContainerPreviewBody = z.infer<typeof UseContainerPreviewBody>;

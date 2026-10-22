@@ -114,10 +114,14 @@ createServer((req, res) => {
     }
     const outside = /^\/_e2e\/commit\/([^/]+)\/([^/]+)$/.exec(url.pathname);
     if (req.method === 'POST' && outside) {
-      if (outside[1].includes('..') || outside[2].includes('..')) return json(res, 400, { message: 'bad name' });
+      if (outside[1].includes('..') || outside[2].includes('..'))
+        return json(res, 400, { message: 'bad name' });
       const dir = path.join(root, outside[1], `${outside[2]}.git`);
       const g = (args, env) =>
-        execFileSync('git', ['--git-dir', dir, ...args], { encoding: 'utf8', env: { ...process.env, ...env } }).trim();
+        execFileSync('git', ['--git-dir', dir, ...args], {
+          encoding: 'utf8',
+          env: { ...process.env, ...env },
+        }).trim();
       const parent = g(['rev-parse', 'refs/heads/main']);
       const who = {
         GIT_AUTHOR_NAME: 'outside',
@@ -125,7 +129,10 @@ createServer((req, res) => {
         GIT_COMMITTER_NAME: 'outside',
         GIT_COMMITTER_EMAIL: 'o@e',
       };
-      const commit = g(['commit-tree', g(['rev-parse', `${parent}^{tree}`]), '-p', parent, '-m', 'pushed from elsewhere'], who);
+      const commit = g(
+        ['commit-tree', g(['rev-parse', `${parent}^{tree}`]), '-p', parent, '-m', 'pushed from elsewhere'],
+        who,
+      );
       g(['update-ref', 'refs/heads/main', commit, parent]);
       return json(res, 200, { main: commit });
     }

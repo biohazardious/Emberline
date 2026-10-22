@@ -22,7 +22,11 @@ const presenceRuns = new Map<PresenceSource, string>();
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 
 function presenceMessage(): ClientPresenceMessage {
-  return { type: 'presence', visible: document.visibilityState === 'visible', runId: presentRunId(presenceRuns) };
+  return {
+    type: 'presence',
+    visible: document.visibilityState === 'visible',
+    runId: presentRunId(presenceRuns),
+  };
 }
 
 function sendPresence(): void {

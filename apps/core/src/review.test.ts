@@ -231,7 +231,19 @@ describe('M6 review, git commit/push, and artifacts', () => {
   it('refuses to prune a worktree with unmerged commits unless forced, naming the branch', async () => {
     const { project } = await createGitProjectWithBareRemote('Prune Unmerged');
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'commits' })).json();
-    execFileSync('git', ['-C', run.worktreePath, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'work']);
+    execFileSync('git', [
+      '-C',
+      run.worktreePath,
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'work',
+    ]);
     await api('POST', `/api/runs/${run.id}/stop`);
     await expect
       .poll(async () => {
@@ -321,7 +333,13 @@ describe('M6 review, git commit/push, and artifacts', () => {
       compareUrl: 'https://github.com/acme/emberline/compare/main...emberline%2Frun-1?expand=1',
     });
 
-    const gl = parseForgeRemote('https://gitlab.example.com/group/sub/app.git', 'auto', null, 'main', 'feat/x');
+    const gl = parseForgeRemote(
+      'https://gitlab.example.com/group/sub/app.git',
+      'auto',
+      null,
+      'main',
+      'feat/x',
+    );
     expect(gl).toMatchObject({
       provider: 'gitlab',
       repoPath: 'group/sub/app',
@@ -361,7 +379,14 @@ describe('M6 review, git commit/push, and artifacts', () => {
     try {
       const { project } = await createGitProjectWithBareRemote('Forge App');
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
-      execFileSync('git', ['-C', run.worktreePath, 'remote', 'set-url', 'origin', 'git@github.com:acme/widget.git']);
+      execFileSync('git', [
+        '-C',
+        run.worktreePath,
+        'remote',
+        'set-url',
+        'origin',
+        'git@github.com:acme/widget.git',
+      ]);
 
       seedForgeAccount(t.db, {
         provider: 'github',
@@ -412,12 +437,25 @@ describe('M6 review, git commit/push, and artifacts', () => {
       const { project } = await createGitProjectWithBareRemote('Forge Exfil');
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
       // A prompt-injected agent repoints origin at a server it controls.
-      execFileSync('git', ['-C', run.worktreePath, 'remote', 'set-url', 'origin', `http://127.0.0.1:${port}/acme/widget.git`]);
-      seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'ghp_secret_token' });
+      execFileSync('git', [
+        '-C',
+        run.worktreePath,
+        'remote',
+        'set-url',
+        'origin',
+        `http://127.0.0.1:${port}/acme/widget.git`,
+      ]);
+      seedForgeAccount(t.db, {
+        provider: 'github',
+        serverUrl: 'https://github.com',
+        token: 'ghp_secret_token',
+      });
 
       const createPrRes = await api('POST', `/api/runs/${run.id}/forge/pr`, { pushFirst: false });
       expect(createPrRes.statusCode).toBe(409);
-      expect(createPrRes.json().message).toBe(`Add a forge account for 127.0.0.1:${port} in Settings → Forge accounts.`);
+      expect(createPrRes.json().message).toBe(
+        `Add a forge account for 127.0.0.1:${port} in Settings → Forge accounts.`,
+      );
       expect(seen).toHaveLength(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -537,7 +575,3 @@ describe('M6 review, git commit/push, and artifacts', () => {
     });
   });
 });
-
-
-
-

@@ -9,7 +9,10 @@ const base = {
   finalMessage: null,
   gitStatus: ' M src/ui/level-select.ts\n M src/ui/result-dialog.ts',
   diffStat: ' 2 files changed, 40 insertions(+), 3 deletions(-)',
-  recentTools: ['replace_file_content: src/ui/level-select.ts', 'replace_file_content: src/ui/result-dialog.ts'],
+  recentTools: [
+    'replace_file_content: src/ui/level-select.ts',
+    'replace_file_content: src/ui/result-dialog.ts',
+  ],
   sameAgent: false,
 };
 
@@ -27,14 +30,22 @@ describe('handoff prompt', () => {
   });
 
   it('says so when the tree is clean and leaves out empty sections', () => {
-    const text = buildHandoffPrompt({ ...base, gitStatus: '', diffStat: '', recentTools: [], finalMessage: 'Plan: 1) tokens 2) aria' });
+    const text = buildHandoffPrompt({
+      ...base,
+      gitStatus: '',
+      diffStat: '',
+      recentTools: [],
+      finalMessage: 'Plan: 1) tokens 2) aria',
+    });
     expect(text).toContain('No changes in the worktree yet.');
     expect(text).not.toContain('Recent tool calls');
     expect(text).toContain('Plan: 1) tokens 2) aria');
   });
 
   it('uses the original prompt when the run has no ticket', () => {
-    expect(buildHandoffPrompt({ ...base, ticket: null })).toContain('MPG-28: Accessibility pass\n\nColour-blind safe cats.');
+    expect(buildHandoffPrompt({ ...base, ticket: null })).toContain(
+      'MPG-28: Accessibility pass\n\nColour-blind safe cats.',
+    );
   });
 });
 
@@ -50,15 +61,24 @@ describe('recent tool summary', () => {
   });
 
   it('is empty when no entry has a detail', () => {
-    expect(summarizeRecentTools([{ name: 'Edit', detail: '' }, { name: 'Write', detail: '' }])).toEqual([]);
+    expect(
+      summarizeRecentTools([
+        { name: 'Edit', detail: '' },
+        { name: 'Write', detail: '' },
+      ]),
+    ).toEqual([]);
   });
 });
 
 describe('successor prompt', () => {
-  const CLOSING = 'Check the current state of the files first, keep the work that is already done, do not redo finished steps, and complete the task.';
+  const CLOSING =
+    'Check the current state of the files first, keep the work that is already done, do not redo finished steps, and complete the task.';
 
-  it('keeps the person\'s text whole and shortens the context to fit the run prompt limit', () => {
-    const text = successorPrompt({ ...base, ticket: { ...base.ticket, body: 'c'.repeat(15_000) } }, 'x'.repeat(10_000));
+  it("keeps the person's text whole and shortens the context to fit the run prompt limit", () => {
+    const text = successorPrompt(
+      { ...base, ticket: { ...base.ticket, body: 'c'.repeat(15_000) } },
+      'x'.repeat(10_000),
+    );
     expect(text.length).toBeLessThanOrEqual(20_000);
     expect(text.endsWith(`\n\n${'x'.repeat(10_000)}`)).toBe(true);
     expect(text.startsWith('You are taking over a task')).toBe(true);
@@ -76,7 +96,9 @@ describe('successor prompt', () => {
     expect(text.length).toBeLessThanOrEqual(20_000);
     expect(text.endsWith(`\n\n${extra}`)).toBe(true);
     const context = text.slice(0, -extra.length - 2);
-    expect(context).toContain('## Worktree state\n\nM src/ui/level-select.ts\n?? notes/plan.md\n\n2 files changed');
+    expect(context).toContain(
+      '## Worktree state\n\nM src/ui/level-select.ts\n?? notes/plan.md\n\n2 files changed',
+    );
     expect(context).toContain('- replace_file_content: src/ui/result-dialog.ts');
     expect(context.endsWith(CLOSING)).toBe(true);
     expect(context).toContain('## Task\n\nMPG-28: Accessibility pass');
@@ -84,9 +106,16 @@ describe('successor prompt', () => {
     expect(context).not.toContain('b'.repeat(4_000));
   });
 
-  it('is the context alone without the person\'s text, within the limit', () => {
+  it("is the context alone without the person's text, within the limit", () => {
     expect(successorPrompt(base, '')).toBe(buildHandoffPrompt(base));
-    const long = successorPrompt({ ...base, gitStatus: 'g'.repeat(40_000), recentTools: Array.from({ length: 3_000 }, (_, i) => `Edit: f${i}.ts`) }, '');
+    const long = successorPrompt(
+      {
+        ...base,
+        gitStatus: 'g'.repeat(40_000),
+        recentTools: Array.from({ length: 3_000 }, (_, i) => `Edit: f${i}.ts`),
+      },
+      '',
+    );
     expect(long.length).toBeLessThanOrEqual(20_000);
     expect(long.endsWith(CLOSING)).toBe(true);
   });

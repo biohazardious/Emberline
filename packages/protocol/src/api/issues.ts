@@ -43,7 +43,10 @@ export type ForgeIssueListResponse = z.infer<typeof ForgeIssueListResponse>;
 
 export const ImportIssuesBody = z.object({
   /** The selected issues: the provider id plus the visible number core re-fetches them by. */
-  issues: z.array(z.object({ externalId: z.string().min(1).max(100), number: z.number().int().min(1) })).min(1).max(50),
+  issues: z
+    .array(z.object({ externalId: z.string().min(1).max(100), number: z.number().int().min(1) }))
+    .min(1)
+    .max(50),
   status: z.enum(['backlog', 'ready']).default('backlog'),
 });
 export type ImportIssuesBody = z.input<typeof ImportIssuesBody>;
@@ -82,7 +85,11 @@ const IssueSyncSettingsObject = z.object({
 
 export const IssueSyncSettings = IssueSyncSettingsObject.superRefine((v, ctx) => {
   if (v.enabled && !v.label) {
-    ctx.addIssue({ code: 'custom', path: ['label'], message: 'a label is required when issue sync is enabled' });
+    ctx.addIssue({
+      code: 'custom',
+      path: ['label'],
+      message: 'a label is required when issue sync is enabled',
+    });
   }
 });
 export type IssueSyncSettings = z.infer<typeof IssueSyncSettings>;
@@ -106,12 +113,14 @@ export const IssueSyncResponse = IssueSyncSettingsObject.extend({ syncStatus: Is
 export type IssueSyncResponse = z.infer<typeof IssueSyncResponse>;
 
 /** PATCH body: any subset of the settings; the merged result must be valid. */
-export const UpdateIssueSyncBody = z.object({
-  enabled: z.boolean(),
-  label: z.string().trim().max(100),
-  status: z.enum(['backlog', 'ready']),
-  closeOnDone: z.boolean(),
-  commentOnProgress: z.boolean(),
-  trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50),
-}).partial();
+export const UpdateIssueSyncBody = z
+  .object({
+    enabled: z.boolean(),
+    label: z.string().trim().max(100),
+    status: z.enum(['backlog', 'ready']),
+    closeOnDone: z.boolean(),
+    commentOnProgress: z.boolean(),
+    trustedAuthors: z.array(z.string().trim().min(1).max(100)).max(50),
+  })
+  .partial();
 export type UpdateIssueSyncBody = z.input<typeof UpdateIssueSyncBody>;

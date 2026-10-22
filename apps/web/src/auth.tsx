@@ -316,7 +316,10 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
     setBusy(true);
     setError(undefined);
     try {
-      const issued = await api<SessionIssued>('/api/auth/setup', 'POST', { password, setupToken: setupToken.trim() });
+      const issued = await api<SessionIssued>('/api/auth/setup', 'POST', {
+        password,
+        setupToken: setupToken.trim(),
+      });
       setSessionKey(issued.sessionKey);
       await onDone();
     } catch (e) {

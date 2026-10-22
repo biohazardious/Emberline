@@ -162,7 +162,10 @@ function storedRecords(db: Db): ForgeAccountRecord[] {
 export function listAccountRecords(db: Db, env: NodeJS.ProcessEnv = process.env): ForgeAccountRecord[] {
   const stored = storedRecords(db);
   const hosts = new Set(stored.map((a) => serverHost(a.serverUrl)));
-  return [...stored, ...environmentAccounts(env, usernamesOf(db)).filter((a) => !hosts.has(serverHost(a.serverUrl)))];
+  return [
+    ...stored,
+    ...environmentAccounts(env, usernamesOf(db)).filter((a) => !hosts.has(serverHost(a.serverUrl))),
+  ];
 }
 
 export function findAccountRecord(
@@ -285,7 +288,8 @@ const readLegacy = (db: Db): LegacyForgeConfig | null => {
   const value = getSetting<unknown>(db, LEGACY_FORGE_SETTINGS_KEY);
   return typeof value === 'object' && value !== null ? (value as LegacyForgeConfig) : null;
 };
-const legacyToken = (cfg: LegacyForgeConfig | null) => (typeof cfg?.token === 'string' ? cfg.token.trim() : '');
+const legacyToken = (cfg: LegacyForgeConfig | null) =>
+  typeof cfg?.token === 'string' ? cfg.token.trim() : '';
 
 /**
  * The servers projects were set up with (https only: the old token never went over plain http to

@@ -11,7 +11,16 @@ export type BatchKind = 'new' | 'reminder' | 'pinned';
 
 export type BatchComment = Pick<
   ReviewComment,
-  'id' | 'filePath' | 'line' | 'currentLine' | 'outdated' | 'side' | 'intent' | 'priority' | 'body' | 'anchorText'
+  | 'id'
+  | 'filePath'
+  | 'line'
+  | 'currentLine'
+  | 'outdated'
+  | 'side'
+  | 'intent'
+  | 'priority'
+  | 'body'
+  | 'anchorText'
 > & { kind: BatchKind };
 
 const GROUPS: { priority: ReviewComment['priority']; heading: string }[] = [
@@ -80,7 +89,11 @@ function feedback(note: string, comments: BatchComment[], rounds: boolean): stri
 
 /** The prompt typed into (or resumed by) the run the comments were written on. */
 export function sameRunPrompt(note: string, comments: BatchComment[]): string {
-  return ['Please address the following code review feedback on this branch:', '', ...feedback(note, comments, true)].join('\n');
+  return [
+    'Please address the following code review feedback on this branch:',
+    '',
+    ...feedback(note, comments, true),
+  ].join('\n');
 }
 
 const priorityRank = (c: BatchComment) => GROUPS.findIndex((g) => g.priority === c.priority);

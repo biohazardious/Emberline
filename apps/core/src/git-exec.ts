@@ -82,7 +82,11 @@ export async function runGit(cwd: string, args: string[], options: RunGitOptions
 }
 
 /** Binary-safe variant of {@link runGit} (e.g. `git show <blob>`). */
-export async function runGitBuffer(cwd: string, args: string[], options: RunGitOptions = {}): Promise<Buffer> {
+export async function runGitBuffer(
+  cwd: string,
+  args: string[],
+  options: RunGitOptions = {},
+): Promise<Buffer> {
   return (await execGitFile(['-C', cwd, ...args], { ...options, encoding: 'buffer' })).stdout;
 }
 
@@ -117,7 +121,10 @@ export async function execGitFile(
   args: string[],
   options: ExecGitOptions & { encoding: 'buffer' },
 ): Promise<{ stdout: Buffer; stderr: string }>;
-export async function execGitFile(args: string[], options?: ExecGitOptions): Promise<{ stdout: string; stderr: string }>;
+export async function execGitFile(
+  args: string[],
+  options?: ExecGitOptions,
+): Promise<{ stdout: string; stderr: string }>;
 export async function execGitFile(
   args: string[],
   options: ExecGitOptions & { encoding?: 'buffer' } = {},

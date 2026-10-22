@@ -30,7 +30,10 @@ export class IssueImportService {
   ) {}
 
   private withStatus(projectId: string, settings: IssueSyncSettings): IssueSyncResponse {
-    return { ...settings, syncStatus: this.sync?.status(projectId) ?? { lastSyncAt: null, lastError: null, pausedUntil: null } };
+    return {
+      ...settings,
+      syncStatus: this.sync?.status(projectId) ?? { lastSyncAt: null, lastError: null, pausedUntil: null },
+    };
   }
 
   private assertProject(projectId: string): void {
@@ -80,7 +83,10 @@ export class IssueImportService {
       try {
         const issue = await this.forge.issues.get(target, sel.number);
         if (issue.externalId !== sel.externalId) {
-          skipped.push({ externalId: sel.externalId, reason: `#${sel.number} does not match the selected issue` });
+          skipped.push({
+            externalId: sel.externalId,
+            reason: `#${sel.number} does not match the selected issue`,
+          });
         } else {
           fetched.push(issue);
         }
@@ -93,7 +99,10 @@ export class IssueImportService {
       }
     }
     const result = this.tickets.importIssues(projectId, source, fetched, body.status);
-    const existing: Ticket[] = [...selected.flatMap((s) => linked.get(s.externalId) ?? []), ...result.existing];
+    const existing: Ticket[] = [
+      ...selected.flatMap((s) => linked.get(s.externalId) ?? []),
+      ...result.existing,
+    ];
     return { created: result.created, existing, skipped };
   }
 
@@ -124,7 +133,8 @@ export class IssueImportService {
       const { remote } = await this.forge.projectRemote(projectId);
       return { provider: remote.provider, repoPath: remote.repoPath };
     } catch (err) {
-      if (err instanceof HttpError && err.statusCode < 500) throw conflict(`connect the forge first: ${err.message}`);
+      if (err instanceof HttpError && err.statusCode < 500)
+        throw conflict(`connect the forge first: ${err.message}`);
       throw err;
     }
   }

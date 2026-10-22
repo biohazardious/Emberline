@@ -11,7 +11,10 @@ let dir: string;
 let main: string;
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
 
 function addWorktree(name: string): string {
   const wt = path.join(dir, name);
@@ -20,7 +23,12 @@ function addWorktree(name: string): string {
 }
 
 const sync = (worktreePath: string, ticketKey: string) =>
-  syncWorktreeToMainWorkspace({ worktreePath, mainWorkspacePath: main, ticketKey, runId: `run-${ticketKey}` });
+  syncWorktreeToMainWorkspace({
+    worktreePath,
+    mainWorkspacePath: main,
+    ticketKey,
+    runId: `run-${ticketKey}`,
+  });
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'merge-'));
@@ -142,7 +150,8 @@ describe('Emberline commits never carry scratch files', () => {
     mkdirSync(path.join(cwd, '.emberline'), { recursive: true });
     writeFileSync(path.join(cwd, TICKETS), JSON.stringify({ tickets: [{ title }] }));
   };
-  const filesIn = (cwd: string, rev: string) => git(cwd, 'show', '--name-only', '--format=', rev).split('\n').filter(Boolean);
+  const filesIn = (cwd: string, rev: string) =>
+    git(cwd, 'show', '--name-only', '--format=', rev).split('\n').filter(Boolean);
 
   it('leaves out a tickets file the agent staged itself (git add -A, no commit)', async () => {
     const a = addWorktree('a');
@@ -215,7 +224,10 @@ describe('Emberline commits never carry scratch files', () => {
 
     const res = await sync(a, 'T-1');
     expect(res.ok).toBe(true);
-    expect(git(main, 'log', '--format=%s', `${head}..HEAD`).split('\n')).toEqual(['Merge T-1 (emberline/a)', 'feat(T-1): factory run output']);
+    expect(git(main, 'log', '--format=%s', `${head}..HEAD`).split('\n')).toEqual([
+      'Merge T-1 (emberline/a)',
+      'feat(T-1): factory run output',
+    ]);
     expect(git(main, 'ls-files', '.emberline')).toBe('');
     // Still on disk, no longer staged.
     expect(existsSync(path.join(main, TICKETS))).toBe(true);
@@ -259,7 +271,9 @@ describe('Emberline commits never carry scratch files', () => {
     const lock = path.resolve(a, git(a, 'rev-parse', '--git-path', 'index.lock'));
     writeFileSync(lock, '');
     try {
-      await expect(commitWorktree(a, 'emberline/a', { message: 'locked', stageAll: false })).rejects.toMatchObject({ statusCode: 409 });
+      await expect(
+        commitWorktree(a, 'emberline/a', { message: 'locked', stageAll: false }),
+      ).rejects.toMatchObject({ statusCode: 409 });
     } finally {
       rmSync(lock, { force: true });
     }

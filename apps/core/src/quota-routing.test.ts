@@ -94,7 +94,8 @@ afterEach(async () => {
     if (!run.endedAt) await t.runs.stop(run.id).catch(() => undefined);
   }
   await ptydServer.close();
-  for (let i = 0; i < 100 && fakeCliAlive(t.dir); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  for (let i = 0; i < 100 && fakeCliAlive(t.dir); i += 1)
+    await new Promise((resolve) => setTimeout(resolve, 50));
   await t.close();
 });
 
@@ -126,18 +127,21 @@ async function startTicket(
   persona = 'ui_ux',
   body: object = { permissionMode: 'auto' },
 ): Promise<{ ticketId: string; run: Run }> {
-  const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title, status: 'ready', persona })).json();
+  const ticket = (
+    await api('POST', `/api/projects/${projectId}/tickets`, { title, status: 'ready', persona })
+  ).json();
   const res = await api('POST', `/api/tickets/${ticket.id}/start`, body);
   expect(res.statusCode).toBe(201);
   return { ticketId: ticket.id, run: res.json().run };
 }
 const AGY_QUOTA = {
   error: 'cli_exit',
-  message: 'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s. AGY_ERROR: RESOURCE_EXHAUSTED (code 429)',
+  message:
+    'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 31h43m5s. AGY_ERROR: RESOURCE_EXHAUSTED (code 429)',
 };
 
 describe('runs carry their route', () => {
-  it('stores the persona chain, the route and starts the route\'s CLI', async () => {
+  it("stores the persona chain, the route and starts the route's CLI", async () => {
     const { run } = await startTicket('Colour-blind cats');
     expect(run).toMatchObject({ agent: 'antigravity', model: 'argon', credential: 'login', routeIndex: 0 });
     expect(run.routes).toEqual([
@@ -156,13 +160,17 @@ describe('runs carry their route', () => {
     const { run } = await startTicket('Login only', 'coder');
     expect(await waitFile(`env-${run.id}`)).toContain('key=none');
 
-    updateFactorySettings(t.db, { personaRoutes: { qa: [{ agent: 'claude', model: 'sonnet', credential: 'api_key' }] } });
+    updateFactorySettings(t.db, {
+      personaRoutes: { qa: [{ agent: 'claude', model: 'sonnet', credential: 'api_key' }] },
+    });
     const { run: paid } = await startTicket('Paid', 'qa');
     expect(await waitFile(`env-${paid.id}`)).toContain('key=sk-ant-test');
   });
 
   it('tells the agy seed whether this run may use AI credits', async () => {
-    updateFactorySettings(t.db, { personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'credits' }] } });
+    updateFactorySettings(t.db, {
+      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'credits' }] },
+    });
     const { run } = await startTicket('Credits run');
     expect(run.credential).toBe('credits');
     expect(await waitFile(`env-${run.id}`)).toContain('credits=1');
@@ -178,7 +186,8 @@ describe('runs carry their route', () => {
         body: '[Preferred Agent: antigravity · Model: argon]\n\nDo the thing',
       })
     ).json();
-    const run: Run = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json().run;
+    const run: Run = (await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' })).json()
+      .run;
     expect(run.agent).toBe('antigravity');
     expect(run.routes).toEqual([
       { agent: 'antigravity', model: 'argon', credential: 'login' },
@@ -195,20 +204,32 @@ describe('runs carry their route', () => {
       anthropicApiKey: 'sk-ant-test',
       personaRoutes: { qa: [{ agent: 'antigravity', model: 'argon', credential: 'login' }] },
     });
-    const run: Run = (await api('POST', '/api/runs', { projectId, persona: 'qa', agent: 'claude', prompt: 'hi' })).json();
+    const run: Run = (
+      await api('POST', '/api/runs', { projectId, persona: 'qa', agent: 'claude', prompt: 'hi' })
+    ).json();
     expect(run.routes).toHaveLength(1);
     expect(run).toMatchObject({ agent: 'claude', credential: 'api_key' });
     expect(await waitFile(`env-${run.id}`)).toContain('key=sk-ant-test');
   });
 
-  it('a model-only request keeps the persona\'s first agent and the rest of its chain', async () => {
+  it("a model-only request keeps the persona's first agent and the rest of its chain", async () => {
     const run: Run = (
-      await api('POST', '/api/runs', { projectId, persona: 'ui_ux', model: 'sonnet', prompt: 'hi', permissionMode: 'auto' })
+      await api('POST', '/api/runs', {
+        projectId,
+        persona: 'ui_ux',
+        model: 'sonnet',
+        prompt: 'hi',
+        permissionMode: 'auto',
+      })
     ).json();
     expect(run.routes[0]!.agent).toBe('antigravity');
     expect(run.agent).toBe('antigravity');
-    updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
-    const coder: Run = (await api('POST', '/api/runs', { projectId, persona: 'coder', model: 'sonnet', prompt: 'hi' })).json();
+    updateFactorySettings(t.db, {
+      personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] },
+    });
+    const coder: Run = (
+      await api('POST', '/api/runs', { projectId, persona: 'coder', model: 'sonnet', prompt: 'hi' })
+    ).json();
     expect(coder).toMatchObject({ agent: 'claude', model: 'sonnet' });
   });
 
@@ -222,10 +243,9 @@ describe('runs carry their route', () => {
 
   it('enqueue continues in a given worktree instead of creating one', async () => {
     const first: Run = (await api('POST', '/api/runs', { projectId, agent: 'claude', prompt: 'a' })).json();
-    const second = await t.runs.enqueue(
-      { projectId, agent: 'claude', prompt: 'b' } as never,
-      { worktree: { path: first.worktreePath, branch: first.branch } },
-    );
+    const second = await t.runs.enqueue({ projectId, agent: 'claude', prompt: 'b' } as never, {
+      worktree: { path: first.worktreePath, branch: first.branch },
+    });
     expect(second.worktreePath).toBe(first.worktreePath);
     expect(second.branch).toBe(first.branch);
   });
@@ -235,14 +255,24 @@ describe('handoff', () => {
   it('keeps the ticket completion: the successor continues the same work', async () => {
     const { ticketId, run } = await startTicket('Keep my handoff');
     const token = await work(run);
-    const completion = { runId: run.id, summary: 'half way', handoff: 'see notes.md', blockers: [], at: '2026-10-17T10:00:00.000Z' };
+    const completion = {
+      runId: run.id,
+      summary: 'half way',
+      handoff: 'see notes.md',
+      blockers: [],
+      at: '2026-10-17T10:00:00.000Z',
+    };
     t.db.update(ticketsTable).set({ completion }).where(eq(ticketsTable.id, ticketId)).run();
     await hook(run.id, 'StopFailure', token, AGY_QUOTA);
-    const successor: Run = await t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, {
-      reason: 'Individual quota reached',
-      source: 'system',
-      automatic: true,
-    });
+    const successor: Run = await t.runs.handOff(
+      run.id,
+      { agent: 'claude', model: 'opus', credential: 'login' },
+      {
+        reason: 'Individual quota reached',
+        source: 'system',
+        automatic: true,
+      },
+    );
     expect(successor.ticketId).toBe(ticketId);
     expect((await api('GET', `/api/tickets/${ticketId}`)).json().completion).toEqual(completion);
   });
@@ -252,11 +282,15 @@ describe('handoff', () => {
     const token = await work(run);
     await hook(run.id, 'StopFailure', token, AGY_QUOTA);
 
-    const successor: Run = await t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, {
-      reason: 'Individual quota reached',
-      source: 'system',
-      automatic: true,
-    });
+    const successor: Run = await t.runs.handOff(
+      run.id,
+      { agent: 'claude', model: 'opus', credential: 'login' },
+      {
+        reason: 'Individual quota reached',
+        source: 'system',
+        automatic: true,
+      },
+    );
     expect(successor).toMatchObject({
       agent: 'claude',
       model: 'opus',
@@ -275,22 +309,42 @@ describe('handoff', () => {
     // Only one live run on the ticket, and it is the successor.
     expect(t.runs.activeRunForTicket(run.ticketId ?? '')?.id).toBe(successor.id);
     // Twice is refused.
-    await expect(t.runs.handOff(run.id, { agent: 'claude', model: 'opus', credential: 'login' }, { reason: 'x', source: 'user', automatic: false })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      t.runs.handOff(
+        run.id,
+        { agent: 'claude', model: 'opus', credential: 'login' },
+        { reason: 'x', source: 'user', automatic: false },
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('resumes a Gemini run without session support with the handoff prompt, not a bare "continue"', async () => {
     process.env.EMBERLINE_GEMINI_COMMAND = path.join(t.dir, 'fake-gemini');
     try {
       writeFake(t.dir, 'fake-gemini');
-      updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'], antigravityTermsAcknowledged: true, personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] } });
+      updateFactorySettings(t.db, {
+        enabledProviders: ['claude', 'antigravity', 'gemini'],
+        antigravityTermsAcknowledged: true,
+        personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] },
+      });
       const { run } = await startTicket('Regression matrix', 'qa');
       const token = await work(run);
       await hook(run.id, 'Stop', token);
       await t.ptyd.get().write(run.terminalId ?? '', 'exit\r');
-      await expect.poll(async () => { await t.runs.reconcile(); return (await getRun(run.id)).endedAt; }, { timeout: 5_000 }).not.toBeNull();
+      await expect
+        .poll(
+          async () => {
+            await t.runs.reconcile();
+            return (await getRun(run.id)).endedAt;
+          },
+          { timeout: 5_000 },
+        )
+        .not.toBeNull();
       const resumed = await t.runs.resume(run.id);
       expect(resumed).toMatchObject({ id: run.id, agent: 'gemini' });
-      await expect.poll(() => readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8'), { timeout: 5_000 }).toContain('Your previous session on this task ended');
+      await expect
+        .poll(() => readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8'), { timeout: 5_000 })
+        .toContain('Your previous session on this task ended');
       expect(readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8')).not.toContain('--resume');
     } finally {
       delete process.env.EMBERLINE_GEMINI_COMMAND;
@@ -311,7 +365,11 @@ describe('handoff', () => {
   it('a manual handoff to a route outside the chain appends it and does not count against the budget', async () => {
     const { run } = await stopped();
     const route = { agent: 'claude', model: 'sonnet', credential: 'login' } as const;
-    const successor: Run = await t.runs.handOff(run.id, route, { reason: 'user', source: 'user', automatic: false });
+    const successor: Run = await t.runs.handOff(run.id, route, {
+      reason: 'user',
+      source: 'user',
+      automatic: false,
+    });
     expect(successor.routes).toHaveLength(3);
     expect(successor.routes[2]).toEqual(route);
     expect(successor).toMatchObject({ routeIndex: 2, model: 'sonnet' });
@@ -320,26 +378,37 @@ describe('handoff', () => {
 
   it('an automatic handoff counts against the budget', async () => {
     const { run } = await stopped();
-    const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, {
+      reason: 'q',
+      source: 'system',
+      automatic: true,
+    });
     expect(count(successor.id)).toBe(1);
   });
 
   it('refuses to hand off a stopped or a working run', async () => {
     const { run } = await startTicket('Working');
     await work(run);
-    await expect(t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'x', source: 'user', automatic: false })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'x', source: 'user', automatic: false }),
+    ).rejects.toMatchObject({ statusCode: 409 });
     await t.runs.stop(run.id);
-    await expect(t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'x', source: 'user', automatic: false })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'x', source: 'user', automatic: false }),
+    ).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('two concurrent handoffs of one run create exactly one successor', async () => {
     const { run, ticketId } = await stopped();
-    const attempt = () => t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    const attempt = () =>
+      t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
     const results = await Promise.allSettled([attempt(), attempt()]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
     expect(rejected.reason).toMatchObject({ statusCode: 409 });
-    expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(1);
+    expect(
+      t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id),
+    ).toHaveLength(1);
   });
 
   /** Holds the handoff while its context (worktree status, diff) is built, so a stop or resume can land in that gap. */
@@ -364,7 +433,9 @@ describe('handoff', () => {
     await t.runs.stop(run.id);
     gate.release();
     await expect(pending).rejects.toMatchObject({ statusCode: 409 });
-    expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(0);
+    expect(
+      t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id),
+    ).toHaveLength(0);
     expect(await getRun(run.id)).toMatchObject({ handedOffTo: null, cancelled: true });
   });
 
@@ -379,15 +450,24 @@ describe('handoff', () => {
     await t.runs.resume(run.id);
     gate.release();
     await expect(pending).rejects.toMatchObject({ statusCode: 409 });
-    expect(t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id)).toHaveLength(0);
+    expect(
+      t.runs.list().filter((r) => r.ticketId === ticketId && r.predecessorRunId === run.id),
+    ).toHaveLength(0);
     expect(await getRun(run.id)).toMatchObject({ state: 'starting', handedOffTo: null, endedAt: null });
   });
 
   it('a handed-off run cannot be resumed, and a cancelled queued run cannot be re-bound', async () => {
     const { run } = await stopped();
-    const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, { reason: 'q', source: 'system', automatic: true });
+    const successor: Run = await t.runs.handOff(run.id, CLAUDE_OPUS, {
+      reason: 'q',
+      source: 'system',
+      automatic: true,
+    });
     const before = t.runs.list().length;
-    await expect(t.runs.resume(run.id)).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining(successor.id.slice(0, 8)) });
+    await expect(t.runs.resume(run.id)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining(successor.id.slice(0, 8)),
+    });
     expect(t.runs.list()).toHaveLength(before);
     expect((await getRun(run.id)).terminalId).toBe(run.terminalId);
     // The UI offers "Re-open" / "Resume now" for resumable runs; this one only refuses them.
@@ -407,7 +487,12 @@ describe('lanes and policy', () => {
 
     const state = await scheduler();
     expect(state.windows).toHaveLength(1);
-    expect(state.windows[0]).toMatchObject({ agent: 'antigravity', credential: 'login', pool: '*', resetSource: 'hook' });
+    expect(state.windows[0]).toMatchObject({
+      agent: 'antigravity',
+      credential: 'login',
+      pool: '*',
+      resetSource: 'hook',
+    });
 
     // Claude work is not paused…
     const coder = await startTicket('Coder work', 'coder');
@@ -420,10 +505,15 @@ describe('lanes and policy', () => {
   });
 
   it('a Claude provider-wide window does not stop Antigravity', async () => {
-    updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
+    updateFactorySettings(t.db, {
+      personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] },
+    });
     const coder = await startTicket('Coder', 'coder');
     const token = await work(coder.run);
-    await hook(coder.run.id, 'StopFailure', token, { error: 'rate_limit', last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}` });
+    await hook(coder.run.id, 'StopFailure', token, {
+      error: 'rate_limit',
+      last_assistant_message: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}`,
+    });
     const ui = await startTicket('UI', 'ui_ux');
     await expect.poll(async () => (await getRun(ui.run.id)).state, { timeout: 5_000 }).toBe('starting');
   });
@@ -447,7 +537,11 @@ describe('lanes and policy', () => {
     await expect.poll(async () => (await getRun(run.id)).handedOffTo, { timeout: 5_000 }).not.toBeNull();
     const successorId = (await getRun(run.id)).handedOffTo ?? '';
     await expect.poll(async () => (await getRun(successorId)).state, { timeout: 5_000 }).toBe('starting');
-    expect(await getRun(successorId)).toMatchObject({ agent: 'claude', predecessorRunId: run.id, worktreePath: run.worktreePath });
+    expect(await getRun(successorId)).toMatchObject({
+      agent: 'claude',
+      predecessorRunId: run.id,
+      worktreePath: run.worktreePath,
+    });
   });
 
   it('stops handing off after MAX_HANDOFFS and waits instead', async () => {
@@ -462,10 +556,14 @@ describe('lanes and policy', () => {
   it('manual handoff: refused onto a closed lane, accepted onto an open one', async () => {
     const { run } = await startTicket('Manual');
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
-    const closed = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'antigravity', model: 'gemini-pro', credential: 'login' } });
+    const closed = await api('POST', `/api/runs/${run.id}/handoff`, {
+      route: { agent: 'antigravity', model: 'gemini-pro', credential: 'login' },
+    });
     expect(closed.statusCode).toBe(409);
     expect(closed.json().error).toBe('lane_exhausted');
-    const ok = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'claude', model: 'sonnet', credential: 'login' } });
+    const ok = await api('POST', `/api/runs/${run.id}/handoff`, {
+      route: { agent: 'claude', model: 'sonnet', credential: 'login' },
+    });
     expect(ok.statusCode).toBe(201);
     expect(ok.json()).toMatchObject({ agent: 'claude', model: 'sonnet', predecessorRunId: run.id });
   });
@@ -473,12 +571,18 @@ describe('lanes and policy', () => {
   it('manual handoff: 404 for an unknown run, refuses routes that cannot run, and leaves the run alone', async () => {
     const { run } = await startTicket('Manual guards');
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
-    const missing = await api('POST', '/api/runs/no-such-run/handoff', { route: { agent: 'antigravity', model: 'argon', credential: 'login' } });
+    const missing = await api('POST', '/api/runs/no-such-run/handoff', {
+      route: { agent: 'antigravity', model: 'argon', credential: 'login' },
+    });
     expect(missing.statusCode).toBe(404);
-    const unsupported = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'antigravity', model: 'argon', credential: 'api_key' } });
+    const unsupported = await api('POST', `/api/runs/${run.id}/handoff`, {
+      route: { agent: 'antigravity', model: 'argon', credential: 'api_key' },
+    });
     expect(unsupported.statusCode).toBe(400);
     expect(unsupported.json().error).toBe('route_unsupported');
-    const noKey = await api('POST', `/api/runs/${run.id}/handoff`, { route: { agent: 'claude', model: 'opus', credential: 'api_key' } });
+    const noKey = await api('POST', `/api/runs/${run.id}/handoff`, {
+      route: { agent: 'claude', model: 'opus', credential: 'api_key' },
+    });
     expect(noKey.statusCode).toBe(409);
     expect(noKey.json().error).toBe('route_unusable');
     expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
@@ -527,21 +631,36 @@ describe('lanes and policy', () => {
       throw new Error('disk I/O error');
     };
     await hook(run.id, 'StopFailure', token, AGY_QUOTA);
-    await expect.poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 }).toContain('rate_limit_failed');
+    await expect
+      .poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 })
+      .toContain('rate_limit_failed');
   });
 
   it('resume-now ends one lane only', async () => {
     const { run } = await startTicket('UI');
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
     const coder = await startTicket('Coder', 'coder');
-    await hook(coder.run.id, 'StopFailure', await work(coder.run), { error: 'rate_limit', last_assistant_message: '5-hour limit reached ∙ resets 11:59pm (UTC)' });
+    await hook(coder.run.id, 'StopFailure', await work(coder.run), {
+      error: 'rate_limit',
+      last_assistant_message: '5-hour limit reached ∙ resets 11:59pm (UTC)',
+    });
     expect((await scheduler()).windows).toHaveLength(2);
-    const after: SchedulerState = (await api('POST', '/api/scheduler/resume', { agent: 'antigravity', credential: 'login', pool: '*' })).json();
+    const after: SchedulerState = (
+      await api('POST', '/api/scheduler/resume', { agent: 'antigravity', credential: 'login', pool: '*' })
+    ).json();
     expect(after.windows.map((w) => w.agent)).toEqual(['claude']);
   });
 
   it('a pre-0.2.0 Claude window (default lane columns) still pauses Claude and resumes it', async () => {
-    t.db.insert(quotaWindows).values({ id: 'legacy', exhaustedAt: new Date(), resumeAt: new Date(Date.now() - 1_000), source: 'hook' }).run();
+    t.db
+      .insert(quotaWindows)
+      .values({
+        id: 'legacy',
+        exhaustedAt: new Date(),
+        resumeAt: new Date(Date.now() - 1_000),
+        source: 'hook',
+      })
+      .run();
     const state = await scheduler();
     expect(state.windows[0]).toMatchObject({ agent: 'claude', credential: 'login', pool: '*' });
     await t.scheduler.tick();
@@ -550,7 +669,15 @@ describe('lanes and policy', () => {
 
   it('a live pre-0.2.0 window (future resumeAt) holds Claude runs but not Antigravity runs', async () => {
     // Only the required columns: agent, credential and pool take their defaults (claude, login, *).
-    t.db.insert(quotaWindows).values({ id: 'legacy-live', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+    t.db
+      .insert(quotaWindows)
+      .values({
+        id: 'legacy-live',
+        exhaustedAt: new Date(),
+        resumeAt: new Date(Date.now() + 3_600_000),
+        source: 'hook',
+      })
+      .run();
     const claude = await startTicket('Claude work', 'coder');
     const agy = await startTicket('Antigravity work', 'ui_ux');
     await expect.poll(async () => (await getRun(agy.run.id)).state, { timeout: 5_000 }).toBe('starting');
@@ -564,36 +691,63 @@ describe('lanes and policy', () => {
     const { run } = await startTicket('Legacy limit', 'coder');
     await work(run);
     // A pre-0.2.0 row: no stored chain, no model column, the column-default credential; and a window with default lane columns.
-    t.db.update(runsTable).set({ state: 'rate_limited', routes: [], model: null, credential: 'login' }).where(eq(runsTable.id, run.id)).run();
-    t.db.insert(quotaWindows).values({ id: 'legacy-open', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+    t.db
+      .update(runsTable)
+      .set({ state: 'rate_limited', routes: [], model: null, credential: 'login' })
+      .where(eq(runsTable.id, run.id))
+      .run();
+    t.db
+      .insert(quotaWindows)
+      .values({
+        id: 'legacy-open',
+        exhaustedAt: new Date(),
+        resumeAt: new Date(Date.now() + 3_600_000),
+        source: 'hook',
+      })
+      .run();
     await t.scheduler.tick();
     expect((await getRun(run.id)).state).toBe('rate_limited');
     expect((await scheduler()).windows).toMatchObject([{ agent: 'claude', credential: 'login', pool: '*' }]);
 
-    t.db.update(quotaWindows).set({ resumeAt: new Date(Date.now() - 1_000) }).where(eq(quotaWindows.id, 'legacy-open')).run();
+    t.db
+      .update(quotaWindows)
+      .set({ resumeAt: new Date(Date.now() - 1_000) })
+      .where(eq(quotaWindows.id, 'legacy-open'))
+      .run();
     await t.scheduler.tick();
     const resumed = await getRun(run.id);
     expect(resumed.state).toBe('starting');
     expect(resumed.events.map((e) => e.type)).toContain('resumed');
-    await expect.poll(() => readFileSync(path.join(t.dir, `lines-${run.id}`), 'utf8'), { timeout: 5_000 }).toMatch(/continue/i);
+    await expect
+      .poll(() => readFileSync(path.join(t.dir, `lines-${run.id}`), 'utf8'), { timeout: 5_000 })
+      .toMatch(/continue/i);
   });
 
-  it('a screen banner narrows the hook\'s reset-less window in place instead of adding a second one', async () => {
-    updateFactorySettings(t.db, { personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] } });
+  it("a screen banner narrows the hook's reset-less window in place instead of adding a second one", async () => {
+    updateFactorySettings(t.db, {
+      personaRoutes: { coder: [{ agent: 'claude', model: 'opus', credential: 'login' }] },
+    });
     const coder = await startTicket('Coder', 'coder');
     t.runs.screen = async () => 'Opus weekly limit reached ∙ resets Oct 30, 9am (UTC)\n';
     await hook(coder.run.id, 'StopFailure', await work(coder.run), { error: 'rate_limit' });
-    await expect.poll(async () => (await scheduler()).windows[0]?.resetSource, { timeout: 5_000 }).toBe('screen');
+    await expect
+      .poll(async () => (await scheduler()).windows[0]?.resetSource, { timeout: 5_000 })
+      .toBe('screen');
     const windows = (await scheduler()).windows;
     expect(windows).toHaveLength(1);
     expect(windows[0]).toMatchObject({ agent: 'claude', pool: 'opus' });
     expect(windows[0]?.resetsAt).toBeTruthy();
   });
 
-  it('forgets a run\'s route_skipped memory once the run ends', async () => {
+  it("forgets a run's route_skipped memory once the run ends", async () => {
     updateFactorySettings(t.db, {
       quotaPolicy: { inFlight: 'fallback' },
-      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'api_key' }] },
+      personaRoutes: {
+        ui_ux: [
+          { agent: 'antigravity', model: 'argon', credential: 'login' },
+          { agent: 'claude', model: 'opus', credential: 'api_key' },
+        ],
+      },
     });
     const { run } = await startTicket('No key');
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
@@ -603,10 +757,15 @@ describe('lanes and policy', () => {
     await expect.poll(() => skipped.size, { timeout: 5_000 }).toBe(0);
   });
 
-  it('keeps a waiting run\'s route_skipped memory after its agent process exited', async () => {
+  it("keeps a waiting run's route_skipped memory after its agent process exited", async () => {
     updateFactorySettings(t.db, {
       quotaPolicy: { inFlight: 'fallback' },
-      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'api_key' }] },
+      personaRoutes: {
+        ui_ux: [
+          { agent: 'antigravity', model: 'argon', credential: 'login' },
+          { agent: 'claude', model: 'opus', credential: 'api_key' },
+        ],
+      },
     });
     const { run } = await startTicket('No key');
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
@@ -624,11 +783,18 @@ describe('lanes and policy', () => {
   it('skips an API-key fallback whose key was deleted', async () => {
     updateFactorySettings(t.db, {
       quotaPolicy: { inFlight: 'fallback' },
-      personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'login' }, { agent: 'claude', model: 'opus', credential: 'api_key' }] },
+      personaRoutes: {
+        ui_ux: [
+          { agent: 'antigravity', model: 'argon', credential: 'login' },
+          { agent: 'claude', model: 'opus', credential: 'api_key' },
+        ],
+      },
     });
     const { run } = await startTicket('No key');
     await hook(run.id, 'StopFailure', await work(run), AGY_QUOTA);
-    await expect.poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 }).toContain('route_skipped');
+    await expect
+      .poll(async () => (await getRun(run.id)).events.map((e) => e.type), { timeout: 5_000 })
+      .toContain('route_skipped');
     expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
   });
 });
@@ -643,7 +809,15 @@ describe('waiting runs follow the in-flight policy and reopening lanes', () => {
   }
   /** Closes the Claude lane too, so the run has no open fallback route. */
   const closeClaude = () =>
-    t.db.insert(quotaWindows).values({ id: 'claude-closed', exhaustedAt: new Date(), resumeAt: new Date(Date.now() + 3_600_000), source: 'hook' }).run();
+    t.db
+      .insert(quotaWindows)
+      .values({
+        id: 'claude-closed',
+        exhaustedAt: new Date(),
+        resumeAt: new Date(Date.now() + 3_600_000),
+        source: 'hook',
+      })
+      .run();
 
   it('a run waiting under "wait" is handed off once the policy is switched to fallback', async () => {
     const run = await waiting();
@@ -655,7 +829,13 @@ describe('waiting runs follow the in-flight policy and reopening lanes', () => {
     // No explicit tick: changing the policy wakes the scheduler.
     await expect.poll(async () => (await getRun(run.id)).handedOffTo, { timeout: 5_000 }).not.toBeNull();
     const successor = await getRun((await getRun(run.id)).handedOffTo ?? '');
-    expect(successor).toMatchObject({ agent: 'claude', model: 'opus', routeIndex: 1, predecessorRunId: run.id, worktreePath: run.worktreePath });
+    expect(successor).toMatchObject({
+      agent: 'claude',
+      model: 'opus',
+      routeIndex: 1,
+      predecessorRunId: run.id,
+      worktreePath: run.worktreePath,
+    });
     expect(t.db.select().from(runsTable).where(eq(runsTable.id, successor.id)).get()?.handoffCount).toBe(1);
   });
 
@@ -666,11 +846,18 @@ describe('waiting runs follow the in-flight policy and reopening lanes', () => {
     await t.scheduler.tick();
     expect(await getRun(run.id)).toMatchObject({ state: 'rate_limited', handedOffTo: null });
 
-    t.db.update(quotaWindows).set({ resumeAt: new Date(Date.now() - 1_000) }).where(eq(quotaWindows.id, 'claude-closed')).run();
+    t.db
+      .update(quotaWindows)
+      .set({ resumeAt: new Date(Date.now() - 1_000) })
+      .where(eq(quotaWindows.id, 'claude-closed'))
+      .run();
     await t.scheduler.tick();
     const after = await getRun(run.id);
     expect(after.handedOffTo).not.toBeNull();
-    expect(await getRun(after.handedOffTo ?? '')).toMatchObject({ agent: 'claude', predecessorRunId: run.id });
+    expect(await getRun(after.handedOffTo ?? '')).toMatchObject({
+      agent: 'claude',
+      predecessorRunId: run.id,
+    });
   });
 
   it('does not re-evaluate a run without an open route on every pass, and hands it off once the fallback lane is resumed', async () => {
@@ -709,7 +896,11 @@ describe('waiting runs follow the in-flight policy and reopening lanes', () => {
       handed.push(id);
       // The first handoff of the pass stops the other waiting run.
       const other = id === first.id ? second.id : first.id;
-      t.db.update(runsTable).set({ cancelledAt: new Date(), state: 'failed', endedAt: new Date() }).where(eq(runsTable.id, other)).run();
+      t.db
+        .update(runsTable)
+        .set({ cancelledAt: new Date(), state: 'failed', endedAt: new Date() })
+        .where(eq(runsTable.id, other))
+        .run();
       return handOff(id, ...rest);
     };
     updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
@@ -730,7 +921,11 @@ describe('waiting runs follow the in-flight policy and reopening lanes', () => {
     await hook(capped.id, 'StopFailure', tokens[0]!, AGY_QUOTA);
     await hook(retrying.id, 'StopFailure', tokens[1]!, AGY_QUOTA);
     t.db.update(runsTable).set({ handoffCount: 3 }).where(eq(runsTable.id, capped.id)).run();
-    t.db.update(runsTable).set({ autoRetryAt: new Date(Date.now() + 3_600_000) }).where(eq(runsTable.id, retrying.id)).run();
+    t.db
+      .update(runsTable)
+      .set({ autoRetryAt: new Date(Date.now() + 3_600_000) })
+      .where(eq(runsTable.id, retrying.id))
+      .run();
 
     updateFactorySettings(t.db, { quotaPolicy: { inFlight: 'fallback' } });
     await t.scheduler.tick();
@@ -797,7 +992,11 @@ describe('handed-off runs are not finished work', () => {
     await t.runs.stop(successor.id);
     await expect.poll(async () => (await getRun(successor.id)).endedAt, { timeout: 5_000 }).not.toBeNull();
     // Reconcile leaves a rate-limited run rate_limited with endedAt set; it still resumes here.
-    t.db.update(runsTable).set({ state: 'rate_limited', cancelledAt: null }).where(eq(runsTable.id, successor.id)).run();
+    t.db
+      .update(runsTable)
+      .set({ state: 'rate_limited', cancelledAt: null })
+      .where(eq(runsTable.id, successor.id))
+      .run();
     expect((await api('POST', `/api/runs/${run.id}/worktree/prune`)).statusCode).toBe(409);
     expect((await api('POST', `/api/runs/${successor.id}/worktree/prune`)).statusCode).toBe(409);
     expect(existsSync(successor.worktreePath)).toBe(true);
@@ -834,7 +1033,13 @@ describe('headless agents refuse modes that would need to ask', () => {
     'Antigravity runs without a terminal to answer in, so in Accept edits mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
 
   it('a ticket started in Accept edits on an Antigravity lane gets a 409 and no run, worktree or ticket move', async () => {
-    const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Landing', status: 'ready', persona: 'ui_ux' })).json();
+    const ticket = (
+      await api('POST', `/api/projects/${projectId}/tickets`, {
+        title: 'Landing',
+        status: 'ready',
+        persona: 'ui_ux',
+      })
+    ).json();
     const res = await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'acceptEdits' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
@@ -852,7 +1057,12 @@ describe('headless agents refuse modes that would need to ask', () => {
   });
 
   it('a direct run in Accept edits on an Antigravity lane gets a 409 and leaves no run or worktree', async () => {
-    const res = await api('POST', '/api/runs', { projectId, persona: 'ui_ux', prompt: 'polish the header', permissionMode: 'acceptEdits' });
+    const res = await api('POST', '/api/runs', {
+      projectId,
+      persona: 'ui_ux',
+      prompt: 'polish the header',
+      permissionMode: 'acceptEdits',
+    });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
     expect(t.db.select().from(runsTable).all()).toHaveLength(0);
@@ -867,7 +1077,9 @@ describe('headless agents refuse modes that would need to ask', () => {
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: 'headless_needs_auto', message: ACCEPT_EDITS_MESSAGE });
-    expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+    expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(
+      0,
+    );
     expect(t.db.select().from(runsTable).all()).toHaveLength(0);
     expect(t.tickets.isAutoChainActive(projectId)).toBe(false);
     // A route tag in the request leads, as it does for the ticket it would create.
@@ -877,7 +1089,9 @@ describe('headless agents refuse modes that would need to ask', () => {
       permissionMode: 'acceptEdits',
     });
     expect(tagged.statusCode).toBe(409);
-    expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+    expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(
+      0,
+    );
   });
 
   it('a factory request whose generated ticket text routes to a headless agent leaves no [Factory] ticket', async () => {
@@ -894,7 +1108,9 @@ describe('headless agents refuse modes that would need to ask', () => {
       });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
-      expect(t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all()).toHaveLength(0);
+      expect(
+        t.db.select().from(ticketsTable).where(eq(ticketsTable.projectId, projectId)).all(),
+      ).toHaveLength(0);
       expect(t.db.select().from(runsTable).all()).toHaveLength(0);
     } finally {
       vi.mocked(orchestration.buildFactoryOrchestratorPrompt).mockImplementation(real);
@@ -902,7 +1118,11 @@ describe('headless agents refuse modes that would need to ask', () => {
   });
 
   it('a run without a prompt opens Antigravity interactively in any mode', async () => {
-    const res = await api('POST', '/api/runs', { projectId, persona: 'ui_ux', permissionMode: 'acceptEdits' });
+    const res = await api('POST', '/api/runs', {
+      projectId,
+      persona: 'ui_ux',
+      permissionMode: 'acceptEdits',
+    });
     expect(res.statusCode).toBe(201);
     expect(res.json().agent).toBe('antigravity');
   });
@@ -911,7 +1131,11 @@ describe('headless agents refuse modes that would need to ask', () => {
     const { ticketId, run } = await startTicket('Colour-blind cats');
     t.db.update(runsTable).set({ state: 'waiting_input' }).where(eq(runsTable.id, run.id)).run();
     await expect(
-      t.tickets.start(ticketId, { permissionMode: 'acceptEdits' }, { byPerson: true, replaceIdleRun: { ids: [run.id], reason: 'review_new_run' } }),
+      t.tickets.start(
+        ticketId,
+        { permissionMode: 'acceptEdits' },
+        { byPerson: true, replaceIdleRun: { ids: [run.id], reason: 'review_new_run' } },
+      ),
     ).rejects.toMatchObject({ statusCode: 409, code: 'headless_needs_auto' });
     expect(await getRun(run.id)).toMatchObject({ state: 'waiting_input', cancelled: false });
     expect(t.db.select().from(runsTable).where(eq(runsTable.ticketId, ticketId)).all()).toHaveLength(1);
@@ -937,7 +1161,13 @@ describe('headless agents refuse modes that would need to ask', () => {
         ],
       },
     });
-    const ticket = (await api('POST', `/api/projects/${projectId}/tickets`, { title: 'Coder', status: 'ready', persona: 'coder' })).json();
+    const ticket = (
+      await api('POST', `/api/projects/${projectId}/tickets`, {
+        title: 'Coder',
+        status: 'ready',
+        persona: 'coder',
+      })
+    ).json();
     const res = await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'acceptEdits' });
     expect(res.statusCode).toBe(201);
     const run: Run = res.json().run;

@@ -69,15 +69,18 @@ describe('ToolchainService', () => {
 
   it('runs one CLI install at a time, across providers (B24)', async () => {
     const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
-    const slow = toolchain.executeAction('codex', { action: 'install', customCommand: 'sleep 1; echo slow-done' });
+    const slow = toolchain.executeAction('codex', {
+      action: 'install',
+      customCommand: 'sleep 1; echo slow-done',
+    });
     await new Promise((resolve) => setTimeout(resolve, 100));
     await expect(
       toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' }),
     ).rejects.toMatchObject({ statusCode: 409 });
     expect((await slow).output).toContain('slow-done');
-    expect((await toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' })).output).toContain(
-      'second',
-    );
+    expect(
+      (await toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' })).output,
+    ).toContain('second');
   });
 
   it('installs SDKs in a runner terminal and reads the installed version from its marker', async () => {
@@ -106,7 +109,9 @@ describe('ToolchainService', () => {
       writeFileSync(path.join(t.dir, 'sdk-gate'), '');
     }
     await expect
-      .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing, { timeout: 5_000 })
+      .poll(async () => (await toolchain.getSdkStatuses()).find((s) => s.id === 'flutter')?.installing, {
+        timeout: 5_000,
+      })
       .toBe(false);
   });
 });

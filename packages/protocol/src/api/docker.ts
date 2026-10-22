@@ -19,7 +19,8 @@ export const DOCKER_ENGINE_NOT_CONFIGURED_TEXT =
   'No Docker engine is configured. With the published images, use the current deploy/compose.yaml (0.3.5 or later), which starts it.';
 
 /** An enabled engine whose first probe has not answered yet. */
-export const DOCKER_ENGINE_NOT_ANSWERED_TEXT = 'The Docker engine has not answered yet; try again in a moment.';
+export const DOCKER_ENGINE_NOT_ANSWERED_TEXT =
+  'The Docker engine has not answered yet; try again in a moment.';
 
 /** Why a disabled engine is off, by its reason (an older core without one, or none, reads as not configured). */
 export function dockerEngineOffText(engine: DockerEngineStatus | undefined): string {

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { inActiveScope, projectIdFromPath, resolveActiveProject, resolveActiveProjectId, switchProjectPath } from './projectPaths';
+import {
+  inActiveScope,
+  projectIdFromPath,
+  resolveActiveProject,
+  resolveActiveProjectId,
+  switchProjectPath,
+} from './projectPaths';
 
 describe('switchProjectPath', () => {
   it('keeps the page for every per-project route', () => {
@@ -68,13 +74,19 @@ describe('resolveActiveProjectId', () => {
 describe('resolveActiveProject', () => {
   const ids = ['p1', 'p2'];
   it('a failed server read falls back to the first project without storing it', () => {
-    expect(resolveActiveProject(ids, { fromUrl: null, stored: null, server: undefined, serverFailed: true })).toEqual({ id: 'p1', remember: false });
+    expect(
+      resolveActiveProject(ids, { fromUrl: null, stored: null, server: undefined, serverFailed: true }),
+    ).toEqual({ id: 'p1', remember: false });
   });
   it('the URL wins at once and is stored', () => {
-    expect(resolveActiveProject(ids, { fromUrl: 'p2', stored: 'p1', server: undefined, serverFailed: false })).toEqual({ id: 'p2', remember: true });
+    expect(
+      resolveActiveProject(ids, { fromUrl: 'p2', stored: 'p1', server: undefined, serverFailed: false }),
+    ).toEqual({ id: 'p2', remember: true });
   });
   it('waits for the server', () => {
-    expect(resolveActiveProject(ids, { fromUrl: null, stored: 'gone', server: undefined, serverFailed: false })).toEqual({ id: undefined, remember: true });
+    expect(
+      resolveActiveProject(ids, { fromUrl: null, stored: 'gone', server: undefined, serverFailed: false }),
+    ).toEqual({ id: undefined, remember: true });
   });
 });
 

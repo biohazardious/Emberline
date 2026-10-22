@@ -1,4 +1,10 @@
-import { ClientPresenceMessage, type Run, type SchedulerState, type ServerEvent, type Ticket } from '@emberline/protocol';
+import {
+  ClientPresenceMessage,
+  type Run,
+  type SchedulerState,
+  type ServerEvent,
+  type Ticket,
+} from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { PresenceRegistry } from '../notifications/presence.js';
 import type { RunService } from '../runs/service.js';

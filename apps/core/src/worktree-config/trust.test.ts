@@ -34,11 +34,11 @@ describe('worktreeCommandsMissing', () => {
     write('version: 1\nsetup:\n  - "true"\n');
     expect(await worktreeCommandsMissing(dir)).toBeNull();
   });
-  it('an invalid file is the other gate\'s job', async () => {
+  it("an invalid file is the other gate's job", async () => {
     write('version: 1\nchecks:\n  container: x\n');
     expect(await worktreeCommandsMissing(dir)).toBeNull();
   });
-  it('a symbolic link is the other gate\'s job', async () => {
+  it("a symbolic link is the other gate's job", async () => {
     writeFileSync(path.join(dir, 'elsewhere.yml'), 'version: 1\n');
     mkdirSync(path.join(dir, '.emberline'), { recursive: true });
     symlinkSync('../elsewhere.yml', path.join(dir, '.emberline/worktree.yml'));

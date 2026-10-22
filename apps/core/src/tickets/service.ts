@@ -31,7 +31,15 @@ import {
 import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
-import { issueTombstones, projects, runEvents, runs, settings, ticketDependencies, tickets } from '../db/schema.js';
+import {
+  issueTombstones,
+  projects,
+  runEvents,
+  runs,
+  settings,
+  ticketDependencies,
+  tickets,
+} from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   auditWorktreeSlop,
@@ -53,7 +61,12 @@ import {
   type TicketsFileHooks,
 } from '../factory/service.js';
 import { mapIssueToTicket } from './issue-mapping.js';
-import { type Edge, normalizeTicketTitle, resolveBatchDependencies, wouldCreateCycle } from './dependencies.js';
+import {
+  type Edge,
+  normalizeTicketTitle,
+  resolveBatchDependencies,
+  wouldCreateCycle,
+} from './dependencies.js';
 import { clipText } from '../text/control-chars.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -87,7 +100,13 @@ interface TicketServiceEvents {
 const POSITION_STEP = 1024;
 
 /** Run states that occupy one of a project's parallel ticket slots. */
-const ACTIVE_RUN_STATES = new Set<Run['state']>(['queued', 'starting', 'working', 'waiting_input', 'rate_limited']);
+const ACTIVE_RUN_STATES = new Set<Run['state']>([
+  'queued',
+  'starting',
+  'working',
+  'waiting_input',
+  'rate_limited',
+]);
 
 type Blocker = Ticket['blockedBy'][number];
 
@@ -355,7 +374,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           return; // removed meanwhile
         }
         // Woke up again (its next Stop starts a new wait), or finished differently in the meantime.
-        if (fresh.state !== 'done' || fresh.stateChangedAt !== run.stateChangedAt || fresh.handedOffTo) return;
+        if (fresh.state !== 'done' || fresh.stateChangedAt !== run.stateChangedAt || fresh.handedOffTo)
+          return;
         this.completeRun(fresh);
       } finally {
         this.stopSettling(run.id);
@@ -437,7 +457,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       this.db
         .select({ id: runEvents.id })
         .from(runEvents)
-        .where(and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'waiting_input', 'done'])))
+        .where(
+          and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'waiting_input', 'done'])),
+        )
         .limit(1)
         .get(),
     );
@@ -476,8 +498,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** A Bootstrap or Deploy ticket of a wizard project whose [Factory] ticket still exists and is not done: the factory plans. */
   private leftToFactory(projectId: string, ticketId: string | undefined): boolean {
     const roles = readWizardTickets(this.db, projectId);
-    if (!roles?.factory || !ticketId || (ticketId !== roles.bootstrap && ticketId !== roles.deploy)) return false;
-    const factory = this.db.select({ status: tickets.status }).from(tickets).where(eq(tickets.id, roles.factory)).get();
+    if (!roles?.factory || !ticketId || (ticketId !== roles.bootstrap && ticketId !== roles.deploy))
+      return false;
+    const factory = this.db
+      .select({ status: tickets.status })
+      .from(tickets)
+      .where(eq(tickets.id, roles.factory))
+      .get();
     return factory !== undefined && factory.status !== 'done';
   }
 
@@ -502,7 +529,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   async resumeChains(): Promise<void> {
     if (!getFactorySettings(this.db).autoPickupReady) return;
-    const known = new Set(this.db.select({ id: projects.id }).from(projects).all().map((p) => p.id));
+    const known = new Set(
+      this.db
+        .select({ id: projects.id })
+        .from(projects)
+        .all()
+        .map((p) => p.id),
+    );
     const resumed: Promise<unknown>[] = [];
     for (const projectId of [...this.autoChainProjects]) {
       if (known.has(projectId)) resumed.push(this.dispatchNextReadyTicket(projectId).catch(() => undefined));
@@ -522,7 +555,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Drops what is kept per project outside its rows (its ticket number sequence) once it is deleted. */
   forgetProject(projectId: string): void {
     this.chainOff(projectId);
-    this.db.delete(settings).where(eq(settings.key, ticketSeqKey(projectId))).run();
+    this.db
+      .delete(settings)
+      .where(eq(settings.key, ticketSeqKey(projectId)))
+      .run();
   }
 
   setAutoChain(projectId: string, enabled: boolean): void {
@@ -534,7 +570,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   createFactoryTicket(
     projectId: string,
     prompt: string,
-    opts: { autoDispatch?: boolean; attachmentContext?: string; leadPersona?: AgentPersona; body?: string } = {},
+    opts: {
+      autoDispatch?: boolean;
+      attachmentContext?: string;
+      leadPersona?: AgentPersona;
+      body?: string;
+    } = {},
   ): Ticket {
     return this.create(projectId, {
       title: factoryTicketTitle(prompt),
@@ -564,7 +605,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         return (
           p?.autoFix === true &&
           (p.check === check ||
-            (check === 'worktree_yml' && p.check === undefined && (p.output ?? '').startsWith('.emberline/worktree.yml is not valid:')))
+            (check === 'worktree_yml' &&
+              p.check === undefined &&
+              (p.output ?? '').startsWith('.emberline/worktree.yml is not valid:')))
         );
       });
   }
@@ -618,14 +661,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     opts: { prompt: string; persona?: AgentPersona },
   ): Promise<Run> {
     this.project(projectId);
-    const existing = this.runs.list().find(
-      (r) =>
-        r.projectId === projectId &&
-        !r.endedAt &&
-        r.state !== 'done' &&
-        r.state !== 'failed' &&
-        Boolean(r.title?.includes('[Brainstorm]')),
-    );
+    const existing = this.runs
+      .list()
+      .find(
+        (r) =>
+          r.projectId === projectId &&
+          !r.endedAt &&
+          r.state !== 'done' &&
+          r.state !== 'failed' &&
+          Boolean(r.title?.includes('[Brainstorm]')),
+      );
     if (existing) {
       return existing;
     }
@@ -689,7 +734,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * tickets; `chain: false` leaves the project's auto-chain as it is (a person's board change must
    * not turn the factory on).
    */
-  dispatchNextReadyTicket(projectId: string, opts: DispatchOptions = {}): Promise<{ ticket: Ticket; run: Run }[]> {
+  dispatchNextReadyTicket(
+    projectId: string,
+    opts: DispatchOptions = {},
+  ): Promise<{ ticket: Ticket; run: Run }[]> {
     // Check-then-start spans several awaits; two completions (or a click) must not both dispatch.
     return this.dispatchLock.run(projectId, () => this.dispatchNextReadyTicketUnlocked(projectId, opts));
   }
@@ -700,7 +748,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   private dispatchUnblocked(projectId: string, ticketIds: string[]): void {
     if (!getFactorySettings(this.db).autoPickupReady) return;
-    const opts: DispatchOptions = this.autoChainProjects.has(projectId) ? {} : { only: new Set(ticketIds), chain: false };
+    const opts: DispatchOptions = this.autoChainProjects.has(projectId)
+      ? {}
+      : { only: new Set(ticketIds), chain: false };
     if (opts.only?.size === 0) return;
     void this.dispatchNextReadyTicket(projectId, opts).catch(() => undefined);
   }
@@ -708,14 +758,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Of `ids`, those blocked in `before` that nothing blocks any more. */
   private nowUnblocked(ids: string[], before: Map<string, { blockedBy: Ticket['blockedBy'] }>): string[] {
     const after = this.dependenciesOf(ids);
-    return ids.filter((id) => (before.get(id)?.blockedBy.length ?? 0) > 0 && after.get(id)?.blockedBy.length === 0);
+    return ids.filter(
+      (id) => (before.get(id)?.blockedBy.length ?? 0) > 0 && after.get(id)?.blockedBy.length === 0,
+    );
   }
 
   /** Active runs working on one of the project's tickets; ticket-less runs never count. */
   private busyTicketRuns(projectId: string): number {
     return this.runs
       .list()
-      .filter((r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && ACTIVE_RUN_STATES.has(r.state)).length;
+      .filter(
+        (r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && ACTIVE_RUN_STATES.has(r.state),
+      ).length;
   }
 
   private async dispatchNextReadyTicketUnlocked(
@@ -777,7 +831,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const byPriority = (a: Ticket, b: Ticket) => b.priority - a.priority || a.position - b.position;
     const queue = [
       ...allTickets.filter((t) => t.status === 'ready').sort(byPriority),
-      ...(fSettings.autoPickupBacklog ? allTickets.filter((t) => t.status === 'backlog').sort(byPriority) : []),
+      ...(fSettings.autoPickupBacklog
+        ? allTickets.filter((t) => t.status === 'backlog').sort(byPriority)
+        : []),
     ];
     if (queue.length === 0) {
       // The chain ends only once its last ticket run is through: a parallel sibling still working
@@ -798,7 +854,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (this.runs.activeRunForTicket(next.id) || this.startingTickets.has(next.id)) continue;
       try {
-        started.push(await this.start(next.id, { permissionMode: 'auto', persona: next.persona }, { unattended: true }));
+        started.push(
+          await this.start(next.id, { permissionMode: 'auto', persona: next.persona }, { unattended: true }),
+        );
       } catch (error) {
         // Someone started it by hand in the meantime: take the next one.
         if (error instanceof HttpError && error.statusCode === 409) continue;
@@ -859,7 +917,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         }
       }
       if (!run.endedAt) {
-        await this.runs.stop(run.id, { source: 'system', reason: 'brainstorm_finished' }).catch(() => undefined);
+        await this.runs
+          .stop(run.id, { source: 'system', reason: 'brainstorm_finished' })
+          .catch(() => undefined);
       }
       return;
     }
@@ -893,17 +953,25 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           worktreePath,
           hooksFor(
             // A detached main checkout has no branch: the project's default branch is main then.
-            async () => runBranchBase(worktreePath, (await mainWorkspaceBranch(projectRow.path)) ?? projectRow.defaultBranch),
+            async () =>
+              runBranchBase(
+                worktreePath,
+                (await mainWorkspaceBranch(projectRow.path)) ?? projectRow.defaultBranch,
+              ),
             worktreePath,
           ),
         )
       : null;
     const fromMain =
       !fromWorktree && projectRow.path !== run.worktreePath
-        ? await ingestAgentTicketsFile(projectRow.path, hooksFor(async () => 'HEAD', projectRow.path))
+        ? await ingestAgentTicketsFile(
+            projectRow.path,
+            hooksFor(async () => 'HEAD', projectRow.path),
+          )
         : null;
     const ingested = fromWorktree ?? fromMain;
-    if (inherited.length > 0) this.runs.note(run.id, 'tickets_file_inherited', { files: [...new Set(inherited)] });
+    if (inherited.length > 0)
+      this.runs.note(run.id, 'tickets_file_inherited', { files: [...new Set(inherited)] });
 
     const draftDepth = (ticketRow?.depth ?? 0) + 1;
     const fSettingsForDepth = getFactorySettings(this.db);
@@ -971,13 +1039,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // Board work, even without a code change: remembered on the run, so a later pass of it (a
       // re-pass after a gate's prompt, finalization after a restart) does not hold it as empty.
       if (created.length > 0) {
-        this.runs.note(run.id, 'tickets_imported', { count: created.length, tickets: created.map((c) => c.ticket.key) });
+        this.runs.note(run.id, 'tickets_imported', {
+          count: created.length,
+          tickets: created.map((c) => c.ticket.key),
+        });
       }
       const repointed = created.map((c) => ({
         ...c,
         draft: {
           ...c.draft,
-          ...(c.draft.dependsOn ? { dependsOn: c.draft.dependsOn.map((d) => skippedRefs.get(refKey(d)) ?? d) } : {}),
+          ...(c.draft.dependsOn
+            ? { dependsOn: c.draft.dependsOn.map((d) => skippedRefs.get(refKey(d)) ?? d) }
+            : {}),
         },
       }));
       this.applyDraftDependencies(run.id, run.projectId, repointed);
@@ -1011,11 +1084,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     const fSettings = effectiveFactorySettings(this.db, run.projectId);
-    const projectTickets = this.db
-      .select()
-      .from(tickets)
-      .where(eq(tickets.projectId, run.projectId))
-      .all();
+    const projectTickets = this.db.select().from(tickets).where(eq(tickets.projectId, run.projectId)).all();
     const hasFactoryPipeline =
       fSettings.autoPickupReady &&
       projectTickets.some((t) => t.title.startsWith('[Factory]') || t.status === 'ready');
@@ -1032,7 +1101,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       isFactoryOrchestratorTicket ||
       hasFactoryPipeline ||
       (ticketRow?.status !== 'done' &&
-        (this.stillHeld(run.id) || reviewUnblockPending(this.db, run.id) || continuesHeldWork(this.db, run.id)));
+        (this.stillHeld(run.id) ||
+          reviewUnblockPending(this.db, run.id) ||
+          continuesHeldWork(this.db, run.id)));
     if (!isFactoryRun) return;
 
     // The gates, the merge and Done apply to every factory-looking run, but only the factory itself
@@ -1099,19 +1170,22 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (problems) {
         const errorText = problems.join('\n').slice(0, 2_400);
-        const gateNote = { check: 'worktree_yml', output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`) };
+        const gateNote = {
+          check: 'worktree_yml',
+          output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`),
+        };
         const autoFix =
-          fSettings.selfHealingBuildGate && !this.askedToFix(run.id, 'worktree_yml') && (!run.endedAt || run.resumable);
+          fSettings.selfHealingBuildGate &&
+          !this.askedToFix(run.id, 'worktree_yml') &&
+          (!run.endedAt || run.resumable);
         let asked = false;
         if (autoFix) {
           // Held before asking: an undelivered request must not let a later dispatch merge the file.
           this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
           asked = await this.runs
-            .prompt(
-              run.id,
-              `${worktreeYmlFixPrompt(errorText)}${this.completionReminder(run, ' ')}`,
-              { automatic: true },
-            )
+            .prompt(run.id, `${worktreeYmlFixPrompt(errorText)}${this.completionReminder(run, ' ')}`, {
+              automatic: true,
+            })
             .then(() => true)
             .catch(() => false);
         }
@@ -1133,16 +1207,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       const missing = await worktreeCommandsMissing(run.worktreePath || projectRow.path).catch(() => null);
       if (missing) {
         const gateNote = { check: 'worktree_commands', output: holdText(missing) };
-        const autoFix = fSettings.selfHealingBuildGate && !this.askedToFix(run.id, 'worktree_commands') && (!run.endedAt || run.resumable);
+        const autoFix =
+          fSettings.selfHealingBuildGate &&
+          !this.askedToFix(run.id, 'worktree_commands') &&
+          (!run.endedAt || run.resumable);
         let asked = false;
         if (autoFix) {
           this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
           asked = await this.runs
-            .prompt(
-              run.id,
-              `${WORKTREE_COMMANDS_PROMPT}${this.completionReminder(run, ' ')}`,
-              { automatic: true },
-            )
+            .prompt(run.id, `${WORKTREE_COMMANDS_PROMPT}${this.completionReminder(run, ' ')}`, {
+              automatic: true,
+            })
             .then(() => true)
             .catch(() => false);
         }
@@ -1163,7 +1238,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     //    An approved worktree.yml with `checks` replaces the detected steps (and is always verifiable).
     const checks = approvedChecks(this.db, run.projectId);
     // Read before the check below, so checking and claiming `selfHealedRuns` stay in one tick.
-    const verifiable = Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
+    const verifiable =
+      Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
@@ -1217,17 +1293,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         fSettings.secretGuardGate && slopReport && !slopReport.secretGuardPassed,
       );
       const hasSlopViolation = Boolean(
-        fSettings.antiSlopGate &&
-          slopReport &&
-          slopReport.addedLinesAudited > 0 &&
-          !slopReport.passed,
+        fSettings.antiSlopGate && slopReport && slopReport.addedLinesAudited > 0 && !slopReport.passed,
       );
 
       const autoFix = Boolean(
         (hasSecretViolation || hasSlopViolation) &&
-          slopReport?.autoFixPrompt &&
-          !this.slopHealedRuns.has(run.id) &&
-          (!run.endedAt || run.resumable),
+        slopReport?.autoFixPrompt &&
+        !this.slopHealedRuns.has(run.id) &&
+        (!run.endedAt || run.resumable),
       );
       const secretNote = {
         secretLeakCount: slopReport?.secretLeakCount ?? 0,
@@ -1243,7 +1316,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
         if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', { autoFix: true, ...slopNote });
         await this.runs
-          .prompt(run.id, `${slopReport.autoFixPrompt}${this.completionReminder(run, '\n\n')}`, { automatic: true })
+          .prompt(run.id, `${slopReport.autoFixPrompt}${this.completionReminder(run, '\n\n')}`, {
+            automatic: true,
+          })
           .catch(() =>
             hasSecretViolation
               ? this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix: false })
@@ -1280,7 +1355,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         const criticNote = { followUpPrompt: holdText(criticRes.followUpPrompt) };
         this.runs.note(run.id, 'critic_blocked', { autoFix: true, ...criticNote });
         await this.runs
-          .prompt(run.id, `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`, { automatic: true })
+          .prompt(run.id, `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`, {
+            automatic: true,
+          })
           .catch(() => this.runs.note(run.id, 'critic_blocked', { autoFix: false, ...criticNote }));
         return;
       }
@@ -1309,7 +1386,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (!merged.ok && merged.autoFix) {
         if (await this.requestConflictResolution(run, merged.conflicts, merged.mainHead, projectRow)) return;
         // Undelivered: nobody is resolving it, so the hold is for a person after all.
-        this.runs.note(run.id, 'merge_failed', { summary: merged.summary, conflicts: merged.conflicts, autoFix: false });
+        this.runs.note(run.id, 'merge_failed', {
+          summary: merged.summary,
+          conflicts: merged.conflicts,
+          autoFix: false,
+        });
       }
     }
 
@@ -1332,9 +1413,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     //    continue it later instead of finding it cancelled.
     if (!run.endedAt && !reviewBlocked) {
       const held = mergeBlocked || this.pipelineOutcome(run.id) === 'held';
-      await (held
-        ? this.runs.closeHeldSession(run.id)
-        : this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' })
+      await (
+        held
+          ? this.runs.closeHeldSession(run.id)
+          : this.runs.stop(run.id, { source: 'system', reason: 'factory_step_finished' })
       ).catch(() => undefined);
     }
 
@@ -1404,7 +1486,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     run: Run,
     mainWorkspacePath: string,
     ticketKey: string | null,
-  ): Promise<{ ok: boolean; conflicts: string[]; summary: string; autoFix: boolean; mainHead: string | null }> {
+  ): Promise<{
+    ok: boolean;
+    conflicts: string[];
+    summary: string;
+    autoFix: boolean;
+    mainHead: string | null;
+  }> {
     const res = await syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
       mainWorkspacePath,
@@ -1501,7 +1589,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // prompt() resumes a session the idle sweep closed meanwhile (the checks can outlast its TTL).
       await this.runs.prompt(run.id, text, { automatic: true });
     } catch (error) {
-      this.runs.note(run.id, 'conflict_resolution_failed', { conflicts, message: error instanceof Error ? error.message : String(error) });
+      this.runs.note(run.id, 'conflict_resolution_failed', {
+        conflicts,
+        message: error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
     this.runs.note(run.id, 'conflict_resolution_requested', { conflicts, mainHead });
@@ -1579,7 +1670,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     try {
       // Includes the batch's own tickets: a skipped draft's dependents point at an earlier draft's key.
       const projectKeys = new Map<string, string>();
-      for (const r of this.db.select({ id: tickets.id, key: tickets.key }).from(tickets).where(eq(tickets.projectId, projectId)).all()) {
+      for (const r of this.db
+        .select({ id: tickets.id, key: tickets.key })
+        .from(tickets)
+        .where(eq(tickets.projectId, projectId))
+        .all()) {
         projectKeys.set(r.key.toUpperCase(), r.id);
       }
       const { edges, dropped } = resolveBatchDependencies(
@@ -1602,7 +1697,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .run();
       }
       const keyById = new Map<string, string>(created.map((c) => [c.ticket.id, c.ticket.key]));
-      for (const r of this.db.select({ id: tickets.id, key: tickets.key }).from(tickets).where(eq(tickets.projectId, projectId)).all()) {
+      for (const r of this.db
+        .select({ id: tickets.id, key: tickets.key })
+        .from(tickets)
+        .where(eq(tickets.projectId, projectId))
+        .all()) {
         keyById.set(r.id, r.key);
       }
       for (const d of dropped) {
@@ -1633,10 +1732,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Runs created for the project in the last 24 hours. */
   runsLast24h(projectId: string): number {
     const since = Date.now() - 24 * 60 * 60_000;
-    return this.runs.list().filter((r) => r.projectId === projectId && !r.predecessorRunId && Date.parse(r.createdAt) >= since).length;
+    return this.runs
+      .list()
+      .filter((r) => r.projectId === projectId && !r.predecessorRunId && Date.parse(r.createdAt) >= since)
+      .length;
   }
 
-  dailyBudgetExhausted(projectId: string, max = getFactorySettings(this.db).maxAutoRunsPerProjectPerDay): boolean {
+  dailyBudgetExhausted(
+    projectId: string,
+    max = getFactorySettings(this.db).maxAutoRunsPerProjectPerDay,
+  ): boolean {
     return max > 0 && this.runsLast24h(projectId) >= max;
   }
 
@@ -1657,7 +1762,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const now = new Date();
     const row = this.db.transaction((tx) => {
       const seqKey = ticketSeqKey(projectId);
-      const stored = tx.select({ value: settings.value }).from(settings).where(eq(settings.key, seqKey)).get()?.value;
+      const stored = tx
+        .select({ value: settings.value })
+        .from(settings)
+        .where(eq(settings.key, seqKey))
+        .get()?.value;
       // The highest number in use too: a project from before the sequence starts after its tickets.
       const last = tx
         .select({ n: max(tickets.number) })
@@ -1711,9 +1820,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const rows = this.db
       .select()
       .from(tickets)
-      .where(and(eq(tickets.projectId, projectId), eq(tickets.externalSource, source), inArray(tickets.externalId, externalIds)))
+      .where(
+        and(
+          eq(tickets.projectId, projectId),
+          eq(tickets.externalSource, source),
+          inArray(tickets.externalId, externalIds),
+        ),
+      )
       .all();
-    for (const [i, ticket] of this.withDependencies(rows).entries()) out.set(rows[i]!.externalId as string, ticket);
+    for (const [i, ticket] of this.withDependencies(rows).entries())
+      out.set(rows[i]!.externalId as string, ticket);
     return out;
   }
 
@@ -1748,11 +1864,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     status: 'backlog' | 'ready',
     { triage = false }: { triage?: boolean } = {},
   ): { created: Ticket[]; existing: Ticket[] } {
-    const mapped = issues.map((issue) => ({ issue, input: CreateTicketBodySchema.parse(mapIssueToTicket(issue, source, status)) }));
+    const mapped = issues.map((issue) => ({
+      issue,
+      input: CreateTicketBodySchema.parse(mapIssueToTicket(issue, source, status)),
+    }));
     const created: Ticket[] = [];
     const existing: Ticket[] = [];
     for (const { issue, input } of mapped) {
-      const link = (): Ticket | undefined => this.linkedTickets(projectId, source, [issue.externalId]).get(issue.externalId);
+      const link = (): Ticket | undefined =>
+        this.linkedTickets(projectId, source, [issue.externalId]).get(issue.externalId);
       const already = link();
       if (already) {
         existing.push(already);
@@ -1801,7 +1921,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     issues: { externalId: string; state: 'open' | 'closed'; labels: string[] }[],
     at = new Date(),
   ): Ticket[] {
-    const linked = this.linkedTickets(projectId, source, issues.map((i) => i.externalId));
+    const linked = this.linkedTickets(
+      projectId,
+      source,
+      issues.map((i) => i.externalId),
+    );
     const changed: string[] = [];
     for (const issue of issues) {
       const ticket = linked.get(issue.externalId);
@@ -1834,7 +1958,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const set: Partial<TicketRow> = { ...patch, updatedAt: new Date() };
     const reorderOnly =
       dependsOn === undefined &&
-      Object.entries(patch).every(([k, v]) => v === undefined || k === 'position' || (k === 'status' && v === current.status));
+      Object.entries(patch).every(
+        ([k, v]) => v === undefined || k === 'position' || (k === 'status' && v === current.status),
+      );
     if (byPerson && current.externalTriage && !reorderOnly) set.externalTriage = false;
     // Moved to another column without an explicit slot: append at the bottom.
     if (patch.status && patch.status !== current.status && patch.position === undefined) {
@@ -1844,7 +1970,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if ((patch.status && patch.status !== current.status) || (patch.title && patch.title !== current.title)) {
       this.publishDependents(id);
     }
-    if (patch.status && patch.status !== current.status) this.emit('moved', ticket, current.status as TicketStatus);
+    if (patch.status && patch.status !== current.status)
+      this.emit('moved', ticket, current.status as TicketStatus);
     // A person closed a ticket by hand: the tickets waiting for it may start now (the whole queue
     // when the factory already chains this project); a plain board move starts nothing else.
     if (patch.status === 'done' && current.status !== 'done') {
@@ -1882,7 +2009,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const siblings = this.db.select().from(tickets).where(eq(tickets.projectId, current.projectId)).all();
     const ids = new Set<string>();
     for (const ref of refs) {
-      const hit = siblings.find((t) => t.id === ref) ?? siblings.find((t) => t.key.toUpperCase() === ref.toUpperCase());
+      const hit =
+        siblings.find((t) => t.id === ref) ?? siblings.find((t) => t.key.toUpperCase() === ref.toUpperCase());
       if (!hit) throw new HttpError(400, 'unknown_dependency', `no ticket "${ref}" in this project`);
       ids.add(hit.id);
     }
@@ -1891,7 +2019,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     for (const dependsOnId of ids) {
       const edge = { ticketId: current.id, dependsOnId };
       if (wouldCreateCycle([...others, ...accepted], edge)) {
-        throw new HttpError(409, 'dependency_cycle', 'a ticket cannot depend on itself, directly or through other tickets');
+        throw new HttpError(
+          409,
+          'dependency_cycle',
+          'a ticket cannot depend on itself, directly or through other tickets',
+        );
       }
       accepted.push(edge);
     }
@@ -1899,7 +2031,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.db.transaction((tx) => {
       tx.delete(ticketDependencies).where(eq(ticketDependencies.ticketId, current.id)).run();
       if (accepted.length > 0) {
-        tx.insert(ticketDependencies).values(accepted.map((e) => ({ ...e, createdAt: now }))).run();
+        tx.insert(ticketDependencies)
+          .values(accepted.map((e) => ({ ...e, createdAt: now })))
+          .run();
       }
     });
   }
@@ -1917,7 +2051,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // A person removed an imported ticket: label sync must not bring the issue back.
       if (row.externalSource && row.externalId) {
         tx.insert(issueTombstones)
-          .values({ projectId: row.projectId, externalSource: row.externalSource, externalId: row.externalId, createdAt: new Date() })
+          .values({
+            projectId: row.projectId,
+            externalSource: row.externalSource,
+            externalId: row.externalId,
+            createdAt: new Date(),
+          })
           .onConflictDoNothing()
           .run();
       }
@@ -1952,8 +2091,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (this.startingTickets.has(id)) throw conflict('this ticket already has a running agent');
     const active = this.runs.activeRunForTicket(id);
     if (active) {
-      if (!opts.replaceIdleRun?.ids.includes(active.id)) throw conflict('this ticket already has a running agent');
-      if (active.state === 'rate_limited') throw conflict('the run is waiting for its quota — stop it or wait');
+      if (!opts.replaceIdleRun?.ids.includes(active.id))
+        throw conflict('this ticket already has a running agent');
+      if (active.state === 'rate_limited')
+        throw conflict('the run is waiting for its quota — stop it or wait');
       if (active.state !== 'done' && active.state !== 'waiting_input') {
         throw conflict('the run is still working — stop it or wait');
       }
@@ -1969,7 +2110,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
     this.startingTickets.add(id);
     try {
-      if (active && opts.replaceIdleRun) await this.runs.stop(active.id, { source: 'system', reason: opts.replaceIdleRun.reason });
+      if (active && opts.replaceIdleRun)
+        await this.runs.stop(active.id, { source: 'system', reason: opts.replaceIdleRun.reason });
       return await this.startUnguarded(ticket, input, opts.unattended, prompt);
     } finally {
       this.startingTickets.delete(id);
@@ -2046,7 +2188,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .from(tickets)
       .where(inArray(tickets.id, ticket.dependsOn))
       .all()
-      .flatMap((dep) => (dep.completion ? [{ key: dep.key, title: dep.title, completion: dep.completion }] : []));
+      .flatMap((dep) =>
+        dep.completion ? [{ key: dep.key, title: dep.title, completion: dep.completion }] : [],
+      );
     const room = Math.min(DEPENDENCY_SECTION_MAX, max - base.length - 2);
     const section = room > 0 ? dependencyContextSection(finished, room) : '';
     return section ? `${base}\n\n${section}` : base;
@@ -2087,7 +2231,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const row = this.row(id);
     const position = this.edgePosition(row.projectId, status, 'top');
     const ticket = this.publish(
-      this.db.update(tickets).set({ status, position, updatedAt: new Date() }).where(eq(tickets.id, id)).returning().get(),
+      this.db
+        .update(tickets)
+        .set({ status, position, updatedAt: new Date() })
+        .where(eq(tickets.id, id))
+        .returning()
+        .get(),
     );
     if (status !== row.status) this.publishDependents(id);
     if (status === 'done') this.failedInARow.delete(row.projectId);
@@ -2098,10 +2247,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private edgePosition(projectId: string, status: TicketStatus, edge: 'top' | 'bottom'): number {
     const where = and(eq(tickets.projectId, projectId), eq(tickets.status, status));
     if (edge === 'top') {
-      const first = this.db.select({ p: min(tickets.position) }).from(tickets).where(where).get();
+      const first = this.db
+        .select({ p: min(tickets.position) })
+        .from(tickets)
+        .where(where)
+        .get();
       return first?.p == null ? POSITION_STEP : first.p - POSITION_STEP;
     }
-    const last = this.db.select({ p: max(tickets.position) }).from(tickets).where(where).get();
+    const last = this.db
+      .select({ p: max(tickets.position) })
+      .from(tickets)
+      .where(where)
+      .get();
     return last?.p == null ? POSITION_STEP : last.p + POSITION_STEP;
   }
 

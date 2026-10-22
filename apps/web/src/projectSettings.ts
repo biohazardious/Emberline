@@ -13,12 +13,18 @@ import { ApiRequestError, errorMessage } from './api';
 export type GateChoice = 'inherit' | 'on' | 'off';
 
 export const GATE_LABELS: Record<ProjectGateKey, { label: string; hint: string }> = {
-  selfHealingBuildGate: { label: 'Self-healing build', hint: 'Build, lint and test before a run is merged; failures go back to the agent' },
+  selfHealingBuildGate: {
+    label: 'Self-healing build',
+    hint: 'Build, lint and test before a run is merged; failures go back to the agent',
+  },
   antiSlopGate: { label: 'Anti-slop audit', hint: 'Block placeholder code and leftover debug output' },
   secretGuardGate: { label: 'Secret guard', hint: 'Block a merge or commit that contains credentials' },
   crossProviderCritic: { label: 'Cross-provider critic', hint: 'A second agent reviews each finished run' },
   autoSyncToMain: { label: 'Auto-merge to main', hint: 'Merge a finished run into the main workspace' },
-  requireCompletionSignal: { label: 'Require completion signal', hint: 'A stop is not "done" unless the agent called ticket_complete' },
+  requireCompletionSignal: {
+    label: 'Require completion signal',
+    hint: 'A stop is not "done" unless the agent called ticket_complete',
+  },
 };
 
 export function gateChoice(overrides: ProjectGateOverrides, key: ProjectGateKey): GateChoice {
@@ -122,13 +128,17 @@ export function worktreeBanner(s: WorktreeConfigStatusResponse | undefined): Wor
 }
 
 /** Approve is offered once the person can see everything they approve: a truncated diff needs the full file open. */
-export function approveEnabled(banner: WorktreeBanner, view: { busy: boolean; fullFileShown: boolean }): boolean {
+export function approveEnabled(
+  banner: WorktreeBanner,
+  view: { busy: boolean; fullFileShown: boolean },
+): boolean {
   return banner.canApprove && !view.busy && (!banner.truncated || view.fullFileShown);
 }
 
 export const WORKTREE_TEMPLATE = 'version: 1\n';
 export const WORKTREE_SAVE_LABEL = 'Save and approve';
-export const WORKTREE_EDIT_HINT = 'Saving commits the file to main and approves it. Runs use it from their next start.';
+export const WORKTREE_EDIT_HINT =
+  'Saving commits the file to main and approves it. Runs use it from their next start.';
 export const WORKTREE_VALIDATE_DELAY_MS = 400;
 /** `/projects/:id/settings?edit=worktree` opens the editor. */
 export const WORKTREE_EDIT_PARAM = 'edit=worktree';
@@ -138,7 +148,9 @@ export function worktreeEditorStart(s: WorktreeConfigStatusResponse | undefined)
   content: string;
   baseSha256: string | null;
 } {
-  return s?.head ? { content: s.head.content, baseSha256: s.head.sha256 } : { content: WORKTREE_TEMPLATE, baseSha256: null };
+  return s?.head
+    ? { content: s.head.content, baseSha256: s.head.sha256 }
+    : { content: WORKTREE_TEMPLATE, baseSha256: null };
 }
 
 export function worktreeSaveEnabled(v: { errors: string[]; validating: boolean; busy: boolean }): boolean {
@@ -151,7 +163,10 @@ export function worktreeSaveFailure(err: unknown): { message: string; errors: st
     const errors = err.data.errors;
     return {
       message: err.message,
-      errors: err.status === 400 && Array.isArray(errors) ? errors.filter((e): e is string => typeof e === 'string') : [],
+      errors:
+        err.status === 400 && Array.isArray(errors)
+          ? errors.filter((e): e is string => typeof e === 'string')
+          : [],
       reload: err.status === 409,
     };
   }

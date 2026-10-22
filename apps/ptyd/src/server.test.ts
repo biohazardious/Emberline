@@ -34,7 +34,9 @@ function collect(client: PtydClient, sessionId: () => string) {
         const tick = () => {
           if (text.includes(needle)) return resolve();
           if (Date.now() - started > timeoutMs) {
-            return reject(new Error(`timed out waiting for ${JSON.stringify(needle)}; got ${JSON.stringify(text)}`));
+            return reject(
+              new Error(`timed out waiting for ${JSON.stringify(needle)}; got ${JSON.stringify(text)}`),
+            );
           }
           setTimeout(tick, 20);
         };
@@ -124,14 +126,21 @@ describe('ptyd', () => {
 
   it('settles a pending snapshot when the session is disposed (B21 guard)', async () => {
     const { PtySession } = await import('./session.js');
-    const session = new PtySession('b21', { file: 'sh', args: [], cwd: dir, env: {}, cols: 80, rows: 24, meta: {} }, {});
+    const session = new PtySession(
+      'b21',
+      { file: 'sh', args: [], cwd: dir, env: {}, cols: 80, rows: 24, meta: {} },
+      {},
+    );
     // The flush callback is asynchronous; disposing in the same tick used to drop it for good.
     const pending = session.snapshot().then(
       () => 'answered',
       () => 'rejected',
     );
     session.dispose();
-    const outcome = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('hung'), 2_000))]);
+    const outcome = await Promise.race([
+      pending,
+      new Promise((resolve) => setTimeout(() => resolve('hung'), 2_000)),
+    ]);
     expect(outcome).not.toBe('hung');
   });
 
@@ -191,12 +200,28 @@ describe('ptyd', () => {
       cwd: dir,
       env: { EXTRA: 'set' },
     });
-    expect(ok).toMatchObject({ exitCode: 4, stdout: `${dir}|set`, stderr: 'oops\n', timedOut: false, truncated: false });
+    expect(ok).toMatchObject({
+      exitCode: 4,
+      stdout: `${dir}|set`,
+      stderr: 'oops\n',
+      timedOut: false,
+      truncated: false,
+    });
 
-    const binary = await client.exec({ file: 'printf', args: ['\\377\\000\\001'], cwd: dir, encoding: 'base64' });
+    const binary = await client.exec({
+      file: 'printf',
+      args: ['\\377\\000\\001'],
+      cwd: dir,
+      encoding: 'base64',
+    });
     expect([...Buffer.from(binary.stdout, 'base64')]).toEqual([255, 0, 1]);
 
-    const capped = await client.exec({ file: 'sh', args: ['-c', 'yes | head -c 5000'], cwd: dir, maxOutputBytes: 100 });
+    const capped = await client.exec({
+      file: 'sh',
+      args: ['-c', 'yes | head -c 5000'],
+      cwd: dir,
+      maxOutputBytes: 100,
+    });
     expect(capped).toMatchObject({ truncated: true });
     expect(capped.stdout).toHaveLength(100);
 
@@ -233,7 +258,9 @@ describe('ptyd', () => {
 
     const missing = await client.exec({ file: 'definitely-not-a-binary', cwd: dir });
     expect(missing.exitCode).toBe(127);
-    await expect(client.exec({ file: 'true', cwd: path.join(dir, 'nope') })).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(client.exec({ file: 'true', cwd: path.join(dir, 'nope') })).rejects.toMatchObject({
+      code: 'bad_request',
+    });
     expect(await client.hello()).toEqual({ protocolVersion: PTYD_PROTOCOL_VERSION });
     // exec never creates a session.
     expect((await client.list()).sessions).toHaveLength(0);
@@ -278,7 +305,9 @@ describe('ptyd', () => {
     // An id in use is refused rather than shadowed.
     const first = client.exec({ file: 'sleep', args: ['5'], cwd: dir, execId: 'dup' });
     await new Promise((r) => setTimeout(r, 100));
-    await expect(client.exec({ file: 'true', cwd: dir, execId: 'dup' })).rejects.toMatchObject({ code: 'conflict' });
+    await expect(client.exec({ file: 'true', cwd: dir, execId: 'dup' })).rejects.toMatchObject({
+      code: 'conflict',
+    });
     await client.execCancel('dup');
     await first;
   });

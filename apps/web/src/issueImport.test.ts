@@ -61,14 +61,23 @@ describe('buildImportBody', () => {
 
 describe('issueListQuery', () => {
   it('encodes the filters and leaves out empty ones', () => {
-    expect(issueListQuery({ state: 'open', labels: ' bug, ui ', search: '', page: 1 })).toBe('state=open&labels=bug%2C+ui&page=1');
-    expect(issueListQuery({ state: 'all', labels: '', search: 'a&b', page: 2 })).toBe('state=all&search=a%26b&page=2');
+    expect(issueListQuery({ state: 'open', labels: ' bug, ui ', search: '', page: 1 })).toBe(
+      'state=open&labels=bug%2C+ui&page=1',
+    );
+    expect(issueListQuery({ state: 'all', labels: '', search: 'a&b', page: 2 })).toBe(
+      'state=all&search=a%26b&page=2',
+    );
   });
 });
 
 describe('parseTrustedAuthors', () => {
   it('splits on commas and lines, trims, drops empties and duplicates', () => {
-    expect(parseTrustedAuthors('alice, bob\n\n alice ,carol\r\ndave')).toEqual(['alice', 'bob', 'carol', 'dave']);
+    expect(parseTrustedAuthors('alice, bob\n\n alice ,carol\r\ndave')).toEqual([
+      'alice',
+      'bob',
+      'carol',
+      'dave',
+    ]);
     expect(parseTrustedAuthors('')).toEqual([]);
   });
 });
@@ -97,9 +106,19 @@ describe('describeImportResult', () => {
 
 describe('issueHref', () => {
   it('links http and https issue URLs only', () => {
-    expect(issueHref('https://github.com/acme/widget/issues/1')).toBe('https://github.com/acme/widget/issues/1');
+    expect(issueHref('https://github.com/acme/widget/issues/1')).toBe(
+      'https://github.com/acme/widget/issues/1',
+    );
     expect(issueHref('http://gitea.lan:3000/a/b/issues/2')).toBe('http://gitea.lan:3000/a/b/issues/2');
-    for (const bad of ['javascript:alert(1)', 'JavaScript:alert(1)', 'data:text/html,x', '', '/relative', 'not a url', ' javascript:x']) {
+    for (const bad of [
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      'data:text/html,x',
+      '',
+      '/relative',
+      'not a url',
+      ' javascript:x',
+    ]) {
       expect(issueHref(bad)).toBeNull();
     }
   });
@@ -108,16 +127,26 @@ describe('issueHref', () => {
 describe('describeSyncNow', () => {
   const at = (iso: string) => `T(${iso})`;
   it('reports the error of the pass when it failed', () => {
-    expect(describeSyncNow({ lastSyncAt: '2026-10-18T10:00:00Z', lastError: 'the forge redirected', pausedUntil: null }, at)).toEqual({
+    expect(
+      describeSyncNow(
+        { lastSyncAt: '2026-10-18T10:00:00Z', lastError: 'the forge redirected', pausedUntil: null },
+        at,
+      ),
+    ).toEqual({
       error: true,
       text: 'Sync failed: the forge redirected',
     });
   });
   it('names the sync time when it worked', () => {
-    expect(describeSyncNow({ lastSyncAt: '2026-10-18T10:00:00Z', lastError: null, pausedUntil: null }, at)).toEqual({
+    expect(
+      describeSyncNow({ lastSyncAt: '2026-10-18T10:00:00Z', lastError: null, pausedUntil: null }, at),
+    ).toEqual({
       error: false,
       text: 'Synced at T(2026-10-18T10:00:00Z).',
     });
-    expect(describeSyncNow({ lastSyncAt: null, lastError: null, pausedUntil: null }, at)).toEqual({ error: false, text: 'Sync finished.' });
+    expect(describeSyncNow({ lastSyncAt: null, lastError: null, pausedUntil: null }, at)).toEqual({
+      error: false,
+      text: 'Sync finished.',
+    });
   });
 });

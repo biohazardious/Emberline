@@ -24,7 +24,7 @@ export const DOCKER_PROMPT_PARAGRAPH =
   'An isolated Docker engine is available for this run (DOCKER_HOST is set). Use compose project name ' +
   '$EMBERLINE_COMPOSE_PROJECT (`docker compose -p "$EMBERLINE_COMPOSE_PROJECT" …`), don\'t publish fixed host ' +
   'ports, and stop what you started when you finish; Emberline wires previews and removes the project when the ' +
-  'worktree is pruned. Don\'t set `container_name` or a fixed volume or network `name:`: runs share this engine, ' +
+  "worktree is pruned. Don't set `container_name` or a fixed volume or network `name:`: runs share this engine, " +
   'and fixed names collide between them.';
 
 /**
@@ -36,7 +36,11 @@ export function composeProjectName(runId: string, worktreePath?: string): string
   let id8 = runId.slice(0, 8);
   if (worktreePath) {
     const owner = path.basename(worktreePath);
-    if (/^[0-9a-f]{8}$/i.test(owner) && path.basename(path.dirname(path.dirname(worktreePath))) === '.worktrees') id8 = owner;
+    if (
+      /^[0-9a-f]{8}$/i.test(owner) &&
+      path.basename(path.dirname(path.dirname(worktreePath))) === '.worktrees'
+    )
+      id8 = owner;
   }
   return `emberline-${id8.toLowerCase()}`;
 }
@@ -94,7 +98,13 @@ export class DockerEngine {
   ) {
     this.current = host
       ? { enabled: true, checked: false, available: false, version: null }
-      : { enabled: false, checked: false, available: false, version: null, reason: options.switchedOff ? 'switched_off' : 'not_configured' };
+      : {
+          enabled: false,
+          checked: false,
+          available: false,
+          version: null,
+          reason: options.switchedOff ? 'switched_off' : 'not_configured',
+        };
   }
 
   /**
@@ -169,7 +179,11 @@ export class DockerEngine {
 
   /** What the Docker CLI needs to reach the engine: its address and the client certificate. */
   private clientEnv(host: string): Record<string, string> {
-    return { DOCKER_HOST: host, DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: this.options.certPath ?? DEFAULT_DOCKER_CERT_PATH };
+    return {
+      DOCKER_HOST: host,
+      DOCKER_TLS_VERIFY: '1',
+      DOCKER_CERT_PATH: this.options.certPath ?? DEFAULT_DOCKER_CERT_PATH,
+    };
   }
 
   private async runProbe(host: string): Promise<DockerEngineStatus> {
@@ -177,7 +191,11 @@ export class DockerEngine {
     this.checkedAt = Date.now();
     const before = this.current;
     this.current = next;
-    if (before.available !== next.available || before.version !== next.version || before.error !== next.error) {
+    if (
+      before.available !== next.available ||
+      before.version !== next.version ||
+      before.error !== next.error
+    ) {
       this.options.onChange?.(this.status);
       for (const listener of this.listeners) listener(this.status);
     }
@@ -185,7 +203,13 @@ export class DockerEngine {
   }
 
   private async ask(host: string): Promise<DockerEngineStatus> {
-    const off = (error: string): DockerEngineStatus => ({ enabled: true, checked: true, available: false, version: null, error: clean(error) });
+    const off = (error: string): DockerEngineStatus => ({
+      enabled: true,
+      checked: true,
+      available: false,
+      version: null,
+      error: clean(error),
+    });
     try {
       const result = await (this.options.exec ?? execCommand)({
         file: 'docker',
@@ -198,7 +222,8 @@ export class DockerEngine {
         return off('the runner image has no Docker CLI; rebuild it (make up)');
       }
       if (result.timedOut) return off(`no answer from ${host} within ${PROBE_TIMEOUT_MS / 1000} s`);
-      if (result.exitCode !== 0) return off(result.stderr || result.stdout || `docker version exited with ${result.exitCode}`);
+      if (result.exitCode !== 0)
+        return off(result.stderr || result.stdout || `docker version exited with ${result.exitCode}`);
       let version: unknown;
       try {
         version = JSON.parse(result.stdout.trim());

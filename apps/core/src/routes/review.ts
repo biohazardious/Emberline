@@ -29,7 +29,8 @@ export function registerReviewRoutes(app: FastifyInstance, review: ReviewService
   );
   app.post<{ Params: { id: string } }>(
     '/api/runs/:id/review/request-changes',
-    async (request): Promise<RequestChangesResponse> => review.requestChanges(request.params.id, request.body),
+    async (request): Promise<RequestChangesResponse> =>
+      review.requestChanges(request.params.id, request.body),
   );
   app.post<{ Params: { id: string } }>(
     '/api/runs/:id/review/verify-carried',

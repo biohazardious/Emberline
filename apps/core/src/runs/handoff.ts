@@ -59,13 +59,26 @@ export function buildHandoffPrompt(input: HandoffPromptInput, max = Number.POSIT
     : `You are taking over a task from another agent, ${who}, which stopped: ${input.reason}. You are in the same worktree and branch it was working in.`;
   const tree = [input.gitStatus.trim(), input.diffStat.trim()].filter(Boolean).join('\n\n');
   // In prompt order; `rank` is the order in which they give way, `shorten` how.
-  const sections: { heading: string; body: string; rank: number; shorten: (text: string, max: number) => string }[] = [
-    { heading: '## Task', body: clip(task), rank: 0, shorten: clipText },
-  ];
+  const sections: {
+    heading: string;
+    body: string;
+    rank: number;
+    shorten: (text: string, max: number) => string;
+  }[] = [{ heading: '## Task', body: clip(task), rank: 0, shorten: clipText }];
   if (input.finalMessage?.trim()) {
-    sections.push({ heading: `## Last message from ${who}`, body: clip(input.finalMessage.trim()), rank: 1, shorten: clipText });
+    sections.push({
+      heading: `## Last message from ${who}`,
+      body: clip(input.finalMessage.trim()),
+      rank: 1,
+      shorten: clipText,
+    });
   }
-  sections.push({ heading: '## Worktree state', body: tree ? clip(tree) : 'No changes in the worktree yet.', rank: 3, shorten: clipText });
+  sections.push({
+    heading: '## Worktree state',
+    body: tree ? clip(tree) : 'No changes in the worktree yet.',
+    rank: 3,
+    shorten: clipText,
+  });
   if (input.recentTools.length > 0) {
     const body = input.recentTools.map((t) => `- ${t}`).join('\n');
     sections.push({ heading: '## Recent tool calls (oldest first)', body, rank: 2, shorten: clipStart });

@@ -37,7 +37,18 @@ describe('build output contracts', () => {
       hostArchiveDir: '/srv/ws/.emberline-outputs/p1',
       archiveDir: '/workspaces/.emberline-outputs/p1',
       runChain: null,
-      outputs: [output, { ...output, id: 'o2', ticketId: null, ticketKey: null, ticketTitle: null, persona: null, runExists: false }],
+      outputs: [
+        output,
+        {
+          ...output,
+          id: 'o2',
+          ticketId: null,
+          ticketKey: null,
+          ticketTitle: null,
+          persona: null,
+          runExists: false,
+        },
+      ],
     });
     expect(res.outputs).toHaveLength(2);
   });

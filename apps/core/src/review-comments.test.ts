@@ -55,7 +55,12 @@ async function ready(run: Run): Promise<void> {
     method: 'POST',
     url: '/api/internal/hooks',
     headers: { authorization: `Bearer ${readFileSync(file, 'utf8')}` },
-    payload: { runId: run.id, event: 'SessionStart', receivedAt: new Date().toISOString(), payload: { session_id: 's' } },
+    payload: {
+      runId: run.id,
+      event: 'SessionStart',
+      receivedAt: new Date().toISOString(),
+      payload: { session_id: 's' },
+    },
   });
   expect(res.json().state).toBe('waiting_input');
 }
@@ -107,7 +112,9 @@ describe('persistent code review', () => {
     const run = await startRun();
     const mark = (viewed: boolean, signature = 'modified:3:1') =>
       api('PUT', `/api/runs/${run.id}/review/viewed`, { filePath: 'src/app.ts', signature, viewed });
-    expect((await mark(true)).json().viewed).toMatchObject([{ filePath: 'src/app.ts', signature: 'modified:3:1' }]);
+    expect((await mark(true)).json().viewed).toMatchObject([
+      { filePath: 'src/app.ts', signature: 'modified:3:1' },
+    ]);
     expect((await mark(true, 'modified:5:1')).json().viewed).toMatchObject([{ signature: 'modified:5:1' }]);
     expect((await mark(false)).json().viewed).toEqual([]);
   });
@@ -118,7 +125,9 @@ describe('persistent code review', () => {
     const c: ReviewComment = (
       await api('POST', `/api/runs/${run.id}/review/comments`, { filePath: 'a.ts', line: 1, body: 'x' })
     ).json();
-    expect((await api('PATCH', `/api/runs/${other.id}/review/comments/${c.id}`, { body: 'y' })).statusCode).toBe(404);
+    expect(
+      (await api('PATCH', `/api/runs/${other.id}/review/comments/${c.id}`, { body: 'y' })).statusCode,
+    ).toBe(404);
     expect((await api('GET', '/api/runs/nope/review')).statusCode).toBe(404);
   });
 });

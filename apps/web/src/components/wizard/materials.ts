@@ -176,7 +176,8 @@ export const materialInfos = (materials: readonly WizardMaterial[]): ProjectMate
 /** Base64 in chunks (String.fromCharCode with 10 MB of arguments would overflow the stack). */
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);
 }
 
@@ -197,7 +198,8 @@ export async function encodeMaterials(materials: readonly WizardMaterial[]): Pro
   return out;
 }
 
-export const MATERIALS_TOO_LARGE_TEXT = 'The files are larger than the server accepts. If Emberline runs behind a proxy, raise its upload limit (nginx: client_max_body_size).';
+export const MATERIALS_TOO_LARGE_TEXT =
+  'The files are larger than the server accepts. If Emberline runs behind a proxy, raise its upload limit (nginx: client_max_body_size).';
 
 /** A create failure that belongs next to the Reference material area, or null. */
 export function materialsErrorMessage(err: unknown, filesSent: boolean): string | null {
@@ -211,7 +213,11 @@ export function materialsErrorMessage(err: unknown, filesSent: boolean): string 
 
 /** Core names the field a refusal is about; without it the files are meant. */
 export function materialsErrorField(err: unknown): 'files' | 'links' {
-  const field = err && typeof err === 'object' ? (err as { data?: { field?: unknown }; field?: unknown }).data?.field ?? (err as { field?: unknown }).field : undefined;
+  const field =
+    err && typeof err === 'object'
+      ? ((err as { data?: { field?: unknown }; field?: unknown }).data?.field ??
+        (err as { field?: unknown }).field)
+      : undefined;
   return field === 'links' ? 'links' : 'files';
 }
 
@@ -225,7 +231,8 @@ export const notKeptText = (names: readonly string[]): string =>
 /** What the summary says about where the files and links go. */
 export function summaryMaterialsNote(fileCount: number, linkCount: number): string {
   const files = 'The files are committed to docs/reference/ with the first commit.';
-  const links = 'The links are listed in PROJECT.md, which is committed too. Emberline never opens the links.';
+  const links =
+    'The links are listed in PROJECT.md, which is committed too. Emberline never opens the links.';
   return [fileCount > 0 ? files : '', linkCount > 0 ? links : ''].filter(Boolean).join(' ');
 }
 

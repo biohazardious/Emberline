@@ -7,7 +7,11 @@ export function presentRunId(slots: ReadonlyMap<PresenceSource, string>): string
 }
 
 /** Clears a slot only while it still holds `runId`, so a card that lost focus to another does not wipe the new owner. */
-export function clearSlotIfOwner(slots: Map<PresenceSource, string>, runId: string, source: PresenceSource): boolean {
+export function clearSlotIfOwner(
+  slots: Map<PresenceSource, string>,
+  runId: string,
+  source: PresenceSource,
+): boolean {
   if (slots.get(source) !== runId) return false;
   slots.delete(source);
   return true;

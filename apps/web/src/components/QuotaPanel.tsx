@@ -203,8 +203,11 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
         activeCount,
         doneCount,
         failedCount,
-        authenticated: auth?.authenticated ?? (providerId === 'claude' ? Boolean(usage?.authenticated) : true),
-        authLabel: auth?.label ?? (providerId === 'claude' ? formatClaudePlanLabel(usage) : `${entry.shortLabel} Ready`),
+        authenticated:
+          auth?.authenticated ?? (providerId === 'claude' ? Boolean(usage?.authenticated) : true),
+        authLabel:
+          auth?.label ??
+          (providerId === 'claude' ? formatClaudePlanLabel(usage) : `${entry.shortLabel} Ready`),
       };
     });
   }, [settingsPoll.data, runs, usage]);
@@ -284,7 +287,15 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
         gap: 14,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
         <div className="quota-main">
           <span className="quota-orb" aria-hidden="true" />
           {window ? (
@@ -303,13 +314,18 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
           )}
         </div>
 
-        <div className="quota-side" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div
+          className="quota-side"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+        >
           {usage && (
             <span
               className="badge mono"
               style={{
                 color: usage.authenticated ? 'var(--ok)' : 'var(--warn)',
-                borderColor: usage.authenticated ? 'color-mix(in srgb, var(--ok) 35%, transparent)' : 'var(--warn)',
+                borderColor: usage.authenticated
+                  ? 'color-mix(in srgb, var(--ok) 35%, transparent)'
+                  : 'var(--warn)',
               }}
             >
               ● {formatClaudePlanLabel(usage)} · OAuth {usage.authenticated ? 'ACTIVE' : 'INACTIVE'}
@@ -386,23 +402,24 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
               resetLabel={dateTimeShort}
               now={now}
             />
-            {usage.extraUsage && (usage.extraUsage.enabled || usage.extraUsage.limitUsd > 0 || usage.extraUsage.usedUsd > 0) && (
-              <LimitGauge
-                icon={<CreditCard className="icon" aria-hidden />}
-                title="Extra Usage Credits"
-                percent={Math.round(usage.extraUsage.utilizationPercent ?? 0)}
-                value={`$${usage.extraUsage.usedUsd.toFixed(2)}${usage.extraUsage.limitUsd > 0 ? ` / $${usage.extraUsage.limitUsd.toFixed(2)}` : ''}`}
-                remaining={`Monthly overflow (${Math.round(usage.extraUsage.utilizationPercent ?? 0)}%)`}
-                status={
-                  usage.extraUsage.enabled
-                    ? 'Active'
-                    : usage.extraUsage.disabledReason
-                      ? `Paused (${usage.extraUsage.disabledReason})`
-                      : 'Disabled'
-                }
-                now={now}
-              />
-            )}
+            {usage.extraUsage &&
+              (usage.extraUsage.enabled || usage.extraUsage.limitUsd > 0 || usage.extraUsage.usedUsd > 0) && (
+                <LimitGauge
+                  icon={<CreditCard className="icon" aria-hidden />}
+                  title="Extra Usage Credits"
+                  percent={Math.round(usage.extraUsage.utilizationPercent ?? 0)}
+                  value={`$${usage.extraUsage.usedUsd.toFixed(2)}${usage.extraUsage.limitUsd > 0 ? ` / $${usage.extraUsage.limitUsd.toFixed(2)}` : ''}`}
+                  remaining={`Monthly overflow (${Math.round(usage.extraUsage.utilizationPercent ?? 0)}%)`}
+                  status={
+                    usage.extraUsage.enabled
+                      ? 'Active'
+                      : usage.extraUsage.disabledReason
+                        ? `Paused (${usage.extraUsage.disabledReason})`
+                        : 'Disabled'
+                  }
+                  now={now}
+                />
+              )}
           </div>
 
           {/* Claude Code token consumption (from its transcripts) across 1h / 24h / 7d */}
@@ -440,8 +457,9 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
             <>
               <ProviderLimitsHeader id="antigravity" title="Antigravity" />
               <p className="muted small" style={{ margin: 0 }}>
-                The Antigravity CLI does not expose its quota, and Emberline does not query Google's quota service with
-                your login. When a run hits a limit, it shows at the top of this panel with its reset time.
+                The Antigravity CLI does not expose its quota, and Emberline does not query Google's quota
+                service with your login. When a run hits a limit, it shows at the top of this panel with its
+                reset time.
               </p>
             </>
           )}
@@ -480,7 +498,9 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
                   style={{
                     fontSize: '0.68rem',
                     color: p.authenticated ? 'var(--ok)' : 'var(--warn)',
-                    borderColor: p.authenticated ? 'color-mix(in srgb, var(--ok) 35%, transparent)' : 'var(--warn)',
+                    borderColor: p.authenticated
+                      ? 'color-mix(in srgb, var(--ok) 35%, transparent)'
+                      : 'var(--warn)',
                   }}
                 >
                   ● {p.authenticated ? 'READY' : 'UNCONFIGURED'}
@@ -519,4 +539,3 @@ export function QuotaPanel({ compact = false }: { compact?: boolean }) {
     </section>
   );
 }
-

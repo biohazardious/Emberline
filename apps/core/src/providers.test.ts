@@ -25,13 +25,17 @@ describe('provider adapters', () => {
   });
 
   it('builds Claude launches with hooks and secondary launches through the wrapper script', () => {
-    const claude = providerAdapter('claude').launch(ctx({ claude: { command: 'claude', playwrightMcp: false } }));
+    const claude = providerAdapter('claude').launch(
+      ctx({ claude: { command: 'claude', playwrightMcp: false } }),
+    );
     expect(claude.args).toContain('--settings');
     expect(claude.env.EMBERLINE_RUN_ID).toBe('run-1');
 
     const codex = providerAdapter('codex').launch(ctx());
     expect(codex.file).toBe('sh');
     expect(codex.env).toMatchObject({ EMBERLINE_RUN_ID: 'run-1', EMBERLINE_AUTO_APPROVE: '1' });
-    expect(providerAdapter('codex').launch(ctx({ permissionMode: 'acceptEdits' })).env.EMBERLINE_AUTO_APPROVE).toBe('0');
+    expect(
+      providerAdapter('codex').launch(ctx({ permissionMode: 'acceptEdits' })).env.EMBERLINE_AUTO_APPROVE,
+    ).toBe('0');
   });
 });

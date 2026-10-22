@@ -12,7 +12,10 @@ beforeEach(async () => {
   t = await createTestApp();
   headers = authHeaders(await setupAndLogin(t.app));
   for (const id of ['a', 'b']) {
-    t.db.insert(projects).values({ id, name: id, slug: id, path: `/tmp/${id}`, createdAt: new Date() }).run();
+    t.db
+      .insert(projects)
+      .values({ id, name: id, slug: id, path: `/tmp/${id}`, createdAt: new Date() })
+      .run();
   }
 });
 afterEach(async () => {
@@ -22,7 +25,9 @@ afterEach(async () => {
 const patch = (id: string, payload: Record<string, unknown>) =>
   t.app.inject({ method: 'PATCH', url: `/api/projects/${id}/settings`, headers, payload });
 const get = async (id: string) =>
-  (await t.app.inject({ method: 'GET', url: `/api/projects/${id}/settings`, headers })).json<ProjectSettingsResponse>();
+  (
+    await t.app.inject({ method: 'GET', url: `/api/projects/${id}/settings`, headers })
+  ).json<ProjectSettingsResponse>();
 
 describe('effective gates', () => {
   it('turns a gate off for one project only', async () => {
@@ -47,7 +52,9 @@ describe('effective gates', () => {
 
   it('keeps global-only settings global', async () => {
     await patch('a', { gates: { autoSyncToMain: false } });
-    expect(effectiveFactorySettings(t.db, 'a').maxTicketDepth).toBe(effectiveFactorySettings(t.db, 'b').maxTicketDepth);
+    expect(effectiveFactorySettings(t.db, 'a').maxTicketDepth).toBe(
+      effectiveFactorySettings(t.db, 'b').maxTicketDepth,
+    );
   });
 });
 

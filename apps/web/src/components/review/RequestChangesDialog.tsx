@@ -68,7 +68,9 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
       setError(errorMessage(e));
       setCanStartNew(chosen === 'same' && e instanceof ApiRequestError && e.data.canStartNew === true);
       setNeedsAutonomous(
-        e instanceof ApiRequestError && !permissionMode && (e.data.needsAutonomous === true || (chosen === 'new' && e.code === 'headless_needs_auto')),
+        e instanceof ApiRequestError &&
+          !permissionMode &&
+          (e.data.needsAutonomous === true || (chosen === 'new' && e.code === 'headless_needs_auto')),
       );
     } finally {
       setBusy(false);
@@ -123,18 +125,29 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
         <fieldset className="request-dialog-targets">
           <legend className="muted small">Send to</legend>
           <label>
-            <input type="radio" name="target" checked={target === 'same'} onChange={() => setTarget('same')} /> This run
+            <input
+              type="radio"
+              name="target"
+              checked={target === 'same'}
+              onChange={() => setTarget('same')}
+            />{' '}
+            This run
           </label>
           {targets.includes('new') && (
             <label>
-              <input type="radio" name="target" checked={target === 'new'} onChange={() => setTarget('new')} /> New run
-              from main
+              <input
+                type="radio"
+                name="target"
+                checked={target === 'new'}
+                onChange={() => setTarget('new')}
+              />{' '}
+              New run from main
             </label>
           )}
           {target === 'new' && (
             <p className="muted small">
-              The new run starts from main, so the earlier attempt is not in its worktree. These comments are carried
-              into its prompt and marked resolved here.
+              The new run starts from main, so the earlier attempt is not in its worktree. These comments are
+              carried into its prompt and marked resolved here.
             </p>
           )}
         </fieldset>
@@ -144,7 +157,12 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
             {needsAutonomous ? (
               <>
                 {' '}
-                <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void send('new', 'auto')}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy}
+                  onClick={() => void send('new', 'auto')}
+                >
                   Start a new run in Autonomous mode
                 </button>
               </>
@@ -152,7 +170,12 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
               canStartNew && (
                 <>
                   {' '}
-                  <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void send('new')}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={busy}
+                    onClick={() => void send('new')}
+                  >
                     Start a new run instead
                   </button>
                 </>
@@ -161,7 +184,12 @@ export function RequestChangesDialog({ comments, targets, onSend, onClose }: Pro
           </div>
         )}
         <div className="request-dialog-actions">
-          <button type="button" className="btn btn-primary" disabled={busy || empty} onClick={() => void send(target)}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || empty}
+            onClick={() => void send(target)}
+          >
             {busy ? 'Sending…' : 'Send'}
           </button>
           <button type="button" className="btn btn-ghost" onClick={onClose}>

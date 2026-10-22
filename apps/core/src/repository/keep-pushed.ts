@@ -66,7 +66,13 @@ export class KeepMainPushed {
     try {
       if (!readRepositorySettings(this.db, projectId).keepMainPushed) return;
       writeRepositorySettings(this.db, projectId, {
-        pendingMainPush: { id: randomUUID(), runId, commitOid, unverified, queuedAt: new Date().toISOString() },
+        pendingMainPush: {
+          id: randomUUID(),
+          runId,
+          commitOid,
+          unverified,
+          queuedAt: new Date().toISOString(),
+        },
       });
     } catch {
       return; // the project was deleted

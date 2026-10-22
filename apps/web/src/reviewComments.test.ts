@@ -74,7 +74,9 @@ describe('commentLocation', () => {
   it('shows the current line, the whole file, or the old line when outdated', () => {
     expect(commentLocation(comment({ line: 3, currentLine: 8 }))).toBe('L8');
     expect(commentLocation(comment({ line: null, currentLine: null }))).toBe('Whole file');
-    expect(commentLocation(comment({ line: 3, currentLine: null, outdated: true }))).toBe('Outdated (was L3)');
+    expect(commentLocation(comment({ line: 3, currentLine: null, outdated: true }))).toBe(
+      'Outdated (was L3)',
+    );
   });
 });
 
@@ -95,14 +97,21 @@ describe('blocking and counts', () => {
     comment({ id: 'd', priority: 'suggestion', status: 'sent', filePath: 'b.ts' }),
   ];
   it('takes the blocking count from the server, apart from what a new run carried', () => {
-    expect(blockingBanner({ blockingOpen: 3, carriedBlocking: null })).toEqual({ comments: 3, carried: null });
+    expect(blockingBanner({ blockingOpen: 3, carriedBlocking: null })).toEqual({
+      comments: 3,
+      carried: null,
+    });
     expect(blockingBanner({ blockingOpen: 3, carriedBlocking: { count: 2, fromRun: 'r0' } })).toEqual({
       comments: 1,
       carried: { count: 2, fromRun: 'r0' },
     });
     expect(blockingBanner(undefined)).toEqual({ comments: 0, carried: null });
-    expect(carriedMessage(1)).toBe("This run carries 1 blocking item from the previous attempt — check it's done");
-    expect(carriedMessage(2)).toBe("This run carries 2 blocking items from the previous attempt — check they're done");
+    expect(carriedMessage(1)).toBe(
+      "This run carries 1 blocking item from the previous attempt — check it's done",
+    );
+    expect(carriedMessage(2)).toBe(
+      "This run carries 2 blocking items from the previous attempt — check they're done",
+    );
   });
   it('counts open and blocking per file', () => {
     expect(fileCommentCounts(list, 'a.ts')).toEqual({ open: 2, blocking: 2 });
@@ -185,7 +194,9 @@ describe('comments on files no longer in the diff', () => {
 
 describe('a person merge of a run whose worktree is gone', () => {
   it('reads the ticket from a worktree_missing 409', () => {
-    expect(worktreeMissing(new ApiRequestError(409, 'worktree_missing', 'x', { ticketId: 't1' }))).toEqual({ ticketId: 't1' });
+    expect(worktreeMissing(new ApiRequestError(409, 'worktree_missing', 'x', { ticketId: 't1' }))).toEqual({
+      ticketId: 't1',
+    });
     expect(worktreeMissing(new ApiRequestError(409, 'worktree_missing', 'x'))).toEqual({ ticketId: null });
     expect(worktreeMissing(new ApiRequestError(409, 'review_blocked', 'x'))).toBeNull();
     expect(worktreeMissing(new Error('boom'))).toBeNull();
@@ -197,22 +208,26 @@ describe('mergeNowFailure', () => {
     expect(mergeNowFailure(new ApiRequestError(409, 'review_blocked', 'x', { blocking: 2 }), 'EL-3')).toBe(
       '2 blocking comments are open on EL-3, so it was not merged. Resolve them in Review first.',
     );
-    expect(mergeNowFailure(new ApiRequestError(409, 'worktree_missing', 'x', { ticketId: 't1' }), 'EL-3')).toBe(
-      "The worktree of EL-3's run is gone and its work isn't in main. Nothing was merged.",
-    );
+    expect(
+      mergeNowFailure(new ApiRequestError(409, 'worktree_missing', 'x', { ticketId: 't1' }), 'EL-3'),
+    ).toBe("The worktree of EL-3's run is gone and its work isn't in main. Nothing was merged.");
     expect(mergeNowFailure(new Error('boom'), 'EL-3')).toBe('Not merged: boom');
   });
 });
 
 describe('glyphHoverText', () => {
   it('escapes Markdown so a comment body is shown as plain text', () => {
-    const text = glyphHoverText(comment({ priority: 'blocking', body: '**bold** [link](http://x) `code` <b>x</b>\n# head' }));
+    const text = glyphHoverText(
+      comment({ priority: 'blocking', body: '**bold** [link](http://x) `code` <b>x</b>\n# head' }),
+    );
     expect(text).toBe(
       'blocking: \\*\\*bold\\*\\* \\[link\\]\\(http://x\\) \\`code\\` \\<b\\>x\\</b\\> \\# head',
     );
   });
   it('shortens long bodies', () => {
-    expect(glyphHoverText(comment({ body: 'x'.repeat(400) })).length).toBeLessThanOrEqual('important: '.length + 161);
+    expect(glyphHoverText(comment({ body: 'x'.repeat(400) })).length).toBeLessThanOrEqual(
+      'important: '.length + 161,
+    );
   });
 });
 

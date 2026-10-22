@@ -2,14 +2,23 @@
 import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { type BrowserViewportSnapshot, type BuildDemoResponse, type WorktreeChecks } from '@emberline/protocol';
+import {
+  type BrowserViewportSnapshot,
+  type BuildDemoResponse,
+  type WorktreeChecks,
+} from '@emberline/protocol';
 import { CommandFailedError, execCommand } from '../command-exec.js';
 import type { Db } from '../db/index.js';
 import { notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { readWorktreeBytes } from '../runs/git.js';
 import { approvedChecks, approvedSetup } from '../worktree-config/load.js';
-import { inlineCode, runWorktreeCommand, SETUP_TIMEOUT_MS, SETUP_TOTAL_MS } from '../worktree-config/lifecycle.js';
+import {
+  inlineCode,
+  runWorktreeCommand,
+  SETUP_TIMEOUT_MS,
+  SETUP_TOTAL_MS,
+} from '../worktree-config/lifecycle.js';
 import { buildStartCommit, recordDemoBuild } from './demo-builds.js';
 import {
   collectWorkspaceFiles,
@@ -64,9 +73,18 @@ const sh = (display: string, cwd: string, timeout: number, requires?: GateStep['
   requires,
 });
 
-const PLATFORMIO = { binary: 'pio', hint: 'Install it with `emberline-sdk install platformio`, then verify again.' };
-const FLUTTER = { binary: 'flutter', hint: 'Install it with `emberline-sdk install flutter`, then verify again.' };
-const JAVA = { binary: 'java', hint: 'Install the JDK and Android SDK with `emberline-sdk install android`, then verify again.' };
+const PLATFORMIO = {
+  binary: 'pio',
+  hint: 'Install it with `emberline-sdk install platformio`, then verify again.',
+};
+const FLUTTER = {
+  binary: 'flutter',
+  hint: 'Install it with `emberline-sdk install flutter`, then verify again.',
+};
+const JAVA = {
+  binary: 'java',
+  hint: 'Install the JDK and Android SDK with `emberline-sdk install android`, then verify again.',
+};
 const CARGO = { binary: 'cargo', hint: 'Rust ships with the runner image; rebuild the runner.' };
 const GO = { binary: 'go', hint: 'Go ships with the runner image; rebuild the runner.' };
 
@@ -95,7 +113,8 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   const ciEnv = { CI: 'true', FORCE_COLOR: '0' };
 
   if (has('package.json')) {
-    const pkgManager = has('pnpm-lock.yaml') || has('pnpm-workspace.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : 'npm';
+    const pkgManager =
+      has('pnpm-lock.yaml') || has('pnpm-workspace.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : 'npm';
     if (!has('node_modules')) {
       const installArgs = pkgManager === 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'];
       steps.push({
@@ -108,7 +127,8 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
     }
     // Unreadable (a FIFO, a link, over the cap): no scripts to run.
     const rawPkg = await readGateFile(workspacePath, 'package.json', PACKAGE_JSON_MAX);
-    const scripts = rawPkg === null ? {} : ((JSON.parse(rawPkg) as { scripts?: Record<string, string> }).scripts ?? {});
+    const scripts =
+      rawPkg === null ? {} : ((JSON.parse(rawPkg) as { scripts?: Record<string, string> }).scripts ?? {});
     const buildScriptName =
       typeof scripts.build === 'string'
         ? 'build'
@@ -126,7 +146,11 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
       env: ciEnv,
     });
     if (buildScriptName) steps.push(npmStep(['run', buildScriptName], 120_000));
-    if (typeof scripts.lint === 'string' && buildScriptName !== 'check' && !scripts.lint.includes('--watch')) {
+    if (
+      typeof scripts.lint === 'string' &&
+      buildScriptName !== 'check' &&
+      !scripts.lint.includes('--watch')
+    ) {
       steps.push(npmStep(['run', 'lint'], 90_000));
     }
     if (
@@ -135,7 +159,9 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
       !scripts.test.includes('--watch') &&
       buildScriptName !== 'check'
     ) {
-      steps.push(npmStep(scripts.test.trim() === 'vitest' ? ['run', 'test', '--', '--run'] : ['run', 'test'], 120_000));
+      steps.push(
+        npmStep(scripts.test.trim() === 'vitest' ? ['run', 'test', '--', '--run'] : ['run', 'test'], 120_000),
+      );
     }
   }
 
@@ -148,7 +174,8 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
     }
   }
   // Tauri's crate needs the frontend built first, so it comes after the npm steps.
-  if (has('src-tauri', 'Cargo.toml')) steps.push(sh('cargo check', path.join(workspacePath, 'src-tauri'), 900_000, CARGO));
+  if (has('src-tauri', 'Cargo.toml'))
+    steps.push(sh('cargo check', path.join(workspacePath, 'src-tauri'), 900_000, CARGO));
   if (has('Cargo.toml')) steps.push(sh('cargo check', workspacePath, 900_000, CARGO));
   if (has('go.mod')) steps.push(sh('go build ./... && go test ./...', workspacePath, 300_000, GO));
   if (has('pubspec.yaml')) {
@@ -157,7 +184,11 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
     if (has('test')) steps.push(sh('flutter test', workspacePath, 600_000, FLUTTER));
   } else {
     // Native Android, Capacitor and React Native projects; Flutter drives Gradle itself.
-    const gradleDir = has('gradlew') ? workspacePath : has('android', 'gradlew') ? path.join(workspacePath, 'android') : null;
+    const gradleDir = has('gradlew')
+      ? workspacePath
+      : has('android', 'gradlew')
+        ? path.join(workspacePath, 'android')
+        : null;
     if (gradleDir) {
       steps.push(sh('bash ./gradlew assembleDebug --no-daemon --console=plain', gradleDir, 1_800_000, JAVA));
     }
@@ -165,13 +196,30 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
   if (steps.length > 0) return steps;
 
   if (topFiles.some((f) => f.endsWith('.py'))) {
-    return [{ display: 'python3 -m compileall -q .', file: 'python3', args: ['-m', 'compileall', '-q', '.'], cwd: workspacePath, timeout: 60_000 }];
+    return [
+      {
+        display: 'python3 -m compileall -q .',
+        file: 'python3',
+        args: ['-m', 'compileall', '-q', '.'],
+        cwd: workspacePath,
+        timeout: 60_000,
+      },
+    ];
   }
   const shFiles = topFiles.filter((f) => f.endsWith('.sh'));
   if (shFiles.length > 0) {
-    return [{ display: `bash -n ${shFiles.join(' ')}`, file: 'bash', args: ['-n', ...shFiles], cwd: workspacePath, timeout: 30_000 }];
+    return [
+      {
+        display: `bash -n ${shFiles.join(' ')}`,
+        file: 'bash',
+        args: ['-n', ...shFiles],
+        cwd: workspacePath,
+        timeout: 30_000,
+      },
+    ];
   }
-  if (has('Makefile')) return [{ display: 'make', file: 'make', args: [], cwd: workspacePath, timeout: 120_000 }];
+  if (has('Makefile'))
+    return [{ display: 'make', file: 'make', args: [], cwd: workspacePath, timeout: 120_000 }];
   return [];
 }
 
@@ -180,7 +228,10 @@ export async function planGateSteps(workspacePath: string, topFiles: readonly st
  * target. package.json is read through a verified, capped descriptor (the workspace is
  * agent-writable: a FIFO or link there must not block or redirect core).
  */
-export async function hasVerifiableBuildTarget(workspacePath: string, checks?: WorktreeChecks | null): Promise<boolean> {
+export async function hasVerifiableBuildTarget(
+  workspacePath: string,
+  checks?: WorktreeChecks | null,
+): Promise<boolean> {
   if (checks && (checks.build || checks.lint || checks.test)) return true;
   const raw = await readWorktreeBytes(workspacePath, 'package.json', PACKAGE_JSON_MAX).catch(() => null);
   if (raw) {
@@ -233,7 +284,16 @@ export function checkSteps(
   return (['build', 'lint', 'test'] as const).flatMap((kind) => {
     const command = checks[kind];
     return command
-      ? [{ display: command, file: 'sh', args: ['-c', command], cwd: workspacePath, timeout: CHECK_TIMEOUT_MS, env: { CI: 'true', FORCE_COLOR: '0', ...env } }]
+      ? [
+          {
+            display: command,
+            file: 'sh',
+            args: ['-c', command],
+            cwd: workspacePath,
+            timeout: CHECK_TIMEOUT_MS,
+            env: { CI: 'true', FORCE_COLOR: '0', ...env },
+          },
+        ]
       : [];
   });
 }
@@ -253,16 +313,25 @@ export async function runApprovedSetup(
   const deadline = Date.now() + SETUP_TOTAL_MS;
   for (const command of setup) {
     const left = deadline - Date.now();
-    if (left <= 0) throw new Error(`Setup stopped after ${SETUP_TOTAL_MS / 60_000} min; not run: ${inlineCode(command)}`);
+    if (left <= 0)
+      throw new Error(`Setup stopped after ${SETUP_TOTAL_MS / 60_000} min; not run: ${inlineCode(command)}`);
     logs.push(`$ ${command}`);
-    const outcome = await runWorktreeCommand(command, workspacePath, Math.min(SETUP_TIMEOUT_MS, left), undefined, env);
+    const outcome = await runWorktreeCommand(
+      command,
+      workspacePath,
+      Math.min(SETUP_TIMEOUT_MS, left),
+      undefined,
+      env,
+    );
     if (!outcome.ok) {
       const how = outcome.timedOut
         ? `timed out after ${Math.round(outcome.timeoutMs / 60_000)} min`
         : outcome.exitCode === null
           ? 'did not finish'
           : `exit ${outcome.exitCode}`;
-      throw new Error(`Setup command ${inlineCode(command)} failed (${how}); the checks were not run.\n${outcome.tail}`);
+      throw new Error(
+        `Setup command ${inlineCode(command)} failed (${how}); the checks were not run.\n${outcome.tail}`,
+      );
     }
     if (outcome.tail) logs.push(outcome.tail);
   }
@@ -303,7 +372,11 @@ export async function buildWorkspaceDemo(params: BuildWorkspaceDemoParams): Prom
     if (!db) return runWorkspaceBuild(params);
     const commit = existsSync(params.workspacePath) ? await buildStartCommit(params.workspacePath) : null;
     const record = (ok: boolean) =>
-      recordDemoBuild(db, params.projectId, params.targetId, { commit, builtAt: new Date().toISOString(), ok });
+      recordDemoBuild(db, params.projectId, params.targetId, {
+        commit,
+        builtAt: new Date().toISOString(),
+        ok,
+      });
     let res: BuildDemoResponse;
     try {
       res = await runWorkspaceBuild(params);
@@ -372,7 +445,9 @@ async function runWorkspaceBuild(params: BuildWorkspaceDemoParams): Promise<Buil
     }
     const steps = approved.length > 0 ? approved : await planGateSteps(workspacePath, filesInfo.topFiles);
     if (steps.length === 0) {
-      logs.push(`Verified workspace structure (${filesInfo.fileCount} files, stack: ${inspection.detectedStack}).`);
+      logs.push(
+        `Verified workspace structure (${filesInfo.fileCount} files, stack: ${inspection.detectedStack}).`,
+      );
     }
     const checkedBinaries = new Set<string>();
     for (const step of steps) {
@@ -421,9 +496,7 @@ async function runWorkspaceBuild(params: BuildWorkspaceDemoParams): Promise<Buil
     targetId,
     demoEntryRelPath,
     demoUrl: demoEntryRelPath ? `/api/projects/${projectId}/demo/${targetId}/` : null,
-    output:
-      logs.join('\n').slice(-4000) ||
-      `Build & verification succeeded (${inspection.detectedStack}).`,
+    output: logs.join('\n').slice(-4000) || `Build & verification succeeded (${inspection.detectedStack}).`,
   };
 }
 
@@ -472,10 +545,18 @@ export async function serveWorkspaceDemoAsset(params: {
   const cleanSub = subPath.replace(/^\/+/, '');
   const requestedRel = cleanSub.length === 0 ? path.basename(entryAbs) : cleanSub;
   const resolvedAbs = path.resolve(demoRootDir, requestedRel);
-  const notFound = { status: 404, contentType: 'text/plain; charset=utf-8', body: `Asset not found: ${requestedRel}` };
+  const notFound = {
+    status: 404,
+    contentType: 'text/plain; charset=utf-8',
+    body: `Asset not found: ${requestedRel}`,
+  };
 
   // Dotfiles (.env, .git/...) are never part of a demo bundle.
-  if (requestedRel.split(/[\\/]/).some((segment) => segment.startsWith('.') && segment !== '.' && segment !== '..')) {
+  if (
+    requestedRel
+      .split(/[\\/]/)
+      .some((segment) => segment.startsWith('.') && segment !== '.' && segment !== '..')
+  ) {
     return notFound;
   }
 

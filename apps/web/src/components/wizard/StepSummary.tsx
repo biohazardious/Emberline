@@ -29,8 +29,7 @@ import {
 } from './wizardLogic';
 
 export type SummaryPreview =
-  | { kind: 'new'; data: ProjectPreviewResponse }
-  | { kind: 'adopt'; data: AdoptPreviewResponse };
+  { kind: 'new'; data: ProjectPreviewResponse } | { kind: 'adopt'; data: AdoptPreviewResponse };
 
 export interface PreviewState {
   /** The last preview that loaded; it may be for an older body while a new one loads. */
@@ -101,11 +100,19 @@ function PreviewTabs({ tabs }: { tabs: { id: string; label: string; content: str
   const onKey = (e: KeyboardEvent) => {
     const last = tabs.length - 1;
     const next =
-      e.key === 'ArrowRight' ? (index === last ? 0 : index + 1)
-      : e.key === 'ArrowLeft' ? (index === 0 ? last : index - 1)
-      : e.key === 'Home' ? 0
-      : e.key === 'End' ? last
-      : null;
+      e.key === 'ArrowRight'
+        ? index === last
+          ? 0
+          : index + 1
+        : e.key === 'ArrowLeft'
+          ? index === 0
+            ? last
+            : index - 1
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? last
+              : null;
     if (next === null) return;
     e.preventDefault();
     setSelected(next);
@@ -135,7 +142,13 @@ function PreviewTabs({ tabs }: { tabs: { id: string; label: string; content: str
           </button>
         ))}
       </div>
-      <pre id="wizard-tabpanel" role="tabpanel" aria-labelledby={`wizard-tab-${tab.id}`} tabIndex={0} className="wizard-file-preview mono">
+      <pre
+        id="wizard-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`wizard-tab-${tab.id}`}
+        tabIndex={0}
+        className="wizard-file-preview mono"
+      >
         {tab.content}
       </pre>
     </div>
@@ -159,7 +172,12 @@ function Group({
       <div className="wizard-sum-head">
         <h4 id={id}>{title}</h4>
         {editStep && (
-          <button type="button" className="btn btn-sm btn-ghost" aria-label={`Edit ${title.toLowerCase()}`} onClick={() => onEdit(editStep)}>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            aria-label={`Edit ${title.toLowerCase()}`}
+            onClick={() => onEdit(editStep)}
+          >
             Edit
           </button>
         )}
@@ -223,7 +241,9 @@ export function StepSummary({
       {imported ? (
         <Group title="Repository" editStep={null} onEdit={onEdit}>
           <Item label={state.source === 'import_folder' ? 'Folder' : 'Git URL'}>
-            <span className="mono">{state.source === 'import_folder' ? state.folder : state.repoUrl.trim()}</span>
+            <span className="mono">
+              {state.source === 'import_folder' ? state.folder : state.repoUrl.trim()}
+            </span>
           </Item>
           <Item label="Project name">{state.name.trim()}</Item>
           <Item label="Type">{type ?? 'Custom'}</Item>
@@ -233,9 +253,13 @@ export function StepSummary({
           <Item label="Name">{state.name.trim()}</Item>
           <Item label="Type">{type}</Item>
           <Item label="Preset">{preset?.label}</Item>
-          <Item label="Vision">{state.vision.trim() ? truncate(state.vision.trim()) : <span className="muted">None</span>}</Item>
+          <Item label="Vision">
+            {state.vision.trim() ? truncate(state.vision.trim()) : <span className="muted">None</span>}
+          </Item>
           {state.referenceDocs.trim() && (
-            <Item label="Reference docs">{state.referenceDocs.trim().length.toLocaleString()} characters</Item>
+            <Item label="Reference docs">
+              {state.referenceDocs.trim().length.toLocaleString()} characters
+            </Item>
           )}
         </Group>
       )}
@@ -244,7 +268,12 @@ export function StepSummary({
         <section className="wizard-sum-group" aria-labelledby="wizard-sum-material">
           <div className="wizard-sum-head">
             <h4 id="wizard-sum-material">Reference material</h4>
-            <button type="button" className="btn btn-sm btn-ghost" aria-label="Edit reference material" onClick={() => onEdit('type')}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              aria-label="Edit reference material"
+              onClick={() => onEdit('type')}
+            >
               Edit
             </button>
           </div>
@@ -278,7 +307,9 @@ export function StepSummary({
             <Item label="Default branch">
               <span className="mono">{state.defaultBranch.trim()}</span>
             </Item>
-            <Item label="Version policy">{VERSION_POLICIES.find((p) => p.id === state.versionPolicy)?.label}</Item>
+            <Item label="Version policy">
+              {VERSION_POLICIES.find((p) => p.id === state.versionPolicy)?.label}
+            </Item>
           </>
         )}
       </Group>
@@ -292,7 +323,11 @@ export function StepSummary({
         <Item label="Start mode">
           {`${imported ? 'Import' : 'Create'}${state.startFactory ? ' and start factory' : ' only'}`}
         </Item>
-        {imported && <Item label="Vision">{state.vision.trim() ? truncate(state.vision.trim()) : <span className="muted">None</span>}</Item>}
+        {imported && (
+          <Item label="Vision">
+            {state.vision.trim() ? truncate(state.vision.trim()) : <span className="muted">None</span>}
+          </Item>
+        )}
       </Group>
 
       <section className="wizard-sum-group" aria-labelledby="wizard-sum-tickets">
@@ -306,7 +341,9 @@ export function StepSummary({
               </li>
             </ul>
           ) : (
-            <p className="muted small">No tickets: an import gets no Bootstrap ticket, and the factory is not started.</p>
+            <p className="muted small">
+              No tickets: an import gets no Bootstrap ticket, and the factory is not started.
+            </p>
           )
         ) : data?.kind === 'new' ? (
           <ul className="wizard-tickets">
@@ -317,7 +354,10 @@ export function StepSummary({
                 {t.dependsOn.length > 0 && (
                   <span className="muted small">
                     {' '}
-                    · after {t.dependsOn.map((k) => data.data.tickets.find((x) => x.key === k)?.title ?? k).join(', ')}
+                    · after{' '}
+                    {t.dependsOn
+                      .map((k) => data.data.tickets.find((x) => x.key === k)?.title ?? k)
+                      .join(', ')}
                   </span>
                 )}
               </li>
@@ -337,14 +377,16 @@ export function StepSummary({
               if (detect.detected.files[f]) {
                 return (
                   <li key={f}>
-                    <span className="mono">{path}</span> <span className="muted small">· in the repository, kept as is</span>
+                    <span className="mono">{path}</span>{' '}
+                    <span className="muted small">· in the repository, kept as is</span>
                   </li>
                 );
               }
               if (!writable.includes(f)) {
                 return (
                   <li key={f}>
-                    <span className="mono">{path}</span> <span className="muted small">· missing; nothing to suggest</span>
+                    <span className="mono">{path}</span>{' '}
+                    <span className="muted small">· missing; nothing to suggest</span>
                   </li>
                 );
               }
@@ -364,13 +406,15 @@ export function StepSummary({
               );
             })}
           </ul>
-          {detect.detected.files.agentsMd && <p className="muted small">AGENTS.md is in the repository and stays as is.</p>}
+          {detect.detected.files.agentsMd && (
+            <p className="muted small">AGENTS.md is in the repository and stays as is.</p>
+          )}
 
           {own && (
             <div className="wizard-own-yml">
               <p className="small">
-                The repository has its own <span className="mono">.emberline/worktree.yml</span>. Its commands run in the
-                runner for every run worktree, so they apply only when you approve them.
+                The repository has its own <span className="mono">.emberline/worktree.yml</span>. Its commands
+                run in the runner for every run worktree, so they apply only when you approve them.
               </p>
               {own.errors.length > 0 && (
                 <ul className="worktree-review-errors" role="alert">
@@ -379,10 +423,22 @@ export function StepSummary({
                   ))}
                 </ul>
               )}
-              {own.notCommitted && <p className="muted small">It is not committed in HEAD, so it cannot be approved: commit it and import again.</p>}
-              {own.workingTreeDiffers && <p className="muted small">The working tree differs from HEAD; this is HEAD&apos;s version.</p>}
+              {own.notCommitted && (
+                <p className="muted small">
+                  It is not committed in HEAD, so it cannot be approved: commit it and import again.
+                </p>
+              )}
+              {own.workingTreeDiffers && (
+                <p className="muted small">
+                  The working tree differs from HEAD; this is HEAD&apos;s version.
+                </p>
+              )}
               {own.content !== null && (
-                <pre className="worktree-review-diff mono" tabIndex={0} aria-label="The repository's worktree.yml">
+                <pre
+                  className="worktree-review-diff mono"
+                  tabIndex={0}
+                  aria-label="The repository's worktree.yml"
+                >
                   {own.content}
                 </pre>
               )}
@@ -410,8 +466,8 @@ export function StepSummary({
               data.data.commitMessage ? (
                 <>
                   <strong>Commit</strong>
-                  The ticked files are committed on the checked-out branch as “{data.data.commitMessage}”. It is a local
-                  commit, never pushed. Runs branch from HEAD, so they see the files.
+                  The ticked files are committed on the checked-out branch as “{data.data.commitMessage}”. It
+                  is a local commit, never pushed. Runs branch from HEAD, so they see the files.
                 </>
               ) : (
                 <>Nothing is written or committed.</>
@@ -450,7 +506,11 @@ export function StepSummary({
           Couldn&apos;t build the preview: {preview.error}
         </p>
       )}
-      {preview.loading && !data && <p className="muted small" role="status">Building the preview…</p>}
+      {preview.loading && !data && (
+        <p className="muted small" role="status">
+          Building the preview…
+        </p>
+      )}
       <PreviewTabs tabs={preview.error ? [] : tabs} />
     </div>
   );

@@ -135,7 +135,12 @@ export async function saveWorktreeConfig(
     });
   }
   return withMainWorkspaceLock(project.path, async () => {
-    if (!(await lstat(path.join(project.path, '.git')).then(() => true, () => false))) {
+    if (
+      !(await lstat(path.join(project.path, '.git')).then(
+        () => true,
+        () => false,
+      ))
+    ) {
       throw conflict(
         'The project folder is not a git repository, so the file cannot be committed. Run git init in the folder, then save again.',
         WORKTREE_CONFIG_CODES.notGitRepo,

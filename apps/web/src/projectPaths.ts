@@ -26,7 +26,12 @@ export function resolveActiveProjectId(
 /** The active project from the URL, this browser, and the server's choice; `remember` is false for a fallback after a failed server read. */
 export function resolveActiveProject(
   projectIds: readonly string[],
-  c: { fromUrl: string | null; stored: string | null; server: string | null | undefined; serverFailed: boolean },
+  c: {
+    fromUrl: string | null;
+    stored: string | null;
+    server: string | null | undefined;
+    serverFailed: boolean;
+  },
 ): { id: string | null | undefined; remember: boolean } {
   if (c.serverFailed && c.server === undefined) {
     const local = resolveActiveProjectId(projectIds, { ...c, server: null });

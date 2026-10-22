@@ -69,8 +69,15 @@ function WorktreeReviewBody({
       )}
       {banner.truncated && banner.fullFile !== null && (
         <>
-          <p className="muted small">The diff is too long to show whole. Review HEAD&apos;s full file before you approve it.</p>
-          <button type="button" className="btn btn-sm" aria-expanded={fullFileShown} onClick={() => setFullFileShown((v) => !v)}>
+          <p className="muted small">
+            The diff is too long to show whole. Review HEAD&apos;s full file before you approve it.
+          </p>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-expanded={fullFileShown}
+            onClick={() => setFullFileShown((v) => !v)}
+          >
             {fullFileShown ? 'Hide full file' : 'Show full file'}
           </button>
           {fullFileShown && (
@@ -97,7 +104,9 @@ function WorktreeReviewBody({
         {!banner.canApprove && banner.errors.length > 0 && (
           <span className="muted">Fix the errors in the repository, then review again.</span>
         )}
-        {banner.canApprove && banner.truncated && !fullFileShown && <span className="muted">Open the full file to approve.</span>}
+        {banner.canApprove && banner.truncated && !fullFileShown && (
+          <span className="muted">Open the full file to approve.</span>
+        )}
       </div>
     </div>
   );
@@ -151,12 +160,7 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
       <div className="worktree-banner-head">
         <strong>{banner.title}</strong>
         <Link href={`/projects/${project.id}/settings`}>Project settings</Link>
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
+        <button type="button" className="btn btn-sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           {open ? 'Hide' : 'Review'}
         </button>
         {bannerOffersEdit(banner) && worktreeEditAvailable(status.data) && !editing && (
@@ -165,7 +169,9 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
           </button>
         )}
       </div>
-      {editing && worktreeEditAvailable(status.data) && <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />}
+      {editing && worktreeEditAvailable(status.data) && (
+        <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />
+      )}
       {open && !editing && <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />}
     </section>
   );
@@ -208,7 +214,8 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
         <div>
           <h2 id="project-settings-title">Project settings · {project.name}</h2>
           <p className="muted">
-            Gates for this project&apos;s runs. Inherit follows the global setting, including later changes to it.
+            Gates for this project&apos;s runs. Inherit follows the global setting, including later changes to
+            it.
           </p>
         </div>
       </header>
@@ -253,14 +260,20 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
       <div className="worktree-heading">
         <h3>worktree.yml</h3>
         {!editing && (
-          <button type="button" className="btn btn-sm" disabled={!worktreeEditAvailable(status.data)} onClick={() => setEditing(true)}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!worktreeEditAvailable(status.data)}
+            onClick={() => setEditing(true)}
+          >
             Edit
           </button>
         )}
       </div>
       {status.error !== undefined && status.data && (
         <p className="muted" role="alert">
-          Couldn&apos;t refresh the worktree.yml status ({errorMessage(status.error)}); showing the last state.
+          Couldn&apos;t refresh the worktree.yml status ({errorMessage(status.error)}); showing the last
+          state.
         </p>
       )}
       {editing && worktreeEditAvailable(status.data) ? (

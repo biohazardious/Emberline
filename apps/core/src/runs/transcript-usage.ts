@@ -66,7 +66,12 @@ export function readTranscriptUsage(filePath: string, root = TRANSCRIPTS_ROOT): 
 
     let entry = cache.get(real);
     if (!entry || entry.ino !== stat.ino || stat.size < entry.offset) {
-      entry = { ino: stat.ino, offset: 0, carry: '', usage: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 } };
+      entry = {
+        ino: stat.ino,
+        offset: 0,
+        carry: '',
+        usage: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
+      };
       cache.set(real, entry);
     }
     if (stat.size > entry.offset) {

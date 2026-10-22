@@ -67,10 +67,7 @@ export function PersonaBadge({
   const id = persona ?? 'coder';
   const meta = PERSONA_BY_ID[id] ?? PERSONA_BY_ID.coder;
   return (
-    <span
-      className={`badge persona-badge persona-${meta.id} mono`}
-      title={meta.hint}
-    >
+    <span className={`badge persona-badge persona-${meta.id} mono`} title={meta.hint}>
       {showFull ? meta.label : meta.shortLabel}
     </span>
   );
@@ -104,11 +101,7 @@ export function PersonaPicker({
   );
 }
 
-export function TaskTemplateBar({
-  onSelect,
-}: {
-  onSelect: (template: TaskTemplate) => void;
-}) {
+export function TaskTemplateBar({ onSelect }: { onSelect: (template: TaskTemplate) => void }) {
   const templates = useApi<TaskTemplate[]>('/api/factory/templates', 60_000);
   const list = templates.data ?? [];
   if (list.length === 0) return null;

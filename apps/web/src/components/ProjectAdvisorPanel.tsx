@@ -1,10 +1,4 @@
-import type {
-  AgentPersona,
-  Project,
-  ProjectRecommendation,
-  Run,
-  Ticket,
-} from '@emberline/protocol';
+import type { AgentPersona, Project, ProjectRecommendation, Run, Ticket } from '@emberline/protocol';
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -91,7 +85,10 @@ export function ProjectAdvisorPanel({
       <header className="panel-head" style={{ flexWrap: 'wrap', gap: '10px' }}>
         <div>
           <p className="eyebrow">AI Coding Factory · Active Workspace</p>
-          <h2 id="advisor-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <h2
+            id="advisor-title"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}
+          >
             <span>{project.name}</span>
             <span className="badge mono">{project.appType.replace('_', ' ')}</span>
             {stackBadges.map((item) => (
@@ -101,7 +98,8 @@ export function ProjectAdvisorPanel({
             ))}
           </h2>
           <p className="muted">
-            {project.description || `Guided recommendations and specialist agent personas for ${project.name}.`}
+            {project.description ||
+              `Guided recommendations and specialist agent personas for ${project.name}.`}
           </p>
         </div>
         <div className="actions">
@@ -178,7 +176,15 @@ export function ProjectAdvisorPanel({
             }}
           >
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '6px',
+                  marginBottom: '6px',
+                }}
+              >
                 <PersonaBadge persona={rec.persona} showFull />
                 <span className="badge badge-soft mono">{rec.priority} priority</span>
               </div>

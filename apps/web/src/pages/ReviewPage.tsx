@@ -6,13 +6,7 @@ import { api, errorMessage } from '../api';
 import { ReviewView } from '../components/ReviewView';
 import { RunStatePill } from '../components/RunStatePill';
 
-export function ReviewPage({
-  id,
-  onInspectRun,
-}: {
-  id: string;
-  onInspectRun?: (runId: string) => void;
-}) {
+export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (runId: string) => void }) {
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,18 +51,19 @@ export function ReviewPage({
               ← Board
             </Link>
           )}
-          <RunStatePill state={run.state} cancelled={run.cancelled} autoRetry={run.autoRetry} handedOffTo={run.handedOffTo} />
-          <strong style={{ fontSize: '0.88rem' }}>
-            {run.title ?? run.prompt.slice(0, 72)}
-          </strong>
+          <RunStatePill
+            state={run.state}
+            cancelled={run.cancelled}
+            autoRetry={run.autoRetry}
+            handedOffTo={run.handedOffTo}
+          />
+          <strong style={{ fontSize: '0.88rem' }}>{run.title ?? run.prompt.slice(0, 72)}</strong>
           {run.branch && (
             <span className="badge badge-soft mono">
               <GitBranch className="icon" aria-hidden /> {run.branch}
             </span>
           )}
-          {run.worktreePath && (
-            <span className="mono muted small">{run.worktreePath}</span>
-          )}
+          {run.worktreePath && <span className="mono muted small">{run.worktreePath}</span>}
         </div>
 
         <div className="review-toolbar-group">
@@ -78,11 +73,7 @@ export function ReviewPage({
             </Link>
           )}
           {onInspectRun && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => onInspectRun(run.id)}
-            >
+            <button type="button" className="btn btn-sm" onClick={() => onInspectRun(run.id)}>
               Dock Live Terminal
             </button>
           )}

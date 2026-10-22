@@ -40,7 +40,9 @@ export function ImportProgress({
   /** The project is gone; `failure` when a Try again could not register it again. */
   onCancelled: (failure?: { message: string; onName: boolean }) => void;
 }) {
-  const [phase, setPhase] = useState<Phase>(source === 'import_url' ? { kind: 'cloning', tail: '', note: null } : { kind: 'detecting' });
+  const [phase, setPhase] = useState<Phase>(
+    source === 'import_url' ? { kind: 'cloning', tail: '', note: null } : { kind: 'detecting' },
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   const alive = useRef(true);
   const terminalId = useRef<string | null>(null);
@@ -192,7 +194,12 @@ export function ImportProgress({
 
   return (
     <div className="wizard-step">
-      <p ref={statusRef} tabIndex={-1} className={failed ? 'form-error' : 'wizard-status'} role={failed ? 'alert' : 'status'}>
+      <p
+        ref={statusRef}
+        tabIndex={-1}
+        className={failed ? 'form-error' : 'wizard-status'}
+        role={failed ? 'alert' : 'status'}
+      >
         {status}
       </p>
       {phase.kind === 'cloning' && phase.note && <p className="muted small">{phase.note}</p>}
@@ -209,7 +216,13 @@ export function ImportProgress({
       {(failed || phase.kind === 'cloning') && (
         <div className="actions">
           {failed && (
-            <button ref={retryRef} type="button" className="btn btn-sm btn-primary" data-autofocus="" onClick={() => void retry()}>
+            <button
+              ref={retryRef}
+              type="button"
+              className="btn btn-sm btn-primary"
+              data-autofocus=""
+              onClick={() => void retry()}
+            >
               Try again
             </button>
           )}

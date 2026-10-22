@@ -111,7 +111,11 @@ export class PtydClient extends EventEmitter<ClientEvents> {
           clearTimeout(timer);
           fn(value);
         };
-      this.pending.set(id, { method, resolve: settle(resolve as (value: unknown) => void), reject: settle(reject) });
+      this.pending.set(id, {
+        method,
+        resolve: settle(resolve as (value: unknown) => void),
+        reject: settle(reject),
+      });
       this.socket.write(encodeFrame({ type: 'request', id, method, params }));
     });
   }

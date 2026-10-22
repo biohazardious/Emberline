@@ -14,7 +14,11 @@ export const Credential = z.enum(['login', 'api_key', 'credits']);
 export type Credential = z.infer<typeof Credential>;
 
 /** One step of a persona's fallback chain. */
-export const Route = z.object({ agent: AgentId, model: AgentModelId, credential: Credential.default('login') });
+export const Route = z.object({
+  agent: AgentId,
+  model: AgentModelId,
+  credential: Credential.default('login'),
+});
 export type Route = z.infer<typeof Route>;
 
 export const QuotaPolicyChoice = z.enum(['wait', 'fallback']);

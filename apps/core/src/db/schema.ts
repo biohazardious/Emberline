@@ -1,6 +1,15 @@
 import type { Route, TicketCompletion } from '@emberline/protocol';
 import { sql } from 'drizzle-orm';
-import { customType, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  customType,
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 import { openSecret, sealSecret } from '../secrets/box.js';
 
 /** Free-form key/value settings (JSON values). */
@@ -196,7 +205,10 @@ export const runs = sqliteTable(
     /** `login` (the CLI's sign-in) or `api_key` (the key from Settings). */
     credential: text('credential').notNull().default('login'),
     /** Fallback chain snapshot taken at enqueue (`Route[]`); `[]` on legacy rows. */
-    routes: text('routes', { mode: 'json' }).$type<Route[]>().notNull().default(sql`'[]'`),
+    routes: text('routes', { mode: 'json' })
+      .$type<Route[]>()
+      .notNull()
+      .default(sql`'[]'`),
     /** Index into `routes` of the route this run uses. */
     routeIndex: integer('route_index').notNull().default(0),
     /** Run this one took over from after a quota handoff. */
@@ -223,9 +235,13 @@ export const runEvents = sqliteTable(
     state: text('state'),
     payload: text('payload', { mode: 'json' }).$type<unknown>(),
   },
-  (t) => [index('run_events_run_idx').on(t.runId, t.id), index('run_events_type_run_idx').on(t.type, t.runId),
+  (t) => [
+    index('run_events_run_idx').on(t.runId, t.id),
+    index('run_events_type_run_idx').on(t.type, t.runId),
     // State-changing events only: the bounds behind run attention read these, not every hook event.
-    index('run_events_state_idx').on(t.runId, t.id).where(sql`${t.state} IS NOT NULL`),
+    index('run_events_state_idx')
+      .on(t.runId, t.id)
+      .where(sql`${t.state} IS NOT NULL`),
   ],
 );
 
@@ -276,7 +292,6 @@ export const scheduledJobs = sqliteTable(
   },
   (t) => [index('scheduled_jobs_project_idx').on(t.projectId)],
 );
-
 
 /** Persistent line comments on a run's diff (Phase 4 code review). */
 export const reviewComments = sqliteTable(
@@ -331,11 +346,18 @@ export const reviewFileViews = sqliteTable(
 export const ticketDependencies = sqliteTable(
   'ticket_dependencies',
   {
-    ticketId: text('ticket_id').notNull().references(() => tickets.id, { onDelete: 'cascade' }),
-    dependsOnId: text('depends_on_id').notNull().references(() => tickets.id, { onDelete: 'cascade' }),
+    ticketId: text('ticket_id')
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
+    dependsOnId: text('depends_on_id')
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
-  (t) => [primaryKey({ columns: [t.ticketId, t.dependsOnId] }), index('ticket_dependencies_depends_on_idx').on(t.dependsOnId)],
+  (t) => [
+    primaryKey({ columns: [t.ticketId, t.dependsOnId] }),
+    index('ticket_dependencies_depends_on_idx').on(t.dependsOnId),
+  ],
 );
 
 /** Archived run deliverables (APKs, installers, firmware). Rows outlive their run on purpose, so `runId` has no foreign key. */

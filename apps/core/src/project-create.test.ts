@@ -57,16 +57,15 @@ afterEach(async () => {
 
 const preview = (payload: CreateProjectBody) =>
   t.app.inject({ method: 'POST', url: '/api/projects/preview', headers, payload });
-const create = (payload: CreateProjectBody) => t.app.inject({ method: 'POST', url: '/api/projects', headers, payload });
+const create = (payload: CreateProjectBody) =>
+  t.app.inject({ method: 'POST', url: '/api/projects', headers, payload });
 const read = (p: string, rel: string) => readFileSync(path.join(p, rel), 'utf8');
 const ticketsOf = (projectId: string): Ticket[] => t.tickets.list(projectId);
 
 function filesOnDisk(root: string, dir = ''): string[] {
   return readdirSync(path.join(root, dir), { withFileTypes: true })
     .filter((e) => e.name !== '.git')
-    .flatMap((e) =>
-      e.isDirectory() ? filesOnDisk(root, path.join(dir, e.name)) : [path.join(dir, e.name)],
-    )
+    .flatMap((e) => (e.isDirectory() ? filesOnDisk(root, path.join(dir, e.name)) : [path.join(dir, e.name)]))
     .sort();
 }
 
@@ -119,7 +118,9 @@ describe('repoUrl in responses', () => {
       })
       .run();
     const res = await t.app.inject({ method: 'GET', url: '/api/projects', headers: { cookie } });
-    expect(res.json().find((p: { id: string }) => p.id === 'p9').repoUrl).toBe('https://github.example/o/r.git');
+    expect(res.json().find((p: { id: string }) => p.id === 'p9').repoUrl).toBe(
+      'https://github.example/o/r.git',
+    );
     expect(res.body).not.toContain('ghp_SECRET');
   });
 });
@@ -134,9 +135,24 @@ describe('generators', () => {
       name: 'X',
       appType: 'web_saas',
       description: 'd',
-      choices: { frontend: 'react-vite', backend: 'none', database: 'agent', auth: { other: 'SSO' }, deploy: 'vercel' },
+      choices: {
+        frontend: 'react-vite',
+        backend: 'none',
+        database: 'agent',
+        auth: { other: 'SSO' },
+        deploy: 'vercel',
+      },
     });
-    for (const label of ['Frontend', 'Backend', 'Database', 'Authentication', 'Deploy target', 'Language', 'Styling', 'Testing']) {
+    for (const label of [
+      'Frontend',
+      'Backend',
+      'Database',
+      'Authentication',
+      'Deploy target',
+      'Language',
+      'Styling',
+      'Testing',
+    ]) {
       expect(md).toContain(label);
     }
     expect(md).toContain('React + Vite');
@@ -173,7 +189,16 @@ describe('generators', () => {
     const full = sectionOf('fullstack');
     expect(full).toMatch(/vision/i);
     expect(full).toMatch(/one-line reason/i);
-    for (const label of ['Frontend', 'Backend', 'Database', 'Authentication', 'Deploy target', 'Language & runtime', 'Styling', 'Testing']) {
+    for (const label of [
+      'Frontend',
+      'Backend',
+      'Database',
+      'Authentication',
+      'Deploy target',
+      'Language & runtime',
+      'Styling',
+      'Testing',
+    ]) {
       expect(full, label).toContain(`- ${label}:`);
     }
     // a static site has no backend option, so Auto marks it none instead of leaving it open
@@ -183,7 +208,11 @@ describe('generators', () => {
   });
 
   it('a stack with no command hints gives a minimal worktree.yml that passes the strict schema', () => {
-    for (const choices of [{}, { ...getPreset('auto-fullstack')!.choices }, { frontend: 'agent', backend: 'none' }]) {
+    for (const choices of [
+      {},
+      { ...getPreset('auto-fullstack')!.choices },
+      { frontend: 'agent', backend: 'none' },
+    ]) {
       const yml = generateWorktreeYml(choices, undefined);
       expect(yml.trim().split('\n').pop()).toBe('version: 1');
       const parsed = parseWorktreeYml(yml);
@@ -194,7 +223,8 @@ describe('generators', () => {
         expect(parsed.config.checks).toEqual({});
       }
     }
-    for (const preset of PRESETS) expect(parseWorktreeYml(generateWorktreeYml({}, preset)).ok, preset.id).toBe(true);
+    for (const preset of PRESETS)
+      expect(parseWorktreeYml(generateWorktreeYml({}, preset)).ok, preset.id).toBe(true);
   });
 
   it('the static-plain starter is three small files', () => {
@@ -225,7 +255,10 @@ describe('worktree.yml hints', () => {
   });
 
   it('language hints are only a per-key fallback; testing wins for test', () => {
-    const yml = generateWorktreeYml({ language: 'go', frontend: 'agent', backend: 'fastify', testing: 'pytest' }, undefined);
+    const yml = generateWorktreeYml(
+      { language: 'go', frontend: 'agent', backend: 'fastify', testing: 'pytest' },
+      undefined,
+    );
     expect(yml).toContain('test: "pytest"');
     expect(yml).toContain('build: "pnpm build"');
     expect(yml).not.toContain('go build');
@@ -236,26 +269,32 @@ describe('worktree.yml hints', () => {
     expect(fallback).toContain('lint: "go vet ./..."');
   });
 
-  it.each(PRESETS.map((p) => [p.id, p] as const))('no check of %s joins a language hint with a framework hint', (_id, preset) => {
-    const yml = generateWorktreeYml({}, preset);
-    const lang = typeof preset.choices.language === 'string' ? findOption('language', preset.choices.language)?.worktree : undefined;
-    for (const key of ['build', 'lint', 'test'] as const) {
-      const value = new RegExp(`^ {2}${key}: (.*)$`, 'm').exec(yml)?.[1];
-      if (!value) continue;
-      const parts = (JSON.parse(value) as string).split(' && ');
-      const frameworkParts = new Set(
-        FRAMEWORK_DIMS.flatMap((d) => {
-          const c = preset.choices[d];
-          const h = typeof c === 'string' ? findOption(d, c)?.worktree?.[key] : undefined;
-          return h ? [h] : [];
-        }),
-      );
-      const langHint = lang?.[key];
-      if (langHint && !frameworkParts.has(langHint)) {
-        expect(parts.length === 1 || !parts.includes(langHint), `${preset.id} ${key}: ${value}`).toBe(true);
+  it.each(PRESETS.map((p) => [p.id, p] as const))(
+    'no check of %s joins a language hint with a framework hint',
+    (_id, preset) => {
+      const yml = generateWorktreeYml({}, preset);
+      const lang =
+        typeof preset.choices.language === 'string'
+          ? findOption('language', preset.choices.language)?.worktree
+          : undefined;
+      for (const key of ['build', 'lint', 'test'] as const) {
+        const value = new RegExp(`^ {2}${key}: (.*)$`, 'm').exec(yml)?.[1];
+        if (!value) continue;
+        const parts = (JSON.parse(value) as string).split(' && ');
+        const frameworkParts = new Set(
+          FRAMEWORK_DIMS.flatMap((d) => {
+            const c = preset.choices[d];
+            const h = typeof c === 'string' ? findOption(d, c)?.worktree?.[key] : undefined;
+            return h ? [h] : [];
+          }),
+        );
+        const langHint = lang?.[key];
+        if (langHint && !frameworkParts.has(langHint)) {
+          expect(parts.length === 1 || !parts.includes(langHint), `${preset.id} ${key}: ${value}`).toBe(true);
+        }
       }
-    }
-  });
+    },
+  );
 
   it.each(PRESETS.map((p) => [p.id, p] as const))('setup of %s is manifest-guarded', (_id, preset) => {
     const yml = generateWorktreeYml({}, preset);
@@ -273,7 +312,9 @@ describe('worktree.yml hints', () => {
     expect(yml).toContain('build: "pnpm build"');
     const go = generateWorktreeYml({ backend: 'go-http' }, undefined);
     expect(go).toContain('"[ ! -f go.mod ] || go mod download"');
-    expect(generateWorktreeYml({ frontend: 'flutter' }, undefined)).toContain('"[ ! -f pubspec.yaml ] || flutter pub get"');
+    expect(generateWorktreeYml({ frontend: 'flutter' }, undefined)).toContain(
+      '"[ ! -f pubspec.yaml ] || flutter pub get"',
+    );
   });
 
   it('the Bootstrap ticket tells the agent to satisfy, not edit, the checks', async () => {
@@ -311,8 +352,14 @@ describe('Auto preset', () => {
       ...AUTO,
       name: 'Filled Auto',
       choices: {
-        language: 'javascript', frontend: 'plain-html', backend: 'none', database: 'none',
-        auth: 'none', deploy: 'static-hosting', styling: 'plain-css', testing: 'none',
+        language: 'javascript',
+        frontend: 'plain-html',
+        backend: 'none',
+        database: 'none',
+        auth: 'none',
+        deploy: 'static-hosting',
+        styling: 'plain-css',
+        testing: 'none',
       },
     } as const;
     const { project } = (await create(filled)).json() as CreateProjectResponse;
@@ -324,7 +371,9 @@ describe('Auto preset', () => {
 
   it('caps the vision quoted in the Bootstrap ticket at 2000 characters', async () => {
     const long = `${'A cafe site with a menu. '.repeat(100)}END-MARKER`;
-    const { project } = (await create({ ...AUTO, name: 'Long Vision', vision: long })).json() as CreateProjectResponse;
+    const { project } = (
+      await create({ ...AUTO, name: 'Long Vision', vision: long })
+    ).json() as CreateProjectResponse;
     const body = ticketsOf(project.id).find((x) => x.title.startsWith('Bootstrap'))?.body ?? '';
     const quoted = body.split('### Vision')[1]?.split('## What to do')[0] ?? '';
     expect(quoted).not.toContain('END-MARKER');
@@ -338,7 +387,11 @@ describe('Auto preset', () => {
     const { project } = res.json() as CreateProjectResponse;
     const yml = read(project.path, '.emberline/worktree.yml');
     expect(parseWorktreeYml(yml).ok).toBe(true);
-    const row = t.db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+    const row = t.db
+      .select()
+      .from(projectWorktreeConfig)
+      .where(eq(projectWorktreeConfig.projectId, project.id))
+      .get();
     expect(row?.content).toBe(yml);
     expect(row?.sha256).toBe(createHash('sha256').update(yml).digest('hex'));
     expect(row?.approvedBy).toBe('wizard');
@@ -348,7 +401,11 @@ describe('Auto preset', () => {
   it('refuses Auto, or three primary dimensions left to the agent, without a 20-character vision', async () => {
     expect((await preview({ ...AUTO, vision: '  too short  ' })).statusCode).toBe(400);
     expect((await create({ ...AUTO, vision: undefined })).statusCode).toBe(400);
-    const open3 = { ...STATIC, vision: 'short', choices: { frontend: 'agent', backend: 'agent', database: 'agent' } } as const;
+    const open3 = {
+      ...STATIC,
+      vision: 'short',
+      choices: { frontend: 'agent', backend: 'agent', database: 'agent' },
+    } as const;
     expect((await preview(open3)).statusCode).toBe(400);
     expect((await preview({ ...open3, vision: AUTO.vision })).statusCode).toBe(200);
     expect((await preview(AUTO)).statusCode).toBe(200);
@@ -392,7 +449,10 @@ describe('POST /api/projects/preview', () => {
     const wrongType = await preview({ ...STATIC, choices: { frontend: 'react-vite' } });
     expect(wrongType.statusCode).toBe(400);
     expect(wrongType.json().message).toContain('frontend');
-    expect((await preview({ ...STATIC, choices: { database: 'none', auth: 'agent', deploy: { other: 'rsync' } } })).statusCode).toBe(200);
+    expect(
+      (await preview({ ...STATIC, choices: { database: 'none', auth: 'agent', deploy: { other: 'rsync' } } }))
+        .statusCode,
+    ).toBe(200);
   });
 });
 
@@ -435,9 +495,22 @@ describe('create v2 behaviour', () => {
   it('commits the files and stores the generated worktree.yml as approved', async () => {
     const { project } = (await create(STATIC)).json() as CreateProjectResponse;
     const { execFileSync } = await import('node:child_process');
-    const tracked = execFileSync('git', ['ls-files'], { cwd: project.path, encoding: 'utf8' }).split('\n').filter(Boolean);
-    expect(tracked.sort()).toEqual(['.emberline/worktree.yml', 'CLAUDE.md', 'PROJECT.md', 'index.html', 'script.js', 'styles.css']);
-    const row = t.db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+    const tracked = execFileSync('git', ['ls-files'], { cwd: project.path, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean);
+    expect(tracked.sort()).toEqual([
+      '.emberline/worktree.yml',
+      'CLAUDE.md',
+      'PROJECT.md',
+      'index.html',
+      'script.js',
+      'styles.css',
+    ]);
+    const row = t.db
+      .select()
+      .from(projectWorktreeConfig)
+      .where(eq(projectWorktreeConfig.projectId, project.id))
+      .get();
     const yml = read(project.path, '.emberline/worktree.yml');
     expect(row?.content).toBe(yml);
     expect(row?.sha256).toBe(createHash('sha256').update(yml).digest('hex'));
@@ -446,15 +519,23 @@ describe('create v2 behaviour', () => {
   });
 
   it('stores the wizard gates in project_settings', async () => {
-    const { project } = (await create({ ...STATIC, gates: { secretGuardGate: true, antiSlopGate: false } })).json() as CreateProjectResponse;
-    expect(readProjectSettings(t.db, project.id).gates).toEqual({ secretGuardGate: true, antiSlopGate: false });
+    const { project } = (
+      await create({ ...STATIC, gates: { secretGuardGate: true, antiSlopGate: false } })
+    ).json() as CreateProjectResponse;
+    expect(readProjectSettings(t.db, project.id).gates).toEqual({
+      secretGuardGate: true,
+      antiSlopGate: false,
+    });
     const { project: p2 } = (await create({ ...STATIC, name: 'Other Site' })).json() as CreateProjectResponse;
     expect(readProjectSettings(t.db, p2.id).gates).toBeUndefined();
   });
 
   it('serves the static starter through the demo path', async () => {
     const { project } = (await create(STATIC)).json() as CreateProjectResponse;
-    const redirect = await t.app.inject({ url: `/api/projects/${project.id}/demo/main/`, headers: { cookie } });
+    const redirect = await t.app.inject({
+      url: `/api/projects/${project.id}/demo/main/`,
+      headers: { cookie },
+    });
     expect(redirect.statusCode).toBe(302);
     const base = String(redirect.headers.location);
     const html = await t.app.inject({ url: base });
@@ -509,7 +590,13 @@ describe('create v2 behaviour', () => {
   });
 
   it('keeps old payloads working: no Bootstrap ticket, no worktree config, old starter tickets', async () => {
-    const res = await create({ name: 'Legacy', mode: 'wizard', appType: 'web_saas', description: 'old', seedStarterTickets: true });
+    const res = await create({
+      name: 'Legacy',
+      mode: 'wizard',
+      appType: 'web_saas',
+      description: 'old',
+      seedStarterTickets: true,
+    });
     expect(res.statusCode).toBe(201);
     const { project } = res.json() as CreateProjectResponse;
     const list = ticketsOf(project.id);
@@ -631,12 +718,18 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
     for (const preset of PRESETS.filter((p) => p.choices.deploy === 'docker-compose')) {
       const parsed = parseWorktreeYml(generateWorktreeYml({}, preset, { dockerEngine: true }));
       expect(parsed.ok, preset.id).toBe(true);
-      if (parsed.ok) expect(parsed.config.services.filter((s) => s.preview).map((s) => s.name), preset.id).toEqual(['container']);
+      if (parsed.ok)
+        expect(
+          parsed.config.services.filter((s) => s.preview).map((s) => s.name),
+          preset.id,
+        ).toEqual(['container']);
     }
   });
 
   const deployBody = (dockerEngine: boolean, body: CreateProjectBody = COMPOSE_WEB) =>
-    planNewProject(CreateProjectBodySchema.parse(body), { dockerEngine }).tickets.find((x) => x.key === 'deploy')?.body ?? '';
+    planNewProject(CreateProjectBodySchema.parse(body), { dockerEngine }).tickets.find(
+      (x) => x.key === 'deploy',
+    )?.body ?? '';
 
   it('without material, the Docker Compose Deploy ticket does not mention .dockerignore', () => {
     expect(deployBody(true)).not.toContain('.dockerignore');
@@ -663,9 +756,9 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
 
   it('other deploy targets get no Container preview step', () => {
     for (const dockerEngine of [true, false]) {
-      expect(deployBody(dockerEngine, { ...COMPOSE_WEB, choices: { ...COMPOSE_WEB.choices, deploy: 'vercel' } })).not.toContain(
-        'Container preview',
-      );
+      expect(
+        deployBody(dockerEngine, { ...COMPOSE_WEB, choices: { ...COMPOSE_WEB.choices, deploy: 'vercel' } }),
+      ).not.toContain('Container preview');
     }
   });
 
@@ -692,7 +785,14 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
           }),
           { dockerEngine },
         );
-        const texts = [plan.projectMd, plan.claudeMd, plan.worktreeYml, ...Object.values(plan.starter), ...plan.tickets.map((x) => x.body), ...plan.notes];
+        const texts = [
+          plan.projectMd,
+          plan.claudeMd,
+          plan.worktreeYml,
+          ...Object.values(plan.starter),
+          ...plan.tickets.map((x) => x.body),
+          ...plan.notes,
+        ];
         for (const text of texts) {
           expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(containerName);
           for (const re of hostPorts) expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(re);
@@ -711,7 +811,14 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
       headers = authHeaders(cookie);
       setCommandExecutor(async (request) =>
         request.file === 'docker' && request.args[0] === 'version'
-          ? { exitCode: engine.up ? 0 : 1, signal: null, stdout: engine.up ? '"29.8.2"\n' : '', stderr: engine.up ? '' : 'Cannot connect', timedOut: false, truncated: false }
+          ? {
+              exitCode: engine.up ? 0 : 1,
+              signal: null,
+              stdout: engine.up ? '"29.8.2"\n' : '',
+              stderr: engine.up ? '' : 'Cannot connect',
+              timedOut: false,
+              truncated: false,
+            }
           : localCommandExecutor(request),
       );
     });
@@ -726,7 +833,11 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
       const { project } = res.json() as CreateProjectResponse;
       const onDisk = read(project.path, '.emberline/worktree.yml');
       expect(onDisk).toBe(body.worktreeYml);
-      const approved = t.db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+      const approved = t.db
+        .select()
+        .from(projectWorktreeConfig)
+        .where(eq(projectWorktreeConfig.projectId, project.id))
+        .get();
       expect(approved?.content).toBe(onDisk);
       // The Deploy ticket tells the agent what the preview expects from compose.yaml.
       const deploy = ticketsOf(project.id).find((x) => x.title.startsWith('Deploy'))?.body ?? '';
@@ -753,14 +864,17 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
 
   it('the summary note says why the engine is missing, and waits for it only while it is on', () => {
     const off = { enabled: false, checked: false, available: false, version: null } as const;
-    const note = (engine: DockerEngineStatus) => planNewProject(CreateProjectBodySchema.parse(COMPOSE_WEB), { engine }).notes.join(' ');
+    const note = (engine: DockerEngineStatus) =>
+      planNewProject(CreateProjectBodySchema.parse(COMPOSE_WEB), { engine }).notes.join(' ');
     const switchedOff = note({ ...off, reason: 'switched_off' });
     expect(switchedOff).toContain(DOCKER_ENGINE_OFF_TEXT);
     expect(switchedOff).not.toContain('Until it answers');
     const notConfigured = note({ ...off, reason: 'not_configured' });
     expect(notConfigured).toContain(DOCKER_ENGINE_NOT_CONFIGURED_TEXT);
     expect(notConfigured).not.toContain('EMBERLINE_DOCKER_ENGINE=0 in .env');
-    expect(note({ enabled: true, checked: true, available: false, version: null, error: 'refused' })).toContain('Until it answers');
+    expect(
+      note({ enabled: true, checked: true, available: false, version: null, error: 'refused' }),
+    ).toContain('Until it answers');
   });
 });
 
@@ -800,7 +914,13 @@ describe('wizard ticket roles', () => {
   });
 
   it('an old-payload project has no wizardTickets', async () => {
-    const res = await create({ name: 'Legacy', mode: 'wizard', appType: 'web_saas', description: 'old', seedStarterTickets: true });
+    const res = await create({
+      name: 'Legacy',
+      mode: 'wizard',
+      appType: 'web_saas',
+      description: 'old',
+      seedStarterTickets: true,
+    });
     const { project } = res.json() as CreateProjectResponse;
     expect(readWizardTickets(t.db, project.id)).toBeNull();
   });

