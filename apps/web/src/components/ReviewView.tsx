@@ -30,6 +30,7 @@ import type {
 } from '@emberline/protocol';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { FORGE_ACCOUNTS_HREF } from '../forgeAccounts';
 import {
   blockingBanner,
   blockingMessage,
@@ -40,7 +41,6 @@ import {
   requestTargets,
   viewedState,
 } from '../reviewComments';
-import { FORGE_ACCOUNTS_HREF } from '../forgeAccounts';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
 import { MonacoDiff } from './MonacoDiff';
 import { CommentChip, commentChipId } from './review/CommentChip';

@@ -3,6 +3,7 @@ import {
   FORGE_DEFAULT_SERVER_URL,
   type ForgeAccount,
   type ForgeProvider,
+  type UpdateForgeAccountBody,
 } from '@emberline/protocol';
 
 export const PROVIDER_LABEL: Record<ForgeProvider, string> = {
@@ -49,4 +50,18 @@ export function accountHost(a: Pick<ForgeAccount, 'serverUrl'>): string {
 export function accountUserLine(a: Pick<ForgeAccount, 'username' | 'source'>): string {
   const user = a.username ? `Signed in as ${a.username}` : 'Not checked yet';
   return a.source === 'environment' ? `${user} · from environment` : user;
+}
+
+/** The PATCH body for a new token; a blank token is never sent (core would keep the old one silently). */
+export function replaceTokenBody(token: string): { body: UpdateForgeAccountBody } | { error: string } {
+  const trimmed = token.trim();
+  return trimmed ? { body: { token: trimmed } } : { error: 'Paste the new token.' };
+}
+
+/** A core message as a sentence: first letter capital, ends with a full stop. */
+export function asSentence(message: string): string {
+  const text = message.trim();
+  if (!text) return text;
+  const capital = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 }

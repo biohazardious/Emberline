@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   accountHost,
   accountUserLine,
+  asSentence,
   createAccountBody,
   isPlainHttpServer,
+  replaceTokenBody,
   serverAfterProviderChange,
 } from './forgeAccounts';
 
@@ -53,5 +55,21 @@ describe('account lines', () => {
     expect(accountUserLine({ username: 'octo', source: 'environment' })).toBe(
       'Signed in as octo · from environment',
     );
+  });
+});
+
+describe('replaceTokenBody', () => {
+  it('trims, and refuses a blank token', () => {
+    expect(replaceTokenBody(' new ')).toEqual({ body: { token: 'new' } });
+    expect(replaceTokenBody('  ')).toEqual({ error: 'Paste the new token.' });
+  });
+});
+
+describe('asSentence', () => {
+  it('capitalises and ends with a full stop', () => {
+    expect(asSentence('the forge did not answer within 30 seconds')).toBe(
+      'The forge did not answer within 30 seconds.',
+    );
+    expect(asSentence('Already fine.')).toBe('Already fine.');
   });
 });

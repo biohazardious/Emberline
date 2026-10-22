@@ -4938,6 +4938,24 @@ dialog.cmd-dialog::backdrop {
   padding: 8px 10px;
 }
 
+.forge-account-token {
+  display: flex;
+  flex: 1 0 100%;
+  gap: 8px;
+}
+
+.forge-account-token .input {
+  flex: 1;
+}
+
+.forge-account-feedback {
+  flex: 1 0 100%;
+}
+
+.forge-account-feedback:empty {
+  display: none;
+}
+
 .forge-account-row .mono {
   overflow-wrap: anywhere;
 }
