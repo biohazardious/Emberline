@@ -103,13 +103,22 @@ export function parsePortRange(raw: string): PortRange | null {
   return { first, last };
 }
 
+function parsableHost(host: string): boolean {
+  try {
+    return new URL(host.replace(/^tcp:/i, 'http:')).hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const port = Number(env.EMBERLINE_PORT ?? 7420);
   const engineSetting = env.EMBERLINE_DOCKER_ENGINE?.trim() ?? '';
   const engineOff = engineSetting === '0';
   const host = env.EMBERLINE_DOCKER_HOST?.trim() || undefined;
   // The bundled engine's address: switching the bundled engine off must not switch off an engine of your own.
-  const bundled = host !== undefined && engineHostName(host) === 'docker';
+  // An unparsable host is not the bundled engine (engineHostName would fall back to 'docker' for it).
+  const bundled = host !== undefined && parsableHost(host) && engineHostName(host) === 'docker';
   return {
     host: env.EMBERLINE_HOST ?? '127.0.0.1',
     port,

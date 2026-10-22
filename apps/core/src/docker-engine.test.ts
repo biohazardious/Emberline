@@ -69,6 +69,7 @@ describe('config: Docker host and preview port ranges', () => {
     const own = loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: 'tcp://10.0.0.5:2376' });
     expect(own.dockerHost).toBe('tcp://10.0.0.5:2376');
     expect(own.dockerEngineSwitchedOff).toBe(false);
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: 'garbage' }).dockerEngineSwitchedOff).toBe(false);
     const bundled = loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: 'tcp://docker:2376' });
     expect(bundled.dockerHost).toBeUndefined();
     expect(bundled.dockerEngineSwitchedOff).toBe(true);

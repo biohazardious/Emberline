@@ -139,7 +139,8 @@ export class DockerEngine {
 
   /** Probes again when the last answer is older than `maxAgeMs` (0 = always); concurrent callers share one probe. */
   async refresh(maxAgeMs: number): Promise<void> {
-    if (Date.now() - this.checkedAt > maxAgeMs || maxAgeMs <= 0) await this.probe();
+    // maxAgeMs 0 means always (the clock may not have moved since the last answer).
+    if (maxAgeMs <= 0 || Date.now() - this.checkedAt > maxAgeMs) await this.probe();
   }
 
   /** Runs `docker version` in the runner; concurrent callers share one probe. Never throws. */

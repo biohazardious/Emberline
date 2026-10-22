@@ -213,6 +213,11 @@ export function composeProjectsInUse(facts: OwnershipFacts): Set<string> {
  * share the worktree's), newest live first, else newest. `orphan` when nothing holds it, the same
  * rule as {@link composeProjectsInUse}.
  */
+/** Live runs before ended ones, then the newer one. */
+function holdsBetter(a: OwnershipRun, b: OwnershipRun): boolean {
+  return runIsLive(a) === runIsLive(b) ? a.createdAt > b.createdAt : runIsLive(a);
+}
+
 export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerProjectOwner {
   if (name.startsWith('emberline-main-')) {
     // Build & Verify's project, or (`-preview`) the main workspace's container preview.
@@ -230,11 +235,7 @@ export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerP
         holdsProjects(x) &&
         (preview ? previewComposeProjectName(x.id) : composeProjectName(x.id, x.worktreePath)) === name,
     )
-    .reduce<OwnershipRun | undefined>(
-      (best, x) =>
-        !best || Number(runIsLive(x)) - Number(runIsLive(best)) > 0 || (runIsLive(x) === runIsLive(best) && x.createdAt > best.createdAt) ? x : best,
-      undefined,
-    );
+    .reduce<OwnershipRun | undefined>((best, x) => (!best || holdsBetter(x, best) ? x : best), undefined);
   if (!r) return { kind: 'orphan' };
   const live = runIsLive(r);
   return {

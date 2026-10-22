@@ -178,26 +178,26 @@ async function envFileKey(projectPath: string): Promise<string> {
  */
 export class ComposeConfigReader {
   private readonly cache = new Map<string, { key: string; result: ComposeConfigRead }>();
-  /** The read in flight per project, shared by every GET that asks for the same key meanwhile. */
-  private readonly inFlight = new Map<string, { key: string; promise: Promise<ComposeConfigRead> }>();
+  /** The read in flight per project and HEAD file, joined synchronously by every caller that asks meanwhile. */
+  private readonly inFlight = new Map<string, { id: string; promise: Promise<ComposeConfigRead> }>();
 
   /** HEAD's `entry` read by compose, from the cache when HEAD, the file and `.env` are unchanged. */
-  async read(projectId: string, projectPath: string, entry: HeadComposeFile): Promise<ComposeConfigRead> {
-    const key = `${entry.commit}:${entry.oid}:${await envFileKey(projectPath)}`;
-    const hit = this.cache.get(projectId);
-    if (hit?.key === key) return hit.result;
+  read(projectId: string, projectPath: string, entry: HeadComposeFile): Promise<ComposeConfigRead> {
+    const id = `${entry.commit}:${entry.oid}`;
     const running = this.inFlight.get(projectId);
-    if (running?.key === key) return running.promise;
-    const flight: { key: string; promise: Promise<ComposeConfigRead> } = {
-      key,
-      promise: this.run(projectId, projectPath, entry)
-        .then(({ result, cacheable }) => {
-          if (cacheable) this.cache.set(projectId, { key, result });
-          return result;
-        })
-        .finally(() => {
-          if (this.inFlight.get(projectId) === flight) this.inFlight.delete(projectId);
-        }),
+    if (running?.id === id) return running.promise;
+    const flight: { id: string; promise: Promise<ComposeConfigRead> } = {
+      id,
+      promise: (async () => {
+        const key = `${id}:${await envFileKey(projectPath)}`;
+        const hit = this.cache.get(projectId);
+        if (hit?.key === key) return hit.result;
+        const { result, cacheable } = await this.run(projectId, projectPath, entry);
+        if (cacheable) this.cache.set(projectId, { key, result });
+        return result;
+      })().finally(() => {
+        if (this.inFlight.get(projectId) === flight) this.inFlight.delete(projectId);
+      }),
     };
     this.inFlight.set(projectId, flight);
     return flight.promise;

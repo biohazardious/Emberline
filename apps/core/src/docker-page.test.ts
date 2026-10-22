@@ -454,10 +454,16 @@ describe('engine off', () => {
     await start();
     engine.available = false;
     await t.runs.docker.probe();
-    // The last answer is older than the page's 5 s debounce.
-    (t.runs.docker as unknown as { checkedAt: number }).checkedAt = 0;
     engine.available = true;
-    const o = await overview();
+    // The last answer is older than the page's 5 s debounce.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 6_000);
+    let o;
+    try {
+      o = await overview();
+    } finally {
+      vi.useRealTimers();
+    }
     expect(o.engine.available).toBe(true);
     expect(o.error).toBeUndefined();
   });

@@ -14,6 +14,7 @@ import {
   setCommandExecutor,
 } from './command-exec.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
+import { ComposeConfigReader, findHeadComposeFile } from './docker/compose-config.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   ALREADY_CONTAINER_PREVIEW_TEXT,
@@ -36,12 +37,13 @@ const CONFIG = JSON.stringify({
 });
 const engine = { up: true };
 /** What `docker compose config` answers next (a result, or a thrown error), and every request it got. */
-const compose: { next: ExecResult | Error; requests: ExecRequest[] } = { next: ok(CONFIG), requests: [] };
+const compose: { next: ExecResult | Error; requests: ExecRequest[]; gate: Promise<void> | null } = { next: ok(CONFIG), requests: [], gate: null };
 
 beforeEach(async () => {
   engine.up = true;
   compose.next = ok(CONFIG);
   compose.requests = [];
+  compose.gate = null;
   setCommandExecutor(async (request) => {
     if (request.file === 'docker' && request.args[0] === 'version') {
       return engine.up ? ok('"29.8.2"\n') : { ...ok(''), exitCode: 1, stderr: 'Cannot connect' };
@@ -49,8 +51,7 @@ beforeEach(async () => {
     if (request.file === 'sh' && request.args.includes('config')) {
       compose.requests.push(request);
       if (compose.next instanceof Error) throw compose.next;
-      // A timeout takes its time, so concurrent GETs meet the read in flight.
-      if (compose.next.timedOut) await new Promise((resolve) => setTimeout(resolve, 150));
+      if (compose.gate) await compose.gate;
       return compose.next;
     }
     return localCommandExecutor(request);
@@ -333,12 +334,23 @@ describe('GET /api/projects/:id/container-preview', () => {
       expect(compose.requests).toHaveLength(3);
     });
 
-    it('concurrent GETs share a timeout too: one compose call, and the next GET asks again', async () => {
+    it('concurrent reads share one compose call and its timeout; the next read asks again', async () => {
       const p = await createProject({ 'compose.yaml': COMPOSE });
+      const head = await findHeadComposeFile(p.path);
+      if (head.kind !== 'present') throw new Error('no compose file');
+      const reader = new ComposeConfigReader();
+      let open!: () => void;
+      compose.gate = new Promise((resolve) => (open = resolve));
       compose.next = { ...ok(''), exitCode: null, timedOut: true };
-      await Promise.all([options(p.id), options(p.id), options(p.id)]);
+      // All three join in the same tick; the compose call is released only afterwards.
+      const reads = [1, 2, 3].map(() => reader.read(p.id, p.path, head.entry));
+      open();
+      const results = await Promise.all(reads);
       expect(compose.requests).toHaveLength(1);
-      await options(p.id);
+      expect(results[1]).toBe(results[0]);
+      expect(results[2]).toBe(results[0]);
+      expect(results[0]).toMatchObject({ ok: false });
+      await reader.read(p.id, p.path, head.entry);
       expect(compose.requests).toHaveLength(2);
     });
 
