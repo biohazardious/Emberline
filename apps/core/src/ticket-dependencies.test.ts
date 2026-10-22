@@ -879,19 +879,22 @@ describe('one automatic merge-conflict resolution', () => {
     expect(movedHead).not.toBe(firstHead);
   });
 
+  /** The pass has written the line to the terminal; the stand-in logs it to its file a moment later. */
+  const typedLines = (run: Run, n: number) => expect.poll(() => followups(run).length, { timeout: 10_000 }).toBe(n);
+
   it('stops asking after three attempts even when main keeps moving', async () => {
     const { project, runB } = await conflictingPair();
     const passes = trackPipelines();
     await stopAgain(runB);
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
     await Promise.all(passes);
-    expect(followups(runB)).toHaveLength(1);
+    await typedLines(runB, 1);
     for (const n of [2, 3]) {
       moveMain(project.path, n);
       await stopAgain(runB);
       await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(n);
       await Promise.all(passes);
-      expect(followups(runB)).toHaveLength(n);
+      await typedLines(runB, n);
     }
     expect(CONFLICT_ATTEMPT_CAP).toBe(3);
     moveMain(project.path, 4);
@@ -899,6 +902,7 @@ describe('one automatic merge-conflict resolution', () => {
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(4);
     await Promise.all(passes);
     expect((await eventTypes(runB)).filter((x) => x === 'merge_failed')).toHaveLength(4);
+    await typedLines(runB, 3); // the stand-in logs a typed line a moment after the pass wrote it
     expect(followups(runB)).toHaveLength(3);
     expect(await requestedHeads(runB)).toHaveLength(3);
   });
