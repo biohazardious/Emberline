@@ -667,14 +667,15 @@ export function registerProjectRoutes(
         runs.note(run.id, 'merged_by_person', {
           ...(result.commitSha ? { commitSha: result.commitSha } : {}),
           ...(result.commitOid ? { commitOid: result.commitOid } : {}),
+          ...(result.commitUnverified ? { commitUnverified: true } : {}),
         });
       }
       // Without a ticket there is no merge note: main's rebuild, preview refresh and push are asked for here.
       else if (result.ok && !result.alreadyMerged) {
         postMerge.enqueue(project.id);
-        mainPush.enqueue(project.id, run.id, result.commitOid);
+        mainPush.enqueue(project.id, run.id, result.commitOid, result.commitUnverified);
       }
-      const { commitOid: _commitOid, ...response } = result;
+      const { commitOid: _commitOid, commitUnverified: _commitUnverified, ...response } = result;
       return response;
     },
   );

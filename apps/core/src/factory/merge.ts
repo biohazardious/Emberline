@@ -78,8 +78,38 @@ export function isEmberlineMergeCommit(mainWorkspacePath: string, oid: string): 
   return mergeCommits.get(path.resolve(mainWorkspacePath))?.includes(oid) ?? false;
 }
 
-/** A merge's outcome inside core: the response plus the merge commit's full id (merge notes carry it). */
-export type SyncWorktreeResult = SyncWorktreeResponse & { commitOid: string | null };
+/**
+ * A merge's outcome inside core: the response plus the merge commit's full id (merge notes carry
+ * it), set only when that commit is verifiably the merge Emberline made; `commitUnverified`: the
+ * merge succeeded but main's commit could not be verified (another process moved main meanwhile).
+ */
+export type SyncWorktreeResult = SyncWorktreeResponse & { commitOid: string | null; commitUnverified: boolean };
+
+/**
+ * The commit main names now, if it is exactly the merge Emberline just made: parents `[before, tip]`
+ * and the tree git computes for merging them. Agents share `.git` and can move `refs/heads/<b>` at
+ * any moment, so the ref alone proves nothing. Read without replace refs, grafts or the
+ * commit-graph (all three are agent-writable); any failure is "not verified" (null).
+ */
+async function verifiedMergeCommit(cwd: string, before: string, tip: string): Promise<string | null> {
+  const real = async (args: string[]) =>
+    (
+      await execGitFile(['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false', ...args], {
+        cwd,
+        env: { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' },
+      })
+    ).stdout.trim();
+  try {
+    const head = await real(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    const [, ...parents] = (await real(['rev-list', '--parents', '-n', '1', head])).split(' ');
+    if (parents.length !== 2 || parents[0] !== before || parents[1] !== tip) return null;
+    const tree = await real(['rev-parse', '--verify', '--quiet', `${head}^{tree}`]);
+    const expected = (await real(['merge-tree', '--write-tree', before, tip])).split('\n')[0]?.trim();
+    return tree && tree === expected ? head : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Runs `fn` while no merge (or other locked change) touches this main workspace. */
 export function withMainWorkspaceLock<T>(mainWorkspacePath: string, fn: () => Promise<T>): Promise<T> {
@@ -159,6 +189,7 @@ export async function syncWorktreeToMainWorkspace(params: {
     filesSynced: 0,
     commitSha: null,
     commitOid: null,
+    commitUnverified: false,
     conflicts: [],
     alreadyMerged: false,
     summary,
@@ -247,13 +278,15 @@ export async function syncWorktreeToMainWorkspace(params: {
 
     const changed = gitLines((await execGitFile(['diff', '--name-only', before, 'HEAD'], inMain)).stdout);
     const commitSha = await shortHead();
-    // Recorded before the lock is released: a push queued behind a later merge knows its commit.
-    const commitOid = (await execGitFile(['rev-parse', 'HEAD'], inMain)).stdout.trim() || null;
+    // Verified, then recorded before the lock is released (a push queued behind a later merge knows
+    // its commit); an unverified one is never recorded, so Keep main pushed never publishes it.
+    const commitOid = await verifiedMergeCommit(mainWorkspacePath, before, tip);
     if (commitOid) recordMergeCommit(mainWorkspacePath, commitOid);
     return result(true, `Merged ${changed.length} changed files from ${label} (${branch}) into the main workspace${commitSha ? ` (commit ${commitSha})` : ''}.`, {
       filesSynced: changed.length,
       commitSha,
       commitOid,
+      commitUnverified: !commitOid,
     });
   });
 }

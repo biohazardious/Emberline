@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
+import { rmSync, watch, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
@@ -15,7 +15,7 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
-import { DIVERGED_MESSAGE, MAIN_MOVED_MESSAGE } from './git.js';
+import { DIVERGED_MESSAGE, MAIN_MOVED_MESSAGE, MERGE_UNVERIFIED_MESSAGE } from './git.js';
 
 let t: TestApp;
 let cookie: string;
@@ -54,6 +54,31 @@ const addRun = (id: string, worktreePath: string, branch: string) => {
 };
 const remoteMain = () =>
   git(forge.bare('alice', 'app'), 'rev-parse', '--verify', '--quiet', 'refs/heads/main');
+const worktree = (id: string) => {
+  const dir = path.join(t.dir, `wt-${id}`);
+  git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir);
+  commit(dir, `${id}.txt`);
+  addRun(id, dir, `emberline/${id}`);
+  return dir;
+};
+const merge = (id: string, dir: string) =>
+  syncWorktreeToMainWorkspace({
+    worktreePath: dir,
+    mainWorkspacePath: projectPath,
+    ticketKey: null,
+    runId: id,
+    branch: `emberline/${id}`,
+  });
+/** As the pipeline notes a merge (tickets/service.ts). */
+const noteMerge = (
+  runId: string,
+  res: { commitSha: string | null; commitOid: string | null; commitUnverified?: boolean },
+) =>
+  t.runs.note(runId, 'merged_to_main', {
+    ...(res.commitSha ? { commitSha: res.commitSha } : {}),
+    ...(res.commitOid ? { commitOid: res.commitOid } : {}),
+    ...(res.commitUnverified ? { commitUnverified: true } : {}),
+  });
 const notes = (runId: string) =>
   t.db
     .select()
@@ -205,24 +230,10 @@ describe('keep main pushed', () => {
 
   it('parallel merges: the earlier one is not reported as moved, and the remote ends at the later one', async () => {
     writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
-    const worktree = (id: string) => {
-      const dir = path.join(t.dir, `wt-${id}`);
-      git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir);
-      commit(dir, `${id}.txt`);
-      addRun(id, dir, `emberline/${id}`);
-      return dir;
-    };
-    const merge = (id: string, dir: string) =>
-      syncWorktreeToMainWorkspace({
-        worktreePath: dir,
-        mainWorkspacePath: projectPath,
-        ticketKey: null,
-        runId: id,
-        branch: `emberline/${id}`,
-      });
     const a = worktree('ra');
     const b = worktree('rb');
     const resA = await merge('ra', a);
+    expect(resA.commitOid).toMatch(/^[0-9a-f]{40}$/); // a normal merge is recorded
     const mergingB = merge('rb', b); // takes the main-workspace lock before A's push can
     // As the pipeline notes a merge (tickets/service.ts): the short sha and the full id.
     t.runs.note('ra', 'merged_to_main', { commitSha: resA.commitSha, commitOid: resA.commitOid });
@@ -233,5 +244,52 @@ describe('keep main pushed', () => {
     expect(notes('rb')).toEqual([]);
     expect(remoteMain()).toBe(git(projectPath, 'rev-parse', 'HEAD'));
     expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+  });
+
+  it("another agent moving main while the merge writes it: the agent's commit is never published", async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const a = worktree('ra');
+    // The other agent's commit X, prepared in advance on main as it is.
+    const evil = worktree('evil');
+    const x = git(evil, 'rev-parse', 'HEAD');
+    let fired = false;
+    const watcher = watch(path.join(projectPath, '.git', 'refs', 'heads'), (_event, name) => {
+      if (fired || name !== 'main') return;
+      fired = true;
+      execFileSync('git', ['-C', projectPath, 'update-ref', 'refs/heads/main', x]);
+    });
+    const res = await merge('ra', a);
+    watcher.close();
+    expect(fired).toBe(true);
+    expect(res.ok).toBe(true);
+    expect(res.commitOid).not.toBe(x);
+    noteMerge('ra', res);
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('ra')).toHaveLength(1);
+  });
+
+  it('a merge Emberline could not verify is never pushed, and says why', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    noteMerge('r1', {
+      commitSha: git(projectPath, 'rev-parse', '--short', 'HEAD'),
+      commitOid: null,
+      commitUnverified: true,
+    });
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MERGE_UNVERIFIED_MESSAGE }]);
+    expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBe(MERGE_UNVERIFIED_MESSAGE);
+  });
+
+  it('main rewound to an older Emberline merge: the later merge gets the moved note, nothing is pushed', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const resA = await merge('ra', worktree('ra'));
+    const resB = await merge('rb', worktree('rb'));
+    git(projectPath, 'update-ref', 'refs/heads/main', resA.commitOid!);
+    noteMerge('rb', resB);
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('rb').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
   });
 });

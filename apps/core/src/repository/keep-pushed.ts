@@ -6,15 +6,18 @@
  */
 import type { Run } from '@emberline/protocol';
 import type { Db } from '../db/index.js';
-import { readRepositorySettings } from '../db/project-settings.js';
+import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { MERGE_NOTES } from '../factory/post-merge.js';
 import type { RunService } from '../runs/service.js';
+import { MERGE_UNVERIFIED_MESSAGE } from './git.js';
 import type { RepositoryService } from './service.js';
 
 /** A merge into main: its run (the failure note goes there) and the full id of the commit it made. */
 interface Merge {
   runId: string | null;
   commitOid: string | null;
+  /** Main changed during the merge: Emberline did not record its commit, so it is never pushed. */
+  unverified: boolean;
 }
 
 interface Job {
@@ -51,9 +54,9 @@ export class KeepMainPushed {
   }
 
   /** A merge into main landed; `commitOid` is the full id of the commit it made (only that commit is ever pushed). */
-  enqueue(projectId: string, runId: string | null, commitOid: string | null): void {
+  enqueue(projectId: string, runId: string | null, commitOid: string | null, unverified = false): void {
     if (this.stopped) return;
-    const merge: Merge = { runId, commitOid };
+    const merge: Merge = { runId, commitOid, unverified };
     const job = this.jobs.get(projectId);
     if (job) {
       job.next = merge;
@@ -71,19 +74,36 @@ export class KeepMainPushed {
   private readonly onNote = (run: Run, type: string, payload?: unknown): void => {
     if (!MERGE_NOTES.includes(type)) return;
     // Only the full id: a short sha (older notes) is never resolved, so it is never pushed automatically.
-    const commitOid = (payload as { commitOid?: unknown } | undefined)?.commitOid;
-    this.enqueue(run.projectId, run.id, typeof commitOid === 'string' ? commitOid : null);
+    const fields = (payload ?? {}) as { commitOid?: unknown; commitUnverified?: unknown };
+    this.enqueue(
+      run.projectId,
+      run.id,
+      typeof fields.commitOid === 'string' ? fields.commitOid : null,
+      fields.commitUnverified === true,
+    );
   };
+
+  /** Nothing is pushed; the reason is kept for the Repository block like a failed push's. */
+  private unverified(projectId: string): { ok: false; reason: string } {
+    try {
+      writeRepositorySettings(this.db, projectId, { lastMainPushError: MERGE_UNVERIFIED_MESSAGE });
+    } catch {
+      // the project was deleted meanwhile
+    }
+    return { ok: false, reason: MERGE_UNVERIFIED_MESSAGE };
+  }
 
   private async drain(projectId: string, job: Job): Promise<void> {
     // Never inside the merge that noted it.
     await Promise.resolve();
     try {
       while (job.next !== undefined && !this.stopped) {
-        const { runId, commitOid } = job.next;
+        const { runId, commitOid, unverified } = job.next;
         job.next = undefined;
         if (!readRepositorySettings(this.db, projectId).keepMainPushed) continue;
-        const res = await this.repository.pushMainQuietly(projectId, commitOid);
+        const res = unverified
+          ? this.unverified(projectId)
+          : await this.repository.pushMainQuietly(projectId, commitOid);
         if (!res.ok) {
           this.log(`keep main pushed: project ${projectId}: ${res.reason}`);
           try {

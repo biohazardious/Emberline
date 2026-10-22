@@ -21,6 +21,7 @@ import {
   branchTip,
   DIVERGED_MESSAGE,
   fetchBranch,
+  isAncestorCommit,
   listRemoteBranches,
   MAIN_MOVED_MESSAGE,
   mainBranchState,
@@ -265,7 +266,10 @@ export class RepositoryService {
         const full = mergeOid !== null && FULL_OID.test(mergeOid) ? mergeOid : null;
         if (!full || !tip) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
         if (tip.sha !== full) {
-          if (isEmberlineMergeCommit(ws.path, tip.sha)) return 'superseded';
+          // A later Emberline merge on top of this one: its own push publishes both. A rewind to an
+          // older merge (this one not in the tip's history) is "moved".
+          if (isEmberlineMergeCommit(ws.path, tip.sha) && (await isAncestorCommit(ws.path, full, tip.sha)))
+            return 'superseded';
           throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
         }
       }

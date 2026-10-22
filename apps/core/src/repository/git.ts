@@ -11,6 +11,8 @@ import {
 
 export const MAIN_MOVED_MESSAGE =
   'Main moved outside Emberline since the merge; push it from Project settings → Repository.';
+export const MERGE_UNVERIFIED_MESSAGE =
+  'Main changed during the merge; Emberline did not record it for pushing.';
 export const DIVERGED_MESSAGE =
   "The remote's main has commits this project doesn't have. Pull them in from a terminal, then push again.";
 const CREDENTIALS_IN_URL = 'Remove the user name and token from the URL; Emberline uses the forge account.';
@@ -107,6 +109,14 @@ export async function branchTip(
   );
   const [sha, shortSha, subject] = out.split('\0');
   return sha && shortSha ? { sha, shortSha, subject: subject ?? '' } : null;
+}
+
+/** Whether `ancestor` is `commit` or one of its ancestors, in the real objects; any failure is "no". */
+export async function isAncestorCommit(mainPath: string, ancestor: string, commit: string): Promise<boolean> {
+  return realGit(['merge-base', '--is-ancestor', ancestor, commit], mainPath).then(
+    () => true,
+    () => false,
+  );
 }
 
 export async function originUrls(mainPath: string): Promise<{ fetch: string | null; push: string | null }> {
