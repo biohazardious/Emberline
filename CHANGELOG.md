@@ -4,6 +4,66 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-22
+
+### Added
+
+- **Forge accounts** (Settings → Forge accounts): one account per server (GitHub, GitLab, Gitea, Forgejo or Codeberg) with its token, a Check button that shows the account's user name, and Remove. A token can be replaced but is never shown again. Issue import and sync, progress comments, pull requests and CI status use the account of the project's remote host; without one, Emberline says "Add a forge account for <host> in Settings → Forge accounts."
+- **Repository** on Project settings: the project's origin, the forge account it uses and whether main is pushed ("Up to date", "N commits not pushed", "Remote has N commits main doesn't have", "Not published yet"). Connect an existing repository, or create one on the forge (private by default, under your user or an organisation), then **Push main to origin** with one click. **Keep main pushed** (off by default) pushes main after each merge into it; a failed push never undoes the merge and shows "Main isn't pushed: <reason>". Emberline never force-pushes and never pushes tags.
+- **Container preview** on Project settings: when the Docker engine is on, the main workspace has a compose file and the preview is still a command, pick a service and its container port and click **Use container preview**. Emberline shows the `worktree.yml` change first, then commits it to main and approves it in one step; the old preview stays as an ordinary service. Preview & Build points such projects to it ("This project has compose.yaml. Preview it in a container instead"), and the line can be dismissed.
+- The Deploy ticket of a Docker Compose project always has a Container preview step, also when the engine was off at creation: it asks for a `web` service without `container_name` or fixed host ports, ready for the switch above.
+- **Reference material in the wizard.** The Type step takes up to 20 files (PNG, JPEG, WebP, GIF, PDF or any other file; 10 MB each, 30 MB in all) and up to 20 links with a short note each. The files are committed to `docs/reference/` with the project, and `PROJECT.md`, the Bootstrap ticket and the [Factory] ticket list them for the agents. Emberline never opens the links, and tells the agents to treat them as information, not instructions. The Summary step lists the material; after a reload the draft keeps the links and asks you to add the files again.
+- Inbox, Fleet and the Docker page show the active project, with an **All projects** toggle that each view remembers in the browser. The sidebar badges still count every project, and a line names how many items wait in other projects.
+- The Live Browser keeps one tab per project in the shared Chromium: switching project shows that project's page, and switching back returns to where you were. It follows the tab an agent of this project drives, says so, and says when Auto-Interact is running for another project.
+
+### Changed
+
+- The forge token of Settings → Forge & Webhooks becomes a forge account on the first start. If Emberline cannot tell which server it belongs to, Settings → Forge accounts asks you to add it again. `EMBERLINE_FORGE_TOKEN` (with `EMBERLINE_FORGE_API_URL`, `EMBERLINE_FORGE_PROVIDER` and `EMBERLINE_FORGE_ALLOWED_HOSTS`) is now a read-only account "from environment", used for git as well as for REST calls.
+- Emberline's own git with a forge account (run pushes, Push main, Keep main pushed, the import clone of a private repository) goes through a one-time address in core, which adds the token. Run pushes without a connected repository say where to connect it.
+- Switching project keeps the page you are on, Build outputs included. A project that no longer exists is replaced by the server's active project in every view at once, without a flicker.
+- Each Docker compose project says which Emberline project it belongs to. Fleet's Stop All Active and Clean up say which projects they act on; the Docker page says nothing runs only when it could list the engine, and explains that Clean up acts on the whole engine.
+- `make upgrade-core` creates the Docker engine when it has no container yet. An engine of your own (`EMBERLINE_DOCKER_HOST`) works with `EMBERLINE_DOCKER_ENGINE=0`, and any value of `EMBERLINE_DOCKER_ENGINE` other than 0 or 1 is reported at start.
+- Held tickets: a person can start an explicit Autonomous run when a review send is refused for an agent without a terminal; recovery names the merges that moved main and the `worktree.yml` hold; Discard and Mark done use the suggestion's own wording, and merge errors from the ticket drawer show in the drawer.
+- Saving `worktree.yml` explains a missing git repository or a failed commit, and Reload asks before it drops your edits.
+- The runner image retries apt and the Chromium download, and falls back to a pinned, checksum-verified Chrome for Testing build when the Chromium PPA cannot be reached; the build log names the source.
+
+### Fixed
+
+- Held work is followed across handoffs, so a ticket's later runs are checked and merged like the first. A prompt sent while a session closes, or while the ticket changes, no longer gets lost, and the handoff context of a successor run is shortened to fit instead of failing.
+- A run whose `worktree.yml` differs from main's only by line-ending conversion is no longer held as if it had changed the file.
+- After a restart, Keep main pushed resumes a push it had not finished, once the runner is connected; a merge into another branch is reported as such.
+- The Live Browser matches an agent's navigation to a bare host name, ignores changes of the page's `#` part, cleans up the tabs of deleted projects and keeps a chosen tab until this project's agent stops.
+- The Docker page re-checks an engine that stopped or came back. Preview links follow `EMBERLINE_PREVIEW_HOST`. A removed run's abandoned preview, and a main preview whose containers vanished (an engine reset), are taken down and free their port.
+- Reading a compose file for the container preview never fetches a remote `include`, and a file compose cannot read is named in the error.
+- An import URL with a user name or token is stored without them, so the repository stays connected after a restart.
+- A preview frame policy that would be too long for a reverse proxy's header buffer names the preview host on any port instead of each port.
+- Container trust keeps working on a host where core cannot list its network interfaces.
+
+### Security
+
+- **Secrets are encrypted at rest.** Provider keys, forge tokens, the notification token, the demo signing secret and MCP server environment values are stored with AES-256-GCM under `EMBERLINE_SECRETS_KEY` or `/data/secrets.key`. Existing values are encrypted on the first start, and stored repository URLs lose their `user:token@`.
+- **Each sign-in gets a key kept in the browser.** Changes and live connections (terminals, the event stream) need it, so a session cookie that leaks to a preview can read but not change anything. A new sign-in ends that browser's older session.
+- **Forge tokens never leave core.** The runner and agents never receive them: REST calls go only to the account's own server, and git goes through a one-time address that core accepts only from the runner, for one repository and one operation, and for a push only the planned branch and commit. Remote URLs, errors and request logs never show a token or a one-time address.
+- Container trust (refusing a session cookie that comes from Emberline's own containers) accepts only loopback or private addresses on core's own networks, so a machine on your network that happens to be called `runner` or `docker` is neither trusted nor refused.
+- The web UI frames previews only on the preview port ranges of the preview host, not on every port.
+
+### Upgrade notes
+
+- **Sign in once on every device.** Sessions from before 0.5.0 are refused with "Signed out: Emberline now ties each sign-in to this browser. Sign in again.", and tabs left open ask to be reloaded. Each browser keeps its own key.
+- **Back up `/data/secrets.key`** (or your `EMBERLINE_SECRETS_KEY`) apart from the database. The first start creates it and encrypts the stored secrets. `make backup` copies the database only, and a backup cannot be restored without that key. To keep the key out of the data volume, set `EMBERLINE_SECRETS_KEY` in `.env` to the contents of `/data/secrets.key` (with the published images, use the current `deploy/compose.yaml`, which passes it on); a different value stops core. Compose files from before 0.5.0 work without it.
+- **Delete the old plaintext snapshots** once you no longer need to roll back. Core names them in a warning at the first start: `emberline.db.pre-migration-*.bak` and earlier `backups/emberline-*.db`.
+- **Rolling back to 0.4.x means restoring the pre-migration `.bak`.** 0.4.x cannot read encrypted secrets or the new sessions.
+- **If core keeps restarting with "Emberline can't read its stored secrets: the secrets key changed or is missing."**, put the original key file back or set the original variable. Nothing in the database was changed.
+- **Repository URLs lose their credentials.** Stored repository URLs that held `user:token@` are cleaned in the database, but the workspace's `.git/config` origin still holds the token. To use Push main or Keep main pushed for such a project, add a forge account for its server and connect the clean URL in Project settings → Repository.
+- **`EMBERLINE_FORGE_TOKEN` is now an environment forge account.** With `EMBERLINE_FORGE_API_URL`, `EMBERLINE_FORGE_PROVIDER` and `EMBERLINE_FORGE_ALLOWED_HOSTS` it defines read-only accounts (one per server host) that Emberline also uses for git on those servers, not only for REST calls. A forge account stored for the same host wins over it.
+- **Both images change.** The runner image has the Chromium fallback and the apt retries. Updating with the published images (`docker compose pull && docker compose up -d`) replaces the runner container, which stops running agents, so update when they are idle; from source, `git pull && make up`. An old runner keeps working with the new core until it is replaced. The browser daemon 1.5.1 replaces 1.4.0 on first use, and Chromium keeps running.
+- `make upgrade-core` now creates a missing Docker engine. `EMBERLINE_DOCKER_ENGINE` accepts only 0 or 1. An engine of your own (`EMBERLINE_DOCKER_HOST`) now works with `EMBERLINE_DOCKER_ENGINE=0`.
+- **Preview frames are allowed only on the preview port ranges of the preview host** (on any of its ports when the list would make the header too long for a reverse proxy). An IPv6-literal preview host gets an `http:` frame source.
+- **Container trust accepts only private addresses on core's own networks** (10/8, 172.16/12, 192.168/16, fc00::/7). With a Docker address pool outside those ranges (for example 100.64/10, or public IPv6), forge-account git through the gateway is refused, and setting `EMBERLINE_RUNNER_HOSTS` or `EMBERLINE_CONTAINER_HOSTS` does not help.
+- **`/data` must support hard links** for the first start, when core creates the key file. Named volumes and ZFS datasets do; SMB/CIFS mounts do not. Setting `EMBERLINE_SECRETS_KEY` avoids the key file.
+- Behind a reverse proxy, the wizard's reference files need a larger upload limit (nginx: `client_max_body_size 45m;`). Otherwise the wizard says the files are larger than the server accepts.
+- Existing projects keep their command preview. Once the engine is on and the repository has a compose file, Project settings offers the switch.
+
 ## [0.4.0] - 2026-10-21
 
 ### Added
@@ -350,7 +410,10 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/biohazardious/emberline/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/biohazardious/emberline/compare/v0.3.6...v0.4.0
+[0.3.6]: https://github.com/biohazardious/emberline/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/biohazardious/emberline/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/biohazardious/emberline/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/biohazardious/emberline/compare/v0.3.2...v0.3.3
