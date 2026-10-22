@@ -1,7 +1,7 @@
 {
   "name": "@emberline/protocol",
   "license": "Apache-2.0",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "Shared zod schemas and types for every Emberline wire contract.",

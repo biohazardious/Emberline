@@ -1,7 +1,7 @@
 {
   "name": "@emberline/ptyd",
   "license": "AGPL-3.0-or-later",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "PTY holder daemon: hosts agent CLI processes independently of core.",
