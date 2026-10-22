@@ -2,6 +2,7 @@ import type { RunRecovery, RecoverySuggestion } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   deliveryNote,
+  discardConfirm,
   recoverErrorText,
   recoveryHeading,
   recoveryApplies,
@@ -119,5 +120,18 @@ describe('recoveryHeading', () => {
     expect(recoveryHeading(rec(['prompt']), true).label).toBeNull();
     expect(recoveryHeading(rec(['prompt']), false).label).toBe('Merge failed');
     expect(recoveryHeading(rec(['prompt']), true).why).toBe('Main moved.');
+  });
+});
+
+describe('discardConfirm', () => {
+  it("asks with the suggestion's own label, so it never contradicts the button or its detail", () => {
+    expect(discardConfirm({ label: 'Close as not needed' })).toEqual({
+      question: 'Close as not needed?',
+      confirm: 'Yes, close as not needed',
+    });
+    expect(discardConfirm({ label: 'Discard this work' })).toEqual({
+      question: 'Discard this work?',
+      confirm: 'Yes, discard this work',
+    });
   });
 });

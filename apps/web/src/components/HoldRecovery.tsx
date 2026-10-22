@@ -7,6 +7,7 @@ import { copyText } from '../clipboard';
 import { toastInfo } from '../toast';
 import {
   deliveryNote,
+  discardConfirm,
   recoverErrorText,
   recoveryApplies,
   recoveryHeading,
@@ -142,16 +143,14 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
               !s.onTicket &&
               (confirming ? (
                 <span className="hold-recovery-confirm">
-                  <span className="small">
-                    Move to Done without merging? The branch and worktree are kept.
-                  </span>
+                  <span className="small">{discardConfirm(s).question}</span>
                   <button
                     type="button"
                     className="btn btn-sm danger"
                     disabled={busy}
                     onClick={() => void guarded(onDiscard!)}
                   >
-                    Discard ticket
+                    {discardConfirm(s).confirm}
                   </button>
                   <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirming(false)}>
                     Cancel

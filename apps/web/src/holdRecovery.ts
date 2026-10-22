@@ -74,3 +74,12 @@ export function sentenceCase(text: string): string {
 export function recoveryHeading(rec: Pick<RunRecovery, 'label' | 'why'>, compact: boolean): { label: string | null; why: string } {
   return { label: compact ? null : rec.label, why: sentenceCase(rec.why) };
 }
+
+/**
+ * The confirm step of a discard suggestion, in its own words ("Close as not needed", "Discard this
+ * work"); its detail, shown beside it, says what happens to the ticket and the branch.
+ */
+export function discardConfirm(s: Pick<RecoverySuggestion, 'label'>): { question: string; confirm: string } {
+  const label = s.label.trim();
+  return { question: `${label}?`, confirm: `Yes, ${label.charAt(0).toLowerCase()}${label.slice(1)}` };
+}
