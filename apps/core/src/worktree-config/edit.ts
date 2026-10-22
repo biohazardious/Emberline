@@ -4,7 +4,7 @@
  * lock. Pattern: `executeAdopt` (factory/project-import.ts).
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rmdir, unlink } from 'node:fs/promises';
+import { lstat, mkdir, rename, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ADOPT_FILE_PATHS,
@@ -19,6 +19,7 @@ import { conflict, HttpError } from '../errors.js';
 import { readHeadWorktreeYml } from '../factory/detect.js';
 import { FACTORY_GIT_IDENTITY, mainWorkspaceBranch, withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
+import { shortGitError } from '../repository/git.js';
 import { createExclusiveFile, isMissing, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
 import { parseWorktreeYml } from './load.js';
 import { storeApproval, worktreeConfigStatus } from './trust.js';
@@ -134,6 +135,12 @@ export async function saveWorktreeConfig(
     });
   }
   return withMainWorkspaceLock(project.path, async () => {
+    if (!(await lstat(path.join(project.path, '.git')).then(() => true, () => false))) {
+      throw conflict(
+        'The project folder is not a git repository, so the file cannot be committed. Run git init in the folder, then save again.',
+        WORKTREE_CONFIG_CODES.notGitRepo,
+      );
+    }
     if (!(await mainWorkspaceBranch(project.path))) {
       throw conflict(
         'The main workspace is not on a branch, so the file cannot be committed. Check out a branch, then save again.',
@@ -199,7 +206,11 @@ export async function saveWorktreeConfig(
       } catch (error) {
         await execGitFile(['reset', '-q', '--', rel], inRepo).catch(() => undefined);
         await written.undo();
-        throw error;
+        throw new HttpError(
+          500,
+          WORKTREE_CONFIG_CODES.commitFailed,
+          `Git could not commit .emberline/worktree.yml: ${shortGitError(error).trim().replace(/\.$/, '')}. The file on main is unchanged and nothing was approved.`,
+        );
       }
       await written.keep();
     }

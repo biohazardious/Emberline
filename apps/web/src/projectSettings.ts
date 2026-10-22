@@ -1,6 +1,7 @@
 import {
   type ApproveWorktreeConfigBody,
   PROJECT_GATE_KEYS,
+  WORKTREE_YML_EDIT_IN_SETTINGS,
   type ProjectGateKey,
   type ProjectGateOverrides,
   type ProjectSettingsResponse,
@@ -180,4 +181,28 @@ export async function refreshWorktreeConfigViews(
     client.invalidateQueries({ queryKey: ['api', `/api/projects/${projectId}/container-preview`] }),
     client.invalidateQueries({ queryKey: ['api', `/api/projects/${projectId}/repository`] }),
   ]);
+}
+
+export const WORKTREE_RELOAD_WARNING =
+  'Reload replaces your edits with the file on main. Copy anything you want to keep, then press Reload again.';
+export const WORKTREE_RELOAD_DISCARD_LABEL = 'Discard my edits and reload';
+
+/** The editor's Reload: edits are replaced only after one warning (a second press), never while busy. */
+export function worktreeReloadStep(v: {
+  busy: boolean;
+  edited: boolean;
+  warned: boolean;
+}): 'ignore' | 'warn' | 'fetch' {
+  if (v.busy) return 'ignore';
+  return v.edited && !v.warned ? 'warn' : 'fetch';
+}
+
+/** The Code Explorer's note on worktree.yml: main's file is edited in Project settings, a run's copy is read-only. */
+export function worktreeYmlExplorerNote(targetId: string): { text: string; link: string } {
+  return targetId === 'main'
+    ? { text: WORKTREE_YML_EDIT_IN_SETTINGS, link: 'Open Project settings' }
+    : {
+        text: "This is the run's copy. Runs use the approved file from main, which you edit in Project settings.",
+        link: "Edit main's worktree.yml",
+      };
 }

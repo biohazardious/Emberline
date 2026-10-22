@@ -5,8 +5,8 @@ import type {
   RunPreviewStatus,
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
-import { useQuery } from '@tanstack/react-query';
-import { type ReactNode, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { type ReactNode, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { Box, ExternalLink, Package, Play, RotateCw, Square } from 'lucide-react';
 import { api, errorMessage } from '../api';
@@ -16,6 +16,8 @@ import {
   choosePrimaryView,
   framingRefusedText,
   framingView,
+  headerOpenShown,
+  recheckFraming,
   previewBadge,
   previewEmptyText,
   previewFrameMode,
@@ -42,7 +44,7 @@ export function previewApiPath(projectId: string, target: Pick<WorkspaceDemoTarg
 }
 
 /** One line pointing a command preview to Project settings, Container preview (spec section 3). */
-function ContainerPreviewHint({
+export function ContainerPreviewHint({
   projectId,
   target,
   preview,
@@ -185,6 +187,9 @@ function ContainerPreview({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [nonce, setNonce] = useState(0);
+  const queryClient = useQueryClient();
+  const inFlight = useRef(false);
+  const [reloading, setReloading] = useState(false);
   const badge = previewBadge(status);
   const problem = previewProblem(status);
   const active = status.status === 'running' || status.status === 'starting';
@@ -206,14 +211,20 @@ function ContainerPreview({
 
   // Reload probes the app's framing headers again (it may have been changed), then reloads the frame.
   const reloadPreview = async () => {
+    if (inFlight.current) return;
     setActionError(undefined);
+    setReloading(true);
     try {
-      await api<PreviewStatus>(`${path}/framing`, 'POST', {});
-    } catch (err) {
-      setActionError(errorMessage(err));
+      const r = await recheckFraming(inFlight, {
+        post: () => api<PreviewStatus>(`${path}/framing`, 'POST', {}),
+        show: (s) => queryClient.setQueryData(['api', path], s),
+        refresh,
+      });
+      if (r.error) setActionError(errorMessage(r.error));
+      if (r.ran) setNonce((n) => n + 1);
+    } finally {
+      setReloading(false);
     }
-    await refresh().catch(() => undefined);
-    setNonce((n) => n + 1);
   };
 
   const framing = framingView(status);
@@ -241,12 +252,19 @@ function ContainerPreview({
           )}
           {status.status === 'running' && status.url && (
             <>
-              <button type="button" className="btn btn-sm" onClick={() => void reloadPreview()}>
-                <RotateCw className="icon" aria-hidden /> Reload
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || reloading}
+                onClick={() => void reloadPreview()}
+              >
+                <RotateCw className="icon" aria-hidden /> {reloading ? 'Reloading…' : 'Reload'}
               </button>
-              <a href={status.url} target="_blank" rel="noreferrer" className="btn btn-sm">
-                <ExternalLink className="icon" aria-hidden /> Open
-              </a>
+              {headerOpenShown(framing, frameMode) && (
+                <a href={status.url} target="_blank" rel="noreferrer" className="btn btn-sm">
+                  <ExternalLink className="icon" aria-hidden /> Open
+                </a>
+              )}
             </>
           )}
         </div>

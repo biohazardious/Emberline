@@ -129,6 +129,35 @@ export function framingView(p: Pick<PreviewLike, 'status' | 'framing'>): 'allowe
   return p.framing.state === 'allowed' ? 'allowed' : p.framing.state;
 }
 
+/** The panel header's Open link: not for a refused app or a plain-http preview in an https page (the panel body has its own link). */
+export function headerOpenShown(
+  framing: 'allowed' | 'refused' | 'unknown',
+  frameMode: { frame: boolean } | null,
+): boolean {
+  return framing !== 'refused' && frameMode?.frame !== false;
+}
+
+/**
+ * Reload of the framing panel: shows the answer of the recheck, rereads the status only after a
+ * failure, and runs one at a time (`ran` false: another was in flight).
+ */
+export async function recheckFraming<T>(
+  inFlight: { current: boolean },
+  deps: { post: () => Promise<T>; show: (status: T) => void; refresh: () => Promise<void> },
+): Promise<{ ran: boolean; error: unknown }> {
+  if (inFlight.current) return { ran: false, error: null };
+  inFlight.current = true;
+  try {
+    deps.show(await deps.post());
+    return { ran: true, error: null };
+  } catch (error) {
+    await deps.refresh().catch(() => undefined);
+    return { ran: true, error };
+  } finally {
+    inFlight.current = false;
+  }
+}
+
 /**
  * The factory request of Live Browser's QA check. It names no URL: the QA run opens its own work
  * through the `preview` tool, which knows where the run's preview answers for the runner.

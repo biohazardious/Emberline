@@ -1,4 +1,5 @@
 import type { ProjectSettingsResponse, WorktreeConfigStatusResponse } from '@emberline/protocol';
+import { WORKTREE_YML_EDIT_IN_SETTINGS } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import { ApiRequestError } from './api';
 import {
@@ -13,6 +14,9 @@ import {
   worktreeBanner,
   worktreeEditAvailable,
   worktreeEditorStart,
+  worktreeReloadStep,
+  worktreeYmlExplorerNote,
+  WORKTREE_RELOAD_WARNING,
   worktreeSaveEnabled,
   worktreeSaveFailure,
 } from './projectSettings';
@@ -191,5 +195,30 @@ describe('refreshWorktreeConfigViews', () => {
       ['api', '/api/projects/p1/container-preview'],
       ['api', '/api/projects/p1/repository'],
     ]);
+  });
+});
+
+describe('worktree editor Reload', () => {
+  it('Reload warns once before it replaces edits, and does nothing while busy', () => {
+    expect(worktreeReloadStep({ busy: false, edited: true, warned: false })).toBe('warn');
+    expect(worktreeReloadStep({ busy: false, edited: true, warned: true })).toBe('fetch');
+    expect(worktreeReloadStep({ busy: false, edited: false, warned: false })).toBe('fetch');
+    expect(worktreeReloadStep({ busy: true, edited: true, warned: true })).toBe('ignore');
+    expect(WORKTREE_RELOAD_WARNING).toBe(
+      'Reload replaces your edits with the file on main. Copy anything you want to keep, then press Reload again.',
+    );
+  });
+});
+
+describe('worktreeYmlExplorerNote', () => {
+  it('points main to Project settings and a run to main', () => {
+    expect(worktreeYmlExplorerNote('main')).toEqual({
+      text: WORKTREE_YML_EDIT_IN_SETTINGS,
+      link: 'Open Project settings',
+    });
+    expect(worktreeYmlExplorerNote('run-1')).toEqual({
+      text: "This is the run's copy. Runs use the approved file from main, which you edit in Project settings.",
+      link: "Edit main's worktree.yml",
+    });
   });
 });

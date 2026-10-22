@@ -7,7 +7,7 @@ import type {
   WorkspaceFileEntry,
   WorkspaceFileListResponse,
 } from '@emberline/protocol';
-import { isEmberlineDirPath, isWorktreeYmlPath, WORKTREE_YML_EDIT_IN_SETTINGS } from '@emberline/protocol';
+import { isEmberlineDirPath, isWorktreeYmlPath } from '@emberline/protocol';
 import {
   Book,
   ChevronDown,
@@ -43,7 +43,7 @@ import { PERSONA_BY_ID, PERSONA_LIST } from '../components/PersonaBadge';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
 import { useThemeMode } from '../hooks/useThemeMode';
-import { WORKTREE_EDIT_PARAM } from '../projectSettings';
+import { WORKTREE_EDIT_PARAM, worktreeYmlExplorerNote } from '../projectSettings';
 import { monacoTheme } from '../monaco';
 import { MonacoEditor } from '../components/MonacoEditor';
 
@@ -1253,8 +1253,10 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   {isWorktreeYmlPath(activeTab.path) && (
                     <p className="muted small worktree-readonly-note" style={{ margin: 0, padding: '6px 12px' }}>
-                      {WORKTREE_YML_EDIT_IN_SETTINGS}{' '}
-                      <Link href={`/projects/${projectId}/settings?${WORKTREE_EDIT_PARAM}`}>Open Project settings</Link>
+                      {worktreeYmlExplorerNote(targetId).text}{' '}
+                      <Link href={`/projects/${projectId}/settings?${WORKTREE_EDIT_PARAM}`}>
+                        {worktreeYmlExplorerNote(targetId).link}
+                      </Link>
                     </p>
                   )}
                   <div style={{ flex: 1, minHeight: 0 }}>

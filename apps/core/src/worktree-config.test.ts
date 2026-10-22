@@ -977,6 +977,17 @@ describe('editing worktree.yml from Project settings', () => {
     expect(commitCount(project)).toBe(count);
   });
 
+  it('409 not_git_repo for a project folder without git', async () => {
+    const { project } = (await api('POST', '/api/projects', { name: 'Plain', initGit: false })).json();
+    const res = await save(project.id, NEXT, null);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'not_git_repo',
+      message:
+        'The project folder is not a git repository, so the file cannot be committed. Run git init in the folder, then save again.',
+    });
+  });
+
   it('content equal to HEAD commits nothing and only approves', async () => {
     const project = await createProject('version: 1\n');
     const count = commitCount(project);
@@ -996,6 +1007,10 @@ describe('editing worktree.yml from Project settings', () => {
     writeFileSync(path.join(project.path, '.git', 'index.lock'), '');
     const res = await save(project.id, NEXT, sha('version: 1\n'));
     expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('worktree_config_commit_failed');
+    expect(res.json().message).toMatch(
+      /^Git could not commit \.emberline\/worktree\.yml: .*\. The file on main is unchanged and nothing was approved\.$/,
+    );
     rmSync(path.join(project.path, '.git', 'index.lock'));
     expect(readFileSync(path.join(project.path, YML), 'utf8')).toBe('version: 1\n');
     expect(readdirSync(path.join(project.path, '.emberline'))).toEqual(['worktree.yml']);

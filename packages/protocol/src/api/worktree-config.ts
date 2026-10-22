@@ -175,6 +175,8 @@ export const WORKTREE_CONFIG_CODES = {
   changed: 'worktree_config_changed',
   dirty: 'worktree_config_dirty',
   detached: 'main_workspace_detached',
+  notGitRepo: 'not_git_repo',
+  commitFailed: 'worktree_config_commit_failed',
   editInSettings: 'worktree_config_edit_in_settings',
 } as const;
 

@@ -10,10 +10,13 @@ import { useThemeMode } from '../hooks/useThemeMode';
 import { monacoTheme } from '../monaco';
 import {
   WORKTREE_EDIT_HINT,
+  WORKTREE_RELOAD_DISCARD_LABEL,
+  WORKTREE_RELOAD_WARNING,
   WORKTREE_SAVE_LABEL,
   WORKTREE_VALIDATE_DELAY_MS,
   refreshWorktreeConfigViews,
   worktreeEditorStart,
+  worktreeReloadStep,
   worktreeSaveEnabled,
   worktreeSaveFailure,
 } from '../projectSettings';
@@ -39,6 +42,7 @@ export function WorktreeEditor({
   const [validating, setValidating] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof worktreeSaveFailure> | null>(null);
+  const [reloadWarned, setReloadWarned] = useState(false);
 
   useEffect(() => {
     let stale = false;
@@ -67,6 +71,7 @@ export function WorktreeEditor({
   const save = async () => {
     setBusy(true);
     setFailure(null);
+    setReloadWarned(false);
     try {
       const saved = await api<WorktreeConfigStatusResponse>(statusUrl, 'PUT', {
         content,
@@ -83,6 +88,9 @@ export function WorktreeEditor({
   };
 
   const reload = async () => {
+    const step = worktreeReloadStep({ busy, edited: content !== start.content, warned: reloadWarned });
+    if (step === 'ignore') return;
+    if (step === 'warn') return setReloadWarned(true);
     setBusy(true);
     try {
       const fresh = await api<WorktreeConfigStatusResponse>(statusUrl);
@@ -91,6 +99,7 @@ export function WorktreeEditor({
       setStart(next);
       setContent(next.content);
       setFailure(null);
+      setReloadWarned(false);
     } catch (err) {
       setFailure(worktreeSaveFailure(err));
     } finally {
@@ -132,9 +141,10 @@ export function WorktreeEditor({
               ))}
             </ul>
           )}
+          {failure.reload && reloadWarned && <p className="small">{WORKTREE_RELOAD_WARNING}</p>}
           {failure.reload && (
             <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void reload()}>
-              Reload
+              {reloadWarned ? WORKTREE_RELOAD_DISCARD_LABEL : 'Reload'}
             </button>
           )}
         </div>

@@ -9,6 +9,8 @@ import {
   choosePrimaryView,
   framingRefusedText,
   framingView,
+  headerOpenShown,
+  recheckFraming,
   liveBrowserNote,
   LIVE_BROWSER_CAN_FOLLOW_NOTE,
   FOLLOW_AGENT,
@@ -376,5 +378,47 @@ describe('liveBrowserNote', () => {
     expect(offersFollow({ following: true })).toBe(false);
     expect(offersFollow({})).toBe(false);
     expect(offersFollow(null)).toBe(false);
+  });
+});
+
+describe('framing panel header', () => {
+  it('shows the header Open link only when the frame is usable', () => {
+    expect(headerOpenShown('refused', { frame: true })).toBe(false);
+    expect(headerOpenShown('allowed', { frame: false })).toBe(false);
+    expect(headerOpenShown('allowed', { frame: true })).toBe(true);
+    expect(headerOpenShown('unknown', { frame: true })).toBe(true);
+    expect(headerOpenShown('allowed', null)).toBe(true);
+  });
+
+  it('Reload shows the recheck answer, rereads only after a failure, and runs once at a time', async () => {
+    const shown: string[] = [];
+    let refreshed = 0;
+    const guard = { current: false };
+    let release!: (v: string) => void;
+    const first = recheckFraming(guard, {
+      post: () => new Promise<string>((r) => (release = r)),
+      show: (s) => shown.push(s),
+      refresh: async () => void refreshed++,
+    });
+    expect(
+      await recheckFraming(guard, {
+        post: async () => 'second',
+        show: (s) => shown.push(s),
+        refresh: async () => void refreshed++,
+      }),
+    ).toEqual({ ran: false, error: null });
+    release('fresh');
+    await first;
+    expect(shown).toEqual(['fresh']);
+    expect(refreshed).toBe(0);
+    const failed = await recheckFraming(guard, {
+      post: async () => {
+        throw new Error('down');
+      },
+      show: () => undefined,
+      refresh: async () => void refreshed++,
+    });
+    expect(failed.ran).toBe(true);
+    expect(refreshed).toBe(1);
   });
 });
