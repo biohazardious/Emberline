@@ -28,6 +28,14 @@ const MAX_SERVICES = 100;
 const MAX_PORTS_PER_SERVICE = 20;
 const ENV_FILE_MAX_BYTES = 256 * 1024;
 const LINE_MAX_CHARS = 200;
+/**
+ * Compose fetches a remote `include:` (a git URL or `oci://`) by default; the box reads only the
+ * committed file and the workspace, never the network. A project's `.env` cannot turn these back on.
+ */
+const NO_REMOTE_RESOURCES_ENV = {
+  COMPOSE_EXPERIMENTAL_GIT_REMOTE: 'false',
+  COMPOSE_EXPERIMENTAL_OCI_REMOTE: 'false',
+};
 
 /** `-p` is fixed (a `name:` in the file cannot pick it), the directory is the main workspace (its `.env`). */
 export function composeConfigArgs(project: string, projectDir: string): string[] {
@@ -193,6 +201,8 @@ export class ComposeConfigReader {
     } catch (error) {
       return fail((error as Error).message, false);
     }
+    // An environment variable cannot carry a NUL byte (and YAML has none): the same answer every time.
+    if (content.includes('\0')) return fail('it is not a text file');
     const shell = composeShell(composeConfigArgs(mainComposeProjectName(projectId), projectPath));
     let ran: ExecResult;
     try {
@@ -200,7 +210,7 @@ export class ComposeConfigReader {
         file: shell.file,
         args: shell.args,
         cwd: projectPath,
-        env: { [COMPOSE_OVERRIDE_ENV]: content },
+        env: { [COMPOSE_OVERRIDE_ENV]: content, ...NO_REMOTE_RESOURCES_ENV },
         timeoutMs: COMPOSE_CONFIG_TIMEOUT_MS,
         maxOutputBytes: COMPOSE_CONFIG_MAX_OUTPUT_BYTES,
       });
@@ -212,10 +222,11 @@ export class ComposeConfigReader {
       return fail(`its configuration is larger than ${COMPOSE_CONFIG_MAX_OUTPUT_BYTES / 1024 / 1024} MB`);
     if (ran.exitCode !== 0) {
       // 127: no Docker CLI in the runner (an old image): not the file's fault, ask again later.
-      return fail(
-        firstErrorLine(ran.stderr, ran.stdout) ?? `docker compose config exited with ${ran.exitCode}`,
-        ran.exitCode !== 127,
+      const line = firstErrorLine(ran.stderr, ran.stdout)?.replace(
+        /^failed to parse -:/,
+        `failed to parse ${entry.file}:`,
       );
+      return fail(line ?? `docker compose config exited with ${ran.exitCode}`, ran.exitCode !== 127);
     }
     const services = parseComposeConfig(ran.stdout);
     if (!services) return fail('docker compose config printed something unexpected');

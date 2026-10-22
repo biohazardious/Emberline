@@ -132,8 +132,12 @@ describe('GET /api/projects/:id/container-preview', () => {
       ]),
     );
     expect(request!.args).not.toContain('--no-interpolate');
-    // Only the file travels in the environment: no project or engine variables.
-    expect(Object.keys(request!.env ?? {})).toEqual([COMPOSE_OVERRIDE_ENV]);
+    // Only the file and the remote-resource switches travel in the environment: no project or engine variables.
+    expect(request!.env).toEqual({
+      [COMPOSE_OVERRIDE_ENV]: COMPOSE,
+      COMPOSE_EXPERIMENTAL_GIT_REMOTE: 'false',
+      COMPOSE_EXPERIMENTAL_OCI_REMOTE: 'false',
+    });
     expect(request!.env![COMPOSE_OVERRIDE_ENV]).toBe(COMPOSE);
     expect(request!.timeoutMs).toBe(15_000);
     expect(request!.maxOutputBytes).toBe(1024 * 1024);
@@ -237,6 +241,43 @@ describe('GET /api/projects/:id/container-preview', () => {
     });
   });
 
+  it('a remote include (git or oci://) is not fetched: compose runs with both remote switches off', async () => {
+    const remote = `include:\n  - https://github.com/example/stack.git#main:compose.yaml\n  - oci://docker.io/example/stack:1\n${COMPOSE}`;
+    const p = await createProject({ 'compose.yaml': remote });
+    // What compose 5.6 answers with COMPOSE_EXPERIMENTAL_GIT_REMOTE=false.
+    compose.next = {
+      ...ok(''),
+      exitCode: 1,
+      stderr: 'git remote resource is disabled by "COMPOSE_EXPERIMENTAL_GIT_REMOTE"\n',
+    };
+    expect(await options(p.id)).toMatchObject({
+      available: false,
+      file: 'compose.yaml',
+      reason:
+        'Docker Compose couldn\'t read compose.yaml: git remote resource is disabled by "COMPOSE_EXPERIMENTAL_GIT_REMOTE".',
+      services: [],
+    });
+    expect(compose.requests).toHaveLength(1);
+    expect(compose.requests[0]!.env).toMatchObject({
+      [COMPOSE_OVERRIDE_ENV]: remote,
+      COMPOSE_EXPERIMENTAL_GIT_REMOTE: 'false',
+      COMPOSE_EXPERIMENTAL_OCI_REMOTE: 'false',
+    });
+  });
+
+  it('a YAML error names the file instead of compose\'s stdin "-"', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE });
+    compose.next = {
+      ...ok(''),
+      exitCode: 1,
+      stderr:
+        'failed to parse -: go-yaml load error in parser at L3.C1: did not find expected node content\n',
+    };
+    expect((await options(p.id)).reason).toBe(
+      "Docker Compose couldn't read compose.yaml: failed to parse compose.yaml: go-yaml load error in parser at L3.C1: did not find expected node content.",
+    );
+  });
+
   it('warnings next to a good result still list the services', async () => {
     const p = await createProject({ 'compose.yaml': COMPOSE });
     compose.next = ok(CONFIG, 'WARN[0000] The "TAG" variable is not set. Defaulting to a blank string.\n');
@@ -280,6 +321,34 @@ describe('GET /api/projects/:id/container-preview', () => {
       commitAll(p, 'readme'); // another HEAD commit
       await options(p.id);
       expect(compose.requests).toHaveLength(3);
+    });
+
+    it('a file compose cannot read is cached like a good one: no new call until HEAD, the file or .env changes', async () => {
+      const p = await createProject({ 'compose.yaml': COMPOSE });
+      compose.next = { ...ok(''), exitCode: 15, stderr: 'yaml: line 2: did not find expected key\n' };
+      await options(p.id);
+      compose.next = ok('not json');
+      expect((await options(p.id)).reason).toBe(
+        "Docker Compose couldn't read compose.yaml: yaml: line 2: did not find expected key.",
+      );
+      expect(compose.requests).toHaveLength(1);
+      writeFileSync(path.join(p.path, '.env'), 'X=1\n');
+      expect((await options(p.id)).reason).toBe(
+        "Docker Compose couldn't read compose.yaml: docker compose config printed something unexpected.",
+      );
+      await options(p.id);
+      expect(compose.requests).toHaveLength(2);
+    });
+
+    it('a file with a NUL byte is refused without compose, and the answer is cached', async () => {
+      const p = await createProject({ 'compose.yaml': `${COMPOSE}#\0\n` });
+      expect((await options(p.id)).reason).toBe(
+        "Docker Compose couldn't read compose.yaml: it is not a text file.",
+      );
+      expect((await options(p.id)).reason).toBe(
+        "Docker Compose couldn't read compose.yaml: it is not a text file.",
+      );
+      expect(compose.requests).toHaveLength(0);
     });
 
     it('a timeout or a runner that cannot run compose is not cached', async () => {
