@@ -94,27 +94,6 @@ export async function accountRemoteHead(
   return (await remoteHeads(r, cwd, branch)).find((head) => head.name === branch)?.oid ?? null;
 }
 
-/** Updates only refs/remotes/origin/<branch> (explicit refspec, `--refmap=`). */
-export async function accountFetchBranch(r: AccountRemote, repoPath: string, branch: string): Promise<void> {
-  await r.gateway.run(grant(r), (url) =>
-    execGitFile(
-      [
-        ...gatewayGitArgs(r.gateway),
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        '--no-recurse-submodules',
-        '--refmap=',
-        '--',
-        url,
-        `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
-      ],
-      { cwd: repoPath, timeout: 10 * MINUTE },
-    ),
-  );
-}
-
-/** Whether `cwd`'s object store has the commit (the runner's git, no network). */
 /**
  * Git for the push plan reads only the real objects: no replace refs, no `info/grafts`, no
  * commit-graph. Agents can write all three in the shared repository to fake ancestry.
@@ -126,6 +105,7 @@ const planGit = (args: string[], cwd: string) =>
     env: PLAN_ENV,
   });
 
+/** Whether `cwd`'s object store has the commit (the runner's git, no network). */
 async function hasCommit(cwd: string, oid: string): Promise<boolean> {
   return planGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(
     () => true,
@@ -133,14 +113,23 @@ async function hasCommit(cwd: string, oid: string): Promise<boolean> {
   );
 }
 
-/** Fetches a remote branch's objects without updating any ref (no destination, `--refmap=`, no FETCH_HEAD). */
-async function fetchBranchObjects(r: AccountRemote, repoPath: string, branch: string): Promise<void> {
+/**
+ * Fetches a remote branch's objects without updating any ref (no destination, `--refmap=`, no
+ * FETCH_HEAD, no commit-graph, no auto maintenance).
+ */
+export async function accountFetchBranchObjects(
+  r: AccountRemote,
+  repoPath: string,
+  branch: string,
+): Promise<void> {
   await r.gateway.run(grant(r), (url) =>
     execGitFile(
       [
         ...gatewayGitArgs(r.gateway),
         '-c',
         'fetch.writeCommitGraph=false',
+        '-c',
+        'maintenance.auto=false',
         'fetch',
         '--no-tags',
         '--no-write-fetch-head',
@@ -205,7 +194,7 @@ export async function accountPushBranch(
   const remoteOid = await accountRemoteHead(r, repoPath, branch);
   if (remoteOid === newOid) return 'pushed';
   if (remoteOid) {
-    if (!(await hasCommit(repoPath, remoteOid))) await fetchBranchObjects(r, repoPath, branch);
+    if (!(await hasCommit(repoPath, remoteOid))) await accountFetchBranchObjects(r, repoPath, branch);
     // Still missing: the remote moved on since; not a fast-forward of what was checked.
     if (!(await hasCommit(repoPath, remoteOid)) || !(await isAncestor(repoPath, remoteOid, newOid)))
       return 'rejected';

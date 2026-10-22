@@ -13,7 +13,7 @@ import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import { execGitFile } from '../git-exec.js';
 import { GitGateway } from './gateway.js';
 import {
-  accountFetchBranch,
+  accountFetchBranchObjects,
   gatewayGitArgs,
   accountPushBranch,
   accountRemoteBranches,
@@ -107,8 +107,10 @@ describe('the git gateway', () => {
     execFileSync('git', ['clone', '-q', a.bare('alice', 'app'), elsewhere]);
     commit(elsewhere, 'b.txt');
     gitIn(elsewhere, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
-    await accountFetchBranch(remote(), repo, 'main');
-    expect(gitIn(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(gitIn(elsewhere, 'rev-parse', 'HEAD'));
+    await accountFetchBranchObjects(remote(), repo, 'main');
+    // The objects only: no ref is written.
+    expect(gitIn(repo, 'cat-file', '-t', gitIn(elsewhere, 'rev-parse', 'HEAD'))).toBe('commit');
+    expect(gitIn(repo, 'for-each-ref', '--format=%(refname)', 'refs/remotes')).toBe('');
     expect(a.seen.every((r) => r.authorization === `Basic ${basicAuthValue(cred())}`)).toBe(true);
     expect(gateway.size).toBe(0);
     expect(logs.join('')).not.toMatch(/\/api\/internal\/git\/[A-Za-z0-9_-]{43}/);

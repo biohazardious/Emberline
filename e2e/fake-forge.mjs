@@ -1,7 +1,8 @@
 /**
  * Fake Gitea for make e2e (see apps/core/src/test-fake-forge.ts, the unit-test twin).
- * REST under /api/v1 and git smart HTTP through `git http-backend` (CGI). One debug route without
- * auth: GET /_e2e/head/<owner>/<name> reports the commit of refs/heads/main in a repository.
+ * REST under /api/v1 and git smart HTTP through `git http-backend` (CGI). Two debug routes without
+ * auth (the e2e network only): GET /_e2e/head/<owner>/<name> reports the commit of refs/heads/main
+ * in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on it, as a push from elsewhere.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -110,6 +111,23 @@ createServer((req, res) => {
         }
       }
       return json(res, 200, { main });
+    }
+    const outside = /^\/_e2e\/commit\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+    if (req.method === 'POST' && outside) {
+      if (outside[1].includes('..') || outside[2].includes('..')) return json(res, 400, { message: 'bad name' });
+      const dir = path.join(root, outside[1], `${outside[2]}.git`);
+      const g = (args, env) =>
+        execFileSync('git', ['--git-dir', dir, ...args], { encoding: 'utf8', env: { ...process.env, ...env } }).trim();
+      const parent = g(['rev-parse', 'refs/heads/main']);
+      const who = {
+        GIT_AUTHOR_NAME: 'outside',
+        GIT_AUTHOR_EMAIL: 'o@e',
+        GIT_COMMITTER_NAME: 'outside',
+        GIT_COMMITTER_EMAIL: 'o@e',
+      };
+      const commit = g(['commit-tree', g(['rev-parse', `${parent}^{tree}`]), '-p', parent, '-m', 'pushed from elsewhere'], who);
+      g(['update-ref', 'refs/heads/main', commit, parent]);
+      return json(res, 200, { main: commit });
     }
     const git = /^\/(.+\.git)\/(?:info\/refs|git-upload-pack|git-receive-pack)$/.exec(url.pathname);
     if (git) {

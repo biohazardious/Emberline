@@ -71,17 +71,31 @@ export interface RemoteCheck {
   /** Why origin could not be read (redacted); published is false then. */
   error: string | null;
 }
+/**
+ * Keep main pushed's push that has not run yet (one per project: the newest merge). Kept across a
+ * restart; only `commitOid`, the merge's own full id, is ever pushed.
+ */
+const PendingMainPushSchema = z.object({
+  id: z.string(),
+  runId: z.string().nullable(),
+  commitOid: z.string().nullable(),
+  unverified: z.boolean(),
+  queuedAt: z.string(),
+});
+export type PendingMainPush = z.infer<typeof PendingMainPushSchema>;
 /** Project settings → Repository: the opt-in automatic push, its last failure, the last read of origin. */
 export interface RepositorySettings {
   keepMainPushed: boolean;
   lastMainPushError: string | null;
   lastRemoteCheck: RemoteCheck | null;
+  pendingMainPush: PendingMainPush | null;
 }
 const RemoteCheckSchema = z.object({ url: z.string(), branch: z.string(), at: z.string(), published: z.boolean(), error: z.string().nullable() });
 const RepositorySettingsSchema = z.object({
   keepMainPushed: z.boolean().catch(false).default(false),
   lastMainPushError: z.string().nullable().catch(null).default(null),
   lastRemoteCheck: RemoteCheckSchema.nullable().catch(null).default(null),
+  pendingMainPush: PendingMainPushSchema.nullable().catch(null).default(null),
 });
 export function readRepositorySettings(db: Db, projectId: string): RepositorySettings {
   return RepositorySettingsSchema.parse(readProjectSettings(db, projectId).repository ?? {});

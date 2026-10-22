@@ -45,6 +45,16 @@ async function step(name, fn) {
   }
 }
 
+/** Polls `fn` until it returns true; fails with `message` after `ms`. */
+async function until(fn, message, ms = 30_000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await fn()) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(message);
+}
+
 async function waitForHealth() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -207,6 +217,34 @@ await step('repository: a forge account creates the repository and main is pushe
   assert.ok(!`${created.text}${pushed.text}${refreshed.text}`.includes('e2e-forge-token'), 'the token never comes back');
   const head = await (await fetch('http://forge:3000/_e2e/head/e2e/smoke')).json();
   assert.match(head.main ?? '', /^[0-9a-f]{40}$/);
+});
+
+await step('repository: Keep main pushed pushes a merge; a remote that moved on is reported, never forced', async () => {
+  const base = `/api/projects/${project.id}/repository`;
+  const forgeMain = async () => (await (await fetch('http://forge:3000/_e2e/head/e2e/smoke')).json()).main;
+  assert.equal((await api('PATCH', base, { keepMainPushed: true })).json.keepMainPushed, true);
+  const run = await api('POST', '/api/runs', { projectId: project.id, prompt: 'e2e keep main pushed' });
+  assert.equal(run.status, 201, run.text);
+  await api('POST', `/api/runs/${run.json.id}/stop`);
+  const mergeFile = async (name) => {
+    const w = await api('PUT', `/api/projects/${project.id}/files/content`, { targetId: run.json.id, path: name, content: `${name}\n` });
+    assert.equal(w.status, 200, w.text);
+    const s = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.json.id });
+    assert.equal(s.json?.ok, true, s.text);
+  };
+  await mergeFile('kept.txt');
+  const tip = (await api('GET', base)).json.mainTip.sha;
+  await until(async () => (await forgeMain()) === tip, 'Keep main pushed never pushed the merge');
+  const elsewhere = await (await fetch('http://forge:3000/_e2e/commit/e2e/smoke', { method: 'POST' })).json();
+  await mergeFile('kept-2.txt');
+  const DIVERGED = "The remote's main has commits this project doesn't have. Pull them in from a terminal, then push again.";
+  await until(async () => (await api('GET', base)).json.lastMainPushError === DIVERGED, 'the diverged push was not reported');
+  assert.equal(await forgeMain(), elsewhere.main, 'never forced');
+  const push = await api('POST', `${base}/push-main`);
+  assert.equal(push.status, 409, push.text);
+  assert.equal(push.json.error, 'main_diverged');
+  assert.equal((await api('POST', `${base}/refresh`)).json.mainState, 'diverged');
+  await api('PATCH', base, { keepMainPushed: false });
 });
 
 await step('demo is served sandboxed through a capability URL', async () => {

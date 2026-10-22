@@ -4,8 +4,10 @@ import path from 'node:path';
 import type { RepositoryStatus, Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { updateAccount } from '../forge/account-store.js';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
+import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
+import { withMainWorkspaceLock } from '../factory/merge.js';
+import { updateAccount } from '../forge/account-store.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   authHeaders,
@@ -328,6 +330,82 @@ describe('push main', () => {
       message: 'The main workspace is on side, not main.',
     });
     expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+  });
+
+  it.each(['push-main', 'refresh'])(
+    '%s never holds the main-workspace lock while git talks to the remote',
+    async (action) => {
+      if (action === 'refresh') await send('POST', `/api/projects/${projectId}/repository/push-main`);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let reached!: () => void;
+      const atNetwork = new Promise<void>((r) => (reached = r));
+      setCommandExecutor(async (request) => {
+        if (request.args.includes(action === 'push-main' ? 'push' : 'ls-remote')) {
+          reached();
+          await gate;
+        }
+        return localCommandExecutor(request);
+      });
+      try {
+        const pending = send('POST', `/api/projects/${projectId}/repository/${action}`);
+        await atNetwork;
+        const got = await Promise.race([
+          withMainWorkspaceLock(projectPath, async () => 'locked'),
+          new Promise((r) => setTimeout(() => r('blocked'), 2_000)),
+        ]);
+        expect(got).toBe('locked'); // a merge is never held up by the network
+        release();
+        expect((await pending).statusCode).toBe(200);
+        expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/main')).toBe(
+          git(projectPath, 'rev-parse', 'HEAD'),
+        );
+      } finally {
+        release();
+        setCommandExecutor(localCommandExecutor);
+      }
+    },
+  );
+
+  it('a refresh while origin is replaced records nothing for the old URL', async () => {
+    const oldUrl = `${forge.url}/alice/app.git`;
+    const newUrl = `${forge.url}/alice/other.git`;
+    forge.bare('alice', 'other');
+    await send('POST', `/api/projects/${projectId}/repository/push-main`);
+    writeRepositorySettings(t.db, projectId, { lastRemoteCheck: null });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let reached!: () => void;
+    const atNetwork = new Promise<void>((r) => (reached = r));
+    let gated = false;
+    setCommandExecutor(async (request) => {
+      if (!gated && request.args.includes('ls-remote')) {
+        gated = true; // only the refresh's read of the old URL waits
+        reached();
+        await gate;
+      }
+      return localCommandExecutor(request);
+    });
+    try {
+      const refreshing = send('POST', `/api/projects/${projectId}/repository/refresh`);
+      await atNetwork;
+      const connecting = send('POST', `/api/projects/${projectId}/repository/connect`, {
+        url: newUrl,
+        replace: true,
+      });
+      // The replace sets origin while the refresh still waits on the network.
+      for (let i = 0; i < 100 && git(projectPath, 'remote', 'get-url', 'origin') !== newUrl; i++)
+        await new Promise((r) => setTimeout(r, 50));
+      expect(git(projectPath, 'remote', 'get-url', 'origin')).toBe(newUrl);
+      release();
+      expect((await refreshing).statusCode).toBe(200);
+      expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.url ?? null).not.toBe(oldUrl);
+      expect((await connecting).statusCode).toBe(200);
+      expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.url).toBe(newUrl);
+    } finally {
+      release();
+      setCommandExecutor(localCommandExecutor);
+    }
   });
 
   it('tags are never pushed, even with push.followTags in the repository config', async () => {

@@ -16,11 +16,12 @@ import { accountForRemote, gitCredentialForRemote } from '../forge/account-store
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway } from '../git-gateway/gateway.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import {
   aheadBehind,
   branchTip,
   DIVERGED_MESSAGE,
-  fetchBranch,
+  fetchBranchObjects,
   isAncestorCommit,
   listRemoteBranches,
   MAIN_MOVED_MESSAGE,
@@ -28,8 +29,11 @@ import {
   originUrls,
   pushBranch,
   type RemoteAccess,
+  remoteBranchHead,
   remoteUrlForDisplay,
   setOrigin,
+  setRemoteTracking,
+  setUpstream,
   shortGitError,
   validateRepositoryUrl,
 } from './git.js';
@@ -56,7 +60,21 @@ const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const remoteErrorText = (error: unknown) =>
   error instanceof HttpError ? error.message : shortGitError(error);
 
+/** What a refresh or push read under the main-workspace lock, for its network call outside it. */
+interface Snapshot {
+  path: string;
+  branch: string;
+  defaultBranch: string;
+  access: RemoteAccess;
+}
+
 export class RepositoryService {
+  /**
+   * Refresh and push, one at a time per project. Their network calls run outside the
+   * main-workspace lock, so a merge never waits on the forge.
+   */
+  private readonly remoteOps = new KeyedMutex();
+
   constructor(
     private readonly db: Db,
     private readonly accounts: ForgeAccountsService,
@@ -156,11 +174,25 @@ export class RepositoryService {
   }
 
   async refresh(projectId: string): Promise<RepositoryStatus> {
-    const ws = await this.workspace(projectId);
-    await withMainWorkspaceLock(ws.path, async () =>
-      this.readRemote(projectId, ws.path, ws.defaultBranch, await this.access(projectId, ws.path)),
+    await this.remoteOps.run(projectId, async () =>
+      this.readRemote(projectId, await this.snapshot(projectId)),
     );
     return this.status(projectId);
+  }
+
+  /** The workspace and origin, read under the main-workspace lock (local only). */
+  private async snapshot(projectId: string): Promise<Snapshot> {
+    return withMainWorkspaceLock(this.project(projectId).path, async () => {
+      const ws = await this.workspace(projectId);
+      return { ...ws, access: await this.access(projectId, ws.path) };
+    });
+  }
+
+  /** Under the lock: origin and projects.repoUrl still name what the network call used. */
+  private async originStill(projectId: string, ws: Snapshot): Promise<boolean> {
+    const { fetch, push } = await originUrls(ws.path);
+    const row = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
+    return row?.repoUrl === ws.access.url && fetch === ws.access.url && (!push || push === fetch);
   }
 
   async connect(projectId: string, raw: unknown): Promise<RepositoryStatus> {
@@ -247,9 +279,10 @@ export class RepositoryService {
   }
 
   /**
-   * Push one commit of the default branch, then read origin again (inside the same lock) so status
-   * shows the result without a network call. The branch and its commit are read under the lock, and
-   * exactly that commit is pushed, whatever the ref names by the time git runs.
+   * Push one commit of the default branch, in three steps: under the main-workspace lock, the branch,
+   * its commit and origin are read; with no lock, exactly that commit is pushed (whatever the ref
+   * names by then); under the lock again, the tracking ref and the read of origin are recorded, if
+   * origin is still the one pushed to. A rejected push reads origin again so status shows why.
    * `mergeOid` undefined: a person's Push main (the tip, with the default branch checked out);
    * otherwise Keep main pushed (the merge's commit, only while it is still the tip; `superseded`:
    * the tip is a later Emberline merge, whose own push publishes it).
@@ -258,29 +291,58 @@ export class RepositoryService {
     projectId: string,
     { mergeOid }: { mergeOid: string | null | undefined },
   ): Promise<'pushed' | 'rejected' | 'superseded'> {
-    return withMainWorkspaceLock(this.project(projectId).path, async () => {
-      const ws = await this.workspace(projectId);
-      const tip = await branchTip(ws.path, ws.defaultBranch);
-      if (mergeOid === undefined) {
-        if (ws.branch !== ws.defaultBranch) {
-          throw conflict(`The main workspace is on ${ws.branch}, not ${ws.defaultBranch}.`, 'branch_differs');
+    return this.remoteOps.run(projectId, async () => {
+      const plan = await withMainWorkspaceLock(this.project(projectId).path, async () => {
+        const ws = await this.workspace(projectId);
+        const tip = await branchTip(ws.path, ws.defaultBranch);
+        if (mergeOid === undefined) {
+          if (ws.branch !== ws.defaultBranch) {
+            throw conflict(`The main workspace is on ${ws.branch}, not ${ws.defaultBranch}.`, 'branch_differs');
+          }
+          if (!tip) throw conflict('Main has no commits yet.', 'no_commits');
+        } else {
+          // A full id compared as is: a prefix is never resolved (an agent can plant a commit that matches it).
+          const full = mergeOid !== null && FULL_OID.test(mergeOid) ? mergeOid : null;
+          if (!full || !tip) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+          if (tip.sha !== full) {
+            // A later Emberline merge on top of this one: its own push publishes both. A rewind to an
+            // older merge (this one not in the tip's history) is "moved".
+            if (isEmberlineMergeCommit(ws.path, tip.sha) && (await isAncestorCommit(ws.path, full, tip.sha)))
+              return 'superseded' as const;
+            // The merge went into the branch checked out instead (it never was on the default branch).
+            if (ws.branch !== ws.defaultBranch && (await isAncestorCommit(ws.path, full, `refs/heads/${ws.branch}`)))
+              throw conflict(
+                `The merge went into ${ws.branch}, which is checked out in the main workspace; Keep main pushed pushes only ${ws.defaultBranch}.`,
+                'merged_elsewhere',
+              );
+            throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+          }
         }
-        if (!tip) throw conflict('Main has no commits yet.', 'no_commits');
-      } else {
-        // A full id compared as is: a prefix is never resolved (an agent can plant a commit that matches it).
-        const full = mergeOid !== null && FULL_OID.test(mergeOid) ? mergeOid : null;
-        if (!full || !tip) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
-        if (tip.sha !== full) {
-          // A later Emberline merge on top of this one: its own push publishes both. A rewind to an
-          // older merge (this one not in the tip's history) is "moved".
-          if (isEmberlineMergeCommit(ws.path, tip.sha) && (await isAncestorCommit(ws.path, full, tip.sha)))
-            return 'superseded';
-          throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
-        }
+        return { ...ws, oid: tip.sha, access: await this.access(projectId, ws.path) };
+      });
+      if (plan === 'superseded') return plan;
+      const result = await pushBranch(plan.path, plan.access, plan.defaultBranch, plan.oid);
+      if (result === 'rejected') {
+        await this.readRemote(projectId, plan);
+        return result;
       }
-      const access = await this.access(projectId, ws.path);
-      const result = await pushBranch(ws.path, access, ws.defaultBranch, tip!.sha);
-      await this.readRemote(projectId, ws.path, ws.defaultBranch, access);
+      await withMainWorkspaceLock(plan.path, async () => {
+        if (!(await this.originStill(projectId, plan))) return; // origin changed meanwhile: its own read counts
+        await setRemoteTracking(plan.path, plan.defaultBranch, plan.oid);
+        await setUpstream(plan.path, plan.defaultBranch);
+        const check: RemoteCheck = {
+          url: plan.access.url,
+          branch: plan.defaultBranch,
+          at: new Date().toISOString(),
+          published: true,
+          error: null,
+        };
+        try {
+          writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
+        } catch {
+          // the project was deleted meanwhile
+        }
+      });
       return result;
     });
   }
@@ -309,29 +371,36 @@ export class RepositoryService {
     return this.accessFor(projectId, fetch);
   }
 
-  /** ls-remote, then the fetch of the branch when the remote has it; never throws, the result (or why it failed) is kept. */
-  private async readRemote(
-    projectId: string,
-    mainPath: string,
-    branch: string,
-    access: RemoteAccess,
-  ): Promise<void> {
+  /**
+   * ls-remote, then the branch's objects (no ref written), outside the main-workspace lock; then,
+   * under it, refs/remotes/origin/<branch> set to the commit ls-remote reported and the read (or why
+   * it failed) kept; a failed read is recorded, not thrown. Nothing is recorded when origin changed
+   * meanwhile.
+   */
+  private async readRemote(projectId: string, ws: Snapshot): Promise<void> {
+    const branch = ws.defaultBranch;
     const at = new Date().toISOString();
     let check: RemoteCheck;
+    let remoteOid: string | null = null;
     try {
-      const published = (await listRemoteBranches(mainPath, access, branch)).includes(branch);
-      if (published) await fetchBranch(mainPath, access, branch);
-      check = { url: access.url, branch, at, published, error: null };
+      remoteOid = await remoteBranchHead(ws.path, ws.access, branch);
+      if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
+      check = { url: ws.access.url, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
+      remoteOid = null;
       const reason =
-        error instanceof HttpError ? error.message : describeGitError(error, access.account?.credential);
-      check = { url: access.url, branch, at, published: false, error: reason };
+        error instanceof HttpError ? error.message : describeGitError(error, ws.access.account?.credential);
+      check = { url: ws.access.url, branch, at, published: false, error: reason };
     }
-    try {
-      writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
-    } catch {
-      // the project was deleted meanwhile
-    }
+    await withMainWorkspaceLock(ws.path, async () => {
+      if (!(await this.originStill(projectId, ws))) return; // origin changed meanwhile: its own read counts
+      if (remoteOid) await setRemoteTracking(ws.path, branch, remoteOid);
+      try {
+        writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
+      } catch {
+        // the project was deleted meanwhile
+      }
+    });
   }
 
   /** Names origin without user info, query or fragment: a token set by hand in it is never echoed. */

@@ -16,6 +16,7 @@ import {
   type TestApp,
 } from '../test-utils.js';
 import { DIVERGED_MESSAGE, MAIN_MOVED_MESSAGE, MERGE_UNVERIFIED_MESSAGE } from './git.js';
+import { KeepMainPushed } from './keep-pushed.js';
 
 let t: TestApp;
 let cookie: string;
@@ -291,5 +292,48 @@ describe('keep main pushed', () => {
     await t.mainPush.idle();
     expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
     expect(notes('rb').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+  });
+
+  it('a push queued when core stops runs after the next start, and only for the recorded merge', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const m = merged();
+    t.runs.note('r1', 'merged_to_main', m);
+    await t.mainPush.stop(); // stops before the queued push ran
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    const next = new KeepMainPushed(t.db, t.runs, t.repository);
+    next.start();
+    await next.idle();
+    expect(remoteMain()).toBe(m.commitOid);
+    expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+    await next.stop();
+  });
+
+  it('after a restart, a main that moved meanwhile is not pushed and says so', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.stop();
+    commit(projectPath, 'agent.txt');
+    const next = new KeepMainPushed(t.db, t.runs, t.repository);
+    next.start();
+    await next.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
+    expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+    await next.stop();
+  });
+
+  it('a merge into another checked-out branch says so, and nothing is pushed', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    git(projectPath, 'checkout', '-q', '-b', 'side');
+    const dir = worktree('s1');
+    noteMerge('s1', await merge('s1', dir));
+    await t.mainPush.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('s1').map((n) => n.payload)).toEqual([
+      {
+        reason:
+          'The merge went into side, which is checked out in the main workspace; Keep main pushed pushes only main.',
+      },
+    ]);
   });
 });

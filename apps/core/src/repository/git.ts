@@ -5,13 +5,14 @@ import { execGitFile } from '../git-exec.js';
 import { describeGitError } from '../git-gateway/gateway.js';
 import {
   type AccountRemote,
-  accountFetchBranch,
+  accountFetchBranchObjects,
   accountPushBranch,
   accountRemoteBranches,
+  accountRemoteHead,
 } from '../git-gateway/remote-git.js';
 
 export const MAIN_MOVED_MESSAGE =
-  'Main moved outside Emberline since the merge; push it from Project settings → Repository.';
+  "Main's latest commit is not this merge, so Keep main pushed did not push it. Check main, then push it from Project settings → Repository.";
 export const MERGE_UNVERIFIED_MESSAGE =
   'Main changed during the merge; Emberline did not record it for pushing.';
 export const DIVERGED_MESSAGE =
@@ -152,25 +153,74 @@ export async function listRemoteBranches(
   return branch ? names.filter((name) => name === branch) : names;
 }
 
-/** Updates only `refs/remotes/origin/<branch>`: an explicit refspec and `--refmap=` on both paths. */
-export async function fetchBranch(mainPath: string, access: RemoteAccess, branch: string): Promise<void> {
-  if (access.account) {
-    await accountFetchBranch(access.account, mainPath, branch);
-    return;
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** The commit `refs/heads/<branch>` names on the remote; null when it has no such branch. */
+export async function remoteBranchHead(
+  mainPath: string,
+  access: RemoteAccess,
+  branch: string,
+): Promise<string | null> {
+  if (access.account) return accountRemoteHead(access.account, mainPath, branch);
+  const out = (
+    await execGitFile(['ls-remote', '--heads', '--', access.url, `refs/heads/${branch}`], {
+      cwd: mainPath,
+      timeout: 20_000,
+    })
+  ).stdout;
+  for (const line of out.split('\n')) {
+    const [oid, ref] = line.split('\t');
+    if (ref?.trim() === `refs/heads/${branch}` && OID.test(oid?.trim() ?? '')) return oid!.trim();
   }
-  await execGitFile(
-    [
-      'fetch',
-      '--no-tags',
-      '--no-write-fetch-head',
-      '--no-recurse-submodules',
-      '--refmap=',
-      '--',
-      access.url,
-      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
-    ],
-    { cwd: mainPath, timeout: 30_000 },
+  return null;
+}
+
+const hasRealCommit = (cwd: string, oid: string) =>
+  realGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(
+    () => true,
+    () => false,
   );
+
+/**
+ * The remote branch's objects, so `oid` (what ls-remote reported) can be read locally. No ref and no
+ * FETCH_HEAD is written: no main-workspace lock is needed, and the caller sets the tracking ref.
+ */
+export async function fetchBranchObjects(
+  mainPath: string,
+  access: RemoteAccess,
+  branch: string,
+  oid: string,
+): Promise<void> {
+  if (await hasRealCommit(mainPath, oid)) return;
+  if (access.account) await accountFetchBranchObjects(access.account, mainPath, branch);
+  else
+    await execGitFile(
+      [
+        '-c',
+        'fetch.writeCommitGraph=false',
+        '-c',
+        'maintenance.auto=false',
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        '--no-recurse-submodules',
+        '--refmap=',
+        '--',
+        access.url,
+        `refs/heads/${branch}`,
+      ],
+      { cwd: mainPath, timeout: 30_000 },
+    );
+  // The remote moved on between ls-remote and the fetch.
+  if (!(await hasRealCommit(mainPath, oid)))
+    throw new HttpError(409, 'remote_moved', "origin's main changed while Emberline read it. Press Refresh again.");
+}
+
+/** Points `refs/remotes/origin/<branch>` at `oid`. Local only; the caller holds the main-workspace lock. */
+export async function setRemoteTracking(mainPath: string, branch: string, oid: string): Promise<void> {
+  await execGitFile(['update-ref', '-m', 'emberline: origin read', `refs/remotes/origin/${branch}`, oid], {
+    cwd: mainPath,
+  });
 }
 
 export async function aheadBehind(
@@ -189,7 +239,8 @@ export async function aheadBehind(
 
 /**
  * Pushes `oid` (read by the caller under the main-workspace lock) to `refs/heads/<branch>` at the
- * access URL: never forced, never tags; the first push sets upstream.
+ * access URL: never forced, never tags. Writes nothing locally (no lock needed); the caller sets the
+ * tracking ref and upstream under the lock.
  */
 export async function pushBranch(
   mainPath: string,
@@ -198,10 +249,9 @@ export async function pushBranch(
   oid: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
-  let result: 'pushed' | 'rejected';
   if (access.account) {
     try {
-      result = await accountPushBranch(access.account, mainPath, branch, oid);
+      return await accountPushBranch(access.account, mainPath, branch, oid);
     } catch (error) {
       throw new HttpError(
         409,
@@ -223,7 +273,7 @@ export async function pushBranch(
         ],
         { cwd: mainPath, timeout: 60_000 },
       );
-      result = 'pushed';
+      return 'pushed';
     } catch (error) {
       const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
       // Only a non-fast-forward is "the remote has commits main doesn't"; a `[remote rejected]` (a hook,
@@ -232,12 +282,13 @@ export async function pushBranch(
       throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error)}`);
     }
   }
-  if (result === 'pushed') await setUpstream(mainPath, branch);
-  return result;
 }
 
-/** What `git push --set-upstream origin` writes, when the branch has no upstream yet (runner git, no network). */
-async function setUpstream(mainPath: string, branch: string): Promise<void> {
+/**
+ * What `git push --set-upstream origin` writes, when the branch has no upstream yet (runner git, no
+ * network). The caller holds the main-workspace lock.
+ */
+export async function setUpstream(mainPath: string, branch: string): Promise<void> {
   const current = await execGitFile(['config', '--get', `branch.${branch}.remote`], { cwd: mainPath }).then(
     (r) => r.stdout.trim(),
     () => '',
