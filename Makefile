@@ -30,8 +30,8 @@ shell: ## Shell inside the dev toolbox
 test lint typecheck build format: ## Run the pnpm script of the same name
 	$(RUN) pnpm $@
 
-check: ## lint + typecheck + test + build
-	$(RUN) sh -c "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+check: ## format check + lint + typecheck + test + build
+	$(RUN) sh -c "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
 
 db-generate: ## Generate a Drizzle migration after editing apps/core/src/db/schema.ts
 	$(RUN) pnpm --filter @emberline/core db:generate

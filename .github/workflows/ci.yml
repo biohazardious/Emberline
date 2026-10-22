@@ -29,6 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The image build context leaves out Markdown and YAML, so formatting is checked on the checkout.
+      # Same Prettier version as pnpm-lock.yaml.
+      - name: Formatting
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo node:24-bookworm-slim npx --yes prettier@3.9.10 --check .
       - uses: docker/setup-buildx-action@v3
       # The Dockerfile's `check` stage runs lint, typecheck, the unit tests and the build.
       - name: Check
