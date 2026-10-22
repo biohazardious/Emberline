@@ -109,6 +109,7 @@ import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { gitCredentialForRemote } from '../forge/account-store.js';
+import { GitGateway } from '../git-gateway/gateway.js';
 import { stripControlChars } from '../text/control-chars.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
@@ -580,6 +581,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   readonly mainPreviews: MainPreviews;
   /** Framing probes of the running previews (main and runs), one per start. */
   readonly framing = new PreviewFramingCache();
+  /** Emberline's git with a forge account: the runner's git talks to it, core adds the credential. */
+  readonly gitGateway: GitGateway;
   private dockerGcFirst?: NodeJS.Timeout;
   private dockerGcTimer?: NodeJS.Timeout;
   /** Unsubscribes the reconcile of interrupted main previews from the engine's changes (startReconciler). */
@@ -606,6 +609,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         switchedOff: config.dockerEngineSwitchedOff,
       });
     this.setMaxListeners(0); // one listener per open UI socket
+    this.gitGateway = new GitGateway({ baseUrl: config.gitGatewayUrl ?? config.hookUrl, runnerHosts: config.runnerHosts ?? ['runner'] });
     this.demoTokens = new DemoTokens(db);
     this.mainPreviews = new MainPreviews({
       db,
@@ -650,6 +654,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   dispose(): void {
+    this.gitGateway.dispose();
     this.offDockerChange?.();
     this.offDockerChange = undefined;
     clearInterval(this.timer);
@@ -2166,10 +2171,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     // The account goes only to the project's own repository URL, never to an origin an agent set.
     const credential = project?.repoUrl ? gitCredentialForRemote(this.db, project.repoUrl) : null;
-    const account =
-      credential && project?.repoUrl
-        ? { mainPath: project.path, url: project.repoUrl, credential, workspacesDir: this.config.workspacesDir }
-        : null;
+    const account = credential && project?.repoUrl ? { gateway: this.gitGateway, projectId: project.id, url: project.repoUrl, credential } : null;
     const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), account);
     this.record(id, {
       source: 'user',

@@ -150,6 +150,8 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerWorktreeConfigRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler, recovery);
+  // The runner's git with a forge account (`/api/internal/git/<capability>/…`): core adds the credential.
+  deps.runs.gitGateway.register(app);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);
   registerDockerRoutes(app, deps.runs);
   registerReviewRoutes(app, review);

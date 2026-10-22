@@ -6,7 +6,7 @@ import {
   redactCredential,
   urlUnderServer,
 } from './git-credentials.js';
-import { authorizationFor, redirectTarget } from './git-transport/http.js';
+import { authorizationFor, redirectTarget } from './git-gateway/upstream.js';
 import { createTestApp, seedForgeAccount, type TestApp } from './test-utils.js';
 
 let t: TestApp;

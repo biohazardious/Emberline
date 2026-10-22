@@ -17,10 +17,10 @@ import type {
   RunFileDiff,
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { unstageScratchFiles, withMainWorkspaceLock } from '../factory/merge.js';
-import type { GitHttpCredential } from '../git-credentials.js';
+import { unstageScratchFiles } from '../factory/merge.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
-import { describeTransportError, pushBranchRef } from '../git-transport/transport.js';
+import { describeGitError } from '../git-gateway/gateway.js';
+import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
 
@@ -665,19 +665,11 @@ export async function commitWorktree(
   }
 }
 
-/** A run push with a forge account: core's transport, from the main repository, to the project's own URL. */
-export interface AccountPush {
-  mainPath: string;
-  url: string;
-  credential: GitHttpCredential;
-  workspacesDir: string;
-}
-
 export async function pushWorktreeBranch(
   worktreePath: string,
   branch: string | null,
   defaultBranch: string,
-  account?: AccountPush | null,
+  account?: AccountRemote | null,
 ): Promise<GitPushResponse> {
   if (!existsSync(path.join(worktreePath, '.git'))) throw conflict('project is not a git repository');
   const currentBranch = (await git(worktreePath, ['branch', '--show-current']).catch(() => '')).trim();
@@ -691,33 +683,21 @@ export async function pushWorktreeBranch(
 
   if (account) {
     // The account pushes the run's own branch only: an agent may have switched its worktree.
-    if (branch && currentBranch && currentBranch !== branch) {
+    if (!branch) throw conflict('this run has no branch of its own; Emberline pushes only a run branch with the forge account');
+    if (currentBranch && currentBranch !== branch) {
       throw conflict(`refusing to push: the run's worktree is on "${currentBranch}", not on its branch "${branch}"`);
     }
     let result: 'pushed' | 'rejected';
     try {
-      // It writes refs/remotes/origin/<branch> in the main repository.
-      result = await withMainWorkspaceLock(account.mainPath, () =>
-        pushBranchRef({
-          url: account.url,
-          credential: account.credential,
-          workspacesDir: account.workspacesDir,
-          repoRoot: account.mainPath,
-          branch: branchToPush,
-        }),
-      );
+      result = await accountPushBranch(account, worktreePath, branch);
     } catch (error) {
-      throw conflict(`git push failed: ${describeTransportError(error, account.credential)}`);
+      throw conflict(`git push failed: ${describeGitError(error, account.credential)}`);
     }
-    if (result === 'rejected') {
-      throw conflict(`git push failed: the remote ${branchToPush} has commits this run doesn't have`);
-    }
-    // What `push -u` wrote before: the runner's git, no network, no credentials.
-    await git(worktreePath, ['config', `branch.${branchToPush}.remote`, 'origin']).catch(() => undefined);
-    await git(worktreePath, ['config', `branch.${branchToPush}.merge`, `refs/heads/${branchToPush}`]).catch(
-      () => undefined,
-    );
-    return { branch: branchToPush, remote: 'origin', output: `Pushed ${branchToPush} to ${account.url}` };
+    if (result === 'rejected') throw conflict(`git push failed: the remote ${branch} has commits this run doesn't have`);
+    // What `push -u` wrote before: the runner's git, no network.
+    await git(worktreePath, ['config', `branch.${branch}.remote`, 'origin']).catch(() => undefined);
+    await git(worktreePath, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]).catch(() => undefined);
+    return { branch, remote: 'origin', output: `Pushed ${branch} to ${account.url}` };
   }
 
   const remoteUrl = await git(worktreePath, ['remote', 'get-url', 'origin']).catch(() => '');

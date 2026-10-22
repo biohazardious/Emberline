@@ -28,9 +28,13 @@ export interface CoreConfig {
    * that arrives from their addresses is refused. `EMBERLINE_CONTAINER_HOSTS`, comma list; unset: none.
    */
   containerHosts?: string[];
+  /** Compose service names of the runner; only their addresses may use the git gateway. EMBERLINE_RUNNER_HOSTS, comma list. */
+  runnerHosts?: string[];
   logLevel: string;
   /** Core base URL as reachable from the runner (hooks post here). */
   hookUrl: string;
+  /** Base URL the runner reaches core at for the git gateway; EMBERLINE_GIT_GATEWAY_URL, default the hook URL. */
+  gitGatewayUrl?: string;
   /** `emberline-hook` executable inside the runner. */
   hookCommand: string;
   /** Claude Code executable inside the runner. */
@@ -114,8 +118,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
       .split(',')
       .map((h) => h.trim())
       .filter(Boolean),
+    runnerHosts: (env.EMBERLINE_RUNNER_HOSTS ?? 'runner')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean),
     logLevel: env.EMBERLINE_LOG_LEVEL ?? 'info',
     hookUrl: env.EMBERLINE_HOOK_URL ?? `http://127.0.0.1:${port}`,
+    gitGatewayUrl: env.EMBERLINE_GIT_GATEWAY_URL?.trim() || undefined,
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',

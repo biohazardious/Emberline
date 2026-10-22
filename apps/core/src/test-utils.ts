@@ -40,6 +40,13 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
+/** Makes the test app listen on 127.0.0.1 and points the git gateway at it (the local git plays the runner). */
+export async function startGitGateway(t: TestApp): Promise<string> {
+  const address = await t.app.listen({ host: '127.0.0.1', port: 0 });
+  t.runs.gitGateway.baseUrl = address;
+  return address;
+}
+
 /** Core wired to an in-memory DB and a ptyd socket path (ptyd itself is optional). */
 export async function createTestApp(
   overrides: Partial<CoreConfig> = {},
@@ -59,6 +66,7 @@ export async function createTestApp(
     sessionTtlMs: 60_000,
     logLevel: 'silent',
     hookUrl: 'http://127.0.0.1:0',
+    runnerHosts: ['localhost'],
     hookCommand: 'emberline-hook',
     claudeCommand: 'claude',
     timeZone: 'UTC',

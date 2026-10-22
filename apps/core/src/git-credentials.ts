@@ -1,6 +1,6 @@
 /**
  * A forge account's credentials for Emberline's own git over HTTP. They never leave core: core's
- * transport (git-transport/) adds them to requests under the account's server only, and nothing
+ * credential gateway (git-gateway/) adds them to requests under the account's server only, and nothing
  * credential-related is passed to ptyd, the runner or a PTY (agents run as the same user there).
  */
 export interface GitHttpCredential {

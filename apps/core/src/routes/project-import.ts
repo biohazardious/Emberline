@@ -18,10 +18,12 @@ import { detectProject } from '../factory/detect.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { techStackFromChoices } from '../factory/project-plan.js';
 import { assertNotCloning, executeAdopt, importStatus, listWorkspaceFolders, planAdopt } from '../factory/project-import.js';
+import { redactCapabilityUrls } from '../git-gateway/gateway.js';
+import { finishAccountClone } from '../git-gateway/remote-git.js';
 import type { CoreDeps } from '../server.js';
 import { toProject } from './projects.js';
 
-export function registerProjectImportRoutes(app: FastifyInstance, { db, config, ptyd, tickets }: CoreDeps): void {
+export function registerProjectImportRoutes(app: FastifyInstance, { db, config, ptyd, tickets, runs }: CoreDeps): void {
   const projectOr404 = (id: string) => {
     const row = db.select().from(projects).where(eq(projects.id, id)).get();
     if (!row) throw notFound('no such project');
@@ -50,8 +52,13 @@ export function registerProjectImportRoutes(app: FastifyInstance, { db, config, 
     async (request): Promise<ImportStatusResponse> => {
       const project = projectOr404(request.params.id);
       const status = await importStatus(ptyd, project);
+      if (status.status !== 'cloning') {
+        // An account clone: release its capability and point origin at the real URL (once).
+        const refusal = await finishAccountClone(runs.gitGateway, project, status.status === 'ready');
+        if (refusal && status.status === 'failed') status.tail = `${status.tail}\n${refusal}`.trim();
+      }
       if (status.status === 'ready') await reconcileClonedBranch(project);
-      return status;
+      return { ...status, tail: redactCapabilityUrls(status.tail) };
     },
   );
 
