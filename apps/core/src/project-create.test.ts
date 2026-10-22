@@ -616,6 +616,61 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
     }
   });
 
+  const deployBody = (dockerEngine: boolean, body: CreateProjectBody = COMPOSE_WEB) =>
+    planNewProject(CreateProjectBodySchema.parse(body), { dockerEngine }).tickets.find((x) => x.key === 'deploy')?.body ?? '';
+
+  it('the Deploy ticket has a Container preview step with the engine (as before)', () => {
+    const body = deployBody(true);
+    expect(body).toContain('4. **Container preview**: Emberline previews the container');
+    expect(body).toContain('service `web` of `compose.yaml`');
+    expect(body).toContain('container port 8080');
+  });
+
+  it('the Deploy ticket has a Container preview step without the engine; worktree.yml stays v1', () => {
+    const plan = planNewProject(CreateProjectBodySchema.parse(COMPOSE_WEB), { dockerEngine: false });
+    const body = plan.tickets.find((x) => x.key === 'deploy')?.body ?? '';
+    expect(body).toContain(
+      '4. **Container preview**: Make `compose.yaml` ready for a container preview: a `web` service that serves the app on container port 8080, no `container_name`, no fixed host ports (Emberline publishes the port itself). Emberline offers to switch the preview to it in Project settings once its Docker engine is on.',
+    );
+    expect(body).not.toContain('`container` entry');
+    expect(plan.worktreeYml).toContain('version: 1');
+    expect(plan.worktreeYml).not.toContain('compose');
+  });
+
+  it('other deploy targets get no Container preview step', () => {
+    for (const dockerEngine of [true, false]) {
+      expect(deployBody(dockerEngine, { ...COMPOSE_WEB, choices: { ...COMPOSE_WEB.choices, deploy: 'vercel' } })).not.toContain(
+        'Container preview',
+      );
+    }
+  });
+
+  it('no generated file or ticket sets container_name or a fixed host port, for every preset, engine on or off', () => {
+    const containerName = /container_name\s*:/;
+    // A compose ports item that fixes a host port: `- "8080:80"`, `- 127.0.0.1:8080:80`.
+    const hostPort = /^\s*-\s*["']?(?:[\d.]+:)?\d{1,5}:\d{1,5}["']?\s*$/m;
+    for (const preset of PRESETS) {
+      for (const dockerEngine of [true, false]) {
+        const plan = planNewProject(
+          CreateProjectBodySchema.parse({
+            name: 'Mug Shop',
+            source: 'new',
+            appType: preset.type,
+            presetId: preset.id,
+            vision: 'A small shop that sells handmade mugs with a cart and a checkout.',
+            startFactory: false,
+          }),
+          { dockerEngine },
+        );
+        const texts = [plan.projectMd, plan.claudeMd, plan.worktreeYml, ...Object.values(plan.starter), ...plan.tickets.map((x) => x.body)];
+        for (const text of texts) {
+          expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(containerName);
+          expect(text, `${preset.id} engine=${dockerEngine}`).not.toMatch(hostPort);
+        }
+      }
+    }
+  });
+
   describe('through the API', () => {
     const engine = { up: true };
     beforeEach(async () => {
