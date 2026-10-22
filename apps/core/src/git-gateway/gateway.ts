@@ -80,8 +80,10 @@ export function requestUrlForLog(url: string): string {
     if (next === decoded) break;
     decoded = next;
   }
-  const capability = /internal[/\\]+git[/\\]+[^/\\?#]+/gi;
-  return capability.test(decoded) ? decoded.replace(capability, 'internal/git/[capability]') : url;
+  // Any segment after a `git` segment (also past `.`/`..` segments) once the path names `internal`.
+  if (!/internal/i.test(decoded)) return url;
+  const capability = /(^|[/\\])git((?:[/\\]+\.{1,2})*)[/\\]+[^/\\?#]+/gi;
+  return capability.test(decoded) ? decoded.replace(capability, '$1git$2/[capability]') : url;
 }
 
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */

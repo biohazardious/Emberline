@@ -17,7 +17,7 @@ import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
 import { ForgeAccountsService } from './accounts.js';
 import { type ForgeAccountRecord, accountForRemote } from './account-store.js';
-import { sameForgeServer } from './hosts.js';
+import { remoteUrlForDisplay, sameForgeServer } from './hosts.js';
 import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
 
 export interface ParsedForgeRemote {
@@ -188,7 +188,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     headBranch: string | null,
   ): { account: ForgeAccountRecord; remote: ParsedForgeRemote } {
     const parsed = parseForgeRemote(remoteUrl);
-    if (!parsed) throw conflict(`unable to parse forge remote URL: ${remoteUrl}`);
+    if (!parsed) throw conflict(`unable to parse forge remote URL: ${remoteUrlForDisplay(remoteUrl).url}`);
     const account = accountForRemote(this.db, remoteUrl);
     if (!account) throw conflict(noAccountMessage(parsed.host), 'forge_account_missing');
     return { account, remote: viaAccount(remoteUrl, account, baseBranch, headBranch)! };
@@ -223,7 +223,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     // The agent can rewrite origin: it must still name the repository the project was set up with.
     if (project.repoUrl?.trim()) {
       const declared = parseForgeRemote(project.repoUrl);
-      if (!declared) throw conflict(`unable to parse the project's repository URL: ${project.repoUrl}`);
+      if (!declared) throw conflict(`unable to parse the project's repository URL: ${remoteUrlForDisplay(project.repoUrl).url}`);
       if (!sameForgeServer(project.repoUrl, remoteUrl) || repoPathUnder(account.serverUrl, declared.repoPath).toLowerCase() !== remote.repoPath.toLowerCase()) {
         throw conflict('origin points at a different repository than the project');
       }

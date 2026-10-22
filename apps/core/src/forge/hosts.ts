@@ -28,3 +28,36 @@ export function sameForgeServer(a: string, b: string): boolean {
   const hostname = (host: string) => host.replace(/:\d+$/, '');
   return hostname(hostA) === hostname(hostB);
 }
+
+/**
+ * A remote URL as core may return or quote it: an http(s) URL without user info, query or
+ * fragment; an ssh URL (or scp-like address) without a password (its user name picks the key and
+ * stays). `hadCredentials`: something was removed. A clean URL comes back exactly as it was.
+ */
+export function remoteUrlForDisplay(raw: string): { url: string; hadCredentials: boolean } {
+  const url = raw.trim();
+  const clean = (() => {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        // Not parseable: cut anything between `//` and `@`, and from `?` or `#` on.
+        return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/[?#].*$/s, '');
+      }
+      const ssh = parsed.protocol === 'ssh:';
+      if (!(ssh ? parsed.password : parsed.username || parsed.password || parsed.search || parsed.hash))
+        return url;
+      parsed.password = '';
+      if (!ssh) {
+        parsed.username = '';
+        parsed.search = '';
+        parsed.hash = '';
+      }
+      return parsed.toString();
+    }
+    // scp-like `user:password@host:path`: keep the user, drop the password.
+    return url.replace(/^([^/@:]*):[^/@]*@/, '$1@');
+  })();
+  return { url: clean, hadCredentials: clean !== url };
+}
