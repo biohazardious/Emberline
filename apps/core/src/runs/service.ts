@@ -523,6 +523,9 @@ function handoffBlocker(row: RunRow, continuesHeld = false): string | undefined 
   return undefined;
 }
 
+/** A push failure about access (no credentials, refused), not about the branch. */
+const ACCESS_FAILURE = /could not read (username|password)|authentication|permission denied|access denied|not authorized|\b40[13]\b/i;
+
 /** Said after a failed run push when the project has no connected repository but an account covers its origin. */
 export const CONNECT_FOR_ACCOUNT =
   "Connect this project's repository in Project settings → Repository to push with a forge account.";
@@ -2187,7 +2190,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           (r) => r.stdout.trim(),
           () => '',
         );
-        if (origin && accountForGitRemote(this.db, origin)) {
+        if (ACCESS_FAILURE.test(error.message) && origin && accountForGitRemote(this.db, origin)) {
           throw new HttpError(error.statusCode, error.code, `${error.message} ${CONNECT_FOR_ACCOUNT}`, error.details);
         }
       }

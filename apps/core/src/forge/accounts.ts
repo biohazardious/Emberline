@@ -34,6 +34,8 @@ const PROVIDER_LABELS: Record<ForgeProvider, string> = { github: 'GitHub', gitla
 const USERNAME_MAX = 200;
 /** Owners (user and organizations) are read once per account for this long. */
 const OWNERS_TTL_MS = 5 * 60_000;
+/** The most accounts whose owners are kept; the oldest entry goes first. */
+const OWNERS_CACHE_MAX = 200;
 const READ_ONLY = 'This account comes from EMBERLINE_FORGE_TOKEN; change it in the environment.';
 
 /** A URL as the person may see it: user info (a token pasted into the address) never leaves core. */
@@ -82,6 +84,8 @@ export class ForgeAccountsService {
   /** Check, token change and removal of one account run one at a time. */
   private readonly accountLocks = new KeyedMutex();
   private readonly ownersCache = new Map<string, { at: number; value: ForgeOwnersResponse }>();
+  /** Bumped when a token changes or an account goes: an owners read begun before it is not kept. */
+  private readonly ownersGeneration = new Map<string, number>();
 
   constructor(
     private readonly db: Db,
@@ -184,18 +188,18 @@ export class ForgeAccountsService {
         serverHost(current.serverUrl),
       );
       updateAccount(this.db, id, { token, username });
-      this.ownersCache.delete(id);
+      this.invalidateOwners(id);
       return accountView(this.record(id));
     });
   }
 
-  /** Refuses at once (404, read-only); the removal itself waits for a check or token change in flight. */
-  remove(id: string): Promise<void> {
+  /** Rejects at once (404, read-only); the removal itself waits for a check or token change in flight. */
+  async remove(id: string): Promise<void> {
     const account = this.record(id);
     if (account.source === 'environment') throw conflict(READ_ONLY, 'account_read_only');
-    return this.accountLocks.run(id, async () => {
+    await this.accountLocks.run(id, async () => {
       deleteAccount(this.db, id);
-      this.ownersCache.delete(id);
+      this.invalidateOwners(id);
     });
   }
 
@@ -217,23 +221,42 @@ export class ForgeAccountsService {
     });
   }
 
+  private invalidateOwners(id: string): void {
+    this.ownersCache.delete(id);
+    this.ownersGeneration.set(id, (this.ownersGeneration.get(id) ?? 0) + 1);
+  }
+
   async owners(id: string): Promise<ForgeOwnersResponse> {
     const cached = this.ownersCache.get(id);
     if (cached && Date.now() - cached.at < OWNERS_TTL_MS) return cached.value;
+    const generation = this.ownersGeneration.get(id) ?? 0;
     const account = this.record(id);
     const user = account.username ?? (await this.check(id)).username!;
     const path = account.provider === 'gitlab' ? '/groups?min_access_level=30&per_page=100' : '/user/orgs?per_page=100';
     const res = await forgeFetch(this.fetch, `${account.apiUrl}${path}`, { headers: authHeaders(account.provider, account.token) });
     if (rateLimited(res)) throw rateLimitedError(serverHost(account.serverUrl));
     if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
-    const rows = res.ok ? await readJson<Record<string, unknown>[]>(res).catch(() => []) : [];
+    let readable = res.ok;
+    const rows = res.ok
+      ? await readJson<Record<string, unknown>[]>(res).catch(() => {
+          readable = false;
+          return [];
+        })
+      : [];
     const orgs = (Array.isArray(rows) ? rows : []).flatMap((o): ForgeOwner[] => {
       const id = account.provider === 'gitlab' ? o.full_path : (o.login ?? o.name ?? o.username);
       return typeof id === 'string' && id ? [{ id, name: id, kind: 'organization' }] : [];
     });
     const value: ForgeOwnersResponse = { owners: [{ id: user, name: user, kind: 'user' }, ...orgs] };
-    // Only a successful read is kept; a failed or limited one throws before this.
-    this.ownersCache.set(id, { at: Date.now(), value });
+    // Only a successful read is kept, and only if the token and account are still the ones it used.
+    if (readable && (this.ownersGeneration.get(id) ?? 0) === generation) {
+      if (this.ownersCache.size >= OWNERS_CACHE_MAX) {
+        const oldest = this.ownersCache.keys().next().value;
+        if (oldest !== undefined) this.ownersCache.delete(oldest);
+      }
+      this.ownersCache.delete(id);
+      this.ownersCache.set(id, { at: Date.now(), value });
+    }
     return value;
   }
 

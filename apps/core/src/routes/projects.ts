@@ -172,10 +172,11 @@ export const toProject = (row: ProjectRow): Project => ({
 });
 
 /** A Project as the API returns it: repoUrl without user info, query or fragment (as origin is shown). */
-export const projectResponse = (row: ProjectRow): Project => {
-  const project = toProject(row);
-  return { ...project, repoUrl: project.repoUrl === null ? null : remoteUrlForDisplay(project.repoUrl).url };
-};
+export const redactedProject = (project: Project): Project => ({
+  ...project,
+  repoUrl: project.repoUrl === null ? null : remoteUrlForDisplay(project.repoUrl).url,
+});
+export const projectResponse = (row: ProjectRow): Project => redactedProject(toProject(row));
 
 /** Letters NFKD does not decompose into ASCII base + combining mark. */
 const TRANSLITERATE: Record<string, string> = { ı: 'i', ß: 'ss', ø: 'o', æ: 'ae', œ: 'oe', ł: 'l', đ: 'd', þ: 'th' };

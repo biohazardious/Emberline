@@ -374,6 +374,46 @@ describe('forge accounts API', () => {
     });
   });
 
+  it('an owners read that started before a token change never fills the cache afterwards', async () => {
+    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 'tok-OLD' })).json().id;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let reading!: () => void;
+    const waiting = new Promise<void>((r) => (reading = r));
+    t.forgeFetch.current = async (url, init) => {
+      const old = (new Headers(init?.headers).get('authorization') ?? '').includes('tok-OLD');
+      if (url.includes('/user/orgs')) {
+        if (old) {
+          reading();
+          await gate;
+          return reply([{ username: 'old-org' }]);
+        }
+        return reply([{ username: 'new-org' }]);
+      }
+      return reply({ login: 'octo' });
+    };
+    const first = send('GET', `/api/forge/accounts/${id}/owners`);
+    await waiting;
+    await send('PATCH', `/api/forge/accounts/${id}`, { token: 'tok-NEW' });
+    release();
+    await first;
+    const again = await send('GET', `/api/forge/accounts/${id}/owners`);
+    expect(JSON.stringify(again.json())).toContain('new-org');
+    expect(JSON.stringify(again.json())).not.toContain('old-org');
+  });
+
+  it('an organizations read that fails is not kept: the next read asks again', async () => {
+    const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't1' })).json().id;
+    let failing = true;
+    answer = (url) =>
+      url.includes('/user/orgs') ? (failing ? reply({}, 500) : reply([{ username: 'acme' }])) : reply({ login: 'octo' });
+    const first = await send('GET', `/api/forge/accounts/${id}/owners`);
+    expect(JSON.stringify(first.json())).not.toContain('acme');
+    failing = false;
+    const second = await send('GET', `/api/forge/accounts/${id}/owners`);
+    expect(JSON.stringify(second.json())).toContain('acme');
+  });
+
   it('owners are read once per account for a few minutes; a new token reads them again', async () => {
     const id = (await send('POST', '/api/forge/accounts', { provider: 'gitea', serverUrl: 'https://git.example.com', token: 't1' })).json().id;
     answer = (url) => (url.includes('/user/orgs') ? reply([{ username: 'acme' }]) : reply({ login: 'octo' }));
@@ -420,7 +460,7 @@ describe('environment accounts', () => {
       const svc = new ForgeAccountsService(t.db, async () => reply({ login: 'x' }), env);
       expect(svc.list().accounts.map((a) => a.source)).toEqual(['environment', 'environment']);
       expect(JSON.stringify(svc.list())).not.toContain('env-secret');
-      expect(() => svc.remove('env')).toThrow(
+      await expect(svc.remove('env')).rejects.toThrow(
         'This account comes from EMBERLINE_FORGE_TOKEN; change it in the environment.',
       );
       expect(accountForRemote(t.db, 'git@gitlab.example.org:g/app.git', env)?.id).toBe(
