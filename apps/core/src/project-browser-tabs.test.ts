@@ -1,5 +1,5 @@
 import type { BrowserActionBody } from '@emberline/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   RunnerBrowserActionBody,
   RunnerBrowserDaemon,
@@ -14,6 +14,8 @@ class FakeDaemon implements RunnerBrowserDaemon {
   pages: FakePage[] = [{ id: 'start', url: 'about:blank', projectId: null }];
   opened: string[] = [];
   performed: { action: string; tabId: string }[] = [];
+  queries: RunnerBrowserQuery[] = [];
+  actions: { action: string; projectId: string }[] = [];
   private next = 1;
   private shown(q: RunnerBrowserQuery): { page: FakePage; following: boolean } | null {
     if (q.follow) {
@@ -57,10 +59,13 @@ class FakeDaemon implements RunnerBrowserDaemon {
   }
   async state(q: RunnerBrowserQuery) {
     await Promise.resolve();
+    this.queries.push(q);
     return this.snap(q);
   }
   async action(body: RunnerBrowserActionBody, q: RunnerBrowserQuery) {
     await Promise.resolve();
+    this.queries.push(q);
+    this.actions.push({ action: body.action, projectId: q.projectId });
     if (body.action === 'open_tab' || body.action === 'new_tab') {
       const id = `t${this.next++}`;
       this.pages.push({
@@ -93,7 +98,12 @@ class FakeDaemon implements RunnerBrowserDaemon {
   }
 }
 
-const opts = (defaultUrl: string | null, follow = false) => ({ defaultUrl, follow });
+const opts = (defaultUrl: string | null, follow = false, agentHere = follow, agentUrl?: string | null) => ({
+  defaultUrl,
+  follow,
+  agentHere,
+  ...(agentUrl !== undefined ? { agentUrl } : {}),
+});
 
 describe('ProjectBrowserTabs', () => {
   it('opens a project tab once at its demo URL and reuses it', async () => {
@@ -274,6 +284,80 @@ describe('ProjectBrowserTabs', () => {
         following: true,
         activeTabId: 'start',
       });
+    });
+  });
+
+  describe("the pin lasts until this project's agent stops (B-28)", () => {
+    const pinnedTo = async () => {
+      const d = new FakeDaemon();
+      const tabs = new ProjectBrowserTabs(async () => d);
+      const own = (await tabs.state('A', opts(null)))!.activeTabId!;
+      d.pages[0]!.url = 'http://core:7420/agent';
+      const chosen = await tabs.action('A', { action: 'select_tab', tabId: own }, opts(null, true, true));
+      expect(chosen).toMatchObject({ following: false, activeTabId: own, canFollow: true });
+      return { tabs, own };
+    };
+
+    it("another project's agent starting (no following for anyone) keeps the pin", async () => {
+      const { tabs, own } = await pinnedTo();
+      expect(await tabs.state('A', opts(null, false, true))).toMatchObject({ following: false, activeTabId: own });
+      expect(await tabs.state('A', opts(null, true, true))).toMatchObject({
+        following: false,
+        activeTabId: own,
+        canFollow: true,
+      });
+    });
+
+    it("this project's agent stopping releases it", async () => {
+      const { tabs } = await pinnedTo();
+      await tabs.state('A', opts(null, false, false));
+      expect(await tabs.state('A', opts(null, true, true))).toMatchObject({ following: true, activeTabId: 'start' });
+    });
+  });
+
+  it("passes the agent's last URL to the daemon only while following", async () => {
+    const d = new FakeDaemon();
+    const tabs = new ProjectBrowserTabs(async () => d);
+    await tabs.state('A', opts(null, true, true, 'http://localhost:5173/'));
+    expect(d.queries.at(-1)?.agentUrl).toBe('http://localhost:5173/');
+    await tabs.state('A', opts(null, false, true, 'http://localhost:5173/'));
+    expect(d.queries.at(-1)?.agentUrl ?? null).toBeNull();
+  });
+
+  describe("deleted projects' tabs are cleaned up (B-7)", () => {
+    it("a poll closes the tabs of a project that no longer exists", async () => {
+      const d = new FakeDaemon();
+      d.pages.push({ id: 'orphan', url: 'http://core:7420/gone', projectId: 'gone' });
+      const tabs = new ProjectBrowserTabs(async () => d, (ids) => new Set(ids.filter((id) => id === 'A')));
+      await tabs.state('A', opts(null));
+      await vi.waitFor(() =>
+        expect(d.actions).toContainEqual({ action: 'close_project_tabs', projectId: 'gone' }),
+      );
+      expect(d.pages.some((p) => p.projectId === 'gone')).toBe(false);
+    });
+
+    it('a project deleted while the runner was away has its tabs closed later', async () => {
+      const d = new FakeDaemon();
+      let up = false;
+      const tabs = new ProjectBrowserTabs(
+        async () => (up ? d : null),
+        (ids) => new Set(ids.filter((id) => id === 'A')),
+      );
+      d.pages.push({ id: 'x1', url: 'http://core:7420/x', projectId: 'X' });
+      await tabs.forget('X');
+      up = true;
+      await tabs.state('A', opts(null));
+      await vi.waitFor(() => expect(d.pages.some((p) => p.projectId === 'X')).toBe(false));
+    });
+
+    it("another existing project's tabs are left alone", async () => {
+      const d = new FakeDaemon();
+      const tabs = new ProjectBrowserTabs(async () => d, (ids) => new Set(ids));
+      await tabs.state('B', opts(null));
+      await tabs.state('A', opts(null));
+      await Promise.resolve();
+      expect(d.actions.filter((a) => a.action === 'close_project_tabs')).toEqual([]);
+      expect(d.pages.some((p) => p.projectId === 'B')).toBe(true);
     });
   });
 

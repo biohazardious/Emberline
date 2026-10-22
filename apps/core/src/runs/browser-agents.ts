@@ -16,10 +16,39 @@ export interface BrowserToolCall {
 
 /** Projects with a browser tool call in the last BROWSER_AGENT_WINDOW_MS before `now`. */
 export function browserAgentProjects(calls: readonly BrowserToolCall[], now: number): Set<string> {
-  const ids = new Set<string>();
+  return new Set(browserAgentActivity(calls, now).keys());
+}
+
+export interface BrowserAgentActivity {
+  /** The URL of the project's newest `browser_navigate` call in the window; null when none. */
+  lastUrl: string | null;
+}
+
+/** The URL a Playwright MCP `browser_navigate` call opens, from its summary (`url: … · …`). */
+function navigateUrl(c: BrowserToolCall): string | null {
+  if (c.toolName !== 'mcp__playwright__browser_navigate') return null;
+  const m = /^url: (.+?)(?: · |$)/.exec(c.detail);
+  return m ? m[1]!.trim() || null : null;
+}
+
+/**
+ * Per project with a browser tool call in the last BROWSER_AGENT_WINDOW_MS before `now`: the URL
+ * its agent navigated to last (the Live Browser follows the tab at that URL).
+ */
+export function browserAgentActivity(
+  calls: readonly BrowserToolCall[],
+  now: number,
+): Map<string, BrowserAgentActivity> {
+  const out = new Map<string, BrowserAgentActivity & { at: number }>();
   for (const c of calls) {
-    if (now - c.at <= BROWSER_AGENT_WINDOW_MS && isBrowserToolCall(c.toolName, c.detail))
-      ids.add(c.projectId);
+    if (now - c.at > BROWSER_AGENT_WINDOW_MS || !isBrowserToolCall(c.toolName, c.detail)) continue;
+    const entry = out.get(c.projectId) ?? { lastUrl: null, at: -Infinity };
+    const url = navigateUrl(c);
+    if (url && c.at >= entry.at) {
+      entry.lastUrl = url;
+      entry.at = c.at;
+    }
+    out.set(c.projectId, entry);
   }
-  return ids;
+  return new Map([...out].map(([id, { lastUrl }]) => [id, { lastUrl }]));
 }

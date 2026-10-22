@@ -4,7 +4,12 @@ import type { RunnerBrowserDaemon, RunnerBrowserQuery, RunnerBrowserSnapshot } f
 
 export interface BrowserTabOptions {
   defaultUrl: string | null;
+  /** Follow the agent's tab: this is the only project whose agent uses a browser now. */
   follow: boolean;
+  /** This project's agent uses a browser now (maybe alongside another project's). */
+  agentHere: boolean;
+  /** The URL this project's agent navigated to last, when known. */
+  agentUrl?: string | null;
 }
 
 /**
@@ -17,12 +22,20 @@ export class ProjectBrowserTabs {
   private readonly selected = new Map<string, string>();
   /**
    * Projects whose person chose their own tab while an agent was followed: the view stays on it
-   * until that agent session ends, the person asks to follow again, or the project is deleted.
+   * until this project's agent session ends, the person asks to follow again, or the project is
+   * deleted.
    */
   private readonly pinnedToOwn = new Set<string>();
   private readonly lock = new KeyedMutex();
 
-  constructor(private readonly daemon: (opts?: { start?: boolean }) => Promise<RunnerBrowserDaemon | null>) {}
+  /**
+   * @param knownProjects which of these project ids still exist: tabs labelled with any other are
+   *   closed (a project deleted while the runner was away). Default: all of them.
+   */
+  constructor(
+    private readonly daemon: (opts?: { start?: boolean }) => Promise<RunnerBrowserDaemon | null>,
+    private readonly knownProjects: (ids: string[]) => Set<string> = (ids) => new Set(ids),
+  ) {}
 
   /**
    * The project's tab (opened at `defaultUrl` on first use, re-found or reopened when gone), or the
@@ -35,6 +48,7 @@ export class ProjectBrowserTabs {
       const follow = this.followNow(projectId, opts);
       try {
         const snap = await this.settle(d, projectId, follow, (q) => d.state(q));
+        this.sweepOrphans(projectId, snap);
         return projectView(projectId, snap, this.offersFollow(projectId, opts));
       } catch {
         return null; // as before: the route falls back to a headless capture
@@ -57,10 +71,13 @@ export class ProjectBrowserTabs {
       if (body.action === 'follow_agent') {
         this.pinnedToOwn.delete(projectId);
         const follow = this.followNow(projectId, opts);
-        return projectView(projectId, await this.settle(d, projectId, follow, (q) => d.state(q)), false);
+        const followed = await this.settle(d, projectId, follow, (q) => d.state(q));
+        this.sweepOrphans(projectId, followed);
+        return projectView(projectId, followed, false);
       }
       const follow = this.followNow(projectId, opts);
       const snap = await this.settle(d, projectId, follow, (q) => d.action(body, q));
+      this.sweepOrphans(projectId, snap);
       const shown = snap.tabs?.find((t) => t.id === snap.activeTabId);
       const ownShown = !snap.following && shown?.projectId === projectId;
       if (ownShown) this.selected.set(projectId, shown.id);
@@ -78,15 +95,35 @@ export class ProjectBrowserTabs {
       if (d)
         await d.action(
           { action: 'close_project_tabs' },
-          query(projectId, null, { defaultUrl: null, follow: false }),
+          query(projectId, null, { defaultUrl: null, follow: false, agentHere: false }),
         );
     });
   }
 
   /** The options for this request: no following while the person keeps the project's own tab. */
   private followNow(projectId: string, opts: BrowserTabOptions): BrowserTabOptions {
-    if (!opts.follow) this.pinnedToOwn.delete(projectId); // the agent session ended
+    if (!opts.agentHere) this.pinnedToOwn.delete(projectId); // this project's agent session ended
     return this.pinnedToOwn.has(projectId) ? { ...opts, follow: false } : opts;
+  }
+
+  /**
+   * Closes the tabs labelled with a project that no longer exists (deleted while the daemon was not
+   * running, so `forget` could not close them). Each under that project's own lock, not awaited here.
+   */
+  private sweepOrphans(projectId: string, snap: RunnerBrowserSnapshot): void {
+    const owners = [
+      ...new Set(
+        (snap.tabs ?? []).map((t) => t.projectId).filter((p): p is string => !!p && p !== projectId),
+      ),
+    ];
+    if (owners.length === 0) return;
+    let known: Set<string>;
+    try {
+      known = this.knownProjects(owners);
+    } catch {
+      return; // the database did not answer: try again on the next poll
+    }
+    for (const id of owners) if (!known.has(id)) void this.forget(id).catch(() => undefined);
   }
 
   private offersFollow(projectId: string, opts: BrowserTabOptions): boolean {
@@ -125,7 +162,13 @@ export class ProjectBrowserTabs {
 }
 
 function query(projectId: string, tabId: string | null, opts: BrowserTabOptions): RunnerBrowserQuery {
-  return { projectId, tabId, follow: opts.follow, defaultUrl: opts.defaultUrl };
+  return {
+    projectId,
+    tabId,
+    follow: opts.follow,
+    defaultUrl: opts.defaultUrl,
+    ...(opts.follow && opts.agentUrl ? { agentUrl: opts.agentUrl } : {}),
+  };
 }
 
 /** Actions by which the person picks one of the project's own tabs (pins the view to it while following). */

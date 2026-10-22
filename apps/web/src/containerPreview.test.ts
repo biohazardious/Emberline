@@ -15,6 +15,10 @@ import {
   LIVE_BROWSER_CAN_FOLLOW_NOTE,
   FOLLOW_AGENT,
   offersFollow,
+  bannerAfterSnapshot,
+  PLAYTEST_ELSEWHERE_TEXT,
+  PLAYTEST_STARTED_TEXT,
+  playtestStartBanner,
   previewBadge,
   previewEmptyText,
   previewFrameMode,
@@ -378,6 +382,34 @@ describe('liveBrowserNote', () => {
     expect(offersFollow({ following: true })).toBe(false);
     expect(offersFollow({})).toBe(false);
     expect(offersFollow(null)).toBe(false);
+  });
+});
+
+describe('Auto-Interact start banner (B-12)', () => {
+  it('says when Auto-Interact runs for another project instead of claiming it started', () => {
+    expect(PLAYTEST_ELSEWHERE_TEXT).toBe(
+      'Auto-Interact is running for another project. Start it here once that one stops.',
+    );
+    expect(playtestStartBanner({ playtestActive: false, playtestElsewhere: true })).toEqual({
+      kind: 'info',
+      text: PLAYTEST_ELSEWHERE_TEXT,
+    });
+    expect(playtestStartBanner({ playtestActive: true })).toEqual({ kind: 'ok', text: PLAYTEST_STARTED_TEXT });
+    expect(PLAYTEST_STARTED_TEXT).toBe(
+      'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
+    );
+    expect(playtestStartBanner({ playtestActive: false })).toBeUndefined();
+    expect(playtestStartBanner(null)).toBeUndefined();
+  });
+
+  it('drops only the refusal, once the other project stops', () => {
+    const refusal = { kind: 'info' as const, text: PLAYTEST_ELSEWHERE_TEXT };
+    const other = { kind: 'err' as const, text: 'down' };
+    expect(bannerAfterSnapshot(refusal, { playtestElsewhere: true })).toBe(refusal);
+    expect(bannerAfterSnapshot(refusal, { playtestElsewhere: false })).toBeUndefined();
+    expect(bannerAfterSnapshot(refusal, {})).toBeUndefined();
+    expect(bannerAfterSnapshot(other, { playtestElsewhere: false })).toBe(other);
+    expect(bannerAfterSnapshot(undefined, { playtestElsewhere: false })).toBeUndefined();
   });
 });
 

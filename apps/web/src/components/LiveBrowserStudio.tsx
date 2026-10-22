@@ -29,11 +29,15 @@ import {
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import {
+  type LiveBanner,
   type PreviewLike,
+  bannerAfterSnapshot,
   choosePrimaryView,
   FOLLOW_AGENT,
   liveBrowserNote,
   offersFollow,
+  PLAYTEST_HELD_MESSAGE,
+  playtestStartBanner,
   qaRequestPrompt,
   resolveRunnerBrowserUrl,
 } from '../containerPreview';
@@ -75,7 +79,7 @@ export function LiveBrowserStudio({
   const [clickMarker, setClickMarker] = useState<{ xPct: number; yPct: number; id: number } | null>(
     null,
   );
-  const [banner, setBanner] = useState<{ kind: 'ok' | 'err' | 'info'; text: string }>();
+  const [banner, setBanner] = useState<LiveBanner>();
   // Shared with the shell's poll: whether the Docker engine can run container previews.
   const systemPoll = useApi<SystemStatus>('/api/system', 5_000);
   const [launchingQa, setLaunchingQa] = useState(false);
@@ -92,6 +96,7 @@ export function LiveBrowserStudio({
           `/api/projects/${project.id}/browser-viewport?targetId=${encodeURIComponent(targetId)}`,
         );
         setSnap(res);
+        setBanner((b) => bannerAfterSnapshot(b, res));
         if (!editingUrl && res.targetUrl) {
           setUrlInput(res.targetUrl);
         }
@@ -118,7 +123,8 @@ export function LiveBrowserStudio({
     return () => clearInterval(timer);
   }, [liveFollow, snap?.agentActive, snap?.playtestActive, fetchSnapshot]);
 
-  const sendAction = async (body: BrowserActionBody) => {
+  /** The action's snapshot, or null when it failed (the error is in the banner). */
+  const sendAction = async (body: BrowserActionBody): Promise<BrowserViewportSnapshot | null> => {
     setActing(true);
     try {
       const res = await api<BrowserViewportSnapshot>(
@@ -128,11 +134,11 @@ export function LiveBrowserStudio({
       );
       setSnap(res);
       if (res.targetUrl) setUrlInput(res.targetUrl);
-      if (body.action === 'start_playtest' && res.message) {
-        setBanner({ kind: 'err', text: res.message });
-      }
+      if (res.message === PLAYTEST_HELD_MESSAGE) setBanner({ kind: 'info', text: res.message });
+      return res;
     } catch (err) {
       setBanner({ kind: 'err', text: errorMessage(err) });
+      return null;
     } finally {
       setActing(false);
     }
@@ -216,11 +222,8 @@ export function LiveBrowserStudio({
       setActing(false);
     }
     if (!url) return;
-    await sendAction({ action: 'start_playtest', url });
-    setBanner({
-      kind: 'ok',
-      text: 'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.',
-    });
+    const res = await sendAction({ action: 'start_playtest', url });
+    if (res) setBanner(playtestStartBanner(res));
   };
 
   const handleCanvasClick = async (e: MouseEvent<HTMLImageElement>) => {
@@ -622,24 +625,7 @@ export function LiveBrowserStudio({
         </button>
       </form>
 
-      {liveBrowserNote(snap) && (
-        <p className="muted small browser-following-note" role="status">
-          {liveBrowserNote(snap)}
-          {offersFollow(snap) && (
-            <>
-              {' '}
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={acting}
-                onClick={() => void sendAction({ action: 'follow_agent' })}
-              >
-                {FOLLOW_AGENT}
-              </button>
-            </>
-          )}
-        </p>
-      )}
+      <FollowingNote snap={snap} acting={acting} onFollow={() => void sendAction({ action: 'follow_agent' })} />
 
       {banner && (
         <div
@@ -1029,6 +1015,35 @@ export function LiveBrowserStudio({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The line above the viewport while an agent uses the browser. The live region holds the note only;
+ * the "Follow it" button sits beside it, so a screen reader does not announce it with every poll.
+ */
+export function FollowingNote({
+  snap,
+  acting,
+  onFollow,
+}: {
+  snap: Pick<BrowserViewportSnapshot, 'following' | 'canFollow'> | null;
+  acting: boolean;
+  onFollow: () => void;
+}) {
+  const note = liveBrowserNote(snap);
+  if (!note) return null;
+  return (
+    <div className="browser-following-row">
+      <p className="muted small browser-following-note" role="status">
+        {note}
+      </p>
+      {offersFollow(snap) && (
+        <button type="button" className="btn btn-sm" disabled={acting} onClick={onFollow}>
+          {FOLLOW_AGENT}
+        </button>
+      )}
     </div>
   );
 }

@@ -3631,9 +3631,16 @@ dialog.cmd-dialog::backdrop {
   padding: 4px 8px;
 }
 
+.browser-following-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+}
+
 .browser-following-note {
   margin: 0;
-  padding: 4px 10px;
   overflow-wrap: anywhere;
 }
 

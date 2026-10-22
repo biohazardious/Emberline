@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { BROWSER_AGENT_WINDOW_MS, browserAgentProjects, isBrowserToolCall } from './runs/browser-agents.js';
+import {
+  BROWSER_AGENT_WINDOW_MS,
+  browserAgentActivity,
+  browserAgentProjects,
+  isBrowserToolCall,
+} from './runs/browser-agents.js';
 
 describe('browser agents', () => {
   it('Playwright MCP and Bash commands that run Playwright or Chromium drive a browser', () => {
@@ -25,5 +30,24 @@ describe('browser agents', () => {
       now,
     );
     expect([...ids]).toEqual(['a']);
+  });
+
+  it("each project's newest navigation in the window is its agent's URL", () => {
+    const now = 1_000_000;
+    const nav = 'mcp__playwright__browser_navigate';
+    const activity = browserAgentActivity(
+      [
+        { projectId: 'a', toolName: nav, detail: 'url: http://localhost:5173/new', at: now - 1_000 },
+        { projectId: 'a', toolName: nav, detail: 'url: http://localhost:5173/old · element: x', at: now - 9_000 },
+        { projectId: 'a', toolName: 'mcp__playwright__browser_click', detail: 'element: Play', at: now },
+        { projectId: 'b', toolName: 'mcp__playwright__browser_click', detail: 'element: Go', at: now },
+        { projectId: 'c', toolName: nav, detail: 'url: http://x/', at: now - BROWSER_AGENT_WINDOW_MS - 1 },
+      ],
+      now,
+    );
+    expect([...activity]).toEqual([
+      ['a', { lastUrl: 'http://localhost:5173/new' }],
+      ['b', { lastUrl: null }],
+    ]);
   });
 });

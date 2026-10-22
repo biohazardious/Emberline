@@ -117,7 +117,7 @@ import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
-import { BROWSER_AGENT_WINDOW_MS, browserAgentProjects } from './browser-agents.js';
+import { BROWSER_AGENT_WINDOW_MS, type BrowserAgentActivity, browserAgentActivity } from './browser-agents.js';
 import {
   effectiveFactorySettings,
   getFactorySettings,
@@ -1825,11 +1825,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /**
-   * Projects whose agent is using a browser now: a working run with a browser tool call in the last
-   * minute. The Live Browser follows an agent's tab only while exactly one project has one (core
-   * cannot tell which tab another project's agent drives in the shared Chromium).
+   * Projects whose agent is using a browser now (a working run with a browser tool call in the last
+   * minute), each with the URL its agent navigated to last. The Live Browser follows an agent's tab
+   * only while exactly one project has one (core cannot tell which tab another project's agent
+   * drives in the shared Chromium), and prefers the tab at that URL.
    */
-  browserAgentProjectIds(now = Date.now()): Set<string> {
+  browserAgentActivity(now = Date.now()): Map<string, BrowserAgentActivity> {
     const since = new Date(now - BROWSER_AGENT_WINDOW_MS);
     const rows = this.db
       .select({ projectId: runs.projectId, payload: runEvents.payload, ts: runEvents.ts })
@@ -1837,7 +1838,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .innerJoin(runs, eq(runs.id, runEvents.runId))
       .where(and(eq(runs.state, 'working'), eq(runEvents.type, 'PreToolUse'), gte(runEvents.ts, since)))
       .all();
-    return browserAgentProjects(
+    return browserAgentActivity(
       rows.map((r) => {
         const p = (r.payload ?? {}) as Record<string, unknown>;
         return {

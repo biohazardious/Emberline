@@ -453,6 +453,8 @@ export const BrowserViewportSnapshot = z.object({
   agentActions: z.array(BrowserAgentAction).optional(),
   agentActive: z.boolean().optional(),
   playtestActive: z.boolean().optional(),
+  /** Auto-Interact runs for another project; this one cannot start it now. */
+  playtestElsewhere: z.boolean().optional(),
   /**
    * The view shows an agent's browser tab (its own Playwright Chromium or the tab it drives), not the
    * project's tab.

@@ -258,3 +258,28 @@ export function liveBrowserNote(snap: FollowFields | null): string | null {
 export function offersFollow(snap: FollowFields | null): boolean {
   return Boolean(snap?.canFollow && !snap.following);
 }
+
+/** The daemon's answer when another project's Auto-Interact keeps this one from stopping or starting it. */
+export const PLAYTEST_HELD_MESSAGE = 'Auto-Interact is running for another project.';
+export const PLAYTEST_ELSEWHERE_TEXT =
+  'Auto-Interact is running for another project. Start it here once that one stops.';
+export const PLAYTEST_STARTED_TEXT =
+  'Browser Auto-Interact started! Watch the viewport and Agent Activity stream in real time.';
+
+export type LiveBanner = { kind: 'ok' | 'err' | 'info'; text: string };
+
+/** The banner after Start Auto-Interact: started, refused (another project runs it), or none. */
+export function playtestStartBanner(
+  res: Pick<BrowserViewportSnapshot, 'playtestActive' | 'playtestElsewhere'> | null,
+): LiveBanner | undefined {
+  if (res?.playtestElsewhere) return { kind: 'info', text: PLAYTEST_ELSEWHERE_TEXT };
+  return res?.playtestActive ? { kind: 'ok', text: PLAYTEST_STARTED_TEXT } : undefined;
+}
+
+/** The banner after a poll: the refusal goes once the other project's Auto-Interact stopped. */
+export function bannerAfterSnapshot(
+  b: LiveBanner | undefined,
+  snap: Pick<BrowserViewportSnapshot, 'playtestElsewhere'>,
+): LiveBanner | undefined {
+  return b?.text === PLAYTEST_ELSEWHERE_TEXT && !snap.playtestElsewhere ? undefined : b;
+}

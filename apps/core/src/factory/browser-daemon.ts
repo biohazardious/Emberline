@@ -13,7 +13,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.5.0';
+export const BROWSER_DAEMON_VERSION = '1.5.1';
 
 /**
  * S17: the same rule the daemon applies before navigating (`normalizeNavigateUrl`), checked in core
@@ -98,8 +98,13 @@ const AGENT_EVENTS_FILE = '/run/emberline/agent-browser-events.jsonl';
 const TABS_FILE = SOCKET_PATH.replace(/[^/]+$/, 'browser-tabs.json');
 /** tab id -> project id: tabs the daemon opened for a project's Live Browser. Any other tab is an agent's. */
 const tabProjects = new Map(loadTabProjects());
-/** Which agent tab a following view shows: the newest one seen with a page loaded. */
-const agentFollow = { seen: new Set(), last: null };
+/**
+ * Which agent tab a following view shows: the one at the agent's last navigation, else the newest
+ * one seen with a page loaded, or the one whose page changed last (\`urls\`: each tab's URL last round).
+ */
+const agentFollow = { seen: new Set(), last: null, urls: new Map() };
+/** Project tabs being opened (\`/json/new\` answered, label not set yet): a following view holds new tabs. */
+let pendingOpens = 0;
 let playtestTabId = null;
 /** The project whose Live Browser started the Auto-Interact loop: only it can stop or replace it. */
 let playtestProjectId = null;
@@ -109,6 +114,8 @@ const consoleByTab = new Map();
 const actionsByTab = new Map();
 /** Tabs of an agent's own Playwright Chromium (:9223) last seen: their buffers are kept too. */
 let ephemeralTabIds = new Set();
+/** When that Chromium last answered: its tabs' buffers are kept for 10 s after, no longer. */
+let ephemeralSeenAt = 0;
 let nextActionId = 900000;
 const attachedTabs = new Set();
 let launchingBrowser = null;
@@ -132,6 +139,7 @@ function saveTabProjects() {
 }
 
 function pushCapped(buffers, tabId, entry, cap) {
+  if (tabId == null) return;
   let list = buffers.get(tabId);
   if (!list) {
     list = [];
@@ -205,17 +213,26 @@ function pushConsole(level, text, tabId) {
   );
 }
 
+/** Why the localhost:7420 bridge does not listen (an error code), reported by \`/health\`; null while it does. */
+let bridgeError = null;
+
 /**
  * Listens on \`port\`, retrying for a bounded time while the port is taken: after a version bump the
- * old daemon (asked to shut down) may still hold it for a moment.
+ * old daemon (asked to shut down) may still hold it for a moment. Any other error, or the port still
+ * taken once the retries run out, goes to \`onGiveUp\`.
  */
-function listenWithRetry(server, port, host, tries, delayMs) {
+function listenWithRetry(server, port, host, tries, delayMs, onGiveUp) {
   let left = tries;
+  server.on('listening', () => {
+    bridgeError = null;
+  });
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE' && left > 0) {
       left--;
       setTimeout(() => server.listen(port, host), delayMs);
+      return;
     }
+    if (typeof onGiveUp === 'function') onGiveUp(err);
   });
   server.listen(port, host);
 }
@@ -229,7 +246,7 @@ try {
     client.on('error', () => upstream.destroy());
     upstream.on('error', () => client.destroy());
   });
-  listenWithRetry(bridge, 7420, '127.0.0.1', 40, 250);
+  listenWithRetry(bridge, 7420, '127.0.0.1', 40, 250, (err) => { bridgeError = String((err && err.code) || err); });
 } catch {}
 
 async function isCdpAlive(baseUrl = CDP_BASE, timeoutMs = 1200) {
@@ -368,6 +385,7 @@ async function ephemeralPages() {
     const pages = (await res.json()).filter(isUserPage);
     for (const p of pages) attachConsoleListener(p);
     ephemeralTabIds = new Set(pages.map((p) => p.id));
+    ephemeralSeenAt = Date.now();
     return pages.length > 0 ? pages : null;
   } catch {
     ephemeralTabIds = new Set();
@@ -381,6 +399,8 @@ async function ephemeralPages() {
  * opens meanwhile is not in this list yet.
  */
 async function sharedPages() {
+  // Nobody follows the agent's own Chromium any more (or it is gone): its tabs' buffers go too.
+  if (Date.now() - ephemeralSeenAt > 10_000) ephemeralTabIds = new Set();
   const labelled = [...tabProjects.keys()];
   const buffered = { console: [...consoleByTab.keys()], actions: [...actionsByTab.keys()] };
   const res = await fetch(CDP_BASE + '/json/list', { signal: AbortSignal.timeout(2000) });
@@ -404,16 +424,35 @@ async function sharedPages() {
   return pages;
 }
 
-function pickAgentTab(pages, labels, follow) {
-  const candidates = pages.filter((p) => !labels.has(p.id) && p.url && p.url !== 'about:blank');
-  for (const p of candidates) if (!follow.seen.has(p.id)) follow.last = p.id;
-  follow.seen = new Set(pages.map((p) => p.id));
+/**
+ * The agent tab a following view shows. The tab at the agent's last navigation (\`agentUrl\`, hash
+ * ignored) wins; else the newest tab, or the one whose page changed. Labelled tabs are projects'.
+ * With \`holdNew\` (a project tab is being opened and not labelled yet) a tab not seen before is left
+ * out and stays unseen, so it is judged once its label is known.
+ */
+function pickAgentTab(pages, labels, follow, agentUrl, holdNew) {
+  const fresh = (p) => !follow.seen.has(p.id);
+  const candidates = pages.filter((p) => !labels.has(p.id) && p.url && p.url !== 'about:blank' && !(holdNew && fresh(p)));
+  const strip = (u) => {
+    try {
+      const x = new URL(u);
+      x.hash = '';
+      return x.href;
+    } catch {
+      return u;
+    }
+  };
+  const hit = agentUrl ? candidates.find((p) => strip(p.url) === strip(agentUrl)) : null;
+  if (hit) follow.last = hit.id;
+  else for (const p of candidates) if (fresh(p) || follow.urls.get(p.id) !== p.url) follow.last = p.id;
+  follow.seen = new Set(pages.filter((p) => !(holdNew && fresh(p))).map((p) => p.id));
+  follow.urls = new Map(pages.map((p) => [p.id, p.url]));
   return candidates.find((p) => p.id === follow.last) || candidates[0] || null;
 }
 
 function pickShownTab(pages, labels, follow, q) {
   if (q.follow) {
-    const agent = pickAgentTab(pages, labels, follow);
+    const agent = pickAgentTab(pages, labels, follow, q.agentUrl, pendingOpens > 0);
     if (agent) return { tab: agent, following: true };
   }
   const own = q.tabId ? pages.find((p) => p.id === q.tabId && labels.get(p.id) === q.projectId) : null;
@@ -667,7 +706,8 @@ async function captureState(q) {
     shownEntry.url = liveUrl || shownEntry.url;
   }
 
-  const playtestHere = Boolean(playtestTimer && Date.now() < playtestEndsAt) && playtestTabId === tab.id;
+  const playtestRunning = Boolean(playtestTimer && Date.now() < playtestEndsAt);
+  const playtestHere = playtestRunning && playtestTabId === tab.id;
 
   return {
     available: Boolean(imageDataUrl),
@@ -682,6 +722,7 @@ async function captureState(q) {
       .reverse(),
     agentActive: Boolean(ephemeral || playtestHere),
     playtestActive: playtestHere,
+    playtestElsewhere: playtestHeldByOther(playtestRunning, playtestProjectId, q.projectId),
     following,
     imageDataUrl,
     capturedAt: nowIso,
@@ -701,11 +742,20 @@ async function handleAction(body, q) {
 
   if (action === 'open_tab' || action === 'new_tab') {
     const url = normalizeNavigateUrl(body.url || q.defaultUrl || 'about:blank');
-    const res = await fetch(CDP_BASE + '/json/new?' + encodeURIComponent(url), { method: 'PUT' }).catch(() => null);
-    if (res && res.ok) {
-      const created = await res.json();
-      tabProjects.set(created.id, q.projectId);
-      saveTabProjects();
+    // Until it is labelled, the new tab looks like an agent's: following views hold new tabs meanwhile.
+    pendingOpens++;
+    let created = null;
+    try {
+      const res = await fetch(CDP_BASE + '/json/new?' + encodeURIComponent(url), { method: 'PUT' }).catch(() => null);
+      if (res && res.ok) {
+        created = await res.json();
+        tabProjects.set(created.id, q.projectId);
+        saveTabProjects();
+      }
+    } finally {
+      pendingOpens--;
+    }
+    if (created) {
       await new Promise((r) => setTimeout(r, 400));
       return captureState({ ...q, tabId: created.id, follow: false });
     }
@@ -744,9 +794,10 @@ async function handleAction(body, q) {
   }
 
   if (action === 'stop_playtest') {
-    if (!playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
-      stopPlaytestLoop('Stopped by user');
+    if (playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
+      return { ...(await captureState(q)), message: 'Auto-Interact is running for another project.' };
     }
+    stopPlaytestLoop('Stopped by user');
     return captureState(q);
   }
 
@@ -1011,6 +1062,7 @@ function browserQuery(u) {
     tabId: u.searchParams.get('tabId') || null,
     follow: u.searchParams.get('follow') === '1',
     defaultUrl: u.searchParams.get('defaultUrl') || null,
+    agentUrl: u.searchParams.get('agentUrl') || null,
   };
 }
 
@@ -1019,7 +1071,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url || '/', 'http://localhost');
     if (req.method === 'GET' && u.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, version: DAEMON_VERSION }));
+      res.end(JSON.stringify({ ok: true, version: DAEMON_VERSION, bridgeError }));
       return;
     }
     if (req.method === 'GET' && u.pathname === '/claude-usage') {
@@ -1117,6 +1169,26 @@ function socketRequest<T>(
 
 let ensuringPromise: Promise<string | null> | null = null;
 
+/** Whether this daemon start's bridge error was logged already. */
+let bridgeErrorLogged = false;
+
+/** A new daemon was started: its bridge error, if any, is logged again. */
+export function resetBridgeErrorLog(): void {
+  bridgeErrorLogged = false;
+}
+
+/** Logs the daemon's localhost:7420 bridge error (from `/health`) once per daemon start. */
+export function logBridgeErrorOnce(
+  bridgeError: string | null | undefined,
+  log: (message: string) => void = (message) => console.warn(message),
+): void {
+  if (!bridgeError || bridgeErrorLogged) return;
+  bridgeErrorLogged = true;
+  log(
+    `Live Browser: the runner's localhost:7420 bridge is not listening (${bridgeError}). Pages that open http://localhost:7420 in the runner's browser will not load.`,
+  );
+}
+
 /**
  * Ensures `/run/emberline/browser-daemon.mjs` and `/run/emberline/playwright-hook.cjs`
  * are written and running inside the `runner` container.
@@ -1137,7 +1209,7 @@ export async function ensureRunnerBrowserDaemon(
       await writeFile(hookPath, PLAYWRIGHT_HOOK_SCRIPT, { encoding: 'utf8', mode: 0o644 });
     }
     if (existsSync(browserSock)) {
-      const health = await socketRequest<{ ok?: boolean; version?: string }>(
+      const health = await socketRequest<{ ok?: boolean; version?: string; bridgeError?: string | null }>(
         browserSock,
         'GET',
         '/health',
@@ -1145,6 +1217,7 @@ export async function ensureRunnerBrowserDaemon(
         1_200,
       );
       if (health.ok && health.version === BROWSER_DAEMON_VERSION) {
+        logBridgeErrorOnce(health.bridgeError);
         return browserSock;
       }
       await socketRequest(browserSock, 'POST', '/shutdown', {}, 1_000).catch(() => undefined);
@@ -1163,6 +1236,7 @@ export async function ensureRunnerBrowserDaemon(
 
       if (ptyd.status !== 'connected') return null;
 
+      resetBridgeErrorLog();
       const launcher = await ptyd.get().spawn({
         file: 'node',
         args: [
@@ -1214,6 +1288,8 @@ export interface RunnerBrowserQuery {
   tabId: string | null;
   follow: boolean;
   defaultUrl: string | null;
+  /** The URL the project's agent navigated to last; sent only while following. */
+  agentUrl?: string | null;
 }
 export type RunnerBrowserTab = BrowserTabInfo & { projectId: string | null };
 export type RunnerBrowserSnapshot = Omit<BrowserViewportSnapshot, 'tabs'> & {
@@ -1234,6 +1310,7 @@ function browserQueryString(q: RunnerBrowserQuery): string {
   if (q.tabId) params.set('tabId', q.tabId);
   if (q.follow) params.set('follow', '1');
   if (q.defaultUrl) params.set('defaultUrl', q.defaultUrl);
+  if (q.follow && q.agentUrl) params.set('agentUrl', q.agentUrl);
   return `?${params.toString()}`;
 }
 

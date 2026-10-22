@@ -74,7 +74,7 @@ import {
   WORKTREE_CONFIG_CODES,
   WORKTREE_YML_EDIT_IN_SETTINGS,
 } from '@emberline/protocol';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
 import { execGitFile } from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
@@ -90,7 +90,7 @@ import {
   runnerBrowserDaemon,
   withRunActivity,
 } from '../factory/browser-daemon.js';
-import { ProjectBrowserTabs } from '../factory/project-browser-tabs.js';
+import { type BrowserTabOptions, ProjectBrowserTabs } from '../factory/project-browser-tabs.js';
 import {
   addRoadmapItem,
   addRoadmapMilestone,
@@ -205,16 +205,30 @@ export function registerProjectRoutes(
       })
       .run();
   };
-  const browserTabs = new ProjectBrowserTabs((opts) =>
-    runnerBrowserDaemon(ptyd, path.dirname(config.ptydSocket), opts),
+  const browserTabs = new ProjectBrowserTabs(
+    (opts) => runnerBrowserDaemon(ptyd, path.dirname(config.ptydSocket), opts),
+    (ids) =>
+      new Set(
+        db
+          .select({ id: projects.id })
+          .from(projects)
+          .where(inArray(projects.id, ids))
+          .all()
+          .map((r) => r.id),
+      ),
   );
   /**
    * The Live Browser follows an agent's tab only while this project is the only one whose agent uses
-   * a browser.
+   * a browser; it shows the tab at the agent's last navigation when there is one.
    */
-  const followsAgent = (projectId: string): boolean => {
-    const ids = runs.browserAgentProjectIds();
-    return ids.size === 1 && ids.has(projectId);
+  const browserTabOptions = (projectId: string, defaultUrl: string): BrowserTabOptions => {
+    const act = runs.browserAgentActivity();
+    return {
+      defaultUrl,
+      follow: act.size === 1 && act.has(projectId),
+      agentHere: act.has(projectId),
+      agentUrl: act.get(projectId)?.lastUrl ?? null,
+    };
   };
 
   app.get('/api/projects', async (): Promise<Project[]> =>
@@ -1169,10 +1183,7 @@ export function registerProjectRoutes(
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
       const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
-      const runnerSnap = await browserTabs.state(project.id, {
-        defaultUrl: demoUrl,
-        follow: followsAgent(project.id),
-      });
+      const runnerSnap = await browserTabs.state(project.id, browserTabOptions(project.id, demoUrl));
       if (runnerSnap) return withRunActivity(runnerSnap, agentActions, agentActive);
       const fallback = await captureBrowserViewportSnapshot({ targetUrl: demoUrl });
       return {
@@ -1194,10 +1205,7 @@ export function registerProjectRoutes(
       const { project } = resolveProjectTargetPath(request.params.id, targetId);
       const demoUrl = agentDemoUrl(project.id, targetId);
       const { actions: agentActions, agentActive } = runs.listBrowserAgentActions(project.id);
-      const runnerSnap = await browserTabs.action(project.id, body, {
-        defaultUrl: demoUrl,
-        follow: followsAgent(project.id),
-      });
+      const runnerSnap = await browserTabs.action(project.id, body, browserTabOptions(project.id, demoUrl));
       if (runnerSnap) return withRunActivity(runnerSnap, agentActions, agentActive);
       const fallback = await captureBrowserViewportSnapshot({
         targetUrl: body.url ?? demoUrl,
