@@ -499,6 +499,23 @@ describe('container addresses', () => {
     c.stop();
   });
 
+  it("core's networks that cannot be listed (a restricted sandbox) leave loopback only, never a failed check", async () => {
+    const c = new ContainerAddresses(['runner', 'localhost'], {
+      lookup: lookupFrom({ runner: ['172.18.0.3'], localhost: ['127.0.0.1'] }),
+      refreshMs: 60_000, // the first resolution starts in the constructor
+      localNetworks: () => {
+        throw Object.assign(new Error('uv_interface_addresses returned Unknown system error 1'), { code: 'ERR_SYSTEM_ERROR' });
+      },
+    });
+    try {
+      await expect(c.has('127.0.0.1')).resolves.toBe(true);
+      await expect(c.has('172.18.0.3')).resolves.toBe(false);
+      await expect(c.refresh()).resolves.toBeUndefined();
+    } finally {
+      c.stop();
+    }
+  });
+
   it('defaults to the compose service names and can be set', () => {
     expect(loadConfig({}).containerHosts).toEqual(['runner', 'docker']);
     expect(loadConfig({ EMBERLINE_CONTAINER_HOSTS: 'agents, engine' }).containerHosts).toEqual(['agents', 'engine']);

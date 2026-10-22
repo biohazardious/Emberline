@@ -19,7 +19,10 @@ export interface ContainerAddressesOptions {
 
 const defaultLookup = async (host: string) => (await dnsLookup(host, { all: true })).map((a) => a.address);
 
-/** Lookup errors that mean the name is gone (its container was removed); any other keeps the last answer. */
+/**
+ * Lookup errors that mean the name has no container now (removed, or stopped or restarting: Docker's
+ * DNS answers ENOTFOUND for those too); any other keeps the last answer.
+ */
 const GONE = new Set(['ENOTFOUND', 'ENODATA']);
 
 const PRIVATE = (() => {
@@ -72,9 +75,10 @@ function networksOf(cidrs: string[]): BlockList {
  * The addresses of Emberline's own containers (compose services `runner` and `docker`), resolved by
  * name and refreshed periodically. Only answers that can be a container next to core count: loopback,
  * or a private address on one of core's own networks, so a LAN host that happens to be called
- * `docker` or `runner` is neither trusted nor refused. A name that is gone (`ENOTFOUND`, `ENODATA`:
- * the engine was removed) drops its addresses; any other failure (`EAI_AGAIN`, a container
- * restarting) keeps the last known ones. With `network_mode: host` the LAN is core's own network,
+ * `docker` or `runner` is neither trusted nor refused. A name that does not resolve (`ENOTFOUND`,
+ * `ENODATA`: its container was removed, or is stopped or restarting) drops its addresses until a
+ * later refresh resolves it again; any other failure (`EAI_AGAIN`, slow DNS) keeps the last known
+ * ones. With `network_mode: host` the LAN is core's own network,
  * and the explicit host settings (`EMBERLINE_CONTAINER_HOSTS`, `EMBERLINE_RUNNER_HOSTS`) decide.
  */
 export class ContainerAddresses {
@@ -98,15 +102,25 @@ export class ContainerAddresses {
     }
   }
 
+  /** Core's own networks; none when they cannot be listed (a sandbox refusing it): only loopback counts then. */
+  private ownNetworks(): BlockList {
+    try {
+      return networksOf(this.localNetworks());
+    } catch {
+      return networksOf([]);
+    }
+  }
+
   async refresh(): Promise<void> {
-    const networks = networksOf(this.localNetworks());
+    const networks = this.ownNetworks();
     await Promise.all(
       this.hosts.map(async (host) => {
         try {
           const answers = (await this.lookup(host)).map(normalizeIp);
           this.byHost.set(host, new Set(answers.filter((ip) => containerAnswer(ip, networks))));
         } catch (error) {
-          // Gone (the engine was removed): forget it. Otherwise (a container restarting, DNS slow): keep what was known.
+          // Not resolvable (removed, or stopped or restarting: Docker's DNS has no answer for it then): forget
+          // it until it resolves again. Otherwise (EAI_AGAIN, DNS slow): keep what was known.
           if (GONE.has((error as NodeJS.ErrnoException).code ?? '')) this.byHost.delete(host);
         }
       }),
