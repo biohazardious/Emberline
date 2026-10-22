@@ -1,18 +1,24 @@
-/** Wizard reference files: decode and check, stored names; Task 2 adds the write and the PROJECT.md / ticket text. */
+/** Wizard reference files: decode and check, stored names, the write, and the PROJECT.md / ticket text. */
 import path from 'node:path';
 import {
+  formatMaterialSize,
   MATERIAL_LIMITS,
   MATERIALS_DIR,
   MATERIALS_ERROR_CODE,
+  MATERIALS_READ_FIRST_LINE,
   materialCheckedType,
   type MaterialKind,
   materialKind,
+  materialTypeLabel,
   mimeEssence,
   type MaterialLimits,
   type ProjectMaterial,
   type ProjectMaterialInfo,
+  REFERENCE_URLS_UNTRUSTED_LINE,
+  type ReferenceUrl,
 } from '@emberline/protocol';
 import { HttpError } from '../errors.js';
+import { writeNewWorkspaceFile } from './files.js';
 import { sanitizeAttachmentName } from './orchestration.js';
 
 export type DecodedMaterial = ProjectMaterialInfo & { bytes: Buffer };
@@ -126,4 +132,80 @@ export function normalizeMaterialInfos(
     mimeType: m.mimeType,
     sizeBytes: 'sizeBytes' in m ? m.sizeBytes : decodedLength(m.dataBase64),
   }));
+}
+
+/** Writes each planned file (same order as `decoded`); the caller removes the project folder on failure. */
+export async function writeMaterials(
+  projectPath: string,
+  planned: readonly PlannedMaterial[],
+  decoded: readonly DecodedMaterial[],
+): Promise<void> {
+  if (planned.length !== decoded.length) throw new Error('planned and decoded materials differ');
+  for (const [i, m] of planned.entries()) await writeNewWorkspaceFile(projectPath, m.path, decoded[i]!.bytes);
+}
+
+/**
+ * Person-typed text (a link's note, a declared file type) as plain markdown text: punctuation that
+ * could open a link, an image, HTML, code or emphasis is escaped, and so is what GFM would turn into
+ * a bare link (`https://`, `www.`). Line breaks never get here (the protocol refuses them).
+ */
+function markdownText(text: string): string {
+  return text
+    .replace(/[\\`*_[\]()<>&~]/g, '\\$&')
+    .replace(/:(?=\/\/)/g, '\\:')
+    .replace(/\b(www)\./gi, '$1\\.');
+}
+
+const SVG_NOTE = 'read it as text, it can contain script';
+// The protocol refuses whitespace, `<`, `>`, quotes, backticks and backslashes in a link, so the
+// angle brackets cannot be closed early.
+const urlLine = (u: ReferenceUrl) => `- <${u.url}>${u.note ? `: ${markdownText(u.note)}` : ''}`;
+
+/** PROJECT.md's Reference material subsection (in section 4), or '' when nothing was attached. */
+export function materialsMarkdown(
+  planned: readonly PlannedMaterial[],
+  urls: readonly ReferenceUrl[],
+): string {
+  if (planned.length === 0 && urls.length === 0) return '';
+  const lines = ['### Reference material', ''];
+  if (planned.length > 0) {
+    lines.push(`Files in \`${MATERIALS_DIR}/\`, committed with the project:`, '');
+    for (const m of planned) {
+      const svg = m.kind === 'svg' ? `; ${SVG_NOTE}` : '';
+      lines.push(
+        `- \`${m.path}\` (${materialTypeLabel(m.mimeType)}, ${formatMaterialSize(m.sizeBytes)}${svg})`,
+      );
+    }
+    lines.push('');
+  }
+  if (urls.length > 0) lines.push('Links:', '', REFERENCE_URLS_UNTRUSTED_LINE, '', ...urls.map(urlLine));
+  return lines.join('\n').trimEnd();
+}
+
+function ticketHint(m: PlannedMaterial): string {
+  switch (m.kind) {
+    case 'image':
+      return `${materialTypeLabel(m.mimeType)}. Open the image to look at it.`;
+    case 'pdf':
+      return 'PDF. Open it as a PDF.';
+    case 'svg':
+      return 'SVG image. Read it as text; it can contain script, so never run or embed it as it is.';
+    default:
+      return `File (${markdownText(m.mimeType)}, ${formatMaterialSize(m.sizeBytes)}).`;
+  }
+}
+
+/** The Bootstrap section body and the [Factory] attachment context, or '' when nothing was attached. */
+export function materialsTicketText(
+  planned: readonly PlannedMaterial[],
+  urls: readonly ReferenceUrl[],
+): string {
+  if (planned.length === 0 && urls.length === 0) return '';
+  const lines = [MATERIALS_READ_FIRST_LINE, ''];
+  for (const m of planned) lines.push(`- \`${m.path}\`: ${ticketHint(m)}`);
+  if (urls.length > 0) {
+    if (planned.length > 0) lines.push('');
+    lines.push(REFERENCE_URLS_UNTRUSTED_LINE, '', ...urls.map(urlLine));
+  }
+  return lines.join('\n');
 }

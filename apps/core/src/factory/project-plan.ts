@@ -15,6 +15,7 @@ import {
   type ProjectGateOverrides,
   type ProjectMaterialInfo,
   type ProjectTechStack,
+  type ReferenceUrl,
   STACK_DIMENSION_IDS,
   type StackChoice,
   type StackDimensionId,
@@ -22,7 +23,13 @@ import {
   visionRequired,
 } from '@emberline/protocol';
 import { badRequest } from '../errors.js';
-import { normalizeMaterialInfos } from './materials.js';
+import {
+  materialsMarkdown,
+  materialsTicketText,
+  normalizeMaterialInfos,
+  type PlannedMaterial,
+  planMaterials,
+} from './materials.js';
 import {
   bootstrapTicket,
   bootstrapWritesWorktree,
@@ -74,6 +81,11 @@ export interface ProjectPlan {
   starter: Record<string, string>;
   /** Bootstrap and Deploy; the `[Factory]` ticket is built by the ticket service from `vision`. */
   tickets: WizardTicketSpec[];
+  /** Reference files in docs/reference/, in the body's order. */
+  materials: PlannedMaterial[];
+  referenceUrls: ReferenceUrl[];
+  /** Bootstrap section body and [Factory] attachment context. */
+  materialsText: string;
 }
 
 /** True when the body asks for the preset-driven creation flow. */
@@ -153,6 +165,11 @@ export function planNewProject(
     );
   }
   const versionPolicy = body.techStack?.versionPolicy;
+  const starter = preset?.starter ? STARTERS[preset.starter]({ name: body.name, description: vision }) : {};
+  const reserved = ['PROJECT.md', 'CLAUDE.md', '.emberline/worktree.yml', ...Object.keys(starter)];
+  const materials = planMaterials(body.materials, reserved);
+  const referenceUrls = body.referenceUrls ?? [];
+  const materialsText = materialsTicketText(materials, referenceUrls);
   const projectMd = generateProjectBlueprint({
     name: body.name,
     appType,
@@ -161,11 +178,11 @@ export function planNewProject(
     versionPolicy,
     architectureNotes: body.architectureNotes,
     referenceDocs: body.referenceDocs,
+    referenceMaterial: materialsMarkdown(materials, referenceUrls),
   });
-  const starter = preset?.starter ? STARTERS[preset.starter]({ name: body.name, description: vision }) : {};
   const composePreview = previewsComposeService(choices, preset, { dockerEngine });
   const startFactory = body.startFactory ?? true;
-  const ctx = { name: body.name, appType, choices, preset, vision, composePreview, factoryPlans: startFactory && vision.length > 0 };
+  const ctx = { name: body.name, appType, choices, preset, vision, composePreview, factoryPlans: startFactory && vision.length > 0, materialsText };
   const tickets = [bootstrapTicket(ctx), deployTicket(ctx)].filter((x): x is WizardTicketSpec => x !== null);
 
   return {
@@ -183,6 +200,9 @@ export function planNewProject(
     notes: !composePreview && choices.deploy === 'docker-compose' ? [dockerComposeNote(engine)] : [],
     starter,
     tickets,
+    materials,
+    referenceUrls,
+    materialsText,
   };
 }
 

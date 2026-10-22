@@ -134,7 +134,7 @@ import {
   writeWorkspaceFileContent,
 } from '../factory/service.js';
 import { inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
-import { decodeMaterials } from '../factory/materials.js';
+import { decodeMaterials, writeMaterials } from '../factory/materials.js';
 import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
 import { DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
 import {
@@ -267,7 +267,7 @@ export function registerProjectRoutes(
       tickets: plannedTickets(plan),
       gates: plan.gates,
       notes: plan.notes,
-      materials: [],
+      materials: plan.materials.map(({ name, path: p, kind, mimeType, sizeBytes }) => ({ name, path: p, kind, mimeType, sizeBytes })),
     };
   });
 
@@ -311,6 +311,8 @@ export function registerProjectRoutes(
       for (const [rel, content] of Object.entries(files)) {
         await writeFile(path.join(projectPath, rel), content, 'utf8');
       }
+      // Committed with the first commit, so every run worktree has them.
+      await writeMaterials(projectPath, plan.materials, decoded);
       if (body.initGit ?? true) {
         await initLocalGitRepository(projectPath, body.defaultBranch);
         // initLocalGitRepository swallows errors; runs need the commit, so a missing one fails the create.
@@ -352,7 +354,7 @@ export function registerProjectRoutes(
       }
       const bootstrap = created.get('bootstrap');
       if (plan.startFactory && plan.vision && bootstrap) {
-        created.set('factory', tickets.createFactoryTicket(project.id, plan.vision, { autoDispatch: true }));
+        created.set('factory', tickets.createFactoryTicket(project.id, plan.vision, { autoDispatch: true, attachmentContext: plan.materialsText }));
       }
       for (const spec of [...plan.tickets, { key: 'factory', dependsOn: ['bootstrap'] }]) {
         const ticket = created.get(spec.key);

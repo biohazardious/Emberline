@@ -139,6 +139,8 @@ export interface BlueprintGeneratorInput {
   techStack?: ProjectTechStack | null;
   architectureNotes?: string;
   referenceDocs?: string;
+  /** Wizard: the Reference material subsection (files in docs/reference/, links). */
+  referenceMaterial?: string;
   /** Wizard v2: every stack dimension as chosen (option id, `none`, `agent` or free text). */
   choices?: ProjectChoices;
   versionPolicy?: string;
@@ -235,7 +237,7 @@ export function generateProjectBlueprint(input: BlueprintGeneratorInput): string
 - Maintain automated tests alongside every feature change.`;
 
   const refSection =
-    input.referenceDocs?.trim() ||
+    [input.referenceDocs?.trim(), input.referenceMaterial?.trim()].filter(Boolean).join('\n\n') ||
     `- No external reference documents attached yet. Add API specs, links, or domain rules here.`;
 
   return `# ${input.name} — Project Blueprint (\`PROJECT.md\`)
@@ -513,6 +515,8 @@ export interface WizardTicketContext {
   composePreview?: boolean;
   /** The [Factory] ticket will plan the feature tickets, so Bootstrap and Deploy must not. */
   factoryPlans?: boolean;
+  /** Reference files and links (see materialsTicketText); '' or absent when none. */
+  materialsText?: string;
 }
 
 export interface WizardTicketSpec {
@@ -591,7 +595,7 @@ Set up the skeleton of **${ctx.name}** (${APP_TYPE_LABELS[ctx.appType]}${ctx.pre
 
 ${stack.join('\n')}
 
-${decideSection(ctx, emptyWorktree)}## What to do
+${ctx.materialsText ? `## Reference material\n\n${ctx.materialsText}\n\n` : ''}${decideSection(ctx, emptyWorktree)}## What to do
 
 ${steps.map((x, i) => `${i + 1}. ${x}`).join('\n')}
 

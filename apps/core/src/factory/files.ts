@@ -365,6 +365,18 @@ export async function writeWorkspaceFileContent(
   };
 }
 
+/** Creates a file that must not exist yet; O_EXCL also refuses a link planted at the path. */
+const CREATE_NEW_NO_FOLLOW = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW;
+
+/** A new file inside the workspace (wizard reference files): contained, no link followed, never overwritten. */
+export async function writeNewWorkspaceFile(workspacePath: string, relPath: string, data: Uint8Array): Promise<void> {
+  const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath);
+  await mkdir(path.dirname(absFile), { recursive: true });
+  // mkdir walks the folder chain: check it again before the write.
+  await resolveContainedWorkspaceFile(workspacePath, relPath);
+  await writeFile(absFile, data, { flag: CREATE_NEW_NO_FOLLOW });
+}
+
 export async function deleteWorkspaceFileEntry(workspacePath: string, relPath: string): Promise<void> {
   const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath, { allowLinkTarget: true });
   await rm(absFile, { recursive: true, force: true });
