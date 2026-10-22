@@ -17,6 +17,7 @@ import {
   offersFollow,
   bannerAfterSnapshot,
   PLAYTEST_ELSEWHERE_TEXT,
+  PLAYTEST_HELD_MESSAGE,
   PLAYTEST_STARTED_TEXT,
   playtestStartBanner,
   previewBadge,
@@ -409,6 +410,9 @@ describe('Auto-Interact start banner (B-12)', () => {
     expect(bannerAfterSnapshot(refusal, { playtestElsewhere: false })).toBeUndefined();
     expect(bannerAfterSnapshot(refusal, {})).toBeUndefined();
     expect(bannerAfterSnapshot(other, { playtestElsewhere: false })).toBe(other);
+    const heldStop = { kind: 'info' as const, text: PLAYTEST_HELD_MESSAGE };
+    expect(bannerAfterSnapshot(heldStop, { playtestElsewhere: true })).toBe(heldStop);
+    expect(bannerAfterSnapshot(heldStop, { playtestElsewhere: false })).toBeUndefined();
     expect(bannerAfterSnapshot(undefined, { playtestElsewhere: false })).toBeUndefined();
   });
 });

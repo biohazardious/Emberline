@@ -117,7 +117,11 @@ import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { ensureRunnerBrowserDaemon } from '../factory/browser-daemon.js';
-import { BROWSER_AGENT_WINDOW_MS, type BrowserAgentActivity, browserAgentActivity } from './browser-agents.js';
+import {
+  BROWSER_AGENT_WINDOW_MS,
+  type BrowserAgentActivity,
+  browserAgentActivity,
+} from './browser-agents.js';
 import {
   effectiveFactorySettings,
   getFactorySettings,

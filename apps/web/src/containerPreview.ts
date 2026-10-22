@@ -276,10 +276,12 @@ export function playtestStartBanner(
   return res?.playtestActive ? { kind: 'ok', text: PLAYTEST_STARTED_TEXT } : undefined;
 }
 
-/** The banner after a poll: the refusal goes once the other project's Auto-Interact stopped. */
+const PLAYTEST_REFUSALS = new Set([PLAYTEST_ELSEWHERE_TEXT, PLAYTEST_HELD_MESSAGE]);
+
+/** The banner after a poll: a start or stop refusal goes once the other project's Auto-Interact stopped. */
 export function bannerAfterSnapshot(
   b: LiveBanner | undefined,
   snap: Pick<BrowserViewportSnapshot, 'playtestElsewhere'>,
 ): LiveBanner | undefined {
-  return b?.text === PLAYTEST_ELSEWHERE_TEXT && !snap.playtestElsewhere ? undefined : b;
+  return b && PLAYTEST_REFUSALS.has(b.text) && !snap.playtestElsewhere ? undefined : b;
 }

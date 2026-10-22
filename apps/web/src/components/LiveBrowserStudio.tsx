@@ -625,7 +625,11 @@ export function LiveBrowserStudio({
         </button>
       </form>
 
-      <FollowingNote snap={snap} acting={acting} onFollow={() => void sendAction({ action: 'follow_agent' })} />
+      <FollowingNote
+        snap={snap}
+        acting={acting}
+        onFollow={() => void sendAction({ action: 'follow_agent' })}
+      />
 
       {banner && (
         <div

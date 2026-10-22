@@ -104,6 +104,15 @@ describe('browser daemon: which agent tab a following view shows (B-10, B-27)', 
     expect(pickAgentTab([{ id: 'old', url: 'http://h/2' }, { id: 'new', url: 'http://h/static' }], none, follow)?.id).toBe('old');
   });
 
+  it('a page that only rewrites its hash does not take the view', () => {
+    const follow = fresh();
+    pickAgentTab([{ id: 'game', url: 'http://h/game#t1' }], none, follow);
+    const both = (hash: string) => [{ id: 'game', url: `http://h/game#${hash}` }, { id: 'new', url: 'http://h/static' }];
+    expect(pickAgentTab(both('t1'), none, follow)?.id).toBe('new');
+    expect(pickAgentTab(both('t2'), none, follow)?.id).toBe('new');
+    expect(pickAgentTab([{ id: 'game', url: 'http://h/level-2#t3' }, { id: 'new', url: 'http://h/static' }], none, follow)?.id).toBe('game');
+  });
+
   it("the tab at the agent's last navigation (hash ignored) wins over everything", () => {
     const follow = fresh();
     pickAgentTab([{ id: 'old', url: 'http://h/app#start' }], none, follow);
@@ -385,7 +394,7 @@ describe('browser daemon localhost:7420 bridge across a daemon upgrade', () => {
 
   it('/health reports the bridge error, and core logs it once per daemon start', () => {
     expect(BROWSER_DAEMON_SCRIPT).toContain('JSON.stringify({ ok: true, version: DAEMON_VERSION, bridgeError })');
-    expect(BROWSER_DAEMON_SCRIPT).toMatch(/listenWithRetry\(bridge, 7420, '127\.0\.0\.1', \d+, \d+, \(err\) => \{ bridgeError = /);
+    expect(BROWSER_DAEMON_SCRIPT).toMatch(/listenWithRetry\(bridge, 7420, '127\.0\.0\.1', \d+, \d+, \(err\) => \{\s+bridgeError = /);
     const logged: string[] = [];
     resetBridgeErrorLog();
     logBridgeErrorOnce(null, (m) => logged.push(m));

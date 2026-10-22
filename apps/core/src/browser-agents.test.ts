@@ -50,4 +50,18 @@ describe('browser agents', () => {
       ['b', { lastUrl: null }],
     ]);
   });
+
+  it('a navigation to a bare host or path gets http://, as the browser shows it', () => {
+    const now = 1_000_000;
+    const lastUrl = (detail: string) =>
+      browserAgentActivity(
+        [{ projectId: 'a', toolName: 'mcp__playwright__browser_navigate', detail, at: now }],
+        now,
+      ).get('a')?.lastUrl;
+    expect(lastUrl('url: localhost:5173')).toBe('http://localhost:5173/');
+    expect(lastUrl('url: localhost:5173/play?level=2 · element: x')).toBe('http://localhost:5173/play?level=2');
+    expect(lastUrl('url: example.com')).toBe('http://example.com/');
+    expect(lastUrl('url: https://example.com')).toBe('https://example.com/');
+    expect(lastUrl('url: file:///etc/passwd')).toBeNull();
+  });
 });

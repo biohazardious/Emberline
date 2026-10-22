@@ -21,13 +21,21 @@ export const BROWSER_DAEMON_VERSION = '1.5.1';
  */
 export function isBrowsableUrl(raw: string): boolean {
   const u = raw.trim();
-  if (!u || u === 'about:blank') return true;
+  return !u || u === 'about:blank' || browsableHref(u) !== null;
+}
+
+/**
+ * A web page address as the browser shows it (a bare host or `host:port/path` gets `http://`, a bare
+ * origin its `/`); null when it is not an http(s) URL. The daemon's `normalizeNavigateUrl` rule.
+ */
+export function browsableHref(raw: string): string | null {
+  const u = raw.trim();
   const candidate = !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) || /^[^:/]+:[0-9]/.test(u) ? `http://${u}` : u;
   try {
-    const { protocol } = new URL(candidate);
-    return protocol === 'http:' || protocol === 'https:';
+    const parsed = new URL(candidate);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -246,7 +254,9 @@ try {
     client.on('error', () => upstream.destroy());
     upstream.on('error', () => client.destroy());
   });
-  listenWithRetry(bridge, 7420, '127.0.0.1', 40, 250, (err) => { bridgeError = String((err && err.code) || err); });
+  listenWithRetry(bridge, 7420, '127.0.0.1', 40, 250, (err) => {
+    bridgeError = String((err && err.code) || err);
+  });
 } catch {}
 
 async function isCdpAlive(baseUrl = CDP_BASE, timeoutMs = 1200) {
@@ -444,9 +454,9 @@ function pickAgentTab(pages, labels, follow, agentUrl, holdNew) {
   };
   const hit = agentUrl ? candidates.find((p) => strip(p.url) === strip(agentUrl)) : null;
   if (hit) follow.last = hit.id;
-  else for (const p of candidates) if (fresh(p) || follow.urls.get(p.id) !== p.url) follow.last = p.id;
+  else for (const p of candidates) if (fresh(p) || follow.urls.get(p.id) !== strip(p.url)) follow.last = p.id;
   follow.seen = new Set(pages.filter((p) => !(holdNew && fresh(p))).map((p) => p.id));
-  follow.urls = new Map(pages.map((p) => [p.id, p.url]));
+  follow.urls = new Map(pages.map((p) => [p.id, strip(p.url)]));
   return candidates.find((p) => p.id === follow.last) || candidates[0] || null;
 }
 

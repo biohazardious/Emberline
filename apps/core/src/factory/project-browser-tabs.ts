@@ -27,6 +27,10 @@ export class ProjectBrowserTabs {
    */
   private readonly pinnedToOwn = new Set<string>();
   private readonly lock = new KeyedMutex();
+  /** The labelled tabs (`id=project`) the last orphan check saw, and when; null: check on the next poll. */
+  private swept: { tabs: string; at: number } | null = null;
+  /** Orphan tab id -> when its close was asked: not asked again while that close is on its way. */
+  private readonly closeAsked = new Map<string, number>();
 
   /**
    * @param knownProjects which of these project ids still exist: tabs labelled with any other are
@@ -88,6 +92,11 @@ export class ProjectBrowserTabs {
 
   /** The project was deleted: close its tabs (only if the daemon already runs) and forget it. */
   forget(projectId: string): Promise<void> {
+    this.swept = null; // the known projects changed: the next poll checks the tabs again
+    return this.closeTabsOf(projectId);
+  }
+
+  private closeTabsOf(projectId: string): Promise<void> {
     return this.lock.run(projectId, async () => {
       this.selected.delete(projectId);
       this.pinnedToOwn.delete(projectId);
@@ -109,21 +118,33 @@ export class ProjectBrowserTabs {
   /**
    * Closes the tabs labelled with a project that no longer exists (deleted while the daemon was not
    * running, so `forget` could not close them). Each under that project's own lock, not awaited here.
+   * The database is asked only when the labelled tabs changed (or after SWEEP_RECHECK_MS), and a tab
+   * whose close was asked is not asked again for CLOSE_ASKED_MS.
    */
-  private sweepOrphans(projectId: string, snap: RunnerBrowserSnapshot): void {
-    const owners = [
-      ...new Set(
-        (snap.tabs ?? []).map((t) => t.projectId).filter((p): p is string => !!p && p !== projectId),
-      ),
-    ];
+  private sweepOrphans(projectId: string, snap: RunnerBrowserSnapshot, now = Date.now()): void {
+    const labelled = (snap.tabs ?? []).filter((t): t is typeof t & { projectId: string } => !!t.projectId);
+    const tabs = labelled
+      .map((t) => `${t.id}=${t.projectId}`)
+      .sort()
+      .join('\n');
+    if (this.swept && this.swept.tabs === tabs && now - this.swept.at < SWEEP_RECHECK_MS) return;
+    this.swept = { tabs, at: now };
+    for (const [id, at] of this.closeAsked) if (now - at >= CLOSE_ASKED_MS) this.closeAsked.delete(id);
+    const pending = labelled.filter((t) => t.projectId !== projectId && !this.closeAsked.has(t.id));
+    const owners = [...new Set(pending.map((t) => t.projectId))];
     if (owners.length === 0) return;
     let known: Set<string>;
     try {
       known = this.knownProjects(owners);
     } catch {
-      return; // the database did not answer: try again on the next poll
+      this.swept = null; // the database did not answer: try again on the next poll
+      return;
     }
-    for (const id of owners) if (!known.has(id)) void this.forget(id).catch(() => undefined);
+    for (const id of owners) {
+      if (known.has(id)) continue;
+      for (const t of pending) if (t.projectId === id) this.closeAsked.set(t.id, now);
+      void this.closeTabsOf(id).catch(() => undefined);
+    }
   }
 
   private offersFollow(projectId: string, opts: BrowserTabOptions): boolean {
@@ -160,6 +181,11 @@ export class ProjectBrowserTabs {
     return opened;
   }
 }
+
+/** The orphan check runs again after this long even when the labelled tabs did not change. */
+const SWEEP_RECHECK_MS = 60_000;
+/** How long a tab whose close was asked is left to close before it is asked again. */
+const CLOSE_ASKED_MS = 10_000;
 
 function query(projectId: string, tabId: string | null, opts: BrowserTabOptions): RunnerBrowserQuery {
   return {

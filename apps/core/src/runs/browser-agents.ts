@@ -1,3 +1,5 @@
+import { browsableHref } from '../factory/browser-daemon.js';
+
 export const BROWSER_AGENT_WINDOW_MS = 60_000;
 
 /** A tool call that drives a browser: Playwright MCP, or a Bash command that runs Playwright or Chromium. */
@@ -28,7 +30,7 @@ export interface BrowserAgentActivity {
 function navigateUrl(c: BrowserToolCall): string | null {
   if (c.toolName !== 'mcp__playwright__browser_navigate') return null;
   const m = /^url: (.+?)(?: · |$)/.exec(c.detail);
-  return m ? m[1]!.trim() || null : null;
+  return m ? browsableHref(m[1]!) : null;
 }
 
 /**

@@ -16,6 +16,8 @@ class FakeDaemon implements RunnerBrowserDaemon {
   performed: { action: string; tabId: string }[] = [];
   queries: RunnerBrowserQuery[] = [];
   actions: { action: string; projectId: string }[] = [];
+  /** While set, `close_project_tabs` waits for it (a close on its way). */
+  closeGate: Promise<void> | null = null;
   private next = 1;
   private shown(q: RunnerBrowserQuery): { page: FakePage; following: boolean } | null {
     if (q.follow) {
@@ -66,6 +68,7 @@ class FakeDaemon implements RunnerBrowserDaemon {
     await Promise.resolve();
     this.queries.push(q);
     this.actions.push({ action: body.action, projectId: q.projectId });
+    if (body.action === 'close_project_tabs' && this.closeGate) await this.closeGate;
     if (body.action === 'open_tab' || body.action === 'new_tab') {
       const id = `t${this.next++}`;
       this.pages.push({
@@ -344,6 +347,62 @@ describe('ProjectBrowserTabs', () => {
         (ids) => new Set(ids.filter((id) => id === 'A')),
       );
       d.pages.push({ id: 'x1', url: 'http://core:7420/x', projectId: 'X' });
+      await tabs.forget('X');
+      up = true;
+      await tabs.state('A', opts(null));
+      await vi.waitFor(() => expect(d.pages.some((p) => p.projectId === 'X')).toBe(false));
+    });
+
+    it('asks once while the close is on its way, even when the tab list changes meanwhile', async () => {
+      const d = new FakeDaemon();
+      let land!: () => void;
+      d.closeGate = new Promise((r) => (land = r));
+      d.pages.push({ id: 'orphan', url: 'http://core:7420/gone', projectId: 'gone' });
+      const tabs = new ProjectBrowserTabs(async () => d, (ids) => new Set(ids.filter((id) => id !== 'gone')));
+      await tabs.state('A', opts(null));
+      await tabs.state('B', opts(null)); // B's tab is new: the list changed
+      await tabs.state('A', opts(null));
+      const closes = () => d.actions.filter((a) => a.action === 'close_project_tabs' && a.projectId === 'gone');
+      await vi.waitFor(() => expect(closes()).toHaveLength(1));
+      land();
+      await vi.waitFor(() => expect(d.pages.some((p) => p.projectId === 'gone')).toBe(false));
+      await tabs.state('A', opts(null));
+      expect(closes()).toHaveLength(1);
+    });
+
+    it('looks the owners up only when the tab list changed', async () => {
+      const d = new FakeDaemon();
+      let lookups = 0;
+      const tabs = new ProjectBrowserTabs(
+        async () => d,
+        (ids) => {
+          lookups++;
+          return new Set(ids);
+        },
+      );
+      await tabs.state('B', opts(null));
+      await tabs.state('A', opts(null));
+      expect(lookups).toBe(1);
+      await tabs.state('A', opts(null));
+      await tabs.state('B', opts(null));
+      expect(lookups).toBe(1);
+      await tabs.action('B', { action: 'new_tab', url: 'http://core:7420/two' }, opts(null));
+      await tabs.state('A', opts(null));
+      expect(lookups).toBe(2);
+    });
+
+    it('a project forgotten while the runner was away is looked up again though the list is the same', async () => {
+      const d = new FakeDaemon();
+      let up = true;
+      const existing = new Set(['A', 'X']);
+      const tabs = new ProjectBrowserTabs(
+        async () => (up ? d : null),
+        (ids) => new Set(ids.filter((id) => existing.has(id))),
+      );
+      await tabs.state('X', opts(null));
+      await tabs.state('A', opts(null));
+      up = false;
+      existing.delete('X');
       await tabs.forget('X');
       up = true;
       await tabs.state('A', opts(null));
