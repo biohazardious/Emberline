@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { type SyncWorktreeResponse } from '@emberline/protocol';
+import { isRunnerUnavailable } from '../command-exec.js';
 import { HttpError } from '../errors.js';
 import { execGitFile, runGit } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -131,13 +132,24 @@ function gitLines(stdout: string): string[] {
     .filter(Boolean);
 }
 
-/** The branch checked out in the main workspace (what runs are merged into); null when detached or unknown. */
-export async function mainWorkspaceBranch(mainWorkspacePath: string): Promise<string | null> {
+/**
+ * The branch checked out in the main workspace; null when detached or git cannot tell. A runner that
+ * could not run git is thrown (isRunnerUnavailable), never read as "not on a branch".
+ */
+export async function mainWorkspaceBranchStrict(mainWorkspacePath: string): Promise<string | null> {
   const res = await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainWorkspacePath }).catch(
-    () => ({ stdout: '' }),
+    (error: unknown) => {
+      if (isRunnerUnavailable(error)) throw error;
+      return { stdout: '' };
+    },
   );
   const branch = res.stdout.trim();
   return branch && branch !== 'HEAD' ? branch : null;
+}
+
+/** The branch checked out in the main workspace (what runs are merged into); null when detached or unknown. */
+export async function mainWorkspaceBranch(mainWorkspacePath: string): Promise<string | null> {
+  return mainWorkspaceBranchStrict(mainWorkspacePath).catch(() => null);
 }
 
 /** The commit the main workspace is at; null when unknown (no commits, not a repository). */

@@ -18,7 +18,12 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
-import { DIVERGED_MESSAGE, MAIN_MOVED_MESSAGE, MERGE_UNVERIFIED_MESSAGE } from './git.js';
+import {
+  DIVERGED_MESSAGE,
+  MAIN_MOVED_MESSAGE,
+  MERGE_UNVERIFIED_MESSAGE,
+  ORIGIN_CHANGED_MESSAGE,
+} from './git.js';
 import { KeepMainPushed } from './keep-pushed.js';
 
 let t: TestApp;
@@ -324,6 +329,43 @@ describe('keep main pushed', () => {
     expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
     expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: MAIN_MOVED_MESSAGE }]);
     expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+    await next.stop();
+  });
+
+  it('after a restart, a push queued for another repository than the connected one is skipped and says so', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.stop(); // stops before the queued push ran
+    expect(readRepositorySettings(t.db, projectId).pendingMainPush?.origin).toBe(
+      `${forge.url}/alice/app.git`,
+    );
+    forge.bare('alice', 'other');
+    await t.repository.connect(projectId, { url: `${forge.url}/alice/other.git`, replace: true });
+    const next = new KeepMainPushed(t.db, t.runs, t.repository);
+    next.start();
+    next.resumePending();
+    await next.idle();
+    expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason: ORIGIN_CHANGED_MESSAGE }]);
+    expect(readRepositorySettings(t.db, projectId)).toMatchObject({
+      pendingMainPush: null,
+      lastMainPushError: ORIGIN_CHANGED_MESSAGE,
+    });
+    await next.stop();
+  });
+
+  it('a push queued by 0.5.0 (no origin recorded) still runs', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+    const m = merged();
+    t.runs.note('r1', 'merged_to_main', m);
+    await t.mainPush.stop();
+    const { origin: _origin, ...old } = readRepositorySettings(t.db, projectId).pendingMainPush!;
+    writeRepositorySettings(t.db, projectId, { pendingMainPush: old });
+    const next = new KeepMainPushed(t.db, t.runs, t.repository);
+    next.start();
+    next.resumePending();
+    await next.idle();
+    expect(remoteMain()).toBe(m.commitOid);
     await next.stop();
   });
 

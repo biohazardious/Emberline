@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import type { Run, Ticket, WorktreeConfigStatusResponse } from '@emberline/protocol';
+import { PtydClientError } from '@emberline/ptyd/client';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1171,6 +1172,25 @@ describe('editing worktree.yml from Project settings', () => {
     const res = await save(project.id, NEXT, (await status(project.id)).head!.sha256);
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('main_workspace_detached');
+    expect(commitCount(project)).toBe(count);
+  });
+
+  it('503 with the runner text when the runner cannot run git, not "not on a branch"', async () => {
+    const project = await createProject('version: 1\n');
+    const base = (await status(project.id)).head!.sha256;
+    const count = commitCount(project);
+    setCommandExecutor(async (request) => {
+      if (request.file === 'git' && request.args.includes('--abbrev-ref')) {
+        throw new PtydClientError('disconnected', 'ptyd connection closed');
+      }
+      return localCommandExecutor(request);
+    });
+    const res = await save(project.id, NEXT, base);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({
+      error: 'ptyd_unavailable',
+      message: 'the runner (ptyd) is not reachable',
+    });
     expect(commitCount(project)).toBe(count);
   });
 

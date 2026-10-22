@@ -85,6 +85,8 @@ const PendingMainPushSchema = z.object({
   commitOid: z.string().nullable(),
   unverified: z.boolean(),
   queuedAt: z.string(),
+  /** The connected repository (projects.repoUrl, without credentials) when it was queued; absent from 0.5.0. */
+  origin: z.string().nullable().optional(),
 });
 export type PendingMainPush = z.infer<typeof PendingMainPushSchema>;
 /** Project settings → Repository: the opt-in automatic push, its last failure, the last read of origin. */

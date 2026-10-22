@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PtydClient } from '@emberline/ptyd/client';
-import { unavailable } from './errors.js';
+import { RUNNER_NOT_REACHABLE, unavailable } from './errors.js';
 
 export type PtydStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -48,7 +48,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   /** Control client for list/spawn/kill. Throws 503 while ptyd is unreachable. */
   get(): PtydClient {
     if (!this.client || this.client.isClosed) {
-      throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+      throw unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
     }
     return this.client;
   }
@@ -58,7 +58,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
     try {
       return await PtydClient.connect(this.socketPath);
     } catch {
-      throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+      throw unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
     }
   }
 

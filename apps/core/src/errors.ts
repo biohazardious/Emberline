@@ -22,6 +22,8 @@ export const badRequest = (message: string) => new HttpError(400, 'bad_request',
 export const notFound = (message: string) => new HttpError(404, 'not_found', message);
 export const conflict = (message: string, code = 'conflict') => new HttpError(409, code, message);
 export const unavailable = (code: string, message: string) => new HttpError(503, code, message);
+/** What a request says when the runner cannot run its command. */
+export const RUNNER_NOT_REACHABLE = 'the runner (ptyd) is not reachable';
 
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {

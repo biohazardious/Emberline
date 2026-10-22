@@ -8,12 +8,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Run } from '@emberline/protocol';
+import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
 import { MERGE_NOTES } from '../factory/post-merge.js';
 import type { RunService } from '../runs/service.js';
-import { MERGE_UNVERIFIED_MESSAGE } from './git.js';
+import { MERGE_UNVERIFIED_MESSAGE, ORIGIN_CHANGED_MESSAGE, remoteUrlForDisplay } from './git.js';
 import type { RepositoryService } from './service.js';
 
 interface Job {
@@ -72,6 +73,7 @@ export class KeepMainPushed {
           commitOid,
           unverified,
           queuedAt: new Date().toISOString(),
+          origin: this.connectedRepository(projectId),
         },
       });
     } catch {
@@ -107,6 +109,26 @@ export class KeepMainPushed {
     return { ok: false, reason: MERGE_UNVERIFIED_MESSAGE };
   }
 
+  /** projects.repoUrl as shown (no credentials); null when none is connected. */
+  private connectedRepository(projectId: string): string | null {
+    const row = this.db
+      .select({ repoUrl: projects.repoUrl })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .get();
+    return row?.repoUrl ? remoteUrlForDisplay(row.repoUrl).url : null;
+  }
+
+  /** The project connected another repository since the merge: nothing is pushed, and it says why. */
+  private originChanged(projectId: string): { ok: false; reason: string } {
+    try {
+      writeRepositorySettings(this.db, projectId, { lastMainPushError: ORIGIN_CHANGED_MESSAGE });
+    } catch {
+      // the project was deleted meanwhile
+    }
+    return { ok: false, reason: ORIGIN_CHANGED_MESSAGE };
+  }
+
   private kick(projectId: string): void {
     const job = this.jobs.get(projectId);
     if (job) {
@@ -133,7 +155,9 @@ export class KeepMainPushed {
         }
         const res = pending.unverified
           ? this.unverified(projectId)
-          : await this.repository.pushMainQuietly(projectId, pending.commitOid);
+          : pending.origin !== undefined && pending.origin !== this.connectedRepository(projectId)
+            ? this.originChanged(projectId)
+            : await this.repository.pushMainQuietly(projectId, pending.commitOid);
         if (!res.ok && 'runnerUnavailable' in res) {
           // Kept as it is: the next runner connection runs it (resumePending).
           this.log(`keep main pushed: project ${projectId}: waiting for the runner (${res.reason})`);

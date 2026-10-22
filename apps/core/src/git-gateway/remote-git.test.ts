@@ -163,7 +163,29 @@ describe('run push through the gateway', () => {
       "Connect this project's repository in Project settings → Repository to push with a forge account.";
 
     it('a failed push names where to connect it when an account covers the origin', async () => {
-      expect(await pushWithoutRepoUrl(true)).toContain(hint);
+      const message = await pushWithoutRepoUrl(true);
+      expect(message).toMatch(/could not read Username/i);
+      expect(message.endsWith(` ${hint}`)).toBe(true);
+    });
+
+    it('a refusal that is not about access (non-fast-forward) gets no hint, even with an account for the origin', async () => {
+      setCommandExecutor(async (request) => {
+        if (request.file === 'git' && request.args.includes('push')) {
+          return {
+            exitCode: 1,
+            signal: null,
+            stdout: '',
+            stderr:
+              ' ! [rejected]        emberline/run-1 -> emberline/run-1 (non-fast-forward)\nerror: failed to push some refs\n',
+            timedOut: false,
+            truncated: false,
+          };
+        }
+        return localCommandExecutor(request);
+      });
+      const message = await pushWithoutRepoUrl(true);
+      expect(message).toContain('non-fast-forward');
+      expect(message).not.toContain(hint);
     });
 
     it('says nothing of it when no account covers the origin', async () => {

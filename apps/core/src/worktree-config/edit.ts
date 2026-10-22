@@ -15,9 +15,10 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projectWorktreeConfig } from '../db/schema.js';
-import { conflict, HttpError } from '../errors.js';
+import { isRunnerUnavailable } from '../command-exec.js';
+import { conflict, HttpError, RUNNER_NOT_REACHABLE, unavailable } from '../errors.js';
 import { readHeadWorktreeYml } from '../factory/detect.js';
-import { FACTORY_GIT_IDENTITY, mainWorkspaceBranch, withMainWorkspaceLock } from '../factory/merge.js';
+import { FACTORY_GIT_IDENTITY, mainWorkspaceBranchStrict, withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import { shortGitError } from '../repository/git.js';
 import { createExclusiveFile, isMissing, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
@@ -146,7 +147,14 @@ export async function saveWorktreeConfig(
         WORKTREE_CONFIG_CODES.notGitRepo,
       );
     }
-    if (!(await mainWorkspaceBranch(project.path))) {
+    const branch = await mainWorkspaceBranchStrict(project.path).catch((error: unknown) => {
+      // The runner went away or never answered: say so, not "not on a branch".
+      if (isRunnerUnavailable(error)) {
+        throw error instanceof HttpError ? error : unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
+      }
+      throw error;
+    });
+    if (!branch) {
       throw conflict(
         'The main workspace is not on a branch, so the file cannot be committed. Check out a branch, then save again.',
         WORKTREE_CONFIG_CODES.detached,

@@ -1,10 +1,17 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
-import { pushBranch, remoteUrlForDisplay, shortGitError, validateRepositoryUrl } from './git.js';
+import {
+  fetchBranchObjects,
+  pushBranch,
+  remoteBranchHead,
+  remoteUrlForDisplay,
+  shortGitError,
+  validateRepositoryUrl,
+} from './git.js';
 
 let dir: string;
 const git = (cwd: string, ...args: string[]) =>
@@ -137,5 +144,47 @@ describe('remoteUrlForDisplay', () => {
       url: 'https://GitHub.com/o/r.git',
       hadCredentials: false,
     });
+  });
+});
+
+describe('reading origin without an account (the runner git straight to the URL)', () => {
+  const setup = () => {
+    const bare = path.join(dir, 'remote.git');
+    const pusher = path.join(dir, 'pusher');
+    const main = path.join(dir, 'main');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    execFileSync('git', ['init', '-q', '-b', 'main', pusher]);
+    execFileSync('git', ['init', '-q', '-b', 'main', main]);
+    git(pusher, 'commit', '-q', '--allow-empty', '-m', 'one');
+    git(pusher, 'push', '-q', bare, 'main');
+    return { bare, pusher, main, access: { url: bare, account: null } };
+  };
+  /** No ref and no FETCH_HEAD: the caller sets the tracking ref under the main-workspace lock. */
+  const wroteNothing = (main: string) => {
+    expect(existsSync(path.join(main, '.git', 'FETCH_HEAD'))).toBe(false);
+    expect(git(main, 'for-each-ref')).toBe('');
+  };
+
+  it('remoteBranchHead names the commit; fetchBranchObjects brings it without a ref or FETCH_HEAD', async () => {
+    const { pusher, main, access } = setup();
+    const oid = await remoteBranchHead(main, access, 'main');
+    expect(oid).toBe(git(pusher, 'rev-parse', 'HEAD'));
+    expect(await remoteBranchHead(main, access, 'nope')).toBeNull();
+    await fetchBranchObjects(main, access, 'main', oid!);
+    expect(git(main, 'cat-file', '-t', oid!)).toBe('commit');
+    wroteNothing(main);
+  });
+
+  it('a remote that moves between ls-remote and the fetch is a 409 remote_moved, and nothing is written', async () => {
+    const { bare, pusher, main, access } = setup();
+    const oid = (await remoteBranchHead(main, access, 'main'))!;
+    // Main is rewritten on the remote: the commit ls-remote named is not in what the fetch gets.
+    git(pusher, 'checkout', '-q', '--orphan', 'other');
+    git(pusher, 'commit', '-q', '--allow-empty', '-m', 'rewritten');
+    git(pusher, 'push', '-q', '--force', bare, 'other:main');
+    const error = await fetchBranchObjects(main, access, 'main', oid).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error).toMatchObject({ statusCode: 409, code: 'remote_moved' });
+    wroteNothing(main);
   });
 });
