@@ -122,6 +122,16 @@ describe('run event pruning', () => {
     expect(typesOf(run.id)).toEqual(expect.arrayContaining(['worktree_copied', 'worktree_copy_skipped']));
   });
 
+  it('keeps the respawn note that marks a one-shot CLI session', async () => {
+    const project = await createProject('Prune Respawn', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    t.db.delete(runEvents).where(eq(runEvents.runId, run.id)).run();
+    seed(run.id, 'respawning', 1);
+    seed(run.id, 'PreToolUse', 5100);
+    t.runs.pruneRunEvents();
+    expect(typesOf(run.id)).toContain('respawning');
+  });
+
   it('keeps preview status and the fact that a long run worked', async () => {
     const project = await createProject('Prune3', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
@@ -1026,7 +1036,7 @@ describe('runs', () => {
       await expect(t.runs.sendPrompt('gem-1', 'fix', { automatic: true })).rejects.toMatchObject({
         statusCode: 409,
         code: 'session_closing',
-        message: 'the agent is closing its session; try again in a moment',
+        message: 'The agent is finishing its turn; try again in a moment.',
       });
       expect(write).not.toHaveBeenCalled();
     });

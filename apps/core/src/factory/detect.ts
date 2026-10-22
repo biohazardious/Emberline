@@ -111,6 +111,7 @@ async function headWorktreeYml(
   dir: string,
   entry: HeadEntry | undefined,
   workingTree: SafeRead,
+  git: GitReadOptions = {},
 ): Promise<ExistingWorktreeYml | null> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
   if (!entry) {
@@ -135,8 +136,9 @@ async function headWorktreeYml(
   if (entry.size === null || entry.size > MAX_WORKTREE_YML_BYTES) {
     return fail(`${rel} is larger than ${MAX_WORKTREE_YML_BYTES / 1024} KB`);
   }
-  const blob = await execGitFile(['cat-file', 'blob', entry.oid], {
+  const blob = await execGitFile([...(git.args ?? []), 'cat-file', 'blob', entry.oid], {
     cwd: dir,
+    env: git.env,
     encoding: 'buffer',
     maxBuffer: MAX_WORKTREE_YML_BYTES + 1,
   });
@@ -158,17 +160,23 @@ export type HeadWorktreeYml =
   /** git could not tell (no repository, no commit, a broken HEAD, unsafe config). */
   | { kind: 'unknown'; error: string };
 
+/** Extra git arguments and environment for a read (e.g. one that must see only the real objects). */
+export interface GitReadOptions {
+  args?: readonly string[];
+  env?: Record<string, string>;
+}
+
 /**
  * `.emberline/worktree.yml` as committed in `dir`'s HEAD (the main workspace's), or in another
  * commit `ref` of that repository, read the hardened way above. Unlike detection, a git failure is
- * reported as such, never as "no file".
+ * reported as such, never as "no file". `git` adds arguments and environment to each git read.
  */
-export async function readHeadWorktreeYml(dir: string, ref = 'HEAD'): Promise<HeadWorktreeYml> {
+export async function readHeadWorktreeYml(dir: string, ref = 'HEAD', git: GitReadOptions = {}): Promise<HeadWorktreeYml> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
   if (!(await entryExists(path.join(dir, '.git')))) return { kind: 'unknown', error: 'the main workspace is not a git repository' };
   let stdout: string;
   try {
-    stdout = (await execGitFile(['ls-tree', '-l', '-z', ref, '--', rel], { cwd: dir })).stdout;
+    stdout = (await execGitFile([...(git.args ?? []), 'ls-tree', '-l', '-z', ref, '--', rel], { cwd: dir, env: git.env })).stdout;
   } catch (error) {
     const message = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
     return { kind: 'unknown', error: `git could not read ${ref}: ${message.slice(0, 300)}` };
@@ -177,7 +185,7 @@ export async function readHeadWorktreeYml(dir: string, ref = 'HEAD'): Promise<He
   if (!record) return { kind: 'absent' };
   const [mode = '', type = '', oid = '', size = ''] = record.slice(0, record.indexOf('\t')).split(/\s+/);
   const entry: HeadEntry = { mode, type, oid, size: /^\d+$/.test(size) ? Number(size) : null };
-  const yml = await headWorktreeYml(dir, entry, { kind: 'missing' });
+  const yml = await headWorktreeYml(dir, entry, { kind: 'missing' }, git);
   return yml ? { kind: 'present', yml } : { kind: 'absent' };
 }
 

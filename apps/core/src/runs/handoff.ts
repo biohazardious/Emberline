@@ -35,27 +35,50 @@ export function summarizeRecentTools(calls: { name: string; detail: string }[]):
   return lines.map((l) => (l.count > 1 ? `${l.text} ×${l.count}` : l.text));
 }
 
-export function buildHandoffPrompt(input: HandoffPromptInput): string {
+/** The handoff prompt's last paragraph; it always stays. */
+const CLOSING =
+  'Check the current state of the files first, keep the work that is already done, do not redo finished steps, and complete the task.';
+
+/** `text` cut to its last `max` characters, marked with a leading ellipsis when cut. */
+const clipStart = (text: string, max: number): string =>
+  text.length <= max ? text : `…${text.slice(text.length - Math.max(0, max - 1))}`;
+
+/**
+ * The prompt a run continues with, at most `max` characters. Over it, the middle gives way and the
+ * opening, the worktree state and the closing instruction stay: first the task (the ticket has it
+ * in full) and the last message are shortened, then the tool calls (the newest kept), and the
+ * worktree state last of all.
+ */
+export function buildHandoffPrompt(input: HandoffPromptInput, max = Number.POSITIVE_INFINITY): string {
   const who = `${input.from.agent}${input.from.model ? ` (${input.from.model})` : ''}`;
   const task = input.ticket
     ? `${input.ticket.key}: ${input.ticket.title}${input.ticket.body.trim() ? `\n\n${input.ticket.body.trim()}` : ''}`
     : input.originalPrompt;
-  const parts = [
-    input.sameAgent
-      ? `Your previous session on this task ended (${input.reason}). You are in the same worktree; continue the task.`
-      : `You are taking over a task from another agent, ${who}, which stopped: ${input.reason}. You are in the same worktree and branch it was working in.`,
-    `## Task\n\n${clip(task)}`,
-  ];
-  if (input.finalMessage?.trim()) parts.push(`## Last message from ${who}\n\n${clip(input.finalMessage.trim())}`);
+  const opening = input.sameAgent
+    ? `Your previous session on this task ended (${input.reason}). You are in the same worktree; continue the task.`
+    : `You are taking over a task from another agent, ${who}, which stopped: ${input.reason}. You are in the same worktree and branch it was working in.`;
   const tree = [input.gitStatus.trim(), input.diffStat.trim()].filter(Boolean).join('\n\n');
-  parts.push(`## Worktree state\n\n${tree ? clip(tree) : 'No changes in the worktree yet.'}`);
-  if (input.recentTools.length > 0) {
-    parts.push(`## Recent tool calls (oldest first)\n\n${input.recentTools.map((t) => `- ${t}`).join('\n')}`);
+  // In prompt order; `rank` is the order in which they give way, `shorten` how.
+  const sections: { heading: string; body: string; rank: number; shorten: (text: string, max: number) => string }[] = [
+    { heading: '## Task', body: clip(task), rank: 0, shorten: clipText },
+  ];
+  if (input.finalMessage?.trim()) {
+    sections.push({ heading: `## Last message from ${who}`, body: clip(input.finalMessage.trim()), rank: 1, shorten: clipText });
   }
-  parts.push(
-    'Check the current state of the files first, keep the work that is already done, do not redo finished steps, and complete the task.',
-  );
-  return parts.join('\n\n');
+  sections.push({ heading: '## Worktree state', body: tree ? clip(tree) : 'No changes in the worktree yet.', rank: 3, shorten: clipText });
+  if (input.recentTools.length > 0) {
+    const body = input.recentTools.map((t) => `- ${t}`).join('\n');
+    sections.push({ heading: '## Recent tool calls (oldest first)', body, rank: 2, shorten: clipStart });
+  }
+  const render = () => [opening, ...sections.map((s) => `${s.heading}\n\n${s.body}`), CLOSING].join('\n\n');
+  let text = render();
+  for (const section of [...sections].sort((a, b) => a.rank - b.rank)) {
+    const over = text.length - max;
+    if (over <= 0) break;
+    section.body = section.shorten(section.body, Math.max(1, section.body.length - over));
+    text = render();
+  }
+  return text.length > max ? clipText(text, max) : text;
 }
 
 /** The least of the handoff context a successor's prompt keeps next to a person's text. */
@@ -63,11 +86,11 @@ const MIN_CONTEXT = 2_000;
 
 /**
  * A successor's prompt within `max` (the run prompt limit): the handoff context, then the person's
- * text whole; the context is shortened to the room left. 400 `prompt_too_long` when the text would
- * leave the context less than {@link MIN_CONTEXT} characters.
+ * text whole; the context gives way to the room left (see {@link buildHandoffPrompt}). 400
+ * `prompt_too_long` when the text would leave the context less than {@link MIN_CONTEXT} characters.
  */
-export function successorPrompt(context: string, extra: string, max = RUN_PROMPT_MAX): string {
-  if (!extra) return clipText(context, max);
+export function successorPrompt(input: HandoffPromptInput, extra: string, max = RUN_PROMPT_MAX): string {
+  if (!extra) return buildHandoffPrompt(input, max);
   const room = max - extra.length - 2;
   if (room < MIN_CONTEXT) {
     throw new HttpError(
@@ -76,5 +99,5 @@ export function successorPrompt(context: string, extra: string, max = RUN_PROMPT
       `The prompt is too long to send with the run's handoff context. Keep it under ${max - MIN_CONTEXT - 2} characters.`,
     );
   }
-  return `${clipText(context, room)}\n\n${extra}`;
+  return `${buildHandoffPrompt(input, room)}\n\n${extra}`;
 }

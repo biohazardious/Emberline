@@ -62,7 +62,7 @@ describe('recoverErrorText', () => {
   it("keeps the server's message for a prompt too long for the successor and a closing session", () => {
     const tooLong = "The prompt is too long to send with the run's handoff context. Keep it under 17998 characters.";
     expect(recoverErrorText('prompt_too_long', tooLong)).toBe(tooLong);
-    const closing = 'the agent is closing its session; try again in a moment';
+    const closing = 'The agent is finishing its turn; try again in a moment.';
     expect(recoverErrorText('session_closing', closing)).toBe(closing);
   });
 });

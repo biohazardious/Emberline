@@ -55,20 +55,44 @@ describe('recent tool summary', () => {
 });
 
 describe('successor prompt', () => {
+  const CLOSING = 'Check the current state of the files first, keep the work that is already done, do not redo finished steps, and complete the task.';
+
   it('keeps the person\'s text whole and shortens the context to fit the run prompt limit', () => {
-    const text = successorPrompt('c'.repeat(15_000), 'x'.repeat(10_000));
+    const text = successorPrompt({ ...base, ticket: { ...base.ticket, body: 'c'.repeat(15_000) } }, 'x'.repeat(10_000));
     expect(text.length).toBeLessThanOrEqual(20_000);
     expect(text.endsWith(`\n\n${'x'.repeat(10_000)}`)).toBe(true);
-    expect(text.startsWith('c')).toBe(true);
+    expect(text.startsWith('You are taking over a task')).toBe(true);
+  });
+
+  it('shortens the task and the last message first: the worktree state, the tool calls and the closing instruction stay', () => {
+    const input = {
+      ...base,
+      ticket: { ...base.ticket, body: 'b'.repeat(6_000) },
+      finalMessage: 'm'.repeat(6_000),
+      gitStatus: ' M src/ui/level-select.ts\n?? notes/plan.md',
+    };
+    const extra = 'x'.repeat(15_000);
+    const text = successorPrompt(input, extra);
+    expect(text.length).toBeLessThanOrEqual(20_000);
+    expect(text.endsWith(`\n\n${extra}`)).toBe(true);
+    const context = text.slice(0, -extra.length - 2);
+    expect(context).toContain('## Worktree state\n\nM src/ui/level-select.ts\n?? notes/plan.md\n\n2 files changed');
+    expect(context).toContain('- replace_file_content: src/ui/result-dialog.ts');
+    expect(context.endsWith(CLOSING)).toBe(true);
+    expect(context).toContain('## Task\n\nMPG-28: Accessibility pass');
+    expect(context).toContain('## Last message from antigravity (argon)');
+    expect(context).not.toContain('b'.repeat(4_000));
   });
 
   it('is the context alone without the person\'s text, within the limit', () => {
-    expect(successorPrompt('context', '')).toBe('context');
-    expect(successorPrompt('c'.repeat(25_000), '').length).toBeLessThanOrEqual(20_000);
+    expect(successorPrompt(base, '')).toBe(buildHandoffPrompt(base));
+    const long = successorPrompt({ ...base, gitStatus: 'g'.repeat(40_000), recentTools: Array.from({ length: 3_000 }, (_, i) => `Edit: f${i}.ts`) }, '');
+    expect(long.length).toBeLessThanOrEqual(20_000);
+    expect(long.endsWith(CLOSING)).toBe(true);
   });
 
   it('refuses text that leaves no room for the context', () => {
-    expect(() => successorPrompt('c', 'y'.repeat(19_000))).toThrow(
+    expect(() => successorPrompt(base, 'y'.repeat(19_000))).toThrow(
       expect.objectContaining({ statusCode: 400, code: 'prompt_too_long' }),
     );
   });

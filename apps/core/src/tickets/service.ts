@@ -2042,7 +2042,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const active = this.runs.activeRunForTicket(id);
     let run: Run;
     if (active && !active.endedAt && active.state !== 'queued') {
-      run = await this.runs.sendPrompt(active.id, text);
+      // Typed into the live session, or a one-shot CLI that has exited is respawned with it.
+      run = await this.runs.prompt(active.id, text);
     } else if (active?.state === 'queued') {
       throw conflict('the agent has not started yet; it is queued');
     } else if (active) {

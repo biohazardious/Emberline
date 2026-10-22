@@ -297,6 +297,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   // The first prompt's note on copied secrets (launch can come long after enqueue), and what a copy skipped.
   'worktree_copied',
   'worktree_copy_skipped',
+  // A respawn: the session runs a one-shot CLI (exitsAfterTurn), whose typed input would be lost.
+  'respawning',
 ];
 type PreviewKind = RunPreviewStatus['kind'];
 
@@ -394,8 +396,8 @@ const STALL_SCREEN_LINES = 50;
  * gate follow-ups) is read as the next turn. A rate-limited turn has ended on its limit.
  */
 const IDLE_STATES: ReadonlySet<string> = new Set<RunState>(['waiting_input', 'done', 'rate_limited']);
-/** 409 `session_closing`: a one-shot CLI finished its turn and is exiting; a prompt respawns it once gone. */
-const SESSION_CLOSING = 'the agent is closing its session; try again in a moment';
+/** 409 `session_closing`: a one-shot CLI is in its turn or exiting after it; a prompt respawns it once gone. */
+const SESSION_CLOSING = 'The agent is finishing its turn; try again in a moment.';
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -1322,9 +1324,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       routes.push(route);
       routeIndex = routes.length - 1;
     }
-    const context = buildHandoffPrompt(await this.handoffContext(row, opts.reason, false));
     // Within the run prompt limit: the person's text whole, the context shortened (400 when it cannot fit).
-    const prompt = successorPrompt(context, opts.extraPrompt?.trim() ?? '');
+    const prompt = successorPrompt(await this.handoffContext(row, opts.reason, false), opts.extraPrompt?.trim() ?? '');
     // A person's handoff to a headless lane that would ask is refused before the run is retired; an
     // automatic one is checked when the successor spawns, as before (no mode is raised).
     if (opts.source === 'user') this.refuseHeadlessAsk(route.agent, row.permissionMode as PermissionMode, prompt);

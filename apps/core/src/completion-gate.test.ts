@@ -162,6 +162,19 @@ async function nextTurn(run: Run, signal?: { summary: string; handoff?: string; 
   await stop(run, signal);
 }
 
+/**
+ * Makes the run a one-shot gemini run (started with its ticket prompt, like every headless ticket run)
+ * whose CLI has exited, its exit not yet noted (no reconcile since). Respawns run the living stand-in.
+ */
+async function oneShotExited(run: Run): Promise<void> {
+  t.db.update(runs).set({ agent: 'gemini', permissionMode: 'auto' }).where(eq(runs.id, run.id)).run();
+  const sessionId = run.terminalId as string;
+  await t.ptyd.get().kill(sessionId);
+  await expect
+    .poll(async () => (await t.ptyd.get().list()).sessions.find((s) => s.id === sessionId)?.status, { timeout: 5_000 })
+    .not.toBe('running');
+}
+
 /** A factory ticket run with one commit of work in its worktree. */
 async function factoryTicket(title = 'A') {
   const project = await createProject();
@@ -677,6 +690,24 @@ describe('the ticket completion and a new run', () => {
     await t.runs.sendPrompt(run.id, 'one more thing');
     expect(t.runs.getRun(run.id).state).toBe('done');
     expect(await statusOf(ticket.id)).toBe('review');
+  });
+
+  it('a ticket follow-up to a one-shot run whose exit is not noted yet respawns it with the prompt', async () => {
+    process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+    try {
+      const project = await createProject();
+      const ticket = await createTicket(project.id, { title: 'By hand' });
+      const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+      const token = await begin(run, { tool: false });
+      await oneShotExited(run);
+      await hook(run.id, 'Stop', token);
+      await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('review');
+      const { run: after } = await t.tickets.prompt(ticket.id, 'one more thing');
+      expect(after).toMatchObject({ id: run.id, state: 'starting', endedAt: null });
+      expect(await eventTypes(run)).toContain('respawning');
+    } finally {
+      delete process.env.EMBERLINE_GEMINI_COMMAND;
+    }
   });
 
   it('a prompt the CLI has not answered yet moves the ticket back to In progress', async () => {
@@ -1311,6 +1342,45 @@ describe('the worktree config check before the merge', () => {
     await settled(passes, 1);
     expect(await eventTypes(run)).toContain('build_gate_failed');
     expect(await eventTypes(run)).not.toContain('merged_to_main');
+  });
+
+  it('a graft making the branch look started from its own file does not let an invalid change through', async () => {
+    const { project, ticket, run } = await ymlTicket(INVALID);
+    writeRunYml(run, 'version: 1\nchecks:\n  e2e: npm run e2e\n');
+    // The agent grafts a commit with its own file under both its branch and main: their "merge-base".
+    const tip = wgit(run.worktreePath, 'rev-parse', 'HEAD').trim();
+    const head = wgit(project.path, 'rev-parse', 'HEAD').trim();
+    const fake = wgit(run.worktreePath, 'commit-tree', `${tip}^{tree}`, '-m', 'fake base').trim();
+    mkdirSync(path.join(project.path, '.git', 'info'), { recursive: true });
+    writeFileSync(path.join(project.path, '.git', 'info', 'grafts'), `${tip} ${fake}\n${head} ${fake}\n`);
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'changed the checks' });
+    await settled(passes, 1);
+    expect(await eventTypes(run)).toContain('build_gate_failed');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+  });
+
+  it('a one-shot run whose exit is not noted yet gets the request to fix the file by a respawn, not a hold', async () => {
+    process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+    try {
+      const { ticket, run } = await ymlTicket();
+      writeRunYml(run, INVALID);
+      const passes = trackPipelines();
+      const token = await begin(run, { tool: false });
+      await oneShotExited(run);
+      await hook(run.id, 'Stop', token);
+      await settled(passes, 1);
+      const detail = (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+      const notes = detail.events.filter((e) => e.type === 'build_gate_failed');
+      expect(notes.map((e) => (e.payload as { autoFix: boolean }).autoFix)).toEqual([true]);
+      expect(detail.events.map((e) => e.type)).toContain('respawning');
+      expect(t.runs.getRun(run.id)).toMatchObject({ state: 'starting', endedAt: null });
+      expect(await statusOf(ticket.id)).not.toBe('done');
+    } finally {
+      delete process.env.EMBERLINE_GEMINI_COMMAND;
+    }
   });
 
   it('a file the run inherited unchanged passes after main fixed it meanwhile (the merge keeps main\'s)', async () => {

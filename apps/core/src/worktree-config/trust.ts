@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projectWorktreeConfig } from '../db/schema.js';
 import { badRequest, conflict } from '../errors.js';
-import { type HeadWorktreeYml, readHeadWorktreeYml } from '../factory/detect.js';
+import { type GitReadOptions, type HeadWorktreeYml, readHeadWorktreeYml } from '../factory/detect.js';
 import { execGitFile } from '../git-exec.js';
 import { isMissing, UnsafePathError } from '../outputs/safe-fs.js';
 import { readWorktreeBytes } from '../runs/git.js';
@@ -101,11 +101,21 @@ function unsafeReason(rel: string, error: UnsafePathError): string {
 
 const OID = /^[0-9a-f]{40,64}$/;
 
+/**
+ * The reads that decide whether a run touched the file see only the real history: no replace refs,
+ * no `info/grafts`, no commit-graph (agents can write all three in the shared repository to make
+ * one commit look like another, or move where their branch seems to start).
+ */
+const REAL_OBJECTS: Required<GitReadOptions> = {
+  args: ['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false'],
+  env: { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' },
+};
+const realGit = (args: string[], cwd: string) => execGitFile([...REAL_OBJECTS.args, ...args], { cwd, env: REAL_OBJECTS.env });
+
 /** The commit main's HEAD names; null when git cannot tell. */
 async function mainHeadCommit(mainWorkspacePath: string): Promise<string | null> {
   try {
-    const inMain = { cwd: mainWorkspacePath };
-    const head = (await execGitFile(['rev-parse', '--verify', 'HEAD^{commit}'], inMain)).stdout.trim();
+    const head = (await realGit(['rev-parse', '--verify', 'HEAD^{commit}'], mainWorkspacePath)).stdout.trim();
     return OID.test(head) ? head : null;
   } catch {
     return null;
@@ -118,7 +128,7 @@ async function mainHeadCommit(mainWorkspacePath: string): Promise<string | null>
  */
 async function branchBase(worktreePath: string, mainHead: string): Promise<string | null> {
   try {
-    const base = (await execGitFile(['merge-base', 'HEAD', mainHead], { cwd: worktreePath })).stdout.trim();
+    const base = (await realGit(['merge-base', 'HEAD', mainHead], worktreePath)).stdout.trim();
     return OID.test(base) ? base : null;
   } catch {
     return null;
@@ -136,7 +146,7 @@ async function branchBaseWorktreeYml(
   const commit = mainHead ? await branchBase(worktreePath, mainHead) : null;
   if (!commit) return null;
   try {
-    const read = await readHeadWorktreeYml(worktreePath, commit);
+    const read = await readHeadWorktreeYml(worktreePath, commit, REAL_OBJECTS);
     return read.kind === 'unknown' ? null : { commit, read };
   } catch {
     return null;
@@ -151,7 +161,7 @@ async function branchBaseWorktreeYml(
  */
 async function sameAs(worktreePath: string, rev: string, rel: string): Promise<boolean> {
   try {
-    await execGitFile(['diff', '--quiet', '--no-ext-diff', '--no-textconv', rev, '--', rel], { cwd: worktreePath });
+    await realGit(['diff', '--quiet', '--no-ext-diff', '--no-textconv', rev, '--', rel], worktreePath);
     return true;
   } catch {
     // Exit code 1: they differ; anything else: git could not compare them.
@@ -192,13 +202,13 @@ export async function runWorktreeYmlProblems(worktreePath: string, mainWorkspace
     const untouched = async (rev: string | null, read: HeadWorktreeYml | null) =>
       read?.kind === 'present' &&
       (content === read.yml.content || (rev !== null && (await sameAs(worktreePath, rev, rel))));
-    if (await untouched(head, await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD'))) return null;
+    if (await untouched(head, await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD', REAL_OBJECTS))) return null;
     const base = await branchBaseWorktreeYml(worktreePath, head);
     return base && (await untouched(base.commit, base.read)) ? null : parsed.errors;
   }
   // The run did not make an unusable file worse than main's or its starting point's.
   const head = await mainHeadCommit(mainWorkspacePath);
-  const main = await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD');
+  const main = await readHeadWorktreeYml(mainWorkspacePath, head ?? 'HEAD', REAL_OBJECTS);
   if (unusable(main) || unusable((await branchBaseWorktreeYml(worktreePath, head))?.read ?? null)) return null;
   return [unreadable ?? `${rel} cannot be read`];
 }
