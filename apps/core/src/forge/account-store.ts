@@ -3,6 +3,8 @@ import type { ForgeProvider } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { forgeAccounts } from '../db/schema.js';
+import { conflict } from '../errors.js';
+import { credentialPtyEnv, type GitHttpCredential } from '../git-credentials.js';
 import { hostOf, sameForgeServer } from './hosts.js';
 
 export interface ForgeAccountRecord {
@@ -174,6 +176,51 @@ export function accountForRemote(
 ): ForgeAccountRecord | null {
   if (!hostOf(remoteUrl)) return null;
   return listAccountRecords(db, env).find((a) => sameForgeServer(a.serverUrl, remoteUrl)) ?? null;
+}
+
+const BASIC_USER: Record<ForgeProvider, string | null> = {
+  github: 'x-access-token',
+  gitlab: 'oauth2',
+  gitea: null,
+};
+
+/** Same scheme, host and port as the server, and a path at or below its path (by segment). */
+function underServer(url: URL, serverUrl: string): boolean {
+  const server = new URL(serverUrl);
+  if (url.origin !== server.origin) return false;
+  const base = server.pathname.replace(/\/+$/, '');
+  return base === '' || url.pathname === base || url.pathname.startsWith(`${base}/`);
+}
+
+/** Credentials for one git call to an http(s) remote under an account's server; null otherwise (ssh, other host). */
+export function gitCredentialForRemote(
+  db: Db,
+  remoteUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): GitHttpCredential | null {
+  let url: URL;
+  try {
+    url = new URL(remoteUrl.trim());
+  } catch {
+    return null; // scp-style ssh, a path
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  const account = listAccountRecords(db, env).find((a) => underServer(url, a.serverUrl));
+  if (!account) return null;
+  const username = BASIC_USER[account.provider] ?? account.username;
+  if (!username) {
+    throw conflict(
+      `Check the account for ${serverHost(account.serverUrl)} in Settings → Forge accounts first.`,
+      'forge_account_unchecked',
+    );
+  }
+  return { serverUrl: account.serverUrl, username, token: account.token };
+}
+
+/** The import clone's extra PTY env: `credentialPtyEnv` for a matching account, else `{}`. */
+export function credentialPtyEnvForRemote(db: Db, remoteUrl: string): Record<string, string> {
+  const credential = gitCredentialForRemote(db, remoteUrl);
+  return credential ? credentialPtyEnv(credential) : {};
 }
 
 export function insertAccount(

@@ -108,6 +108,7 @@ import { type AttentionFacts, attachAttention, loadAttentionFacts } from './atte
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { gitCredentialForRemote } from '../forge/account-store.js';
 import { stripControlChars } from '../text/control-chars.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
@@ -2162,7 +2163,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async push(id: string): Promise<GitPushResponse> {
     const row = this.row(id);
-    const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId));
+    const res = await pushWorktreeBranch(row.worktreePath, row.branch, this.defaultBranch(row.projectId), (url) =>
+      gitCredentialForRemote(this.db, url),
+    );
     this.record(id, {
       source: 'user',
       type: 'pushed',

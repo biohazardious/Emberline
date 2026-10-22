@@ -80,6 +80,7 @@ import { projects, projectSettings, projectWorktreeConfig, settings } from '../d
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
+import { credentialPtyEnvForRemote } from '../forge/account-store.js';
 import {
   getRunnerClaudeUsage,
   isBrowsableUrl,
@@ -449,11 +450,12 @@ export function registerProjectRoutes(
 
     if (body.repoUrl) {
       if (existsSync(projectPath)) throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
-      // Clone inside the runner so it uses the runner's git credentials; the UI can watch it live.
+      // Clone inside the runner; an account for the URL's host gives this session (only) its credentials. The UI can watch it live.
       const session = await ptyd.get().spawn({
         file: 'git',
         args: ['clone', '--progress', '--', body.repoUrl, projectPath],
         cwd: config.workspacesDir,
+        env: credentialPtyEnvForRemote(db, body.repoUrl),
         meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
       });
       terminalId = session.id;

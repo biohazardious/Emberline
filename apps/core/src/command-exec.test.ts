@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,13 +19,24 @@ import {
   setCommandExecutor,
 } from './command-exec.js';
 import { buildWorkspaceDemo } from './factory/service.js';
+import { credentialPtyEnv } from './git-credentials.js';
 import { runGit } from './git-exec.js';
 import { PtydBridge } from './ptyd-bridge.js';
+import { startFakeForge } from './test-fake-forge.js';
 
 let dir: string;
 let server: PtydServer;
 let bridge: PtydBridge;
 const seen: ExecRequest[] = [];
+
+async function waitForExit(b: PtydBridge, id: string) {
+  for (let i = 0; i < 100; i++) {
+    const { sessions } = await b.get().list();
+    if (sessions.find((s) => s.id === id)?.status === 'exited') return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('session did not exit');
+}
 
 beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'cmd-exec-'));
@@ -117,5 +129,43 @@ describe('command execution through the runner', () => {
     );
     const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws });
     expect(res.ok).toBe(true);
+  });
+
+  it('the import clone PTY gets the account variables for that session only', async () => {
+    const forge = await startFakeForge({ token: 'clone-secret' });
+    try {
+      forge.bare('alice', 'private');
+      const seed = path.join(dir, 'seed');
+      // Async: the fake forge answers from this process, so a sync git call would block it.
+      const git = promisify(execFile);
+      await git('git', [
+        'clone',
+        '-q',
+        `http://alice:clone-secret@${forge.url.slice('http://'.length)}/alice/private.git`,
+        seed,
+      ]);
+      execFileSync('git', ['-C', seed, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '--allow-empty', '-m', 'one']);
+      // An empty clone's branch follows init.defaultBranch, not the remote's main.
+      await git('git', ['-C', seed, 'push', '-q', 'origin', 'HEAD:refs/heads/main']);
+      const target = path.join(dir, 'cloned');
+      const env = credentialPtyEnv({ serverUrl: forge.url, username: 'alice', token: 'clone-secret' });
+      const session = await bridge.get().spawn({
+        file: 'git',
+        args: ['clone', '--progress', '--', `${forge.url}/alice/private.git`, target],
+        cwd: dir,
+        env,
+        meta: {},
+      });
+      await waitForExit(bridge, session.id);
+      expect(execFileSync('git', ['-C', target, 'log', '--oneline'], { encoding: 'utf8' })).toContain('one');
+      expect(readFileSync(path.join(target, '.git', 'config'), 'utf8')).not.toContain('clone-secret');
+      const other = await bridge.get().spawn({ file: 'env', args: [], cwd: dir, meta: {} });
+      await waitForExit(bridge, other.id);
+      const printed = (await bridge.get().snapshot(other.id)).data;
+      expect(printed).toContain('PATH=');
+      expect(printed).not.toContain('GIT_CONFIG');
+    } finally {
+      await forge.close();
+    }
   });
 });

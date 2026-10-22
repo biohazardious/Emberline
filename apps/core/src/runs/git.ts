@@ -18,7 +18,8 @@ import type {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
-import { execGitFile } from '../git-exec.js';
+import type { GitHttpCredential } from '../git-credentials.js';
+import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
 
@@ -667,6 +668,7 @@ export async function pushWorktreeBranch(
   worktreePath: string,
   branch: string | null,
   defaultBranch: string,
+  credentialFor?: (remoteUrl: string) => GitHttpCredential | null,
 ): Promise<GitPushResponse> {
   if (!existsSync(path.join(worktreePath, '.git'))) throw conflict('project is not a git repository');
   const currentBranch = (await git(worktreePath, ['branch', '--show-current']).catch(() => '')).trim();
@@ -682,13 +684,12 @@ export async function pushWorktreeBranch(
   if (!remoteUrl) {
     throw conflict('no "origin" remote is configured for this repository');
   }
+  const credential = credentialFor?.(remoteUrl.trim()) ?? null;
 
   try {
     const { stdout, stderr } = await execGitFile(
       ['-C', worktreePath, 'push', '--porcelain', '-u', 'origin', `refs/heads/${branchToPush}:refs/heads/${branchToPush}`],
-      {
-        timeout: 60_000,
-      },
+      { timeout: 60_000, credential },
     );
     return {
       branch: branchToPush,
@@ -696,7 +697,9 @@ export async function pushWorktreeBranch(
       output: `${stdout}\n${stderr}`.trim() || `Pushed ${branchToPush} to origin`,
     };
   } catch (error) {
-    const stderr = (error as { stderr?: string }).stderr?.trim();
+    // A refused repository config has no stderr: its message says what to remove.
+    const stderr =
+      error instanceof UnsafeGitConfigError ? error.message : (error as { stderr?: string }).stderr?.trim();
     throw conflict(`git push failed${stderr ? `: ${stderr}` : ''}`);
   }
 }
