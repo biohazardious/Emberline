@@ -59,6 +59,21 @@ describe('config: Docker host and preview port ranges', () => {
     expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '1' }).dockerEngineSwitchedOff).toBe(false);
   });
 
+  it('flags an EMBERLINE_DOCKER_ENGINE value that is not 0 or 1', () => {
+    expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: '2' }).dockerEngineSettingInvalid).toBe('2');
+    for (const v of ['0', ' 1 ', '']) expect(loadConfig({ EMBERLINE_DOCKER_ENGINE: v }).dockerEngineSettingInvalid).toBeUndefined();
+    expect(loadConfig({}).dockerEngineSettingInvalid).toBeUndefined();
+  });
+
+  it('an engine of your own keeps working with the bundled one switched off', () => {
+    const own = loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: 'tcp://10.0.0.5:2376' });
+    expect(own.dockerHost).toBe('tcp://10.0.0.5:2376');
+    expect(own.dockerEngineSwitchedOff).toBe(false);
+    const bundled = loadConfig({ EMBERLINE_DOCKER_ENGINE: '0', EMBERLINE_DOCKER_HOST: 'tcp://docker:2376' });
+    expect(bundled.dockerHost).toBeUndefined();
+    expect(bundled.dockerEngineSwitchedOff).toBe(true);
+  });
+
   it('reads the client certificate directory, by default the runner\'s read-only mount', () => {
     expect(loadConfig({}).dockerCertPath).toBe('/run/emberline-docker-certs');
     expect(loadConfig({ EMBERLINE_DOCKER_CERT_PATH: ' /certs/client ' }).dockerCertPath).toBe('/certs/client');

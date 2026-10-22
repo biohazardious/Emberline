@@ -14,7 +14,7 @@ import {
   type RunPreviewStatus,
 } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type ExecRequest,
   type ExecResult,
@@ -94,6 +94,8 @@ class FakeEngine {
   /** While set, `down` waits for it; `heldDowns` counts the ones waiting. */
   downGate: Promise<void> | null = null;
   heldDowns = 0;
+  /** With a gate set: hold only the `down` of this compose project (null = every project). */
+  downGateFor: string | null = null;
 
   readonly cancel = async (execId: string): Promise<boolean> => {
     this.cancels.push(execId);
@@ -163,7 +165,7 @@ class FakeEngine {
     }
     if (verb === 'logs') return ok('web-1  | \u001b[31mnginx: [emerg] bind failed\u001b[0m\n');
     if (verb === 'down') {
-      if (this.downGate) {
+      if (this.downGate && (this.downGateFor === null || this.downGateFor === project)) {
         this.heldDowns += 1;
         await this.downGate;
       }
@@ -645,6 +647,41 @@ describe('compose previews (worktree.yml v2)', () => {
       expect(engine.composeCalls('down').at(-1)!.args).toEqual([
         'compose', '-p', previewComposeProjectName(run.id), 'down', '-v', '--rmi', 'local', '--remove-orphans',
       ]);
+    });
+
+    it('a start abandoned by a stop that settles while its run is being removed is taken down with its volumes', async () => {
+      await start('tcp://docker:2376');
+      let open!: () => void;
+      engine.upGate = new Promise((resolve) => (open = resolve));
+      engine.ignoreCancels = 10;
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await expect.poll(() => engine.pendingUps.size).toBe(1);
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      await t.runs.stop(run.id).catch(() => undefined);
+      let release!: () => void;
+      engine.downGate = new Promise((resolve) => (release = resolve));
+      engine.downGateFor = composeProjectName(run.id, run.worktreePath);
+      const deleting = api('DELETE', `/api/runs/${run.id}`);
+      await expect.poll(() => engine.heldDowns).toBe(1);
+      const downsBefore = engine.composeCalls('down').length;
+      open();
+      await expect.poll(() => engine.composeCalls('down').length).toBe(downsBefore + 1);
+      expect(engine.composeCalls('down').at(-1)!.args).toEqual([
+        'compose', '-p', previewComposeProjectName(run.id), 'down', '-v', '--rmi', 'local', '--remove-orphans',
+      ]);
+      release();
+      await deleting;
+    });
+
+    it('deleting a run forgets its framing probe', async () => {
+      await start('tcp://docker:2376');
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      const forget = vi.spyOn(t.runs.framing, 'forget');
+      await api('DELETE', `/api/runs/${run.id}`);
+      expect(forget).toHaveBeenCalledWith(`run:${run.id}`);
     });
 
     it('a preview start is refused while the worktree is being torn down', async () => {

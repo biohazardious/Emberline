@@ -450,6 +450,33 @@ describe('engine off', () => {
     expect(engine.calls).toEqual([]);
   });
 
+  it('an engine that came back is listed at the next page load, without waiting for the 60 s probe', async () => {
+    await start();
+    engine.available = false;
+    await t.runs.docker.probe();
+    // The last answer is older than the page's 5 s debounce.
+    (t.runs.docker as unknown as { checkedAt: number }).checkedAt = 0;
+    engine.available = true;
+    const o = await overview();
+    expect(o.engine.available).toBe(true);
+    expect(o.error).toBeUndefined();
+  });
+
+  it('an engine that went away is shown as unreachable once its listings fail', async () => {
+    await start();
+    engine.available = false;
+    engine.lsResult = engine.psResult = engine.dfResult = failed('Cannot connect to the Docker daemon');
+    const o = await overview();
+    expect(o.engine.available).toBe(false);
+    expect(o.error).toContain('not reachable');
+  });
+
+  it('enabled but not answered yet: the page says so, never "not reachable"', async () => {
+    await start();
+    t.runs.docker.ready = async () => undefined;
+    expect((await overview()).error).toBe(DOCKER_ENGINE_NOT_ANSWERED_TEXT);
+  });
+
   it('a sweep that finds the engine unreachable says so', async () => {
     await start();
     engine.available = false;

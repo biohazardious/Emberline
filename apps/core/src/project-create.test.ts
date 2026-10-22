@@ -638,6 +638,11 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
   const deployBody = (dockerEngine: boolean, body: CreateProjectBody = COMPOSE_WEB) =>
     planNewProject(CreateProjectBodySchema.parse(body), { dockerEngine }).tickets.find((x) => x.key === 'deploy')?.body ?? '';
 
+  it('without material, the Docker Compose Deploy ticket does not mention .dockerignore', () => {
+    expect(deployBody(true)).not.toContain('.dockerignore');
+    expect(deployBody(false)).not.toContain('.dockerignore');
+  });
+
   it('the Deploy ticket has a Container preview step with the engine (as before)', () => {
     const body = deployBody(true);
     expect(body).toContain('4. **Container preview**: Emberline previews the container');

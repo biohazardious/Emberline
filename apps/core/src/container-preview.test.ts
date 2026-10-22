@@ -49,6 +49,8 @@ beforeEach(async () => {
     if (request.file === 'sh' && request.args.includes('config')) {
       compose.requests.push(request);
       if (compose.next instanceof Error) throw compose.next;
+      // A timeout takes its time, so concurrent GETs meet the read in flight.
+      if (compose.next.timedOut) await new Promise((resolve) => setTimeout(resolve, 150));
       return compose.next;
     }
     return localCommandExecutor(request);
@@ -329,6 +331,15 @@ describe('GET /api/projects/:id/container-preview', () => {
       commitAll(p, 'readme'); // another HEAD commit
       await options(p.id);
       expect(compose.requests).toHaveLength(3);
+    });
+
+    it('concurrent GETs share a timeout too: one compose call, and the next GET asks again', async () => {
+      const p = await createProject({ 'compose.yaml': COMPOSE });
+      compose.next = { ...ok(''), exitCode: null, timedOut: true };
+      await Promise.all([options(p.id), options(p.id), options(p.id)]);
+      expect(compose.requests).toHaveLength(1);
+      await options(p.id);
+      expect(compose.requests).toHaveLength(2);
     });
 
     it('a file compose cannot read is cached like a good one: no new call until HEAD, the file or .env changes', async () => {

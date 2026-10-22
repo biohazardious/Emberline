@@ -5,6 +5,7 @@ import {
   buildDockerProjects,
   composeProjectsInUse,
   dockerProjectIdOf,
+  knownProjectId,
   type OwnershipFacts,
   type OwnershipRun,
   parseComposeLsRows,
@@ -337,6 +338,45 @@ describe('ownership', () => {
   });
 });
 
+describe('ownership edge cases', () => {
+  const projectId = 'p0000000-0000-0000-0000-000000000000';
+  const projects = [{ id: projectId, name: 'Shop' }];
+
+  it("a gone run that worked in another run's worktree: its leftover is that worktree owner's name and keeps the project", () => {
+    const gone = run({
+      id: 'cccccccc-0000-0000-0000-000000000000',
+      worktreePath: '/w/.worktrees/shop/aaaaaaaa',
+      worktreeExists: false,
+      state: 'done',
+      endedAt: 5,
+    });
+    const facts: OwnershipFacts = { runs: [gone], projects };
+    expect(resolveDockerOwner('emberline-aaaaaaaa', facts)).toEqual({ kind: 'orphan' });
+    expect(dockerProjectIdOf('emberline-aaaaaaaa', facts)).toBe(projectId);
+    expect(dockerProjectIdOf('emberline-cccccccc', facts)).toBeNull();
+  });
+
+  it('two runs sharing an 8-character prefix: the newest owns the name and gives its project', () => {
+    const otherProject = 'p1111111-0000-0000-0000-000000000000';
+    const a = run({ id: 'aaaaaaaa-1111-0000-0000-000000000000', projectId, worktreePath: '/w/a', createdAt: 1 });
+    const b = run({ id: 'aaaaaaaa-2222-0000-0000-000000000000', projectId: otherProject, worktreePath: '/w/b', createdAt: 2 });
+    const facts: OwnershipFacts = { runs: [a, b], projects: [...projects, { id: otherProject, name: 'Other' }] };
+    expect(resolveDockerOwner('emberline-aaaaaaaa', facts)).toMatchObject({ kind: 'agent', runId: b.id, projectId: otherProject });
+    expect(dockerProjectIdOf('emberline-aaaaaaaa', facts)).toBe(otherProject);
+    const reversed: OwnershipFacts = { ...facts, runs: [b, a] };
+    expect(dockerProjectIdOf('emberline-aaaaaaaa', reversed)).toBe(otherProject);
+  });
+
+  it('a main project name and a run name with the same suffix resolve to different owners', () => {
+    const deadProject = 'deadbeef-0000-0000-0000-000000000000';
+    const r = run({ id: 'deadbeef-1111-0000-0000-000000000000', projectId, worktreePath: '/w/r' });
+    const facts: OwnershipFacts = { runs: [r], projects: [...projects, { id: deadProject, name: 'Dead' }] };
+    expect(dockerProjectIdOf('emberline-main-deadbeef', facts)).toBe(deadProject);
+    expect(dockerProjectIdOf('emberline-deadbeef', facts)).toBe(projectId);
+    expect(resolveDockerOwner('emberline-main-deadbeef', facts)).not.toEqual(resolveDockerOwner('emberline-deadbeef', facts));
+  });
+});
+
 describe('buildDockerProjects', () => {
   const facts: OwnershipFacts = { runs: [], projects: [] };
   it('lists only Emberline projects, from `compose ls` and from containers, with their containers', () => {
@@ -392,5 +432,16 @@ describe('buildDockerProjects', () => {
       containersError: 'bad',
       projects: [{ name: 'emberline-abcd1234', containers: [] }],
     });
+  });
+  it('a live run whose project is gone from the database lists no project id', () => {
+    const live = run({ id: 'dddddddd-0000-0000-0000-000000000000' });
+    const out = buildDockerProjects({
+      ls: parseComposeLsRows(JSON.stringify([{ Name: composeProjectName(live.id, live.worktreePath), Status: 'running(1)' }])),
+      ps: parseDockerPs(''),
+      facts: { runs: [live], projects: [] },
+    });
+    expect(out.projects[0]!.projectId).toBeNull();
+    expect(knownProjectId(live.projectId, { runs: [live], projects: [] })).toBeNull();
+    expect(knownProjectId(null, { runs: [], projects: [] })).toBeNull();
   });
 });

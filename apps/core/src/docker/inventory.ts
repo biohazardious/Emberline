@@ -224,14 +224,17 @@ export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerP
     return { kind: 'main', projectId: project.id, projectName: project.name, ...(preview ? { preview: true } : {}) };
   }
   const preview = name.endsWith('-preview');
-  const holders = facts.runs
+  const r = facts.runs
     .filter(
-      (r) =>
-        holdsProjects(r) &&
-        (preview ? previewComposeProjectName(r.id) : composeProjectName(r.id, r.worktreePath)) === name,
+      (x) =>
+        holdsProjects(x) &&
+        (preview ? previewComposeProjectName(x.id) : composeProjectName(x.id, x.worktreePath)) === name,
     )
-    .sort((a, b) => Number(runIsLive(b)) - Number(runIsLive(a)) || b.createdAt - a.createdAt);
-  const r = holders[0];
+    .reduce<OwnershipRun | undefined>(
+      (best, x) =>
+        !best || Number(runIsLive(x)) - Number(runIsLive(best)) > 0 || (runIsLive(x) === runIsLive(best) && x.createdAt > best.createdAt) ? x : best,
+      undefined,
+    );
   if (!r) return { kind: 'orphan' };
   const live = runIsLive(r);
   return {
@@ -249,6 +252,11 @@ export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerP
   };
 }
 
+/** `id` when it is a project in the database, else null (a run's project may be gone). */
+export function knownProjectId(id: string | null | undefined, facts: OwnershipFacts): string | null {
+  return id && facts.projects.some((p) => p.id === id) ? id : null;
+}
+
 /**
  * The Emberline project of a compose project, by its name (docker/engine.ts): Build & Verify's and
  * the main preview's through the project, a run's own and its preview's through the run — any run
@@ -256,7 +264,7 @@ export function resolveDockerOwner(name: string, facts: OwnershipFacts): DockerP
  * run has the name.
  */
 export function dockerProjectIdOf(name: string, facts: OwnershipFacts): string | null {
-  const known = (id: string | undefined): string | null => (id && facts.projects.some((p) => p.id === id) ? id : null);
+  const known = (id: string | undefined): string | null => knownProjectId(id ?? null, facts);
   const preview = name.endsWith('-preview');
   if (name.startsWith('emberline-main-')) {
     return known(
@@ -265,7 +273,7 @@ export function dockerProjectIdOf(name: string, facts: OwnershipFacts): string |
   }
   const newest = facts.runs
     .filter((r) => (preview ? previewComposeProjectName(r.id) : composeProjectName(r.id, r.worktreePath)) === name)
-    .sort((a, b) => b.createdAt - a.createdAt)[0];
+    .reduce<OwnershipRun | undefined>((best, r) => (!best || r.createdAt > best.createdAt ? r : best), undefined);
   return known(newest?.projectId);
 }
 
@@ -304,7 +312,7 @@ export function buildDockerProjects(input: {
         (a, b) => (a.service ?? '').localeCompare(b.service ?? '') || a.name.localeCompare(b.name),
       ),
       stale: owner.kind === 'orphan',
-      projectId: owner.kind === 'orphan' ? dockerProjectIdOf(name, input.facts) : owner.projectId,
+      projectId: owner.kind === 'orphan' ? dockerProjectIdOf(name, input.facts) : knownProjectId(owner.projectId, input.facts),
     };
   });
   return {

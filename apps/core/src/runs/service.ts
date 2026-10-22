@@ -2700,12 +2700,22 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const empty = { disk: { rows: [] }, cleanup, projects: [] };
     if (!this.docker.host) return { engine: this.docker.status, ...empty };
     await this.docker.ready();
-    const env = this.docker.cliEnv();
-    if (!env.DOCKER_HOST) {
+    // Still waiting for the first answer: say so, never "not reachable".
+    if (!this.docker.status.checked) return { engine: this.docker.status, ...empty, error: DOCKER_ENGINE_NOT_ANSWERED_TEXT };
+    // An engine that came back is listed at this page load, without waiting for the 60 s probe.
+    if (!this.docker.status.available) await this.docker.refresh(5_000);
+    const unreachable = (): DockerOverview => {
       const why = this.docker.status.error;
       return { engine: this.docker.status, ...empty, error: `the Docker engine is not reachable${why ? `: ${why}` : ''}` };
-    }
+    };
+    const env = this.docker.cliEnv();
+    if (!env.DOCKER_HOST) return unreachable();
     const inventory = await gatherDockerInventory(env);
+    // Every listing failed: the engine may have gone away since the last probe.
+    if (!inventory.ls.ok && !inventory.ps.ok && !inventory.df.ok) {
+      await this.docker.refresh(0);
+      if (!this.docker.status.available) return unreachable();
+    }
     // Read after the listing, like the sweep: a listed project belongs to a run that existed before it.
     // Only the compose preview range is published on the host (by the engine's container); any
     // other port a project publishes stays inside the engine.
@@ -3232,8 +3242,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .then(async () => {
         if (!job.abandoned) return;
         await this.previewRunLock.run(row.id, async () => {
-          const gone = !this.hasRun(row.id);
-          if (!gone && this.previewGenerations.get(row.id) !== job.generation) return;
+          const generation = this.previewGenerations.get(row.id);
+          // No generation: remove() is forgetting the run (only it deletes the entry); take it down with its volumes.
+          const gone = !this.hasRun(row.id) || generation === undefined;
+          if (!gone && generation !== job.generation) return;
           // A deleted run's preview project is never used again: its volumes and images go too.
           await composeDown(project, env, gone ? CLEANUP_DOWN : {});
         });
@@ -3328,6 +3340,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async remove(id: string): Promise<void> {
     const row = this.row(id);
     this.agentPreviewStarts.delete(id);
+    this.framing.forget(`run:${id}`);
     // B16: GC and project deletion go through here; a preview server must not outlive its run.
     if (this.ptyd.status === 'connected') {
       const { sessions } = await this.ptyd

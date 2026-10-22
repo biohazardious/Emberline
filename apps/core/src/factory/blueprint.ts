@@ -517,6 +517,8 @@ export interface WizardTicketContext {
   factoryPlans?: boolean;
   /** Reference files and links (see materialsTicketText); '' or absent when none. */
   materialsText?: string;
+  /** Reference files are committed under docs/reference/ (the wizard had materials). */
+  referenceFiles?: boolean;
 }
 
 export interface WizardTicketSpec {
@@ -639,7 +641,7 @@ Prepare **${ctx.name}** for deployment to: ${choice === 'agent' ? 'a target you 
 ## Rules
 
 - Emberline does not run the deploy; prepare it so a person can.
-- Put no credentials, tokens or private keys in the repository. Document the environment variables and where to set them instead.${ctx.factoryPlans ? `\n- ${FACTORY_PLANS_RULE}` : ''}
+- Put no credentials, tokens or private keys in the repository. Document the environment variables and where to set them instead.${choice === 'docker-compose' && ctx.referenceFiles ? '\n- Add `docs/reference/` to `.dockerignore`, so the reference files stay out of the image.' : ''}${ctx.factoryPlans ? `\n- ${FACTORY_PLANS_RULE}` : ''}
 `,
   };
 }

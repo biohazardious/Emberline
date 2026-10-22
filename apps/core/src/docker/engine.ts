@@ -83,6 +83,7 @@ export interface DockerEngineOptions {
 export class DockerEngine {
   private current: DockerEngineStatus;
   private inFlight?: Promise<DockerEngineStatus>;
+  private checkedAt = 0;
   private timer?: NodeJS.Timeout;
   private readonly listeners = new Set<(status: DockerEngineStatus) => void>();
 
@@ -136,6 +137,11 @@ export class DockerEngine {
     this.timer = undefined;
   }
 
+  /** Probes again when the last answer is older than `maxAgeMs` (0 = always); concurrent callers share one probe. */
+  async refresh(maxAgeMs: number): Promise<void> {
+    if (Date.now() - this.checkedAt > maxAgeMs || maxAgeMs <= 0) await this.probe();
+  }
+
   /** Runs `docker version` in the runner; concurrent callers share one probe. Never throws. */
   probe(): Promise<DockerEngineStatus> {
     if (!this.host) return Promise.resolve(this.status);
@@ -167,6 +173,7 @@ export class DockerEngine {
 
   private async runProbe(host: string): Promise<DockerEngineStatus> {
     const next = await this.ask(host);
+    this.checkedAt = Date.now();
     const before = this.current;
     this.current = next;
     if (before.available !== next.available || before.version !== next.version || before.error !== next.error) {

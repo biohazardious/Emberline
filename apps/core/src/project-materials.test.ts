@@ -252,6 +252,20 @@ describe('wizard materials: committed and listed', () => {
     expect(list.find((x) => x.title.startsWith('Deploy'))?.body ?? '').not.toContain('docs/reference/');
   });
 
+  it('a Docker Compose Deploy ticket with material keeps docs/reference/ out of the image', async () => {
+    const res = await create({
+      ...WITH_MATERIAL,
+      appType: 'web_saas',
+      presetId: 'web-react-fastify',
+      choices: { auth: 'none', database: 'agent' },
+      startFactory: true,
+    });
+    expect(res.statusCode).toBe(201);
+    const { project } = res.json() as CreateProjectResponse;
+    const deploy = t.tickets.list(project.id).find((x) => x.title.startsWith('Deploy'))!;
+    expect(deploy.body).toContain('Add `docs/reference/` to `.dockerignore`, so the reference files stay out of the image.');
+  });
+
   it('links are never opened: no fetch, no runner command carries them', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const commands: string[] = [];

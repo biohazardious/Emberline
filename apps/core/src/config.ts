@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import path from 'node:path';
+import { engineHostName } from './docker/compose.js';
 
 export interface CoreConfig {
   host: string;
@@ -65,6 +66,8 @@ export interface CoreConfig {
    * no engine is configured (a compose file older than 0.3.5, or dev); the texts tell the two apart.
    */
   dockerEngineSwitchedOff?: boolean;
+  /** `EMBERLINE_DOCKER_ENGINE` is set to something other than 0 or 1 (the value); core logs it at start. */
+  dockerEngineSettingInvalid?: string;
   /**
    * Directory in the runner with the engine's client certificate (`ca.pem`, `cert.pem`, `key.pem`),
    * mounted read-only from the engine's `docker-client-certs` volume; sent as `DOCKER_CERT_PATH`.
@@ -102,6 +105,11 @@ export function parsePortRange(raw: string): PortRange | null {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const port = Number(env.EMBERLINE_PORT ?? 7420);
+  const engineSetting = env.EMBERLINE_DOCKER_ENGINE?.trim() ?? '';
+  const engineOff = engineSetting === '0';
+  const host = env.EMBERLINE_DOCKER_HOST?.trim() || undefined;
+  // The bundled engine's address: switching the bundled engine off must not switch off an engine of your own.
+  const bundled = host !== undefined && engineHostName(host) === 'docker';
   return {
     host: env.EMBERLINE_HOST ?? '127.0.0.1',
     port,
@@ -131,8 +139,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
-    dockerHost: env.EMBERLINE_DOCKER_ENGINE?.trim() === '0' ? undefined : env.EMBERLINE_DOCKER_HOST?.trim() || undefined,
-    dockerEngineSwitchedOff: env.EMBERLINE_DOCKER_ENGINE?.trim() === '0',
+    dockerHost: engineOff && bundled ? undefined : host,
+    dockerEngineSwitchedOff: engineOff && (host === undefined || bundled),
+    dockerEngineSettingInvalid: ['', '0', '1'].includes(engineSetting) ? undefined : engineSetting,
     dockerCertPath: env.EMBERLINE_DOCKER_CERT_PATH?.trim() || DEFAULT_DOCKER_CERT_PATH,
     previewPorts: {
       runner: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_RUNNER ?? '') ?? DEFAULT_PREVIEW_PORTS.runner,

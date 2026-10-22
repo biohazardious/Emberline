@@ -182,7 +182,7 @@ export function planNewProject(
   });
   const composePreview = previewsComposeService(choices, preset, { dockerEngine });
   const startFactory = body.startFactory ?? true;
-  const ctx = { name: body.name, appType, choices, preset, vision, composePreview, factoryPlans: startFactory && vision.length > 0, materialsText };
+  const ctx = { name: body.name, appType, choices, preset, vision, composePreview, factoryPlans: startFactory && vision.length > 0, materialsText, referenceFiles: materials.length > 0 };
   const tickets = [bootstrapTicket(ctx), deployTicket(ctx)].filter((x): x is WizardTicketSpec => x !== null);
 
   return {

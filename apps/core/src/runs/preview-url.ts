@@ -16,6 +16,16 @@ export function hostNameOf(hostHeader: string | undefined): string | null {
 
 export function previewUrl(port: number, requestHost?: string, override = process.env.EMBERLINE_PREVIEW_HOST): string {
   const base = override?.trim();
-  if (base) return `${base.replace(/\/+$/, '')}:${port}`;
+  if (base) {
+    try {
+      const u = new URL(base);
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        u.port = String(port);
+        return `${u.protocol}//${u.host}`;
+      }
+    } catch {
+      /* invalid base: same fallback as the frame policy */
+    }
+  }
   return `http://${hostNameOf(requestHost) ?? 'localhost'}:${port}`;
 }

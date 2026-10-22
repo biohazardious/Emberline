@@ -52,6 +52,11 @@ const app = await buildServer(
 if (secrets.source === 'created') {
   app.log.info(`secrets: created ${secrets.file}; back it up separately from the database`);
 }
+if (config.dockerEngineSettingInvalid !== undefined) {
+  app.log.error(
+    `EMBERLINE_DOCKER_ENGINE is "${config.dockerEngineSettingInvalid}". Only 0 (off) or 1 (on) are allowed. Compose starts one engine container per unit on the same volumes; set it to 0 or 1 in .env and run make up.`,
+  );
+}
 if (secrets.encrypted > 0) app.log.info(`secrets: encrypted ${secrets.encrypted} stored secrets`);
 if (secrets.cleanedRepoUrls > 0) {
   app.log.info(`secrets: removed credentials from ${secrets.cleanedRepoUrls} stored repository URLs`);
