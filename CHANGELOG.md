@@ -4,15 +4,38 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-22
+
+Clean-up after 0.5.0: the items its reviews left open, two escape hatches for unusual setups, and formatting checks for contributors.
+
 ### Added
 
-- `EMBERLINE_FORGET_SECRETS=1`: for a database restored without its secrets key. Core clears the stored secrets the current key cannot read instead of refusing to start, keeps a snapshot of the database first (`emberline.db.pre-forget-secrets-*.bak`) and logs which secrets it cleared, never their values. Enter them again, then remove the variable.
+- `EMBERLINE_FORGET_SECRETS=1`: for a database restored without its secrets key. Core clears the stored secrets the current key cannot read instead of refusing to start, keeps a snapshot of the database first (`emberline.db.pre-forget-secrets-*.bak`) and logs which secrets it cleared, never their values. Enter them again, then remove the variable. A forge account whose token was cleared is not used until you enter the token again; Emberline says so instead of sending an empty token.
 - `EMBERLINE_CONTAINER_NETWORKS`: comma-separated CIDR ranges (IPv4 and IPv6) that container trust accepts besides the private ranges, for Docker address pools such as 100.64/10 or public IPv6. An address must still be on one of core's own networks. Entries that are not CIDR ranges are logged at start and ignored.
 
 ### Fixed
 
 - The first start creates `/data/secrets.key` on volumes without hard links, such as SMB/CIFS mounts.
 - After a runner restart, forge-account git works again within seconds instead of being refused for up to a minute.
+- The main container preview reads its status with one `docker compose ps` per poll, and compose output that is not JSON no longer takes a running preview down.
+- Keep main pushed binds a queued push to the repository it was queued for: if the project's repository changed meanwhile, it does not push and says why.
+- Saving `worktree.yml` while the runner is down says the runner is not reachable instead of "not on a branch".
+- A prompt to a finished one-shot run starts it again even while Emberline is tidying up runs, instead of being refused.
+- A run you stopped no longer shows "exited unexpectedly with exit code 0". After a failed merge, the ticket drawer keeps core's own message and offers **Merge anyway** or **Move to Done without merging**, as the board's dialog does, while the ticket is still in that column.
+- Repository settings keep the owner you chose when you open Create again.
+- A browser that blocks site storage gets its own sign-in notice, and signing out forgets the browser's key even when the request fails.
+- Live Browser: refusals from another project's Auto-Interact are recognised reliably, and Start on an agent's own browser says that Auto-Interact runs only in the shared browser.
+- The Container preview link from Preview & Build scrolls to the box and keeps it in view while the page above it loads.
+
+### Changed
+
+- The runner image checks the Chromium PPA key's fingerprint after downloading it, and the Chromium fallback fails early on a partial package index.
+- For contributors: the code is formatted with Prettier, and `make check` and CI fail on unformatted files (`make format`). The formatting commit is listed in `.git-blame-ignore-revs`.
+
+### Upgrade notes
+
+- **The runner image changes.** Updating replaces the runner container, which stops running agents, so update when they are idle. The browser daemon 1.5.2 replaces 1.5.1 on first use.
+- Nothing else to do: no migration, and existing settings keep working.
 
 ## [0.5.0] - 2026-10-22
 
@@ -420,7 +443,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/biohazardious/emberline/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/biohazardious/emberline/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/biohazardious/emberline/compare/v0.3.6...v0.4.0
 [0.3.6]: https://github.com/biohazardious/emberline/compare/v0.3.5...v0.3.6
