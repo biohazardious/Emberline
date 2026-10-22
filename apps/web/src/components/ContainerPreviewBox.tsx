@@ -8,11 +8,13 @@ import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import {
+  ANCHOR_HOLD_MS,
   CONTAINER_PREVIEW_ANCHOR,
   CONTAINER_PREVIEW_DIFF_DELAY_MS,
   CONTAINER_PREVIEW_TITLE,
   type ContainerPreviewDraft,
   USE_CONTAINER_PREVIEW_LABEL,
+  anchorHoldActive,
   anchorScrollDue,
   choiceForService,
   containerPreviewBoxShown,
@@ -57,6 +59,7 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
   // Scroll to the box once, after the page's first loads settle: content above it still grows until then.
   const fetching = useIsFetching();
   const scrolled = useRef(false);
+  const holdStop = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (
       !anchorScrollDue({
@@ -70,7 +73,43 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
       return;
     scrolled.current = true;
     box.current?.scrollIntoView({ block: 'start' });
+    // The box's data is cached, so this runs before the sections above have rendered. Keep the box in view as
+    // they push it down, until the time is up or the reader scrolls.
+    const el = box.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const started = Date.now();
+    let userScrolled = false;
+    const userEvents = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
+    const stop = () => {
+      observer.disconnect();
+      for (const e of userEvents) window.removeEventListener(e, onUser);
+      holdStop.current = null;
+    };
+    const onUser = () => {
+      userScrolled = true;
+      stop();
+    };
+    const observer = new ResizeObserver(() => {
+      if (
+        !anchorHoldActive({
+          elapsedMs: Date.now() - started,
+          userScrolled,
+          hash: window.location.hash,
+          anchor: CONTAINER_PREVIEW_ANCHOR,
+        })
+      ) {
+        stop();
+        return;
+      }
+      el.scrollIntoView({ block: 'start' });
+    });
+    for (const e of userEvents) window.addEventListener(e, onUser, { passive: true });
+    observer.observe(document.body);
+    if (el.parentElement) observer.observe(el.parentElement);
+    holdStop.current = stop;
+    setTimeout(() => holdStop.current === stop && stop(), ANCHOR_HOLD_MS);
   }, [shown, fetching]);
+  useEffect(() => () => holdStop.current?.(), []);
 
   // The diff follows the choice, a moment after the last change.
   const file = data?.available ? data.file : null;

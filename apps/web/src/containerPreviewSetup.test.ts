@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANCHOR_HOLD_MS,
+  anchorHoldActive,
   anchorScrollDue,
   choiceForService,
   containerPreviewBoxShown,
@@ -188,5 +190,16 @@ describe('anchorScrollDue', () => {
     expect(anchorScrollDue({ ...v, scrolled: true })).toBe(false);
     expect(anchorScrollDue({ ...v, shown: false })).toBe(false);
     expect(anchorScrollDue({ ...v, hash: '#other' })).toBe(false);
+  });
+});
+
+describe('anchorHoldActive', () => {
+  const v = { elapsedMs: 100, userScrolled: false, hash: '#forge-accounts', anchor: 'forge-accounts' };
+  it('keeps the box in view while the layout settles, until the time is up, the reader scrolls or the hash changes', () => {
+    expect(anchorHoldActive(v)).toBe(true);
+    expect(anchorHoldActive({ ...v, elapsedMs: ANCHOR_HOLD_MS - 1 })).toBe(true);
+    expect(anchorHoldActive({ ...v, elapsedMs: ANCHOR_HOLD_MS })).toBe(false);
+    expect(anchorHoldActive({ ...v, userScrolled: true })).toBe(false);
+    expect(anchorHoldActive({ ...v, hash: '' })).toBe(false);
   });
 });

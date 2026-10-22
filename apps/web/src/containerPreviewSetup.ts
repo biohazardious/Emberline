@@ -129,3 +129,16 @@ export function anchorScrollDue(v: {
 }): boolean {
   return !v.scrolled && v.shown && v.fetching === 0 && v.hash === `#${v.anchor}`;
 }
+
+/** How long after the first scroll the box is kept in view while the content above it still grows. */
+export const ANCHOR_HOLD_MS = 3000;
+
+/** Keep the anchored box in view after layout growth: only while the hash is still the anchor, the time is not up and the reader has not scrolled. */
+export function anchorHoldActive(v: {
+  elapsedMs: number;
+  userScrolled: boolean;
+  hash: string;
+  anchor: string;
+}): boolean {
+  return !v.userScrolled && v.elapsedMs < ANCHOR_HOLD_MS && v.hash === `#${v.anchor}`;
+}
