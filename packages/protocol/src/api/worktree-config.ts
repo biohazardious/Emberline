@@ -197,3 +197,61 @@ export const SaveWorktreeConfigBody = z
   .object({ content: WorktreeYmlContent, baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable() })
   .strict();
 export type SaveWorktreeConfigBody = z.infer<typeof SaveWorktreeConfigBody>;
+
+/** The compose files the Container preview box looks for in HEAD, in this order (the first present wins). */
+export const COMPOSE_FILE_NAMES = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'] as const;
+export const ComposeFileName = z.enum(COMPOSE_FILE_NAMES);
+export type ComposeFileName = z.infer<typeof ComposeFileName>;
+
+/** A service of the compose file and its container ports (published targets, then `expose`), as `docker compose config` resolves them. */
+export const ContainerPreviewService = z.object({ name: z.string(), ports: z.array(z.number().int()) });
+export type ContainerPreviewService = z.infer<typeof ContainerPreviewService>;
+
+/**
+ * `GET /api/projects/:id/container-preview`. `file` is set exactly when Project settings shows the
+ * Container preview box (engine available, HEAD has a compose file, the approved worktree.yml has no
+ * compose preview); `available` says whether the box can save, `reason` why not. `commandPreview`:
+ * the approved preview service is a command (the Preview & Build hint).
+ */
+export const ContainerPreviewOptionsResponse = z.object({
+  available: z.boolean(),
+  reason: z.string().nullable(),
+  file: ComposeFileName.nullable(),
+  services: z.array(ContainerPreviewService),
+  commandPreview: z.boolean(),
+});
+export type ContainerPreviewOptionsResponse = z.infer<typeof ContainerPreviewOptionsResponse>;
+
+/** The person's pick: `POST …/container-preview/diff` takes it as is. */
+export const ContainerPreviewChoice = z
+  .object({
+    file: ComposeFileName,
+    service: z.string().regex(COMPOSE_SERVICE_NAME),
+    port: z.number().int().min(1).max(65535),
+  })
+  .strict();
+export type ContainerPreviewChoice = z.infer<typeof ContainerPreviewChoice>;
+
+/** The new worktree.yml, its diff from the approved content, and the HEAD sha256 a save must start from. */
+export const ContainerPreviewDiffResponse = z.object({
+  content: z.string(),
+  diff: z.string(),
+  baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+});
+export type ContainerPreviewDiffResponse = z.infer<typeof ContainerPreviewDiffResponse>;
+
+/** `POST /api/projects/:id/container-preview`: the pick and the `baseSha256` of the diff the person saw. */
+export const UseContainerPreviewBody = z
+  .object({
+    file: ComposeFileName,
+    service: z.string().regex(COMPOSE_SERVICE_NAME),
+    port: z.number().int().min(1).max(65535),
+    baseSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  })
+  .strict();
+export type UseContainerPreviewBody = z.infer<typeof UseContainerPreviewBody>;
+
+export const CONTAINER_PREVIEW_CODES = {
+  unavailable: 'container_preview_unavailable',
+  unknownService: 'container_preview_unknown_service',
+} as const;

@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_WORKTREE_YML_BYTES } from './projects.js';
 import {
+  COMPOSE_FILE_NAMES,
+  ContainerPreviewChoice,
   isEmberlineDirPath,
   isWorktreeYmlPath,
   SaveWorktreeConfigBody,
+  UseContainerPreviewBody,
   ValidateWorktreeConfigBody,
   WorktreeConfig,
   WORKTREE_CONFIG_LIMITS,
@@ -173,5 +176,20 @@ describe('editing worktree.yml from Project settings', () => {
     expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: 'a'.repeat(63) }).success).toBe(false);
     expect(SaveWorktreeConfigBody.safeParse({ content: 'version: 1\n', baseSha256: null }).success).toBe(true);
     expect(ValidateWorktreeConfigBody.safeParse({ content: 'x'.repeat(MAX_WORKTREE_YML_BYTES + 1) }).success).toBe(false);
+  });
+});
+
+describe('container preview bodies', () => {
+  it('take only the four compose file names, a compose service name and a port', () => {
+    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 8080 }).success).toBe(true);
+    expect(ContainerPreviewChoice.safeParse({ file: 'deploy/compose.yaml', service: 'web', port: 8080 }).success).toBe(false);
+    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: '-x', port: 8080 }).success).toBe(false);
+    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 0 }).success).toBe(false);
+    expect(ContainerPreviewChoice.safeParse({ file: 'compose.yaml', service: 'web', port: 8080, extra: 1 }).success).toBe(false);
+    expect(UseContainerPreviewBody.safeParse({ file: 'compose.yml', service: 'web', port: 80, baseSha256: null }).success).toBe(true);
+    expect(UseContainerPreviewBody.safeParse({ file: 'compose.yml', service: 'web', port: 80 }).success).toBe(false);
+  });
+  it('lists the file names in the spec order', () => {
+    expect(COMPOSE_FILE_NAMES).toEqual(['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml']);
   });
 });

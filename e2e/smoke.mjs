@@ -102,6 +102,18 @@ await step('wizard project: git init runs in the runner', async () => {
   assert.ok(Array.isArray(checkpoints) && checkpoints.length >= 1, 'initial commit is visible');
 });
 
+await step('container preview: the engine is off, so the box is not offered and says why', async () => {
+  const res = await api('GET', `/api/projects/${project.id}/container-preview`);
+  assert.equal(res.status, 200, res.text);
+  assert.deepEqual(res.json, {
+    available: false,
+    reason: 'The Docker engine is turned off (EMBERLINE_DOCKER_ENGINE=0 in .env). Remove that line and restart to turn it on.',
+    file: null,
+    services: [],
+    commandPreview: res.json.commandPreview,
+  });
+});
+
 await step('build gate runs workspace scripts in the runner, not in core', async () => {
   const pkg = {
     name: 'e2e-smoke',

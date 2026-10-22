@@ -1,0 +1,226 @@
+/**
+ * The Container preview box's read of a compose file: HEAD's committed file goes to
+ * `docker compose config --format json` in the runner on stdin (never to disk, as the preview
+ * override in compose.ts), so what is listed is what a run worktree will start. No engine is
+ * needed; interpolation reads only the main workspace's `.env` (compose's own lookup). Bounded in
+ * time and output; cached per HEAD commit + file + `.env`.
+ */
+import { createHash } from 'node:crypto';
+import {
+  COMPOSE_FILE_NAMES,
+  COMPOSE_SERVICE_NAME,
+  type ComposeFileName,
+  type ContainerPreviewService,
+} from '@emberline/protocol';
+import { type ExecResult, execCommand } from '../command-exec.js';
+import { execGitFile } from '../git-exec.js';
+import { KeyedMutex } from '../keyed-mutex.js';
+import { isMissing } from '../outputs/safe-fs.js';
+import { readWorktreeBytes } from '../runs/git.js';
+import { clipText, stripControlChars } from '../text/control-chars.js';
+import { COMPOSE_OVERRIDE_ENV, composeShell } from './compose.js';
+import { mainComposeProjectName } from './engine.js';
+
+export const COMPOSE_CONFIG_TIMEOUT_MS = 15_000;
+export const COMPOSE_CONFIG_MAX_OUTPUT_BYTES = 1024 * 1024;
+export const COMPOSE_FILE_MAX_BYTES = 64 * 1024;
+const MAX_SERVICES = 100;
+const MAX_PORTS_PER_SERVICE = 20;
+const ENV_FILE_MAX_BYTES = 256 * 1024;
+const LINE_MAX_CHARS = 200;
+
+/** `-p` is fixed (a `name:` in the file cannot pick it), the directory is the main workspace (its `.env`). */
+export function composeConfigArgs(project: string, projectDir: string): string[] {
+  return [
+    'compose',
+    '-p',
+    project,
+    '--project-directory',
+    projectDir,
+    '-f',
+    '-',
+    'config',
+    '--format',
+    'json',
+  ];
+}
+
+function addPorts(into: Set<number>, value: unknown): void {
+  const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value : '';
+  // A short-syntax item `[ip:]host:container[/proto]`: the container side is last.
+  const m = /^(\d{1,5})(?:-(\d{1,5}))?(?:\/\w+)?$/.exec(text.trim().split(':').pop() ?? '');
+  if (!m) return;
+  const start = Number(m[1]);
+  const end = m[2] ? Number(m[2]) : start;
+  for (let port = start; port <= end && into.size < MAX_PORTS_PER_SERVICE; port++) {
+    if (port >= 1 && port <= 65535) into.add(port);
+  }
+}
+
+/** Services (compose's order) with their published targets, then `expose`; null when the output is not a config. */
+export function parseComposeConfig(stdout: string): ContainerPreviewService[] | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const services =
+    doc && typeof doc === 'object' && !Array.isArray(doc)
+      ? (doc as { services?: unknown }).services
+      : undefined;
+  if (!services || typeof services !== 'object' || Array.isArray(services)) return null;
+  const out: ContainerPreviewService[] = [];
+  for (const [name, raw] of Object.entries(services as Record<string, unknown>)) {
+    if (out.length >= MAX_SERVICES) break;
+    if (!COMPOSE_SERVICE_NAME.test(name)) continue;
+    const def = (raw && typeof raw === 'object' ? raw : {}) as { ports?: unknown; expose?: unknown };
+    const ports = new Set<number>();
+    for (const p of Array.isArray(def.ports) ? def.ports : []) {
+      addPorts(ports, p && typeof p === 'object' ? (p as { target?: unknown }).target : p);
+    }
+    for (const e of Array.isArray(def.expose) ? def.expose : []) addPorts(ports, e);
+    out.push({ name, ports: [...ports] });
+  }
+  return out;
+}
+
+/** The first line of compose's output that is not a warning, without its log prefix; null when there is none. */
+export function firstErrorLine(stderr: string, stdout = ''): string | null {
+  for (const raw of `${stderr}\n${stdout}`.split('\n')) {
+    const line = stripControlChars(raw, '').trim();
+    if (!line || /^WARN\[|level=warn/i.test(line)) continue;
+    return clipText(line.replace(/^(?:time="[^"]*"\s+)?level=\w+\s+msg=/, ''), LINE_MAX_CHARS);
+  }
+  return null;
+}
+
+/** "Docker Compose couldn't read <file>: <first line>." (spec §2), one full stop. */
+export function composeConfigFailure(file: string, detail: string): string {
+  return `Docker Compose couldn't read ${file}: ${detail.trim().replace(/[\s.]+$/, '')}.`;
+}
+
+export interface HeadComposeFile {
+  file: ComposeFileName;
+  commit: string;
+  oid: string;
+  mode: string;
+  type: string;
+  size: number | null;
+}
+export type HeadComposeLookup =
+  { kind: 'present'; entry: HeadComposeFile } | { kind: 'absent' } | { kind: 'unknown'; error: string };
+
+/** The first of {@link COMPOSE_FILE_NAMES} in the main workspace's HEAD (git in the runner). */
+export async function findHeadComposeFile(projectPath: string): Promise<HeadComposeLookup> {
+  const inRepo = { cwd: projectPath };
+  let commit: string;
+  let listing: string;
+  try {
+    commit = (await execGitFile(['rev-parse', '--verify', 'HEAD^{commit}'], inRepo)).stdout.trim();
+    listing = (await execGitFile(['ls-tree', '-l', '-z', commit, '--', ...COMPOSE_FILE_NAMES], inRepo))
+      .stdout;
+  } catch (error) {
+    const message = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
+    return { kind: 'unknown', error: clipText(message, 300) };
+  }
+  const entries = new Map<string, Omit<HeadComposeFile, 'file' | 'commit'>>();
+  for (const record of listing.split('\0')) {
+    const tab = record.indexOf('\t');
+    if (tab < 0) continue;
+    const [mode = '', type = '', oid = '', size = ''] = record.slice(0, tab).split(/\s+/);
+    entries.set(record.slice(tab + 1), { mode, type, oid, size: /^\d+$/.test(size) ? Number(size) : null });
+  }
+  const file = COMPOSE_FILE_NAMES.find((name) => entries.has(name));
+  return file ? { kind: 'present', entry: { file, commit, ...entries.get(file)! } } : { kind: 'absent' };
+}
+
+export type ComposeConfigRead =
+  { ok: true; services: ContainerPreviewService[] } | { ok: false; reason: string };
+
+const sha = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
+
+/** The `.env` compose interpolates from, as a cache key part (its content never leaves this function). */
+async function envFileKey(projectPath: string): Promise<string> {
+  try {
+    const bytes = await readWorktreeBytes(projectPath, '.env', ENV_FILE_MAX_BYTES);
+    return bytes ? sha(bytes) : 'large';
+  } catch (error) {
+    return isMissing(error) ? 'none' : 'unreadable';
+  }
+}
+
+export class ComposeConfigReader {
+  private readonly cache = new Map<string, { key: string; result: ComposeConfigRead }>();
+  private readonly lock = new KeyedMutex();
+
+  /** HEAD's `entry` read by compose, from the cache when HEAD, the file and `.env` are unchanged. */
+  async read(projectId: string, projectPath: string, entry: HeadComposeFile): Promise<ComposeConfigRead> {
+    const key = `${entry.commit}:${entry.oid}:${await envFileKey(projectPath)}`;
+    const hit = this.cache.get(projectId);
+    if (hit?.key === key) return hit.result;
+    return this.lock.run(projectId, async () => {
+      const again = this.cache.get(projectId);
+      if (again?.key === key) return again.result;
+      const { result, cacheable } = await this.run(projectId, projectPath, entry);
+      if (cacheable) this.cache.set(projectId, { key, result });
+      return result;
+    });
+  }
+
+  private async run(
+    projectId: string,
+    projectPath: string,
+    entry: HeadComposeFile,
+  ): Promise<{ result: ComposeConfigRead; cacheable: boolean }> {
+    const fail = (detail: string, cacheable = true) => ({
+      result: { ok: false as const, reason: composeConfigFailure(entry.file, detail) },
+      cacheable,
+    });
+    if (entry.mode === '120000') return fail('it is a symbolic link in HEAD');
+    if (entry.type !== 'blob' || !/^[0-9a-f]{40,64}$/.test(entry.oid))
+      return fail('it is not a file in HEAD');
+    if (entry.size === null || entry.size > COMPOSE_FILE_MAX_BYTES)
+      return fail(`it is larger than ${COMPOSE_FILE_MAX_BYTES / 1024} KB`);
+    let content: string;
+    try {
+      content = (
+        await execGitFile(['cat-file', 'blob', entry.oid], {
+          cwd: projectPath,
+          maxBuffer: COMPOSE_FILE_MAX_BYTES + 1,
+        })
+      ).stdout;
+    } catch (error) {
+      return fail((error as Error).message, false);
+    }
+    const shell = composeShell(composeConfigArgs(mainComposeProjectName(projectId), projectPath));
+    let ran: ExecResult;
+    try {
+      ran = await execCommand({
+        file: shell.file,
+        args: shell.args,
+        cwd: projectPath,
+        env: { [COMPOSE_OVERRIDE_ENV]: content },
+        timeoutMs: COMPOSE_CONFIG_TIMEOUT_MS,
+        maxOutputBytes: COMPOSE_CONFIG_MAX_OUTPUT_BYTES,
+      });
+    } catch (error) {
+      return fail((error as Error).message, false);
+    }
+    if (ran.timedOut) return fail(`no answer within ${COMPOSE_CONFIG_TIMEOUT_MS / 1000} s`, false);
+    if (ran.truncated)
+      return fail(`its configuration is larger than ${COMPOSE_CONFIG_MAX_OUTPUT_BYTES / 1024 / 1024} MB`);
+    if (ran.exitCode !== 0) {
+      // 127: no Docker CLI in the runner (an old image): not the file's fault, ask again later.
+      return fail(
+        firstErrorLine(ran.stderr, ran.stdout) ?? `docker compose config exited with ${ran.exitCode}`,
+        ran.exitCode !== 127,
+      );
+    }
+    const services = parseComposeConfig(ran.stdout);
+    if (!services) return fail('docker compose config printed something unexpected');
+    if (services.length === 0)
+      return { result: { ok: false, reason: `${entry.file} has no services.` }, cacheable: true };
+    return { result: { ok: true, services }, cacheable: true };
+  }
+}

@@ -19,6 +19,7 @@ import { registerOpsRoutes } from './ops.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 import { KeepMainPushed } from './repository/keep-pushed.js';
 import { RepositoryService } from './repository/service.js';
+import { registerContainerPreviewRoutes } from './routes/container-preview.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { registerDockerRoutes } from './routes/docker.js';
 import { registerEventRoutes } from './routes/events.js';
@@ -179,6 +180,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerProjectRoutes(app, { ...deps, postMerge, mainPush });
   registerProjectImportRoutes(app, deps);
   registerWorktreeConfigRoutes(app, deps);
+  registerContainerPreviewRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerRunRoutes(app, deps.runs, deps.scheduler, recovery);
   // The runner's git with a forge account (`/api/internal/git/<capability>/…`): core adds the credential.
