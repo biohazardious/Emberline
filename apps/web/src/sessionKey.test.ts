@@ -76,6 +76,20 @@ describe('the per-login key', () => {
     expect(getSessionKey()).toBeNull();
   });
 
+  it('a new key wins over an older stored one that storage can no longer replace', () => {
+    // Quota exceeded: reads still work, writes throw.
+    const stale = new Map([['emberline.sessionKey', 'old']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => stale.get(k) ?? null,
+      setItem: () => {
+        throw new DOMException('full', 'QuotaExceededError');
+      },
+      removeItem: (k: string) => void stale.delete(k),
+    });
+    setSessionKey('new');
+    expect(getSessionKey()).toBe('new');
+  });
+
   it('is cleared on sign-out', () => {
     setSessionKey('k');
     clearSessionKey();

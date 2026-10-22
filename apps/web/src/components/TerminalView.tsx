@@ -4,6 +4,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
+import { afterSocketClose, signalSignedOut } from '../liveAuth';
 import { sessionProtocols } from '../sessionKey';
 
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting' | 'exited';
@@ -104,6 +105,10 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/api/terminals/${encodeURIComponent(terminalId)}/ws`, sessionProtocols());
+      let opened = false;
+      ws.onopen = () => {
+        opened = true;
+      };
       ws.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as TerminalServerMessage;
         switch (message.type) {
@@ -144,7 +149,12 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
         if (close.code === 1013) overflowAt = Date.now();
         if (disposed || exited) return;
         update('reconnecting');
-        retryTimer = setTimeout(connect, Math.min(500 * 2 ** attempt++, 5_000));
+        void afterSocketClose(opened).then((next) => {
+          if (disposed) return;
+          // Signed out: the sign-in form replaces the app; no reconnect storm.
+          if (next === 'signed_out') return signalSignedOut();
+          retryTimer = setTimeout(connect, Math.min(500 * 2 ** attempt++, 5_000));
+        });
       };
     };
 

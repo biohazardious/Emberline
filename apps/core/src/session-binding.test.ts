@@ -11,6 +11,7 @@ import { ContainerAddresses } from './auth/container-addresses.js';
 import { loadConfig } from './config.js';
 import { runs, sessions } from './db/schema.js';
 import {
+  API_VERSION,
   CSRF_HEADER,
   SESSION_KEY_MISSING_MESSAGE,
   SESSION_KEY_PROTOCOL_PREFIX,
@@ -231,6 +232,53 @@ describe('a per-login key', () => {
       signedOut: SESSION_KEY_MISSING_MESSAGE,
       setupRequired: false,
     });
+  });
+
+  it('every changing method needs the key, and a live key from another sign-in is not this one', async () => {
+    t = await createTestApp();
+    const a = await setupFrom(t, '192.0.2.10');
+    const other = await setupFromLogin(t, '192.0.2.10');
+    const created = await t.app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      remoteAddress: '192.0.2.10',
+      headers: authHeaders(a),
+      payload: { name: 'Keyed', initGit: false },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = (created.json().project as { id: string }).id;
+    const changes = [
+      ['PATCH', `/api/projects/${id}/settings`],
+      ['PUT', '/api/projects/active'],
+      ['DELETE', `/api/projects/${id}`],
+    ] as const;
+    for (const [method, url] of changes) {
+      for (const key of ['1', keyOf(other)]) {
+        const res = await t.app.inject({
+          method,
+          url,
+          remoteAddress: '192.0.2.10',
+          headers: { cookie: a, [CSRF_HEADER]: key },
+          payload: {},
+        });
+        expect(res.statusCode, `${method} with ${key === '1' ? 'no key' : "another sign-in's key"}`).toBe(401);
+        expect(res.json()).toMatchObject({ error: 'session_key_missing' });
+      }
+    }
+    const logout = (key: string) =>
+      t!.app.inject({ method: 'POST', url: '/api/auth/logout', remoteAddress: '192.0.2.10', headers: { cookie: a, [CSRF_HEADER]: key } });
+    expect((await logout(keyOf(other))).statusCode).toBe(401);
+    expect((await logout(keyOf(a))).statusCode).toBe(200);
+  });
+
+  it('a tab from before 0.5.0 reads the new API version with its cookie alone, so it offers a reload', async () => {
+    // Bumped for the per-login key: an old bundle sends no key, so its changes and live connections fail.
+    expect(API_VERSION).toBe(2);
+    t = await createTestApp();
+    const cookie = await setupAndLogin(t.app);
+    const system = await t.app.inject({ method: 'GET', url: '/api/system', headers: { cookie } });
+    expect(system.statusCode).toBe(200);
+    expect(system.json()).toMatchObject({ apiVersion: 2 });
   });
 
   it("a sign-in revokes the session this browser's cookie named; other devices keep theirs", async () => {

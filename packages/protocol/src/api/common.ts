@@ -24,8 +24,9 @@ export type HealthResponse = z.infer<typeof HealthResponse>;
 /**
  * Bumped when the REST/WebSocket contract changes incompatibly. The web bundle compares it with
  * core's to ask for a reload after an upgrade instead of failing on changed payloads.
+ * 2 (0.5.0): changes and live connections need the per-login key, which older bundles never send.
  */
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 
 /** The Docker engine sidecar (compose service `docker`, on unless `EMBERLINE_DOCKER_ENGINE=0`), as core's last probe saw it. */
 export const DockerEngineStatus = z.object({

@@ -29,7 +29,12 @@ export function setSessionKey(key: string): void {
   try {
     storage()?.setItem(STORAGE_KEY, key);
   } catch {
-    // memory only
+    // Memory only; an older stored key must not win over this one.
+    try {
+      storage()?.removeItem(STORAGE_KEY);
+    } catch {
+      // nothing kept
+    }
   }
 }
 

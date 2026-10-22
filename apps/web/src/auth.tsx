@@ -28,6 +28,7 @@ import {
 import { api, ApiRequestError, errorMessage } from './api';
 import { BrandLogo } from './components/BrandLogo';
 import { SecurityBanner } from './components/SecurityBanner';
+import { shareInFlight } from './liveAuth';
 import { authGateState, clearSessionKey, getSessionKey, setSessionKey } from './sessionKey';
 
 interface AuthContextValue {
@@ -53,7 +54,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
-    const onUnauthorized = () => void refresh();
+    // A burst of 401s (every poll at once, live connections) checks once.
+    const checkOnce = shareInFlight(refresh);
+    const onUnauthorized = () => void checkOnce();
     window.addEventListener('emberline:unauthorized', onUnauthorized);
     return () => window.removeEventListener('emberline:unauthorized', onUnauthorized);
   }, [refresh]);

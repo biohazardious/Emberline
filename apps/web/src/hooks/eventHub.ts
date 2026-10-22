@@ -1,5 +1,6 @@
 import { type ClientPresenceMessage, ServerEvent } from '@emberline/protocol';
 import { clearSlotIfOwner, presentRunId, type PresenceSource } from '../presenceSlots';
+import { afterSocketClose, signalSignedOut } from '../liveAuth';
 import { sessionProtocols } from '../sessionKey';
 
 type Listener = { onEvent: (event: ServerEvent) => void; onOpen: () => void };
@@ -43,10 +44,13 @@ export function clearPresenceRun(runId: string, source: PresenceSource): void {
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', sendPresence);
 
 function connect(): void {
+  timer = undefined;
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/events`;
   const ws = new WebSocket(url, sessionProtocols());
   socket = ws;
+  let opened = false;
   ws.onopen = () => {
+    opened = true;
     if (Date.now() - overflowAt > 10_000) delay = 500;
     for (const listener of listeners) listener.onOpen();
     sendPresence();
@@ -66,8 +70,14 @@ function connect(): void {
     clearInterval(heartbeat);
     socket = undefined;
     if (listeners.size === 0) return;
-    timer = setTimeout(connect, delay);
-    delay = Math.min(delay * 2, 10_000);
+    void afterSocketClose(opened).then((next) => {
+      // Meanwhile the last subscriber left, or a new one connected.
+      if (listeners.size === 0 || socket || timer) return;
+      // Signed out: the sign-in form replaces the app (its subscribers leave); no reconnect storm.
+      if (next === 'signed_out') return signalSignedOut();
+      timer = setTimeout(connect, delay);
+      delay = Math.min(delay * 2, 10_000);
+    });
   };
 }
 
