@@ -1,10 +1,12 @@
 import type {
   ContainerPreviewOptionsResponse,
   MainPreviewStatus,
-  Project,   RunPreviewStatus,
+  Project,
+  RunPreviewStatus,
   WorkspaceDemoTarget,
 } from '@emberline/protocol';
-import { type ReactNode, useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { type ReactNode, useState } from 'react';
 import { Link } from 'wouter';
 import { Box, ExternalLink, Package, Play, RotateCw, Square } from 'lucide-react';
 import { api, errorMessage } from '../api';
@@ -49,9 +51,16 @@ function ContainerPreviewHint({
   target: WorkspaceDemoTarget;
   preview: PreviewStatus | undefined;
 }) {
-  const options = useApi<ContainerPreviewOptionsResponse>(`/api/projects/${projectId}/container-preview`, 60_000);
-  const [dismissed, setDismissed] = useState(() => readHintDismissed(projectId));
-  useEffect(() => setDismissed(readHintDismissed(projectId)), [projectId]);
+  // Dismissed in a past visit (storage) or in this one (state, which also covers failing storage).
+  const [dismissedFor, setDismissedFor] = useState<string>();
+  const dismissed = dismissedFor === projectId || readHintDismissed(projectId);
+  // The same cached query as Project settings' box, fetched once per mount: file and commandPreview
+  // change only with a commit or a save, so this observer adds no polling interval of its own.
+  const options = useQuery({
+    queryKey: ['api', `/api/projects/${projectId}/container-preview`],
+    queryFn: () => api<ContainerPreviewOptionsResponse>(`/api/projects/${projectId}/container-preview`),
+    enabled: !dismissed,
+  });
   const file = options.data?.file;
   if (!file || !containerPreviewHintShown(options.data, target, preview, dismissed)) return null;
   const hint = containerPreviewHint(file);
@@ -64,7 +73,7 @@ function ContainerPreviewHint({
         aria-label="Dismiss this hint"
         onClick={() => {
           writeHintDismissed(projectId);
-          setDismissed(true);
+          setDismissedFor(projectId);
         }}
       >
         Dismiss
@@ -109,7 +118,8 @@ export function PreviewAndBuildView({
       </p>
     );
   }
-  if (primary !== 'container' || !poll.data) return (
+  if (primary !== 'container' || !poll.data)
+    return (
       <>
         {hint}
         {children}

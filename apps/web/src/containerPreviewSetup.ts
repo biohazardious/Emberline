@@ -79,7 +79,10 @@ export function containerPreviewHintKey(projectId: string): string {
   return `emberline.containerPreviewHint.dismissed.${projectId}`;
 }
 
-export function readHintDismissed(projectId: string, storage: FlagStorage | null = defaultStorage()): boolean {
+export function readHintDismissed(
+  projectId: string,
+  storage: FlagStorage | null = defaultStorage(),
+): boolean {
   try {
     return storage?.getItem(containerPreviewHintKey(projectId)) === '1';
   } catch {
@@ -97,7 +100,8 @@ export function writeHintDismissed(projectId: string, storage: FlagStorage | nul
 }
 
 /**
- * Spec section 3: the approved preview is a command, the box is offered (HEAD has a compose file),
+ * Spec section 3: the approved preview is a command, the box is on the page (HEAD has a compose
+ * file; `available: false` still counts, the box explains why),
  * not dismissed, and not a run already previewing a container. Main's status is always
  * `kind: 'compose'`, so only a run's kind counts.
  */

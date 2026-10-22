@@ -122,12 +122,16 @@ describe('the Preview & Build hint', () => {
   it('shows for a command preview while the box is offered', () => {
     expect(containerPreviewHintShown(offer, main, { kind: 'compose' }, false)).toBe(true); // main's status is always kind compose
     expect(containerPreviewHintShown(offer, run, { kind: 'command' }, false)).toBe(true);
-    expect(containerPreviewHintShown({ ...offer, available: false, reason: 'x' }, run, { kind: 'command' }, false)).toBe(true);
+    expect(
+      containerPreviewHintShown({ ...offer, available: false, reason: 'x' }, run, { kind: 'command' }, false),
+    ).toBe(true);
   });
   it('hides when dismissed, without a box, without a command preview, or for a run already on a compose preview', () => {
     expect(containerPreviewHintShown(offer, run, { kind: 'command' }, true)).toBe(false);
     expect(containerPreviewHintShown({ ...offer, file: null }, run, { kind: 'command' }, false)).toBe(false);
-    expect(containerPreviewHintShown({ ...offer, commandPreview: false }, run, { kind: 'command' }, false)).toBe(false);
+    expect(
+      containerPreviewHintShown({ ...offer, commandPreview: false }, run, { kind: 'command' }, false),
+    ).toBe(false);
     expect(containerPreviewHintShown(offer, run, { kind: 'compose' }, false)).toBe(false);
     expect(containerPreviewHintShown(undefined, run, { kind: 'command' }, false)).toBe(false);
   });
