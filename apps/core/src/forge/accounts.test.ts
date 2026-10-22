@@ -401,6 +401,25 @@ describe('forge accounts API', () => {
     });
   });
 
+  it('an account without a token (cleared by EMBERLINE_FORGET_SECRETS) quotes forge errors unchanged', async () => {
+    const id = (
+      await send('POST', '/api/forge/accounts', {
+        provider: 'gitea',
+        serverUrl: 'https://git.example.com',
+        token: 't',
+      })
+    ).json().id;
+    answer = () => reply({ message: 'disk full' }, 500);
+    const svc = new ForgeAccountsService(t.db, (url, init) => t.forgeFetch.current(url, init), {});
+    const record = { ...svc.record(id), token: '' };
+    await expect(
+      svc.createRepository(record, { owner: 'octo', name: 'x', private: true }),
+    ).rejects.toMatchObject({
+      code: 'forge_error',
+      message: 'The forge could not create the repository (HTTP 500): disk full.',
+    });
+  });
+
   it('an owners read that started before a token change never fills the cache afterwards', async () => {
     const id = (
       await send('POST', '/api/forge/accounts', {

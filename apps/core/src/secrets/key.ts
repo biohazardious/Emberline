@@ -61,8 +61,7 @@ export const NODE_KEY_FILE_OPS: KeyFileOps = {
  * directory, synced, then hard-linked into place (fails when `file` exists, so a key is never
  * replaced), then the directory synced. A temp file left by a crash is never read as the key.
  * On a volume without hard links (SMB/CIFS, some FUSE mounts) the synced temp file is renamed into
- * place once no key exists, then read back; the directory sync is best effort there. Two starts
- * racing on such a volume can still both pass the check in a narrow window (one core per volume).
+ * place once no key exists, then read back; the directory sync is best effort there.
  */
 export function createKeyFile(file: string, key: Buffer, ops: KeyFileOps = NODE_KEY_FILE_OPS): void {
   const tmp = `${file}.tmp`;
@@ -82,6 +81,10 @@ export function createKeyFile(file: string, key: Buffer, ops: KeyFileOps = NODE_
       ops.link(tmp, file);
     } catch (error) {
       if (!NO_HARD_LINKS.has(errorCode(error))) throw error;
+      // Known window, accepted: rename replaces its target. A key another start creates after the
+      // check below is replaced, and if that start already read its own key back it goes on sealing
+      // with a key that is no longer on disk. The read-back only catches a rename that lands after
+      // ours. Two cores on one /data volume are not supported, so only that setup can hit this.
       if (ops.exists(file)) throw Object.assign(new Error(`${file} already exists`), { code: 'EEXIST' });
       ops.rename(tmp, file);
       linked = false;
@@ -131,6 +134,7 @@ export function loadSecretsKey(o: { env: NodeJS.ProcessEnv; dataDir: string; all
   if (!o.allowCreate) {
     throw new SecretsKeyError(
       `no ${SECRETS_KEY_ENV} and no ${file}, but the database holds encrypted secrets`,
+      { keyLost: true },
     );
   }
   const key = randomBytes(32);

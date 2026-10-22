@@ -11,12 +11,20 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getSetting, openDb } from '../db/index.js';
 import { getProviderEnvFromSettings } from '../factory/settings.js';
 import { listAccountRecords } from '../forge/account-store.js';
-import { installedSecretsKey, installSecretsKey, SecretsKeyError, sealWith } from './box.js';
-import { encryptStoredSecrets, startSecrets } from './startup.js';
+import {
+  installedSecretsKey,
+  installSecretsKey,
+  SECRETS_KEY_FORGET_SENTENCE,
+  SECRETS_KEY_SENTENCE,
+  SecretsKeyError,
+  sealWith,
+} from './box.js';
+import { encryptStoredSecrets, forgetLogLine, startSecrets } from './startup.js';
 
 const testKey = installedSecretsKey();
 const dirs: string[] = [];
@@ -267,7 +275,67 @@ describe('EMBERLINE_FORGET_SECRETS=1 (a database restored without its key)', () 
     expect(() => startSecrets(o.db, { env: envWith(randomBytes(32), false), dataDir: dir })).toThrow(
       SecretsKeyError,
     );
+    // This refusal is the one the variable resolves, so it names it.
+    expect(() => startSecrets(o.db, { env: envWith(randomBytes(32), false), dataDir: dir })).toThrow(
+      `${SECRETS_KEY_SENTENCE} ${SECRETS_KEY_FORGET_SENTENCE}`,
+    );
     expect(rows(o)).toBe(before);
+    o.close();
+  });
+
+  it('only the value 1 turns it on: true or 0 still stops start and changes nothing', () => {
+    const dir = tempDir();
+    const o = restored(dir, randomBytes(32), randomBytes(32));
+    const before = rows(o);
+    for (const value of ['true', '0', 'yes', '']) {
+      const env = { ...envWith(randomBytes(32), false), EMBERLINE_FORGET_SECRETS: value };
+      expect(() => startSecrets(o.db, { env, dataDir: dir })).toThrow(SecretsKeyError);
+    }
+    expect(rows(o)).toBe(before);
+    o.close();
+  });
+
+  it('never masks a malformed key file: start still stops, the file and the rows stay', () => {
+    const dir = tempDir();
+    const o = restored(dir, randomBytes(32), randomBytes(32));
+    const before = rows(o);
+    const file = path.join(dir, 'secrets.key');
+    writeFileSync(file, 'not-a-key\n', { mode: 0o600 });
+    const run = () => startSecrets(o.db, { env: { EMBERLINE_FORGET_SECRETS: '1' }, dataDir: dir });
+    expect(run).toThrow(SecretsKeyError);
+    expect(run).toThrow(new RegExp(`^${SECRETS_KEY_SENTENCE}$`));
+    expect(readFileSync(file, 'utf8')).toBe('not-a-key\n');
+    expect(rows(o)).toBe(before);
+    o.close();
+  });
+
+  it('seals plaintext before the snapshot, so the snapshot holds the cleared values but no plaintext', () => {
+    const dir = tempDir();
+    const lost = randomBytes(32);
+    const kept = randomBytes(32);
+    const o = restored(dir, lost, kept);
+    // A value an older version left in plaintext, next to the ones the lost key sealed.
+    o.db.$client
+      .prepare('insert into settings(key, value) values (?, ?)')
+      .run('forge.config', JSON.stringify({ token: 'CANARY15' }));
+    const sealedToken = (o.db.$client.prepare('select token from forge_accounts').get() as { token: string })
+      .token;
+    const result = startSecrets(o.db, { env: envWith(kept), dataDir: dir });
+    expect(result.encrypted).toBe(1);
+    expect(result.forget.cleared).toHaveLength(4);
+    const snapshot = result.forget.snapshot!;
+    expect(readFileSync(snapshot).includes('CANARY15')).toBe(false);
+    const copy = new Database(snapshot, { readonly: true });
+    try {
+      expect(copy.prepare('select token from forge_accounts').get()).toEqual({ token: sealedToken });
+      const forge = copy.prepare("select value from settings where key = 'forge.config'").get() as {
+        value: string;
+      };
+      expect(JSON.parse(forge.value).token).toMatch(/^enc:v1:/);
+    } finally {
+      copy.close();
+    }
+    expect(getSetting(o.db, 'forge.config')).toEqual({ token: 'CANARY15' });
     o.close();
   });
 
@@ -279,10 +347,10 @@ describe('EMBERLINE_FORGET_SECRETS=1 (a database restored without its key)', () 
     const result = startSecrets(o.db, { env: envWith(kept), dataDir: dir });
     expect(result.forget.requested).toBe(true);
     expect([...result.forget.cleared].sort()).toEqual([
-      'forge account https://github.com',
-      'settings demo.tokenSecret',
-      'settings factory.providerKeys',
-      'settings updates.config',
+      'demo signing secret',
+      'forge account https://github.com token',
+      'provider API keys',
+      'update check GitHub token',
     ]);
     expect(JSON.stringify(result.forget)).not.toMatch(/CANARY|enc:v1:/);
     expect(result.forget.snapshot).toMatch(/emberline\.db\.pre-forget-secrets-\d+\.bak$/);
@@ -342,5 +410,37 @@ describe('EMBERLINE_FORGET_SECRETS=1 (a database restored without its key)', () 
     ).toThrow(SecretsKeyError);
     expect(rows(o)).toBe(before);
     o.close();
+  });
+});
+
+describe('forgetLogLine', () => {
+  it('names what to enter again, says the demo secret is made again, and asks to remove the variable', () => {
+    const line = forgetLogLine({
+      requested: true,
+      cleared: ['notification token', 'demo signing secret', 'forge account https://github.com token'],
+      snapshot: '/data/emberline.db.pre-forget-secrets-1.bak',
+    });
+    expect(line).toEqual({
+      level: 'warn',
+      message:
+        'secrets: EMBERLINE_FORGET_SECRETS cleared the stored secrets the current key cannot read. Enter these again in Settings: notification token, forge account https://github.com token. The demo signing secret is made again automatically. The database before this is in /data/emberline.db.pre-forget-secrets-1.bak. Remove EMBERLINE_FORGET_SECRETS now.',
+    });
+  });
+
+  it('with only the demo secret cleared, asks for nothing in Settings', () => {
+    expect(forgetLogLine({ requested: true, cleared: ['demo signing secret'], snapshot: null })).toEqual({
+      level: 'warn',
+      message:
+        'secrets: EMBERLINE_FORGET_SECRETS cleared the stored secrets the current key cannot read. The demo signing secret is made again automatically. Remove EMBERLINE_FORGET_SECRETS now.',
+    });
+  });
+
+  it('says the variable can go when nothing was cleared, and says nothing when it was not set', () => {
+    expect(forgetLogLine({ requested: true, cleared: [], snapshot: null })).toEqual({
+      level: 'info',
+      message:
+        'secrets: every stored secret is readable, nothing was cleared; remove EMBERLINE_FORGET_SECRETS',
+    });
+    expect(forgetLogLine({ requested: false, cleared: [], snapshot: null })).toBeNull();
   });
 });

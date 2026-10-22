@@ -2,7 +2,8 @@
  * Start-up pass for secrets at rest: load the key, prove it opens every sealed value, install it,
  * then seal the plaintext values an older version left (one transaction, then a checkpoint and
  * VACUUM so no plaintext page stays in the file). Nothing is written before the key is verified, except,
- * with `EMBERLINE_FORGET_SECRETS=1`, the clearing of values the key cannot open (after a snapshot).
+ * with `EMBERLINE_FORGET_SECRETS=1`: plaintext is sealed first, then a snapshot is taken, then the
+ * values the key cannot open are cleared.
  */
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -66,7 +67,7 @@ export function assertSecretsReadable(sqlite: Sqlite, key: Buffer): void {
       try {
         return openWith(key, s);
       } catch {
-        throw new SecretsKeyError(`${place} could not be decrypted with this key`);
+        throw new SecretsKeyError(`${place} could not be decrypted with this key`, { keyLost: true });
       }
     };
   for (const row of secretSettingRows(sqlite)) mapSettingRow(row, open(`settings ${row.key}`));
@@ -76,8 +77,19 @@ export function assertSecretsReadable(sqlite: Sqlite, key: Buffer): void {
 /** Set to `1` for one start: stored secrets the current key cannot open are cleared instead of refusing to start. */
 export const FORGET_SECRETS_ENV = 'EMBERLINE_FORGET_SECRETS';
 
-const settingPlace = (key: string) => `settings ${key}`;
-const accountPlace = (serverUrl: string) => `forge account ${serverUrl}`;
+/** The demo's HMAC secret: made again on first use, so nobody enters it. */
+export const DEMO_SECRET_LABEL = 'demo signing secret';
+/** What a person calls each secret setting, for the log; never a value. */
+const SETTING_LABELS: Record<string, string> = {
+  'factory.providerKeys': 'provider API keys',
+  'notifications.config': 'notification token',
+  'updates.config': 'update check GitHub token',
+  'forge.config': 'old Forge & Webhooks token',
+  'demo.tokenSecret': DEMO_SECRET_LABEL,
+  'factory.settings': 'MCP server environment values',
+};
+const settingPlace = (key: string) => SETTING_LABELS[key] ?? `settings ${key}`;
+const accountPlace = (serverUrl: string) => `forge account ${serverUrl} token`;
 
 /** A mapper that leaves readable values alone and notes (or, with `clear`, empties) the others' place. */
 function unreadableMapper(key: Buffer, places: Set<string>, place: string, clear: boolean): Fn {
@@ -93,7 +105,7 @@ function unreadableMapper(key: Buffer, places: Set<string>, place: string, clear
   };
 }
 
-/** Where a stored secret cannot be opened with `key` (`settings <key>`, `forge account <server>`); never a value. */
+/** Which stored secrets `key` cannot open, by label (`notification token`, `forge account <server> token`); never a value. */
 export function unreadableSecrets(sqlite: Sqlite, key: Buffer): string[] {
   const places = new Set<string>();
   for (const row of secretSettingRows(sqlite)) {
@@ -236,14 +248,19 @@ export function startSecrets(
     allowCreate: requested || !hasSealedSecrets(sqlite),
   });
   const forget = { requested, cleared: [] as string[], snapshot: null as string | null };
+  let before = { encrypted: 0, cleanedRepoUrls: 0 };
   if (requested && unreadableSecrets(sqlite, loaded.key).length > 0) {
+    // Seal leftover plaintext with this key first, so the snapshot holds no plaintext secret.
+    before = encryptStoredSecrets(sqlite, loaded.key);
     forget.snapshot = snapshotBeforeForget(sqlite);
     forget.cleared = forgetUnreadableSecrets(sqlite, loaded.key);
   }
   assertSecretsReadable(sqlite, loaded.key);
   installSecretsKey(loaded.key);
   // Only after the key is durably on disk (key.ts) and proven: from here on data is written.
-  const { encrypted, cleanedRepoUrls } = encryptStoredSecrets(sqlite, loaded.key);
+  const after = encryptStoredSecrets(sqlite, loaded.key);
+  const encrypted = before.encrypted + after.encrypted;
+  const cleanedRepoUrls = before.cleanedRepoUrls + after.cleanedRepoUrls;
   return {
     source: loaded.source,
     file: loaded.file,
@@ -252,4 +269,29 @@ export function startSecrets(
     plaintextSnapshots: encrypted + cleanedRepoUrls > 0 ? plaintextSnapshots(o.dataDir, startedAt) : [],
     forget,
   };
+}
+
+/** The start log line for {@link startSecrets}' `forget`; null when the variable was not set. */
+export function forgetLogLine(forget: {
+  requested: boolean;
+  cleared: string[];
+  snapshot: string | null;
+}): { level: 'warn' | 'info'; message: string } | null {
+  if (forget.cleared.length === 0) {
+    return forget.requested
+      ? {
+          level: 'info',
+          message: `secrets: every stored secret is readable, nothing was cleared; remove ${FORGET_SECRETS_ENV}`,
+        }
+      : null;
+  }
+  const enterAgain = forget.cleared.filter((label) => label !== DEMO_SECRET_LABEL);
+  const parts = [
+    `secrets: ${FORGET_SECRETS_ENV} cleared the stored secrets the current key cannot read.`,
+    enterAgain.length > 0 ? `Enter these again in Settings: ${enterAgain.join(', ')}.` : '',
+    forget.cleared.includes(DEMO_SECRET_LABEL) ? 'The demo signing secret is made again automatically.' : '',
+    forget.snapshot ? `The database before this is in ${forget.snapshot}.` : '',
+    `Remove ${FORGET_SECRETS_ENV} now.`,
+  ];
+  return { level: 'warn', message: parts.filter(Boolean).join(' ') };
 }

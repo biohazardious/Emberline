@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SecretsKeyError } from './box.js';
+import { SECRETS_KEY_FORGET_SENTENCE, SECRETS_KEY_SENTENCE, SecretsKeyError } from './box.js';
 import { createKeyFile, type KeyFileOps, loadSecretsKey, NODE_KEY_FILE_OPS } from './key.js';
 
 let dir: string;
@@ -83,8 +83,9 @@ describe('loadSecretsKey', () => {
     writeFileSync(keyFile(), `${bad}\n`, { mode: 0o600 });
     const error = thrown(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true }));
     expect(error).toBeInstanceOf(SecretsKeyError);
+    // A broken key file is not a lost key: EMBERLINE_FORGET_SECRETS would not help, so it is not named.
     expect((error as Error).message).toBe(
-      "Emberline can't read its stored secrets: the secrets key changed or is missing. If the key is lost, start once with EMBERLINE_FORGET_SECRETS=1 to clear the secrets it cannot read.",
+      "Emberline can't read its stored secrets: the secrets key changed or is missing.",
     );
     expect((error as SecretsKeyError).detail).toContain(keyFile());
     expect((error as SecretsKeyError).detail).not.toContain(bad);
@@ -93,6 +94,22 @@ describe('loadSecretsKey', () => {
   it('never creates a key when it may not', () => {
     expect(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: false })).toThrow(SecretsKeyError);
     expect(existsSync(keyFile())).toBe(false);
+  });
+
+  it('names EMBERLINE_FORGET_SECRETS only when the key is missing, not when it is malformed or cannot be made', () => {
+    const missing = thrown(() => loadSecretsKey({ env: {}, dataDir: dir, allowCreate: false }));
+    expect((missing as Error).message).toBe(`${SECRETS_KEY_SENTENCE} ${SECRETS_KEY_FORGET_SENTENCE}`);
+    const malformed = thrown(() =>
+      loadSecretsKey({ env: { EMBERLINE_SECRETS_KEY: 'not-a-key' }, dataDir: dir, allowCreate: true }),
+    );
+    expect(malformed).toBeInstanceOf(SecretsKeyError);
+    expect((malformed as Error).message).toBe(SECRETS_KEY_SENTENCE);
+    const notADir = path.join(dir, 'data');
+    writeFileSync(notADir, '');
+    const uncreatable = thrown(() => loadSecretsKey({ env: {}, dataDir: notADir, allowCreate: true }));
+    expect(uncreatable).toBeInstanceOf(SecretsKeyError);
+    expect((uncreatable as SecretsKeyError).detail).toMatch(/could not be created/);
+    expect((uncreatable as Error).message).toBe(SECRETS_KEY_SENTENCE);
   });
   it('publishes a new key through a synced temp file and leaves nothing else behind', () => {
     const created = loadSecretsKey({ env: {}, dataDir: dir, allowCreate: true });
@@ -171,7 +188,7 @@ describe('createKeyFile on a volume without hard links', () => {
     expect(readFileSync(keyFile(), 'utf8').trim()).toBe(key.toString('base64'));
   });
 
-  it('never replaces a key file that exists or appeared meanwhile', () => {
+  it('never replaces a key file that exists when the fallback checks', () => {
     const existing = `${randomBytes(32).toString('base64')}\n`;
     writeFileSync(keyFile(), existing, { mode: 0o600 });
     const { ops, calls } = noLinks();

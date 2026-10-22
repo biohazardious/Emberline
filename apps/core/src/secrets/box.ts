@@ -15,10 +15,17 @@ export const SECRETS_KEY_FORGET_SENTENCE =
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 
-/** The spec sentences as the message; `detail` says which key or place, never a value. */
+/**
+ * The spec sentence as the message; `detail` says which key or place, never a value. `keyLost`
+ * (a missing key, or one that cannot open a stored secret) adds the EMBERLINE_FORGET_SECRETS way
+ * out; a malformed key or one that cannot be read or made keeps the first sentence only.
+ */
 export class SecretsKeyError extends Error {
-  constructor(readonly detail: string) {
-    super(`${SECRETS_KEY_SENTENCE} ${SECRETS_KEY_FORGET_SENTENCE}`);
+  constructor(
+    readonly detail: string,
+    o: { keyLost?: boolean } = {},
+  ) {
+    super(o.keyLost ? `${SECRETS_KEY_SENTENCE} ${SECRETS_KEY_FORGET_SENTENCE}` : SECRETS_KEY_SENTENCE);
     this.name = 'SecretsKeyError';
   }
 }

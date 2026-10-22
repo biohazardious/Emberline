@@ -72,6 +72,10 @@ export const rateLimited = (res: Response): boolean =>
       res.headers.get('x-ratelimit-remaining') === '0' ||
       res.headers.get('ratelimit-remaining') === '0'));
 
+/** Hides the token in forge text; an empty token (a reset account) leaves the text as it is. */
+const redactToken = (text: string, token: string): string =>
+  token ? text.split(token).join('[redacted]') : text;
+
 const rateLimitedError = (host: string): HttpError =>
   new HttpError(
     429,
@@ -321,7 +325,7 @@ export class ForgeAccountsService {
         !/(^|\/)\.+(\/|$)/.test(fullPath);
       return { fullPath: plain ? fullPath : `${input.owner}/${input.name}` };
     }
-    const text = JSON.stringify(data).split(account.token).join('[redacted]');
+    const text = redactToken(JSON.stringify(data), account.token);
     if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
     if (res.status === 409 || /already (exists|been taken)/i.test(text)) {
       throw new HttpError(
@@ -333,9 +337,7 @@ export class ForgeAccountsService {
     if (res.status === 403 || res.status === 404)
       throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
     const message =
-      typeof data.message === 'string'
-        ? `: ${data.message.split(account.token).join('[redacted]').slice(0, 200)}`
-        : '';
+      typeof data.message === 'string' ? `: ${redactToken(data.message, account.token).slice(0, 200)}` : '';
     throw new HttpError(
       502,
       'forge_error',
@@ -380,7 +382,7 @@ export class ForgeAccountsService {
       throw new HttpError(
         502,
         'forge_error',
-        `Couldn't check the token with ${host}: ${message.split(token).join('[redacted]')}`,
+        `Couldn't check the token with ${host}: ${redactToken(message, token)}`,
       );
     }
     if (rateLimited(res)) throw rateLimitedError(host);

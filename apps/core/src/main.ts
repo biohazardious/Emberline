@@ -14,7 +14,7 @@ import { openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
 import { SecretsKeyError } from './secrets/box.js';
-import { FORGET_SECRETS_ENV, startSecrets } from './secrets/startup.js';
+import { forgetLogLine, startSecrets } from './secrets/startup.js';
 import { previewPortList } from './security-headers.js';
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
@@ -71,13 +71,8 @@ if (secrets.plaintextSnapshots.length > 0) {
     `secrets: these snapshots from before this start still hold secrets in plaintext; delete them once you no longer need to roll back: ${secrets.plaintextSnapshots.join(', ')}`,
   );
 }
-if (secrets.forget.cleared.length > 0) {
-  app.log.warn(
-    `secrets: ${FORGET_SECRETS_ENV} cleared these stored secrets, which the current key cannot read: ${secrets.forget.cleared.join(', ')}. Enter them again in Settings.${secrets.forget.snapshot ? ` The database before this is in ${secrets.forget.snapshot}.` : ''} Remove ${FORGET_SECRETS_ENV} now.`,
-  );
-} else if (secrets.forget.requested) {
-  app.log.info(`secrets: every stored secret is readable, nothing was cleared; remove ${FORGET_SECRETS_ENV}`);
-}
+const forgotten = forgetLogLine(secrets.forget);
+if (forgotten) app.log[forgotten.level](forgotten.message);
 const { ignored: ignoredHosts } = parseAllowedHosts(process.env.EMBERLINE_ALLOWED_HOSTS ?? '');
 if (ignoredHosts.length > 0) {
   app.log.warn(
