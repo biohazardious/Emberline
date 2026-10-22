@@ -26,6 +26,11 @@ export const COMPOSE_CONFIG_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const COMPOSE_FILE_MAX_BYTES = 64 * 1024;
 const MAX_SERVICES = 100;
 const MAX_PORTS_PER_SERVICE = 20;
+/** Port and `expose` entries examined over all services (an agent's file can list thousands). */
+const MAX_PORT_ENTRIES = 2000;
+/** Service keys examined, listed or not (names the box drops count too). */
+const MAX_SERVICE_ENTRIES = 1000;
+const MAX_PORT = 65535;
 const ENV_FILE_MAX_BYTES = 256 * 1024;
 const LINE_MAX_CHARS = 200;
 /**
@@ -58,11 +63,11 @@ function addPorts(into: Set<number>, value: unknown): void {
   // A short-syntax item `[ip:]host:container[/proto]`: the container side is last.
   const m = /^(\d{1,5})(?:-(\d{1,5}))?(?:\/\w+)?$/.exec(text.trim().split(':').pop() ?? '');
   if (!m) return;
-  const start = Number(m[1]);
-  const end = m[2] ? Number(m[2]) : start;
-  for (let port = start; port <= end && into.size < MAX_PORTS_PER_SERVICE; port++) {
-    if (port >= 1 && port <= 65535) into.add(port);
-  }
+  // Compose prints ranges above 65535 unchanged: clamp, never walk ports that cannot be listed.
+  const start = Math.max(Number(m[1]), 1);
+  if (start > MAX_PORT) return;
+  const end = Math.min(m[2] ? Number(m[2]) : start, MAX_PORT);
+  for (let port = start; port <= end && into.size < MAX_PORTS_PER_SERVICE; port++) into.add(port);
 }
 
 /** Services (compose's order) with their published targets, then `expose`; null when the output is not a config. */
@@ -79,15 +84,25 @@ export function parseComposeConfig(stdout: string): ContainerPreviewService[] | 
       : undefined;
   if (!services || typeof services !== 'object' || Array.isArray(services)) return null;
   const out: ContainerPreviewService[] = [];
-  for (const [name, raw] of Object.entries(services as Record<string, unknown>)) {
-    if (out.length >= MAX_SERVICES) break;
-    if (!COMPOSE_SERVICE_NAME.test(name)) continue;
+  let serviceEntries = 0;
+  let portEntries = 0;
+  for (const name in services) {
+    if (out.length >= MAX_SERVICES || ++serviceEntries > MAX_SERVICE_ENTRIES) break;
+    if (!Object.hasOwn(services, name) || !COMPOSE_SERVICE_NAME.test(name)) continue;
+    const raw = (services as Record<string, unknown>)[name];
     const def = (raw && typeof raw === 'object' ? raw : {}) as { ports?: unknown; expose?: unknown };
     const ports = new Set<number>();
-    for (const p of Array.isArray(def.ports) ? def.ports : []) {
-      addPorts(ports, p && typeof p === 'object' ? (p as { target?: unknown }).target : p);
+    const published = Array.isArray(def.ports) ? (def.ports as unknown[]) : [];
+    const exposed = Array.isArray(def.expose) ? (def.expose as unknown[]) : [];
+    // Indexes, not copies: an entry past a cap or the budget is never touched.
+    for (let i = 0; i < published.length + exposed.length; i++) {
+      if (ports.size >= MAX_PORTS_PER_SERVICE || ++portEntries > MAX_PORT_ENTRIES) break;
+      const p = i < published.length ? published[i] : exposed[i - published.length];
+      addPorts(
+        ports,
+        i < published.length && p && typeof p === 'object' ? (p as { target?: unknown }).target : p,
+      );
     }
-    for (const e of Array.isArray(def.expose) ? def.expose : []) addPorts(ports, e);
     out.push({ name, ports: [...ports] });
   }
   return out;
@@ -158,6 +173,10 @@ async function envFileKey(projectPath: string): Promise<string> {
   }
 }
 
+/**
+ * The key is HEAD's commit and file plus the main workspace's `.env`: workspace files the compose file
+ * `include`s, `extends` or names in `env_file` are read uncommitted and do not invalidate it.
+ */
 export class ComposeConfigReader {
   private readonly cache = new Map<string, { key: string; result: ComposeConfigRead }>();
   private readonly lock = new KeyedMutex();
@@ -226,7 +245,8 @@ export class ComposeConfigReader {
         /^failed to parse -:/,
         `failed to parse ${entry.file}:`,
       );
-      return fail(line ?? `docker compose config exited with ${ran.exitCode}`, ran.exitCode !== 127);
+      const exited = ran.signal ? `was stopped by ${ran.signal}` : `exited with ${ran.exitCode}`;
+      return fail(line ?? `docker compose config ${exited}`, ran.exitCode !== 127);
     }
     const services = parseComposeConfig(ran.stdout);
     if (!services) return fail('docker compose config printed something unexpected');

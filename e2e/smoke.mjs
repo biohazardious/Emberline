@@ -110,7 +110,7 @@ await step('container preview: the engine is off, so the box is not offered and 
     reason: 'The Docker engine is turned off (EMBERLINE_DOCKER_ENGINE=0 in .env). Remove that line and restart to turn it on.',
     file: null,
     services: [],
-    commandPreview: res.json.commandPreview,
+    commandPreview: false, // no stack picked: the wizard's worktree.yml has no preview service
   });
 });
 

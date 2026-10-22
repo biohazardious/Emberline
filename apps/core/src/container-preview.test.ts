@@ -226,6 +226,14 @@ describe('GET /api/projects/:id/container-preview', () => {
     });
   });
 
+  it('a compose killed by a signal (out of memory) says so', async () => {
+    const p = await createProject({ 'compose.yaml': COMPOSE });
+    compose.next = { ...ok(''), exitCode: null, signal: 'SIGKILL' };
+    expect((await options(p.id)).reason).toBe(
+      "Docker Compose couldn't read compose.yaml: docker compose config was stopped by SIGKILL.",
+    );
+  });
+
   it('a compose error quotes its first line that is not a warning (Review Focus 3)', async () => {
     const p = await createProject({ 'compose.yaml': COMPOSE });
     compose.next = {

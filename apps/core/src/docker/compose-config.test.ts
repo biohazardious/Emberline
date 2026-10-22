@@ -36,6 +36,41 @@ describe('parseComposeConfig', () => {
       { name: 'web', ports: Array.from({ length: 20 }, (_, i) => 1000 + i) },
     ]);
   });
+  it('lists a normal range port by port, and skips ports and ranges above 65535', () => {
+    const out = JSON.stringify({
+      services: {
+        web: {
+          expose: ['8000-8003', '65536-99999', '70000-99999/udp', '65530-70000'],
+          ports: [{ target: 99999 }, '99999'],
+        },
+      },
+    });
+    expect(parseComposeConfig(out)).toEqual([
+      { name: 'web', ports: [8000, 8001, 8002, 8003, 65530, 65531, 65532, 65533, 65534, 65535] },
+    ]);
+  });
+  it('never walks a range or examines more entries than its budget: 1 MB of out-of-range ranges parses at once', () => {
+    // The reviewer's case: 100 services sharing 440 distinct out-of-range ranges (compose prints them as is).
+    const ranges = Array.from({ length: 440 }, (_, i) => `65536-${99999 - i}`);
+    const services = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`s${i}`, { expose: ranges }]));
+    const started = performance.now();
+    expect(parseComposeConfig(JSON.stringify({ services }))).toEqual(
+      Array.from({ length: 100 }, (_, i) => ({ name: `s${i}`, ports: [] })),
+    );
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+  it('stops examining entries after the total budget, and services after theirs', () => {
+    const junk = Array.from({ length: 5000 }, () => 'x');
+    const out = JSON.stringify({ services: { a: { expose: [...junk, '8080'] }, b: { expose: ['9090'] } } });
+    expect(parseComposeConfig(out)).toEqual([
+      { name: 'a', ports: [] },
+      { name: 'b', ports: [] },
+    ]);
+    const many = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`-bad${i}`, {}]));
+    expect(parseComposeConfig(JSON.stringify({ services: { ...many, web: { expose: ['80'] } } }))).toEqual(
+      [],
+    );
+  });
   it('is null for output that is not a compose config', () => {
     expect(parseComposeConfig('not json')).toBeNull();
     expect(parseComposeConfig('[]')).toBeNull();
