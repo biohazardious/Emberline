@@ -12,6 +12,8 @@ import type { FetchLike } from './forge/issues.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { PtydBridge } from './ptyd-bridge.js';
+import { KeepMainPushed } from './repository/keep-pushed.js';
+import { RepositoryService } from './repository/service.js';
 import { RecoveryService } from './runs/recovery-service.js';
 import { RunService } from './runs/service.js';
 import { Scheduler, type SchedulerOptions } from './scheduler/service.js';
@@ -37,6 +39,10 @@ export interface TestApp {
   postMerge: PostMergeJobs;
   /** The server's recovery suggestions for held runs. */
   recovery: RecoveryService;
+  /** The server's project repository actions (status, connect, create, push main). */
+  repository: RepositoryService;
+  /** The server's Keep main pushed (pushes main after merges when the project opted in). */
+  mainPush: KeepMainPushed;
   close(): Promise<void>;
 }
 
@@ -98,7 +104,23 @@ export async function createTestApp(
   const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
   const postMerge = new PostMergeJobs(opened.db, runs);
   const recovery = new RecoveryService(opened.db, runs, scheduler, { completionReminder: (run) => tickets.completionReminder(run, '\n\n') });
-  const app = await buildServer({ config, db: opened.db, ptyd, runs, tickets, scheduler, presence, forge, issueSync, postMerge, recovery });
+  const repository = new RepositoryService(opened.db, forge.accounts, runs.gitGateway);
+  const mainPush = new KeepMainPushed(opened.db, runs, repository);
+  const app = await buildServer({
+    config,
+    db: opened.db,
+    ptyd,
+    runs,
+    tickets,
+    scheduler,
+    presence,
+    forge,
+    issueSync,
+    postMerge,
+    recovery,
+    repository,
+    mainPush,
+  });
   return {
     app,
     config,
@@ -114,6 +136,8 @@ export async function createTestApp(
     issueSync,
     postMerge,
     recovery,
+    repository,
+    mainPush,
     async close() {
       await app.close();
       // Background archive passes must not outlive the DB and temp dir they use.

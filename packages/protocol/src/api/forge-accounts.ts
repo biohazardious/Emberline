@@ -49,3 +49,13 @@ export type CreateForgeAccountBody = z.input<typeof CreateForgeAccountBody>;
 /** Only the token can change (blank keeps it); a new server or provider is a new account. */
 export const UpdateForgeAccountBody = z.object({ token: z.string().trim().max(500).optional() });
 export type UpdateForgeAccountBody = z.input<typeof UpdateForgeAccountBody>;
+
+export const ForgeOwner = z.object({
+  /** GitHub/Gitea login or organisation name; GitLab user name or group full path. */
+  id: z.string(),
+  name: z.string(),
+  kind: z.enum(['user', 'organization']),
+});
+export type ForgeOwner = z.infer<typeof ForgeOwner>;
+export const ForgeOwnersResponse = z.object({ owners: z.array(ForgeOwner) });
+export type ForgeOwnersResponse = z.infer<typeof ForgeOwnersResponse>;

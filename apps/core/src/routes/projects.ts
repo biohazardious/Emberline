@@ -139,6 +139,7 @@ import { contentDisposition, EDITOR_BODY_LIMIT, UNTRUSTED_CONTENT_CSP, UPLOAD_BO
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
+import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
 import { ToolchainService } from '../toolchain/service.js';
@@ -176,7 +177,7 @@ export function slugify(name: string): string {
 
 export function registerProjectRoutes(
   app: FastifyInstance,
-  { db, config, ptyd, tickets, runs, scheduler, postMerge }: CoreDeps & { postMerge: PostMergeJobs },
+  { db, config, ptyd, tickets, runs, scheduler, postMerge, mainPush }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed },
 ): void {
   const saveActiveProjectId = (activeProjectId: string | null) => {
     db.insert(settings)
@@ -663,8 +664,11 @@ export function registerProjectRoutes(
       // was already in main is no new merge (its sha would be main's HEAD, not this merge).
       if (result.ok && !result.alreadyMerged && blocking > 0) runs.note(run.id, 'review_blocking_overridden', { count: blocking });
       if (result.ok && !result.alreadyMerged && ticket) runs.note(run.id, 'merged_by_person', result.commitSha ? { commitSha: result.commitSha } : {});
-      // Without a ticket there is no merge note, so main's rebuild and preview refresh are asked for here.
-      else if (result.ok && !result.alreadyMerged) postMerge.enqueue(project.id);
+      // Without a ticket there is no merge note: main's rebuild, preview refresh and push are asked for here.
+      else if (result.ok && !result.alreadyMerged) {
+        postMerge.enqueue(project.id);
+        mainPush.enqueue(project.id, run.id);
+      }
       return result;
     },
   );

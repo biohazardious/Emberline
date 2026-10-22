@@ -16,6 +16,8 @@ import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
 import { registerOpsRoutes } from './ops.js';
 import type { PtydBridge } from './ptyd-bridge.js';
+import { KeepMainPushed } from './repository/keep-pushed.js';
+import { RepositoryService } from './repository/service.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { registerDockerRoutes } from './routes/docker.js';
 import { registerEventRoutes } from './routes/events.js';
@@ -25,6 +27,7 @@ import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { registerRepositoryRoutes } from './routes/repository.js';
 import { registerWorktreeConfigRoutes } from './routes/worktree-config.js';
 import { registerReviewRoutes } from './routes/review.js';
 import { registerBuildOutputRoutes } from './routes/build-outputs.js';
@@ -61,6 +64,10 @@ export interface CoreDeps {
   postMerge?: PostMergeJobs;
   /** Recovery suggestions for held runs; built from `db`, `runs` and `tickets` when omitted. */
   recovery?: RecoveryService;
+  /** Project repository actions; built from db and the forge accounts when omitted. */
+  repository?: RepositoryService;
+  /** Keep main pushed after merges; built when omitted. */
+  mainPush?: KeepMainPushed;
 }
 
 export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerOptions = {}): Promise<FastifyInstance> {
@@ -87,6 +94,9 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     new PostMergeJobs(deps.db, deps.runs, {
       log: (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message)),
     });
+  const repository = deps.repository ?? new RepositoryService(deps.db, forge.accounts, deps.runs.gitGateway);
+  const mainPush =
+    deps.mainPush ?? new KeepMainPushed(deps.db, deps.runs, repository, { log: (message) => app.log.warn(message) });
   // A person's review feedback for a fresh attempt starts the ticket like the Board's Start does.
   const review = new ReviewService(deps.db, deps.runs, {
     log: (message, err) => app.log.warn({ err }, message),
@@ -112,6 +122,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   // After a merge into main, a running main container preview is rebuilt on its port.
   postMerge.registerPostMergeStep('refresh main preview', ({ projectId }) => deps.runs.mainPreviews.refresh(projectId));
   postMerge.start();
+  mainPush.start();
   app.addHook('onClose', async () => {
     cron.stop();
     notifications.stop();
@@ -119,6 +130,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
     updates.stop();
     await issueSync.stop();
     await postMerge.stop();
+    await mainPush.stop();
   });
 
   installErrorHandler(app);
@@ -146,7 +158,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
     docker: deps.runs.docker.status,
   }));
-  registerProjectRoutes(app, { ...deps, postMerge });
+  registerProjectRoutes(app, { ...deps, postMerge, mainPush });
   registerProjectImportRoutes(app, deps);
   registerWorktreeConfigRoutes(app, deps);
   registerTerminalRoutes(app, deps);
@@ -161,6 +173,7 @@ export async function buildServer(deps: CoreDeps, fastifyOptions: FastifyServerO
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
   registerForgeAccountRoutes(app, forge.accounts, deps.db);
+  registerRepositoryRoutes(app, repository);
   registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);

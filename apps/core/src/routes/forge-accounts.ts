@@ -1,4 +1,4 @@
-import type { ForgeAccount, ForgeAccountsResponse } from '@emberline/protocol';
+import type { ForgeAccount, ForgeAccountsResponse, ForgeOwnersResponse } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/index.js';
 import { forgetLegacyToken } from '../forge/account-store.js';
@@ -25,6 +25,10 @@ export function registerForgeAccountRoutes(
   app.post<{ Params: { id: string } }>(
     '/api/forge/accounts/:id/check',
     async (request): Promise<ForgeAccount> => accounts.check(request.params.id),
+  );
+  app.get<{ Params: { id: string } }>(
+    '/api/forge/accounts/:id/owners',
+    async (request): Promise<ForgeOwnersResponse> => accounts.owners(request.params.id),
   );
   app.delete('/api/forge/legacy-token', async () => {
     forgetLegacyToken(db);

@@ -3,6 +3,8 @@ import {
   FORGE_SCOPE_HINTS,
   type ForgeAccount,
   type ForgeAccountsResponse,
+  type ForgeOwner,
+  type ForgeOwnersResponse,
   type ForgeProvider,
   UpdateForgeAccountBody,
 } from '@emberline/protocol';
@@ -177,6 +179,62 @@ export class ForgeAccountsService {
     if (account.source === 'environment') setEnvironmentUsername(id, username);
     else updateAccount(this.db, id, { username });
     return accountView(this.record(id));
+  }
+
+  async owners(id: string): Promise<ForgeOwnersResponse> {
+    const account = this.record(id);
+    const user = account.username ?? (await this.check(id)).username!;
+    const path = account.provider === 'gitlab' ? '/groups?min_access_level=30&per_page=100' : '/user/orgs?per_page=100';
+    const res = await forgeFetch(this.fetch, `${account.apiUrl}${path}`, { headers: authHeaders(account.provider, account.token) });
+    if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
+    const rows = res.ok ? await readJson<Record<string, unknown>[]>(res).catch(() => []) : [];
+    const orgs = (Array.isArray(rows) ? rows : []).flatMap((o): ForgeOwner[] => {
+      const id = account.provider === 'gitlab' ? o.full_path : (o.login ?? o.name ?? o.username);
+      return typeof id === 'string' && id ? [{ id, name: id, kind: 'organization' }] : [];
+    });
+    return { owners: [{ id: user, name: user, kind: 'user' }, ...orgs] };
+  }
+
+  /** Creates an empty repository; returns its `owner/name` path (origin is built from the account server, never the forge's clone URL). */
+  async createRepository(
+    account: ForgeAccountRecord,
+    input: { owner: string; name: string; private: boolean; description?: string },
+  ): Promise<{ fullPath: string }> {
+    const forUser = input.owner === account.username;
+    const headers = { ...authHeaders(account.provider, account.token), 'Content-Type': 'application/json' };
+    let url: string;
+    let body: Record<string, unknown>;
+    if (account.provider === 'gitlab') {
+      url = `${account.apiUrl}/projects`;
+      body = { name: input.name, path: input.name, visibility: input.private ? 'private' : 'public', description: input.description ?? '' };
+      if (!forUser) {
+        const ns = await forgeFetch(this.fetch, `${account.apiUrl}/namespaces/${encodeURIComponent(input.owner)}`, { headers });
+        const nsData = ns.ok ? await readJson<{ id?: unknown }>(ns).catch((): { id?: unknown } => ({})) : {};
+        if (typeof nsData.id !== 'number') throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
+        body.namespace_id = nsData.id;
+      }
+    } else {
+      url = forUser ? `${account.apiUrl}/user/repos` : `${account.apiUrl}/orgs/${encodeURIComponent(input.owner)}/repos`;
+      body = { name: input.name, private: input.private, description: input.description ?? '', auto_init: false };
+    }
+    const res = await forgeFetch(this.fetch, url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const data = await readJson<Record<string, unknown>>(res).catch(() => ({}) as Record<string, unknown>);
+    if (res.ok) {
+      const fullPath = account.provider === 'gitlab' ? data.path_with_namespace : data.full_name;
+      return { fullPath: typeof fullPath === 'string' && fullPath ? fullPath : `${input.owner}/${input.name}` };
+    }
+    const text = JSON.stringify(data).split(account.token).join('[redacted]');
+    if (res.status === 401) throw new HttpError(400, 'token_refused', TOKEN_REFUSED);
+    if (res.status === 409 || /already (exists|been taken)/i.test(text)) {
+      throw new HttpError(409, 'repo_name_taken', `A repository named ${input.name} already exists for ${input.owner}.`);
+    }
+    if (res.status === 403 || res.status === 404) throw new HttpError(409, 'forge_create_refused', this.createRefused(account, input.owner));
+    const message = typeof data.message === 'string' ? `: ${data.message.split(account.token).join('[redacted]').slice(0, 200)}` : '';
+    throw new HttpError(502, 'forge_error', `The forge could not create the repository (HTTP ${res.status})${message}.`);
+  }
+
+  private createRefused(account: ForgeAccountRecord, owner: string): string {
+    return `The forge did not let this token create a repository under ${owner}. ${FORGE_SCOPE_HINTS[account.provider]}`;
   }
 
   /**
