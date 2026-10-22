@@ -73,6 +73,7 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
     state.materials.length > 0 ||
     state.referenceUrlsText.trim() !== '' ||
     state.materialsError !== null ||
+    state.linksError !== null ||
     state.materialsNotKept.length > 0;
   const [materialOpen, setMaterialOpen] = useState(hasMaterial);
 

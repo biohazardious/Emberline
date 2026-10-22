@@ -193,16 +193,22 @@ export async function encodeMaterials(materials: readonly WizardMaterial[]): Pro
   return out;
 }
 
-export const MATERIALS_TOO_LARGE_TEXT = 'The files are too large for the server to accept. Remove some and try again.';
+export const MATERIALS_TOO_LARGE_TEXT = 'The files are larger than the server accepts. If Emberline runs behind a proxy, raise its upload limit (nginx: client_max_body_size).';
 
 /** A create failure that belongs next to the Reference material area, or null. */
-export function materialsErrorMessage(err: unknown): string | null {
+export function materialsErrorMessage(err: unknown, filesSent: boolean): string | null {
   if (err instanceof MaterialReadError) return err.message;
   if (!err || typeof err !== 'object') return null;
   const { status, code, message } = err as { status?: unknown; code?: unknown; message?: unknown };
-  if (status === 413) return MATERIALS_TOO_LARGE_TEXT;
+  if (status === 413 && filesSent) return MATERIALS_TOO_LARGE_TEXT;
   if (status === 400 && code === MATERIALS_ERROR_CODE && typeof message === 'string') return message;
   return null;
+}
+
+/** Core names the field a refusal is about; without it the files are meant. */
+export function materialsErrorField(err: unknown): 'files' | 'links' {
+  const field = err && typeof err === 'object' ? (err as { data?: { field?: unknown }; field?: unknown }).data?.field ?? (err as { field?: unknown }).field : undefined;
+  return field === 'links' ? 'links' : 'files';
 }
 
 /** Names from a restored draft that are not in the list again yet. */

@@ -19,7 +19,7 @@ import { StepStack } from './StepStack';
 import { StepRepo, StepStart } from './StepStart';
 import { StepSummary, useSummaryPreview } from './StepSummary';
 import { StepType } from './StepType';
-import { materialsErrorMessage } from './materials';
+import { materialsErrorField, materialsErrorMessage } from './materials';
 import { useWizardState } from './useWizardState';
 import {
   buildAdoptBody,
@@ -215,13 +215,14 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
       if (res.warning) setDone({ name, warning: res.warning });
       else onClose();
     } catch (err) {
-      const materialsProblem = imported ? null : materialsErrorMessage(err);
+      const field = materialsErrorField(err);
+      const materialsProblem = imported ? null : materialsErrorMessage(err, state.materials.length > 0);
       if (!imported && isNameConflict(err)) {
         dispatch({ type: 'nameError', message: errorMessage(err) });
         go('type', 'wizard-name');
       } else if (materialsProblem) {
-        dispatch({ type: 'materialsError', message: materialsProblem });
-        go('type', 'wizard-materials');
+        dispatch({ type: 'materialsError', message: materialsProblem, field });
+        go('type', field === 'links' ? 'wizard-links' : 'wizard-materials');
       } else {
         setActionError(errorMessage(err));
       }

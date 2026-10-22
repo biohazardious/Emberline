@@ -97,7 +97,9 @@ describe('wizard materials: checks before anything is written', () => {
     expect(link.json()).toMatchObject({
       error: 'invalid_materials',
       message: 'Use a link that starts with http:// or https://.',
+      field: 'links',
     });
+    expect(res.json()).toMatchObject({ field: 'files' });
   });
 
   it('materials and links are only for a new project from the wizard', async () => {

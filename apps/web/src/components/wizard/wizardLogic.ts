@@ -53,6 +53,8 @@ export interface WizardState {
   referenceUrlsText: string;
   /** Core's refusal of a file (e.g. a type mismatch), shown next to the area. */
   materialsError: string | null;
+  /** A refusal of the links, shown next to the links field. */
+  linksError: string | null;
   /** File names from a restored draft; the area asks to add them again. */
   materialsNotKept: string[];
   choices: ProjectChoices;
@@ -85,7 +87,8 @@ export type WizardAction =
   | { type: 'nameError'; message: string | null }
   | { type: 'materialsAdded'; materials: WizardMaterial[] }
   | { type: 'materialRemoved'; id: string }
-  | { type: 'materialsError'; message: string | null }
+  | { type: 'materialsError'; message: string | null; field?: 'files' | 'links' }
+  | { type: 'materialsNotKeptDismissed' }
   | { type: 'importCreated'; projectId: string }
   | { type: 'importCancelled' }
   | { type: 'detected'; detect: ProjectDetectResponse }
@@ -108,6 +111,7 @@ export function initialWizardState(): WizardState {
     materials: [],
     referenceUrlsText: '',
     materialsError: null,
+    linksError: null,
     materialsNotKept: [],
     choices: {},
     dirty: [],
@@ -424,10 +428,13 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
     case 'materialRemoved':
       return { ...s, materials: s.materials.filter((m) => m.id !== a.id), materialsError: null };
     case 'materialsError':
-      return { ...s, materialsError: a.message };
+      return a.field === 'links' ? { ...s, linksError: a.message } : { ...s, materialsError: a.message };
+    case 'materialsNotKeptDismissed':
+      return { ...s, materialsNotKept: [] };
     case 'field': {
       if (a.field === 'startFactory') return { ...s, startFactory: a.value };
       if (a.field === 'name') return { ...s, name: a.value, nameError: null };
+      if (a.field === 'referenceUrlsText') return { ...s, referenceUrlsText: a.value, linksError: null };
       if (a.field === 'repoUrl') {
         const name = followName(s.name, repoNameFromUrl(s.repoUrl), repoNameFromUrl(a.value));
         return { ...s, repoUrl: a.value, name, nameError: name === s.name ? s.nameError : null };

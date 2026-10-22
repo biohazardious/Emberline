@@ -15,7 +15,8 @@ export function ReferenceMaterial({
   const [dragging, setDragging] = useState(false);
   const [linksTouched, setLinksTouched] = useState(false);
   const links = parseReferenceUrls(state.referenceUrlsText);
-  const showLinkErrors = linksTouched && links.problems.length > 0;
+  const linkProblems = [...(state.linksError ? [state.linksError] : []), ...(linksTouched ? links.problems : [])];
+  const showLinkErrors = linkProblems.length > 0;
   const toAddAgain = filesToAddAgain(state.materialsNotKept, state.materials);
   const errors = [...(state.materialsError ? [state.materialsError] : []), ...problems];
 
@@ -78,7 +79,14 @@ export function ReferenceMaterial({
         <p id="wizard-materials-cap" className="muted small" aria-live="polite">
           {capLine(state.materials)}
         </p>
-        {toAddAgain.length > 0 && <p className="notice-box">{notKeptText(toAddAgain)}</p>}
+        {toAddAgain.length > 0 && (
+          <div className="notice-box">
+            <p>{notKeptText(toAddAgain)}</p>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => dispatch({ type: 'materialsNotKeptDismissed' })}>
+              Dismiss
+            </button>
+          </div>
+        )}
         <MaterialList
           materials={state.materials}
           onRemove={(id) => {
@@ -113,7 +121,7 @@ export function ReferenceMaterial({
         </p>
         {showLinkErrors && (
           <ul id="wizard-links-errors" className="form-error" role="alert">
-            {links.problems.map((p, i) => (
+            {linkProblems.map((p, i) => (
               <li key={`${i}-${p}`}>{p}</li>
             ))}
           </ul>

@@ -638,6 +638,20 @@ describe('reference material: bodies and draft', () => {
     // A second reload before re-adding still remembers the name.
     expect(draftOf(restored)?.materialNames).toEqual(['a.png']);
   });
+  it('dismissing the not-kept notice clears it and the draft stops writing the names back', () => {
+    const draft = parseDraft(JSON.stringify(draftOf(withMaterial())))!;
+    let restored = wizardReducer(initialWizardState(), { type: 'restore', draft });
+    restored = wizardReducer(restored, { type: 'materialsNotKeptDismissed' });
+    expect(restored.materialsNotKept).toEqual([]);
+    expect(draftOf(restored)?.materialNames).toEqual([]);
+  });
+  it('a link error is kept apart from a file error and clears when the links change', () => {
+    let s = wizardReducer(withMaterial(), { type: 'materialsError', message: 'Use a link.', field: 'links' });
+    expect(s.linksError).toBe('Use a link.');
+    expect(s.materialsError).toBeNull();
+    s = wizardReducer(s, { type: 'field', field: 'referenceUrlsText', value: 'https://example.com' });
+    expect(s.linksError).toBeNull();
+  });
   it('an older draft without the new fields still parses; junk names are dropped', () => {
     const old = JSON.parse(JSON.stringify(draftOf(withMaterial()))) as Record<string, unknown>;
     delete old.referenceUrlsText;

@@ -28,7 +28,15 @@ export async function api<T>(path: string, method: Method = 'GET', body?: unknow
     credentials: 'same-origin',
   });
   const text = await res.text();
-  const json = text ? (JSON.parse(text) as unknown) : undefined;
+  let json: unknown;
+  try {
+    json = text ? (JSON.parse(text) as unknown) : undefined;
+  } catch {
+    // Not JSON: a reverse proxy's error page. A failure still needs its status.
+    if (res.ok) throw new Error('The server sent a reply Emberline could not read.');
+    if (res.status === 401) window.dispatchEvent(new Event('emberline:unauthorized'));
+    throw new ApiRequestError(res.status, 'http_error', res.statusText);
+  }
   if (!res.ok) {
     const err = (json && typeof json === 'object' ? json : {}) as Record<string, unknown> & {
       error?: string;

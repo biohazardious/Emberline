@@ -8,6 +8,7 @@ import {
   MaterialReadError,
   materialDetail,
   materialMimeType,
+  materialsErrorField,
   materialsErrorMessage,
   notKeptText,
   parseReferenceUrls,
@@ -208,17 +209,30 @@ describe('sending the files', () => {
 
 describe('errors next to the area', () => {
   it("maps core's invalid_materials, a 413 and a read failure; anything else stays with the dialog", () => {
-    expect(materialsErrorMessage({ status: 400, code: 'invalid_materials', message: 'photo.png is not a PNG file.' })).toBe(
+    expect(materialsErrorMessage({ status: 400, code: 'invalid_materials', message: 'photo.png is not a PNG file.' }, true)).toBe(
       'photo.png is not a PNG file.',
     );
-    expect(materialsErrorMessage({ status: 413, code: 'bad_request', message: 'Request body is too large' })).toBe(
-      'The files are too large for the server to accept. Remove some and try again.',
+    const proxy = { status: 413, code: 'http_error', message: 'Payload Too Large' };
+    // HTML 413 from a proxy, files were sent: the files text, which mentions the proxy.
+    expect(materialsErrorMessage(proxy, true)).toBe(
+      'The files are larger than the server accepts. If Emberline runs behind a proxy, raise its upload limit (nginx: client_max_body_size).',
     );
-    expect(materialsErrorMessage(new MaterialReadError("Couldn't read a.png. Remove it and add it again."))).toBe(
+    // Nothing was sent: not a files problem.
+    expect(materialsErrorMessage(proxy, false)).toBeNull();
+    expect(materialsErrorMessage(new MaterialReadError("Couldn't read a.png. Remove it and add it again."), true)).toBe(
       "Couldn't read a.png. Remove it and add it again.",
     );
-    expect(materialsErrorMessage({ status: 400, code: 'bad_request', message: 'x' })).toBeNull();
-    expect(materialsErrorMessage({ status: 409, code: 'name_taken', message: 'x' })).toBeNull();
+    expect(materialsErrorMessage({ status: 400, code: 'bad_request', message: 'x' }, true)).toBeNull();
+    expect(materialsErrorMessage({ status: 409, code: 'name_taken', message: 'x' }, true)).toBeNull();
+  });
+});
+
+describe('which field an error belongs to', () => {
+  it('a link refusal goes to the links, everything else to the files', () => {
+    expect(materialsErrorField({ status: 400, code: 'invalid_materials', field: 'links', message: 'x' })).toBe('links');
+    expect(materialsErrorField({ status: 400, code: 'invalid_materials', field: 'files', message: 'x' })).toBe('files');
+    expect(materialsErrorField({ status: 400, code: 'invalid_materials', message: 'x' })).toBe('files');
+    expect(materialsErrorField(new MaterialReadError('x'))).toBe('files');
   });
 });
 
