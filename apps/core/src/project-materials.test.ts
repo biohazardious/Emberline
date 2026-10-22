@@ -274,5 +274,27 @@ describe('wizard materials: committed and listed', () => {
     const res = await create(WITH_MATERIAL);
     expect(res.statusCode).toBe(500);
     expect(existsSync(projectDir())).toBe(false);
+    // Nothing was registered: the same name works on the retry.
+    writes.failOn = 0;
+    expect((await create(WITH_MATERIAL)).statusCode).toBe(201);
+  });
+
+  it('20 links of 2 048 characters still give Bootstrap and [Factory]; the tickets point to PROJECT.md', async () => {
+    vi.spyOn(t.tickets, 'dispatchNextReadyTicket').mockResolvedValue([]);
+    const referenceUrls = Array.from({ length: 20 }, (_, i) => ({
+      url: `https://example.com/${String(i).padStart(2, '0')}${'a'.repeat(2026)}`,
+      note: 'n'.repeat(200),
+    }));
+    const res = await create({ ...WITH_MATERIAL, referenceUrls, startFactory: true });
+    expect(res.statusCode).toBe(201);
+    const { project } = res.json() as CreateProjectResponse;
+    const list: Ticket[] = t.tickets.list(project.id);
+    const bootstrap = list.find((x) => x.title.startsWith('Bootstrap'));
+    const factory = list.find((x) => x.title.startsWith('[Factory]'));
+    for (const body of [bootstrap?.body, factory?.body]) {
+      expect(body).toContain('The full list is in PROJECT.md under Reference material.');
+    }
+    const md = readFileSync(path.join(project.path, 'PROJECT.md'), 'utf8');
+    for (const u of referenceUrls) expect(md).toContain(`<${u.url}>`);
   });
 });

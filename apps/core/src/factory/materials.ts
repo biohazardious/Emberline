@@ -145,15 +145,12 @@ export async function writeMaterials(
 }
 
 /**
- * Person-typed text (a link's note, a declared file type) as plain markdown text: punctuation that
- * could open a link, an image, HTML, code or emphasis is escaped, and so is what GFM would turn into
- * a bare link (`https://`, `www.`). Line breaks never get here (the protocol refuses them).
+ * Person-typed text (a link's note, a declared file type) as plain markdown text: what could open a
+ * link, an image, HTML, an entity or code is escaped; everything else stays as typed, because agents
+ * read it as raw text. Line breaks never get here (the protocol refuses them).
  */
 function markdownText(text: string): string {
-  return text
-    .replace(/[\\`*_[\]()<>&~]/g, '\\$&')
-    .replace(/:(?=\/\/)/g, '\\:')
-    .replace(/\b(www)\./gi, '$1\\.');
+  return text.replace(/[\\`[\]<>]/g, '\\$&').replace(/&(?=[#A-Za-z])/g, '\\&');
 }
 
 const SVG_NOTE = 'read it as text, it can contain script';
@@ -195,17 +192,45 @@ function ticketHint(m: PlannedMaterial): string {
   }
 }
 
-/** The Bootstrap section body and the [Factory] attachment context, or '' when nothing was attached. */
+/**
+ * Characters of the Bootstrap section body and of the [Factory] attachment context. Ticket bodies
+ * are capped at 20 000 characters; 20 links of 2 048 characters would not fit, so the tickets list
+ * what fits and point to PROJECT.md, which keeps the full list.
+ */
+export const MATERIALS_TICKET_TEXT_MAX = 4000;
+const PATHS_NOTE = 'Paths are relative to the repository root.';
+const moreLine = (n: number) => `…and ${n} more. The full list is in PROJECT.md under Reference material.`;
+
+function ticketText(fileLines: readonly string[], linkLines: readonly string[], left: number): string {
+  const lines = [MATERIALS_READ_FIRST_LINE, ''];
+  if (fileLines.length > 0) lines.push(...fileLines, '', PATHS_NOTE, '');
+  if (linkLines.length > 0) lines.push(REFERENCE_URLS_UNTRUSTED_LINE, '', ...linkLines, '');
+  if (left > 0) lines.push(moreLine(left));
+  return lines.join('\n').trimEnd();
+}
+
+/**
+ * The Bootstrap section body and the [Factory] attachment context, or '' when nothing was attached.
+ * Files come first (their paths are short), then links, as many as fit in
+ * {@link MATERIALS_TICKET_TEXT_MAX}; the last line says how many are left out.
+ */
 export function materialsTicketText(
   planned: readonly PlannedMaterial[],
   urls: readonly ReferenceUrl[],
 ): string {
   if (planned.length === 0 && urls.length === 0) return '';
-  const lines = [MATERIALS_READ_FIRST_LINE, ''];
-  for (const m of planned) lines.push(`- \`${m.path}\`: ${ticketHint(m)}`);
-  if (urls.length > 0) {
-    if (planned.length > 0) lines.push('');
-    lines.push(REFERENCE_URLS_UNTRUSTED_LINE, '', ...urls.map(urlLine));
+  const fileLines = planned.map((m) => `- \`${m.path}\`: ${ticketHint(m)}`);
+  const linkLines = urls.map(urlLine);
+  const total = fileLines.length + linkLines.length;
+  let text = ticketText([], [], total);
+  for (let n = 1; n <= total; n++) {
+    const next = ticketText(
+      fileLines.slice(0, n),
+      linkLines.slice(0, Math.max(0, n - fileLines.length)),
+      total - n,
+    );
+    if (next.length > MATERIALS_TICKET_TEXT_MAX) break;
+    text = next;
   }
-  return lines.join('\n');
+  return text;
 }
