@@ -9,6 +9,7 @@ import { withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
 import { CAPABILITY_ROUTE_PREFIX, type GitGateway } from './gateway.js';
+import { oldValueRefusal } from './receive-pack.js';
 import { GitGatewayError } from './upstream.js';
 
 const MINUTE = 60_000;
@@ -114,8 +115,19 @@ export async function accountFetchBranch(r: AccountRemote, repoPath: string, bra
 }
 
 /** Whether `cwd`'s object store has the commit (the runner's git, no network). */
+/**
+ * Git for the push plan reads only the real objects: no replace refs, no `info/grafts`, no
+ * commit-graph. Agents can write all three in the shared repository to fake ancestry.
+ */
+const PLAN_ENV = { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' };
+const planGit = (args: string[], cwd: string) =>
+  execGitFile(['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false', ...args], {
+    cwd,
+    env: PLAN_ENV,
+  });
+
 async function hasCommit(cwd: string, oid: string): Promise<boolean> {
-  return execGitFile(['cat-file', '-e', `${oid}^{commit}`], { cwd }).then(
+  return planGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(
     () => true,
     () => false,
   );
@@ -127,6 +139,8 @@ async function fetchBranchObjects(r: AccountRemote, repoPath: string, branch: st
     execGitFile(
       [
         ...gatewayGitArgs(r.gateway),
+        '-c',
+        'fetch.writeCommitGraph=false',
         'fetch',
         '--no-tags',
         '--no-write-fetch-head',
@@ -136,7 +150,7 @@ async function fetchBranchObjects(r: AccountRemote, repoPath: string, branch: st
         url,
         `refs/heads/${branch}`,
       ],
-      { cwd: repoPath, timeout: 10 * MINUTE },
+      { cwd: repoPath, timeout: 10 * MINUTE, env: PLAN_ENV },
     ),
   );
 }
@@ -144,7 +158,7 @@ async function fetchBranchObjects(r: AccountRemote, repoPath: string, branch: st
 /** Exit code 1 of `merge-base --is-ancestor` is "no"; anything else is a failure. */
 async function isAncestor(cwd: string, ancestor: string, commit: string): Promise<boolean> {
   try {
-    await execGitFile(['merge-base', '--is-ancestor', ancestor, commit], { cwd });
+    await planGit(['merge-base', '--is-ancestor', ancestor, commit], cwd);
     return true;
   } catch (error) {
     if ((error as { code?: unknown }).code === 1) return false;
@@ -176,8 +190,15 @@ export async function accountPushBranch(
   branch: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
+  // A shallow repository's history is cut off (`.git/shallow`): it cannot show a fast-forward.
+  if ((await planGit(['rev-parse', '--is-shallow-repository'], repoPath)).stdout.trim() !== 'false') {
+    throw new GitGatewayError(
+      'git_failed',
+      'Emberline pushes with the forge account only from a complete clone; this repository is shallow.',
+    );
+  }
   const newOid = (
-    await execGitFile(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: repoPath })
+    await planGit(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], repoPath)
   ).stdout.trim();
   const remoteOid = await accountRemoteHead(r, repoPath, branch);
   if (remoteOid === newOid) return 'pushed';
@@ -187,10 +208,9 @@ export async function accountPushBranch(
     if (!(await hasCommit(repoPath, remoteOid)) || !(await isAncestor(repoPath, remoteOid, newOid)))
       return 'rejected';
   }
-  const oldOid = remoteOid ?? '0'.repeat(newOid.length);
-  return r.gateway.run(
-    grant(r, { service: 'git-receive-pack', push: { ref, newOid, oldOid } }),
-    async (url) => {
+  const plan = { ref, newOid, oldOid: remoteOid ?? '0'.repeat(newOid.length) };
+  try {
+    return await r.gateway.run(grant(r, { service: 'git-receive-pack', push: plan }), async (url) => {
       try {
         await execGitFile(
           [
@@ -212,8 +232,17 @@ export async function accountPushBranch(
         if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected' as const;
         throw error;
       }
-    },
-  );
+    });
+  } catch (error) {
+    // The remote moved between the check and the push: the same answer as a remote that is ahead.
+    if (
+      error instanceof GitGatewayError &&
+      error.code === 'ref_refused' &&
+      error.message === oldValueRefusal(plan)
+    )
+      return 'rejected';
+    throw error;
+  }
 }
 
 /**

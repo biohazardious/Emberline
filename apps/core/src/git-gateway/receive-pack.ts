@@ -77,13 +77,14 @@ export function checkPush(commands: PushCommand[], plan: PushPlan): void {
       `This push may set ${plan.ref} only to the commit Emberline planned (${plan.newOid.slice(0, 12)}).`,
     );
   }
-  if (only.oldOid !== plan.oldOid) {
-    throw refused(
-      /^0+$/.test(plan.oldOid)
-        ? `This push may only create ${plan.ref}; the forge already has it.`
-        : `This push may update ${plan.ref} only from the commit Emberline checked (${plan.oldOid.slice(0, 12)}).`,
-    );
-  }
+  if (only.oldOid !== plan.oldOid) throw refused(oldValueRefusal(plan));
+}
+
+/** Why a push whose old value is not the planned one is refused (the remote moved, or a forged list). */
+export function oldValueRefusal(plan: PushPlan): string {
+  return /^0+$/.test(plan.oldOid)
+    ? `This push may only create ${plan.ref}; the forge already has it.`
+    : `This push may update ${plan.ref} only from the commit Emberline checked (${plan.oldOid.slice(0, 12)}).`;
 }
 
 /** git's auth probe before a large push (remote-curl's `probe_rpc`): a body that is a lone flush. */

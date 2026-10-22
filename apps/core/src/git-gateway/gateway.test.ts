@@ -139,7 +139,7 @@ describe('the git gateway', () => {
     expect(a.seen.length).toBe(seen);
   });
 
-  it('the wrong service, another path and a second push are refused before the forge', async () => {
+  it('the wrong service and another path are refused before the forge', async () => {
     const read = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
@@ -190,7 +190,7 @@ describe('the git gateway', () => {
     expect(posts(a)).toEqual([]);
   });
 
-  it("any other path or method under a capability gets the same 404, a POST that is not git's is refused, and nothing is logged", async () => {
+  it("any other path under a capability gets the same 404, any other method a 405, a POST that is not git's is refused, and nothing is logged", async () => {
     const grant = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
@@ -473,9 +473,49 @@ describe('the git gateway, one push and its limits', () => {
     commit(repo, 'orphan.txt');
     gitIn(repo, 'branch', '-f', 'main', 'HEAD');
     expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    // History an agent can fake in the shared repository does not count: a replace ref or a graft
+    // that makes the unrelated commit a child of the remote's.
+    const orphan = gitIn(repo, 'rev-parse', 'HEAD');
+    gitIn(repo, 'replace', '--graft', orphan, theirs);
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    gitIn(repo, 'replace', '-d', orphan);
+    writeFileSync(path.join(repo, '.git', 'info', 'grafts'), `${orphan} ${theirs}\n`);
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    rmSync(path.join(repo, '.git', 'info', 'grafts'));
+    // A shallow repository cannot show ancestry: refused with a sentence.
+    writeFileSync(path.join(repo, '.git', 'shallow'), `${theirs}\n`);
+    await expect(accountPushBranch(remote(), repo, 'main')).rejects.toMatchObject({
+      code: 'git_failed',
+      message:
+        'Emberline pushes with the forge account only from a complete clone; this repository is shallow.',
+    });
+    rmSync(path.join(repo, '.git', 'shallow'));
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(theirs);
     expect(receivePosts()).toHaveLength(pushes);
     expect(gateway.size).toBe(0);
+  });
+
+  it('a remote that moves between the check and the push gives "rejected", not an error', async () => {
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed');
+    commit(repo, 'c2.txt');
+    const c2 = gitIn(repo, 'rev-parse', 'HEAD');
+    commit(repo, 'c3.txt');
+    // Someone pushes c2 (an ancestor of ours) right after Emberline read the remote.
+    setCommandExecutor(async (request) => {
+      if (request.args.includes('push') && request.args.includes('--porcelain')) {
+        await promisify(execFile)('git', [
+          '-C',
+          repo,
+          'push',
+          '-q',
+          a.bare('alice', 'app'),
+          `${c2}:refs/heads/main`,
+        ]);
+      }
+      return localCommandExecutor(request);
+    });
+    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(c2);
   });
 
   it('a forged old value on a planned push never reaches the forge, and a force push of another commit is refused', async () => {
