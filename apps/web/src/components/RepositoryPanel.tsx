@@ -17,6 +17,7 @@ import {
   lastPushText,
   mainStateText,
   mainTipText,
+  ownerAfterLoad,
   originCredentialsText,
   pushMainBlocked,
   repoErrorForm,
@@ -61,7 +62,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
       .then((res) => {
         if (!live) return;
         setOwnersOf({ accountId, owners: res.owners });
-        setOwner(res.owners[0]?.id ?? '');
+        setOwner((current) => ownerAfterLoad(current, res.owners));
       })
       .catch((err: unknown) => {
         if (live) setOwnersError(errorMessage(err));

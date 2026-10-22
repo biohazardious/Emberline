@@ -1,4 +1,4 @@
-import type { RepositoryStatus } from '@emberline/protocol';
+import type { ForgeOwner, RepositoryStatus } from '@emberline/protocol';
 import { ApiRequestError } from './api';
 import { PROVIDER_LABEL } from './forgeAccounts';
 
@@ -58,10 +58,9 @@ export function lastPushText(s: RepositoryStatus): string | null {
   return s.lastMainPushError ? `Main isn't pushed: ${s.lastMainPushError}` : null;
 }
 
-/** origin_exists from connect/create: the origin to name in the confirm, else null. */
-export function existingOrigin(error: unknown): string | null {
-  if (!(error instanceof ApiRequestError) || error.code !== 'origin_exists') return null;
-  return typeof error.data.origin === 'string' ? error.data.origin : null;
+/** The owner selected once the owners are read: the chosen one while it is still offered, else the first. */
+export function ownerAfterLoad(current: string, owners: readonly ForgeOwner[]): string {
+  return owners.some((o) => o.id === current) ? current : (owners[0]?.id ?? '');
 }
 
 /** origin as configured holds a user name or token (core returns it without them). */

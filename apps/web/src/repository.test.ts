@@ -5,11 +5,11 @@ import {
   accountText,
   connectPrefill,
   createRepoEnabled,
-  existingOrigin,
   originCredentialsText,
   lastPushText,
   mainStateText,
   mainTipText,
+  ownerAfterLoad,
   pushMainBlocked,
   replaceOriginQuestion,
   repoErrorForm,
@@ -113,13 +113,16 @@ describe('mainTipText', () => {
   });
 });
 
-describe('existingOrigin', () => {
-  it('reads origin_exists', () => {
-    expect(
-      existingOrigin(new ApiRequestError(409, 'origin_exists', 'x', { origin: 'https://a/b.git' })),
-    ).toBe('https://a/b.git');
-    expect(existingOrigin(new ApiRequestError(409, 'conflict', 'x'))).toBeNull();
-    expect(existingOrigin(new Error('x'))).toBeNull();
+describe('ownerAfterLoad', () => {
+  const owners = [
+    { id: 'me', name: 'me', kind: 'user' },
+    { id: 'org', name: 'Org', kind: 'organization' },
+  ] as const;
+  it('keeps the chosen owner while it is still offered, else takes the first', () => {
+    expect(ownerAfterLoad('org', owners)).toBe('org');
+    expect(ownerAfterLoad('', owners)).toBe('me');
+    expect(ownerAfterLoad('gone', owners)).toBe('me');
+    expect(ownerAfterLoad('org', [])).toBe('');
   });
 });
 

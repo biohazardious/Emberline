@@ -38,11 +38,14 @@ describe('static render', () => {
       '/api/forge/accounts': accounts,
     });
     expect(html).toContain('Push main to origin');
-    expect(html).not.toMatch(/<details[^>]* open/);
+    // Both forms are there (only with the cached status) and start closed.
+    expect(html.match(/<details class="repo-form">/g)).toHaveLength(2);
   });
 
   it('renders empty feedback regions before any result (A-10)', () => {
     const html = renderStatic(createElement(ForgeAccountsPanel), { '/api/forge/accounts': accounts });
-    expect((html.match(/role="status"><\/p>/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // Legacy token, the cached account and Add: one status and one alert region each.
+    expect(html.match(/role="status"><\/p>/g)).toHaveLength(3);
+    expect(html.match(/role="alert"><\/p>/g)).toHaveLength(3);
   });
 });
