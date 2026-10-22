@@ -13,6 +13,9 @@ import {
 
 const MB = 1024 * 1024;
 
+// eslint-disable-next-line no-control-regex -- control characters are exactly what is refused
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
 export interface WizardMaterial {
   id: string;
   /** The picked or dropped file; kept in memory only, never in the draft. */
@@ -64,6 +67,12 @@ export function addMaterials(
   let total = current.reduce((sum, m) => sum + m.sizeBytes, 0);
   for (const c of candidates) {
     if (c.isFolder) problems.push(`${c.name} is a folder. Add the files inside it instead.`);
+    else if (c.name.length > 255)
+      problems.push(`${c.name.slice(0, 40)}… has a name longer than 255 characters.`);
+    else if (CONTROL_CHARS.test(c.name))
+      problems.push(
+        `${JSON.stringify(c.name).slice(1, -1)} has line breaks or control characters in its name.`,
+      );
     else if (c.file.size === 0) problems.push(`${c.name} is empty.`);
     else if (count >= limits.maxFiles)
       problems.push(`${c.name} was not added: at most ${limits.maxFiles} files.`);

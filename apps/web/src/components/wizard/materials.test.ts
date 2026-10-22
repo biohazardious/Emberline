@@ -55,6 +55,21 @@ describe('addMaterials', () => {
     ]);
     expect(problems).toEqual(['empty.txt is empty.', 'assets is a folder. Add the files inside it instead.']);
   });
+  it('refuses names the server would refuse', () => {
+    const { added, problems } = addMaterials(
+      [],
+      [
+        { file: blob(1), name: 'a'.repeat(256) },
+        { file: blob(1), name: 'x\ny.png' },
+      ],
+      id,
+    );
+    expect(added).toEqual([]);
+    expect(problems).toEqual([
+      `${'a'.repeat(40)}… has a name longer than 255 characters.`,
+      'x\\ny.png has line breaks or control characters in its name.',
+    ]);
+  });
   it('holds the count, per-file and total caps', () => {
     const current = Array.from({ length: 19 }, (_, i) =>
       material(`f${i}`, MB, 'application/octet-stream', 'other'),
@@ -157,5 +172,8 @@ describe('ThumbnailUrls', () => {
     reg.revokeAll();
     expect(f.revoked).toEqual(['blob:1', 'blob:2']);
     expect(reg.sync([]).size).toBe(0);
+    reg.sync([png, gif]);
+    reg.revokeAll(); // what unmount does
+    expect(f.revoked).toEqual(['blob:1', 'blob:2', 'blob:3', 'blob:4']);
   });
 });

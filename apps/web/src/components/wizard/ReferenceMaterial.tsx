@@ -15,6 +15,7 @@ export function ReferenceMaterial({
   const [dragging, setDragging] = useState(false);
   const [linksTouched, setLinksTouched] = useState(false);
   const links = parseReferenceUrls(state.referenceUrlsText);
+  const showLinkErrors = linksTouched && links.problems.length > 0;
   const errors = [...(state.materialsError ? [state.materialsError] : []), ...problems];
 
   const add = (candidates: MaterialCandidate[]) => {
@@ -48,7 +49,7 @@ export function ReferenceMaterial({
         tabIndex={-1}
         role="group"
         aria-labelledby="wizard-materials-label"
-        aria-describedby="wizard-materials-hint wizard-materials-cap"
+        aria-describedby={`wizard-materials-hint wizard-materials-cap${errors.length > 0 ? ' wizard-materials-errors' : ''}`}
       >
         <span id="wizard-materials-label" className="wizard-materials-label">
           Files
@@ -84,9 +85,9 @@ export function ReferenceMaterial({
           }}
         />
         {errors.length > 0 && (
-          <ul className="form-error wizard-material-errors" role="alert">
-            {errors.map((p) => (
-              <li key={p}>{p}</li>
+          <ul id="wizard-materials-errors" className="form-error wizard-material-errors" role="alert">
+            {errors.map((p, i) => (
+              <li key={`${i}-${p}`}>{p}</li>
             ))}
           </ul>
         )}
@@ -99,8 +100,8 @@ export function ReferenceMaterial({
           rows={3}
           maxLength={50_000}
           value={state.referenceUrlsText}
-          aria-describedby="wizard-links-hint"
-          aria-invalid={linksTouched && links.problems.length > 0 ? true : undefined}
+          aria-describedby={showLinkErrors ? 'wizard-links-hint wizard-links-errors' : 'wizard-links-hint'}
+          aria-invalid={showLinkErrors ? true : undefined}
           onBlur={() => setLinksTouched(true)}
           onChange={(e) => dispatch({ type: 'field', field: 'referenceUrlsText', value: e.target.value })}
         />
@@ -108,10 +109,10 @@ export function ReferenceMaterial({
           One link per line, starting with http:// or https://, with a short note after it if it helps, for
           example: https://example.com like this one. Emberline never opens these links.
         </p>
-        {linksTouched && links.problems.length > 0 && (
-          <ul className="form-error" role="alert">
-            {links.problems.map((p) => (
-              <li key={p}>{p}</li>
+        {showLinkErrors && (
+          <ul id="wizard-links-errors" className="form-error" role="alert">
+            {links.problems.map((p, i) => (
+              <li key={`${i}-${p}`}>{p}</li>
             ))}
           </ul>
         )}
