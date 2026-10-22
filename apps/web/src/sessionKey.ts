@@ -53,14 +53,48 @@ export function sessionProtocols(): string[] {
   return key ? [WS_PROTOCOL, `${SESSION_KEY_PROTOCOL_PREFIX}${key}`] : [WS_PROTOCOL];
 }
 
-/** Signed in only with a key: a cookie whose key this browser lost gets the sign-in form and the notice, never a page of 401s. */
+/** Logs out and forgets the key here, also when the request fails (the key must not outlive the sign-out). */
+export async function signOut(post: () => Promise<unknown>): Promise<void> {
+  try {
+    await post();
+  } finally {
+    clearSessionKey();
+  }
+}
+
+/** The login notice when this browser keeps no site storage (shown capitalised, with ". Sign in again." after it). */
+export const SITE_STORAGE_BLOCKED_MESSAGE =
+  'signed out: this browser blocks site storage, so a sign-in lasts only until the page reloads. Allow site data for this address to stay signed in';
+
+const PROBE_KEY = 'emberline.storageProbe';
+
+/** True when this browser refuses to keep anything for Emberline (private mode, blocked site data). */
+export function siteStorageBlocked(): boolean {
+  try {
+    const s = storage();
+    if (!s) return true;
+    s.setItem(PROBE_KEY, '1');
+    s.removeItem(PROBE_KEY);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Signed in only with a key: a cookie whose key this browser lost gets the sign-in form and the notice,
+ * never a page of 401s. With blocked site storage the key could not survive a reload: that is the notice.
+ */
 export function authGateState(
   state: { authenticated: boolean; signedOut?: string },
   key: string | null,
+  storageBlocked = false,
 ): { signedIn: boolean; notice?: string } {
   if (state.authenticated && key) return { signedIn: true };
-  return {
-    signedIn: false,
-    notice: state.signedOut ?? (state.authenticated ? SESSION_KEY_MISSING_MESSAGE : undefined),
-  };
+  const keyLost = storageBlocked ? SITE_STORAGE_BLOCKED_MESSAGE : SESSION_KEY_MISSING_MESSAGE;
+  const notice =
+    state.signedOut === SESSION_KEY_MISSING_MESSAGE
+      ? keyLost
+      : (state.signedOut ?? (state.authenticated ? keyLost : undefined));
+  return { signedIn: false, notice };
 }

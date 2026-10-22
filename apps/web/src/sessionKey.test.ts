@@ -6,7 +6,16 @@ import {
 } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
-import { authGateState, clearSessionKey, getSessionKey, sessionProtocols, setSessionKey } from './sessionKey';
+import {
+  authGateState,
+  clearSessionKey,
+  getSessionKey,
+  SITE_STORAGE_BLOCKED_MESSAGE,
+  sessionProtocols,
+  setSessionKey,
+  signOut,
+  siteStorageBlocked,
+} from './sessionKey';
 
 /** A Map-backed localStorage. */
 const mapStorage = () => {
@@ -119,5 +128,65 @@ describe('authGateState', () => {
       signedIn: false,
       notice: SESSION_KEY_MISSING_MESSAGE,
     });
+  });
+});
+
+describe('blocked site storage', () => {
+  const blockStorage = () =>
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('denied', 'SecurityError');
+      },
+    });
+
+  it('is detected, and a writable storage is not', () => {
+    expect(siteStorageBlocked()).toBe(false);
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('denied', 'SecurityError');
+      },
+      removeItem: () => undefined,
+    });
+    expect(siteStorageBlocked()).toBe(true);
+    blockStorage();
+    expect(siteStorageBlocked()).toBe(true);
+  });
+
+  it('after a reload names the blocked storage, not the per-login key change', () => {
+    expect(authGateState({ authenticated: true }, null, true)).toEqual({
+      signedIn: false,
+      notice: SITE_STORAGE_BLOCKED_MESSAGE,
+    });
+    expect(
+      authGateState({ authenticated: false, signedOut: SESSION_KEY_MISSING_MESSAGE }, null, true),
+    ).toEqual({
+      signedIn: false,
+      notice: SITE_STORAGE_BLOCKED_MESSAGE,
+    });
+    // Another reason from core stays as it is.
+    expect(
+      authGateState(
+        { authenticated: false, signedOut: 'signed out: your network address changed' },
+        null,
+        true,
+      ),
+    ).toEqual({ signedIn: false, notice: 'signed out: your network address changed' });
+    expect(authGateState({ authenticated: true }, 'k', true)).toEqual({ signedIn: true });
+  });
+});
+
+describe('signOut', () => {
+  it('forgets the key even when the logout request fails', async () => {
+    setSessionKey('k');
+    await expect(signOut(() => Promise.reject(new Error('offline')))).rejects.toThrow('offline');
+    expect(getSessionKey()).toBeNull();
+  });
+
+  it('forgets the key after a logout that worked', async () => {
+    setSessionKey('k');
+    await signOut(() => Promise.resolve({}));
+    expect(getSessionKey()).toBeNull();
   });
 });

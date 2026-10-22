@@ -29,7 +29,7 @@ import { api, ApiRequestError, errorMessage } from './api';
 import { BrandLogo } from './components/BrandLogo';
 import { SecurityBanner } from './components/SecurityBanner';
 import { shareInFlight } from './liveAuth';
-import { authGateState, clearSessionKey, getSessionKey, setSessionKey } from './sessionKey';
+import { authGateState, getSessionKey, setSessionKey, signOut, siteStorageBlocked } from './sessionKey';
 
 interface AuthContextValue {
   logout: () => Promise<void>;
@@ -63,9 +63,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await api('/api/auth/logout', 'POST');
+      await signOut(() => api('/api/auth/logout', 'POST'));
     } finally {
-      clearSessionKey();
       await refresh();
     }
   }, [refresh]);
@@ -84,7 +83,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
   if (!state) return <div className="splash" aria-busy="true" />;
   if (state.setupRequired) return <SetupForm onDone={refresh} />;
-  const gate = authGateState(state, getSessionKey());
+  const gate = authGateState(state, getSessionKey(), siteStorageBlocked());
   if (!gate.signedIn) return <LoginForm onDone={refresh} notice={gate.notice} />;
   return <AuthContext.Provider value={{ logout }}>{children}</AuthContext.Provider>;
 }
