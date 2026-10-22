@@ -35,6 +35,12 @@ export const APP_CSP = [
 
 /** Above this many preview ports, `frame-src` names the preview host on any port instead of each port. */
 export const MAX_LISTED_PREVIEW_PORTS = 100;
+/**
+ * The longest web UI policy with each preview port listed; a longer one names the preview host on
+ * any port instead. nginx's default `proxy_buffer_size` (4 KB) has to hold every response header,
+ * so the policy leaves 1 KB of it for the rest.
+ */
+export const MAX_APP_CSP_BYTES = 3 * 1024;
 
 /** Every preview port of both ranges, sorted and once each; null when there are more than {@link MAX_LISTED_PREVIEW_PORTS}. */
 export function previewPortList(ports: CoreConfig['previewPorts']): number[] | null {
@@ -51,7 +57,8 @@ export function previewPortList(ports: CoreConfig['previewPorts']): number[] | n
 /**
  * Where the browser opens previews, as CSP sources: `EMBERLINE_PREVIEW_HOST`'s host, else the host
  * the page was requested on (the same rule as `previewUrl`), on each preview port (any port above
- * {@link MAX_LISTED_PREVIEW_PORTS}). A CSP host source cannot name an IPv6 literal, so that host gets
+ * {@link MAX_LISTED_PREVIEW_PORTS}, or when the list would take the policy past
+ * {@link MAX_APP_CSP_BYTES}). A CSP host source cannot name an IPv6 literal, so that host gets
  * its scheme (`http:`; the preview panel says so). Empty when neither is a plain http(s) host, so
  * nothing malformed reaches the policy.
  */
@@ -63,9 +70,13 @@ export function previewFrameSources(
   const host = previewHost(hostHeader, override);
   if (!host) return [];
   if (host.name.startsWith('[')) return [host.protocol];
+  const anyPort = [`${host.protocol}//${host.name}:*`];
   const list = previewPortList(ports);
-  if (!list) return [`${host.protocol}//${host.name}:*`];
-  return list.map((port) => `${host.protocol}//${host.name}:${port}`);
+  if (!list) return anyPort;
+  const listed = list.map((port) => `${host.protocol}//${host.name}:${port}`);
+  // `frame-src 'self'` gains a space and the sources.
+  const policyBytes = Buffer.byteLength(APP_CSP) + 1 + Buffer.byteLength(listed.join(' '));
+  return policyBytes > MAX_APP_CSP_BYTES ? anyPort : listed;
 }
 
 /** The scheme and host name previews open on; null when it is not a plain http(s) host. */

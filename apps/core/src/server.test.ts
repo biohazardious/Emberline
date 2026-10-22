@@ -15,7 +15,7 @@ import {
   type TestApp,
   wsProtocols,
 } from './test-utils.js';
-import { appCsp, previewPortList } from './security-headers.js';
+import { appCsp, MAX_APP_CSP_BYTES, previewPortList } from './security-headers.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -218,6 +218,27 @@ describe('hardening', () => {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
       rmSync(webDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to any port when listing them would make the policy too long for a proxy header buffer', () => {
+    const saved = process.env.EMBERLINE_PREVIEW_HOST;
+    try {
+      delete process.env.EMBERLINE_PREVIEW_HOST;
+      const frameSrc = (host: string, previewPorts: CoreConfig['previewPorts']) =>
+        /frame-src ([^;]*)/.exec(appCsp(host, previewPorts))?.[1];
+      const longHost = 'previews-of-the-emberline-instance.example.internal'; // 51 characters
+      const wide = { runner: { first: 4300, last: 4349 }, docker: { first: 4350, last: 4399 } };
+      // 100 ports on a long host name: about 6 KB listed, more than nginx's default 4 KB header buffer.
+      expect(frameSrc(`${longHost}:7420`, wide)).toBe(`'self' http://${longHost}:*`);
+      expect(appCsp(`${longHost}:7420`, wide).length).toBeLessThanOrEqual(MAX_APP_CSP_BYTES);
+      // The same ports on a short host name, and the default ranges on a long one, are still listed.
+      expect(frameSrc('h:7420', wide)).toBe(`'self' ${portSources('h', 4300, 4399)}`);
+      const homeHost = 'emberline.home.example.internal';
+      expect(frameSrc(`${homeHost}:7420`, DEFAULT_PREVIEW_PORTS)).toBe(`'self' ${portSources(homeHost)}`);
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
+      else process.env.EMBERLINE_PREVIEW_HOST = saved;
     }
   });
 
