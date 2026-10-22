@@ -30,8 +30,9 @@ function writeFake(dir: string, name: string): string {
       `printf %s "$EMBERLINE_HOOK_TOKEN" > "${dir}/.token-$EMBERLINE_RUN_ID"`,
       `mv "${dir}/.token-$EMBERLINE_RUN_ID" "${dir}/token-$EMBERLINE_RUN_ID"`,
       `echo "${name} $*" >> "${dir}/args-$EMBERLINE_RUN_ID"`,
-      `echo "key=\${ANTHROPIC_API_KEY:-none}" >> "${dir}/env-$EMBERLINE_RUN_ID"`,
-      `echo "credits=\${EMBERLINE_USE_CREDITS:-unset}" >> "${dir}/env-$EMBERLINE_RUN_ID"`,
+      // One write: the tests read the env file as soon as it exists, so it appears whole.
+      `printf 'key=%s\\ncredits=%s\\n' "\${ANTHROPIC_API_KEY:-none}" "\${EMBERLINE_USE_CREDITS:-unset}" > "${dir}/.env-$EMBERLINE_RUN_ID"`,
+      `mv "${dir}/.env-$EMBERLINE_RUN_ID" "${dir}/env-$EMBERLINE_RUN_ID"`,
       'while read line; do',
       `  echo "$line" >> "${dir}/lines-$EMBERLINE_RUN_ID"`,
       '  [ "$line" = "exit" ] && exit 0',
