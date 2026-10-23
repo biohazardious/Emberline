@@ -268,9 +268,18 @@ describe('import clone', () => {
     output = '';
     // The runner's PTY: runs the command like ptyd would (same user, no extra env).
     vi.spyOn(t.ptyd, 'get').mockReturnValue({
-      spawn: async (params: { file: string; args: string[]; cwd: string; meta: Record<string, string> }) => {
+      spawn: async (params: {
+        file: string;
+        args: string[];
+        cwd: string;
+        env?: Record<string, string>;
+        meta: Record<string, string>;
+      }) => {
         spawned.push(params);
-        clone = promisify(execFile)(params.file, params.args, { cwd: params.cwd }).then(
+        clone = promisify(execFile)(params.file, params.args, {
+          cwd: params.cwd,
+          ...(params.env ? { env: { ...process.env, ...params.env } } : {}),
+        }).then(
           (r) => {
             output = `${r.stdout}${r.stderr}`;
             exitCode = 0;
@@ -434,21 +443,37 @@ describe('import clone', () => {
     gitIn(repo, 'tag', 'v1.0');
     gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main', 'v1.0');
     const missing = (await createOn('No Branch', 'nope')).json();
+    // git's messages in English whatever the runner's locale, so the missing branch is told apart.
+    expect(spawned[0]!.env).toEqual({ LC_ALL: 'C' });
     await clone;
     const noBranch = await importStatus(missing.project.id);
-    expect(noBranch).toMatchObject({ status: 'failed' });
-    expect(noBranch.tail).toContain(
-      'The repository has no branch "nope". Try again with a branch that exists, or leave Default branch empty to use the repository\'s default branch.',
-    );
+    expect(noBranch).toMatchObject({
+      status: 'failed',
+      reason:
+        'The repository has no branch "nope". Try again with a branch that exists, or leave Default branch empty to use the repository\'s default branch.',
+    });
     spawned.length = 0;
     exitCode = null;
     output = '';
     const tagged = (await createOn('Tag App', 'v1.0')).json();
     await clone;
     expect(exitCode).toBe(0); // git clones a tag, detached
-    const tag = await importStatus(tagged.project.id);
-    expect(tag).toMatchObject({ status: 'failed' });
-    expect(tag.tail).toContain('"v1.0" is a tag, not a branch. Try again with a branch that exists');
+    const TAG_REASON =
+      '"v1.0" is a tag, not a branch. Try again with a branch that exists, or leave Default branch empty to use the repository\'s default branch.';
+    expect(await importStatus(tagged.project.id)).toMatchObject({ status: 'failed', reason: TAG_REASON });
+    // The runner restarted and forgot the clone terminal: git in the folder still says it is a tag.
+    spawned.length = 0;
+    expect(await importStatus(tagged.project.id)).toMatchObject({
+      status: 'failed',
+      terminalId: null,
+      reason: TAG_REASON,
+    });
+    const row = t.db
+      .select()
+      .from(projects)
+      .all()
+      .find((p) => p.id === tagged.project.id);
+    expect(row?.defaultBranch).toBe('v1.0'); // never reconciled as if it were a branch
   });
 
   it('the capability never reaches .git/config: origin is the real URL as soon as the clone ends', async () => {

@@ -152,7 +152,7 @@ export class RepositoryService {
       transport === 'ssh' ? accountForRemote(this.db, origin) : accountForGitRemote(this.db, shown.url);
     const withOrigin: RepositoryStatus = {
       ...withRepo,
-      originUrl: shown.url,
+      originUrl: shown.display,
       originHasCredentials: shown.hadCredentials,
       originHost: parseForgeRemote(origin)?.host ?? null,
       transport,
@@ -168,7 +168,7 @@ export class RepositoryService {
       mainState: 'unknown',
     };
     const check = settings.lastRemoteCheck;
-    if (!check || check.url !== shown.url || check.branch !== main) return withOrigin; // not read since origin was set
+    if (!check || check.url !== shown.display || check.branch !== main) return withOrigin; // not read since origin was set
     const checked: RepositoryStatus = { ...withOrigin, checkedAt: check.at };
     if (check.error) return { ...checked, remoteError: check.error };
     if (!check.published) return { ...checked, mainState: 'unpublished' };
@@ -366,7 +366,7 @@ export class RepositoryService {
         await setRemoteTracking(plan.path, plan.defaultBranch, plan.oid);
         await setUpstream(plan.path, plan.defaultBranch);
         const check: RemoteCheck = {
-          url: remoteUrlForDisplay(plan.origin).url,
+          url: remoteUrlForDisplay(plan.origin).display,
           branch: plan.defaultBranch,
           at: new Date().toISOString(),
           published: true,
@@ -408,7 +408,7 @@ export class RepositoryService {
     const connected = this.project(projectId).repoUrl;
     if (connected === null || !sameRepository(connected, fetch)) {
       throw conflict(
-        `origin (${remoteUrlForDisplay(fetch).url}) is not the repository connected for this project. Connect it under "Connect an existing repository" first.`,
+        `origin (${remoteUrlForDisplay(fetch).display}) is not the repository connected for this project. Connect it under "Connect an existing repository" first.`,
         'origin_differs',
       );
     }
@@ -425,7 +425,7 @@ export class RepositoryService {
   private async readRemote(projectId: string, ws: Snapshot): Promise<void> {
     const branch = ws.defaultBranch;
     const at = new Date().toISOString();
-    const checkedUrl = remoteUrlForDisplay(ws.origin).url; // stored: never with a token
+    const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
     let check: RemoteCheck;
     let remoteOid: string | null = null;
     try {
@@ -466,9 +466,9 @@ export class RepositoryService {
     const shown = remoteUrlForDisplay(current);
     const credentialsOnly = next !== undefined && shown.hadCredentials && shown.url === next;
     const message = credentialsOnly
-      ? `origin already points at ${shown.url}, with a user name or token in its URL. Replace it with the clean URL?`
-      : `This project already has origin ${shown.url}. Replace it?`;
-    return new HttpError(409, 'origin_exists', message, { origin: shown.url, credentialsOnly });
+      ? `origin already points at ${shown.display}, with a user name or token in its URL. Replace it with the clean URL?`
+      : `This project already has origin ${shown.display}. Replace it?`;
+    return new HttpError(409, 'origin_exists', message, { origin: shown.display, credentialsOnly });
   }
 
   private async setOriginLocked(

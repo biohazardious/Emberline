@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAdoptBody,
   buildCreateBody,
+  cloneFailedText,
   buildCreateBodyWithFiles,
   buildPreviewBody,
   canVisit,
@@ -478,6 +479,27 @@ describe('body building', () => {
     expect(
       wizardReducer(initialWizardState(), { type: 'restore', draft: parseDraft(fresh)! }).defaultBranch,
     ).toBe('main');
+    // A draft written since 0.6.1 (v: 2) keeps a `main` the person typed.
+    const typedMain = run([
+      { type: 'source', source: 'import_url' },
+      { type: 'field', field: 'repoUrl', value: 'https://github.com/acme/shop.git' },
+      { type: 'field', field: 'defaultBranch', value: 'main' },
+    ]);
+    const saved = draftOf(typedMain)!;
+    expect(saved.v).toBe(2);
+    const back = wizardReducer(initialWizardState(), {
+      type: 'restore',
+      draft: parseDraft(JSON.stringify(saved))!,
+    });
+    expect(back.defaultBranch).toBe('main');
+    expect(buildCreateBody(back)).toMatchObject({ defaultBranch: 'main' });
+  });
+
+  it('says why a clone failed in a plain sentence, never "exit 0"', () => {
+    expect(cloneFailedText(128)).toBe('The clone failed (exit 128).');
+    expect(cloneFailedText(null)).toBe('The clone failed.');
+    expect(cloneFailedText(0)).toBe('The clone failed.');
+    expect(cloneFailedText(0, '"v1.0" is a tag, not a branch.')).toBe('"v1.0" is a tag, not a branch.');
   });
 
   it('follows the URL or folder with the name until the person types one', () => {

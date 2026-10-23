@@ -590,6 +590,12 @@ function cleanChoices(choices: ProjectChoices): ProjectChoices {
   return out;
 }
 
+/** The status line of a failed clone: core's reason when it has one, else the exit code (never "exit 0"). */
+export function cloneFailedText(exitCode: number | null, reason?: string): string {
+  if (reason) return reason;
+  return `The clone failed${exitCode !== null && exitCode !== 0 ? ` (exit ${exitCode})` : ''}.`;
+}
+
 /** `POST /api/projects` (and its preview) for the current source. */
 export function buildCreateBody(s: WizardState): CreateProjectBody {
   const name = s.name.trim();
@@ -658,9 +664,12 @@ export function buildAdoptBody(s: WizardState): AdoptProjectBody {
 
 export const DRAFT_KEY = 'emberline.wizard.draft';
 
-/** What sessionStorage keeps: the person's choices only, never server state. */
+/**
+ * What sessionStorage keeps: the person's choices only, never server state. `v: 2` since 0.6.1: a
+ * URL import's empty branch means the repository's default (a `v: 1` draft always held `main`).
+ */
 export interface WizardDraft {
-  v: 1;
+  v: 2;
   step: StepId;
   source: WizardSource | null;
   name: string;
@@ -688,7 +697,7 @@ export const isDirty = (s: WizardState) => s.source !== null || s.importProjectI
 export function draftOf(s: WizardState): WizardDraft | null {
   if (!isDirty(s) || s.importProjectId !== null) return null;
   return {
-    v: 1,
+    v: 2,
     step: s.step,
     source: s.source,
     name: s.name,
@@ -739,7 +748,7 @@ export function parseDraft(raw: string | null): WizardDraft | null {
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const d = data as Record<string, unknown>;
-  if (d.v !== 1) return null;
+  if (d.v !== 1 && d.v !== 2) return null;
   const base = draftOf({ ...initialWizardState(), source: 'preset' })!;
   for (const f of STRING_FIELDS) {
     if (d[f] !== undefined && typeof d[f] !== 'string') return null;
@@ -757,10 +766,16 @@ export function parseDraft(raw: string | null): WizardDraft | null {
   }
   const gates = ProjectGateOverrides.safeParse(d.gates);
   const str = (f: (typeof STRING_FIELDS)[number]) => (typeof d[f] === 'string' ? (d[f] as string) : base[f]);
+  const source = SOURCES.includes(d.source as WizardSource) ? (d.source as WizardSource) : null;
+  // A `v: 1` URL import always held `main`, which was never cloned: it meant the repository's default.
+  const defaultBranch =
+    d.v === 1 && source === 'import_url' && str('defaultBranch').trim() === 'main'
+      ? ''
+      : str('defaultBranch');
   return {
-    v: 1,
+    v: 2,
     step: STEPS.includes(d.step as StepId) ? (d.step as StepId) : 'start',
-    source: SOURCES.includes(d.source as WizardSource) ? (d.source as WizardSource) : null,
+    source,
     name: str('name').slice(0, 200),
     appType,
     presetId: preset && preset.type === appType ? preset.id : null,
@@ -776,7 +791,7 @@ export function parseDraft(raw: string | null): WizardDraft | null {
     dirty: Array.isArray(d.dirty)
       ? STACK_DIMENSION_IDS.filter((id) => (d.dirty as unknown[]).includes(id) && choices[id] !== undefined)
       : [],
-    defaultBranch: str('defaultBranch'),
+    defaultBranch,
     versionPolicy: VERSION_POLICIES.some((p) => p.id === d.versionPolicy)
       ? (d.versionPolicy as string)
       : base.versionPolicy,
@@ -793,11 +808,6 @@ function restoreDraft(d: WizardDraft): WizardState {
   const s: WizardState = {
     ...initialWizardState(),
     ...fields,
-    // A URL import's draft from before 0.6.1 always held `main`, which was never cloned: it means the
-    // repository's default branch, as an empty field does now.
-    ...(fields.source === 'import_url' && fields.defaultBranch.trim() === 'main'
-      ? { defaultBranch: '' }
-      : {}),
     materialsNotKept: materialNames,
     nameError: null,
     furthest: 0,

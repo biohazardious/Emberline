@@ -196,7 +196,8 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     headBranch: string | null,
   ): { account: ForgeAccountRecord; remote: ParsedForgeRemote } {
     const parsed = parseForgeRemote(remoteUrl);
-    if (!parsed) throw conflict(`unable to parse forge remote URL: ${remoteUrlForDisplay(remoteUrl).url}`);
+    if (!parsed)
+      throw conflict(`unable to parse forge remote URL: ${remoteUrlForDisplay(remoteUrl).display}`);
     const account = credentialAccountForRemote(this.db, remoteUrl);
     if (!account) throw conflict(noAccountMessage(parsed.host), 'forge_account_missing');
     return { account, remote: viaAccount(remoteUrl, account, baseBranch, headBranch)! };
@@ -239,7 +240,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       const declared = parseForgeRemote(project.repoUrl);
       if (!declared)
         throw conflict(
-          `unable to parse the project's repository URL: ${remoteUrlForDisplay(project.repoUrl).url}`,
+          `unable to parse the project's repository URL: ${remoteUrlForDisplay(project.repoUrl).display}`,
         );
       if (
         !sameForgeServer(project.repoUrl, remoteUrl) ||

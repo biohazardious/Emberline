@@ -191,7 +191,8 @@ export function encryptStoredSecrets(
       }[];
       for (const row of repoRows) {
         const shown = remoteUrlForDisplay(row.repo_url);
-        if (!shown.hadCredentials) continue;
+        // An address that may hold a secret but cannot be cleaned without changing what it names is kept.
+        if (!shown.hadCredentials || shown.url === row.repo_url) continue;
         setRepoUrl.run(shown.url, row.id);
         cleanedRepoUrls += 1;
       }

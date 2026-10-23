@@ -190,7 +190,7 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
     sessions = (await ptyd.get().list()).sessions;
   } catch (error) {
     if (await hasHeadCommit(project.path))
-      return { status: 'ready', exitCode: null, terminalId: null, tail: '' };
+      return readyUnlessTag(project, { exitCode: null, terminalId: null, tail: '' });
     if (error instanceof HttpError) throw error;
     // A connected client that times out or drops mid-request: same answer as an unreachable runner.
     throw unavailable(
@@ -200,39 +200,33 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
   }
   const clone = latestClone(sessions, project.id);
   if (!clone) {
-    const ready = await hasHeadCommit(project.path);
+    // The runner restarted, or forgot the terminal: the folder itself says how the clone ended.
+    if (await hasHeadCommit(project.path))
+      return readyUnlessTag(project, { exitCode: null, terminalId: null, tail: '' });
     return {
-      status: ready ? 'ready' : 'failed',
+      status: 'failed',
       exitCode: null,
       terminalId: null,
-      tail: ready ? '' : 'No clone terminal for this project, and its folder has no commit.',
+      tail: 'No clone terminal for this project, and its folder has no commit.',
     };
   }
   const tail = await terminalTail(ptyd, clone.id);
   const base = { exitCode: clone.exitCode, terminalId: clone.id, tail };
   if (clone.status === 'running') return { ...base, status: 'cloning' };
-  if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) {
-    const tag = await checkedOutTag(project);
-    if (!tag) return { ...base, status: 'ready' };
-    return {
-      ...base,
-      status: 'failed',
-      tail: `${tail}\n${branchProblemText(`"${tag}" is a tag, not a branch.`)}`.trim(),
-    };
-  }
+  if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) return readyUnlessTag(project, base);
   if (clone.exitCode === 0)
     return {
       ...base,
       status: 'failed',
-      tail: `${tail}\nThe clone has no commit (empty repository?).`.trim(),
+      reason: 'The repository has no commit yet, so there is nothing to import.',
     };
-  // git: "fatal: Remote branch <name> not found in upstream origin".
+  // git, run with LC_ALL=C when a branch is given: "fatal: Remote branch <name> not found in upstream origin".
   const missing = /Remote branch (\S+) not found in upstream/.exec(tail)?.[1];
   if (missing)
     return {
       ...base,
       status: 'failed',
-      tail: `${tail}\n${branchProblemText(`The repository has no branch "${missing}".`)}`.trim(),
+      reason: branchProblemText(`The repository has no branch "${missing}".`),
     };
   return { ...base, status: 'failed' };
 }
@@ -241,9 +235,21 @@ const branchProblemText = (what: string) =>
   `${what} Try again with a branch that exists, or leave Default branch empty to use the repository's default branch.`;
 
 /**
- * The tag a clone checked out for the branch it was given (`git clone --branch v1.0` leaves HEAD
- * detached at the tag); null when HEAD is on a branch, or is detached for another reason.
+ * Ready, unless the clone checked out a tag for the branch it was given (`git clone --branch v1.0`
+ * leaves HEAD detached at the tag): runs need a branch, and the tag must not become the default
+ * branch. Asked of git in the folder, whether or not the clone terminal is still listed.
  */
+async function readyUnlessTag(
+  project: Project,
+  base: Omit<ImportStatusResponse, 'status'>,
+): Promise<ImportStatusResponse> {
+  const tag = await checkedOutTag(project);
+  return tag
+    ? { ...base, status: 'failed', reason: branchProblemText(`"${tag}" is a tag, not a branch.`) }
+    : { ...base, status: 'ready' };
+}
+
+/** The tag HEAD is detached at when it is the project's branch; null when HEAD is on a branch, or detached otherwise. */
 async function checkedOutTag(project: Project): Promise<string | null> {
   if (await mainWorkspaceBranch(project.path)) return null;
   const tag = project.defaultBranch;

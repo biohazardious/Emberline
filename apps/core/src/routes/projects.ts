@@ -174,7 +174,7 @@ export const toProject = (row: ProjectRow): Project => ({
 /** A Project as the API returns it: repoUrl without user info, query or fragment (as origin is shown). */
 export const redactedProject = (project: Project): Project => ({
   ...project,
-  repoUrl: project.repoUrl === null ? null : remoteUrlForDisplay(project.repoUrl).url,
+  repoUrl: project.repoUrl === null ? null : remoteUrlForDisplay(project.repoUrl).display,
 });
 export const projectResponse = (row: ProjectRow): Project => redactedProject(toProject(row));
 
@@ -579,6 +579,8 @@ export function registerProjectRoutes(
             file: 'git',
             args,
             cwd: config.workspacesDir,
+            // English messages, so import-status can tell a missing branch from other failures.
+            ...(branch ? { env: { LC_ALL: 'C' } } : {}),
             meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
           });
           terminalId = session.id;

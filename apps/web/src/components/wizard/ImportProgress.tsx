@@ -7,12 +7,12 @@ import {
 } from '@emberline/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../../api';
-import { isNameConflict } from './wizardLogic';
+import { cloneFailedText, isNameConflict } from './wizardLogic';
 
 type Phase =
   | { kind: 'cloning'; tail: string; note: string | null }
   | { kind: 'detecting' }
-  | { kind: 'cloneFailed'; exitCode: number | null; tail: string }
+  | { kind: 'cloneFailed'; exitCode: number | null; tail: string; reason: string | undefined }
   | { kind: 'detectFailed'; message: string }
   | { kind: 'busy'; label: string };
 
@@ -90,7 +90,7 @@ export function ImportProgress({
         } else if (s.status === 'ready') {
           void detect();
         } else {
-          setPhase({ kind: 'cloneFailed', exitCode: s.exitCode, tail: s.tail });
+          setPhase({ kind: 'cloneFailed', exitCode: s.exitCode, tail: s.tail, reason: s.reason });
         }
       } catch (err) {
         if (stopped) return;
@@ -187,7 +187,7 @@ export function ImportProgress({
       : phase.kind === 'detecting'
         ? 'Inspecting the repository (files only; no project code runs)…'
         : phase.kind === 'cloneFailed'
-          ? `The clone failed${phase.exitCode !== null ? ` (exit ${phase.exitCode})` : ''}.`
+          ? cloneFailedText(phase.exitCode, phase.reason)
           : phase.kind === 'detectFailed'
             ? `Couldn't inspect the repository: ${phase.message}`
             : phase.label;

@@ -30,20 +30,38 @@ export function sameForgeServer(a: string, b: string): boolean {
 }
 
 /**
- * A remote URL as core may return or quote it: an http(s) URL without user info, query or
- * fragment; an ssh URL (or scp-like address) without a password (its user name picks the key and
- * stays). `hadCredentials`: something was removed. A clean URL comes back exactly as it was.
+ * An scp-like address that may hold `user:secret@` before its first `/`: up to the last such `@`
+ * (`$1` is the user).
  */
-export function remoteUrlForDisplay(raw: string): { url: string; hadCredentials: boolean } {
+const SCP_CREDENTIALS = /^([^/@:[]*):[^/]*@/;
+/**
+ * The one scp-like form read as credentials without doubt: `user:secret@host:path`, with a single
+ * `@` before the first `/` and a host (or `[v6]`) and its `:` right after it.
+ */
+const SCP_PLAIN_CREDENTIALS = /^([^/@:[]*):[^/@]*@(?=(?:[^/@:[\]]+|\[[^\]/@]*\]):[^/@]*(?:\/|$))/;
+
+/**
+ * A remote URL as core may store, compare and quote it.
+ * - `url`: an http(s) URL without user info, query or fragment; an ssh URL without a password (its
+ *   user name picks the key and stays); `user:secret@host:path` as `user@host:path`. An scp-like
+ *   address that may or may not hold credentials (`host:a@x/y` is the path `a@x/y` on `host`, or the
+ *   user `host` on `x`; `alice:p@ss:w@host:o`) comes back as it was, so two such remotes never
+ *   compare equal.
+ * - `display`: `url`, except that such an ambiguous address shows `user:***@` in place of what may
+ *   be a secret. Anything shown to a person or written to a log uses this.
+ * - `hadCredentials`: something was removed, or may be a secret.
+ * A clean URL comes back exactly as it was.
+ */
+export function remoteUrlForDisplay(raw: string): { url: string; display: string; hadCredentials: boolean } {
   const url = raw.trim();
-  const clean = (() => {
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    const clean = (() => {
       let parsed: URL;
       try {
         parsed = new URL(url);
       } catch {
-        // Not parseable: cut anything between `//` and `@`, and from `?` or `#` on.
-        return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/[?#].*$/s, '');
+        // Not parseable: cut everything from `//` to the last `@`, and from `?` or `#` on.
+        return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)\S*@/i, '$1').replace(/[?#].*$/s, '');
       }
       const ssh = parsed.protocol === 'ssh:';
       if (!(ssh ? parsed.password : parsed.username || parsed.password || parsed.search || parsed.hash))
@@ -55,13 +73,14 @@ export function remoteUrlForDisplay(raw: string): { url: string; hadCredentials:
         parsed.hash = '';
       }
       return parsed.toString();
-    }
-    // scp-like `user:password@host:path` (or a schemeless `user:token@host/path`): keep the user,
-    // drop the password. Only when a host and its `:` or `/` follow the `@`: `host:repo@x` is the
-    // path `repo@x` on `host`. The password runs to the last such `@` before any `/`, so no part of
-    // one holding `@` or `:` is ever shown (an scp path holding `@x:` is then shown short), and an
-    // IPv6 `[host]` is never read as a user.
-    return url.replace(/^([^/@:[]*):[^/]*@(?=[^/@:]+[:/])/, '$1@');
-  })();
-  return { url: clean, hadCredentials: clean !== url };
+    })();
+    return { url: clean, display: clean, hadCredentials: clean !== url };
+  }
+  if (SCP_PLAIN_CREDENTIALS.test(url)) {
+    const clean = url.replace(SCP_PLAIN_CREDENTIALS, '$1@');
+    return { url: clean, display: clean, hadCredentials: true };
+  }
+  if (SCP_CREDENTIALS.test(url))
+    return { url, display: url.replace(SCP_CREDENTIALS, '$1:***@'), hadCredentials: true };
+  return { url, display: url, hadCredentials: false };
 }

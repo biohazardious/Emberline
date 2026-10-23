@@ -204,6 +204,8 @@ export const ImportStatusResponse = z.object({
   terminalId: z.string().nullable(),
   /** Tail of the clone terminal output. */
   tail: z.string(),
+  /** Why a clone failed, in a plain sentence, when core can tell (a tag, a missing branch, no commit). */
+  reason: z.string().optional(),
 });
 export type ImportStatusResponse = z.infer<typeof ImportStatusResponse>;
 

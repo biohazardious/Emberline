@@ -52,7 +52,7 @@ describe('pushing a run branch without an account', () => {
     expect(error).toMatchObject({ statusCode: 409 });
     const message = (error as Error).message;
     expect(message).toMatch(
-      /^git push failed: Permission denied for https:\/\/git\.example\.com\/o\/r\.git or ssh:\/\/git@git\.example\.com\/o\/r\.git/,
+      /^git push failed: Permission denied for https:\/\/git\.example\.com\/o\/r\.git or ssh:\/\/git\.example\.com\/o\/r\.git/,
     );
     expect(message).not.toMatch(/tok3n|p@ss|ss@/);
     expect(message).toContain('/api/internal/git/[capability]');
@@ -66,6 +66,8 @@ describe('pushing a run branch without an account', () => {
       stderr: [
         'remote: Create a pull request: https://bob:p4t@git.example.com/o/r/pulls/new',
         'remote: mirror: https://carol:p@ss:w@git.example.com/o/r.git and ssh://git:s3cr3t@git.example.com:2222/o/r.git',
+        "remote: also 'https://dave:q'u0te@git.example.com/o/r.git' and ssh://me@corp.com:c0rp@git.example.com/o/r.git",
+        'remote: and ssh+git://erin:sl/ash@git.example.com/o/r.git',
         `remote: mirrored to ${CAPABILITY}`,
         `remote: ${'y'.repeat(100_000)}`,
       ].join('\n'),
@@ -74,9 +76,11 @@ describe('pushing a run branch without an account', () => {
     expect(res.output).toContain('To https://git.example.com/o/r.git');
     expect(res.output).toContain('https://git.example.com/o/r/pulls/new');
     expect(res.output).toContain(
-      'mirror: https://git.example.com/o/r.git and ssh://git@git.example.com:2222/o/r.git',
+      'mirror: https://git.example.com/o/r.git and ssh://git.example.com:2222/o/r.git',
     );
-    expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t/);
+    expect(res.output).toContain("also 'https://git.example.com/o/r.git' and ssh://git.example.com/o/r.git");
+    expect(res.output).toContain('and ssh+git://git.example.com/o/r.git');
+    expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);
   });

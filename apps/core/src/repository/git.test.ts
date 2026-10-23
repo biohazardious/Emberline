@@ -62,7 +62,7 @@ describe('validateRepositoryUrl', () => {
     });
   });
 
-  it('reads credentials in an scp-like address as the display does: an `@` in the path is none', () => {
+  it('refuses an address whose user info may hold a password, read as the display reads it', () => {
     const refusal = (url: string) => {
       try {
         validateRepositoryUrl(url);
@@ -72,11 +72,18 @@ describe('validateRepositoryUrl', () => {
       }
     };
     const CREDENTIALS = 'Remove the user name and token from the URL; Emberline uses the forge account.';
-    expect(refusal('git.example.com:app@v2')).not.toBe(CREDENTIALS);
+    // Whatever may hold a secret, as the display masks it, is refused.
     expect(refusal('alice:pw@git.example.com:o/r.git')).toBe(CREDENTIALS);
     expect(refusal('alice:p@ss:w@git.example.com:o/r.git')).toBe(CREDENTIALS);
     expect(refusal('alice:token@github.com/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('git.example.com:app@v2')).toBe(CREDENTIALS);
     expect(refusal('git@git.example.com:o/r@v2.git')).toBeNull();
+    expect(refusal('git.example.com:team/app@v2.git')).not.toBe(CREDENTIALS);
+    // ssh URLs: user info up to the last `@` before the path; one that does not parse is refused.
+    expect(refusal('ssh://me@corp.com:pw@host/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('ssh://git:pa/ss@host/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('ssh://git@host:2222/o/r@v2.git')).toBeNull();
+    expect(refusal('ssh://me@corp.com@host/o/r.git')).toBeNull();
   });
 
   it('a capitalised scheme is stored lower-case, and IPv6 hosts are accepted', () => {
@@ -112,35 +119,38 @@ describe('pushBranch without an account: refusals', () => {
 });
 
 describe('shortGitError', () => {
-  it('drops user info from http(s) URLs git quotes (a token typed into origin), keeping ssh users', () => {
+  it('drops the credentials of URLs git quotes (a token typed into origin)', () => {
     const error = Object.assign(new Error('git failed'), {
       stderr:
-        "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': and ssh://git@host/o/r.git, http://tok3n@h/x",
+        "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': and ssh://git:tok3n@host/o/r.git, http://tok3n@h/x",
     });
     const text = shortGitError(error);
     expect(text).not.toContain('tok3n');
     expect(text).toContain("'https://git.example.com/o/r.git/'");
-    expect(text).toContain('ssh://git@host/o/r.git');
+    expect(text).toContain('ssh://host/o/r.git');
     expect(text).toContain('http://h/x');
   });
 });
 
 describe('shortGitError: hostile URLs in what git and a server print', () => {
   const text = (stderr: string) => shortGitError(Object.assign(new Error('git failed'), { stderr }));
-  it('drops http(s) user info up to its last `@`, so no part of a password holding `@` shows', () => {
+  it('drops everything from `://` to the last `@` of the address, whatever the password holds', () => {
     expect(text("fatal: unable to access 'https://alice:p@ss@git.example.com/o/r.git/'")).toBe(
       "unable to access 'https://git.example.com/o/r.git/'",
     );
     expect(text('remote: see https://bob:p@ss:w@h.example/x')).toBe('see https://h.example/x');
     expect(text('remote: https://u:p%40x@h/x')).toBe('https://h/x');
-  });
-  it('drops an ssh password, keeping the user name and the port', () => {
-    expect(text('fatal: ssh://git:p@ss@host:2222/o/r.git refused')).toBe(
-      'ssh://git@host:2222/o/r.git refused',
-    );
-    expect(text('fatal: ssh://git:hunter2@host/o/r.git refused')).toBe('ssh://git@host/o/r.git refused');
-    expect(text('fatal: ssh://git@host:2222/o/r.git and ssh://[::1]:22/x')).toBe(
-      'ssh://git@host:2222/o/r.git and ssh://[::1]:22/x',
+    // A quote or a `/` in a password does not end the address.
+    expect(text("remote: https://u:p'w@h/x")).toBe('https://h/x');
+    expect(text('fatal: ssh://git:pa/ss@h/x refused')).toBe('ssh://h/x refused');
+    // A user name holding `@`, and any scheme git takes.
+    expect(text('fatal: ssh://me@corp.com:pw@host/o/r refused')).toBe('ssh://host/o/r refused');
+    expect(text('fatal: ssh+git://u:p@h/x and git+ssh://u:p@h/y')).toBe('ssh+git://h/x and git+ssh://h/y');
+    expect(text('fatal: SSH://git:p@ss@host:2222/o/r.git refused')).toBe('SSH://host:2222/o/r.git refused');
+    // The address ends at whitespace; one without user info is left alone.
+    expect(text('fatal: ssh://git:pw@host:22 mail me@x.y')).toBe('ssh://host:22 mail me@x.y');
+    expect(text('fatal: ssh://[::1]:22/x and https://h/o/r.git')).toBe(
+      'ssh://[::1]:22/x and https://h/o/r.git',
     );
   });
 });
@@ -149,76 +159,92 @@ describe('remoteUrlForDisplay', () => {
   it('drops user info, query and fragment from http(s) URLs and says it did', () => {
     expect(remoteUrlForDisplay('https://x-access-token:ghp_secret@github.com/o/r.git')).toEqual({
       url: 'https://github.com/o/r.git',
+      display: 'https://github.com/o/r.git',
       hadCredentials: true,
     });
-    expect(remoteUrlForDisplay('https://tok@git.example.com:8443/o/r.git?private_token=s#f')).toEqual({
+    expect(remoteUrlForDisplay('https://tok@git.example.com:8443/o/r.git?private_token=s#f')).toMatchObject({
       url: 'https://git.example.com:8443/o/r.git',
       hadCredentials: true,
     });
   });
 
   it('keeps an ssh user (it picks the key, it is no secret) but drops an ssh password', () => {
-    expect(remoteUrlForDisplay('ssh://git:pw@host:2222/o/r.git')).toEqual({
+    expect(remoteUrlForDisplay('ssh://git:pw@host:2222/o/r.git')).toMatchObject({
       url: 'ssh://git@host:2222/o/r.git',
       hadCredentials: true,
     });
-    expect(remoteUrlForDisplay('ssh://git@host/o/r.git')).toEqual({
+    expect(remoteUrlForDisplay('ssh://git@host/o/r.git')).toMatchObject({
       url: 'ssh://git@host/o/r.git',
       hadCredentials: false,
     });
     expect(remoteUrlForDisplay('git:pw@host:o/r.git')).toEqual({
       url: 'git@host:o/r.git',
+      display: 'git@host:o/r.git',
       hadCredentials: true,
     });
-    expect(remoteUrlForDisplay('git@host:o/r.git')).toEqual({
+    expect(remoteUrlForDisplay('git@host:o/r.git')).toMatchObject({
       url: 'git@host:o/r.git',
       hadCredentials: false,
     });
   });
 
-  it('strips a scp-like password only before a host: an `@` in the path is no user info', () => {
-    const shown = (url: string) => remoteUrlForDisplay(url).url;
-    // `host:repo@x` is the path `repo@x` on `host`, never the user `host` on the server `x`.
-    expect(remoteUrlForDisplay('host:repo@x')).toEqual({ url: 'host:repo@x', hadCredentials: false });
-    expect(shown('host:a@x')).not.toBe(shown('host:b@x'));
-    expect(shown('gitea:team/app@v2.git')).toBe('gitea:team/app@v2.git');
-    expect(shown('git@host:o/r@v2.git')).toBe('git@host:o/r@v2.git');
-    // A password before a host goes, whatever the host or path looks like.
-    expect(remoteUrlForDisplay('Alice:S3cret@GitHub.COM:o/r.git')).toEqual({
+  it('rewrites only `user:secret@host:path`; an address that may hold a secret is kept, and shown masked', () => {
+    const read = remoteUrlForDisplay;
+    // The plain form: one `@` before the first `/`, a host and its `:` after it.
+    expect(read('Alice:S3cret@GitHub.COM:o/r.git')).toEqual({
       url: 'Alice@GitHub.COM:o/r.git',
+      display: 'Alice@GitHub.COM:o/r.git',
       hadCredentials: true,
     });
-    expect(shown('alice:pw@host:o/r@v2')).toBe('alice@host:o/r@v2');
-    expect(shown('alice:p@ss@host:o/r.git')).toBe('alice@host:o/r.git');
-    expect(shown('alice:p:w@host:o/r.git')).toBe('alice@host:o/r.git');
-    // No part of a password holding `@` and `:` shows; an scp path holding `@x:` is then shown short.
-    expect(shown('alice:p@ss:w@host:o/r.git')).toBe('alice@host:o/r.git');
-    expect(shown('alice:p@ss:w@host:o')).toBe('alice@host:o');
-    expect(shown('alice:pw@host:a@b:c')).toBe('alice@b:c');
-    // A schemeless `user:token@host/path` (no scp `:` after the host) loses its token too.
-    expect(remoteUrlForDisplay('alice:token@github.com/o/r.git')).toEqual({
-      url: 'alice@github.com/o/r.git',
-      hadCredentials: true,
-    });
-    expect(shown('alice:pw@[2001:db8::1]:o/r.git')).toBe('alice@[2001:db8::1]:o/r.git');
-    // An IPv6 host is never read as a user name.
-    expect(remoteUrlForDisplay('[2001:db8::1]:o/r@x')).toEqual({
-      url: '[2001:db8::1]:o/r@x',
-      hadCredentials: false,
-    });
-    expect(shown('[2001:db8::1]:a@b:c')).toBe('[2001:db8::1]:a@b:c');
-    // URL forms: user info goes, an `@` in the path stays.
+    expect(read('alice:pw@host:o/r@v2').url).toBe('alice@host:o/r@v2');
+    expect(read('alice:p:w@host:o/r.git').url).toBe('alice@host:o/r.git');
+    expect(read('alice:pw@[2001:db8::1]:o/r.git').url).toBe('alice@[2001:db8::1]:o/r.git');
+    // Ambiguous: a password holding `@`, an `@x:` in the path, a schemeless `user:token@host/path`
+    // (the same shape as the path `a@x/y` on `host`), a pathless `host:repo@x`. Kept as they are
+    // (never two remotes made equal), shown with `***` (no part of a password), and flagged.
+    for (const [raw, display] of [
+      ['alice:p@ss@host:o/r.git', 'alice:***@host:o/r.git'],
+      ['alice:p@ss:w@host:o', 'alice:***@host:o'],
+      ['alice:pw@host:a@b:c', 'alice:***@b:c'],
+      ['alice:token@github.com/o/r.git', 'alice:***@github.com/o/r.git'],
+      ['host:a@x/y', 'host:***@x/y'],
+      ['host:repo@x', 'host:***@x'],
+      ['alice:p@ss:w@host', 'alice:***@host'],
+    ] as const) {
+      expect(read(raw), raw).toEqual({ url: raw, display, hadCredentials: true });
+    }
+    expect(read('host:a@x/y').url).not.toBe(read('host:b@x/y').url);
+    expect(read('alice:pw@host:a@b:c').url).not.toBe(read('alice:pw@other:a@b:c').url);
+    // No `user:` before an `@` ahead of the first `/`: nothing to hide.
+    for (const raw of [
+      'gitea:team/app@v2.git',
+      'git@host:o/r@v2.git',
+      '[2001:db8::1]:o/r@x',
+      '[2001:db8::1]:a@b:c',
+    ])
+      expect(read(raw), raw).toEqual({ url: raw, display: raw, hadCredentials: false });
+  });
+
+  it('URL forms: user info goes up to its last `@`, an `@` in the path stays', () => {
+    const shown = (url: string) => remoteUrlForDisplay(url).display;
     expect(shown('https://github.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
     expect(shown('https://u:p@GitHub.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
     expect(shown('https://u:p@ss@host/o/r.git')).toBe('https://host/o/r.git');
     expect(shown('ssh://git:pw@[2001:db8::1]:2222/o/r@v2.git')).toBe(
       'ssh://git@[2001:db8::1]:2222/o/r@v2.git',
     );
+    expect(shown('ssh://me@corp.com:pw@host/o/r')).not.toContain('pw');
+    // Not parseable (a `/` in the password): everything up to the last `@` goes.
+    expect(remoteUrlForDisplay('ssh://git:pa/ss@h/x')).toMatchObject({
+      display: 'ssh://h/x',
+      hadCredentials: true,
+    });
   });
 
   it('leaves a clean URL exactly as it is', () => {
     expect(remoteUrlForDisplay('https://GitHub.com/o/r.git')).toEqual({
       url: 'https://GitHub.com/o/r.git',
+      display: 'https://GitHub.com/o/r.git',
       hadCredentials: false,
     });
   });

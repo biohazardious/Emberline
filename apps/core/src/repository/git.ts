@@ -71,13 +71,22 @@ export function validateRepositoryUrl(raw: string): {
     if (parsed.search || parsed.hash) throw badRequest(BAD_URL);
     transport = parsed.protocol === 'http:' ? 'http' : 'https';
   } else if (/^ssh:\/\//.test(url) || /^[^/:]+@?[^/:]*:[^/]/.test(url)) {
-    // A password in an ssh URL (`ssh://user:pw@host`, `user:pw@host:path`) is a credential too; an
-    // scp-like address has one exactly when the display would remove it (`host:app@v2` has none).
-    if (
-      /^ssh:\/\/[^/@]*:[^/@]*@/.test(url) ||
-      (!url.startsWith('ssh://') && remoteUrlForDisplay(url).hadCredentials)
-    )
-      throw badRequest(CREDENTIALS_IN_URL);
+    // A password in an ssh URL (`ssh://user:pw@host`, `user:pw@host:path`) is a credential too. An
+    // ssh URL is read as git and the display read it: its user info runs to the last `@` before the
+    // path (`ssh://me@corp.com:pw@host` has the password `pw`), and one that does not parse is
+    // refused (`ssh://git:pa/ss@host` as holding credentials). An scp-like address may hold one whenever the display
+    // says so (`host:a@x/y` too, which it cannot tell from `user:token@host/path`).
+    if (url.startsWith('ssh://')) {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        // Unparseable: a `:` before its last `@` may be a password's.
+        const at = url.lastIndexOf('@');
+        throw badRequest(at > 0 && url.slice(6, at).includes(':') ? CREDENTIALS_IN_URL : BAD_URL);
+      }
+      if (parsed.password) throw badRequest(CREDENTIALS_IN_URL);
+    } else if (remoteUrlForDisplay(url).hadCredentials) throw badRequest(CREDENTIALS_IN_URL);
     transport = 'ssh';
   } else {
     throw badRequest(BAD_URL);

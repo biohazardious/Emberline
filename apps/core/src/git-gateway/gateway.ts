@@ -90,13 +90,13 @@ export function requestUrlForLog(url: string): string {
 
 /**
  * Text without the credentials of the URLs in it (a token typed into an origin, or one a server
- * quotes back): an http(s) URL loses its user info, an ssh URL its password, each up to the last
- * `@` before the path. An ssh user name stays (it picks the key, it is no secret).
+ * quotes back): for any `scheme://` (https, ssh, git+ssh, ssh+git, …) everything from `://` to the
+ * last `@` of the address goes, the address ending only at whitespace. A quote, a `/` or an `@` in a
+ * password never ends it early; an ssh user name or an `@` in a path may go too (better too much
+ * than a secret).
  */
 export function withoutUrlCredentials(text: string): string {
-  return text
-    .replace(/\b(https?:\/\/)[^/\s'"]*@/gi, '$1')
-    .replace(/\b(ssh:\/\/[^:/@\s'"]*):[^/\s'"]*@/gi, '$1@');
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)\S*@/gi, '$1');
 }
 
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */
@@ -117,7 +117,7 @@ export function describeGitError(error: unknown, credential?: GitHttpCredential 
         .map((l) => l.replace(/^(fatal|error|remote): /, '').trim())
         .find(Boolean) ?? 'git failed';
   }
-  // A token typed into an origin (no account) is never quoted back; an ssh user name stays.
+  // A token typed into an origin (no account) is never quoted back.
   return redactCapabilityUrls(redactCredential(withoutUrlCredentials(text), credential)).slice(0, 300);
 }
 

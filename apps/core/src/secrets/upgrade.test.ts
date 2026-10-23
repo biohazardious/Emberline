@@ -188,6 +188,8 @@ describe('secrets at start', () => {
       d: 'ssh://git@host:2222/o/d.git',
       e: 'https://github.com/o/e.git',
       f: null,
+      // May or may not hold a password: kept as it is, and not counted as cleaned.
+      g: 'host:a@x/y',
     };
     for (const [id, url] of Object.entries(urls)) put.run(id, id, id, url, `/w/${id}`);
     const repoUrls = () =>
