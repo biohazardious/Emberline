@@ -186,6 +186,16 @@ export function scpUserInfoBeforePath(raw: string): boolean {
 const startsHost = (ch: string | undefined) => ch !== undefined && !/[\s@/:'"`]/.test(ch);
 
 /**
+ * Where the authority of a `scheme://` address ends, as the URL parser reads it: at the first `/`,
+ * `?` or `#`, and for the schemes it treats as special (http, https, ws, wss, ftp, file) at a `\`
+ * too.
+ */
+function authorityEndOf(r: AddressReader, schemeEnd: number): number {
+  const special = /^(?:https?|wss?|ftp|file):/i.test(r.text);
+  return r.next(special ? '/\\?#' : '/?#', schemeEnd);
+}
+
+/**
  * A remote URL as core may store, compare and quote it.
  * - `url`: an http(s) URL without user info, query or fragment; an ssh URL without a password (its
  *   user name picks the key and stays); `user:secret@host:path` as `user@host:path`. An scp-like
@@ -234,11 +244,13 @@ export function remoteUrlForDisplay(
     })();
     // A password holding `/`, `?` or `#` ends what the parser reads as user info and host early:
     // `https://u:2024/Secret@h/o/r` reads as the port 2024 and a path, as git reads it, and so does
-    // `https://host:8443/g/n@v2/r.git`; the two cannot be told apart. When a `:` comes before the
-    // first `/`, `?` or `#` and an `@` that a host follows comes after it, the address is shown cut
-    // up to that `@` (it is kept as the parser cleans it, so Connect may take it).
-    const authorityEnd = r.next('/?#', schemeEnd);
-    if (url.slice(schemeEnd, authorityEnd).includes(':')) {
+    // `https://host:8443/g/n@v2/r.git`; the two cannot be told apart. For http(s) the parser ends
+    // them at a `\` too, which git sends as part of the user info (`https://u:2024\S3CRET@host/`).
+    // When a `:` comes before the first of these, or a `\` ends them, and an `@` that a host
+    // follows comes after it, the address is shown cut up to that `@` (it is kept as the parser
+    // cleans it, so Connect may take it).
+    const authorityEnd = authorityEndOf(r, schemeEnd);
+    if (url.slice(schemeEnd, authorityEnd).includes(':') || url[authorityEnd] === '\\') {
       let at = url.length - 1;
       while (at >= authorityEnd && !(url[at] === '@' && startsHost(url[at + 1]))) at--;
       if (meter) meter.steps += url.length - at;
@@ -257,42 +269,58 @@ export function remoteUrlForDisplay(
   return { url, display: `${user}:***@${host}`, hadCredentials: true };
 }
 
+/** How many `@`s may end a password (the last one too): enough for any real address, and linear. */
+const MAX_PASSWORD_ENDS = 16;
+
 /**
- * What may be the password of a remote address, as git may print it (as written, percent-decoded and
- * percent-encoded): from the `:` that may start one (the first one in a URL's authority, the one
- * after the user name of an scp-like address) to the first and to the last `@` that a host follows.
- * More than the password may come back (a port and a path), never less. `user`: what comes before
- * that `:` (after a `scheme://`). Null when the address holds no `user:…@`.
+ * The credentials an address may hold, as user name and password pairs (as written; the caller
+ * masks their encoded and decoded forms too). More than a password may come back (a port and a
+ * path), never less:
+ * - the user info as the URL parser and as git read it: up to the last `@` in the authority (it
+ *   ends at the first `/`, `?` or `#`, for the parser at a `\` too) that a host follows, the
+ *   password after its first `:` (`https://u:x@y@host/o/r@v2.git` holds `x@y`). An
+ *   http(s) user name without a password may be a token (`https://ghp_…@github.com/…`): it comes
+ *   back with a null password;
+ * - from the `:` that may start a password (the first one in a URL's authority, the one after the
+ *   user name of an scp-like address) to each `@` that a host follows (the first 16 and the last),
+ *   for the addresses the parser reads otherwise (a password holding `/`, `?`, `#` or `\`).
+ * An ssh user name, alone, is no secret. Read in linear time.
  */
-export function addressSecrets(raw: string): { user: string; passwords: string[] } | null {
+export function addressSecrets(raw: string, meter?: ScanMeter): { user: string; password: string | null }[] {
   const url = raw.trim();
-  const r = new AddressReader(url);
+  const r = new AddressReader(url, meter);
   const schemeEnd = r.scheme();
+  const found: { user: string; password: string | null }[] = [];
   let colon: number;
   if (schemeEnd > 0) {
+    const authorityEnd = authorityEndOf(r, schemeEnd);
+    // As the parser reads the user info, and as git does (it ends it at `/`, `?` or `#` only).
+    for (const end of new Set([authorityEnd, r.next('/?#', schemeEnd)])) {
+      const at = r.lastAt(schemeEnd - 1, end);
+      if (at < 0 || !startsHost(url[at + 1])) continue;
+      const info = url.slice(schemeEnd, at);
+      const split = info.indexOf(':');
+      if (split >= 0) found.push({ user: info.slice(0, split), password: info.slice(split + 1) });
+      else if (/^https?:/i.test(url) && info) found.push({ user: info, password: null });
+    }
     colon = r.next(':', schemeEnd);
-    if (colon >= r.next('/?#', schemeEnd)) return null;
+    if (colon >= authorityEnd) return found;
   } else {
-    const found = scpCredentials(r);
-    if (!found) return null;
-    colon = found.userEnd;
+    const scp = scpCredentials(r);
+    if (!scp) return found;
+    colon = scp.userEnd;
   }
   const ats: number[] = [];
+  let last = -1;
   for (let at = url.indexOf('@', colon + 1); at >= 0; at = url.indexOf('@', at + 1))
-    if (startsHost(url[at + 1])) ats.push(at);
-  if (ats.length === 0) return null;
-  const passwords = new Set<string>();
-  for (const at of [ats[0]!, ats[ats.length - 1]!]) {
-    const secret = url.slice(colon + 1, at);
-    passwords.add(secret);
-    try {
-      const decoded = decodeURIComponent(secret);
-      passwords.add(decoded);
-      passwords.add(encodeURIComponent(decoded));
-    } catch {
-      // not percent-encoded
+    if (startsHost(url[at + 1])) {
+      if (ats.length < MAX_PASSWORD_ENDS) ats.push(at);
+      last = at;
     }
-  }
-  passwords.delete('');
-  return { user: url.slice(schemeEnd, colon), passwords: [...passwords] };
+  if (last >= 0 && !ats.includes(last)) ats.push(last);
+  const user = url.slice(schemeEnd, colon);
+  for (const at of ats) found.push({ user, password: url.slice(colon + 1, at) });
+  // The scan for `@`s, and each password taken (at most MAX_PASSWORD_ENDS + 1 of them).
+  if (meter) meter.steps += url.length - colon + ats.reduce((sum, at) => sum + at - colon, 0);
+  return found;
 }

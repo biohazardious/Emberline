@@ -72,6 +72,39 @@ describe('pushing a run branch without an account', () => {
     expect(res.output).toBe('***\nremote: ***, alice:***');
   });
 
+  it('every address origin pushes to is known: all its URLs and push URLs, also one an agent sets during the push', async () => {
+    git('remote', 'set-url', '--add', 'origin', 'https://bob:s3cond-URL@git.example.com/o/r.git');
+    git('remote', 'set-url', '--add', '--push', 'origin', 'https://carol:f1rst-PUSH@git.example.com/o/r.git');
+    git('remote', 'set-url', '--add', '--push', 'origin', 'https://dave:s3cond-PUSH@git.example.com/o/r.git');
+    let args: string[] = [];
+    setCommandExecutor(async (request) => {
+      if (!request.args.includes('push')) return localCommandExecutor(request);
+      args = request.args;
+      // An agent points origin elsewhere while git pushes.
+      git(
+        'remote',
+        'set-url',
+        '--add',
+        '--push',
+        'origin',
+        'https://erin:dur1ng-PUSH@git.example.com/o/r.git',
+      );
+      return {
+        exitCode: 1,
+        signal: null,
+        stdout: '',
+        stderr: 'remote: bad tokens: s3cond-URL f1rst-PUSH s3cond-PUSH dur1ng-PUSH tok3n',
+        timedOut: false,
+        truncated: false,
+      };
+    });
+    const error = await pushWorktreeBranch(dir, 'emberline/run-1', 'main').catch((e: unknown) => e);
+    expect((error as Error).message).toBe('git push failed: bad tokens: *** *** *** *** ***');
+    // Never into a submodule, whatever the repository's config says.
+    expect(args).toContain('--no-recurse-submodules');
+    expect(args.join(' ')).toContain('-c submodule.recurse=false -c push.recurseSubmodules=no');
+  });
+
   it('the output of a push that worked has no user info or capability, and is bounded', async () => {
     pushAnswers({
       stdout:

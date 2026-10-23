@@ -929,6 +929,31 @@ describe('GET /api/projects/:id/import-status', () => {
     expect(tail).not.toContain('S3CRET');
   });
 
+  it('the tail is cut after it is masked, so it never starts inside a password', async () => {
+    const { cloneTail } = await import('./factory/project-import.js');
+    const args = ['clone', '--progress', '--', 'https://alice:typ3d-S3CRET@example.com/x.git', '/w/x'];
+    // Without the mask first, the cut would land inside the password and leave its end.
+    for (let filler = 3_980; filler <= 4_000; filler++) {
+      const tail = cloneTail(`remote: invalid token typ3d-S3CRET\n${'y'.repeat(filler)}`, args);
+      expect(tail.length).toBeLessThanOrEqual(4_000);
+      expect(tail).not.toMatch(/3CRET|CRET|RET\n/);
+    }
+  });
+
+  it('an address whose password git would print in the clone is refused before anything runs', async () => {
+    const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+    for (const repoUrl of [
+      'ssh://git:pw0rd@example.com/o/r.git',
+      'https://u:2024\\pw0rd@example.com/o/r.git',
+    ]) {
+      const res = await api('POST', '/api/projects', { name: 'Refused', source: 'import_url', repoUrl });
+      expect(res.statusCode, repoUrl).toBe(400);
+      expect(res.json().message).toMatch(/^Remove the password from the address/);
+      expect(res.body).not.toContain('pw0rd');
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('cloning while the terminal runs; detect and adopt wait for it', async () => {
     const { project } = await importUrl('Slow', (dest) => ({
       file: 'sh',

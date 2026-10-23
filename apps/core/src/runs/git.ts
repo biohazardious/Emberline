@@ -760,12 +760,27 @@ export async function pushWorktreeBranch(
   if (!remoteUrl) {
     throw conflict('no "origin" remote is configured for this repository');
   }
-  // origin as configured (its push URL too): a token typed into it is masked wherever git quotes it.
-  const pushUrl = await git(worktreePath, ['remote', 'get-url', '--push', 'origin']).catch(() => '');
-  const known: KnownSecrets = { addresses: [remoteUrl, pushUrl] };
+  // Every address git may push to (all of origin's URLs and push URLs, as configured right before
+  // and right after the push, as an agent may change them meanwhile): a token typed into any of
+  // them is masked wherever git or the server quotes it.
+  const originAddresses = async () =>
+    (
+      await Promise.all([
+        git(worktreePath, ['remote', 'get-url', '--all', 'origin']).catch(() => ''),
+        git(worktreePath, ['remote', 'get-url', '--push', '--all', 'origin']).catch(() => ''),
+      ])
+    ).flatMap((out) =>
+      out
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+  const before = await originAddresses();
 
+  let pushed: { stdout: string; stderr: string } | null = null;
+  let failure: { error: unknown } | null = null;
   try {
-    const { stdout, stderr } = await execGitFile(
+    pushed = await execGitFile(
       [
         '-C',
         worktreePath,
@@ -779,13 +794,15 @@ export async function pushWorktreeBranch(
       ],
       { timeout: 60_000 },
     );
-    // `remote:` lines are the server's: as bounded and redacted as a failure's.
-    const output = redactGitText(`${stdout}\n${stderr}`.trim(), known).slice(0, MAX_PUSH_OUTPUT);
-    return { branch: branchToPush, remote: 'origin', output: output || `Pushed ${branchToPush} to origin` };
   } catch (error) {
-    // A refused repository config has no stderr: its message says what to remove.
-    throw conflict(`git push failed: ${describeGitError(error, known)}`);
+    failure = { error };
   }
+  const known: KnownSecrets = { addresses: [...before, ...(await originAddresses())] };
+  // A refused repository config has no stderr: its message says what to remove.
+  if (failure || !pushed) throw conflict(`git push failed: ${describeGitError(failure?.error, known)}`);
+  // `remote:` lines are the server's: as bounded and redacted as a failure's.
+  const output = redactGitText(`${pushed.stdout}\n${pushed.stderr}`.trim(), known).slice(0, MAX_PUSH_OUTPUT);
+  return { branch: branchToPush, remote: 'origin', output: output || `Pushed ${branchToPush} to origin` };
 }
 
 function classifyArtifact(relPath: string): ArtifactKind {

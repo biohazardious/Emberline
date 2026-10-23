@@ -63,6 +63,10 @@ export function validateRepositoryUrl(raw: string): {
     throw badRequest(BAD_URL);
   let transport: 'https' | 'http' | 'ssh';
   if (/^https?:\/\//i.test(url)) {
+    // The parser ends the user info and host at a `\`; git sends it as part of the user info
+    // (`https://u:2024\S3CRET@host/…`), so it may hold a password.
+    const backslash = url.indexOf('\\');
+    if (backslash >= 0) throw badRequest(url.indexOf('@', backslash) > 0 ? CREDENTIALS_IN_URL : BAD_URL);
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -100,6 +104,34 @@ export function validateRepositoryUrl(raw: string): {
   const remote = parseForgeRemote(url);
   if (!remote || remote.host.startsWith('-')) throw badRequest(BAD_URL);
   return { url, host: remote.host, transport };
+}
+
+export const PASSWORD_GIT_WOULD_SHOW =
+  "Remove the password from the address: git can't use it there and would show it in the clone's output. Use an ssh key, or add a forge account for this server in Settings.";
+
+/**
+ * Whether git, cloning this address, would print its password where a person sees the clone's
+ * output: an ssh URL's `user:password@host` goes to ssh as the login (ssh prints it, and never uses
+ * the password), an scp-like `user:…@` before the path splits so that the password starts the path
+ * git quotes, and an http(s) `\` before an `@` (the parser and git read the user info differently).
+ * An http(s) address's user name and password otherwise go only into git's Authorization header:
+ * git leaves them out of every address it prints.
+ */
+export function passwordGitWouldShow(raw: string): boolean {
+  const url = raw.trim();
+  if (/^https?:\/\//i.test(url)) {
+    const backslash = url.indexOf('\\');
+    return backslash >= 0 && url.indexOf('@', backslash) > 0;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    try {
+      return Boolean(new URL(url).password);
+    } catch {
+      const at = url.lastIndexOf('@');
+      return at > 0 && url.slice(url.indexOf('://') + 3, at).includes(':');
+    }
+  }
+  return scpUserInfoBeforePath(url);
 }
 
 /** A failed git command reads as `fallback`; a runner that could not run it is thrown, never read as an answer. */

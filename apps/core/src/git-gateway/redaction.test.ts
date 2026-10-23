@@ -41,6 +41,7 @@ const HOSTILE = [
   '@',
   '#',
   '?',
+  '\\',
   ...'0123456789',
   ...'abcdefgh',
 ];
@@ -62,16 +63,30 @@ const HOST = 'git.example.com';
 /** User names, the git prefixes among them: a line's own prefix opens nothing, an address's does. */
 const USERS = ['u', 'alice', 'fatal', 'error', 'warning', 'hint', 'remote', 'ssh'];
 const PREFIXES = ['fatal', 'error', 'warning', 'hint', 'remote', 'ssh'];
-/** The ways an origin holds a password. */
-const ADDRESSES = (pw: string, user: string) => [
-  `https://${user}:${pw}@${HOST}/o/r.git`,
-  `http://${user}:${pw}@${HOST}:3000/o/r.git`,
-  `ssh://${user}:${pw}@${HOST}:2222/o/r.git`,
-  `${user}:${pw}@${HOST}:o/r.git`,
-  `me@corp.com:${pw}@${HOST}:o/r.git`,
-  `${user}:${pw}@${HOST}/o/r.git`,
-  `${user}:${pw}@${HOST}`,
-  `https://${user}:2024/${pw}@${HOST}/o`,
+/** An http user name that is a token: no `:`, `/`, `?`, `#` or `@` (it would be no user name). */
+const tokenOf = (pw: string) => pw.replace(/[:/?#@]/g, '');
+/**
+ * The ways an origin holds a password: the address, the password git uses (a server may echo it),
+ * and the user name it goes with (null: the user name is the token).
+ */
+const ORIGINS = (pw: string, user: string): { address: string; secret: string; user: string | null }[] => [
+  { address: `https://${user}:${pw}@${HOST}/o/r.git`, secret: pw, user },
+  { address: `http://${user}:${pw}@${HOST}:3000/o/r.git`, secret: pw, user },
+  { address: `ssh://${user}:${pw}@${HOST}:2222/o/r.git`, secret: pw, user },
+  { address: `${user}:${pw}@${HOST}:o/r.git`, secret: pw, user },
+  { address: `me@corp.com:${pw}@${HOST}:o/r.git`, secret: pw, user: 'me@corp.com' },
+  { address: `${user}:${pw}@${HOST}/o/r.git`, secret: pw, user },
+  { address: `${user}:${pw}@${HOST}`, secret: pw, user },
+  { address: `https://${user}:2024/${pw}@${HOST}/o`, secret: `2024/${pw}`, user },
+  // A path's `@` too (a password's own `@` must not end it).
+  { address: `https://${user}:${pw}@${HOST}/o/r@v2.git`, secret: pw, user },
+  { address: `https://${tokenOf(pw)}@${HOST}/o/r.git`, secret: tokenOf(pw), user: null },
+];
+const ADDRESSES = (pw: string, user: string) => ORIGINS(pw, user).map((o) => o.address);
+/** What a server may echo of a credential it was sent: the password itself, and its Basic value. */
+const ECHOES = ({ secret, user }: { secret: string; user: string | null }) => [
+  `remote: invalid token ${secret}, try again`,
+  `remote: Authorization: Basic ${Buffer.from(user === null ? `${secret}:` : `${user}:${secret}`).toString('base64')}`,
 ];
 /** git splits an scp-like address at its first `:` and quotes the rest as a path. */
 const SPLIT = (pw: string) => `${pw}@${HOST}:o/r.git`;
@@ -132,8 +147,8 @@ const readings = (text: string, known?: KnownSecrets) => [
   describeGitError(new HttpError(409, 'push_failed', text), known),
 ];
 
-/** 200 passwords: 98,800 texts, each read eight ways (about 5 s alone; more under a full run). */
-const PASSWORDS = 200;
+/** 120 passwords: 75,120 texts and echoes, each read eight ways (about 5 s alone; more under a full run). */
+const PASSWORDS = 120;
 
 describe('git output and errors', () => {
   it('never show any part of a hostile password, known or not, in any address form or message, and keep the message (generated)', () => {
@@ -169,6 +184,19 @@ describe('git output and errors', () => {
         if (m.kind === 'path') check(m, SPLIT(pw));
         check(m, SPLIT(pw), split);
       }
+      // What a server echoes of the credential it was sent: nothing of it, once the address is known.
+      for (const origin of ORIGINS(pw, user))
+        for (const echo of ECHOES(origin)) {
+          for (const shown of [
+            redactGitText(echo, { addresses: [origin.address] }),
+            ...readings(echo, { addresses: [origin.address] }),
+          ])
+            if (/[QXZJKVW]/.test(shown))
+              throw new Error(
+                `echo leak: ${JSON.stringify(origin.address)}: ${JSON.stringify(echo)} → ${JSON.stringify(shown)}`,
+              );
+          cases++;
+        }
       // An address shown on its own (Project settings) keeps nothing of the password either.
       for (const address of ADDRESSES(pw, user)) {
         const { display } = remoteUrlForDisplay(address);
@@ -177,7 +205,8 @@ describe('git output and errors', () => {
       }
     }
     const paths = TEMPLATES.filter((m) => m.kind === 'path').length;
-    expect(cases).toBe(PASSWORDS * (8 * TEMPLATES.length * 2 + TEMPLATES.length + paths));
+    const forms = ORIGINS('x', 'u').length;
+    expect(cases).toBe(PASSWORDS * (forms * TEMPLATES.length * 2 + TEMPLATES.length + paths + forms * 2));
   }, 60_000);
 
   it('a password that copies the start of a git message, for a user named like a git prefix (generated)', () => {

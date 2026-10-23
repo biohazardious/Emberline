@@ -148,7 +148,7 @@ import {
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
-import { validateRepositoryUrl } from '../repository/git.js';
+import { PASSWORD_GIT_WOULD_SHOW, passwordGitWouldShow, validateRepositoryUrl } from '../repository/git.js';
 import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
@@ -563,6 +563,9 @@ export function registerProjectRoutes(
         // With an account the URL must be one Connect accepts (no query or fragment), so both entry
         // points bind capabilities to, and store, the same URL shapes.
         if (credential) validateRepositoryUrl(body.repoUrl);
+        // Without one git uses what the URL holds; a password it would print is refused before the
+        // clone's terminal shows it.
+        else if (passwordGitWouldShow(body.repoUrl)) throw badRequest(PASSWORD_GIT_WOULD_SHOW);
         // A branch given is the one checked out; without one the remote's default branch is, and
         // import-status records it.
         const branch = body.defaultBranch ?? null;

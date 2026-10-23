@@ -96,22 +96,55 @@ export interface KnownSecrets {
   addresses?: readonly (string | null | undefined)[];
 }
 
+/** A text as written, percent-decoded and percent-encoded. */
+function percentForms(text: string): string[] {
+  const forms = new Set([text]);
+  try {
+    const decoded = decodeURIComponent(text);
+    forms.add(decoded);
+    forms.add(encodeURIComponent(decoded));
+  } catch {
+    // not percent-encoded
+  }
+  return [...forms];
+}
+
+/**
+ * What to mask for a known address, as `[secret, shown]`: each password (and an http user name
+ * that may be a token) in every form, and the Basic value git sends for it; a password shorter than
+ * 3 characters only between its user name and `@`.
+ */
+function addressMasks(address: string): [secret: string, shown: string][] {
+  const masks: [string, string][] = [];
+  for (const { user, password } of addressSecrets(address)) {
+    if (password === null) {
+      for (const token of percentForms(user)) {
+        if (token.length >= 3) masks.push([token, '***']);
+        masks.push([Buffer.from(`${token}:`).toString('base64'), '[redacted]']);
+      }
+      continue;
+    }
+    if (!password) continue;
+    for (const form of percentForms(password))
+      masks.push(form.length >= 3 ? [form, '***'] : [`${user}:${form}@`, `${user}:***@`]);
+    for (const name of percentForms(user))
+      for (const form of percentForms(password))
+        if (name.length + form.length >= 3)
+          masks.push([Buffer.from(`${name}:${form}`).toString('base64'), '[redacted]']);
+  }
+  return masks;
+}
+
 /**
  * A git command's output or error as a person may read it: every secret core knows masked exactly
  * wherever it shows (the account's token and Basic value; an address's password as written,
- * percent-decoded and percent-encoded, one shorter than 3 characters only between its user name and
- * `@`), then any other address's credentials (withoutUrlCredentials), then any capability.
+ * percent-decoded and percent-encoded, and its Basic value; one shorter than 3 characters only
+ * between its user name and `@`), then any other address's credentials (withoutUrlCredentials),
+ * then any capability.
  */
 export function redactGitText(text: string, known?: KnownSecrets): string {
   let out = redactCredential(text, known?.credential);
-  const masks: [secret: string, shown: string][] = [];
-  for (const address of known?.addresses ?? []) {
-    const secrets = address ? addressSecrets(address) : null;
-    for (const password of secrets?.passwords ?? [])
-      masks.push(
-        password.length >= 3 ? [password, '***'] : [`${secrets!.user}:${password}@`, `${secrets!.user}:***@`],
-      );
-  }
+  const masks = (known?.addresses ?? []).flatMap((address) => (address ? addressMasks(address) : []));
   // Longest first: a password inside a longer one never leaves a piece of the longer one.
   for (const [secret, shown] of masks.sort((a, b) => b[0].length - a[0].length))
     out = out.split(secret).join(shown);

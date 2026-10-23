@@ -142,7 +142,7 @@ export async function inspectImportFolder(dir: string): Promise<{ branch: string
   return { branch: await mainWorkspaceBranch(dir) };
 }
 
-/** The last lines of a terminal, as plain text. */
+/** The last lines of a terminal, as plain text (all of what ptyd keeps: the caller cuts it). */
 async function terminalTail(ptyd: PtydBridge, sessionId: string): Promise<string> {
   try {
     const snap = await ptyd.get().snapshot(sessionId, 200);
@@ -151,10 +151,20 @@ async function terminalTail(ptyd: PtydBridge, sessionId: string): Promise<string
       .split('\n')
       .map((l) => l.trimEnd());
     while (lines.length > 0 && !lines[lines.length - 1]) lines.pop();
-    return lines.join('\n').slice(-TAIL_CHARS);
+    return lines.join('\n');
   } catch {
     return '';
   }
+}
+
+/**
+ * The end of a clone terminal's output, as import-status returns it. git may quote the URL the
+ * person typed (`clone … -- <url> <folder>`): its password never shows. Masked before it is cut,
+ * so the cut never starts inside a password.
+ */
+export function cloneTail(output: string, args: readonly string[]): string {
+  const dashes = args.indexOf('--');
+  return redactGitText(output, { addresses: [dashes >= 0 ? args[dashes + 1] : null] }).slice(-TAIL_CHARS);
 }
 
 /** Latest clone terminal of a project, if ptyd knows one. */
@@ -212,9 +222,7 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
     };
   }
   const output = await terminalTail(ptyd, clone.id);
-  // git may quote the URL the person typed (`clone -- <url> <folder>`): its password never shows.
-  const dashes = clone.args.indexOf('--');
-  const tail = redactGitText(output, { addresses: [dashes >= 0 ? clone.args[dashes + 1] : null] });
+  const tail = cloneTail(output, clone.args);
   const base = { exitCode: clone.exitCode, terminalId: clone.id, tail };
   if (clone.status === 'running') return { ...base, status: 'cloning' };
   if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) return readyUnlessTag(project, base);

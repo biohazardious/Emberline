@@ -1,12 +1,16 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
 import { addressSecrets, hostOf, remoteCompareKey, type ScanMeter } from '../forge/hosts.js';
 import {
   fetchBranchObjects,
+  passwordGitWouldShow,
   pushBranch,
   remoteBranchHead,
   remoteUrlForDisplay,
@@ -62,6 +66,38 @@ describe('validateRepositoryUrl', () => {
       transport: 'ssh',
       host: 'host',
     });
+  });
+
+  it('refuses a `\\` in an http(s) URL: as user info when an `@` follows it (git sends it there)', () => {
+    const refusal = (url: string) => {
+      try {
+        validateRepositoryUrl(url);
+        return null;
+      } catch (error) {
+        return (error as Error).message;
+      }
+    };
+    expect(refusal('https://u:2024\\S3CRET@github.com/o/r.git')).toMatch(/^Remove the user name and token/);
+    expect(refusal('https://x-access-token:12\\ghp_T0K@github.com/o/r.git')).toMatch(/^Remove the user name/);
+    expect(refusal('https://alice:a@b\\c@github.com/o/r.git')).toMatch(/^Remove the user name/);
+    expect(refusal('https://github.com\\o\\r.git')).toMatch(/^Enter a repository URL/);
+  });
+
+  it('knows which passwords git would print while it clones', () => {
+    for (const url of [
+      'ssh://git:pw@host/o/r.git',
+      'ssh://me@corp.com:pw@host/o/r.git',
+      'git:pw@host:o/r.git',
+      'https://u:2024\\S3CRET@github.com/o/r.git',
+    ])
+      expect(passwordGitWouldShow(url), url).toBe(true);
+    for (const url of [
+      'https://u:tok@github.com/o/r.git',
+      'git@github.com:o/r.git',
+      'ssh://git@h/o',
+      'https://h/o',
+    ])
+      expect(passwordGitWouldShow(url), url).toBe(false);
   });
 
   it('refuses an address whose user info may hold a password, read as the display reads it', () => {
@@ -219,37 +255,48 @@ describe('hostOf and remoteCompareKey', () => {
 });
 
 describe('addressSecrets', () => {
-  it('returns what may be the password, as written, decoded and encoded, never less, and the user name before it', () => {
-    for (const [raw, user, secrets] of [
-      ['https://u:S3CRET@h/o/r.git', 'u', ['S3CRET']],
-      ['https://u:p%40ss%20w@h/o', 'u', ['p%40ss%20w', 'p@ss w']],
-      ['https://u:p@ss@h/o', 'u', ['p@ss']],
-      ['ssh://me@corp.com:S3CRET@h/o', 'me@corp.com', ['S3CRET']],
-      ['git:S3CRET@h:o/r.git', 'git', ['S3CRET']],
-      ['me@corp.com:S3CRET@h:o/r', 'me@corp.com', ['S3CRET']],
-      ['alice:pa/ss@h', 'alice', ['pa/ss']],
-      ['https://u:ab@h/o', 'u', ['ab']],
+  it('returns each user name and what may be its password, never less than the password', () => {
+    const pairs = (raw: string) => addressSecrets(raw).map((p) => `${p.user}|${p.password}`);
+    for (const [raw, wanted] of [
+      ['https://u:S3CRET@h/o/r.git', ['u|S3CRET']],
+      ['https://u:p%40ss%20w@h/o', ['u|p%40ss%20w']],
+      ['https://u:p@ss@h/o', ['u|p@ss']],
+      ['ssh://me@corp.com:S3CRET@h/o', ['me@corp.com|S3CRET']],
+      ['git:S3CRET@h:o/r.git', ['git|S3CRET']],
+      ['me@corp.com:S3CRET@h:o/r', ['me@corp.com|S3CRET']],
+      ['alice:pa/ss@h', ['alice|pa/ss']],
+      ['https://u:ab@h/o', ['u|ab']],
+      // A password holding an `@`, in an address with a path's `@`: as the parser and git read it.
+      ['https://u:x@y@host/o/r@v2.git', ['u|x@y', 'u|x@y@host/o/r']],
       // The first and the last `@` a host follows: a path's `@` may end the password.
-      [
-        'https://u:S3CRET@GitHub.com/o/r@v2.git',
-        'u',
-        ['S3CRET', 'S3CRET@GitHub.com/o/r', 'S3CRET%40GitHub.com%2Fo%2Fr'],
-      ],
-      ['https://u:2024/S3CRET@h/o', 'u', ['2024/S3CRET', '2024%2FS3CRET']],
-    ] as const) {
-      const found = addressSecrets(raw);
-      expect(found?.user, raw).toBe(user);
-      for (const secret of secrets) expect(found?.passwords, raw).toContain(secret);
+      ['https://u:S3CRET@GitHub.com/o/r@v2.git', ['u|S3CRET', 'u|S3CRET@GitHub.com/o/r']],
+      ['https://u:2024/S3CRET@h/o', ['u|2024/S3CRET']],
+      // A `\` (the parser ends the authority there; git sends it in the user info).
+      ['https://u:2024\\S3CRET@github.com/o/r.git', ['u|2024\\S3CRET']],
+      ['https://alice:a@b\\c@github.com/o/r.git', ['alice|a', 'alice|a@b\\c']],
+      // An http(s) user name alone may be a token.
+      ['https://ghp_T0KEN@github.com/o/r.git', ['ghp_T0KEN|null']],
+      ['https://ghp_T0KEN@github.com:8443/o/r@v2.git', ['ghp_T0KEN|null']],
+    ] as const)
+      for (const pair of wanted) expect(pairs(raw), raw).toContain(pair);
+    // Linear: each character read a fixed number of times, however many `@`s.
+    const steps = (raw: string) => {
+      const meter: ScanMeter = { steps: 0 };
+      addressSecrets(raw, meter);
+      return meter.steps;
+    };
+    for (const make of [
+      (n: number) => `https://u:${'p@h'.repeat(n / 3)}/x`,
+      (n: number) => `alice:${'@h/'.repeat(n / 3)}`,
+      (n: number) => `https://${'a@'.repeat(n / 2)}h/o`,
+    ]) {
+      const small = steps(make(60_000));
+      expect(small).toBeLessThanOrEqual(20 * 60_000);
+      expect(steps(make(120_000)) / small).toBeLessThan(2.1);
     }
-    // No `user:…@`: nothing.
-    for (const raw of [
-      'git@h:o/r.git',
-      'https://h/o/r@v2.git',
-      'ssh://git@h:2222/o',
-      'https://tok@h/o',
-      'h:o/r',
-    ])
-      expect(addressSecrets(raw), raw).toBeNull();
+    // No password, no http user name: nothing.
+    for (const raw of ['git@h:o/r.git', 'https://h/o/r@v2.git', 'ssh://git@h:2222/o', 'h:o/r'])
+      expect(addressSecrets(raw), raw).toEqual([]);
   });
 });
 
@@ -391,6 +438,11 @@ describe('remoteUrlForDisplay', () => {
       ['ssh://git:22/S3C@host:2222/o/r', 'ssh://***@host:2222/o/r'],
       ['https://host:8443/g/n@v2/r.git', 'https://***@v2/r.git'],
       ['https://u:2024/S@[::1]:8443/o', 'https://***@[::1]:8443/o'],
+      // A `\\` ends the parser's user info and host; git sends it as part of the user info.
+      ['https://u:2024\\S3CRET@github.com/o/r.git', 'https://***@github.com/o/r.git'],
+      ['https://x-access-token:12\\ghp_T0K@github.com/o/r.git', 'https://***@github.com/o/r.git'],
+      ['https://alice:a@b\\c@github.com/o/r.git', 'https://***@github.com/o/r.git'],
+      ['https://u@h\\x@github.com/o', 'https://***@github.com/o'],
     ] as const)
       expect(remoteUrlForDisplay(raw), raw).toMatchObject({ display, hadCredentials: true });
     // Kept as git reads it (Connect may take it).
@@ -462,5 +514,33 @@ describe('reading origin without an account (the runner git straight to the URL)
     expect(error).toBeInstanceOf(HttpError);
     expect(error).toMatchObject({ statusCode: 409, code: 'remote_moved' });
     wroteNothing(main);
+  });
+});
+
+describe('a `\\` in an http password, as git sends it', () => {
+  it('git sends it in the user info; core shows ***, masks it and its Basic value, and Connect refuses it', async () => {
+    let authorization = '';
+    const server = http.createServer((req, res) => {
+      authorization ||= req.headers.authorization ?? '';
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="x"' }).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const address = `http://u:2024\\S3CRET@127.0.0.1:${port}/o/r.git`;
+    try {
+      const failure = await promisify(execFile)('git', ['ls-remote', '--', address], {
+        cwd: tmpdir(),
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      }).catch((e: { stderr: string }) => e);
+      expect(Buffer.from(authorization.replace(/^Basic /, ''), 'base64').toString()).toBe('u:2024\\S3CRET');
+      expect(remoteUrlForDisplay(address).display).toBe(`http://***@127.0.0.1:${port}/o/r.git`);
+      expect(shortGitError(failure, { addresses: [address] })).not.toContain('S3CRET');
+      expect(
+        shortGitError(new Error(`remote: ${authorization} and 2024\\S3CRET`), { addresses: [address] }),
+      ).toBe('Basic [redacted] and ***');
+      expect(() => validateRepositoryUrl(address.replace('http:', 'https:'))).toThrow(/Remove the user name/);
+    } finally {
+      server.close();
+    }
   });
 });
