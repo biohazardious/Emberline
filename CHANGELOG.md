@@ -4,6 +4,20 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- **Answer dialog.** **Answer** on the Inbox, the ticket drawer and the run dock opens a dialog with the agent's own question (its last message, its blockers, the hold's reason, or the questions of Claude's picker), the options the agent offered as one-click chips, a large answer box, file attachments and Send. Drafts are kept per run in the browser. A recovery suggestion that comes with a prompt opens the dialog with that prompt filled in.
+- **Suggest an answer** in the dialog: Claude Code drafts a reply read-only in the run's worktree, only when you press it, with the model `EMBERLINE_SUGGEST_MODEL` (default `haiku`) and a 60 second limit. It says why when Claude Code is not signed in.
+- **Attachments** to an answer: up to 10 files, 10 MB each and 25 MB in all. They are stored under `.emberline/attachments/answers/` in the run's worktree, never merged into main, and the prompt lists their paths.
+- With Claude's question picker open, a chip answers the picker directly, and typed text cancels the picker and arrives as the answer. A real permission prompt is answered in the terminal; the dialog says so and offers **Open terminal**.
+- The Inbox shows the agent's own question (its last message, up to 2,000 characters) instead of "Claude is waiting for your input".
+- One answer at a time per run: a second one gets "An answer is already being sent."
+
+### Upgrade notes
+
+- Nothing to migrate, and existing settings keep working. The nginx limit of 45 MB from 0.5.0 already covers attachments.
+- **Suggest an answer** spends Claude usage (your subscription or key) only when you press it. `EMBERLINE_SUGGEST_MODEL` (default `haiku`) chooses the model; add it to the `core` service's `environment` to change it.
+
 ## [0.5.2] - 2026-10-23
 
 A fix for held tickets whose merge failed for another reason than conflicts.
