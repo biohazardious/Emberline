@@ -26,6 +26,12 @@ export default defineConfig({
     // chunk keeps the 500 kB limit through chunkSizeGuard.
     chunkSizeWarningLimit: 4_000,
     rollupOptions: {
+      // A dependency's comment Rollup cannot place (zod's `@__PURE__` notes) is dropped either way:
+      // not worth a notice in every build. Any other warning, and any in our own code, still shows.
+      onwarn(warning, warn) {
+        if (warning.code === 'INVALID_ANNOTATION' && warning.id?.includes('/node_modules/')) return;
+        warn(warning);
+      },
       output: {
         // The libraries every page loads, and the protocol schemas, in chunks of their own beside
         // the app's: none of them grows the app's chunk. Those only lazy pages use (xterm, Monaco)
