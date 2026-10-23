@@ -395,15 +395,16 @@ export function repoNameFromUrl(url: string): string {
 }
 
 /**
- * A URL without credentials, for this browser's storage: better too much gone than a secret kept.
+ * A URL without credentials, for this browser's storage: better too much gone than a secret kept,
+ * and `***` where it was cut, so a restored draft never shows another address as the one typed.
  * - `scheme://`: an ssh URL keeps only its user name, any other loses its user info; query and
  *   fragment (where a token may sit) go too. A password holding `/`, `?` or `#` ends what the URL
  *   parser reads as user info early (`https://u:2024/rest@host/…` reads as a port and a path): when a
  *   `:` comes before the first `/`, `?` or `#` and an `@` that a host (`[v6]` too) follows comes
- *   after it, everything up to that `@` goes. One the parser cannot read loses everything from `//`
- *   to its last `@`, and from `?` or `#` on.
+ *   after it, everything up to that `@` goes (`https://***@host/…`). One the parser cannot read
+ *   loses everything from `//` to its last `@`, and from `?` or `#` on.
  * - scp-like (`user:secret@host:path`): everything from the first `:` to the last `@` goes, so
- *   `user:secret@host:path` becomes `user@host:path`. `git@host:path` has no `:` before its `@`
+ *   `user:secret@host:path` becomes `user:***@host:path`. `git@host:path` has no `:` before its `@`
  *   and stays as it is; an address with a `:` and a later `@` that holds no secret
  *   (`gitea:team/app@v2.git`) is cut too.
  */
@@ -416,14 +417,14 @@ export function stripUrlCredentials(url: string): string {
       for (let at = url.lastIndexOf('@'); at >= authorityEnd; at = url.lastIndexOf('@', at - 1)) {
         startsHost.lastIndex = at + 1;
         if (startsHost.test(url))
-          return (url.slice(0, schemeEnd) + url.slice(at + 1)).replace(/[?#][^]*$/, '');
+          return `${url.slice(0, schemeEnd)}***${url.slice(at)}`.replace(/[?#][^]*$/, '');
       }
     }
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
-      return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^]*@/i, '$1').replace(/[?#][^]*$/, '');
+      return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^]*@/i, '$1***@').replace(/[?#][^]*$/, '');
     }
     const ssh = parsed.protocol.toLowerCase() === 'ssh:';
     if (!parsed.password && !(parsed.username && !ssh) && !parsed.search && !parsed.hash) return url;
@@ -435,7 +436,7 @@ export function stripUrlCredentials(url: string): string {
   }
   const colon = url.indexOf(':');
   const at = url.lastIndexOf('@');
-  return colon >= 0 && colon < at ? url.slice(0, colon) + url.slice(at) : url;
+  return colon >= 0 && colon < at ? `${url.slice(0, colon)}:***${url.slice(at)}` : url;
 }
 
 /** "Use a folder" is offered only when at least one folder can be imported (a git repository). */

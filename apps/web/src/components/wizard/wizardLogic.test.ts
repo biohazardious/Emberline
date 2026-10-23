@@ -675,29 +675,31 @@ describe('credentials never reach the draft', () => {
       // `@`, `:`, `/`, quotes and whitespace in the password; a query token.
       ['https://u:S3C@R3T@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
       ['https://u:S3C:R3T@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
-      ['https://u:S3C/R3T@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ['https://u:S3C/R3T@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
       ["https://u:S3C'R3T@github.com/acme/shop.git", 'https://github.com/acme/shop.git'],
       ['https://github.com/acme/shop.git?private_token=t0k#t0k', 'https://github.com/acme/shop.git'],
       ['ssh://git:S3C@R3T@host.example/acme/shop.git', 'ssh://git@host.example/acme/shop.git'],
       ['ssh+git://u:S3C@R3T@host.example/acme/shop.git', 'ssh+git://host.example/acme/shop.git'],
-      // Not readable as a URL (a space in the host): everything up to the last `@`.
-      ['https://u:S3C R3T@host example/o/r', 'https://host example/o/r'],
-      ['https://u:S3C\tR3T@h\u00a0x/o/r?t0k', 'https://h\u00a0x/o/r'],
+      // Not readable as a URL (a space in the host): everything up to the last `@`, *** in its place.
+      ['https://u:S3C R3T@host example/o/r', 'https://***@host example/o/r'],
+      ['https://u:S3C\tR3T@h\u00a0x/o/r?t0k', 'https://***@h\u00a0x/o/r'],
       // scp-like: from the first `:` to the last `@`.
-      ['alice:S3C@R3T@host.example:acme/shop.git', 'alice@host.example:acme/shop.git'],
-      ['alice:p@ss@host.example:acme/shop.git', 'alice@host.example:acme/shop.git'],
-      ['alice:S3C/R3T@host.example:acme/shop.git', 'alice@host.example:acme/shop.git'],
-      ['alice:S3C R3T@host.example/acme/shop.git', 'alice@host.example/acme/shop.git'],
-      ['me@corp.com:S3C@R3T@host.example:o/r', 'me@corp.com@host.example:o/r'],
-      ['host.example:S3C@x.example', 'host.example@x.example'],
+      ['alice:S3C@R3T@host.example:acme/shop.git', 'alice:***@host.example:acme/shop.git'],
+      ['alice:p@ss@host.example:acme/shop.git', 'alice:***@host.example:acme/shop.git'],
+      ['alice:S3C/R3T@host.example:acme/shop.git', 'alice:***@host.example:acme/shop.git'],
+      ['alice:S3C R3T@host.example/acme/shop.git', 'alice:***@host.example/acme/shop.git'],
+      ['me@corp.com:S3C@R3T@host.example:o/r', 'me@corp.com:***@host.example:o/r'],
+      ['host.example:S3C@x.example', 'host.example:***@x.example'],
       // A password starting with digits and then `/`, `?` or `#` reads as a port.
-      ['https://u:2024/S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
-      ['https://u:123?S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
-      ['https://u:9#S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
-      ['https://u:2024/S3C@[::1]:8443/o', 'https://[::1]:8443/o'],
-      ['ssh://git:#S3C@host.example:2222/o/r.git', 'ssh://host.example:2222/o/r.git'],
-      // Indistinguishable from the form above (a port, an `@` in the path): stored cut too.
-      ['https://host.example:8443/acme/shop@v2.git', 'https://v2.git'],
+      ['https://u:2024/S3C@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
+      ['https://u:123?S3C@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
+      ['https://u:9#S3C@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
+      ['https://u:2024/S3C@[::1]:8443/o', 'https://***@[::1]:8443/o'],
+      ['ssh://git:#S3C@host.example:2222/o/r.git', 'ssh://***@host.example:2222/o/r.git'],
+      // Indistinguishable from the form above (a port, an `@` in the path): stored cut too, never
+      // as another address (`https://v2.git`).
+      ['https://host.example:8443/acme/shop@v2.git', 'https://***@v2.git'],
+      ['gitea:team/app@v2.git', 'gitea:***@v2.git'],
     ] as const) {
       const stripped = stripUrlCredentials(raw);
       expect(stripped, raw).not.toMatch(SECRET);
