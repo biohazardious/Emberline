@@ -167,16 +167,26 @@ export interface TicketsFileHooks {
   proceed?: () => boolean;
 }
 
+/** One tickets file's drafts. */
+export interface TicketsFileBatch {
+  autoDispatch: boolean;
+  tickets: AgentTicketDraft[];
+  sha256: string;
+}
+
 /**
- * Reads and consumes the drafts file an agent wrote. A file that is not valid JSON or not a valid
- * batch is still removed; `onRejected` hears why, so the run can say so instead of failing silently.
- * A file the hooks skip (inherited from main, or already imported) is removed too.
+ * Reads and consumes the drafts files an agent wrote: `new-tickets.json`, then `tickets.json`, so one
+ * pass imports both. A file that is not valid JSON or not a valid batch is still removed;
+ * `onRejected` hears why, so the run can say so instead of failing silently. A file the hooks skip
+ * (inherited from main, or already imported) is removed too. Once `proceed` says no, no file is
+ * consumed: the ones left wait for a later pass, which reads them all.
  */
-export async function ingestAgentTicketsFile(
+export async function ingestAgentTicketsFiles(
   workspacePath: string,
   hooks: TicketsFileHooks = {},
-): Promise<{ autoDispatch: boolean; tickets: AgentTicketDraft[]; sha256: string } | null> {
+): Promise<TicketsFileBatch[]> {
   const { onRejected, isInherited, claim, onSkipped, proceed } = hooks;
+  const batches: TicketsFileBatch[] = [];
   for (const name of ['new-tickets.json', 'tickets.json']) {
     const relPath = `.emberline/${name}`;
     const filePath = path.join(workspacePath, '.emberline', name);
@@ -185,7 +195,7 @@ export async function ingestAgentTicketsFile(
       const raw = await readFile(filePath);
       const sha256 = createHash('sha256').update(raw).digest('hex');
       const inherited = isInherited ? await isInherited(relPath, raw).catch(() => false) : false;
-      if (proceed && !proceed()) return null;
+      if (proceed && !proceed()) break;
       await rm(filePath, { force: true });
       if (inherited) {
         onSkipped?.('inherited', name, sha256);
@@ -199,13 +209,13 @@ export async function ingestAgentTicketsFile(
         onSkipped?.('duplicate', name, sha256);
         continue;
       }
-      return { ...parsed, sha256 };
+      batches.push({ ...parsed, sha256 });
     } catch (error) {
       await rm(filePath, { force: true }).catch(() => undefined);
       onRejected?.(`${name}: ${(error as Error).message}`.slice(0, 500));
     }
   }
-  return null;
+  return batches;
 }
 
 /**

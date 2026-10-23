@@ -53,7 +53,7 @@ import {
   effectiveFactorySettings,
   getFactorySettings,
   committedWithContent,
-  ingestAgentTicketsFile,
+  ingestAgentTicketsFiles,
   mainWorkspaceBranch,
   persistFactoryAttachments,
   runBranchBase,
@@ -1425,9 +1425,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
       : undefined;
 
-    // 1. Check if the agent wrote `.emberline/new-tickets.json` in its worktree or main workspace.
-    //    A file committed where the run's branch started came from main, not from this run, and a
-    //    content imported before is not imported again: either would recreate the same tickets.
+    // 1. Check if the agent wrote `.emberline/new-tickets.json` (or `tickets.json`, both are read) in
+    //    its worktree or main workspace. A file committed where the run's branch started came from
+    //    main, not from this run, and a content imported before is not imported again: either would
+    //    recreate the same tickets.
     const projectId = run.projectId;
     const inherited: string[] = [];
     let duplicate = false;
@@ -1443,12 +1444,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         duplicate = true;
         this.runs.note(run.id, 'tickets_file_duplicate', { file, sha256 });
       },
-      // A pass whose turn is over leaves the file to the newer turn's pass (it is consumed when read).
+      // A pass whose turn is over leaves the files to the newer turn's pass (each is consumed when read).
       proceed: () => !stale(),
     });
     const worktreePath = run.worktreePath;
     const fromWorktree = worktreePath
-      ? await ingestAgentTicketsFile(
+      ? await ingestAgentTicketsFiles(
           worktreePath,
           hooksFor(
             // A detached main checkout has no branch: the project's default branch is main then.
@@ -1460,101 +1461,103 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             worktreePath,
           ),
         )
-      : null;
+      : [];
     const fromMain =
-      !fromWorktree && projectRow.path !== run.worktreePath
-        ? await ingestAgentTicketsFile(
+      fromWorktree.length === 0 && projectRow.path !== run.worktreePath
+        ? await ingestAgentTicketsFiles(
             projectRow.path,
             hooksFor(async () => 'HEAD', projectRow.path),
           )
-        : null;
-    const ingested = fromWorktree ?? fromMain;
+        : [];
+    const batches = fromWorktree.length > 0 ? fromWorktree : fromMain;
     if (inherited.length > 0)
       this.runs.note(run.id, 'tickets_file_inherited', { files: [...new Set(inherited)] });
 
     const draftDepth = (ticketRow?.depth ?? 0) + 1;
     const fSettingsForDepth = getFactorySettings(this.db);
-    if (ingested && ingested.tickets.length > 0 && this.leftToFactory(projectId, ticketRow?.id)) {
-      this.runs.note(run.id, 'tickets_file_left_to_factory', { drafts: ingested.tickets.length });
-    } else if (ingested && ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
-      // S16: agent tickets spawning agent tickets must not grow without bound.
-      this.runs.note(run.id, 'ticket_depth_limit', {
-        drafts: ingested.tickets.length,
-        depth: draftDepth,
-        maxTicketDepth: fSettingsForDepth.maxTicketDepth,
-      });
-    } else if (ingested && ingested.tickets.length > 0) {
-      const created: { draft: (typeof ingested.tickets)[number]; ticket: Ticket }[] = [];
-      // Open tickets by normalized title; a done ticket with the same title does not block a new one.
-      const byTitle = new Map<string, string>();
-      for (const r of this.db
-        .select({ key: tickets.key, title: tickets.title, status: tickets.status })
-        .from(tickets)
-        .where(eq(tickets.projectId, run.projectId))
-        .all()) {
-        const k = normalizeTicketTitle(r.title);
-        if (r.status !== 'done' && !byTitle.has(k)) byTitle.set(k, r.key);
-      }
-      const refKey = (ref: string) => normalizeTicketRef(ref) ?? ref.toLowerCase();
-      const skippedRefs = new Map<string, string>(); // skipped draft's ref -> key of the ticket that stands in for it
-      for (const draft of ingested.tickets) {
-        const titleKey = normalizeTicketTitle(draft.title);
-        const existing = byTitle.get(titleKey);
-        if (existing) {
-          this.runs.note(run.id, 'ticket_draft_duplicate', { title: draft.title.slice(0, 200), existing });
-          if (draft.ref) skippedRefs.set(refKey(draft.ref), existing);
-          continue;
+    for (const ingested of batches) {
+      if (ingested.tickets.length > 0 && this.leftToFactory(projectId, ticketRow?.id)) {
+        this.runs.note(run.id, 'tickets_file_left_to_factory', { drafts: ingested.tickets.length });
+      } else if (ingested.tickets.length > 0 && draftDepth > fSettingsForDepth.maxTicketDepth) {
+        // S16: agent tickets spawning agent tickets must not grow without bound.
+        this.runs.note(run.id, 'ticket_depth_limit', {
+          drafts: ingested.tickets.length,
+          depth: draftDepth,
+          maxTicketDepth: fSettingsForDepth.maxTicketDepth,
+        });
+      } else if (ingested.tickets.length > 0) {
+        const created: { draft: (typeof ingested.tickets)[number]; ticket: Ticket }[] = [];
+        // Open tickets by normalized title; a done ticket with the same title does not block a new one.
+        const byTitle = new Map<string, string>();
+        for (const r of this.db
+          .select({ key: tickets.key, title: tickets.title, status: tickets.status })
+          .from(tickets)
+          .where(eq(tickets.projectId, run.projectId))
+          .all()) {
+          const k = normalizeTicketTitle(r.title);
+          if (r.status !== 'done' && !byTitle.has(k)) byTitle.set(k, r.key);
         }
-        let body = draft.body ?? '';
-        if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
-          const agentStr = draft.preferredAgent ?? 'claude';
-          const modelStr = draft.preferredModel ?? 'auto';
-          const routeTag = `[Preferred Agent: ${agentStr} · Model: ${modelStr}]`;
-          // Keep the tag inside the body limit even for drafts that already use all of it.
-          body = `${body.slice(0, TICKET_BODY_MAX - routeTag.length - 2)}\n\n${routeTag}`.trim();
+        const refKey = (ref: string) => normalizeTicketRef(ref) ?? ref.toLowerCase();
+        const skippedRefs = new Map<string, string>(); // skipped draft's ref -> key of the ticket that stands in for it
+        for (const draft of ingested.tickets) {
+          const titleKey = normalizeTicketTitle(draft.title);
+          const existing = byTitle.get(titleKey);
+          if (existing) {
+            this.runs.note(run.id, 'ticket_draft_duplicate', { title: draft.title.slice(0, 200), existing });
+            if (draft.ref) skippedRefs.set(refKey(draft.ref), existing);
+            continue;
+          }
+          let body = draft.body ?? '';
+          if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
+            const agentStr = draft.preferredAgent ?? 'claude';
+            const modelStr = draft.preferredModel ?? 'auto';
+            const routeTag = `[Preferred Agent: ${agentStr} · Model: ${modelStr}]`;
+            // Keep the tag inside the body limit even for drafts that already use all of it.
+            body = `${body.slice(0, TICKET_BODY_MAX - routeTag.length - 2)}\n\n${routeTag}`.trim();
+          }
+          try {
+            const ticket = this.create(
+              run.projectId,
+              {
+                title: draft.title,
+                body,
+                persona: draft.persona,
+                priority: draft.priority,
+                status: 'ready',
+              },
+              draftDepth,
+            );
+            created.push({ draft, ticket });
+            byTitle.set(titleKey, ticket.key);
+          } catch (error) {
+            // The drafts file is already consumed: skip the bad draft, keep the others.
+            this.runs.note(run.id, 'ticket_draft_rejected', {
+              title: draft.title.slice(0, 200),
+              message: (error as Error).message.slice(0, 500),
+            });
+          }
         }
-        try {
-          const ticket = this.create(
-            run.projectId,
-            {
-              title: draft.title,
-              body,
-              persona: draft.persona,
-              priority: draft.priority,
-              status: 'ready',
-            },
-            draftDepth,
-          );
-          created.push({ draft, ticket });
-          byTitle.set(titleKey, ticket.key);
-        } catch (error) {
-          // The drafts file is already consumed: skip the bad draft, keep the others.
-          this.runs.note(run.id, 'ticket_draft_rejected', {
-            title: draft.title.slice(0, 200),
-            message: (error as Error).message.slice(0, 500),
+        // Board work, even without a code change: remembered on the run, so a later pass of it (a
+        // re-pass after a gate's prompt, finalization after a restart) does not hold it as empty.
+        if (created.length > 0) {
+          this.runs.note(run.id, 'tickets_imported', {
+            count: created.length,
+            tickets: created.map((c) => c.ticket.key),
           });
         }
-      }
-      // Board work, even without a code change: remembered on the run, so a later pass of it (a
-      // re-pass after a gate's prompt, finalization after a restart) does not hold it as empty.
-      if (created.length > 0) {
-        this.runs.note(run.id, 'tickets_imported', {
-          count: created.length,
-          tickets: created.map((c) => c.ticket.key),
-        });
-      }
-      const repointed = created.map((c) => ({
-        ...c,
-        draft: {
-          ...c.draft,
-          ...(c.draft.dependsOn
-            ? { dependsOn: c.draft.dependsOn.map((d) => skippedRefs.get(refKey(d)) ?? d) }
-            : {}),
-        },
-      }));
-      this.applyDraftDependencies(run.id, run.projectId, repointed);
-      if (ingested.autoDispatch) {
-        this.chainOn(run.projectId);
+        const repointed = created.map((c) => ({
+          ...c,
+          draft: {
+            ...c.draft,
+            ...(c.draft.dependsOn
+              ? { dependsOn: c.draft.dependsOn.map((d) => skippedRefs.get(refKey(d)) ?? d) }
+              : {}),
+          },
+        }));
+        this.applyDraftDependencies(run.id, run.projectId, repointed);
+        if (ingested.autoDispatch) {
+          this.chainOn(run.projectId);
+        }
       }
     }
 
@@ -1564,7 +1567,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // If a Factory Orchestrator (PO) stopped to ask a clarifying question without writing
     // `.emberline/new-tickets.json`, automatically reply once so it writes the tickets immediately.
-    if (isFactoryOrchestratorTicket && !ingested && !duplicate && (!run.endedAt || run.resumable)) {
+    if (
+      isFactoryOrchestratorTicket &&
+      batches.length === 0 &&
+      !duplicate &&
+      (!run.endedAt || run.resumable)
+    ) {
       const nudge = () =>
         this.runs
           .prompt(
@@ -1602,7 +1610,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const isFactoryRun =
       finalizing ||
       this.autoChainProjects.has(run.projectId) ||
-      Boolean(ingested) ||
+      batches.length > 0 ||
       isFactoryOrchestratorTicket ||
       hasFactoryPipeline ||
       (ticketRow?.status !== 'done' &&
@@ -1616,7 +1624,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // a chaining dispatch (already on). A ticket a person started, or one a narrow dispatch started
     // because a person's change unblocked it, does not start the rest of the queue when it finishes.
     if (stale()) return;
-    if (fSettings.autoPickupReady && isFactoryOrchestratorTicket && ingested?.autoDispatch !== false) {
+    if (fSettings.autoPickupReady && isFactoryOrchestratorTicket && batches.every((b) => b.autoDispatch)) {
       this.chainOn(run.projectId);
     }
 

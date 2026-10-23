@@ -48,10 +48,10 @@ vi.mock('./factory/service.js', async (importOriginal) => {
       }
       return critic.result ?? actual.runCrossProviderCritic(params);
     }) as typeof actual.runCrossProviderCritic,
-    ingestAgentTicketsFile: ((workspacePath, hooks) => {
+    ingestAgentTicketsFiles: ((workspacePath, hooks) => {
       ingestStep.before?.();
-      return actual.ingestAgentTicketsFile(workspacePath, hooks);
-    }) as typeof actual.ingestAgentTicketsFile,
+      return actual.ingestAgentTicketsFiles(workspacePath, hooks);
+    }) as typeof actual.ingestAgentTicketsFiles,
     syncWorktreeToMainWorkspace: ((params) =>
       actual.syncWorktreeToMainWorkspace({
         ...params,
@@ -1725,15 +1725,17 @@ describe('factory chain robustness', () => {
     await settle(project.id);
   });
 
-  it("a pass whose turn is over leaves the agent's tickets file to the newer turn's pass", async () => {
+  it("a pass whose turn is over leaves the agent's tickets files to the newer turn's pass, which imports both", async () => {
     await api('PATCH', '/api/factory/settings', { autoPickupReady: false });
     const project = await createProject();
     const po = await createTicket(project.id, { title: 'Plan the work', status: 'ready' });
     const passes = trackPipelines();
     const { run } = (await api('POST', `/api/tickets/${po.id}/start`, {})).json() as { run: Run };
     const file = path.join(run.worktreePath, '.emberline', 'new-tickets.json');
+    const second = path.join(run.worktreePath, '.emberline', 'tickets.json');
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Drafted' }] }));
+    writeFileSync(second, JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Drafted too' }] }));
     // The agent works again just as the first pass reads the file.
     ingestStep.before = () => {
       ingestStep.before = null;
@@ -1747,22 +1749,25 @@ describe('factory chain robustness', () => {
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
     await Promise.all(passes);
     const drafted = async () =>
-      ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).filter(
-        (x) => x.title === 'Drafted',
-      );
+      ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[])
+        .map((x) => x.title)
+        .filter((title) => title.startsWith('Drafted'))
+        .sort();
     expect(existsSync(file)).toBe(true);
-    expect(await drafted()).toHaveLength(0);
+    expect(existsSync(second)).toBe(true);
+    expect(await drafted()).toEqual([]);
     expect((await eventTypes(run)).filter((x) => x.startsWith('tickets_'))).toEqual([]);
 
-    // That turn's stop: its pass imports the file, once.
+    // That turn's stop: its pass imports both files, once each, without waiting for another stop.
     const token = await waitFile(`token-${run.id}`);
     await signal(run.id, token);
     await hook(run.id, 'Stop', token);
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
     await Promise.all(passes);
     expect(existsSync(file)).toBe(false);
-    expect(await drafted()).toHaveLength(1);
-    expect((await eventTypes(run)).filter((x) => x === 'tickets_imported')).toHaveLength(1);
+    expect(existsSync(second)).toBe(false);
+    expect(await drafted()).toEqual(['Drafted', 'Drafted too']);
+    expect((await eventTypes(run)).filter((x) => x === 'tickets_imported')).toHaveLength(2);
     await settle(project.id);
   });
 
