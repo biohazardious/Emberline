@@ -580,6 +580,70 @@ describe('runs', () => {
     });
   });
 
+  describe('prune and GC while a reconcile pass is running', () => {
+    /** A run whose agent exited; nothing has noted it yet. */
+    const exitedRun = async (projectId: string) => {
+      const run: Run = (await api('POST', '/api/runs', { projectId })).json();
+      await tokenFor(run.id);
+      await t.ptyd.get().write(run.terminalId ?? '', 'bye\r');
+      await expect
+        .poll(async () => (await t.ptyd.get().list()).sessions.find((s) => s.id === run.terminalId)?.status, {
+          timeout: 5_000,
+        })
+        .toBe('exited');
+      return run;
+    };
+    /** A reconcile pass held in its session listing until `release()`. */
+    const heldPass = () => {
+      const client = t.ptyd.get();
+      const list = client.list.bind(client);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      vi.spyOn(client, 'list').mockImplementation(async (...args: Parameters<typeof list>) => {
+        calls += 1;
+        if (calls === 1) await gate;
+        return list(...args);
+      });
+      return { pass: t.runs.reconcile(), release };
+    };
+
+    it('a prune notes the exit of the run itself instead of refusing it as active', async () => {
+      const project = await createProject('Prune during a pass', true);
+      const run = await exitedRun(project.id);
+      const { pass, release } = heldPass();
+      try {
+        const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ removed: true });
+        expect(t.runs.getRun(run.id).endedAt).not.toBeNull();
+      } finally {
+        release();
+        await pass;
+      }
+      // The pass listed the run while it was open: it does not note its end a second time.
+      const types = t.runs.get(run.id).events.map((e) => e.type);
+      expect(types.filter((type) => type === 'process_exited')).toHaveLength(1);
+      expect(types).not.toContain('session_lost');
+    });
+
+    it('a manual GC waits for the pass, so a run that just ended is collected', async () => {
+      const project = await createProject('GC during a pass', true);
+      const run = await exitedRun(project.id);
+      const { pass, release } = heldPass();
+      setTimeout(release, 300);
+      const res = await t.runs.garbageCollect({
+        projectId: project.id,
+        keepRecent: 0,
+        includeFailed: true,
+        pruneWorktrees: true,
+      });
+      await pass;
+      expect(res.removedRuns).toBe(1);
+      expect(existsSync(run.worktreePath)).toBe(false);
+    });
+  });
+
   describe('garbage collection keeps unmerged work', () => {
     const finishRun = async (projectId: string) => {
       const run: Run = (await api('POST', '/api/runs', { projectId })).json();
@@ -769,6 +833,117 @@ describe('runs', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('auto-GC asks git for the merge target only when a kept worktree needs a fresh check', async () => {
+      const project = await createProject('Auto GC lazy target', true);
+      const stale = await finishRun(project.id);
+      commitIn(stale.worktreePath);
+      t.db
+        .update(runs)
+        .set({ createdAt: new Date(1_000) })
+        .where(eq(runs.id, stale.id))
+        .run();
+      for (let i = 0; i < 10; i += 1) {
+        t.db
+          .insert(runs)
+          .values({
+            id: `synthetic-${i}`,
+            projectId: project.id,
+            agent: 'claude',
+            state: 'done',
+            worktreePath: project.path,
+            hookTokenHash: 'x',
+            stateChangedAt: new Date(10_000 + i),
+            createdAt: new Date(10_000 + i),
+            endedAt: new Date(10_000 + i),
+          })
+          .run();
+      }
+      const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(live.id);
+      const mergeTarget = vi.spyOn(
+        t.runs as unknown as { mergeTarget(project: unknown): Promise<string> },
+        'mergeTarget',
+      );
+      const autoGc = async () => {
+        (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+        await t.runs.reconcile();
+      };
+      await autoGc();
+      expect(mergeTarget).toHaveBeenCalledTimes(1);
+      // The kept worktree's verdict is cached and its HEAD has not moved: no git call for the branch.
+      await autoGc();
+      expect(mergeTarget).toHaveBeenCalledTimes(1);
+      expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
+    });
+
+    it('auto-GC keeps its verdicts on the runs an exhausted archive budget left for the next pass', async () => {
+      const project = await createProject('Auto GC budget', true);
+      // Oldest first: `kept` is never reached, `second` finds the budget used up, `first` uses it.
+      const kept = await finishRun(project.id);
+      commitIn(kept.worktreePath);
+      const second = await finishRun(project.id);
+      const first = await finishRun(project.id);
+      for (const [row, at] of [
+        [kept, 1_000],
+        [second, 2_000],
+        [first, 3_000],
+      ] as const) {
+        t.db
+          .update(runs)
+          .set({ createdAt: new Date(at) })
+          .where(eq(runs.id, row.id))
+          .run();
+      }
+      for (let i = 0; i < 10; i += 1) {
+        t.db
+          .insert(runs)
+          .values({
+            id: `synthetic-${i}`,
+            projectId: project.id,
+            agent: 'claude',
+            state: 'done',
+            worktreePath: project.path,
+            hookTokenHash: 'x',
+            stateChangedAt: new Date(10_000 + i),
+            createdAt: new Date(10_000 + i),
+            endedAt: new Date(10_000 + i),
+          })
+          .run();
+      }
+      const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+      await tokenFor(live.id);
+      const checks = (
+        t.runs as unknown as {
+          keptWorktreeChecks: Map<string, { head: string | null; reason: string; checkedAt: number }>;
+        }
+      ).keptWorktreeChecks;
+      const verdict = {
+        head: await worktreeHeadSha(kept.worktreePath, project.path),
+        reason: 'unmerged_commits',
+        checkedAt: Date.now(),
+      };
+      checks.set(kept.id, verdict);
+      const warn = vi.fn();
+      t.runs.setLogger({ warn });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.spyOn(t.runs.outputs, 'archiveBeforePrune').mockImplementation(async () => {
+          vi.setSystemTime(Date.now() + 61_000);
+          return 'timeout';
+        });
+        (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
+        await t.runs.reconcile();
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(checks.get(kept.id)).toEqual(verdict);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ runsLeft: 2 }),
+        expect.stringContaining('next pass'),
+      );
+      expect(t.runs.list().map((r) => r.id)).toEqual(expect.arrayContaining([kept.id, second.id, first.id]));
     });
 
     it('auto-GC keeps a stale worktree with unmerged commits', async () => {
@@ -1339,7 +1514,7 @@ describe('runs', () => {
       }
     });
 
-    it('the same prompt respawns it while a reconcile pass is running', async () => {
+    it('the same prompt respawns it at once while a reconcile pass is running, and the pass leaves it alone', async () => {
       process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
       try {
         const project = await createProject('One-shot during a pass', true);
@@ -1374,12 +1549,21 @@ describe('runs', () => {
           return list(...args);
         });
         const pass = t.runs.reconcile();
+        // The prompt checks this run's session itself: it does not wait for the pass (an auto-GC
+        // pass may take a minute).
         const prompting = t.runs.prompt('gem-3', 'fix', { automatic: true });
-        setTimeout(release, 50);
-        const run = await prompting;
+        const outcome = await Promise.race([
+          prompting,
+          new Promise<'waited'>((resolve) => setTimeout(() => resolve('waited'), 5_000)),
+        ]);
+        release();
+        await prompting;
         await pass;
-        expect(run).toMatchObject({ state: 'starting', endedAt: null });
+        expect(outcome).toMatchObject({ state: 'starting', endedAt: null });
         expect(t.runs.get('gem-3').events.map((e) => e.type)).toContain('respawning');
+        // The pass listed the run before its respawn: it must not end the new session as lost.
+        expect(t.runs.getRun('gem-3')).toMatchObject({ endedAt: null });
+        expect(t.runs.get('gem-3').events.filter((e) => e.type === 'session_lost')).toHaveLength(1);
         await tokenFor('gem-3');
       } finally {
         delete process.env.EMBERLINE_GEMINI_COMMAND;

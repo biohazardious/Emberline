@@ -18,6 +18,9 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Dropping a folder on the Answer dialog added it as an empty file, or failed at Send. It is now refused with "… is a folder. Add the files inside it instead."
 - An option's explanation in the Answer dialog showed only as a hover tooltip, which touch screens never show. It now shows under the option.
 - Screen readers now hear why **Suggest an answer** is off, and each problem with an attached file as it appears.
+- A prompt to a Codex, Gemini or other one-shot agent that had just finished its turn could wait up to a minute or more while the background clean-up ran. It now checks only that agent's session and goes on at once.
+- **Prune worktree** on a run whose agent had just exited could fail with "stop the active run before pruning its worktree", and **Clean Up Finished** or **Clean Worktrees** skipped a run that had just ended. They now notice the exit first.
+- A run sharing its worktree with another run (after a handoff) could start a preview while that worktree was being torn down and removed. The preview is now refused until the removal is done.
 
 ## [0.6.0] - 2026-10-23
 

@@ -884,6 +884,48 @@ describe('teardown before prune', () => {
     await expect.poll(() => typesOf(run.id)).toContain('worktree_pruned');
   });
 
+  it('a prune of a run sharing a worktree whose teardown runs follows that teardown instead of starting another', async () => {
+    const { release, order } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    // A handoff successor works in its predecessor's worktree.
+    t.db.update(runs).set({ worktreePath: a.worktreePath }).where(eq(runs.id, b.id)).run();
+    expect((await api('POST', `/api/runs/${a.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    const res = await api('POST', `/api/runs/${b.id}/worktree/prune`, {});
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ removed: false, pending: true });
+    expect(order).toEqual([`teardown:${a.worktreePath}`]);
+    release();
+    await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => typesOf(a.id)).toContain('worktree_pruned');
+    expect(order).toEqual([`teardown:${a.worktreePath}`]);
+  });
+
+  it('a run sharing a worktree whose teardown runs cannot start a preview in it', async () => {
+    const { release } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject(
+      'version: 1\nteardown:\n  - echo slow-teardown\nservices:\n  - name: web\n    command: sleep 30\n    preview: true\n',
+    );
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    t.db.update(runs).set({ worktreePath: a.worktreePath }).where(eq(runs.id, b.id)).run();
+    expect((await api('POST', `/api/runs/${a.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    const res = await api('POST', `/api/runs/${b.id}/preview/start`, {});
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toBe("this run's worktree is being removed; it cannot start a preview");
+    release();
+    await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
+  });
+
   it('a manual GC answers within its time budget and reports the teardowns still running', async () => {
     const { release, order } = holdTeardowns();
     budgets().request = 200;
