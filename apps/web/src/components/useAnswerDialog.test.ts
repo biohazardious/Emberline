@@ -173,6 +173,32 @@ describe('useAnswerDialog: option chips', () => {
     expect(calls).toEqual([]);
   });
 
+  it('after a typed change, the next chip adds its option, even after a line equal to the last chip (F-5)', async () => {
+    await open();
+    await act(async () => dialog.onText('Blue first'));
+    await act(async () => dialog.onOption(0));
+    expect(dialog.text).toBe('Blue first\nRed');
+    await act(async () => dialog.onText('Blue first\nRed\nor else\nRed'));
+    await act(async () => dialog.onOption(1));
+    expect(dialog.text).toBe('Blue first\nRed\nor else\nRed\nGreen');
+  });
+
+  it('a chip while a typed answer goes out leaves the box alone (F-11)', async () => {
+    const pending = deferred<unknown>();
+    answer = () => pending.promise;
+    await open();
+    await act(async () => dialog.onText('Blue'));
+    await act(async () => {
+      dialog.onSend();
+      dialog.onOption(0);
+    });
+    expect(dialog.busy).toBe(true);
+    expect(dialog.text).toBe('Blue');
+    await act(async () => pending.reject(new ApiRequestError(409, 'run_busy', 'busy')));
+    await waitFor(() => expect(dialog.busy).toBe(false));
+    expect(dialog.text).toBe('Blue');
+  });
+
   it('with files attached, a chip goes into the box so the files are not dropped', async () => {
     await open();
     await act(async () => dialog.onFiles([file('shot.png')]));

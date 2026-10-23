@@ -88,8 +88,10 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   const question = query.data ?? null;
   const questionError = query.error ? errorText(query.error) : null;
 
-  // Every change is the draft, so closing the dialog never loses typed text.
+  // Every change is the draft, so closing the dialog never loses typed text. Any change but a chip's
+  // own makes the box no longer end in what the last chip placed: the next chip adds, never swaps.
   const setText = (v: string) => {
+    placed.current = null;
     textNow.current = v;
     setTextState(v);
     saveDraft(run.id, v);
@@ -125,12 +127,14 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   // or attached would be dropped; otherwise it goes into the box (Send then cancels the picker and
   // types the text).
   const chooseOption = (i: number) => {
+    // While an answer goes out the box stays as it was sent.
+    if (sending.current) return;
     const choice = question ? optionChoice(question, i, text, files, placed.current) : null;
     if (!choice) return;
     if (choice.send) void post(async () => ({ option: i }));
     else {
-      placed.current = choice.placed;
       setText(choice.text);
+      placed.current = choice.placed;
     }
   };
 
