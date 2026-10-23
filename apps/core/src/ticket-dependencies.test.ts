@@ -1958,6 +1958,30 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
+    it('holds it also when another run finished between the start and the resume', async () => {
+      const { project, a, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      // Another run's Stop (an agent that kept running through the update) writes the marks first.
+      (restarted as unknown as { markPipelinePending(id: string): void }).markPipelinePending('other-run');
+      expect(pendingKey()).toBeDefined();
+      await restarted.resumeChains();
+      expect((await eventTypes(run)).filter((x) => x === 'pipeline_interrupted')).toHaveLength(1);
+      expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+
+    it('a run that finished again since the start is not held: its own pass runs', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const passes = trackPipelines(restarted);
+      (restarted as unknown as { markPipelinePending(id: string): void }).markPipelinePending(run.id);
+      await restarted.resumeChains();
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(passes);
+      expect(await eventTypes(run)).not.toContain('pipeline_interrupted');
+      await settle(project.id);
+    });
+
     it('holds nothing once the marks are kept', async () => {
       const { project, a, run } = await cutOffBeforeMarks(true);
       await new TicketService(t.db, t.runs, t.scheduler).resumeChains();

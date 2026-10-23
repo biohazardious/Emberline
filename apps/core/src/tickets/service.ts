@@ -335,6 +335,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Finished runs waiting out the settle window before their pipeline (R8). */
   private readonly settlingRuns = new Map<string, NodeJS.Timeout>();
   private readonly pipelineSettleMs: number;
+  /**
+   * The first start of a version that marks pipelines (an upgrade from 0.6.0 or earlier): read before
+   * any run's `done` can write the marks, then `{}` is written, so only this start holds (resumeChains).
+   */
+  private unmarkedUpgrade: boolean;
 
   /** Event types of a run, oldest first (to tell whether its worktree setup finished). */
   private runEventTypes(runId: string): string[] {
@@ -357,6 +362,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.setMaxListeners(0);
     this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
+    this.unmarkedUpgrade = getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) === undefined;
+    if (this.unmarkedUpgrade) this.savePendingPipelines(new Map());
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
       if (run.handedOffTo) return;
@@ -637,11 +644,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     );
     // The first start of a version that marks pipelines (an upgrade from 0.6.0 or earlier): a pass
     // the upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a
-    // person instead of being merged without its checks or left unseen; written at once, so only
-    // this start does.
-    if (getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) === undefined) {
-      for (const projectId of known) this.holdUnmarkedReviews(projectId);
-      this.savePendingPipelines(new Map());
+    // person instead of being merged without its checks or left unseen; only on this start.
+    if (this.unmarkedUpgrade) {
+      this.unmarkedUpgrade = false;
+      const marked = this.pendingPipelineRuns();
+      for (const projectId of known) this.holdUnmarkedReviews(projectId, marked);
     }
     // Only passes that were due or going when core stopped: one that ended decided already (a run
     // that was no factory step stays in Review for its person, whatever the board shows now). Not as
@@ -666,7 +673,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * may have had its checks cut off by the upgrade's restart. It gets a `pipeline_interrupted` hold,
    * so it shows in the Inbox; the agent's next stop runs its checks again.
    */
-  private holdUnmarkedReviews(projectId: string): void {
+  private holdUnmarkedReviews(projectId: string, marked: Map<string, PendingPipeline>): void {
     if (!this.autoChainProjects.has(projectId)) return;
     const { autoSyncToMain, autoMoveToDone } = effectiveFactorySettings(this.db, projectId);
     // With neither, a pass that ended leaves its ticket in Review without an outcome too.
@@ -674,6 +681,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
       const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
       if (!latestRun || latestRun.state !== 'done' || latestRun.handedOffTo) continue;
+      // Finished since this start: its own pass (going, settling or due) runs its checks.
+      if (
+        this.pipelineRuns.has(latestRun.id) ||
+        this.settlingRuns.has(latestRun.id) ||
+        marked.has(latestRun.id)
+      )
+        continue;
       if (this.pipelineOutcome(latestRun.id) !== null) continue;
       // A run still resolving its conflict is finished by its own pipeline when it stops again.
       if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
