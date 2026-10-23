@@ -193,8 +193,9 @@ const startsHost = (ch: string | undefined) => ch !== undefined && !/[\s@/:'"`]/
  *   user `host` on `x`; `alice:p@ss:w@host:o`), and a URL whose password reads as a port
  *   (`https://u:2024/rest@host/…`, the same shape as `https://host:8443/g/n@v2/r.git`), comes back
  *   as it was, so two such remotes never compare equal.
- * - `display`: `url`, except that such an ambiguous address shows `user:***@` in place of what may
- *   be a secret. Anything shown to a person or written to a log uses this.
+ * - `display`: `url`, except that an address cut at an `@` shows `***` where it was cut
+ *   (`https://***@v2/r.git`, `user:***@host:path`), never a clean-looking other address. Anything
+ *   shown to a person or written to a log uses this.
  * - `hadCredentials`: something was removed, or may be a secret.
  * A clean URL comes back exactly as it was. Read in linear time (`meter` counts the steps).
  */
@@ -206,17 +207,20 @@ export function remoteUrlForDisplay(
   const r = new AddressReader(url, meter);
   const schemeEnd = r.scheme();
   if (schemeEnd > 0) {
+    const withoutQuery = (text: string) => text.slice(0, new AddressReader(text, meter).next('?#', 0));
+    // `scheme://***@…` from the `@` at `at` on, without its query or fragment.
+    const cutAt = (at: number) => withoutQuery(`${url.slice(0, schemeEnd)}***${url.slice(at)}`);
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      // Not parseable: cut everything from `//` to the last `@` (whitespace in a password too),
+      // and from `?` or `#` on.
+      const at = r.lastAt(schemeEnd - 1, url.length);
+      const clean = withoutQuery(at >= 0 ? url.slice(0, schemeEnd) + url.slice(at + 1) : url);
+      return { url: clean, display: at >= 0 ? cutAt(at) : clean, hadCredentials: clean !== url };
+    }
     const clean = (() => {
-      let parsed: URL;
-      try {
-        parsed = new URL(url);
-      } catch {
-        // Not parseable: cut everything from `//` to the last `@` (whitespace in a password too),
-        // and from `?` or `#` on.
-        const at = r.lastAt(schemeEnd - 1, url.length);
-        const cut = at >= 0 ? url.slice(0, schemeEnd) + url.slice(at + 1) : url;
-        return cut.slice(0, new AddressReader(cut, meter).next('?#', 0));
-      }
       const ssh = parsed.protocol === 'ssh:';
       if (!(ssh ? parsed.password : parsed.username || parsed.password || parsed.search || parsed.hash))
         return url;
@@ -238,14 +242,7 @@ export function remoteUrlForDisplay(
       let at = url.length - 1;
       while (at >= authorityEnd && !(url[at] === '@' && startsHost(url[at + 1]))) at--;
       if (meter) meter.steps += url.length - at;
-      if (at >= authorityEnd) {
-        const cut = url.slice(0, schemeEnd) + url.slice(at + 1);
-        return {
-          url: clean,
-          display: cut.slice(0, new AddressReader(cut, meter).next('?#', 0)),
-          hadCredentials: true,
-        };
-      }
+      if (at >= authorityEnd) return { url: clean, display: cutAt(at), hadCredentials: true };
     }
     return { url: clean, display: clean, hadCredentials: clean !== url };
   }

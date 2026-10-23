@@ -526,6 +526,22 @@ describe('an origin that may hold a password where it shows ***', () => {
     expect(JSON.stringify(s)).not.toContain('SECRET');
   });
 
+  it('an address with a port and an `@` in its path shows *** where it was cut, and is flagged as one that may hold a password', async () => {
+    for (const [origin, shown] of [
+      ['https://host:8443/g/n@v2/r.git', 'https://***@v2/r.git'],
+      ['https://u:p@GitHub.com/o/r@v2.git', 'https://***@v2.git'],
+      ['https://u:2024/S3CRET@h/o', 'https://***@h/o'],
+    ] as const) {
+      git(projectPath, 'config', 'remote.origin.url', origin);
+      // originMasked: the web says it "may hold a password", never that it does.
+      expect(await status(), origin).toMatchObject({
+        originUrl: shown,
+        originHasCredentials: true,
+        originMasked: true,
+      });
+    }
+  });
+
   it("another origin masked alike never shows the connected one's read", async () => {
     // Only an older Emberline could connect such an address; refresh and push read only that one.
     t.db.update(projects).set({ repoUrl: masked }).where(eq(projects.id, projectId)).run();

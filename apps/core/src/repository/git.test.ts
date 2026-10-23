@@ -363,32 +363,34 @@ describe('remoteUrlForDisplay', () => {
     });
   });
 
-  it('URL forms: user info goes up to its last `@`; an `@` in the path stays unless a `:` may start a password', () => {
+  it('URL forms: user info goes up to its last `@`; an `@` in the path stays unless a `:` may start a password, and a cut shows ***', () => {
     const shown = (url: string) => remoteUrlForDisplay(url).display;
     expect(shown('https://github.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
     expect(shown('https://u:p@ss@host/o/r.git')).toBe('https://host/o/r.git');
-    // With a `:` in the user info, an `@` in the path may end a password holding `/`: shown cut.
-    expect(shown('https://u:p@GitHub.com/o/r@v2.git')).toBe('https://v2.git');
-    expect(shown('ssh://git:pw@[2001:db8::1]:2222/o/r@v2.git')).toBe('ssh://v2.git');
+    // With a `:` in the user info, an `@` in the path may end a password holding `/`: shown cut,
+    // with *** where it was cut (never as another, clean-looking address).
+    expect(shown('https://u:p@GitHub.com/o/r@v2.git')).toBe('https://***@v2.git');
+    expect(shown('ssh://git:pw@[2001:db8::1]:2222/o/r@v2.git')).toBe('ssh://***@v2.git');
     expect(remoteUrlForDisplay('https://u:p@GitHub.com/o/r@v2.git').url).toBe(
       'https://github.com/o/r@v2.git',
     );
     expect(shown('ssh://me@corp.com:pw@host/o/r')).not.toContain('pw');
     // Not parseable (a `/` in the password): everything up to the last `@` goes.
     expect(remoteUrlForDisplay('ssh://git:pa/ss@h/x')).toMatchObject({
-      display: 'ssh://h/x',
+      display: 'ssh://***@h/x',
       hadCredentials: true,
     });
     // A password starting with digits (or `/`, `?`, `#`) reads as a port and a path, as an `@` in the
     // path after a real port does: kept as it is (Connect may take it), shown up to the last `@`.
     for (const [raw, display] of [
-      ['https://u:2024/Secret@h/o/r', 'https://h/o/r'],
-      ['https://u:123?abc@h/o', 'https://h/o'],
-      ['https://u:9#t@h/o', 'https://h/o'],
-      ['https://u:#t@h/o', 'https://h/o'],
-      ['ssh://git:22/S3C@host:2222/o/r', 'ssh://host:2222/o/r'],
-      ['https://host:8443/g/n@v2/r.git', 'https://v2/r.git'],
-      ['https://u:2024/S@[::1]:8443/o', 'https://[::1]:8443/o'],
+      ['https://u:2024/Secret@h/o/r', 'https://***@h/o/r'],
+      ['https://u:2024/S@h/o', 'https://***@h/o'],
+      ['https://u:123?abc@h/o', 'https://***@h/o'],
+      ['https://u:9#t@h/o', 'https://***@h/o'],
+      ['https://u:#t@h/o', 'https://***@h/o'],
+      ['ssh://git:22/S3C@host:2222/o/r', 'ssh://***@host:2222/o/r'],
+      ['https://host:8443/g/n@v2/r.git', 'https://***@v2/r.git'],
+      ['https://u:2024/S@[::1]:8443/o', 'https://***@[::1]:8443/o'],
     ] as const)
       expect(remoteUrlForDisplay(raw), raw).toMatchObject({ display, hadCredentials: true });
     // Kept as git reads it (Connect may take it).
@@ -402,7 +404,7 @@ describe('remoteUrlForDisplay', () => {
     for (const c of ['\t', '\u00a0', '\u2003', ' ', '’', '“', '”', '«', '»'])
       expect(remoteUrlForDisplay(`https://u:S3C${c}R3T@h o/r`), JSON.stringify(c)).toEqual({
         url: 'https://h o/r',
-        display: 'https://h o/r',
+        display: 'https://***@h o/r',
         hadCredentials: true,
       });
     // Parseable: the URL parser takes them out with the rest of the user info.
