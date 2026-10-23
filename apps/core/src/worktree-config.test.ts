@@ -1496,6 +1496,11 @@ describe('editing worktree.yml from Project settings', () => {
   it.each([
     ['directly', (e: Error) => e],
     ['wrapped in another error', (e: Error) => new Error('git failed', { cause: e })],
+    [
+      'under a dropped connection',
+      (e: Error) =>
+        Object.assign(new PtydClientError('disconnected', 'ptyd connection closed'), { cause: e }),
+    ],
   ])('503 runner_outdated keeps its code and text when the runner throws it %s', async (_how, wrap) => {
     const project = await createProject('version: 1\n');
     const base = (await status(project.id)).head!.sha256;

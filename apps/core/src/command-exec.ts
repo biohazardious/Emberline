@@ -194,8 +194,13 @@ export function isRunnerUnavailable(error: unknown): boolean {
   return runnerUnavailableCause(error) !== undefined;
 }
 
-/** The first error along `cause` that says the runner could not run the command (see {@link isRunnerUnavailable}). */
+/**
+ * The error along `cause` that says the runner could not run the command (see
+ * {@link isRunnerUnavailable}), the most specific one: a 503 that says why (not reachable, too old)
+ * anywhere in the chain, else the first dropped or unanswered connection.
+ */
 export function runnerUnavailableCause(error: unknown): Error | undefined {
+  let connection: Error | undefined;
   for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
     if (
       e instanceof HttpError &&
@@ -203,9 +208,9 @@ export function runnerUnavailableCause(error: unknown): Error | undefined {
       (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated')
     )
       return e;
-    if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) return e;
+    if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) connection ??= e;
   }
-  return undefined;
+  return connection;
 }
 
 /**
