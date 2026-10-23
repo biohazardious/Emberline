@@ -17,6 +17,8 @@ const critic = vi.hoisted(() => ({
   calls: 0,
   /** The next call never answers (core goes down meanwhile). */
   hang: false,
+  /** The next call answers once this settles. */
+  held: null as null | Promise<void>,
 }));
 /** A build gate result for the next pipelines to get instead of building (null: the real build). */
 const build = vi.hoisted(() => ({ result: null as null | { ok: boolean; output: string }, calls: 0 }));
@@ -29,6 +31,11 @@ vi.mock('./factory/service.js', async (importOriginal) => {
       if (critic.hang) {
         critic.hang = false;
         return new Promise(() => undefined);
+      }
+      if (critic.held) {
+        const held = critic.held;
+        critic.held = null;
+        await held;
       }
       return critic.result ?? actual.runCrossProviderCritic(params);
     }) as typeof actual.runCrossProviderCritic,
@@ -81,6 +88,7 @@ afterEach(async () => {
   critic.result = null;
   critic.calls = 0;
   critic.hang = false;
+  critic.held = null;
   build.result = null;
   build.calls = 0;
   await ptydServer.close();
@@ -765,6 +773,16 @@ const followups = (run: Run) => {
 const eventTypes = async (run: Run) =>
   ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.map((e) => e.type);
 
+/** Records the automatic prompts instead of typing them (both services share the run service). */
+function recordPrompts(): string[] {
+  const sent: string[] = [];
+  (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+    sent.push(text);
+    return t.runs.getRun(id);
+  };
+  return sent;
+}
+
 /** A new (signalled) turn of the agent, e.g. after a gate's follow-up. */
 const stopAgain = async (run: Run) => {
   const token = await waitFile(`token-${run.id}`);
@@ -1446,6 +1464,62 @@ describe('factory chain robustness', () => {
     await settle(project.id);
   });
 
+  it('a second stop while the critic works on its verdict leaves the decision to the pass waiting for it', async () => {
+    await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+    critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+    let answer!: () => void;
+    critic.held = new Promise<void>((resolve) => (answer = resolve));
+    const sent = recordPrompts();
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    await finish(run);
+    await expect.poll(() => critic.calls, { timeout: 10_000 }).toBe(1);
+
+    // The agent stops again while the first pass still waits for the critic.
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await passes[1];
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+
+    answer();
+    await Promise.all(passes);
+    expect(critic.calls).toBe(1);
+    expect(await eventTypes(run)).toContain('critic_blocked');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
+    expect(await statusOf(a.id)).toBe('review');
+    await settle(project.id);
+  });
+
+  it('a second stop while the critic works merges once, after a passing verdict', async () => {
+    await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+    critic.result = { verdict: 'PASS', followUpPrompt: null };
+    let answer!: () => void;
+    critic.held = new Promise<void>((resolve) => (answer = resolve));
+    recordPrompts();
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    await finish(run);
+    await expect.poll(() => critic.calls, { timeout: 10_000 }).toBe(1);
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await passes[1];
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+
+    answer();
+    await Promise.all(passes);
+    expect(critic.calls).toBe(1);
+    expect((await eventTypes(run)).filter((type) => type === 'merged_to_main')).toHaveLength(1);
+    expect(await statusOf(a.id)).toBe('done');
+    await settle(project.id);
+  });
+
   it('a Review ticket whose pipeline was cut off gets the gates on resume, not a plain merge', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });
@@ -1547,16 +1621,6 @@ describe('factory chain robustness', () => {
   });
 
   describe('a pass resumed after a restart does not repeat what the cut-off pass did', () => {
-    /** Records the automatic prompts instead of typing them (both services share the run service). */
-    function recordPrompts(): string[] {
-      const sent: string[] = [];
-      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
-        sent.push(text);
-        return t.runs.getRun(id);
-      };
-      return sent;
-    }
-
     /** Pass 1 ran in full; the agent's next stop is cut off by a restart; a new service resumes it. */
     async function restartAfterSecondStop(run: Run): Promise<void> {
       (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
@@ -1634,6 +1698,65 @@ describe('factory chain robustness', () => {
       expect(await eventTypes(run)).toContain('critic_blocked');
       expect(await eventTypes(run)).not.toContain('merged_to_main');
       expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
+      expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+
+    it("the critic's follow-up that never went out is sent when the pass resumes", async () => {
+      await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+      critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+      const sent: string[] = [];
+      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+        sent.push(text);
+        // Core goes down while the follow-up is being typed: it never arrives, and the pass never ends.
+        if (sent.length === 1) return new Promise<Run>(() => undefined);
+        return t.runs.getRun(id);
+      };
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      await finish(run);
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+      expect(await eventTypes(run)).toContain('critic_blocked');
+
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const resumed = trackPipelines(restarted);
+      await restarted.resumeChains();
+      await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(resumed);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toBe(sent[0]);
+      expect(critic.calls).toBe(1);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+
+    it("the critic's follow-up that went out before the restart is not sent again", async () => {
+      await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+      critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+      const sent: string[] = [];
+      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+        sent.push(text);
+        // Typed into the session (recorded as sendPrompt does), then core goes down before the pass ends.
+        t.runs.note(id, 'prompt_sent', { length: text.length });
+        return new Promise<Run>(() => undefined);
+      };
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      await finish(run);
+      await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('prompt_sent');
+      expect(await eventTypes(run)).toContain('critic_blocked');
+
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const resumed = trackPipelines(restarted);
+      await restarted.resumeChains();
+      expect(resumed).toHaveLength(0);
+      expect(sent).toHaveLength(1);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
       expect(await statusOf(a.id)).toBe('review');
       await settle(project.id);
     });

@@ -634,7 +634,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly teardownJobs = new Map<string, Promise<void>>();
   /** The run each of those jobs was started for, and how archiving the worktree's outputs went first. */
   private readonly teardownJobRuns = new Map<string, { runId: string; archive?: ArchiveOutcome }>();
-  /** A manual prune's archive and the start of its teardown, one per worktree at a time. */
+  /** A prune's archive and the start of its teardown, one per worktree at a time (GC skips a locked one). */
   private readonly pruneLock = new KeyedMutex();
   private log?: RunServiceLogger;
   /**
@@ -2709,6 +2709,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { runId: id, worktreePath: row.worktreePath, removed: removed || !existsSync(row.worktreePath) };
   }
 
+  /**
+   * `fn` under the worktree's prune lock for garbage collection: null at once, without waiting, while
+   * a manual prune (or another clean-up) holds it, so the worktree is left for the next pass.
+   */
+  private unlessPruning<T>(worktreePath: string, fn: () => Promise<T>): Promise<T | null> {
+    if (this.pruneLock.isLocked(worktreePath)) return Promise.resolve(null);
+    return this.pruneLock.run(worktreePath, fn);
+  }
+
   /** Notes on `id` that the worktree it shares is being removed for another run, and how that run's archive went. */
   private noteSharedArchive(id: string, owner: { runId: string; archive?: ArchiveOutcome }): void {
     const other = owner.runId.slice(0, 8);
@@ -3980,37 +3989,44 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (shared) reportedPaths.add(shared);
           continue;
         }
-        // The run row goes away with or without its worktree: archive first, or its outputs become
-        // unreachable. Within one time budget per request; a run it cannot archive in time is kept.
         if (proj && row.worktreePath && row.worktreePath !== proj.path) {
-          const budgetLeft = archiveDeadline - Date.now();
-          const archived =
-            budgetLeft >= AUTO_GC_MIN_ARCHIVE_MS
-              ? await this.outputs.archiveBeforePrune(row.id, budgetLeft, { keepOnTimeout: true })
-              : 'timeout';
-          if (archived === 'timeout') {
-            if (!reportedPaths.has(row.worktreePath))
+          const worktreePath = row.worktreePath;
+          let removedWt = false;
+          // The archive and the prune (or the start of its teardown) under the worktree's prune lock.
+          const step = await this.unlessPruning(worktreePath, async () => {
+            // The run row goes away with or without its worktree: archive first, or its outputs become
+            // unreachable. Within one time budget per request; a run it cannot archive in time is kept.
+            const budgetLeft = archiveDeadline - Date.now();
+            const archived =
+              budgetLeft >= AUTO_GC_MIN_ARCHIVE_MS
+                ? await this.outputs.archiveBeforePrune(row.id, budgetLeft, { keepOnTimeout: true })
+                : 'timeout';
+            if (archived === 'timeout') return 'archive_pending' as const;
+            if (!body.pruneWorktrees || this.worktreeSharedWith(row)) return 'remove' as const;
+            if (this.needsTeardown(proj.id, worktreePath)) {
+              // Wrapped: the lock is held until the job has started, not until it ends.
+              const job = this.teardownThenPrune(row, proj, async (r) => {
+                removedWt = r;
+                await this.remove(row.id).catch(() => undefined);
+              });
+              return { job };
+            }
+            removedWt = await this.pruneRunWorktree(proj.path, worktreePath).catch(() => false);
+            return 'remove' as const;
+          });
+          // A manual prune of this worktree is archiving it or starting its teardown: left for the
+          // next clean-up, which finds it pruned or tearing down.
+          if (step === null) continue;
+          if (step === 'archive_pending') {
+            if (!reportedPaths.has(worktreePath))
               keptWorktrees.push({ runId: row.id, reason: 'archive_pending' });
-            reportedPaths.add(row.worktreePath);
+            reportedPaths.add(worktreePath);
             continue;
           }
-        }
-        if (
-          body.pruneWorktrees &&
-          proj &&
-          row.worktreePath &&
-          row.worktreePath !== proj.path &&
-          !this.worktreeSharedWith(row)
-        ) {
-          if (this.needsTeardown(proj.id, row.worktreePath)) {
+          if (step !== 'remove') {
             // Teardowns share one time budget per request; one still running prunes (and removes
             // its run) in the background when it ends.
-            let removedWt = false;
-            const job = this.teardownThenPrune(row, proj, async (r) => {
-              removedWt = r;
-              await this.remove(row.id).catch(() => undefined);
-            });
-            if (await settlesWithin(job, teardownDeadline - Date.now())) {
+            if (await settlesWithin(step.job, teardownDeadline - Date.now())) {
               if (removedWt) prunedWorktrees += 1;
               removedRuns += 1;
             } else {
@@ -4018,7 +4034,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             }
             continue;
           }
-          const removedWt = await this.pruneRunWorktree(proj.path, row.worktreePath).catch(() => false);
           if (removedWt) prunedWorktrees += 1;
         }
         await this.remove(row.id).catch(() => undefined);
@@ -4331,25 +4346,33 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 for (const staleId of staleIds) seen.add(staleId);
                 break autoGc;
               }
-              // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
-              // worktree (and row) and is tried again on the next pass. A copy that keeps failing
-              // (a worktree reached through a link, unreadable files) holds it for 24 h at most.
-              const archived = await this.outputs.archiveBeforePrune(stale.id, budgetLeft, {
-                keepOnTimeout: true,
+              const worktreePath = stale.worktreePath;
+              const pruned = await this.unlessPruning(worktreePath, async () => {
+                // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
+                // worktree (and row) and is tried again on the next pass. A copy that keeps failing
+                // (a worktree reached through a link, unreadable files) holds it for 24 h at most.
+                const archived = await this.outputs.archiveBeforePrune(stale.id, budgetLeft, {
+                  keepOnTimeout: true,
+                });
+                if (archived === 'timeout') return false;
+                if (archived === 'failed') {
+                  const firstFailure = this.outputs.firstFailureAt(stale.id);
+                  if (firstFailure && Date.now() - firstFailure.getTime() < AUTO_GC_ARCHIVE_RETRY_MS)
+                    return false;
+                }
+                if (this.needsTeardown(proj.id, worktreePath)) {
+                  // Teardown commands (and compose downs) may take minutes: they run beside reconcile, and this worktree is
+                  // pruned (and its run removed) only once they finished. The guard keeps a later
+                  // pass from starting them again meanwhile.
+                  void this.teardownThenPrune(stale, proj, () => this.remove(stale.id));
+                  return false;
+                }
+                await this.pruneRunWorktree(proj.path, worktreePath).catch(() => undefined);
+                return true;
               });
-              if (archived === 'timeout') continue;
-              if (archived === 'failed') {
-                const firstFailure = this.outputs.firstFailureAt(stale.id);
-                if (firstFailure && Date.now() - firstFailure.getTime() < AUTO_GC_ARCHIVE_RETRY_MS) continue;
-              }
-              if (this.needsTeardown(proj.id, stale.worktreePath)) {
-                // Teardown commands (and compose downs) may take minutes: they run beside reconcile, and this worktree is
-                // pruned (and its run removed) only once they finished. The guard keeps a later
-                // pass from starting them again meanwhile.
-                void this.teardownThenPrune(stale, proj, () => this.remove(stale.id));
-                continue;
-              }
-              await this.pruneRunWorktree(proj.path, stale.worktreePath).catch(() => undefined);
+              // `null`: a manual prune of this worktree is archiving it or starting its teardown; the
+              // next pass finds it pruned or tearing down.
+              if (pruned !== true) continue;
             }
             await this.remove(stale.id).catch(() => undefined);
           }

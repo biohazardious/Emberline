@@ -975,6 +975,74 @@ describe('teardown before prune', () => {
     await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
   });
 
+  /** Holds the first archive of `runId` (a manual prune's) until `archived()`; later calls go through. */
+  function holdFirstArchive(runId: string) {
+    let archived!: () => void;
+    const archiving = new Promise<void>((resolve) => (archived = resolve));
+    const archive = t.runs.outputs.archiveBeforePrune.bind(t.runs.outputs);
+    let held = false;
+    const spy = vi.spyOn(t.runs.outputs, 'archiveBeforePrune').mockImplementation(async (id, ...rest) => {
+      if (id === runId && !held) {
+        held = true;
+        await archiving;
+      }
+      return archive(id, ...rest);
+    });
+    const calls = () => spy.mock.calls.filter(([id]) => id === runId).length;
+    return { archived, calls };
+  }
+
+  it('auto-GC leaves a worktree alone while a manual prune of it archives, and does not wait for it', async () => {
+    const { release, order } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const ended: Run[] = [];
+    for (let i = 0; i < 11; i++) ended.push(await endedRun(project.id));
+    await t.runs.enqueue({ projectId: project.id, prompt: 'open' });
+    const oldest = ended[0]!;
+    const { archived, calls } = holdFirstArchive(oldest.id);
+    const prune = api('POST', `/api/runs/${oldest.id}/worktree/prune`, {});
+    await expect.poll(calls).toBe(1);
+
+    // The auto-GC pass picks the same run meanwhile: it neither copies it nor starts its teardown.
+    await t.runs.reconcile();
+    expect(calls()).toBe(1);
+    expect(order).toEqual([]);
+
+    archived();
+    expect((await prune).json()).toMatchObject({ pending: true });
+    expect(order).toEqual([`teardown:${oldest.worktreePath}`]);
+    release();
+    await expect.poll(() => existsSync(oldest.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => typesOf(oldest.id)).toContain('worktree_pruned');
+    expect(order).toEqual([`teardown:${oldest.worktreePath}`]);
+  });
+
+  it('a clean-up leaves a worktree alone while a manual prune of it archives', async () => {
+    const { release, order } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const run = await endedRun(project.id);
+    const { archived, calls } = holdFirstArchive(run.id);
+    const prune = api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    await expect.poll(calls).toBe(1);
+
+    const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+    expect(calls()).toBe(1);
+    expect(order).toEqual([]);
+    expect(res.removedRuns).toBe(0);
+    expect(t.runs.list().some((r) => r.id === run.id)).toBe(true);
+
+    archived();
+    expect((await prune).json()).toMatchObject({ pending: true });
+    expect(order).toEqual([`teardown:${run.worktreePath}`]);
+    release();
+    await expect.poll(() => existsSync(run.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => typesOf(run.id)).toContain('worktree_pruned');
+  });
+
   it('two prunes of the same run sent together tear down once, and both answer what happened', async () => {
     const { release, order } = holdTeardowns();
     release();

@@ -75,6 +75,7 @@ import { openBlockingCount } from '../review/blocking.js';
 import {
   branchMergedBefore,
   continuesHeldWork,
+  isAutoFixHold,
   latestDoneEventId,
   pipelineOutcome,
   reviewHoldLiftedIsCurrent,
@@ -647,8 +648,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
       const outcome = this.pipelineOutcome(latestRun.id);
       // A gate left it here for a person (secret guard, build gate, a merge that failed): not
-      // leftover work, and not a merge to retry on every dispatch.
-      if (outcome === 'held') continue;
+      // leftover work, and not a merge to retry on every dispatch. Unless the restart cut the pass off
+      // between the critic's hold and its follow-up: the resumed pass sends it.
+      if (outcome === 'held' && !(wasCutOff && this.undeliveredCriticRequest(latestRun.id) !== null))
+        continue;
       if (outcome === 'merged') {
         // Merged, but the move to Done was cut off.
         if (!autoMoveToDone) continue;
@@ -740,7 +743,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           'this ticket asks for the setup, build, lint and test commands and the preview service',
         );
         if (check === 'worktree_yml') return worktreeYml;
-        return check === 'build' && !worktreeYml && !worktreeCommands;
+        if (check === 'worktree_commands') return worktreeCommands;
+        return !worktreeYml && !worktreeCommands;
       });
   }
 
@@ -749,6 +753,34 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * prompt reached the agent after it; null when this turn has none.
    */
   private nudgeOfThisTurn(runId: string): { delivered: boolean } | null {
+    return this.noteOfThisTurn(
+      runId,
+      'auto_nudged',
+      (payload) => (payload as { reason?: string } | null)?.reason === 'no_ticket_drafts',
+    );
+  }
+
+  /**
+   * The critic's follow-up that the run's current turn asked for but never sent: the text of its
+   * `critic_blocked` hold noted with the request (`autoFix: true`) when no prompt reached the agent
+   * after it (a restart cut the pass off in between); null otherwise.
+   */
+  private undeliveredCriticRequest(runId: string): string | null {
+    const blocked = this.noteOfThisTurn(runId, 'critic_blocked');
+    if (!blocked || blocked.delivered || !isAutoFixHold(blocked.payload)) return null;
+    const text = (blocked.payload as { followUpPrompt?: unknown }).followUpPrompt;
+    return typeof text === 'string' && text !== '' ? text : null;
+  }
+
+  /**
+   * The newest `type` note of the run's current turn (after its latest switch to `done`) that
+   * `matches`, and whether a prompt reached the agent after it; null when this turn has none.
+   */
+  private noteOfThisTurn(
+    runId: string,
+    type: string,
+    matches: (payload: unknown) => boolean = () => true,
+  ): { payload: unknown; delivered: boolean } | null {
     const turnStart = latestDoneEventId(this.db, runId) ?? 0;
     const events = this.db
       .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
@@ -757,17 +789,26 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         and(
           eq(runEvents.runId, runId),
           gt(runEvents.id, turnStart),
-          inArray(runEvents.type, ['auto_nudged', 'prompt_sent', 'resumed', 'respawning']),
+          inArray(runEvents.type, [type, 'prompt_sent', 'resumed', 'respawning']),
         ),
       )
       .orderBy(asc(runEvents.id))
       .all();
-    const nudged = events.find(
-      (e) =>
-        e.type === 'auto_nudged' && (e.payload as { reason?: string } | null)?.reason === 'no_ticket_drafts',
-    );
-    if (!nudged) return null;
-    return { delivered: events.some((e) => e.type !== 'auto_nudged' && e.id > nudged.id) };
+    const note = events.findLast((e) => e.type === type && matches(e.payload));
+    if (!note) return null;
+    return { payload: note.payload, delivered: events.some((e) => e.type !== type && e.id > note.id) };
+  }
+
+  /** Sends the critic's follow-up; should it not arrive, the hold is noted again for a person. */
+  private async askCriticFix(run: Run, followUpPrompt: string): Promise<void> {
+    await this.runs
+      .prompt(run.id, `${followUpPrompt}${this.completionReminder(run, '\n\n')}`, { automatic: true })
+      .catch(() =>
+        this.runs.note(run.id, 'critic_blocked', {
+          autoFix: false,
+          followUpPrompt: holdText(followUpPrompt),
+        }),
+      );
   }
 
   /** Whether the run was already asked to clean up a secret or slop finding (the autoFix note survives restarts). */
@@ -1069,6 +1110,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .stop(run.id, { source: 'system', reason: 'brainstorm_finished' })
           .catch(() => undefined);
       }
+      return;
+    }
+
+    // The pass a restart cut off had held the run for the critic's follow-up but not sent it yet:
+    // everything before it was done, so this one only sends it, and the agent's next stop is the next pass.
+    const criticRequest = resumed ? this.undeliveredCriticRequest(run.id) : null;
+    if (criticRequest !== null) {
+      await this.askCriticFix(run, criticRequest);
       return;
     }
 
@@ -1488,9 +1537,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       fSettings.crossProviderCritic &&
       run.worktreePath &&
       !isFactoryOrchestratorTicket &&
-      !this.criticRunning.has(run.id) &&
       !this.runs.hasEvent(run.id, 'critic_reviewed')
     ) {
+      // Another pass of this run (an earlier stop's) waits for the critic's verdict: that pass holds
+      // or merges, this one stands down instead of merging without a verdict.
+      if (this.criticRunning.has(run.id)) return;
       // Once per run, also across a restart: noted once its verdict is in, so a pass a restart cut off
       // while the critic ran asks it again instead of merging without one.
       this.criticRunning.add(run.id);
@@ -1514,13 +1565,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         criticRes.followUpPrompt &&
         (!run.endedAt || run.resumable)
       ) {
-        const criticNote = { followUpPrompt: holdText(criticRes.followUpPrompt) };
-        this.runs.note(run.id, 'critic_blocked', { autoFix: true, ...criticNote });
-        await this.runs
-          .prompt(run.id, `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`, {
-            automatic: true,
-          })
-          .catch(() => this.runs.note(run.id, 'critic_blocked', { autoFix: false, ...criticNote }));
+        this.runs.note(run.id, 'critic_blocked', {
+          autoFix: true,
+          followUpPrompt: holdText(criticRes.followUpPrompt),
+        });
+        await this.askCriticFix(run, criticRes.followUpPrompt);
         return;
       }
     }

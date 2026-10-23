@@ -1809,6 +1809,27 @@ describe('an Auto Bootstrap writes the worktree commands', () => {
     await expect.poll(async () => t.runs.get(run.id).endedAt, { timeout: 5_000 }).not.toBeNull();
   });
 
+  it('a request noted by v0.4.0 (no check named) counts: held for a person, not asked again', async () => {
+    const { ticket, run } = await bootstrapRun();
+    // v0.4.0 asked once already; its note said what it asked only through its text.
+    t.runs.note(run.id, 'build_gate_failed', {
+      autoFix: true,
+      output:
+        '.emberline/worktree.yml is missing: this ticket asks for the setup, build, lint and test commands and the preview service.',
+    });
+    const passes = trackPipelines();
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await settled(passes, 1);
+    const asked = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events
+      .filter((e) => e.type === 'build_gate_failed')
+      .map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    expect(asked).toEqual([true, false]);
+    expect(promptCount(run)).toBe(0);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+  });
+
   it('selfHealingBuildGate off: held at once with autoFix false', async () => {
     await api('PATCH', '/api/factory/settings', { selfHealingBuildGate: false });
     const { ticket, run } = await bootstrapRun();
