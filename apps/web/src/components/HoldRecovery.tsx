@@ -23,15 +23,20 @@ interface Props {
   onMerge?: () => Promise<void> | void;
 }
 
+/** The held run's recovery (`GET /api/runs/:id/recovery`), shared by the hold block and the Inbox's Answer. */
+export function useRunRecovery(run: Run) {
+  return useQuery({
+    queryKey: ['run-recovery', run.id],
+    queryFn: () => api<RunRecovery | null>(`/api/runs/${run.id}/recovery`),
+    enabled: recoveryApplies(run),
+  });
+}
+
 /** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). Key it by run id. */
 export function HoldRecovery({ run, onAnswer, onDiscard, onMerge }: Props) {
   const client = useQueryClient();
   const applies = recoveryApplies(run);
-  const query = useQuery({
-    queryKey: ['run-recovery', run.id],
-    queryFn: () => api<RunRecovery | null>(`/api/runs/${run.id}/recovery`),
-    enabled: applies,
-  });
+  const query = useRunRecovery(run);
   // The Answer dialog this block opens itself (undefined: closed); the Inbox opens its own through onAnswer.
   const [answer, setAnswer] = useState<string>();
   const [busy, setBusy] = useState(false);

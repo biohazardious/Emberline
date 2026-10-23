@@ -1,15 +1,20 @@
 import type { Run, RunQuestion } from '@emberline/protocol';
 import { Paperclip, X } from 'lucide-react';
 import { type DragEvent, type Ref, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation } from 'wouter';
-import { answerCapLine, canSend } from '../answerDialog';
-import { trapTab } from '../focusTrap';
+import { answerCapLine, canSend, handleDialogKey, pickerNote, QUESTION_SOURCE_LINES } from '../answerDialog';
+import { timeAgo, useNow } from '../time';
 import { useAnswerDialog } from './useAnswerDialog';
 import { MaterialList } from './wizard/MaterialList';
 import type { WizardMaterial } from './wizard/materials';
 
 export interface AnswerDialogViewProps {
   heading: { key: string | null; title: string };
+  /** The run's agent, for the header. */
+  agent?: string;
+  /** How long the run has waited, e.g. "5m"; null when unknown. */
+  waited?: string | null;
   question: RunQuestion | null;
   /** The question is still being fetched. */
   loading?: boolean;
@@ -51,27 +56,47 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
   const dismiss = p.onDismiss ?? p.onCancel;
   // Nothing can be sent to a permission prompt; it is answered in the terminal.
   const locked = permission || p.busy;
+  const note = q ? pickerNote(q) : null;
   return (
-    <div className="drawer-backdrop" onClick={dismiss}>
-      <aside
+    // A click on the backdrop stays here: inside the ticket drawer it would close the drawer too.
+    <div
+      className="answer-backdrop"
+      onClick={(e) => {
+        e.stopPropagation();
+        dismiss();
+      }}
+    >
+      <section
         ref={p.dialogRef}
-        className="drawer answer-dialog"
+        className="answer-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="answer-dialog-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="drawer-head">
-          <h2 id="answer-dialog-title" className="issue-dialog-title">
-            {p.heading.key && <span className="mono">{p.heading.key}</span>} {p.heading.title}
-          </h2>
+        <header className="answer-dialog-head">
+          <div className="answer-dialog-heading">
+            <h2 id="answer-dialog-title" className="issue-dialog-title">
+              {p.heading.key && <span className="mono">{p.heading.key}</span>} {p.heading.title}
+            </h2>
+            {(p.agent || p.waited) && (
+              <span className="muted small">
+                {p.agent && <span className="mono">{p.agent}</span>}
+                {p.agent && p.waited && ' · '}
+                {p.waited && `waiting for ${p.waited}`}
+              </span>
+            )}
+          </div>
           <button type="button" className="icon-btn" aria-label="Close" onClick={p.onCancel}>
             <X className="icon" aria-hidden />
           </button>
         </header>
         <section className="answer-question" aria-label="What the agent asks">
           {q ? (
-            <pre className="answer-question-text">{q.text || 'The agent did not say what it needs.'}</pre>
+            <>
+              <pre className="answer-question-text">{q.text || 'The agent did not say what it needs.'}</pre>
+              <p className="muted small answer-question-source">{QUESTION_SOURCE_LINES[q.source]}</p>
+            </>
           ) : (
             p.loading && <p className="muted small">Loading the question…</p>
           )}
@@ -90,9 +115,9 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
                 {o.label}
               </button>
             ))}
-            {q.picker && <span className="muted small">An option answers Claude's picker right away.</span>}
           </div>
         )}
+        {note && !permission && <p className="muted small">{note}</p>}
         {permission ? (
           <p className="small">
             A permission prompt is answered in the agent's terminal.{' '}
@@ -213,7 +238,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
             </button>
           </div>
         </form>
-      </aside>
+      </section>
     </div>
   );
 }
@@ -233,6 +258,8 @@ export function AnswerDialog(props: {
   const dismissRef = useRef(state.onDismiss);
   dismissRef.current = state.onDismiss;
   const { textRef } = state;
+  const now = useNow(30_000);
+  const since = run.attention?.since;
 
   // Focus starts in the answer and stays in the dialog; it goes back where it was on close.
   useEffect(() => {
@@ -241,21 +268,20 @@ export function AnswerDialog(props: {
     return () => opener?.focus();
   }, [textRef]);
 
+  // Capture phase: the dialog sees Escape and Tab before the ticket drawer's own Escape listener.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        dismissRef.current();
-      } else trapTab(dialogRef.current, e);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => handleDialogKey(e, dialogRef.current, () => dismissRef.current());
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  return (
+  // On the body, so the ticket drawer or the run dock never clips or covers it.
+  return createPortal(
     <AnswerDialogView
       {...state}
       heading={heading}
+      agent={run.agent}
+      waited={since ? timeAgo(since, now).replace(/ ago$/, '') : null}
       dialogRef={dialogRef}
       onOpenTerminal={
         run.terminalId
@@ -265,6 +291,7 @@ export function AnswerDialog(props: {
             }
           : undefined
       }
-    />
+    />,
+    document.body,
   );
 }

@@ -1,4 +1,4 @@
-import { type Project, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
+import { type Project, type Run, type Ticket } from '@emberline/protocol';
 import { useQueries } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -12,8 +12,9 @@ import {
   type TicketName,
 } from '../attention';
 import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
+import { answerOffered } from '../answerDialog';
 import { AnswerDialog } from '../components/AnswerDialog';
-import { HoldRecovery } from '../components/HoldRecovery';
+import { HoldRecovery, useRunRecovery } from '../components/HoldRecovery';
 import { recoveryApplies } from '../holdRecovery';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
@@ -28,7 +29,6 @@ import { timeAgo, useNow } from '../time';
 const ticketNames = (lists: { data?: Ticket[] }[]): Map<string, TicketName> =>
   new Map(lists.flatMap((q) => (q.data ?? []).map((t) => [t.id, { key: t.key, title: t.title }] as const)));
 
-const REPLYABLE: ReadonlySet<RunAttentionReason> = new Set(['question', 'permission', 'held', 'blocked']);
 /** A long detail is clamped to this many lines until expanded (set in CSS as .inbox-detail-clamped). */
 const CLAMP_CHARS = 280;
 
@@ -63,6 +63,8 @@ function InboxItem({
   const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
 
   const recovering = recoveryApplies(run);
+  // A held run that can't take a prompt: the hold block says why and offers Copy instead of Answer.
+  const recovery = useRunRecovery(run);
 
   return (
     <li className="inbox-item" data-reason={attention.reason}>
@@ -94,7 +96,7 @@ function InboxItem({
       )}
       {recovering && <HoldRecovery key={run.id} run={run} onAnswer={setAnswer} />}
       <div className="inbox-actions">
-        {REPLYABLE.has(attention.reason) && (
+        {answerOffered(run, recovery.data) && (
           <button type="button" className="btn btn-sm btn-primary" onClick={() => setAnswer('')}>
             Answer
           </button>

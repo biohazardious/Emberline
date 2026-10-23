@@ -12,6 +12,7 @@ const q = {
     { label: 'Green', detail: 'cooler' },
   ],
   picker: false,
+  pickerChips: false,
   suggest: { available: false, reason: 'Claude Code is not signed in.' },
 };
 const view = (over: object = {}) =>
@@ -108,5 +109,40 @@ describe('AnswerDialogView', () => {
     };
     expect(view({ text: 'blue', confirmClose: true })).toContain('Your answer stays as a draft.');
     expect(view({ files: [file], confirmClose: true })).toContain('the attached files are not kept');
+  });
+  it('is a centred modal, not a side drawer', () => {
+    const html = view();
+    expect(html).toContain('class="answer-backdrop"');
+    expect(html).toMatch(
+      /class="answer-dialog" role="dialog" aria-modal="true" aria-labelledby="answer-dialog-title"/,
+    );
+    expect(html).not.toContain('class="drawer');
+  });
+  it('names the agent and how long it has waited', () => {
+    const html = view({ agent: 'claude', waited: '5m' });
+    expect(html).toContain('>claude<');
+    expect(html).toContain('waiting for 5m');
+    expect(view()).not.toContain('waiting for');
+  });
+  it('says where the question came from', () => {
+    expect(view()).toContain('From the agent&#x27;s last message');
+    expect(view({ question: { ...q, kind: 'blocked', source: 'blockers', options: [] } })).toContain(
+      'The agent&#x27;s blockers',
+    );
+    expect(view({ question: { ...q, kind: 'held', source: 'hold', options: [] } })).toContain(
+      'Why it is held',
+    );
+  });
+  it('with a picker open, says typing cancels it; an option answers it only when chips can', () => {
+    const typed = 'Typing an answer cancels Claude&#x27;s question picker and sends your text instead.';
+    const picker = { ...q, source: 'ask_user_question' as const, picker: true };
+    const textOnly = view({ question: picker });
+    expect(textOnly).toContain(typed);
+    expect(textOnly).not.toContain('Pick an option');
+    expect(textOnly).toContain('Claude&#x27;s question picker</p>');
+    expect(view({ question: { ...picker, pickerChips: true } })).toContain(
+      `${typed} Pick an option to answer it directly.`,
+    );
+    expect(view()).not.toContain('Typing an answer');
   });
 });

@@ -3,10 +3,14 @@ import {
   addAnswerFiles,
   ANSWER_DRAFT_KEY,
   answerErrorText,
+  answerOffered,
   canSend,
+  chipAnswers,
   clearDraft,
+  handleDialogKey,
   loadDraft,
   saveDraft,
+  startText,
   suggestionAction,
 } from './answerDialog';
 
@@ -97,8 +101,19 @@ describe('answerErrorText', () => {
     expect(answerErrorText('no_question', 'x')).toBe(
       'This run is not waiting for an answer any more. Your draft is kept.',
     );
-    expect(answerErrorText('not_held', 'x')).toBe(
-      'This run is not waiting for an answer any more. Your draft is kept.',
+  });
+  it("words recovery's refusals as the hold block does, never the server's text", () => {
+    expect(answerErrorText('not_held', 'nothing holds this run any more')).toBe(
+      'This ticket is no longer held.',
+    );
+    expect(answerErrorText('no_session', 'this run has no agent session to continue')).toBe(
+      "This run can't take a prompt any more. Start a new run or discard the ticket.",
+    );
+    expect(answerErrorText('worktree_missing', "this run's worktree was removed")).toBe(
+      "This run's worktree was removed; start a new run.",
+    );
+    expect(answerErrorText('run_stopped_by_you', 'this run was stopped')).toBe(
+      "This run was stopped, so it can't take a prompt. Start a new run or discard the ticket.",
     );
   });
   it('says the agent is working', () => {
@@ -121,5 +136,71 @@ describe('suggestionAction', () => {
   it('fills an empty box and asks before replacing a typed answer', () => {
     expect(suggestionAction(false, '  ')).toBe('fill');
     expect(suggestionAction(false, 'blue')).toBe('ask');
+  });
+});
+
+describe('startText', () => {
+  it("opens with the run's draft when the caller gives no prompt or an empty one", () => {
+    saveDraft('r1', 'my draft');
+    expect(startText('', 'r1')).toBe('my draft');
+    expect(startText(undefined, 'r1')).toBe('my draft');
+  });
+  it("a suggestion's prompt wins over the draft", () => {
+    saveDraft('r1', 'my draft');
+    expect(startText('Fix the checks.', 'r1')).toBe('Fix the checks.');
+  });
+});
+
+describe('answerOffered', () => {
+  const run = (reason: string) =>
+    ({
+      attention: { reason, detail: null, since: '2026-10-23T10:00:00.000Z', occurrence: 'o' },
+    }) as never;
+  it('offers Answer on a run that waits on a person, unless its recovery cannot deliver', () => {
+    expect(answerOffered(run('question'), undefined)).toBe(true);
+    expect(answerOffered(run('held'), undefined)).toBe(true);
+    expect(answerOffered(run('held'), { delivery: 'session' })).toBe(true);
+    expect(answerOffered(run('blocked'), { delivery: 'successor' })).toBe(true);
+    expect(answerOffered(run('blocked'), { delivery: 'none' })).toBe(false);
+    expect(answerOffered(run('stalled'), undefined)).toBe(false);
+    expect(answerOffered({ attention: null } as never, undefined)).toBe(false);
+  });
+});
+
+describe('chipAnswers', () => {
+  it('sends the option only when core says the picker takes its number', () => {
+    expect(chipAnswers({ picker: true, pickerChips: true })).toBe(true);
+    expect(chipAnswers({ picker: true, pickerChips: false })).toBe(false);
+    expect(chipAnswers({ picker: false, pickerChips: false })).toBe(false);
+  });
+});
+
+describe('handleDialogKey', () => {
+  const key = (k: string) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      event: {
+        key: k,
+        shiftKey: false,
+        preventDefault: () => calls.push('prevent'),
+        stopPropagation: () => calls.push('stop'),
+      },
+    };
+  };
+  it('Escape dismisses the dialog and goes no further (the ticket drawer stays open)', () => {
+    const { calls, event } = key('Escape');
+    let dismissed = 0;
+    handleDialogKey(event, null, () => dismissed++);
+    expect(dismissed).toBe(1);
+    expect(calls).toEqual(['prevent', 'stop']);
+  });
+  it('Tab stays with the dialog; other keys pass through', () => {
+    const tab = key('Tab');
+    handleDialogKey(tab.event, null, () => undefined);
+    expect(tab.calls).toEqual(['stop']);
+    const other = key('a');
+    handleDialogKey(other.event, null, () => undefined);
+    expect(other.calls).toEqual([]);
   });
 });

@@ -12,9 +12,10 @@ import { api, ApiRequestError, errorMessage } from '../api';
 import {
   addAnswerFiles,
   answerErrorText,
+  chipAnswers,
   clearDraft,
-  loadDraft,
   saveDraft,
+  startText,
   suggestionAction,
 } from '../answerDialog';
 import { deliveryNote } from '../holdRecovery';
@@ -39,7 +40,7 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
     queryFn: () => api<RunQuestion>(`/api/runs/${run.id}/question`),
     retry: false,
   });
-  const [text, setTextState] = useState(() => initialText ?? loadDraft(run.id));
+  const [text, setTextState] = useState(() => startText(initialText, run.id));
   // The latest text for a suggestion that arrives after the person typed on.
   const textNow = useRef(text);
   const [files, setFiles] = useState<WizardMaterial[]>([]);
@@ -104,11 +105,12 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
 
   const send = () => post(async () => ({ text: text.trim(), attachments: await encodeMaterials(files) }));
 
-  // With Claude's picker open a chip answers it; otherwise it only fills the box.
+  // A chip answers Claude's picker by its number when core says the numbers match; otherwise it
+  // only fills the box (Send then cancels the picker and types the text).
   const chooseOption = (i: number) => {
     const option = question?.options[i];
     if (!question || !option) return;
-    if (question.picker) void post(async () => ({ option: i }));
+    if (chipAnswers(question)) void post(async () => ({ option: i }));
     else setText(option.label);
   };
 

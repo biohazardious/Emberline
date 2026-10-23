@@ -1,5 +1,7 @@
-import type { Project, Run } from '@emberline/protocol';
+import type { Project, Run, RunRecovery } from '@emberline/protocol';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { InboxPage } from './pages/InboxPage';
 import { renderStatic } from './staticRender';
@@ -68,5 +70,40 @@ describe('InboxPage', () => {
     expect(html).toContain('>Answer</button>');
     expect(html).not.toContain('<textarea');
     expect(html).not.toContain('inbox-reply');
+  });
+  it("offers no Answer on a held run that can't take a prompt", () => {
+    const held = {
+      ...run('r1', 'p1'),
+      state: 'done',
+      attention: { reason: 'blocked', detail: 'no key', since: '2026-10-18T11:59:00.000Z', occurrence: 'o' },
+    } as Run;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const recovery = (delivery: RunRecovery['delivery']): RunRecovery => ({
+      hold: 'completion_blocked',
+      label: 'Blocked',
+      why: 'The agent is blocked.',
+      delivery,
+      suggestions: [],
+    });
+    const render = () =>
+      renderToStaticMarkup(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(InboxPage, {
+            runs: [held],
+            seen: {},
+            activeProjectId: null,
+            onOpenRun: () => undefined,
+            onDismiss: () => undefined,
+          }),
+        ),
+      );
+    client.setQueryData(['run-recovery', 'r1'], recovery('session'));
+    expect(render()).toContain('>Answer</button>');
+    client.setQueryData(['run-recovery', 'r1'], recovery('none'));
+    const html = render();
+    expect(html).not.toContain('>Answer</button>');
+    expect(html).toContain('This run can&#x27;t take a prompt any more.');
   });
 });

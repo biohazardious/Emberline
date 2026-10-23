@@ -4897,9 +4897,53 @@ dialog.cmd-dialog::backdrop {
   gap: 8px;
 }
 
-/* --- answer dialog ---------------------------------------------------------- */
+/* --- answer dialog ----------------------------------------------------------
+   A centred modal over the page (and over the ticket drawer, z-index 50); full screen on a phone. */
+.answer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.55);
+}
+
 .answer-dialog {
   width: min(720px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.answer-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.answer-dialog-head .icon-btn {
+  margin-left: auto;
+}
+
+.answer-dialog-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.answer-question-source {
+  margin: 4px 0 0;
 }
 
 .answer-question-text {
@@ -4957,10 +5001,16 @@ dialog.cmd-dialog::backdrop {
 }
 
 @media (max-width: 640px) {
+  .answer-backdrop {
+    padding: 0;
+  }
+
   .answer-dialog {
     width: 100%;
-    max-width: 100%;
-    border-left: 0;
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
   }
 }
 
