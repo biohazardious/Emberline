@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
-import { hostOf, remoteCompareKey } from '../forge/hosts.js';
+import { hostOf, remoteCompareKey, type ScanMeter } from '../forge/hosts.js';
 import {
   fetchBranchObjects,
   pushBranch,
@@ -284,18 +284,30 @@ describe('remoteUrlForDisplay', () => {
       expect(read(raw), raw).toEqual({ url: raw, display: raw, hadCredentials: false });
   });
 
-  it('reads a long hand-set address in linear time', () => {
-    const long = 60_000;
-    const started = performance.now();
-    for (const raw of [
-      `me@${'a@'.repeat(long / 2)}:x`,
-      `me@corp.com:${'s@'.repeat(long / 2)}`,
-      `${'a@'.repeat(long / 2)}:${'b@'.repeat(long / 2)}/x`,
-      `u@x:${'@h'.repeat(long / 2)}:`,
-      `${'@'.repeat(long)}`,
-    ])
-      remoteUrlForDisplay(raw);
-    expect(performance.now() - started).toBeLessThan(500);
+  it('reads a long hand-set address in linear time: each character a fixed number of times', () => {
+    const addresses = (n: number) => [
+      `me@${'a@'.repeat(n / 2)}:x`,
+      `me@corp.com:${'s@'.repeat(n / 2)}`,
+      `${'a@'.repeat(n / 2)}:${'b@'.repeat(n / 2)}/x`,
+      `u@x:${'@h'.repeat(n / 2)}:`,
+      `${'@'.repeat(n)}`,
+      // Many `@`s, each followed by a host that fails, after a user name holding an `@`.
+      `me@x:${'@hostname['.repeat(n / 10)}/x`,
+      `alice:${'@[v6'.repeat(n / 4)}`,
+      // Not readable as a URL (a space in the host): the fallback reads it.
+      `https://u:${'p@'.repeat(n / 2)}@h o/r?${'q'.repeat(n / 2)}`,
+    ];
+    const steps = (address: string) => {
+      const meter: ScanMeter = { steps: 0 };
+      remoteUrlForDisplay(address, meter);
+      return meter.steps;
+    };
+    const large = addresses(120_000);
+    addresses(60_000).forEach((address, i) => {
+      const small = steps(address);
+      expect(small, address.slice(0, 20)).toBeLessThanOrEqual(6 * address.length);
+      expect(steps(large[i]!) / small, address.slice(0, 20)).toBeLessThan(2.1);
+    });
   });
 
   it('URL forms: user info goes up to its last `@`, an `@` in the path stays', () => {
