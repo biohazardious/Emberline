@@ -6,6 +6,7 @@ import {
   type RunQuestion,
   type RunRecovery,
 } from '@emberline/protocol';
+import type { QueryClient } from '@tanstack/react-query';
 import {
   addMaterials,
   capLine,
@@ -15,7 +16,10 @@ import {
 import { trapTab } from './focusTrap';
 import { recoverErrorText } from './holdRecovery';
 
-export const ANSWER_DRAFT_KEY = (runId: string) => `emberline.answerDraft.${runId}`;
+const DRAFT_PREFIX = 'emberline.answerDraft.';
+export const ANSWER_DRAFT_KEY = (runId: string) => `${DRAFT_PREFIX}${runId}`;
+/** A draft nobody came back to in this long is for a run long finished; it is dropped. */
+export const DRAFT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 // Storage can be missing or blocked; the draft is a convenience, so every access is guarded.
 const store = () => {
@@ -26,18 +30,58 @@ const store = () => {
   }
 };
 
-export function loadDraft(runId: string): string {
+/** A stored draft is `{text, savedAt}`; before 0.6.1 it was the plain text, which counts as saved now. */
+function readDraft(raw: string, now: number): { text: string; savedAt: number; legacy: boolean } {
   try {
-    return store()?.getItem(ANSWER_DRAFT_KEY(runId)) ?? '';
+    const v: unknown = JSON.parse(raw);
+    if (
+      v &&
+      typeof v === 'object' &&
+      typeof (v as { text?: unknown }).text === 'string' &&
+      typeof (v as { savedAt?: unknown }).savedAt === 'number'
+    ) {
+      const { text, savedAt } = v as { text: string; savedAt: number };
+      return { text, savedAt, legacy: false };
+    }
+  } catch {
+    // plain text
+  }
+  return { text: raw, savedAt: now, legacy: true };
+}
+
+/** Drops drafts older than DRAFT_MAX_AGE_MS; an old plain-text one is stamped now, so it expires in turn. */
+function pruneDrafts(now: number): void {
+  const s = store();
+  if (!s || typeof s.key !== 'function') return;
+  const keys: string[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const k = s.key(i);
+    if (k?.startsWith(DRAFT_PREFIX)) keys.push(k);
+  }
+  for (const k of keys) {
+    const raw = s.getItem(k);
+    if (raw === null) continue;
+    const draft = readDraft(raw, now);
+    if (now - draft.savedAt > DRAFT_MAX_AGE_MS) s.removeItem(k);
+    else if (draft.legacy) s.setItem(k, JSON.stringify({ text: draft.text, savedAt: now }));
+  }
+}
+
+export function loadDraft(runId: string, now = Date.now()): string {
+  try {
+    pruneDrafts(now);
+    const raw = store()?.getItem(ANSWER_DRAFT_KEY(runId));
+    return raw == null ? '' : readDraft(raw, now).text;
   } catch {
     return '';
   }
 }
 
-export function saveDraft(runId: string, text: string): void {
+export function saveDraft(runId: string, text: string, now = Date.now()): void {
   try {
-    if (text.trim()) store()?.setItem(ANSWER_DRAFT_KEY(runId), text);
+    if (text.trim()) store()?.setItem(ANSWER_DRAFT_KEY(runId), JSON.stringify({ text, savedAt: now }));
     else store()?.removeItem(ANSWER_DRAFT_KEY(runId));
+    pruneDrafts(now);
   } catch {
     // the draft is a convenience
   }
@@ -119,6 +163,31 @@ export function pickerNote(question: Pick<RunQuestion, 'picker' | 'pickerChips'>
 /** A chip answers the open picker by its number only when core says the numbers match; else it fills the box. */
 export const chipAnswers = (question: Pick<RunQuestion, 'picker' | 'pickerChips'>): boolean =>
   question.picker && question.pickerChips;
+
+/**
+ * A chip sends its number only when nothing is typed or attached: the option goes alone, so it
+ * would drop them. Otherwise it goes into the box (`withOption`) and Send carries all of it.
+ */
+export const chipSends = (
+  question: Pick<RunQuestion, 'picker' | 'pickerChips'>,
+  text: string,
+  files: readonly WizardMaterial[],
+): boolean => chipAnswers(question) && !text.trim() && files.length === 0;
+
+/** The box after a chip fills it: the option in an empty box or in place of another chip's, else after the typed answer. */
+export function withOption(text: string, label: string, labels: readonly string[]): string {
+  const typed = text.trim();
+  return !typed || labels.includes(typed) ? label : `${text.trimEnd()}\n${label}`;
+}
+
+/** Once an answer went out: the hold block refetches its recovery, and no copy of the answered question is kept. */
+export function refreshAfterAnswer(
+  client: Pick<QueryClient, 'invalidateQueries' | 'removeQueries'>,
+  runId: string,
+): void {
+  void client.invalidateQueries({ queryKey: ['run-recovery', runId] });
+  client.removeQueries({ queryKey: ['run-question', runId] });
+}
 
 /**
  * The dialog's keydown, registered on window in the capture phase: Escape and a trapped Tab stop

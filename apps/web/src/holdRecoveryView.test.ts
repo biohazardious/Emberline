@@ -1,6 +1,6 @@
 import type { Run, RunRecovery } from '@emberline/protocol';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createElement } from 'react';
+import { type ComponentProps, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Router } from 'wouter';
 import { describe, expect, it } from 'vitest';
@@ -32,14 +32,14 @@ const rec = (delivery: RunRecovery['delivery']): RunRecovery => ({
   ],
 });
 
-const render = (data: RunRecovery) => {
+const render = (data: RunRecovery, props: Partial<ComponentProps<typeof HoldRecovery>> = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(['run-recovery', 'r1'], data);
   return renderToStaticMarkup(
     createElement(
       QueryClientProvider,
       { client },
-      createElement(Router, { ssrPath: '/', children: createElement(HoldRecovery, { run }) }),
+      createElement(Router, { ssrPath: '/', children: createElement(HoldRecovery, { run, ...props }) }),
     ),
   );
 };
@@ -50,6 +50,12 @@ describe('HoldRecovery', () => {
     expect(html).toContain('>Rebase it</button>');
     expect(html).not.toContain('hold-recovery-form');
     expect(html).not.toContain('<textarea');
+  });
+  it("drops the hold's label only where the caller says it shows it already", () => {
+    const onAnswer = () => undefined;
+    expect(render(rec('session'))).toContain('<strong>Merge failed</strong>');
+    expect(render(rec('session'), { onAnswer })).toContain('<strong>Merge failed</strong>');
+    expect(render(rec('session'), { onAnswer, hideLabel: true })).not.toContain('Merge failed');
   });
   it('keeps the Copy fallback when the run cannot take a prompt', () => {
     expect(render(rec('none'))).toContain('Copy: Rebase it');

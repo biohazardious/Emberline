@@ -12,6 +12,12 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - For Claude's picker with several questions, the Answer dialog offered the first question's options as chips, so a chip answered without saying which question it was for. Such a picker now offers no chips: type your answer.
 - When a Claude session ended with its question picker still open, the Answer dialog still treated the picker as open, and an option chip restarted the session with a bare number as the prompt. The end of the session now closes the picker.
 - A long agent message cut short for the Inbox, the Answer dialog's options or a suggestion could end in a broken character when the cut fell inside an emoji. Cuts now keep whole characters.
+- An option chip in the Answer dialog replaced what you had typed; with Claude's question picker open, it sent the option alone and threw away your typed answer and attached files. With an answer typed or files attached, a chip now adds the option to your answer (a second chip swaps it), and Send sends all of it.
+- The Answer dialog opened from a held run's block in the ticket drawer or the run dock closed by itself, with the files you had attached, when the run changed (for example when the hold ended). It now stays open until you close it.
+- Reopening the Answer dialog for a new question could briefly show the previous question's option chips, and a click on one picked that number in the new question. The dialog now loads each question fresh.
+- Dropping a folder on the Answer dialog added it as an empty file, or failed at Send. It is now refused with "… is a folder. Add the files inside it instead."
+- An option's explanation in the Answer dialog showed only as a hover tooltip, which touch screens never show. It now shows under the option.
+- Screen readers now hear why **Suggest an answer** is off, and each problem with an attached file as it appears.
 
 ## [0.6.0] - 2026-10-23
 

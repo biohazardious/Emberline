@@ -5000,6 +5000,30 @@ dialog.cmd-dialog::backdrop {
   border-radius: var(--radius-sm);
 }
 
+/* An option's detail sits under its chip; the chips line up at the top. */
+.answer-options {
+  align-items: flex-start;
+}
+
+.answer-option {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 100%;
+}
+
+/* The live region for file problems is always there; empty, it takes no gap in the list. */
+.answer-file-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.answer-file-problems:empty {
+  margin-top: -8px;
+}
+
 @media (max-width: 640px) {
   .answer-backdrop {
     padding: 0;

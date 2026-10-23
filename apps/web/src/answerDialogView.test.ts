@@ -47,6 +47,25 @@ describe('AnswerDialogView', () => {
     expect(html).toContain('Claude Code is not signed in.');
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Suggest an answer/);
   });
+  it("shows an option's detail as text under its chip, which describes the chip", () => {
+    const html = view();
+    expect(html).not.toContain('title="cooler"');
+    expect(html).toMatch(/<button[^>]*aria-describedby="answer-option-detail-1"[^>]*>Green<\/button>/);
+    expect(html).toMatch(/<span id="answer-option-detail-1"[^>]*>cooler<\/span>/);
+    expect(html).not.toMatch(/aria-describedby="[^"]*"[^>]*>Red</);
+  });
+  it('Suggest is described by why it is off, while that shows', () => {
+    expect(view()).toMatch(/<button[^>]*aria-describedby="answer-suggest-reason"[^>]*>Suggest an answer/);
+    expect(view()).toMatch(/<span id="answer-suggest-reason"[^>]*>Claude Code is not signed in.<\/span>/);
+    const on = view({ question: { ...q, suggest: { available: true, reason: null } } });
+    expect(on).not.toContain('answer-suggest-reason');
+  });
+  it('file problems are read out as they appear: the live region is always there', () => {
+    expect(view()).toMatch(/<div role="status" aria-live="polite"[^>]*><\/div>/);
+    expect(view({ problems: ['pictures is a folder. Add the files inside it instead.'] })).toMatch(
+      /<div role="status" aria-live="polite"[^>]*><p[^>]*>pictures is a folder/,
+    );
+  });
   it('Send is off without text or files', () => {
     expect(view()).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
     expect(view({ text: 'green' })).not.toMatch(/<button[^>]*type="submit"[^>]*disabled/);

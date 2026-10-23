@@ -7,7 +7,7 @@ import { answerCapLine, canSend, handleDialogKey, pickerNote, QUESTION_SOURCE_LI
 import { timeAgo, useNow } from '../time';
 import { useAnswerDialog } from './useAnswerDialog';
 import { MaterialList } from './wizard/MaterialList';
-import type { WizardMaterial } from './wizard/materials';
+import { droppedFiles, type MaterialCandidate, type WizardMaterial } from './wizard/materials';
 
 export interface AnswerDialogViewProps {
   heading: { key: string | null; title: string };
@@ -33,7 +33,8 @@ export interface AnswerDialogViewProps {
   onSuggest: () => void;
   onReplace?: () => void;
   onKeepAnswer?: () => void;
-  onFiles: (list: FileList | File[]) => void;
+  /** Picked or dropped files; a dropped folder is marked so it is refused. */
+  onFiles: (candidates: MaterialCandidate[]) => void;
   onRemoveFile: (id: string) => void;
   onSend: () => void;
   /** Cancel and the close button; the text stays a draft, attached files make it ask first. */
@@ -57,6 +58,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
   // Nothing can be sent to a permission prompt; it is answered in the terminal.
   const locked = permission || p.busy;
   const note = q ? pickerNote(q) : null;
+  const suggestReason = q && !q.suggest.available ? q.suggest.reason : null;
   return (
     // A click on the backdrop stays here: inside the ticket drawer it would close the drawer too.
     <div
@@ -103,17 +105,24 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
         </section>
         {q && q.options.length > 0 && !permission && (
           <div className="answer-options" role="group" aria-label="Options the agent offered">
+            {/* The detail is shown, not a tooltip: touch screens have no hover, and it describes the chip. */}
             {q.options.map((o, i) => (
-              <button
-                key={`${i}-${o.label}`}
-                type="button"
-                className="btn btn-sm"
-                title={o.detail ?? undefined}
-                disabled={p.busy}
-                onClick={() => p.onOption(i)}
-              >
-                {o.label}
-              </button>
+              <span key={`${i}-${o.label}`} className="answer-option">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  aria-describedby={o.detail ? `answer-option-detail-${i}` : undefined}
+                  disabled={p.busy}
+                  onClick={() => p.onOption(i)}
+                >
+                  {o.label}
+                </button>
+                {o.detail && (
+                  <span id={`answer-option-detail-${i}`} className="muted small">
+                    {o.detail}
+                  </span>
+                )}
+              </span>
             ))}
           </div>
         )}
@@ -136,12 +145,15 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               type="button"
               className="btn btn-sm"
               disabled={!q?.suggest.available || p.suggesting || p.busy}
+              aria-describedby={suggestReason ? 'answer-suggest-reason' : undefined}
               onClick={p.onSuggest}
             >
               {p.suggesting ? 'Suggesting…' : 'Suggest an answer'}
             </button>
-            {q && !q.suggest.available && q.suggest.reason && (
-              <span className="muted small">{q.suggest.reason}</span>
+            {suggestReason && (
+              <span id="answer-suggest-reason" className="muted small">
+                {suggestReason}
+              </span>
             )}
           </div>
         )}
@@ -180,7 +192,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
             onDragOver={(e: DragEvent) => e.preventDefault()}
             onDrop={(e: DragEvent) => {
               e.preventDefault();
-              if (!locked) p.onFiles(e.dataTransfer.files);
+              if (!locked) p.onFiles(droppedFiles(e.dataTransfer));
             }}
           >
             <div className="answer-files-head">
@@ -192,7 +204,8 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
                   multiple
                   disabled={locked}
                   onChange={(e) => {
-                    if (e.target.files) p.onFiles(e.target.files);
+                    if (e.target.files)
+                      p.onFiles([...e.target.files].map((file) => ({ file, name: file.name })));
                     e.target.value = '';
                   }}
                 />
@@ -200,11 +213,14 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               <span className="muted small">{answerCapLine(p.files)} · or drop files here</span>
             </div>
             <MaterialList materials={p.files} onRemove={locked ? undefined : p.onRemoveFile} />
-            {p.problems.map((m) => (
-              <p key={m} className="small banner banner-warn">
-                {m}
-              </p>
-            ))}
+            {/* Always there, so a screen reader hears each problem as it appears. */}
+            <div role="status" aria-live="polite" className="answer-file-problems">
+              {p.problems.map((m) => (
+                <p key={m} className="small banner banner-warn">
+                  {m}
+                </p>
+              ))}
+            </div>
           </div>
           {p.error && (
             <div className="banner banner-error" role="alert">

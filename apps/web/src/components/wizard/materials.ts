@@ -59,6 +59,16 @@ let lastId = 0;
 /** List ids from a counter: crypto.randomUUID needs a secure context, and Emberline also runs on plain http. */
 export const nextMaterialId = (): string => `material-${++lastId}`;
 
+/** A drop's files as candidates; a dropped folder is marked, so `addMaterials` refuses it. */
+export const droppedFiles = (data: Pick<DataTransfer, 'files' | 'items'>): MaterialCandidate[] => {
+  const items = [...data.items].filter((item) => item.kind === 'file');
+  return [...data.files].map((file, i) => ({
+    file,
+    name: file.name,
+    isFolder: items[i]?.webkitGetAsEntry?.()?.isDirectory === true,
+  }));
+};
+
 /** The files that fit, in order, and a plain sentence for each one that does not. */
 export function addMaterials(
   current: readonly WizardMaterial[],

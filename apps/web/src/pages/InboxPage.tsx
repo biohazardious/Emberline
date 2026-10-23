@@ -1,5 +1,5 @@
 import { type Project, type Run, type Ticket } from '@emberline/protocol';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ATTENTION_LABELS,
@@ -12,7 +12,7 @@ import {
   type TicketName,
 } from '../attention';
 import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
-import { answerOffered, answerTarget } from '../answerDialog';
+import { answerOffered, answerTarget, refreshAfterAnswer } from '../answerDialog';
 import { AnswerDialog } from '../components/AnswerDialog';
 import { HoldRecovery, useRunRecovery } from '../components/HoldRecovery';
 import { recoveryApplies } from '../holdRecovery';
@@ -88,7 +88,7 @@ function InboxItem({
           )}
         </div>
       )}
-      {recovering && <HoldRecovery key={run.id} run={run} onAnswer={onAnswer} />}
+      {recovering && <HoldRecovery key={run.id} run={run} onAnswer={onAnswer} hideLabel />}
       <div className="inbox-actions">
         {answerOffered(run, recovery.data) && (
           <button type="button" className="btn btn-sm btn-primary" onClick={() => onAnswer('')}>
@@ -123,6 +123,7 @@ export function InboxPage({
   onOpenRun: (runId: string) => void;
   onDismiss: (run: Run) => void;
 }) {
+  const client = useQueryClient();
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const [all, setAll] = useAllProjects('inbox');
@@ -219,6 +220,7 @@ export function InboxPage({
           heading={answering.heading}
           initialText={answering.text}
           onClose={() => setAnswering(null)}
+          onSent={() => refreshAfterAnswer(client, answerRun.id)}
         />
       )}
     </div>

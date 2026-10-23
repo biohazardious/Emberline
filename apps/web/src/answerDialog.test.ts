@@ -1,3 +1,4 @@
+import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addAnswerFiles,
@@ -7,18 +8,25 @@ import {
   answerTarget,
   canSend,
   chipAnswers,
+  chipSends,
   clearDraft,
   handleDialogKey,
   loadDraft,
+  refreshAfterAnswer,
   saveDraft,
   startText,
   suggestionAction,
+  withOption,
 } from './answerDialog';
+import { droppedFiles } from './components/wizard/materials';
+import { questionQuery } from './components/useAnswerDialog';
 
 type Stub = {
   getItem: (k: string) => string | null;
   setItem: (k: string, v: string) => void;
   removeItem: (k: string) => void;
+  key?: (i: number) => string | null;
+  readonly length?: number;
 };
 const g = globalThis as unknown as { localStorage?: Stub };
 
@@ -28,8 +36,15 @@ function memoryStore(): Stub {
     getItem: (k) => m.get(k) ?? null,
     setItem: (k, v) => void m.set(k, v),
     removeItem: (k) => void m.delete(k),
+    key: (i) => [...m.keys()][i] ?? null,
+    get length() {
+      return m.size;
+    },
   };
 }
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse('2026-10-23T12:00:00.000Z');
 
 beforeEach(() => {
   g.localStorage = memoryStore();
@@ -77,6 +92,28 @@ describe('drafts', () => {
     delete g.localStorage;
     expect(loadDraft('r1')).toBe('');
     expect(() => saveDraft('r1', 'x')).not.toThrow();
+  });
+
+  it('drops drafts older than 14 days on load and on save; other keys stay', () => {
+    g.localStorage!.setItem('emberline.theme', 'dark');
+    saveDraft('old', 'stale', NOW - 15 * DAY);
+    saveDraft('recent', 'keep', NOW - 13 * DAY);
+    expect(loadDraft('r1', NOW)).toBe('');
+    expect(g.localStorage!.getItem(ANSWER_DRAFT_KEY('old'))).toBeNull();
+    expect(loadDraft('recent', NOW)).toBe('keep');
+    saveDraft('r1', 'new', NOW + 2 * DAY);
+    expect(g.localStorage!.getItem(ANSWER_DRAFT_KEY('recent'))).toBeNull();
+    expect(loadDraft('r1', NOW + 2 * DAY)).toBe('new');
+    expect(g.localStorage!.getItem('emberline.theme')).toBe('dark');
+  });
+
+  it('reads a draft kept as plain text before 0.6.1, which then expires 14 days on', () => {
+    g.localStorage!.setItem(ANSWER_DRAFT_KEY('r1'), 'typed in 0.6.0');
+    g.localStorage!.setItem(ANSWER_DRAFT_KEY('r2'), '42');
+    expect(loadDraft('r1', NOW)).toBe('typed in 0.6.0');
+    expect(loadDraft('r2', NOW)).toBe('42');
+    expect(loadDraft('r1', NOW + 13 * DAY)).toBe('typed in 0.6.0');
+    expect(loadDraft('r1', NOW + 15 * DAY)).toBe('');
   });
 });
 
@@ -190,6 +227,80 @@ describe('chipAnswers', () => {
     expect(chipAnswers({ picker: true, pickerChips: true })).toBe(true);
     expect(chipAnswers({ picker: true, pickerChips: false })).toBe(false);
     expect(chipAnswers({ picker: false, pickerChips: false })).toBe(false);
+  });
+});
+
+describe('chipSends', () => {
+  const chips = { picker: true, pickerChips: true };
+  const file = {
+    id: 'm1',
+    file: new Blob(['x']),
+    name: 'a.txt',
+    sizeBytes: 1,
+    mimeType: 'text/plain',
+    kind: 'other' as const,
+  };
+  it('answers the picker by its number only with nothing typed or attached, which it would drop', () => {
+    expect(chipSends(chips, '', [])).toBe(true);
+    expect(chipSends(chips, '  ', [])).toBe(true);
+    expect(chipSends(chips, 'and make it bright', [])).toBe(false);
+    expect(chipSends(chips, '', [file])).toBe(false);
+    expect(chipSends({ picker: true, pickerChips: false }, '', [])).toBe(false);
+  });
+});
+
+describe('withOption', () => {
+  const labels = ['Red', 'Green'];
+  it('fills an empty box, adds to a typed answer, and swaps a label another chip put there', () => {
+    expect(withOption('', 'Red', labels)).toBe('Red');
+    expect(withOption(' Red ', 'Green', labels)).toBe('Green');
+    expect(withOption('make it bright\n', 'Red', labels)).toBe('make it bright\nRed');
+  });
+});
+
+describe('questionQuery', () => {
+  const run = (occurrence: string) =>
+    ({
+      id: 'r1',
+      attention: { reason: 'question', detail: null, since: '2026-10-23T10:00:00.000Z', occurrence },
+    }) as never;
+  it('is per question, and kept no longer than the dialog shows it', () => {
+    expect(questionQuery(run('r1:question:e1')).queryKey).not.toEqual(
+      questionQuery(run('r1:question:e2')).queryKey,
+    );
+    expect(questionQuery(run('r1:question:e1')).queryKey.slice(0, 2)).toEqual(['run-question', 'r1']);
+    expect(questionQuery(run('r1:question:e1')).gcTime).toBe(0);
+  });
+});
+
+describe('refreshAfterAnswer', () => {
+  it("refetches the run's recovery and drops every copy of its question", () => {
+    const client = new QueryClient();
+    client.setQueryData(['run-recovery', 'r1'], { label: 'Held' });
+    client.setQueryData(['run-question', 'r1', 'r1:question:e1'], { text: 'Which?' });
+    client.setQueryData(['run-question', 'r2', 'r2:question:e1'], { text: 'Other' });
+    refreshAfterAnswer(client, 'r1');
+    expect(client.getQueryState(['run-recovery', 'r1'])?.isInvalidated).toBe(true);
+    expect(client.getQueryData(['run-question', 'r1', 'r1:question:e1'])).toBeUndefined();
+    expect(client.getQueryData(['run-question', 'r2', 'r2:question:e1'])).toEqual({ text: 'Other' });
+  });
+});
+
+describe('droppedFiles', () => {
+  it('marks a dropped folder so it is refused, not sent as an empty file', () => {
+    const entry = (isDirectory: boolean) => ({ kind: 'file', webkitGetAsEntry: () => ({ isDirectory }) });
+    const data = {
+      files: [new File(['x'], 'a.txt'), new File([], 'pictures')],
+      items: [{ kind: 'string', webkitGetAsEntry: () => null }, entry(false), entry(true)],
+    } as unknown as DataTransfer;
+    const candidates = droppedFiles(data);
+    expect(candidates.map((c) => [c.name, c.isFolder])).toEqual([
+      ['a.txt', false],
+      ['pictures', true],
+    ]);
+    const { added, problems } = addAnswerFiles([], candidates);
+    expect(added.map((m) => m.name)).toEqual(['a.txt']);
+    expect(problems).toEqual(['pictures is a folder. Add the files inside it instead.']);
   });
 });
 

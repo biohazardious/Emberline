@@ -12,16 +12,22 @@ import { api, ApiRequestError, errorMessage } from '../api';
 import {
   addAnswerFiles,
   answerErrorText,
-  chipAnswers,
+  chipSends,
   clearDraft,
   saveDraft,
   startText,
   suggestionAction,
+  withOption,
 } from '../answerDialog';
 import { deliveryNote } from '../holdRecovery';
 import { escapeDraft } from '../reviewComments';
 import { toastInfo } from '../toast';
-import { encodeMaterials, materialsErrorMessage, type WizardMaterial } from './wizard/materials';
+import {
+  encodeMaterials,
+  type MaterialCandidate,
+  materialsErrorMessage,
+  type WizardMaterial,
+} from './wizard/materials';
 
 const errorText = (e: unknown, filesSent = false): string =>
   materialsErrorMessage(e, filesSent) ??
@@ -34,12 +40,19 @@ export interface AnswerDialogOptions {
   onSent?: () => void;
 }
 
+/**
+ * The run's question, cached per occurrence of its wait and only while the dialog shows it: a copy
+ * from an earlier wait would offer that picker's chips, and a chip's number would go to the new one.
+ */
+export const questionQuery = (run: Pick<Run, 'id' | 'attention'>) => ({
+  queryKey: ['run-question', run.id, run.attention?.occurrence ?? null] as const,
+  queryFn: () => api<RunQuestion>(`/api/runs/${run.id}/question`),
+  retry: false,
+  gcTime: 0,
+});
+
 export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDialogOptions) {
-  const query = useQuery({
-    queryKey: ['run-question', run.id],
-    queryFn: () => api<RunQuestion>(`/api/runs/${run.id}/question`),
-    retry: false,
-  });
+  const query = useQuery(questionQuery(run));
   const [text, setTextState] = useState(() => startText(initialText, run.id));
   // The latest text for a suggestion that arrives after the person typed on.
   const textNow = useRef(text);
@@ -105,13 +118,21 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
 
   const send = () => post(async () => ({ text: text.trim(), attachments: await encodeMaterials(files) }));
 
-  // A chip answers Claude's picker by its number when core says the numbers match; otherwise it
-  // only fills the box (Send then cancels the picker and types the text).
+  // A chip answers Claude's picker by its number when core says the numbers match and nothing typed
+  // or attached would be dropped; otherwise it goes into the box (Send then cancels the picker and
+  // types the text).
   const chooseOption = (i: number) => {
     const option = question?.options[i];
     if (!question || !option) return;
-    if (chipAnswers(question)) void post(async () => ({ option: i }));
-    else setText(option.label);
+    if (chipSends(question, text, files)) void post(async () => ({ option: i }));
+    else
+      setText(
+        withOption(
+          text,
+          option.label,
+          question.options.map((o) => o.label),
+        ),
+      );
   };
 
   const suggest = async () => {
@@ -129,12 +150,9 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
     }
   };
 
-  const addFiles = (list: FileList | File[]) => {
+  const addFiles = (candidates: MaterialCandidate[]) => {
     if (sending.current || question?.kind === 'permission') return;
-    const { added, problems: refused } = addAnswerFiles(
-      files,
-      [...list].map((f) => ({ file: f, name: f.name })),
-    );
+    const { added, problems: refused } = addAnswerFiles(files, candidates);
     setFiles([...files, ...added]);
     setProblems(refused);
   };

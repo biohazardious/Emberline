@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { refreshAfterAnswer } from '../answerDialog';
 import { copyText } from '../clipboard';
 import { AnswerDialog } from './AnswerDialog';
 import {
@@ -16,8 +17,10 @@ import {
 
 interface Props {
   run: Run;
-  /** Inbox: the caller opens the Answer dialog itself (with this start text); the row also drops the hold's label it already shows. */
+  /** Inbox: the caller opens the Answer dialog itself (with this start text). */
   onAnswer?: (initialText: string) => void;
+  /** Leaves out the hold's label, for a row that shows it already (the Inbox). */
+  hideLabel?: boolean;
   /** Without these the suggestion is not offered; the ticket link takes their place. */
   onDiscard?: () => Promise<void> | void;
   onMerge?: () => Promise<void> | void;
@@ -33,21 +36,45 @@ export function useRunRecovery(run: Run) {
 }
 
 /** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). Key it by run id. */
-export function HoldRecovery({ run, onAnswer, onDiscard, onMerge }: Props) {
+export function HoldRecovery({ onAnswer, ...props }: Props) {
+  const { run } = props;
   const client = useQueryClient();
-  const applies = recoveryApplies(run);
-  const query = useRunRecovery(run);
   // The Answer dialog this block opens itself (undefined: closed); the Inbox opens its own through onAnswer.
+  // It sits beside the block, not in it: a refetch that ends the hold (any run event) hides the
+  // block, and the dialog with the person's files stays until they close it.
   const [answer, setAnswer] = useState<string>();
+  const query = useRunRecovery(run);
+  const rec = recoveryApplies(run) ? query.data : null;
+
+  return (
+    <>
+      {rec && <HoldRecoveryBlock {...props} rec={rec} onAnswer={onAnswer ?? setAnswer} />}
+      {answer !== undefined && (
+        <AnswerDialog
+          run={run}
+          heading={{ key: null, title: run.title ?? 'Run' }}
+          initialText={answer}
+          onClose={() => setAnswer(undefined)}
+          onSent={() => refreshAfterAnswer(client, run.id)}
+        />
+      )}
+    </>
+  );
+}
+
+function HoldRecoveryBlock({
+  run,
+  rec,
+  onAnswer,
+  hideLabel = false,
+  onDiscard,
+  onMerge,
+}: Omit<Props, 'onAnswer'> & { rec: RunRecovery; onAnswer: (initialText: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState<string>();
 
-  const rec = query.data;
-  if (!applies || !rec) return null;
-
-  const refetch = () => void client.invalidateQueries({ queryKey: ['run-recovery', run.id] });
   const ticketHref = run.ticketId ? `/projects/${run.projectId}/board?ticket=${run.ticketId}` : null;
   const suggestions = visibleSuggestions(rec, { onDiscard, onMerge, ticket: !!ticketHref });
   const canDeliver = rec.delivery !== 'none';
@@ -87,18 +114,13 @@ export function HoldRecovery({ run, onAnswer, onDiscard, onMerge }: Props) {
       );
     }
     return (
-      <button
-        type="button"
-        className={btn(s)}
-        disabled={busy}
-        onClick={() => (onAnswer ? onAnswer(initialAnswerText(s)) : setAnswer(initialAnswerText(s)))}
-      >
+      <button type="button" className={btn(s)} disabled={busy} onClick={() => onAnswer(initialAnswerText(s))}>
         {s.label}
       </button>
     );
   };
 
-  const heading = recoveryHeading(rec, !!onAnswer);
+  const heading = recoveryHeading(rec, hideLabel);
 
   return (
     <section className="hold-recovery" aria-label="Held run">
@@ -181,15 +203,6 @@ export function HoldRecovery({ run, onAnswer, onDiscard, onMerge }: Props) {
         <div className="banner banner-error" role="alert">
           {error}
         </div>
-      )}
-      {answer !== undefined && (
-        <AnswerDialog
-          run={run}
-          heading={{ key: null, title: run.title ?? 'Run' }}
-          initialText={answer}
-          onClose={() => setAnswer(undefined)}
-          onSent={refetch}
-        />
       )}
     </section>
   );
