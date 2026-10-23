@@ -50,66 +50,84 @@ function hostilePassword(next: () => number): string {
 }
 
 const HOST = 'git.example.com';
+/** User names, the git prefixes among them: a line's own prefix opens nothing, an address's does. */
+const USERS = ['u', 'alice', 'fatal', 'error', 'warning', 'hint', 'remote', 'ssh'];
 /** The ways an origin holds a password. */
-const ADDRESSES = (pw: string) => [
-  `https://u:${pw}@${HOST}/o/r.git`,
-  `http://u:${pw}@${HOST}:3000/o/r.git`,
-  `ssh://git:${pw}@${HOST}:2222/o/r.git`,
-  `alice:${pw}@${HOST}:o/r.git`,
+const ADDRESSES = (pw: string, user: string) => [
+  `https://${user}:${pw}@${HOST}/o/r.git`,
+  `http://${user}:${pw}@${HOST}:3000/o/r.git`,
+  `ssh://${user}:${pw}@${HOST}:2222/o/r.git`,
+  `${user}:${pw}@${HOST}:o/r.git`,
   `me@corp.com:${pw}@${HOST}:o/r.git`,
-  `alice:${pw}@${HOST}/o/r.git`,
-  `https://u:2024/${pw}@${HOST}/o`,
+  `${user}:${pw}@${HOST}/o/r.git`,
+  `https://${user}:2024/${pw}@${HOST}/o`,
 ];
 /** git splits an scp-like address at its first `:` and quotes the rest as a path. */
 const SPLIT = (pw: string) => `${pw}@${HOST}:o/r.git`;
-/** The messages that carry an address, as git, ssh and servers print them. */
+/**
+ * The messages that carry an address, as git, ssh and servers print them, with the text before the
+ * address that must survive and the text after it (null: an `@` there may take the mask on).
+ */
+const message = (before: string, after: string | null) => ({
+  make: (a: string) => `${before}${a}${after ?? ' by bob@example.com'}`,
+  before,
+  after,
+});
 const QUOTED = [
-  (a: string) => `fatal: '${a}' does not appear to be a git repository`,
-  (a: string) => `fatal: unable to access '${a}/': The requested URL returned error: 403`,
-  (a: string) => `fatal: repository '${a}/' not found`,
-  (a: string) => `Cloning into '${a}'...`,
-  (a: string) => `error: failed to push some refs to '${a}'`,
+  message("fatal: '", "' does not appear to be a git repository"),
+  message("fatal: unable to access '", "/': The requested URL returned error: 403"),
+  message("fatal: repository '", "/' not found"),
+  message("Cloning into '", "'..."),
+  message("error: failed to push some refs to '", "'"),
+  message("hint: Updates were rejected; see '", "'"),
+  message("warning: redirecting to '", "'"),
 ];
 const UNQUOTED = [
-  (a: string) => `To ${a}`,
-  (a: string) => `remote: mirrored to ${a} by bob@example.com`,
-  (a: string) => `remote: ${a}`,
-  (a: string) => `ssh: Could not resolve hostname ${a}: Name or service not known`,
+  message('To ', ''),
+  message('remote: mirrored to ', null),
+  message('remote: ', ''),
+  message('ssh: Could not resolve hostname ', ': Name or service not known'),
 ];
 
 describe('withoutUrlCredentials', () => {
-  it('never shows any part of a hostile password, in any address form or message (generated)', () => {
+  it('never shows any part of a hostile password, in any address form or message, and keeps the message (generated)', () => {
     const next = random(20261023);
     let cases = 0;
     for (let n = 0; n < 1500; n++) {
       const pw = hostilePassword(next);
+      const user = USERS[n % USERS.length]!;
       const texts = [
-        ...ADDRESSES(pw).flatMap((address) => [...QUOTED, ...UNQUOTED].map((message) => message(address))),
+        ...ADDRESSES(pw, user).flatMap((address) => [...QUOTED, ...UNQUOTED].map((m) => ({ m, address }))),
         // The path git quotes is quoted wherever git prints it.
-        ...QUOTED.map((message) => message(SPLIT(pw))),
+        ...QUOTED.map((m) => ({ m, address: SPLIT(pw) })),
       ];
-      for (const text of texts) {
-        {
-          // Line by line, also with other lines around it and as describeGitError reads it.
-          for (const shown of [
-            withoutUrlCredentials(text),
-            withoutUrlCredentials(`Pushing...\n${text}\nDone`),
-            describeGitError(Object.assign(new Error('git failed'), { stderr: text })),
-          ]) {
-            if (/[QXZJKVW]/.test(shown))
-              throw new Error(`leak: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
-          }
-          cases++;
+      for (const { m, address } of texts) {
+        const text = m.make(address);
+        // Line by line, also with other lines around it and as describeGitError reads it.
+        const alone = withoutUrlCredentials(text);
+        for (const shown of [
+          alone,
+          withoutUrlCredentials(`Pushing...\n${text}\nDone`).replace(/^Pushing\.\.\.\n|\nDone$/g, ''),
+          describeGitError(Object.assign(new Error('git failed'), { stderr: text })),
+        ]) {
+          if (/[QXZJKVW]/.test(shown))
+            throw new Error(`leak: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
+          if (m.after !== null && !shown.endsWith(m.after))
+            throw new Error(`message lost: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
         }
+        // The git prefix, and the message words before the address, are kept.
+        if (!alone.startsWith(m.before))
+          throw new Error(`prefix lost: ${JSON.stringify(text)} → ${JSON.stringify(alone)}`);
+        cases++;
       }
       // An address shown on its own (Project settings) keeps nothing of the password either.
-      for (const address of ADDRESSES(pw)) {
+      for (const address of ADDRESSES(pw, user)) {
         const { display } = remoteUrlForDisplay(address);
         if (/[QXZJKVW]/.test(display))
           throw new Error(`display leak: ${JSON.stringify(address)} → ${display}`);
       }
     }
-    expect(cases).toBe(1500 * (7 * 9 + 5));
+    expect(cases).toBe(1500 * (7 * 11 + 7));
   });
 
   it('keeps the address without its user info after a scheme, and masks with *** otherwise', () => {
@@ -120,9 +138,9 @@ describe('withoutUrlCredentials', () => {
     expect(withoutUrlCredentials("'pw@host:o/r' does not appear to be a git repository")).toBe(
       "'***@host:o/r' does not appear to be a git repository",
     );
-    // From the first opener on the line: a git prefix with a `:` is one too.
+    // A git prefix that starts the line opens nothing: the quote does.
     expect(withoutUrlCredentials("fatal: 'pw@host:o/r' does not appear to be a git repository")).toBe(
-      "fatal:***@host:o/r' does not appear to be a git repository",
+      "fatal: '***@host:o/r' does not appear to be a git repository",
     );
   });
 

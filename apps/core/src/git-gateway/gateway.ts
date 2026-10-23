@@ -120,7 +120,8 @@ export interface ScanMeter {
  * server quotes back). One rule, line by line, that masks too much rather than ever too little:
  * from the first credential opener on the line to the last `@` on it that a host follows, all goes.
  * - The openers: a `scheme://` (from after `://`), a quote mark of any kind (from after it), and a
- *   `:` in a word (from after the word's first `:`, so `user:` keeps its user name).
+ *   `:` in a word (from after the word's first `:`, so `user:` keeps its user name), but not the
+ *   `:` of a git prefix that starts the line (`fatal: `, `remote: `, … see LINE_PREFIX).
  * - After a `scheme://` the whole user info goes with its `@` (`https://host/…`); otherwise `***`
  *   takes its place (`alice:***@host:path`, `'***@host:path'`).
  * So a password never shows, whatever it holds (whitespace, quote marks, `:`, `/`, `@`, `#`, `?`),
@@ -139,6 +140,13 @@ export function withoutUrlCredentials(text: string, meter?: ScanMeter): string {
   }
 }
 
+/**
+ * The prefixes git, ssh and a server put at the start of a line (`fatal: '…' does not appear …`):
+ * their `:` opens nothing, so the message keeps them. An address after one is still caught by its
+ * own opener (its scheme, its quote, its `user:`).
+ */
+const LINE_PREFIX = /^(?:fatal|error|warning|hint|remote|ssh): /;
+
 function withoutLineCredentials(line: string, meter?: ScanMeter): string {
   if (meter) meter.steps += line.length;
   let at = line.length - 1;
@@ -147,9 +155,10 @@ function withoutLineCredentials(line: string, meter?: ScanMeter): string {
   // The first opener: the mask starts after it, so nothing after it up to `at` is kept.
   let from = -1;
   let scheme = false;
+  const prefixColon = (LINE_PREFIX.exec(line)?.[0].length ?? 0) - 2;
   for (let i = 0; i < at && from < 0; i++) {
     if (QUOTES.has(line[i]!)) from = i + 1;
-    else if (line[i] === ':') {
+    else if (line[i] === ':' && i !== prefixColon) {
       scheme = line.startsWith('//', i + 1);
       from = scheme ? i + 3 : i + 1;
     }
@@ -171,8 +180,9 @@ export function describeGitError(error: unknown, credential?: GitHttpCredential 
         : error instanceof Error
           ? error.message
           : String(error);
+    // Redacted before the prefix goes: an address must never become the start of the line.
     text =
-      raw
+      withoutUrlCredentials(raw)
         .split('\n')
         .map((l) => l.replace(/^(fatal|error|remote): /, '').trim())
         .find(Boolean) ?? 'git failed';

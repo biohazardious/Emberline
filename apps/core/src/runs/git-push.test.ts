@@ -80,11 +80,12 @@ describe('pushing a run branch without an account', () => {
       ].join('\n'),
     });
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
-    // Each line from its first opener (`remote:` too) to its last `@` that a host follows.
+    // Each line from its first opener to its last `@` that a host follows; the `remote: ` prefix
+    // that starts a line is no opener.
     expect(res.output).toContain('To https://git.example.com/o/r.git');
-    expect(res.output).toContain('remote:***@git.example.com/o/r/pulls/new');
-    expect(res.output).toContain('remote:***@git.example.com:2222/o/r.git');
-    expect(res.output).toContain("remote:***@git.example.com:o/r.git'");
+    expect(res.output).toContain('remote: Create a pull request:***@git.example.com/o/r/pulls/new');
+    expect(res.output).toContain('remote: mirror:***@git.example.com:2222/o/r.git');
+    expect(res.output).toContain("remote: scp frank:***@git.example.com:o/r.git'");
     expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@|fr4nk|gr4ce|h3idi/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);
