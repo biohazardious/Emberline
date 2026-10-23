@@ -120,10 +120,17 @@ async function pendingOperation(worktreePath: string, head: string): Promise<Pen
     );
     parents = parents.filter((p) => independent.has(p));
   }
+  // Whatever MERGE_MODE says (a --no-ff merge keeps its parents unreduced).
+  let staleMerge = mergeHeads.length > 0;
+  for (const mergeHead of mergeHeads)
+    staleMerge &&= await execGitFile(['merge-base', '--is-ancestor', mergeHead, head], inWorktree).then(
+      () => true,
+      () => false,
+    );
   return {
     mergeHeads,
     parents,
-    staleMerge: mergeHeads.length > 0 && parents.length === 1 && parents[0] === head,
+    staleMerge,
     cherryPick: await verify('CHERRY_PICK_HEAD'),
     revert: (await verify('REVERT_HEAD')) !== null,
     autostash: (await readGitDirFile(worktreePath, 'MERGE_AUTOSTASH')) !== null,
@@ -428,8 +435,13 @@ export async function syncWorktreeToMainWorkspace(params: {
     // 1. The run's output as a commit on its own branch; .gitignore keeps secrets and build output
     //    out. It goes on the branch only once the merge is allowed.
     const head = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
-    const pending = await pendingOperation(worktreePath, head);
+    // A refusal is a stale pass's to drop: asked first, so it records nothing.
+    const pending = await pendingOperation(worktreePath, head).catch((error: unknown) => {
+      beforeMerge?.();
+      throw error;
+    });
     if (pending.autostash) {
+      beforeMerge?.();
       // Concluding it would put the agent's stashed changes on the stash list all worktrees share.
       return result(
         false,

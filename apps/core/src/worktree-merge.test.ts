@@ -13,10 +13,12 @@ import { rmTemp } from './test-rm.js';
 let dir: string;
 let main: string;
 
+// stderr is kept from the test output (git's conflict hints); a failure still carries it.
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
     cwd,
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 
 function addWorktree(name: string): string {
@@ -306,9 +308,13 @@ describe('a merge refused before it starts', () => {
     writeFileSync(path.join(a, 'old.txt'), 'edited, not committed\n');
     expect(() => git(a, 'merge', '--autostash', '-q', 'main')).toThrow();
     const before = { head: git(a, 'rev-parse', 'HEAD'), status: git(a, 'status', '--porcelain') };
-    const res = await refusing(a, () => {
-      throw new Error('never asked');
-    });
+    // A pass whose turn is over is asked first: it records nothing.
+    await expect(
+      refusing(a, () => {
+        throw new Error('turn moved');
+      }),
+    ).rejects.toThrow('turn moved');
+    const res = await refusing(a, () => undefined);
     expect(res).toMatchObject({ ok: false });
     expect(res.summary).toBe(
       'Could not merge T-1: a git merge --autostash in its worktree is not finished. Finish it with git commit (or end it with git merge --abort), then merge again.',
@@ -316,6 +322,49 @@ describe('a merge refused before it starts', () => {
     expect({ head: git(a, 'rev-parse', 'HEAD'), status: git(a, 'status', '--porcelain') }).toEqual(before);
     expect(git(a, 'stash', 'list')).toBe('');
     expect(git(a, 'rev-parse', '-q', '--verify', 'MERGE_AUTOSTASH')).not.toBe('');
+  });
+
+  it('a MERGE_HEAD that names no commit fails the merge, after asking whether the pass is still current', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeFileSync(
+      path.join(git(a, 'rev-parse', '--path-format=absolute', '--git-dir'), 'MERGE_HEAD'),
+      'not a commit\n',
+    );
+    await expect(
+      refusing(a, () => {
+        throw new Error('turn moved');
+      }),
+    ).rejects.toThrow('turn moved');
+    await expect(refusing(a, () => undefined)).rejects.toThrow(/MERGE_HEAD names no commit/);
+    expect(git(a, 'log', '--format=%s')).toBe('init');
+  });
+
+  it('a --no-ff merge whose end failed after the branch moved is ended by the next merge too', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(main, 'main-only.js'), 'm\n');
+    git(main, 'add', 'main-only.js');
+    git(main, 'commit', '-q', '-m', 'main only');
+    git(a, 'merge', '--no-ff', '--no-commit', '-q', 'main');
+    const gitDir = git(a, 'rev-parse', '--path-format=absolute', '--git-dir');
+    expect(readFileSync(path.join(gitDir, 'MERGE_MODE'), 'utf8')).toBe('no-ff');
+    setCommandExecutor(async (request) => {
+      if (request.file === 'git' && request.args.includes('--quit'))
+        throw new Error('index.lock: File exists');
+      return localCommandExecutor(request);
+    });
+    try {
+      await expect(refusing(a, () => undefined)).rejects.toThrow('index.lock');
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    const recorded = git(a, 'rev-parse', 'HEAD');
+    expect(git(a, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ')).toHaveLength(3);
+    const res = await refusing(a, () => undefined);
+    expect(res.ok, res.summary).toBe(true);
+    expect(git(a, 'rev-parse', 'HEAD')).toBe(recorded);
+    expect(() => git(a, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+    expect(existsSync(path.join(gitDir, 'MERGE_MODE'))).toBe(false);
   });
 
   it('a merge whose end failed after the branch moved is ended by the next merge, which records nothing twice', async () => {
