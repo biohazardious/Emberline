@@ -145,6 +145,85 @@ describe('syncWorktreeToMainWorkspace (git merge)', () => {
   });
 });
 
+describe('a merge refused before it starts', () => {
+  const refusing = (worktreePath: string, beforeMerge: () => void) =>
+    syncWorktreeToMainWorkspace({
+      worktreePath,
+      mainWorkspacePath: main,
+      ticketKey: 'T-1',
+      runId: 'run-T-1',
+      beforeMerge,
+    });
+  /** The branch, the index (with what the agent staged) and the files, as git shows them. */
+  const stateOf = (wt: string) => ({
+    head: git(wt, 'rev-parse', 'HEAD'),
+    status: git(wt, 'status', '--porcelain', '--untracked-files=all'),
+    staged: git(wt, 'diff', '--cached', '--name-status'),
+    unstaged: git(wt, 'diff', '--name-status'),
+  });
+
+  it("leaves the run's branch, its index and its files as they were", async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 edited\nline3\n');
+    writeFileSync(path.join(a, 'staged.js'), 'staged\n');
+    git(a, 'add', 'staged.js');
+    const before = stateOf(a);
+    const mainBefore = git(main, 'rev-parse', 'HEAD');
+
+    await expect(
+      refusing(a, () => {
+        throw new Error('the agent works again');
+      }),
+    ).rejects.toThrow('the agent works again');
+    expect(stateOf(a)).toEqual(before);
+    expect(git(a, 'log', '--format=%s')).toBe('init');
+    expect(git(main, 'rev-parse', 'HEAD')).toBe(mainBefore);
+  });
+
+  it('once allowed, the output is committed as before, with what the agent staged by hand', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    mkdirSync(path.join(a, '.venv'));
+    writeFileSync(path.join(a, '.venv', 'kept.cfg'), 'kept\n');
+    git(a, 'add', '-f', '.venv/kept.cfg');
+    let calls = 0;
+    const res = await refusing(a, () => {
+      calls += 1;
+      // Asked with the output commit built and nothing moved yet.
+      expect(git(a, 'log', '--format=%s')).toBe('init');
+    });
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(1);
+    expect(git(a, 'log', '--format=%s')).toBe('feat(T-1): factory run output\ninit');
+    expect(git(a, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual([
+      '.venv/kept.cfg',
+      'feature-a.js',
+    ]);
+    expect(git(a, 'status', '--porcelain', '--untracked-files=all')).toBe('');
+    expect(readFileSync(path.join(main, 'feature-a.js'), 'utf8')).toBe('a\n');
+  });
+
+  it('an agent that commits while the merge is asked for keeps its commit; nothing is merged', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const mainBefore = git(main, 'rev-parse', 'HEAD');
+    let calls = 0;
+    const res = await refusing(a, () => {
+      calls += 1;
+      if (calls === 1) {
+        git(a, 'add', '-A');
+        git(a, 'commit', '-q', '-m', 'agent commit');
+      }
+    });
+    expect(res.ok).toBe(false);
+    expect(res.summary).toMatch(/branch moved/);
+    expect(calls).toBe(2);
+    expect(git(a, 'log', '--format=%s')).toBe('agent commit\ninit');
+    expect(git(main, 'rev-parse', 'HEAD')).toBe(mainBefore);
+  });
+});
+
 describe('Emberline commits never carry scratch files', () => {
   const TICKETS = '.emberline/new-tickets.json';
   const writeTickets = (cwd: string, title = 'Again') => {

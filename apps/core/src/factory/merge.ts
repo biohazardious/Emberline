@@ -1,5 +1,6 @@
 /** Integration of run worktrees into the main workspace (git merge under a per-workspace lock). */
 import { existsSync } from 'node:fs';
+import { copyFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { type SyncWorktreeResponse } from '@emberline/protocol';
 import { isRunnerUnavailable } from '../command-exec.js';
@@ -47,11 +48,60 @@ const SCRATCH_PATHSPECS = EMBERLINE_SCRATCH_PATHS.map((p) => `:(glob)**/${p}`);
  * `git commit` takes the whole index. Scratch files that are already tracked are removed from the
  * index too, so the commit deletes them from the repository; the files on disk are left alone.
  */
-export async function unstageScratchFiles(cwd: string): Promise<void> {
+export async function unstageScratchFiles(cwd: string, env?: Record<string, string>): Promise<void> {
   // -f: the staged content may differ from both HEAD and the file on disk; only the index changes.
   await execGitFile(['rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', ...SCRATCH_PATHSPECS], {
     cwd,
+    env,
   });
+}
+
+/** Stages a run's output: everything but what a run never commits (RUN_OUTPUT_EXCLUDES, scratch files). */
+async function stageRunOutput(worktreePath: string, env?: Record<string, string>): Promise<void> {
+  await execGitFile(['add', '-A', '--', '.', ...RUN_OUTPUT_EXCLUDES], { cwd: worktreePath, env });
+  await unstageScratchFiles(worktreePath, env);
+}
+
+/**
+ * The commit of a run's output on top of `head`, or null when there is nothing to commit. It is
+ * built in a copy of the worktree's index and not put on any branch, so the worktree, its index and
+ * its branch stay exactly as they were (the caller moves the branch once the merge is allowed).
+ */
+async function buildRunOutputCommit(
+  worktreePath: string,
+  head: string,
+  label: string,
+): Promise<string | null> {
+  const inWorktree = { cwd: worktreePath };
+  const index = (
+    await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', 'index'], inWorktree)
+  ).stdout.trim();
+  const scratchIndex = `${index}.emberline-output`;
+  const env = { GIT_INDEX_FILE: scratchIndex };
+  try {
+    // What the agent staged by hand (a file its .gitignore ignores, say) is part of the output too.
+    await copyFile(index, scratchIndex).catch(() => execGitFile(['read-tree', head], { ...inWorktree, env }));
+    await stageRunOutput(worktreePath, env);
+    const tree = (await execGitFile(['write-tree'], { ...inWorktree, env })).stdout.trim();
+    const headTree = (await execGitFile(['rev-parse', `${head}^{tree}`], inWorktree)).stdout.trim();
+    if (tree === headTree) return null;
+    return (
+      await execGitFile(
+        [
+          ...FACTORY_GIT_IDENTITY,
+          'commit-tree',
+          tree,
+          '-p',
+          head,
+          '-m',
+          `feat(${label}): factory run output`,
+        ],
+        inWorktree,
+      )
+    ).stdout.trim();
+  } finally {
+    await rm(scratchIndex, { force: true }).catch(() => undefined);
+  }
 }
 
 /**
@@ -205,7 +255,10 @@ export async function syncWorktreeToMainWorkspace(params: {
   runId: string;
   /** The run's branch: with the worktree gone, whether its tip is in main decides. */
   branch?: string | null;
-  /** Called once there is something to merge (not for work already in main); may throw to refuse. */
+  /**
+   * Called once there is something to merge (not for work already in main), with the commit to merge
+   * built but the run's branch, worktree and index untouched; may throw to refuse, which leaves them so.
+   */
   beforeMerge?: () => void;
 }): Promise<SyncWorktreeResult> {
   const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
@@ -255,17 +308,11 @@ export async function syncWorktreeToMainWorkspace(params: {
     const inWorktree = { cwd: worktreePath };
     const inMain = { cwd: mainWorkspacePath };
 
-    // 1. Commit the run's output on its own branch; .gitignore keeps secrets and build output out.
-    await execGitFile(['add', '-A', '--', '.', ...RUN_OUTPUT_EXCLUDES], inWorktree);
-    await unstageScratchFiles(worktreePath);
-    const staged = await execGitFile(['diff', '--cached', '--name-only'], inWorktree);
-    if (staged.stdout.trim()) {
-      await execGitFile(
-        [...FACTORY_GIT_IDENTITY, 'commit', '-q', '-m', `feat(${label}): factory run output`],
-        inWorktree,
-      );
-    }
-    const tip = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
+    // 1. The run's output as a commit on its own branch; .gitignore keeps secrets and build output
+    //    out. It goes on the branch only once the merge is allowed.
+    const head = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
+    const output = await buildRunOutputCommit(worktreePath, head, label);
+    const tip = output ?? head;
     const branch = (await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], inWorktree)).stdout.trim();
     const shortHead = async () =>
       (await execGitFile(['rev-parse', '--short', 'HEAD'], inMain)).stdout.trim() || null;
@@ -282,6 +329,25 @@ export async function syncWorktreeToMainWorkspace(params: {
     }
 
     beforeMerge?.();
+    if (output) {
+      // Only if the branch is still where the commit was built on (an agent may commit meanwhile).
+      const moved = await execGitFile(
+        ['update-ref', '-m', `commit: feat(${label}): factory run output`, 'HEAD', output, head],
+        inWorktree,
+      ).then(
+        () => false,
+        () => true,
+      );
+      if (moved) {
+        beforeMerge?.();
+        return result(
+          false,
+          `Could not merge ${label}: its branch moved while it was being merged. Merge it again.`,
+        );
+      }
+      // The worktree's index matches the new commit, as after a `git commit`.
+      await stageRunOutput(worktreePath);
+    }
 
     // 2. Edits made directly in the main workspace (file explorer, blueprint) are committed first so
     //    the merge can never overwrite them. Untracked files stay untracked. Scratch files are put

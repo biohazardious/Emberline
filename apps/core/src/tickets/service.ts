@@ -2019,8 +2019,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ticketKey,
       runId: run.id,
       branch: run.branch,
-      // Checked once the run's output is committed and its tip read, right before that tip (not a
-      // later one) is merged: an agent that worked again since leaves it to its newer turn's pass.
+      // Checked once the run's output commit is built and its tip read, right before that tip (not a
+      // later one) is merged: an agent that worked again since leaves it, and its branch, worktree and
+      // index as they were, to its newer turn's pass.
       beforeMerge: () => {
         if (stale()) throw new TurnMoved();
       },
