@@ -159,6 +159,7 @@ export async function buildServer(
   const questions = new QuestionService(deps.db, deps.runs, recovery, {
     completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n'),
     suggestModel: deps.config.suggestModel,
+    cancelWaitMs: deps.config.pickerCancelWaitMs,
     claudeCommand: deps.config.claudeCommand,
   });
   cron.start();

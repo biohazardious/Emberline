@@ -6,7 +6,6 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCommandExecutor, localCommandExecutor } from './command-exec.js';
-import { pickerTiming } from './runs/question-service.js';
 import { projects, runEvents, runs, tickets } from './db/schema.js';
 import { updateFactorySettings } from './factory/settings.js';
 import * as gitExec from './git-exec.js';
@@ -458,6 +457,28 @@ describe('POST /api/runs/:id/answer', () => {
     expect(calls).toEqual(['prompt:2']);
   });
 
+  it('a second answer while one is being sent is 409 answer_busy and types once', async () => {
+    const { calls } = openPicker('a12');
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const started = new Promise<void>((r) => (entered = r));
+    vi.spyOn(t.runs, 'prompt').mockImplementation(async (rid, text) => {
+      calls.push(`prompt:${text}`);
+      entered();
+      await gate;
+      return t.runs.getRun(rid);
+    });
+    const first = post('/api/runs/a12/answer', { option: 0 });
+    await started;
+    const second = await post('/api/runs/a12/answer', { option: 0 });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toBe('answer_busy');
+    release();
+    expect((await first).statusCode).toBe(200);
+    expect(calls).toEqual(['prompt:1']);
+  });
+
   it('an option the picker does not offer is a 400', async () => {
     const { calls } = openPicker('a10');
     const res = await post('/api/runs/a10/answer', { option: 5 });
@@ -468,7 +489,6 @@ describe('POST /api/runs/:id/answer', () => {
   });
 
   it('text with a picker open cancels the picker first, then sends the text', async () => {
-    pickerTiming.cancelWaitMs = 5;
     const { wt, calls } = openPicker('a11');
     const res = await post('/api/runs/a11/answer', {
       text: 'something else',

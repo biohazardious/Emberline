@@ -2376,9 +2376,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /** Raw keys into a live session (an open picker); no paste brackets, no submit. */
   async sendKeys(id: string, keys: string): Promise<void> {
-    const row = this.row(id);
-    if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
-    await this.ptyd.get().write(row.ptydSessionId, keys);
+    return this.sessionLock.run(id, async () => {
+      const row = this.row(id);
+      if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
+      if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
+      await this.ptyd.get().write(row.ptydSessionId, keys);
+    });
   }
 
   /**

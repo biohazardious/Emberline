@@ -88,6 +88,7 @@ export async function createTestApp(
     hookCommand: 'emberline-hook',
     claudeCommand: 'claude',
     suggestModel: 'haiku',
+    pickerCancelWaitMs: 5,
     timeZone: 'UTC',
     setupToken: TEST_SETUP_TOKEN,
     allowedHosts: [],

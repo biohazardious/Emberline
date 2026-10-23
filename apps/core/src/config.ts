@@ -45,6 +45,8 @@ export interface CoreConfig {
   claudeCommand: string;
   /** --model for Suggest an answer (EMBERLINE_SUGGEST_MODEL). */
   suggestModel: string;
+  /** How long a cancelled AskUserQuestion picker gets to close before a typed answer follows. */
+  pickerCancelWaitMs: number;
   /** IANA zone for limit reset times printed without one (should match the runner's TZ). */
   timeZone: string;
   /**
@@ -153,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
     suggestModel: env.EMBERLINE_SUGGEST_MODEL?.trim() || 'haiku',
+    pickerCancelWaitMs: 1_000,
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,

@@ -124,3 +124,20 @@ describe('typed prompts', () => {
     expect(writes).toContain('\x1b[200~a\tb\nc\x1b[201~');
   });
 });
+
+describe('sendKeys', () => {
+  it('writes the raw bytes alone: no paste brackets, no Enter', async () => {
+    const run = await idleRun();
+    const writes = captureWrites();
+    await t.runs.sendKeys(run.id, '\x1b');
+    expect(writes).toEqual(['\x1b']);
+  });
+
+  it('is refused once the session ended', async () => {
+    const run = await idleRun();
+    await t.runs.stop(run.id);
+    const writes = captureWrites();
+    await expect(t.runs.sendKeys(run.id, '\x1b')).rejects.toMatchObject({ statusCode: 409 });
+    expect(writes).toEqual([]);
+  });
+});

@@ -27,19 +27,21 @@ export interface QuestionServiceOptions {
   suggestModel: string;
   /** Claude Code executable in the runner. */
   claudeCommand: string;
+  /** How long a cancelled picker gets to close before the typed answer follows. */
+  cancelWaitMs: number;
 }
 
 const noQuestion = () => new HttpError(404, 'no_question', 'This run is not waiting for an answer.');
 const BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart']);
 const ANSWERABLE = new Set(['question', 'permission', 'held', 'blocked']);
 
-/** How long a cancelled picker gets to close before the typed answer follows (tests shorten it). */
-export const pickerTiming = { cancelWaitMs: 1_000 };
 const ESC = '\x1b';
 
 export class QuestionService {
   /** Runs with a suggestion being written (one at a time per run). */
   private readonly suggesting = new Set<string>();
+  /** Runs with an answer being delivered (a second one would type into the terminal twice). */
+  private readonly answering = new Set<string>();
 
   constructor(
     private readonly db: Db,
@@ -70,6 +72,17 @@ export class QuestionService {
 
   /** Stores the answer's files in the run's worktree, then delivers the prompt the answer becomes. */
   async answer(runId: string, body: AnswerRequestParsed): Promise<AnswerResponse> {
+    if (this.answering.has(runId))
+      throw new HttpError(409, 'answer_busy', 'An answer is already being sent.');
+    this.answering.add(runId);
+    try {
+      return await this.deliver(runId, body);
+    } finally {
+      this.answering.delete(runId);
+    }
+  }
+
+  private async deliver(runId: string, body: AnswerRequestParsed): Promise<AnswerResponse> {
     const question = await this.get(runId); // 404 no_question once the run stopped waiting
     if (body.option !== undefined) return this.answerPicker(runId, question, body.option);
     // Nothing is typed into a permission prompt: Enter or text there would allow or deny it.
@@ -107,7 +120,7 @@ export class QuestionService {
     // Free text over an open picker: Esc closes it, then the answer is typed as an ordinary prompt.
     if (question.picker) {
       await this.runs.sendKeys(run.id, ESC);
-      await new Promise((resolve) => setTimeout(resolve, pickerTiming.cancelWaitMs));
+      await new Promise((resolve) => setTimeout(resolve, this.opts.cancelWaitMs));
     }
     await this.runs.prompt(run.id, text);
     return { delivery: 'session', attachments: paths };
