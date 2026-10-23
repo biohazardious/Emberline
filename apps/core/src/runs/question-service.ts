@@ -33,6 +33,10 @@ const noQuestion = () => new HttpError(404, 'no_question', 'This run is not wait
 const BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart']);
 const ANSWERABLE = new Set(['question', 'permission', 'held', 'blocked']);
 
+/** How long a cancelled picker gets to close before the typed answer follows (tests shorten it). */
+export const pickerTiming = { cancelWaitMs: 1_000 };
+const ESC = '\x1b';
+
 export class QuestionService {
   /** Runs with a suggestion being written (one at a time per run). */
   private readonly suggesting = new Set<string>();
@@ -67,13 +71,10 @@ export class QuestionService {
   /** Stores the answer's files in the run's worktree, then delivers the prompt the answer becomes. */
   async answer(runId: string, body: AnswerRequestParsed): Promise<AnswerResponse> {
     const question = await this.get(runId); // 404 no_question once the run stopped waiting
-    // Nothing is typed into a terminal picker or a permission prompt: Enter or text there would pick a choice.
-    // Picker delivery of `option` comes later.
-    if (body.option !== undefined)
-      throw new HttpError(409, 'picker_open', 'Answer this question in the terminal.');
+    if (body.option !== undefined) return this.answerPicker(runId, question, body.option);
+    // Nothing is typed into a permission prompt: Enter or text there would allow or deny it.
     if (question.kind === 'permission')
       throw new HttpError(409, 'permission_prompt', 'Answer this permission prompt in the terminal.');
-    if (question.picker) throw new HttpError(409, 'picker_open', 'Answer this question in the terminal.');
     const run = this.runs.getRun(runId);
     const decoded = decodeMaterials(body.attachments, ANSWER_LIMITS);
     const paths = answerAttachmentPaths(
@@ -103,8 +104,23 @@ export class QuestionService {
       const res = await this.recovery.recover(run.id, text);
       return { delivery: res.delivery, attachments: paths };
     }
+    // Free text over an open picker: Esc closes it, then the answer is typed as an ordinary prompt.
+    if (question.picker) {
+      await this.runs.sendKeys(run.id, ESC);
+      await new Promise((resolve) => setTimeout(resolve, pickerTiming.cancelWaitMs));
+    }
     await this.runs.prompt(run.id, text);
     return { delivery: 'session', attachments: paths };
+  }
+
+  /** Picks option `option` (0-based) of the open picker: its number plus Enter selects it. */
+  private async answerPicker(runId: string, question: RunQuestion, option: number): Promise<AnswerResponse> {
+    if (!question.picker)
+      throw new HttpError(409, 'picker_closed', 'This question has no open picker any more.');
+    if (option >= question.options.length)
+      throw new HttpError(400, 'invalid_option', 'That option is not offered.');
+    await this.runs.prompt(runId, String(option + 1));
+    return { delivery: 'picker', attachments: [] };
   }
 
   /** Claude drafts the person's reply, read-only in the run's worktree; the person edits and sends it. */

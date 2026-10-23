@@ -6,6 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCommandExecutor, localCommandExecutor } from './command-exec.js';
+import { pickerTiming } from './runs/question-service.js';
 import { projects, runEvents, runs, tickets } from './db/schema.js';
 import { updateFactorySettings } from './factory/settings.js';
 import * as gitExec from './git-exec.js';
@@ -412,38 +413,84 @@ describe('POST /api/runs/:id/answer', () => {
     expect(res.json().error).toBe('no_question');
   });
 
-  it('an open picker refuses an answer and writes nothing', async () => {
-    const wt = worktree('a6', { 'app.js': 'x\n' });
-    seedRun({ id: 'a6', ...wt, hold: null, ended: false });
-    t.db.update(runs).set({ state: 'waiting_input' }).where(eq(runs.id, 'a6')).run();
-    event('a6', 'PreToolUse', {
+  /** A waiting run with an open picker of two options; the session is a spy, so nothing is typed. */
+  function openPicker(id: string) {
+    const wt = worktree(id, { 'app.js': 'x\n' });
+    seedRun({ id, ...wt, hold: null, ended: false });
+    t.db.update(runs).set({ state: 'waiting_input' }).where(eq(runs.id, id)).run();
+    event(id, 'PreToolUse', {
       tool_name: 'AskUserQuestion',
       ask_user_question: {
-        questions: [{ question: 'Colour?', header: null, options: [{ label: 'Red', detail: null }] }],
+        questions: [
+          {
+            question: 'Colour?',
+            header: null,
+            options: [
+              { label: 'Red', detail: null },
+              { label: 'Green', detail: null },
+            ],
+          },
+        ],
       },
     });
     event(
-      'a6',
+      id,
       'Notification',
       { notification_type: 'permission_prompt', message: 'Claude needs your permission' },
       'waiting_input',
     );
-    const res = await post('/api/runs/a6/answer', {
-      text: 'x',
-      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    const calls: string[] = [];
+    vi.spyOn(t.runs, 'sendKeys').mockImplementation(async (_id, keys) => {
+      calls.push(`keys:${JSON.stringify(keys)}`);
     });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('picker_open');
-    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
-    expect(existsSync(path.join(t.dir, 'args-a6'))).toBe(false);
+    vi.spyOn(t.runs, 'prompt').mockImplementation(async (rid, text) => {
+      calls.push(`prompt:${text}`);
+      return t.runs.getRun(rid);
+    });
+    return { wt, calls };
+  }
+
+  it('an option on an open picker selects it by its number', async () => {
+    const { calls } = openPicker('a6');
+    const res = await post('/api/runs/a6/answer', { option: 1 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ delivery: 'picker', attachments: [] });
+    expect(calls).toEqual(['prompt:2']);
   });
 
-  it('an option on a blocked run is refused: nothing written, nothing sent', async () => {
+  it('an option the picker does not offer is a 400', async () => {
+    const { calls } = openPicker('a10');
+    const res = await post('/api/runs/a10/answer', { option: 5 });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_option');
+    expect(res.json().message).toBe('That option is not offered.');
+    expect(calls).toEqual([]);
+  });
+
+  it('text with a picker open cancels the picker first, then sends the text', async () => {
+    pickerTiming.cancelWaitMs = 5;
+    const { wt, calls } = openPicker('a11');
+    const res = await post('/api/runs/a11/answer', {
+      text: 'something else',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AnswerResponse;
+    expect(body.delivery).toBe('session');
+    expect(body.attachments).toHaveLength(1);
+    expect(existsSync(path.join(wt.worktreePath, body.attachments[0]!))).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe('keys:"\\u001b"');
+    expect(calls[1]).toContain('something else');
+  });
+
+  it('an option on a blocked run says the picker is closed: nothing written, nothing sent', async () => {
     const wt = worktree('a7', { 'app.js': 'x\n' });
     seedRun({ id: 'a7', ...wt, hold: blocked });
     const res = await post('/api/runs/a7/answer', { option: 0 });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('picker_open');
+    expect(res.json().error).toBe('picker_closed');
+    expect(res.json().message).toBe('This question has no open picker any more.');
     expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
     expect(existsSync(path.join(t.dir, 'args-a7'))).toBe(false);
   });

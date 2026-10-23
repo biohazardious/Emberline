@@ -2374,6 +2374,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.resume(id, text);
   }
 
+  /** Raw keys into a live session (an open picker); no paste brackets, no submit. */
+  async sendKeys(id: string, keys: string): Promise<void> {
+    const row = this.row(id);
+    if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
+    await this.ptyd.get().write(row.ptydSessionId, keys);
+  }
+
   /**
    * Types `text` into the agent's terminal. Controls are stripped first (newline and tab stay): an
    * ESC or C1 control from the content (agent-controlled build output, paths, code) could otherwise
