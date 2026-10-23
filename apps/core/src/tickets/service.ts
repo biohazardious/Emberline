@@ -923,8 +923,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * Whether the critic reviews this pass: the run has no review yet, or the agent was asked to fix
-   * what the latest one found (its fix turn is reviewed too).
+   * Whether the critic reviews this pass: the run has no review yet, or the latest one held the run
+   * (changes asked of the agent, or a hold for a person). Like a failed build, a hold is checked again
+   * on the agent's next stop: a passing review lets the merge go on, changes still needed keep it held.
    */
   private criticDue(runId: string): boolean {
     const events = this.db
@@ -935,7 +936,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .all();
     const review = events.findLast((e) => e.type === 'critic_reviewed');
     if (!review) return true;
-    return events.some((e) => e.id > review.id && e.type === 'critic_blocked' && isAutoFixHold(e.payload));
+    return events.some((e) => e.id > review.id && e.type === 'critic_blocked');
   }
 
   /** Whether the run was already asked to fix the critic's findings (the autoFix note survives restarts). */
@@ -1303,6 +1304,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         duplicate = true;
         this.runs.note(run.id, 'tickets_file_duplicate', { file, sha256 });
       },
+      // A pass whose turn is over leaves the file to the newer turn's pass (it is consumed when read).
+      proceed: () => !stale(),
     });
     const worktreePath = run.worktreePath;
     const fromWorktree = worktreePath
@@ -1473,6 +1476,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // turns the chain on: its orchestrator ticket (unless its tickets file asked not to dispatch) or
     // a chaining dispatch (already on). A ticket a person started, or one a narrow dispatch started
     // because a person's change unblocked it, does not start the rest of the queue when it finishes.
+    if (stale()) return;
     if (fSettings.autoPickupReady && isFactoryOrchestratorTicket && ingested?.autoDispatch !== false) {
       this.chainOn(run.projectId);
     }

@@ -163,6 +163,8 @@ export interface TicketsFileHooks {
    */
   claim?: (sha256: string) => boolean;
   onSkipped?: (reason: TicketsFileSkip, file: string, sha256: string) => void;
+  /** Called synchronously right before a file is consumed: false leaves it for a later pass. */
+  proceed?: () => boolean;
 }
 
 /**
@@ -174,7 +176,7 @@ export async function ingestAgentTicketsFile(
   workspacePath: string,
   hooks: TicketsFileHooks = {},
 ): Promise<{ autoDispatch: boolean; tickets: AgentTicketDraft[]; sha256: string } | null> {
-  const { onRejected, isInherited, claim, onSkipped } = hooks;
+  const { onRejected, isInherited, claim, onSkipped, proceed } = hooks;
   for (const name of ['new-tickets.json', 'tickets.json']) {
     const relPath = `.emberline/${name}`;
     const filePath = path.join(workspacePath, '.emberline', name);
@@ -183,6 +185,7 @@ export async function ingestAgentTicketsFile(
       const raw = await readFile(filePath);
       const sha256 = createHash('sha256').update(raw).digest('hex');
       const inherited = isInherited ? await isInherited(relPath, raw).catch(() => false) : false;
+      if (proceed && !proceed()) return null;
       await rm(filePath, { force: true });
       if (inherited) {
         onSkipped?.('inherited', name, sha256);
