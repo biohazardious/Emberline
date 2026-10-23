@@ -269,6 +269,10 @@ describe('remoteUrlForDisplay', () => {
       ['host:a@x/y', 'host:***@x/y'],
       ['host:repo@x', 'host:***@x'],
       ['alice:p@ss:w@host', 'alice:***@host'],
+      // A `/` in the password: its `@` comes after the first `/`.
+      ['u:se/cret@h/p', 'u:***@h/p'],
+      ['alice:pa/ss@host:o/r', 'alice:***@host:o/r'],
+      ['me@corp.com:pa/ss@host/o/r', 'me@corp.com:***@host/o/r'],
     ] as const) {
       expect(read(raw), raw).toEqual({ url: raw, display, hadCredentials: true });
     }
@@ -323,6 +327,19 @@ describe('remoteUrlForDisplay', () => {
     expect(remoteUrlForDisplay('ssh://git:pa/ss@h/x')).toMatchObject({
       display: 'ssh://h/x',
       hadCredentials: true,
+    });
+    // A password starting with digits and then `/`, `?` or `#` reads as a port: it goes up to the
+    // last `@` that a host and its `/` or `:` follow. A real port with an `@` in the path stays.
+    for (const [raw, display] of [
+      ['https://u:2024/Secret@h/o/r', 'https://h/o/r'],
+      ['https://u:123?abc@h/o', 'https://h/o'],
+      ['https://u:9#t@h/o', 'https://h/o'],
+      ['ssh://git:22/S3C@host:2222/o/r', 'ssh://host:2222/o/r'],
+    ] as const)
+      expect(remoteUrlForDisplay(raw), raw).toMatchObject({ display, hadCredentials: true });
+    expect(remoteUrlForDisplay('https://host:8443/o/r@v2.git')).toMatchObject({
+      display: 'https://host:8443/o/r@v2.git',
+      hadCredentials: false,
     });
     // Not parseable (whitespace or a quote mark in the password, a space in the host): the same.
     for (const c of ['\t', '\u00a0', '\u2003', ' ', '’', '“', '”', '«', '»'])

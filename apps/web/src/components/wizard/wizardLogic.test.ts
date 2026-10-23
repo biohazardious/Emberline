@@ -690,13 +690,22 @@ describe('credentials never reach the draft', () => {
       ['alice:S3C R3T@host.example/acme/shop.git', 'alice@host.example/acme/shop.git'],
       ['me@corp.com:S3C@R3T@host.example:o/r', 'me@corp.com@host.example:o/r'],
       ['host.example:S3C@x.example', 'host.example@x.example'],
+      // A password starting with digits and then `/`, `?` or `#` reads as a port.
+      ['https://u:2024/S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ['https://u:123?S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ['https://u:9#S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
     ] as const) {
       const stripped = stripUrlCredentials(raw);
       expect(stripped, raw).not.toMatch(SECRET);
       expect(stripped, raw).toBe(kept);
     }
     // Nothing to hide: as it was.
-    for (const raw of ['git@github.com:acme/shop.git', 'https://github.com/acme/shop.git', 'ssh://git@h/o/r'])
+    for (const raw of [
+      'git@github.com:acme/shop.git',
+      'https://github.com/acme/shop.git',
+      'ssh://git@h/o/r',
+      'https://host.example:8443/acme/shop@v2.git',
+    ])
       expect(stripUrlCredentials(raw)).toBe(raw);
   });
 

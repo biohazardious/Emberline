@@ -49,7 +49,10 @@ export function sameForgeServer(a: string, b: string): boolean {
   return hostname(hostA) === hostname(hostB);
 }
 
-/** Counts the characters a read of an address handles (the linear-time test reads it). */
+/**
+ * Counts the characters a read of an address handles (the linear-time test reads it).
+ * Every pass over the text adds what it reads; a new pass that does not would hide from that test.
+ */
 export interface ScanMeter {
   steps: number;
 }
@@ -113,6 +116,8 @@ class AddressReader {
  *   first of `/@:[`); or a user name that holds an `@` (`me@corp.com:secret@host:o/r`, the user runs
  *   to the first of `/:[`), up to the last `@` before the first `/` that a host and its `:` or `/` (or
  *   the end) follow. Git itself reads the latter as the host `corp.com`, so it is never rewritten.
+ *   With no such `@` before the first `/` (a `/` in the password), the last `@` after it that a host
+ *   and its `/` or `:` follow.
  */
 function scpCredentials(r: AddressReader): { kind: 'plain' | 'masked'; userEnd: number; at: number } | null {
   const t = r.text;
@@ -127,9 +132,11 @@ function scpCredentials(r: AddressReader): { kind: 'plain' | 'masked'; userEnd: 
         if (rest === n || t[rest] === '/') return { kind: 'plain', userEnd: colon, at: firstAt };
       }
     }
-    const at = r.lastAt(colon, r.next('/', colon + 1));
+    const slash = r.next('/', colon + 1);
+    const at = r.lastAt(colon, slash);
     if (at >= 0) return { kind: 'masked', userEnd: colon, at };
-    return null;
+    const pathAt = lastAtBeforePath(r, slash);
+    return pathAt >= 0 ? { kind: 'masked', userEnd: colon, at: pathAt } : null;
   }
   // A user name with an `@`: it runs to the first of `/:[`, and must hold an `@` before it.
   const userEnd = r.next('/:[', 0);
@@ -140,7 +147,22 @@ function scpCredentials(r: AddressReader): { kind: 'plain' | 'masked'; userEnd: 
     if (host >= 0 && (host === n || t[host] === ':' || t[host] === '/'))
       return { kind: 'masked', userEnd, at };
   }
-  return null;
+  const pathAt = lastAtBeforePath(r, slash);
+  return pathAt >= 0 ? { kind: 'masked', userEnd, at: pathAt } : null;
+}
+
+/**
+ * `user:pa/ss@host/path`: a `/` in the password puts its `@` after the first `/` (at `slash`). The
+ * last `@` after it that a host and its `/` or `:` follow (not the end: `gitea:team/app@v2.git` is
+ * a path), else -1.
+ */
+function lastAtBeforePath(r: AddressReader, slash: number): number {
+  const t = r.text;
+  for (let at = r.lastAt(slash, t.length); at >= 0; at = r.lastAt(slash, at)) {
+    const host = r.afterHost(at + 1);
+    if (host >= 0 && (t[host] === ':' || t[host] === '/')) return at;
+  }
+  return -1;
 }
 
 /**
@@ -173,6 +195,19 @@ export function remoteUrlForDisplay(
         const at = r.lastAt(schemeEnd - 1, url.length);
         const cut = at >= 0 ? url.slice(0, schemeEnd) + url.slice(at + 1) : url;
         return cut.slice(0, new AddressReader(cut, meter).next('?#', 0));
+      }
+      // `https://u:2024/Secret@h/o/r`: a password that starts with digits and then a `/`, `?` or
+      // `#` reads as a port, the rest as the path. With no user info read, an `@` after the port
+      // that a host and its `/` or `:` follow ends such a password: everything up to it goes.
+      if (parsed.port && !parsed.username && !parsed.password) {
+        const authorityEnd = r.next('/?#', schemeEnd);
+        for (let at = r.lastAt(authorityEnd - 1, url.length); at >= 0; at = r.lastAt(authorityEnd - 1, at)) {
+          const host = r.afterHost(at + 1);
+          if (host >= 0 && (url[host] === '/' || url[host] === ':')) {
+            const cut = url.slice(0, schemeEnd) + url.slice(at + 1);
+            return cut.slice(0, new AddressReader(cut, meter).next('?#', 0));
+          }
+        }
       }
       const ssh = parsed.protocol === 'ssh:';
       if (!(ssh ? parsed.password : parsed.username || parsed.password || parsed.search || parsed.hash))
