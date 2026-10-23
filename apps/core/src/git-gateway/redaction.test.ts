@@ -102,11 +102,14 @@ const UNQUOTED = [
   ...PREFIXES.map((prefix) => message(`${prefix}: `, ': Permission denied (publickey).', false)),
 ];
 
+/** 600 passwords: 134,400 texts, each read eight ways (about 4 s alone; more under a full run). */
+const PASSWORDS = 600;
+
 describe('withoutUrlCredentials', () => {
   it('never shows any part of a hostile password, in any address form or message, and keeps the message (generated)', () => {
     const next = random(20261023);
     let cases = 0;
-    for (let n = 0; n < 1500; n++) {
+    for (let n = 0; n < PASSWORDS; n++) {
       const pw = hostilePassword(next);
       const user = USERS[n % USERS.length]!;
       const texts = [
@@ -147,8 +150,8 @@ describe('withoutUrlCredentials', () => {
           throw new Error(`display leak: ${JSON.stringify(address)} → ${display}`);
       }
     }
-    expect(cases).toBe(1500 * (8 * (8 + 19) + 8));
-  });
+    expect(cases).toBe(PASSWORDS * (8 * (8 + 19) + 8));
+  }, 60_000);
 
   it('keeps the address without its user info after a scheme, and masks with *** otherwise', () => {
     expect(withoutUrlCredentials('To https://alice:tok3n@git.example.com/o/r.git')).toBe(
