@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { runProducedChanges, withMainWorkspaceLock } from './factory/merge.js';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
 import { commitWorktree } from './runs/git.js';
@@ -202,6 +203,38 @@ describe('a merge refused before it starts', () => {
     ]);
     expect(git(a, 'status', '--porcelain', '--untracked-files=all')).toBe('');
     expect(readFileSync(path.join(main, 'feature-a.js'), 'utf8')).toBe('a\n');
+  });
+
+  it('the index copy is made and removed in the runner; one an interrupted merge left behind is replaced', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const scratch = `${git(a, 'rev-parse', '--path-format=absolute', '--git-path', 'index')}.emberline-output`;
+    // Left behind: not an index, and read-only.
+    writeFileSync(scratch, 'not an index');
+    chmodSync(scratch, 0o444);
+    const requests: ExecRequest[] = [];
+    setCommandExecutor(async (request) => {
+      requests.push(request);
+      return localCommandExecutor(request);
+    });
+    try {
+      const res = await refusing(a, () => undefined);
+      expect(res.ok).toBe(true);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(git(a, 'show', '--name-only', '--format=', 'HEAD')).toBe('feature-a.js');
+    expect(existsSync(scratch)).toBe(false);
+    const onScratch = requests
+      .filter((r) => r.file !== 'git' && r.args.includes(scratch))
+      .map((r) => [r.file, ...r.args.filter((x) => x !== scratch)].join(' '));
+    expect(onScratch).toEqual([
+      'rm -f --',
+      `cp -- ${scratch.slice(0, -'.emberline-output'.length)}`,
+      'rm -f --',
+    ]);
+    // The runner's own git commands do not read it.
+    expect(git(a, 'status', '--porcelain')).toBe('');
   });
 
   it('an agent that commits while the merge is asked for keeps its commit; nothing is merged', async () => {

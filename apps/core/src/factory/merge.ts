@@ -1,9 +1,8 @@
 /** Integration of run worktrees into the main workspace (git merge under a per-workspace lock). */
 import { existsSync } from 'node:fs';
-import { copyFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { type SyncWorktreeResponse } from '@emberline/protocol';
-import { isRunnerUnavailable } from '../command-exec.js';
+import { execFileChecked, isRunnerUnavailable } from '../command-exec.js';
 import { HttpError } from '../errors.js';
 import { execGitFile, runGit } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -66,6 +65,9 @@ async function stageRunOutput(worktreePath: string, env?: Record<string, string>
  * The commit of a run's output on top of `head`, or null when there is nothing to commit. It is
  * built in a copy of the worktree's index and not put on any branch, so the worktree, its index and
  * its branch stay exactly as they were (the caller moves the branch once the merge is allowed).
+ * The copy (`<git dir>/index.emberline-output`) is made and removed in the runner, so it belongs to
+ * the user the runner's git runs as. git reads it only through GIT_INDEX_FILE, here; a copy an
+ * interrupted merge left behind is removed first, never reused.
  */
 async function buildRunOutputCommit(
   worktreePath: string,
@@ -78,9 +80,13 @@ async function buildRunOutputCommit(
   ).stdout.trim();
   const scratchIndex = `${index}.emberline-output`;
   const env = { GIT_INDEX_FILE: scratchIndex };
+  const inRunner = (file: string, args: string[]) => execFileChecked({ file, args, cwd: worktreePath });
   try {
+    await inRunner('rm', ['-f', '--', scratchIndex]);
     // What the agent staged by hand (a file its .gitignore ignores, say) is part of the output too.
-    await copyFile(index, scratchIndex).catch(() => execGitFile(['read-tree', head], { ...inWorktree, env }));
+    await inRunner('cp', ['--', index, scratchIndex]).catch(() =>
+      execGitFile(['read-tree', head], { ...inWorktree, env }),
+    );
     await stageRunOutput(worktreePath, env);
     const tree = (await execGitFile(['write-tree'], { ...inWorktree, env })).stdout.trim();
     const headTree = (await execGitFile(['rev-parse', `${head}^{tree}`], inWorktree)).stdout.trim();
@@ -100,7 +106,7 @@ async function buildRunOutputCommit(
       )
     ).stdout.trim();
   } finally {
-    await rm(scratchIndex, { force: true }).catch(() => undefined);
+    await inRunner('rm', ['-f', '--', scratchIndex]).catch(() => undefined);
   }
 }
 
