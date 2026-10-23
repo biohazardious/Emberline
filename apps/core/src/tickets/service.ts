@@ -524,11 +524,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * After a core restart: dispatches every project whose chain was on, so the factory carries on
-   * (and finalizes Review tickets a pipeline left behind) without a person pressing "Run pipeline".
+   * After a core restart: finalizes the Review tickets a cut-off pipeline left behind in every
+   * project (a hand-started run's too, with the chain on or off), then dispatches every project whose
+   * chain was on, so the factory carries on without a person pressing "Run pipeline".
    */
   async resumeChains(): Promise<void> {
-    if (!getFactorySettings(this.db).autoPickupReady) return;
     const known = new Set(
       this.db
         .select({ id: projects.id })
@@ -536,12 +536,59 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         .all()
         .map((p) => p.id),
     );
+    // Not as `finalizing`: each pipeline decides as its cut-off pass would have whether the run is a
+    // factory step (gates, merge), so a person's run in a project without a factory is not merged.
+    for (const projectId of known) this.finalizeLeftoverReviews(projectId);
+    if (!getFactorySettings(this.db).autoPickupReady) return;
     const resumed: Promise<unknown>[] = [];
     for (const projectId of [...this.autoChainProjects]) {
       if (known.has(projectId)) resumed.push(this.dispatchNextReadyTicket(projectId).catch(() => undefined));
       else this.chainOff(projectId);
     }
     await Promise.all(resumed);
+  }
+
+  /**
+   * Review tickets whose latest run finished but whose completion pipeline never got to its end
+   * (core went down mid-way, or inside the settle window): the pipeline runs again, so its gates
+   * apply instead of a merge behind them; one that merged but was cut off before Done moves there
+   * (when tickets move to Done by themselves). Once per run and process; the pipelines are not
+   * awaited, since a dispatch they start waits for the one calling this.
+   */
+  private finalizeLeftoverReviews(projectId: string, opts: PipelineOptions = {}): void {
+    const { autoMoveToDone } = getFactorySettings(this.db);
+    for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
+      const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
+      // A run whose own pipeline is still going (gates, merge) or waiting to settle is not left over.
+      if (
+        !latestRun ||
+        latestRun.state !== 'done' ||
+        latestRun.handedOffTo ||
+        this.pipelineRuns.has(latestRun.id) ||
+        this.settlingRuns.has(latestRun.id)
+      ) {
+        continue;
+      }
+      // A run still resolving its conflict is finished by its own pipeline when it stops again.
+      if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
+      const outcome = this.pipelineOutcome(latestRun.id);
+      // A gate left it here for a person (secret guard, build gate, a merge that failed): not
+      // leftover work, and not a merge to retry on every dispatch.
+      if (outcome === 'held') continue;
+      if (outcome === 'merged') {
+        // Merged, but the move to Done was cut off.
+        if (!autoMoveToDone) continue;
+        try {
+          this.moveToTop(reviewTicket.id, 'done');
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      if (this.resumedPipelines.has(latestRun.id)) continue;
+      this.resumedPipelines.add(latestRun.id);
+      this.completeRun(latestRun, opts);
+    }
   }
 
   factorySettings(): FactorySettings {
@@ -788,42 +835,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // Finalize any tickets left in 'review' with a completed run (e.g. if core restarted mid-pipeline)
-    if (fSettings.autoMoveToDone && !only) {
-      for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
-        const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
-        // A run whose own pipeline is still going (gates, merge) or waiting to settle is not left over.
-        if (
-          !latestRun ||
-          latestRun.state !== 'done' ||
-          latestRun.handedOffTo ||
-          this.pipelineRuns.has(latestRun.id) ||
-          this.settlingRuns.has(latestRun.id)
-        ) {
-          continue;
-        }
-        // A run still resolving its conflict is finished by its own pipeline when it stops again.
-        if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
-        const outcome = this.pipelineOutcome(latestRun.id);
-        // A gate left it here for a person (secret guard, build gate, a merge that failed): not
-        // leftover work, and not a merge to retry on every dispatch.
-        if (outcome === 'held') continue;
-        if (outcome === 'merged') {
-          // Merged, but the move to Done was cut off.
-          try {
-            this.moveToTop(reviewTicket.id, 'done');
-          } catch {
-            // ignore
-          }
-          continue;
-        }
-        // The pipeline of this completion never got to its end (e.g. core went down mid-way): run it
-        // again so its gates apply instead of merging behind them. Once per process; not awaited,
-        // since its own dispatch waits for this one.
-        if (this.resumedPipelines.has(latestRun.id)) continue;
-        this.resumedPipelines.add(latestRun.id);
-        this.completeRun(latestRun, { finalizing: true });
-      }
-    }
+    if (fSettings.autoMoveToDone && !only) this.finalizeLeftoverReviews(projectId, { finalizing: true });
 
     // Read after the finalization above: tickets it moved to Done may unblock others.
     // An untrusted issue import waits for a person (external.triage); no automatic path starts it.

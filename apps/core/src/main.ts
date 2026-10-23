@@ -116,7 +116,8 @@ logDocker = (status) => {
 process.on('unhandledRejection', (reason) => {
   app.log.error({ err: reason }, 'unhandled promise rejection');
 });
-// Factory chains that were on when core stopped carry on once the runner is back (first connect).
+// Once the runner is back (first connect) and the exits are noted: Review tickets whose pipeline a
+// restart cut off get it again, in every project, and factory chains that were on carry on.
 let chainsResumed = false;
 ptyd.on('status', (status) => {
   app.log.info({ socket: config.ptydSocket }, `ptyd ${status}`);

@@ -1457,6 +1457,54 @@ describe('factory chain robustness', () => {
     expect(existsSync(path.join(project.path, '.env'))).toBe(false);
     await settle(project.id);
   });
+
+  it('a hand-started run in a project without an active chain gets its cut-off pipeline after a restart', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    // Another ticket waits in Ready: A's completion is a factory step, gated and merged.
+    await createTicket(project.id, { title: 'B', status: 'ready' });
+    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+      undefined;
+
+    const { run } = (await api('POST', `/api/tickets/${a.id}/start`, {})).json() as { run: Run };
+    commitSecret(run.worktreePath);
+    await finish(run);
+    await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('review');
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    expect(restarted.isAutoChainActive(project.id)).toBe(false);
+    const passes = trackPipelines(restarted);
+    await restarted.resumeChains();
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+
+    expect(await eventTypes(run)).toContain('secret_guard_blocked');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).toBe('review');
+    await settle(project.id);
+  });
+
+  it("after a restart, a person's run in a project without a factory is not merged by the finalization", async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+      undefined;
+
+    const { run } = (await api('POST', `/api/tickets/${a.id}/start`, {})).json() as { run: Run };
+    await finish(run);
+    await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('review');
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const passes = trackPipelines(restarted);
+    await restarted.resumeChains();
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+
+    // Its pass decides as the cut-off one would have: no factory step, so no gates and no merge.
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).toBe('review');
+    await settle(project.id);
+  });
 });
 
 /** Pages a NotificationService on the test app would send for "waiting on you" (sending stubbed). */
