@@ -48,22 +48,21 @@ const PRUNE_OUTCOMES = new Set(['worktree_pruned', 'worktree_prune_failed']);
 /**
  * The note after a run's Prune whose worktree.yml teardown outlasted the request: shown until that
  * prune's outcome (the newest `worktree_pruned` or `worktree_prune_failed` event after `since`) is known or
- * the run is gone, and while the runs are not known yet. A failed prune says so, whatever happens on
- * the run after it. `events`: the run's events, when loaded; until then its latest event stands in.
+ * the run is gone, and while the runs or its events are not known yet. A failed prune says so,
+ * whatever happens on the run after it. The run's latest event is no stand-in: it may be an earlier
+ * prune's outcome, or one that a later event replaced.
  */
 export function prunePendingNote(
   pending: PrunePending | undefined,
-  runs: readonly Pick<Run, 'id' | 'lastEvent'>[] | undefined,
+  runs: readonly Pick<Run, 'id'>[] | undefined,
   events?: readonly Pick<RunEvent, 'id' | 'type'>[],
 ): { text: string; failed: boolean } | null {
   if (!pending) return null;
   const run = runs?.find((r) => r.id === pending.runId);
   if (runs && !run) return null;
   const outcome = events
-    ? events
-        .filter((e) => PRUNE_OUTCOMES.has(e.type) && (pending.since === null || e.id > pending.since))
-        .at(-1)?.type
-    : run?.lastEvent;
+    ?.filter((e) => PRUNE_OUTCOMES.has(e.type) && (pending.since === null || e.id > pending.since))
+    .at(-1)?.type;
   if (outcome === 'worktree_pruned') return null;
   if (outcome === 'worktree_prune_failed') return { text: PRUNE_FAILED_TEXT, failed: true };
   return { text: PRUNE_PENDING_TEXT, failed: false };

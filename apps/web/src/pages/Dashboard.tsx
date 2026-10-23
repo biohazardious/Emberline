@@ -14,7 +14,7 @@ import type {
 import { API_VERSION } from '@emberline/protocol';
 import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
 import { keptWorktreesSummary, type PrunePending, prunePendingNote } from '../gcSummary';
@@ -169,10 +169,11 @@ export function Dashboard({
     }
   };
 
-  // The pending prune's outcome is read from the run's events: a later event must not hide it.
+  // The pending prune's outcome is read from the run's events: a later event must not hide it. Keyed
+  // by the prune, so a refetch that is still out, or that failed, keeps what was read.
   const prunedRun = runs?.find((r) => r.id === prunePending?.runId);
   const pruneEvents = useQuery({
-    queryKey: ['prune-outcome', prunePending?.runId, prunePending?.since, prunedRun?.lastEvent],
+    queryKey: ['prune-outcome', prunePending?.runId, prunePending?.since],
     queryFn: () => api<RunDetail>(`/api/runs/${prunePending!.runId}`),
     enabled: Boolean(prunePending && prunedRun),
     select: (detail) => detail.events,
@@ -180,6 +181,12 @@ export function Dashboard({
     refetchInterval: (query) =>
       prunePendingNote(prunePending, runs, query.state.data?.events)?.failed === false ? 5_000 : false,
   });
+  // Each update of the run reads its events again.
+  const refetchPruneEvents = pruneEvents.refetch;
+  const prunedRunEvent = prunedRun?.lastEvent;
+  useEffect(() => {
+    if (prunedRunEvent !== undefined) void refetchPruneEvents();
+  }, [prunedRunEvent, refetchPruneEvents]);
   const pruneNote = prunePendingNote(prunePending, runs, pruneEvents.data);
   const dockerLine = dockerEngineLine(system?.docker);
   const projectName = (id: string | null) => projects.data?.find((p) => p.id === id)?.name;

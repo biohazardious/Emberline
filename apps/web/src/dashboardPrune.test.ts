@@ -4,7 +4,7 @@ import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
-import { apiRoutes, cleanup, click, getButton, renderDom, settle, waitFor } from './domRender';
+import { apiRoutes, cleanup, click, deferred, getButton, renderDom, settle, waitFor } from './domRender';
 import { PRUNE_FAILED_TEXT, PRUNE_PENDING_TEXT } from './gcSummary';
 import { liveKeys } from './hooks/liveData';
 import { Dashboard } from './pages/Dashboard';
@@ -36,16 +36,19 @@ let prune: PruneWorktreeResponse;
 let prunes: number;
 /** The run's events as `GET /api/runs/r1` answers them. */
 let events: { id: number; type: string }[];
+/** When set, `GET /api/runs/r1` answers with this instead (a read still out, or one that fails). */
+let detailAnswer: Promise<unknown> | null;
 
 beforeEach(() => {
   prunes = 0;
   events = [{ id: 7, type: 'stop_requested' }];
+  detailAnswer = null;
   vi.mocked(api).mockImplementation(
     apiRoutes({
       'GET /api/projects': () => [{ id: 'p1', name: 'Shop' }],
       'GET /api/terminals': () => [],
       'GET /api/runs': () => [run],
-      'GET /api/runs/r1': () => ({ ...run, events }),
+      'GET /api/runs/r1': () => detailAnswer ?? { ...run, events },
       'POST /api/runs/r1/worktree/prune': () => {
         prunes++;
         return prune;
@@ -89,6 +92,26 @@ describe('Dashboard Prune worktree (W-4)', () => {
     // Another event on the run afterwards does not bring the running note back.
     events = [...events, { id: 9, type: 'resume_failed' }];
     await act(async () => client.setQueryData(liveKeys.runs, [{ ...run, lastEvent: 'resume_failed' }]));
+    await settle(50);
+    expect(document.body.textContent).toContain(PRUNE_FAILED_TEXT);
+    expect(document.body.textContent).not.toContain(PRUNE_PENDING_TEXT);
+  });
+
+  it('a run update whose read of the events is still out, or fails, keeps the failure shown', async () => {
+    prune = { runId: 'r1', worktreePath: run.worktreePath, removed: false, pending: true, since: 7 };
+    const { client } = await pruneRun();
+    events = [...events, { id: 8, type: 'worktree_prune_failed' }];
+    await act(async () =>
+      client.setQueryData(liveKeys.runs, [{ ...run, lastEvent: 'worktree_prune_failed' }]),
+    );
+    await waitFor(() => expect(document.body.textContent).toContain(PRUNE_FAILED_TEXT));
+    const read = deferred<unknown>();
+    detailAnswer = read.promise;
+    await act(async () => client.setQueryData(liveKeys.runs, [{ ...run, lastEvent: 'resume_failed' }]));
+    await settle(50);
+    expect(document.body.textContent).toContain(PRUNE_FAILED_TEXT);
+    expect(document.body.textContent).not.toContain(PRUNE_PENDING_TEXT);
+    await act(async () => read.reject(new Error('offline')));
     await settle(50);
     expect(document.body.textContent).toContain(PRUNE_FAILED_TEXT);
     expect(document.body.textContent).not.toContain(PRUNE_PENDING_TEXT);

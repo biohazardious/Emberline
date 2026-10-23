@@ -29,30 +29,26 @@ describe('keptWorktreesSummary', () => {
 });
 
 describe('prunePendingNote (W-4)', () => {
-  const runs = [
-    { id: 'r1', lastEvent: 'Stop' },
-    { id: 'r2', lastEvent: 'worktree_pruned' },
-    { id: 'r4', lastEvent: 'worktree_prune_failed' },
-  ];
+  const runs = [{ id: 'r1' }];
   const pending = { text: PRUNE_PENDING_TEXT, failed: false };
   const failed = { text: PRUNE_FAILED_TEXT, failed: true };
   const on = (runId: string, since: number | null = 10) => ({ runId, since });
 
-  it('says the teardown is still running while the pruned run keeps its worktree', () => {
+  it("says the teardown is still running until the prune's outcome is known", () => {
     expect(prunePendingNote(on('r1'), runs)).toEqual(pending);
     expect(prunePendingNote(on('r1'), undefined)).toEqual(pending);
-    expect(prunePendingNote(on('r1'), runs, [{ id: 9, type: 'worktree_pruned' }])).toEqual(pending);
+    expect(prunePendingNote(on('r1'), runs, [])).toEqual(pending);
+    // An earlier prune's outcome is not this one's.
+    expect(prunePendingNote(on('r1'), runs, [{ id: 9, type: 'worktree_prune_failed' }])).toEqual(pending);
     expect(PRUNE_PENDING_TEXT).toBe('Teardown is running; the worktree is removed when it ends.');
   });
 
   it("goes once the prune's outcome says pruned, or the run is gone", () => {
-    expect(prunePendingNote(on('r2'), runs)).toBeNull();
-    expect(prunePendingNote(on('r3'), runs)).toBeNull();
     expect(prunePendingNote(on('r1'), runs, [{ id: 11, type: 'worktree_pruned' }])).toBeNull();
+    expect(prunePendingNote(on('r3'), runs)).toBeNull();
   });
 
   it('says the prune failed, also once later events came after its outcome (F-10)', () => {
-    expect(prunePendingNote(on('r4'), runs)).toEqual(failed);
     const events = [
       { id: 9, type: 'worktree_pruned' },
       { id: 11, type: 'worktree_prune_failed' },
