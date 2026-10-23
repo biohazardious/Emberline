@@ -66,7 +66,9 @@ export function validateRepositoryUrl(raw: string): {
     } catch {
       throw badRequest(BAD_URL);
     }
-    if (parsed.username || parsed.password) throw badRequest(CREDENTIALS_IN_URL);
+    // `https://user:2024/rest@host/…` reads as the port 2024: the display finds its password.
+    if (parsed.username || parsed.password || remoteUrlForDisplay(url).hadCredentials)
+      throw badRequest(CREDENTIALS_IN_URL);
     // A query or fragment can carry a token (`?private_token=`) and is no part of a repository's address.
     if (parsed.search || parsed.hash) throw badRequest(BAD_URL);
     transport = parsed.protocol === 'http:' ? 'http' : 'https';
@@ -85,7 +87,7 @@ export function validateRepositoryUrl(raw: string): {
         const at = url.lastIndexOf('@');
         throw badRequest(at > 0 && url.slice(6, at).includes(':') ? CREDENTIALS_IN_URL : BAD_URL);
       }
-      if (parsed.password) throw badRequest(CREDENTIALS_IN_URL);
+      if (parsed.password || remoteUrlForDisplay(url).hadCredentials) throw badRequest(CREDENTIALS_IN_URL);
     } else if (remoteUrlForDisplay(url).hadCredentials) throw badRequest(CREDENTIALS_IN_URL);
     transport = 'ssh';
   } else {

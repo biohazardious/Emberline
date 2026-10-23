@@ -87,6 +87,11 @@ describe('validateRepositoryUrl', () => {
     expect(refusal('ssh://git:pa/ss@host/o/r.git')).toBe(CREDENTIALS);
     expect(refusal('ssh://git@host:2222/o/r@v2.git')).toBeNull();
     expect(refusal('ssh://me@corp.com@host/o/r.git')).toBeNull();
+    // A `/` in the password, and one that starts with digits and then `/` (read as a port).
+    expect(refusal('u:pa/ss@git.example.com/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('https://u:2024/Secret@github.com/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('ssh://git:22/S3C@host:2222/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('https://git.example.com:8443/o/r@v2.git')).toBeNull();
   });
 
   it('a capitalised scheme is stored lower-case, and IPv6 hosts are accepted', () => {
