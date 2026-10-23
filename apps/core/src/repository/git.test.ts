@@ -90,6 +90,9 @@ describe('validateRepositoryUrl', () => {
     // Only user info git would send is refused: an `@` after a port or after the first `/` is a
     // path's as git reads it (the display masks the ones that may hide a password).
     for (const url of [
+      'https://u:2024/S@h/o',
+      'https://host:8443/g/n@v2/r.git',
+      'git@host:o/r@v2/x.git',
       'https://u:2024/Secret@github.com/o/r.git',
       'https://host.example:8443/group/name@v2/repo.git',
       'https://host.example:8443/o/r@v2.git',
