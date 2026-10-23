@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-23
+
+A clean-up release: every known bug and piece of technical debt left after 0.6.0, from the Answer dialog to held tickets, restarts, previews, project delete and how repository addresses and credentials are shown.
+
 ### Fixed
 
 - Saving `.emberline/worktree.yml` from Project settings while the runner was out of date said the runner was not reachable. It now says the runner is outdated and to update it (run `make up` again).
@@ -524,7 +528,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/biohazardious/emberline/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/biohazardious/emberline/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/biohazardious/emberline/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/biohazardious/emberline/compare/v0.5.0...v0.5.1
