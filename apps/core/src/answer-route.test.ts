@@ -435,4 +435,63 @@ describe('POST /api/runs/:id/answer', () => {
     expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
     expect(existsSync(path.join(t.dir, 'args-a6'))).toBe(false);
   });
+
+  it('an option on a blocked run is refused: nothing written, nothing sent', async () => {
+    const wt = worktree('a7', { 'app.js': 'x\n' });
+    seedRun({ id: 'a7', ...wt, hold: blocked });
+    const res = await post('/api/runs/a7/answer', { option: 0 });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('picker_open');
+    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
+    expect(existsSync(path.join(t.dir, 'args-a7'))).toBe(false);
+  });
+
+  it('a permission prompt is never answered with text', async () => {
+    const wt = worktree('a8', { 'app.js': 'x\n' });
+    seedRun({ id: 'a8', ...wt, hold: null, ended: false });
+    t.db.update(runs).set({ state: 'waiting_input' }).where(eq(runs.id, 'a8')).run();
+    event(
+      'a8',
+      'Notification',
+      { notification_type: 'permission_prompt', message: 'Claude needs your permission' },
+      'waiting_input',
+    );
+    const res = await post('/api/runs/a8/answer', { text: 'yes' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('permission_prompt');
+    expect(existsSync(path.join(t.dir, 'args-a8'))).toBe(false);
+  });
+
+  it('a failed write says so in a plain sentence', async () => {
+    const wt = worktree('a9', { 'app.js': 'x\n' });
+    seedRun({ id: 'a9', ...wt, hold: blocked });
+    mkdirSync(path.join(wt.worktreePath, '.emberline'), { recursive: true });
+    symlinkSync(t.dir, path.join(wt.worktreePath, '.emberline', 'attachments'));
+    const res = await post('/api/runs/a9/answer', {
+      text: 'x',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.json().message).toBe(
+      "Couldn't store n.txt in the run's worktree. Try again, or send the answer without it.",
+    );
+  });
+
+  it('a waiting question gets the text as written, in its session', async () => {
+    const wt = worktree('a10', { 'app.js': 'x\n' });
+    seedRun({ id: 'a10', ...wt, hold: null, ended: false });
+    t.db.update(runs).set({ state: 'waiting_input' }).where(eq(runs.id, 'a10')).run();
+    event('a10', 'Stop', { last_assistant_message: 'Which colour?' }, 'waiting_input');
+    const res = await post('/api/runs/a10/answer', { text: 'green' });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as AnswerResponse).delivery).toBe('session');
+    expect(await resumedWith('a10')).toBe('green');
+  });
+
+  it('a held run gets the edited prompt unchanged', async () => {
+    const wt = worktree('a11', { 'app.js': 'x\n' });
+    seedRun({ id: 'a11', ...wt });
+    const res = await post('/api/runs/a11/answer', { text: 'Resolve the conflicts in app.js.' });
+    expect(res.statusCode).toBe(200);
+    expect(await resumedWith('a11')).toBe('Resolve the conflicts in app.js.');
+  });
 });

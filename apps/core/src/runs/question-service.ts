@@ -62,7 +62,12 @@ export class QuestionService {
   /** Stores the answer's files in the run's worktree, then delivers the prompt the answer becomes. */
   async answer(runId: string, body: AnswerRequestParsed): Promise<AnswerResponse> {
     const question = await this.get(runId); // 404 no_question once the run stopped waiting
-    // Never type an answer into an open picker; the terminal answers it (picker delivery comes later).
+    // Nothing is typed into a terminal picker or a permission prompt: Enter or text there would pick a choice.
+    // Picker delivery of `option` comes later.
+    if (body.option !== undefined)
+      throw new HttpError(409, 'picker_open', 'Answer this question in the terminal.');
+    if (question.kind === 'permission')
+      throw new HttpError(409, 'permission_prompt', 'Answer this permission prompt in the terminal.');
     if (question.picker) throw new HttpError(409, 'picker_open', 'Answer this question in the terminal.');
     const run = this.runs.getRun(runId);
     const decoded = decodeMaterials(body.attachments, ANSWER_LIMITS);
@@ -74,11 +79,11 @@ export class QuestionService {
     for (const [i, d] of decoded.entries()) {
       try {
         await writeNewWorkspaceFile(run.worktreePath, paths[i]!, d.bytes);
-      } catch (error) {
+      } catch {
         throw new HttpError(
           500,
           'attachment_write_failed',
-          `Couldn't store ${d.name}: ${(error as Error).message}`,
+          `Couldn't store ${d.name} in the run's worktree. Try again, or send the answer without it.`,
         );
       }
       files.push({ path: paths[i]!, mimeType: d.mimeType, sizeBytes: d.sizeBytes });
