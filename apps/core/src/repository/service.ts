@@ -17,7 +17,7 @@ import { accountForGitRemote, accountForRemote, gitCredentialForRemote } from '.
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { remoteCompareKey } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
-import { describeGitError, type GitGateway } from '../git-gateway/gateway.js';
+import { describeGitError, type GitGateway, type KnownSecrets } from '../git-gateway/gateway.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import {
   aheadBehind,
@@ -60,8 +60,8 @@ const parse = <T>(
 };
 /** A full commit id (SHA-1 or SHA-256), never an abbreviation. */
 const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const remoteErrorText = (error: unknown) =>
-  error instanceof HttpError ? error.message : shortGitError(error);
+const remoteErrorText = (error: unknown, known?: KnownSecrets) =>
+  error instanceof HttpError ? error.message : shortGitError(error, known);
 /**
  * One repository: a user name or token typed into a URL is never part of which repository it names,
  * and neither is the case of its host.
@@ -226,6 +226,7 @@ export class RepositoryService {
     const { fetch: current } = await originUrls(ws.path);
     if (current && current !== url && !body.replace) throw this.originExists(current, url);
     const access = this.accessFor(projectId, url); // an unchecked account keeps its own error
+    const known: KnownSecrets = { credential: access.account?.credential, addresses: [url] };
     try {
       // Readable before anything changes; an empty repository answers with no branches.
       await listRemoteBranches(ws.path, access);
@@ -233,7 +234,7 @@ export class RepositoryService {
       throw new HttpError(
         409,
         'remote_unreachable',
-        `Couldn't read the repository on ${host}: ${remoteErrorText(error)}`,
+        `Couldn't read the repository on ${host}: ${remoteErrorText(error, known)}`,
       );
     }
     await this.setOriginLocked(projectId, ws.path, url, body.replace);
@@ -435,6 +436,8 @@ export class RepositoryService {
     const branch = ws.defaultBranch;
     const at = new Date().toISOString();
     const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
+    // origin as configured: a token typed into it is masked wherever git quotes it.
+    const known: KnownSecrets = { credential: ws.access.account?.credential, addresses: [ws.origin] };
     let check: RemoteCheck;
     let remoteOid: string | null = null;
     try {
@@ -444,8 +447,7 @@ export class RepositoryService {
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
-      const reason =
-        error instanceof HttpError ? error.message : describeGitError(error, ws.access.account?.credential);
+      const reason = error instanceof HttpError ? error.message : describeGitError(error, known);
       check = { url: checkedUrl, branch, at, published: false, error: reason };
     }
     await withMainWorkspaceLock(ws.path, async () => {
@@ -458,7 +460,7 @@ export class RepositoryService {
           check = {
             ...check,
             published: false,
-            error: describeGitError(error, ws.access.account?.credential),
+            error: describeGitError(error, known),
           };
         }
       }

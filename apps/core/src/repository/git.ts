@@ -3,7 +3,7 @@ import { badRequest, HttpError } from '../errors.js';
 import { remoteUrlForDisplay, scpUserInfoBeforePath } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { execGitFile } from '../git-exec.js';
-import { describeGitError } from '../git-gateway/gateway.js';
+import { describeGitError, type KnownSecrets } from '../git-gateway/gateway.js';
 import {
   type AccountRemote,
   accountFetchBranchObjects,
@@ -39,9 +39,12 @@ export interface RemoteAccess {
   account: AccountRemote | null;
 }
 
-/** The first useful line of a failed gateway or git call (no token, no capability), at most 300 characters. */
-export function shortGitError(error: unknown): string {
-  return describeGitError(error);
+/**
+ * The first useful line of a failed gateway or git call (no secret core knows, no token, no
+ * capability), at most 300 characters.
+ */
+export function shortGitError(error: unknown, known?: KnownSecrets): string {
+  return describeGitError(error, known);
 }
 
 export { remoteUrlForDisplay };
@@ -285,16 +288,13 @@ export async function pushBranch(
   oid: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
+  const known: KnownSecrets = { credential: access.account?.credential, addresses: [access.url] };
   if (access.account) {
     try {
       return await accountPushBranch(access.account, mainPath, branch, oid);
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // not a failed push: the runner could not run it
-      throw new HttpError(
-        409,
-        'push_failed',
-        `Push failed: ${describeGitError(error, access.account.credential)}`,
-      );
+      throw new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`);
     }
   } else {
     try {
@@ -317,7 +317,7 @@ export async function pushBranch(
       // Only a non-fast-forward is "the remote has commits main doesn't"; a `[remote rejected]` (a hook,
       // a protected branch) is a failed push with git's reason.
       if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
-      throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error)}`);
+      throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`);
     }
   }
 }

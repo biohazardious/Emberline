@@ -20,6 +20,7 @@ import {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound, unavailable } from '../errors.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
+import { redactGitText } from '../git-gateway/gateway.js';
 import {
   createExclusiveFile,
   isMissing,
@@ -210,7 +211,10 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
       tail: 'No clone terminal for this project, and its folder has no commit.',
     };
   }
-  const tail = await terminalTail(ptyd, clone.id);
+  const output = await terminalTail(ptyd, clone.id);
+  // git may quote the URL the person typed (`clone -- <url> <folder>`): its password never shows.
+  const dashes = clone.args.indexOf('--');
+  const tail = redactGitText(output, { addresses: [dashes >= 0 ? clone.args[dashes + 1] : null] });
   const base = { exitCode: clone.exitCode, terminalId: clone.id, tail };
   if (clone.status === 'running') return { ...base, status: 'cloning' };
   if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) return readyUnlessTag(project, base);
@@ -221,7 +225,7 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
       reason: 'The repository has no commit yet, so there is nothing to import.',
     };
   // git, run with LC_ALL=C when a branch is given: "fatal: Remote branch <name> not found in upstream origin".
-  const missing = /Remote branch (\S+) not found in upstream/.exec(tail)?.[1];
+  const missing = /Remote branch (\S+) not found in upstream/.exec(output)?.[1];
   if (missing)
     return {
       ...base,

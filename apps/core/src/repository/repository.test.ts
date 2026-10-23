@@ -555,6 +555,42 @@ describe('an origin that may hold a password where it shows ***', () => {
   });
 });
 
+describe('a token typed into the connected origin, on a host without an account', () => {
+  it('never shows in what Refresh records or Push main says, wherever the runner quotes it', async () => {
+    const secret = 'typed-S3CRET';
+    commit(projectPath, 'a.txt');
+    t.db
+      .update(projects)
+      .set({ repoUrl: 'https://git.example.com/o/r.git' })
+      .where(eq(projects.id, projectId))
+      .run();
+    git(projectPath, 'remote', 'add', 'origin', `https://alice:${secret}@git.example.com/o/r.git`);
+    setCommandExecutor(async (request: ExecRequest) =>
+      request.args.includes('ls-remote') || request.args.includes('push')
+        ? {
+            exitCode: 128,
+            signal: null,
+            stdout: '',
+            stderr: `fatal: token ${secret} was refused\n`,
+            timedOut: false,
+            truncated: false,
+          }
+        : localCommandExecutor(request),
+    );
+    try {
+      expect(await refresh()).toMatchObject({ connected: true, remoteError: 'token *** was refused' });
+      const pushed = await send('POST', `/api/projects/${projectId}/repository/push-main`);
+      expect(pushed.json()).toMatchObject({
+        error: 'push_failed',
+        message: 'Push failed: token *** was refused',
+      });
+      expect(JSON.stringify(readRepositorySettings(t.db, projectId))).not.toContain(secret);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+  });
+});
+
 describe('a token typed into the connected origin, on a host with an account', () => {
   it('is still the connected repository; the account reaches it through the gateway, the typed token is not sent', async () => {
     forge.bare('alice', 'app');

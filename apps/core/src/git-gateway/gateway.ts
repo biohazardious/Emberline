@@ -16,6 +16,7 @@ import { pipeline, Readable, Transform } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ContainerAddresses } from '../auth/container-addresses.js';
 import { HttpError } from '../errors.js';
+import { addressSecrets } from '../forge/hosts.js';
 import { type GitHttpCredential, redactCredential, urlUnderServer } from '../git-credentials.js';
 import { PUSH_PROBE, type PushPlan, readPushRequest } from './receive-pack.js';
 import { GitGatewayError, type GitGatewayErrorCode, openUpstream, UpstreamAgents } from './upstream.js';
@@ -117,16 +118,18 @@ export interface ScanMeter {
 
 /**
  * Text without the credentials of the addresses in it (a token typed into an origin, or one a
- * server quotes back). One rule, line by line, that masks too much rather than ever too little:
- * from the first credential opener on the line to the last `@` on it that a host follows, all goes.
+ * server quotes back), for an address core does not know (what it knows goes first, see
+ * redactGitText). One rule, line by line, that masks too much rather than ever too little: from the
+ * first credential opener on the line to the last `@` on it that a host follows, all goes, and
+ * `***` takes its place.
  * - The openers: a `scheme://` (from after `://`), a quote mark of any kind (from after it), and a
- *   `:` in a word (from after the word's first `:`, so `user:` keeps its user name). A git prefix
- *   that starts the line (`fatal: `, `remote: `, …, see LINE_PREFIX) opens right after it.
- * - After a `scheme://` the whole user info goes with its `@` (`https://host/…`); otherwise `***`
- *   takes its place (`alice:***@host:path`, `'***@host:path'`).
+ *   `:` in a word (from after the word's first `:`, so `user:` keeps its user name). An `ssh://`
+ *   whose own `@` is that `@`, with no `:` before it, opens nothing: a user name, never a password.
+ * - A git prefix that starts the line (`fatal: `, `remote: `, …, see LINE_PREFIX) is read apart,
+ *   so git's own messages stay readable (see withoutPrefixedLineCredentials).
  * So a password never shows, whatever it holds (whitespace, quote marks, `:`, `/`, `@`, `#`, `?`),
  * and so may an email, a path or a git message's words between an opener and an `@`.
- * Linear: each line is read twice.
+ * Linear: each line is read at most four times.
  */
 export function withoutUrlCredentials(text: string, meter?: ScanMeter): string {
   let out = '';
@@ -141,13 +144,34 @@ export function withoutUrlCredentials(text: string, meter?: ScanMeter): string {
 }
 
 /**
- * The prefixes git, ssh and a server put at the start of a line (`fatal: …`). Such a word may as
- * well be the user name of an address that starts the line (`ssh: S3CRET@host: Permission denied`),
- * so only the word, its `:` and one whitespace character after it are kept: on a line with an `@`
- * that a host follows, everything after them up to that `@` goes (`fatal: ***@host:o/r' does not
- * appear to be a git repository`).
+ * The prefixes git, ssh and a server put at the start of a line (`fatal: …`; `ssh://…` is an
+ * address). Such a word may as well be the user name of an address that starts the line
+ * (`ssh: S3CRET@host: Permission denied`), so the word, its `:` and one whitespace character after
+ * it are kept, and what follows only when it is one of git's messages (GIT_QUOTES).
  */
-const LINE_PREFIX = /^(?:fatal|error|warning|hint|remote|ssh):\s?/;
+const LINE_PREFIX = /^(?:fatal|error|warning|hint|remote|ssh):(?!\/\/)\s?/;
+
+/**
+ * git's messages that quote an address after a line prefix. The phrase and its quote mark always
+ * stay. The quoted text is read as the address git quotes (so a user name and host show, and only
+ * what a password may hold goes) when it is one word (no whitespace or quote mark) that holds the
+ * line's last `@` before a host and is closed by a quote mark that the message's own end (`end`)
+ * follows; curl's messages (`url`) quote only a `scheme://` URL. Otherwise everything from the quote
+ * mark to that `@` goes: the line may as well be an address whose user name is the prefix word and
+ * whose password copies the phrase (only that copy then shows).
+ * `'` alone (`'<path>' does not appear to be a git repository`) quotes a path, which may start with
+ * a password (git reads `user:pw@host:path` as the path `pw@host:path` on `user`): masked from the
+ * quote mark.
+ */
+const GIT_QUOTES: readonly { phrase: string; end?: RegExp; url?: boolean }[] = [
+  { phrase: "unable to access '", end: /^': /, url: true },
+  { phrase: "repository '", end: /^' not found\s*$/, url: true },
+  { phrase: "Authentication failed for '", end: /^'\s*$/, url: true },
+  { phrase: "could not read Username for '", end: /^': /, url: true },
+  { phrase: "could not read Password for '", end: /^': /, url: true },
+  { phrase: "failed to push some refs to '", end: /^'\s*$/ },
+  { phrase: "'" },
+];
 
 function withoutLineCredentials(line: string, meter?: ScanMeter): string {
   if (meter) meter.steps += line.length;
@@ -155,43 +179,106 @@ function withoutLineCredentials(line: string, meter?: ScanMeter): string {
   while (at >= 0 && !(line[at] === '@' && startsHost(line[at + 1]))) at--;
   if (at < 0) return line;
   const prefixLength = LINE_PREFIX.exec(line)?.[0].length ?? 0;
-  if (prefixLength > 0) return `${line.slice(0, prefixLength)}***${line.slice(at)}`;
-  // The first opener: the mask starts after it, so nothing after it up to `at` is kept.
-  let from = -1;
-  let scheme = false;
-  for (let i = 0; i < at && from < 0; i++) {
-    if (QUOTES.has(line[i]!)) from = i + 1;
-    else if (line[i] === ':') {
-      scheme = line.startsWith('//', i + 1);
-      from = scheme ? i + 3 : i + 1;
-    }
-  }
-  if (meter) meter.steps += at;
-  if (from < 0 || from > at) return line;
-  return scheme ? line.slice(0, from) + line.slice(at + 1) : `${line.slice(0, from)}***${line.slice(at)}`;
+  if (prefixLength > 0) return withoutPrefixedLineCredentials(line, prefixLength, at, meter);
+  return masked(line, 0, at, meter);
 }
 
-/** One plain line for a gateway, core or runner-git failure: no token, no capability. */
-export function describeGitError(error: unknown, credential?: GitHttpCredential | null): string {
-  let text: string;
-  if (error instanceof GitGatewayError || error instanceof HttpError) text = error.message;
-  else {
-    const stderr = (error as { stderr?: unknown }).stderr;
-    const raw =
-      typeof stderr === 'string' && stderr.trim()
-        ? stderr
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    // Redacted before the prefix goes: an address must never become the start of the line.
-    text =
-      withoutUrlCredentials(raw)
-        .split('\n')
-        .map((l) => l.replace(/^(?:fatal|error|remote):(?: |\s?(?=\*\*\*@))/, '').trim())
-        .find(Boolean) ?? 'git failed';
+/**
+ * `line` with everything from its first opener at or after `from` up to `at` (its last `@` that a
+ * host follows) masked, or as it is without such an opener.
+ */
+function masked(line: string, from: number, at: number, meter?: ScanMeter): string {
+  let i = from;
+  while (i < at && line[i] !== ':' && !QUOTES.has(line[i]!)) i++;
+  if (meter) meter.steps += i - from;
+  if (i >= at) return line;
+  if (line[i] !== ':' || !line.startsWith('//', i + 1)) return `${line.slice(0, i + 1)}***${line.slice(at)}`;
+  // `ssh://user@host`, its `@` the one at `at`: a user name, never a password.
+  let end = i + 3;
+  while (end < at && line[end] !== ':' && !QUOTES.has(line[end]!) && !isSpace(line.charCodeAt(end))) end++;
+  if (meter) meter.steps += end - i;
+  if (end === at && /(?:^|[^a-z0-9+.-])ssh$/i.test(line.slice(Math.max(from, i - 4), i))) return line;
+  return `${line.slice(0, i + 3)}***${line.slice(at)}`;
+}
+
+/**
+ * A line that starts with a git prefix, `at` its last `@` that a host follows: the prefix stays, and
+ * so does one of git's messages after it (GIT_QUOTES); everything else up to `at` goes
+ * (`fatal: ***@host:o/r`).
+ */
+function withoutPrefixedLineCredentials(
+  line: string,
+  prefixLength: number,
+  at: number,
+  meter?: ScanMeter,
+): string {
+  const quote = GIT_QUOTES.find((q) => line.startsWith(q.phrase, prefixLength));
+  if (!quote) return `${line.slice(0, prefixLength)}***${line.slice(at)}`;
+  const inside = prefixLength + quote.phrase.length;
+  if (quote.end) {
+    // The quoted word: up to the first whitespace or quote mark.
+    let close = inside;
+    while (close < line.length && !QUOTES.has(line[close]!) && !isSpace(line.charCodeAt(close))) close++;
+    if (meter) meter.steps += 2 * (close - inside) + (line.length - close);
+    const isAddress =
+      close > at &&
+      QUOTES.has(line[close] ?? '') &&
+      quote.end.test(line.slice(close)) &&
+      (!quote.url || /^[a-z][a-z0-9+.-]*:\/\//i.test(line.slice(inside, close)));
+    if (isAddress) return masked(line, inside, at, meter);
   }
-  // A token typed into an origin (no account) is never quoted back.
-  return redactCapabilityUrls(redactCredential(withoutUrlCredentials(text), credential)).slice(0, 300);
+  return `${line.slice(0, inside)}***${line.slice(at)}`;
+}
+
+/** What core knows is secret around a git command. */
+export interface KnownSecrets {
+  /** The forge account's credential, when the command used it. */
+  credential?: GitHttpCredential | null;
+  /** The addresses git was given (origin as configured, a URL a person typed): their passwords. */
+  addresses?: readonly (string | null | undefined)[];
+}
+
+/**
+ * A git command's output or error as a person may read it: every secret core knows masked exactly
+ * wherever it shows (the account's token and Basic value; an address's password as written,
+ * percent-decoded and percent-encoded, one shorter than 3 characters only between its user name and
+ * `@`), then any other address's credentials (withoutUrlCredentials), then any capability.
+ */
+export function redactGitText(text: string, known?: KnownSecrets): string {
+  let out = redactCredential(text, known?.credential);
+  const masks: [secret: string, shown: string][] = [];
+  for (const address of known?.addresses ?? []) {
+    const secrets = address ? addressSecrets(address) : null;
+    for (const password of secrets?.passwords ?? [])
+      masks.push(
+        password.length >= 3 ? [password, '***'] : [`${secrets!.user}:${password}@`, `${secrets!.user}:***@`],
+      );
+  }
+  // Longest first: a password inside a longer one never leaves a piece of the longer one.
+  for (const [secret, shown] of masks.sort((a, b) => b[0].length - a[0].length))
+    out = out.split(secret).join(shown);
+  return redactCapabilityUrls(withoutUrlCredentials(out));
+}
+
+/** One plain line for a gateway, core or runner-git failure: no secret core knows, no token, no capability. */
+export function describeGitError(error: unknown, known?: KnownSecrets): string {
+  if (error instanceof GitGatewayError || error instanceof HttpError)
+    return redactGitText(error.message, known).slice(0, 300);
+  const stderr = (error as { stderr?: unknown }).stderr;
+  const raw =
+    typeof stderr === 'string' && stderr.trim()
+      ? stderr
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  // Redacted before the prefix goes (an address must never become the start of the line), and only
+  // then: read again, the line would lose what git's messages keep.
+  return (
+    redactGitText(raw, known)
+      .split('\n')
+      .map((l) => l.replace(/^(?:fatal|error|remote):(?: |\s?(?=\*\*\*@))/, '').trim())
+      .find(Boolean) ?? 'git failed'
+  ).slice(0, 300);
 }
 
 const sizeText = (bytes: number) =>
@@ -289,7 +376,9 @@ export class GitGateway {
       const outcome = record.outcome;
       throw outcome
         ? new GitGatewayError(outcome.code, outcome.message)
-        : new GitGatewayError('git_failed', describeGitError(error, grant.credential), { cause: error });
+        : new GitGatewayError('git_failed', describeGitError(error, { credential: grant.credential }), {
+            cause: error,
+          });
     } finally {
       this.release(capability);
     }

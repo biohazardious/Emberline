@@ -259,3 +259,43 @@ export function remoteUrlForDisplay(
   }
   return { url, display: `${user}:***@${host}`, hadCredentials: true };
 }
+
+/**
+ * What may be the password of a remote address, as git may print it (as written, percent-decoded and
+ * percent-encoded): from the `:` that may start one (the first one in a URL's authority, the one
+ * after the user name of an scp-like address) to the first and to the last `@` that a host follows.
+ * More than the password may come back (a port and a path), never less. `user`: what comes before
+ * that `:` (after a `scheme://`). Null when the address holds no `user:…@`.
+ */
+export function addressSecrets(raw: string): { user: string; passwords: string[] } | null {
+  const url = raw.trim();
+  const r = new AddressReader(url);
+  const schemeEnd = r.scheme();
+  let colon: number;
+  if (schemeEnd > 0) {
+    colon = r.next(':', schemeEnd);
+    if (colon >= r.next('/?#', schemeEnd)) return null;
+  } else {
+    const found = scpCredentials(r);
+    if (!found) return null;
+    colon = found.userEnd;
+  }
+  const ats: number[] = [];
+  for (let at = url.indexOf('@', colon + 1); at >= 0; at = url.indexOf('@', at + 1))
+    if (startsHost(url[at + 1])) ats.push(at);
+  if (ats.length === 0) return null;
+  const passwords = new Set<string>();
+  for (const at of [ats[0]!, ats[ats.length - 1]!]) {
+    const secret = url.slice(colon + 1, at);
+    passwords.add(secret);
+    try {
+      const decoded = decodeURIComponent(secret);
+      passwords.add(decoded);
+      passwords.add(encodeURIComponent(decoded));
+    } catch {
+      // not percent-encoded
+    }
+  }
+  passwords.delete('');
+  return { user: url.slice(schemeEnd, colon), passwords: [...passwords] };
+}

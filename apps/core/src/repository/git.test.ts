@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
-import { hostOf, remoteCompareKey, type ScanMeter } from '../forge/hosts.js';
+import { addressSecrets, hostOf, remoteCompareKey, type ScanMeter } from '../forge/hosts.js';
 import {
   fetchBranchObjects,
   pushBranch,
@@ -143,23 +143,34 @@ describe('shortGitError', () => {
       stderr:
         "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': and ssh://git:tok3n@host/o/r.git, http://tok3n@h/x",
     });
-    // After git's prefix (which may be a user name), up to the line's last `@` that a host follows.
-    expect(shortGitError(error)).toBe('***@h/x');
+    // git's phrase stays; the quoted text is no single word, so all of it up to the line's last `@`
+    // that a host follows goes.
+    expect(shortGitError(error)).toBe("unable to access '***@h/x");
+    // Known (origin as configured): its token goes wherever it shows.
+    expect(
+      shortGitError(Object.assign(new Error('git failed'), { stderr: 'remote: token tok3n expired' }), {
+        addresses: ['https://alice:tok3n@git.example.com/o/r.git'],
+      }),
+    ).toBe('token *** expired');
   });
 });
 
 /** Each line masks from its first opener to its last `@` that a host follows; examples (generated cases: redaction.test.ts). */
 describe('shortGitError: addresses with a password in what git and a server print', () => {
   const text = (stderr: string) => shortGitError(Object.assign(new Error('git failed'), { stderr }));
-  it("after git's prefix, everything up to the line's last `@` before a host goes; the rest of the line stays", () => {
+  it("after git's prefix and phrase, everything up to the line's last `@` before a host goes; the rest of the line stays", () => {
     for (const [stderr, shown] of [
       [
+        "fatal: unable to access 'https://alice:p@ss@git.example.com/o/r.git/': Could not resolve host",
+        "unable to access 'https://***@git.example.com/o/r.git/': Could not resolve host",
+      ],
+      [
         "fatal: unable to access 'https://alice:p@ss@git.example.com/o/r.git/'",
-        "***@git.example.com/o/r.git/'",
+        "unable to access '***@git.example.com/o/r.git/'",
       ],
       [
         "fatal: 'pw@host:o/r' does not appear to be a git repository",
-        "***@host:o/r' does not appear to be a git repository",
+        "'***@host:o/r' does not appear to be a git repository",
       ],
       ['remote: https://u:p%40x@h/x', '***@h/x'],
       ['fatal: ssh://git:pa/ss@h/x refused', '***@h/x refused'],
@@ -171,9 +182,9 @@ describe('shortGitError: addresses with a password in what git and a server prin
     ] as const)
       expect(text(stderr), stderr).toBe(shown);
   });
-  it('without a git prefix, from the first opener: a scheme keeps the address without its user info', () => {
+  it('without a git prefix, from the first opener: a scheme keeps the address, with *** for its user info', () => {
     for (const [stderr, shown] of [
-      ['https://u:p@ss@git.example.com/o/r.git refused', 'https://git.example.com/o/r.git refused'],
+      ['https://u:p@ss@git.example.com/o/r.git refused', 'https://***@git.example.com/o/r.git refused'],
       ["Cloning into 'pw@host:o/r'...", "Cloning into '***@host:o/r'..."],
       ['To alice:pw@host:o/r', 'To alice:***@host:o/r'],
     ] as const)
@@ -204,6 +215,41 @@ describe('hostOf and remoteCompareKey', () => {
       'ssh://Git@host.example:2222/o/R.git',
     );
     expect(remoteCompareKey('me@corp.com@Host:o/r')).toBe('me@corp.com@host:o/r');
+  });
+});
+
+describe('addressSecrets', () => {
+  it('returns what may be the password, as written, decoded and encoded, never less, and the user name before it', () => {
+    for (const [raw, user, secrets] of [
+      ['https://u:S3CRET@h/o/r.git', 'u', ['S3CRET']],
+      ['https://u:p%40ss%20w@h/o', 'u', ['p%40ss%20w', 'p@ss w']],
+      ['https://u:p@ss@h/o', 'u', ['p@ss']],
+      ['ssh://me@corp.com:S3CRET@h/o', 'me@corp.com', ['S3CRET']],
+      ['git:S3CRET@h:o/r.git', 'git', ['S3CRET']],
+      ['me@corp.com:S3CRET@h:o/r', 'me@corp.com', ['S3CRET']],
+      ['alice:pa/ss@h', 'alice', ['pa/ss']],
+      ['https://u:ab@h/o', 'u', ['ab']],
+      // The first and the last `@` a host follows: a path's `@` may end the password.
+      [
+        'https://u:S3CRET@GitHub.com/o/r@v2.git',
+        'u',
+        ['S3CRET', 'S3CRET@GitHub.com/o/r', 'S3CRET%40GitHub.com%2Fo%2Fr'],
+      ],
+      ['https://u:2024/S3CRET@h/o', 'u', ['2024/S3CRET', '2024%2FS3CRET']],
+    ] as const) {
+      const found = addressSecrets(raw);
+      expect(found?.user, raw).toBe(user);
+      for (const secret of secrets) expect(found?.passwords, raw).toContain(secret);
+    }
+    // No `user:…@`: nothing.
+    for (const raw of [
+      'git@h:o/r.git',
+      'https://h/o/r@v2.git',
+      'ssh://git@h:2222/o',
+      'https://tok@h/o',
+      'h:o/r',
+    ])
+      expect(addressSecrets(raw), raw).toBeNull();
   });
 });
 

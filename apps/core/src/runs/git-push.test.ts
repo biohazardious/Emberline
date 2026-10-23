@@ -59,6 +59,19 @@ describe('pushing a run branch without an account', () => {
     expect(message).not.toContain('xxxxxxxxxx'.repeat(31));
   });
 
+  it("origin's password (its push URL's too) never shows, wherever git or the server quotes it", async () => {
+    git('remote', 'set-url', '--push', 'origin', 'https://alice:pu5hS3CRET@git.example.com/o/r.git');
+    pushAnswers({
+      exitCode: 1,
+      stderr: 'remote: token tok3n expired\nremote: and pu5hS3CRET too',
+    });
+    const error = await pushWorktreeBranch(dir, 'emberline/run-1', 'main').catch((e: unknown) => e);
+    expect((error as Error).message).toBe('git push failed: token *** expired');
+    pushAnswers({ stdout: 'tok3n', stderr: 'remote: pu5hS3CRET, alice:tok3n' });
+    const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
+    expect(res.output).toBe('***\nremote: ***, alice:***');
+  });
+
   it('the output of a push that worked has no user info or capability, and is bounded', async () => {
     pushAnswers({
       stdout:
@@ -79,7 +92,7 @@ describe('pushing a run branch without an account', () => {
     });
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
     // A `remote: ` line keeps its prefix and one space; the rest up to its last `@` before a host goes.
-    expect(res.output).toContain('To https://git.example.com/o/r.git');
+    expect(res.output).toContain('To https://***@git.example.com/o/r.git');
     expect(res.output).toContain('remote: ***@git.example.com/o/r/pulls/new');
     expect(res.output).toContain('remote: ***@git.example.com:2222/o/r.git');
     expect(res.output).toContain("remote: ***@git.example.com:o/r.git'");

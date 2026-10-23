@@ -19,7 +19,7 @@ import type {
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
-import { describeGitError, redactCapabilityUrls, withoutUrlCredentials } from '../git-gateway/gateway.js';
+import { describeGitError, type KnownSecrets, redactGitText } from '../git-gateway/gateway.js';
 import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
@@ -744,7 +744,7 @@ export async function pushWorktreeBranch(
     try {
       result = await accountPushBranch(account, worktreePath, branch);
     } catch (error) {
-      throw conflict(`git push failed: ${describeGitError(error, account.credential)}`);
+      throw conflict(`git push failed: ${describeGitError(error, { credential: account.credential })}`);
     }
     if (result === 'rejected')
       throw conflict(`git push failed: the remote ${branch} has commits this run doesn't have`);
@@ -760,6 +760,9 @@ export async function pushWorktreeBranch(
   if (!remoteUrl) {
     throw conflict('no "origin" remote is configured for this repository');
   }
+  // origin as configured (its push URL too): a token typed into it is masked wherever git quotes it.
+  const pushUrl = await git(worktreePath, ['remote', 'get-url', '--push', 'origin']).catch(() => '');
+  const known: KnownSecrets = { addresses: [remoteUrl, pushUrl] };
 
   try {
     const { stdout, stderr } = await execGitFile(
@@ -775,14 +778,11 @@ export async function pushWorktreeBranch(
       { timeout: 60_000 },
     );
     // `remote:` lines are the server's: as bounded and redacted as a failure's.
-    const output = redactCapabilityUrls(withoutUrlCredentials(`${stdout}\n${stderr}`.trim())).slice(
-      0,
-      MAX_PUSH_OUTPUT,
-    );
+    const output = redactGitText(`${stdout}\n${stderr}`.trim(), known).slice(0, MAX_PUSH_OUTPUT);
     return { branch: branchToPush, remote: 'origin', output: output || `Pushed ${branchToPush} to origin` };
   } catch (error) {
     // A refused repository config has no stderr: its message says what to remove.
-    throw conflict(`git push failed: ${describeGitError(error)}`);
+    throw conflict(`git push failed: ${describeGitError(error, known)}`);
   }
 }
 

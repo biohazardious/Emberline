@@ -900,6 +900,35 @@ describe('GET /api/projects/:id/import-status', () => {
     expect(s.tail).toMatch(/fatal/);
   });
 
+  it('the tail never shows the password of the URL the person typed, wherever git quotes it', async () => {
+    const typed = 'https://alice:typ3d-S3CRET@example.com/x.git';
+    const client = t.ptyd.get();
+    const spawn = client.spawn.bind(client);
+    // git's own arguments stay (`clone … -- <url> <folder>`); sh prints what a failing git might.
+    vi.spyOn(client, 'spawn').mockImplementation((params) =>
+      spawn({
+        ...params,
+        file: 'sh',
+        args: [
+          '-c',
+          `echo "fatal: unable to access '$2/': error"; echo "remote: token typ3d-S3CRET refused"; exit 128`,
+          'sh',
+          ...(params.args ?? []).slice((params.args ?? []).indexOf('--')),
+        ],
+      }),
+    );
+    const res = await api('POST', '/api/projects', { name: 'Typed', source: 'import_url', repoUrl: typed });
+    expect(res.statusCode, res.body).toBe(201);
+    const { project } = res.json() as CreateProjectResponse;
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
+      timeout: 10_000,
+    });
+    const { tail } = await status(project.id);
+    expect(tail).toContain("fatal: unable to access 'https://***@example.com/x.git/': error");
+    expect(tail).toContain('remote: token *** refused');
+    expect(tail).not.toContain('S3CRET');
+  });
+
   it('cloning while the terminal runs; detect and adopt wait for it', async () => {
     const { project } = await importUrl('Slow', (dest) => ({
       file: 'sh',

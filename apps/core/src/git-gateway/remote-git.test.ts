@@ -297,6 +297,7 @@ describe('import clone', () => {
           id: 'clone-1',
           status: exitCode === null ? 'running' : 'exited',
           exitCode,
+          args: p.args ?? [],
           meta: p.meta ?? {},
           createdAt: new Date().toISOString(),
         })),
