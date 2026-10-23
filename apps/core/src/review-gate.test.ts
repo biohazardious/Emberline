@@ -220,10 +220,21 @@ describe('blocking review comments close the merge gate', () => {
     const { project, ticket, run } = await factoryTicket();
     await comment(run, 'blocking');
     await comment(run, 'blocking', 2);
+    // Uncommitted work, one file staged by hand: a refused merge leaves branch, index and files alone.
+    writeFileSync(path.join(run.worktreePath, 'B.txt'), 'B\n');
+    writeFileSync(path.join(run.worktreePath, 'C.txt'), 'C\n');
+    wgit(run.worktreePath, 'add', 'C.txt');
+    const branchState = () => ({
+      log: wgit(run.worktreePath, 'log', '--format=%s'),
+      status: wgit(run.worktreePath, 'status', '--porcelain', '--untracked-files=all'),
+    });
+    const before = branchState();
     const refused = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
     expect(refused.statusCode).toBe(409);
     expect(refused.json()).toMatchObject({ blocking: 2 });
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(false);
+    expect(branchState()).toEqual(before);
+    expect(before.log).not.toContain('factory run output');
     const forced = await api('POST', `/api/projects/${project.id}/sync-worktree`, {
       runId: run.id,
       force: true,

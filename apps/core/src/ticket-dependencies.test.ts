@@ -1688,6 +1688,35 @@ describe('factory chain robustness', () => {
     });
   });
 
+  it('a commit made by hand on the branch while the merge is prepared fails the merge with a note; a person can merge it again', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    writeFileSync(path.join(run.worktreePath, 'late.txt'), 'late\n');
+    // The agent stays idle; someone commits on the run's branch while the output commit is built.
+    mergeStep.beforeMerge = () => {
+      mergeStep.beforeMerge = null;
+      wgit(run.worktreePath, 'commit', '-q', '--allow-empty', '-m', 'by hand');
+    };
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await noteOf(run, 'merge_failed')).toEqual([
+      { summary: `Could not merge ${a.key}: its branch moved while it was being merged. Merge it again.` },
+    ]);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).toBe('review');
+    expect(existsSync(path.join(project.path, 'late.txt'))).toBe(false);
+    expect(wgit(run.worktreePath, 'log', '-1', '--format=%s').trim()).toBe('by hand');
+    // The ticket waits in Review: a person's merge takes the branch as it is now.
+    const retry = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
+    expect(retry.json()).toMatchObject({ ok: true });
+    expect(existsSync(path.join(project.path, 'late.txt'))).toBe(true);
+    await settle(project.id);
+  });
+
   it('an agent that works again while its merge is prepared gets nothing merged; its next stop merges once', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });

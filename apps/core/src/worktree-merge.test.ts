@@ -237,6 +237,101 @@ describe('a merge refused before it starts', () => {
     expect(git(a, 'status', '--porcelain')).toBe('');
   });
 
+  it("an agent's resolved but unconcluded `git merge main` is concluded as `git commit` would: a merge commit, no MERGE_HEAD", async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 run\nline3\n');
+    git(a, 'commit', '-q', '-am', 'run edit');
+    writeFileSync(path.join(main, 'app.js'), 'line1\nline2 main\nline3\n');
+    git(main, 'commit', '-q', '-am', 'main edit');
+    const mainTip = git(main, 'rev-parse', 'HEAD');
+    expect(() => git(a, 'merge', '-q', 'main')).toThrow();
+    // Resolved on disk, not added, not committed.
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 main and run\nline3\n');
+    const res = await refusing(a, () => undefined);
+    expect(res.ok, res.summary).toBe(true);
+    expect(git(a, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ').slice(1)).toEqual([
+      git(a, 'rev-parse', 'HEAD^1'),
+      mainTip,
+    ]);
+    expect(() => git(a, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+    expect(git(a, 'status', '--porcelain')).toBe('');
+    expect(readFileSync(path.join(main, 'app.js'), 'utf8')).toBe('line1\nline2 main and run\nline3\n');
+  });
+
+  it("an agent's resolved but unconcluded cherry-pick keeps the picked commit's author, and its state ends", async () => {
+    const a = addWorktree('a');
+    git(main, 'checkout', '-q', '-b', 'other');
+    writeFileSync(path.join(main, 'picked.js'), 'picked\n');
+    writeFileSync(path.join(main, 'app.js'), 'line1\nline2 other\nline3\n');
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.name=Picked Author',
+        '-c',
+        'user.email=picked@example.com',
+        'commit',
+        '-q',
+        '-am',
+        'pick me',
+      ],
+      { cwd: main },
+    );
+    git(main, 'add', 'picked.js');
+    git(main, 'commit', '-q', '--amend', '--no-edit');
+    const picked = git(main, 'rev-parse', 'HEAD');
+    git(main, 'checkout', '-q', 'main');
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 run\nline3\n');
+    git(a, 'commit', '-q', '-am', 'run edit');
+    expect(() => git(a, 'cherry-pick', picked)).toThrow();
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 both\nline3\n');
+    const res = await refusing(a, () => undefined);
+    expect(res.ok, res.summary).toBe(true);
+    expect(git(a, 'log', '-1', '--format=%an <%ae>')).toBe('Picked Author <picked@example.com>');
+    expect(() => git(a, 'rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD')).toThrow();
+    expect(git(a, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual([
+      'app.js',
+      'picked.js',
+    ]);
+  });
+
+  it('a restage that fails leaves the branch where it was and the index never behind it', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const before = git(a, 'rev-parse', 'HEAD');
+    const mainBefore = git(main, 'rev-parse', 'HEAD');
+    setCommandExecutor(async (request) => {
+      if (request.file === 'git' && request.args.includes('add') && !request.env?.GIT_INDEX_FILE)
+        throw new Error('index.lock: File exists');
+      return localCommandExecutor(request);
+    });
+    try {
+      await expect(refusing(a, () => undefined)).rejects.toThrow('index.lock');
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(git(a, 'rev-parse', 'HEAD')).toBe(before);
+    expect(git(main, 'rev-parse', 'HEAD')).toBe(mainBefore);
+    // Nothing committed shows as deleted from the index.
+    expect(git(a, 'diff', '--cached', '--diff-filter=D', '--name-only', 'HEAD')).toBe('');
+  });
+
+  it('a copy of the index that fails fails the merge, instead of leaving out what the agent staged', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const before = git(a, 'rev-parse', 'HEAD');
+    setCommandExecutor(async (request) => {
+      if (request.file === 'cp') throw new Error('No space left on device');
+      return localCommandExecutor(request);
+    });
+    try {
+      await expect(refusing(a, () => undefined)).rejects.toThrow('No space left');
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(git(a, 'rev-parse', 'HEAD')).toBe(before);
+  });
+
   it('an agent that commits while the merge is asked for keeps its commit; nothing is merged', async () => {
     const a = addWorktree('a');
     writeFileSync(path.join(a, 'feature-a.js'), 'a\n');

@@ -62,17 +62,80 @@ async function stageRunOutput(worktreePath: string, env?: Record<string, string>
 }
 
 /**
- * The commit of a run's output on top of `head`, or null when there is nothing to commit. It is
- * built in a copy of the worktree's index and not put on any branch, so the worktree, its index and
- * its branch stay exactly as they were (the caller moves the branch once the merge is allowed).
- * The copy (`<git dir>/index.emberline-output`) is made and removed in the runner, so it belongs to
- * the user the runner's git runs as. git reads it only through GIT_INDEX_FILE, here; a copy an
- * interrupted merge left behind is removed first, never reused.
+ * A file of the worktree's git directory, read in the runner: its text, or null when it does not
+ * exist (any other failure is thrown).
+ */
+async function readGitDirFile(worktreePath: string, name: string): Promise<string | null> {
+  const file = (
+    await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', name], { cwd: worktreePath })
+  ).stdout.trim();
+  // A leading `.` tells an empty file from a missing one.
+  const { stdout } = await execFileChecked({
+    file: 'sh',
+    args: ['-c', 'test ! -e "$1" || { printf .; cat -- "$1"; }', 'sh', file],
+    cwd: worktreePath,
+  });
+  return stdout.startsWith('.') ? stdout.slice(1) : null;
+}
+
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+/**
+ * What the agent left unconcluded in its worktree, as `git commit` would conclude it with the run's
+ * output: a merge (MERGE_HEAD's commits become the output commit's other parents), a cherry-pick
+ * (the output commit keeps the picked commit's author) or a revert.
+ */
+interface PendingOperation {
+  mergeHeads: string[];
+  cherryPick: string | null;
+  revert: boolean;
+}
+
+async function pendingOperation(worktreePath: string): Promise<PendingOperation> {
+  const verify = (rev: string) =>
+    execGitFile(['rev-parse', '-q', '--verify', `${rev}^{commit}`], { cwd: worktreePath }).then(
+      (res) => res.stdout.trim() || null,
+      () => null,
+    );
+  const mergeHeads: string[] = [];
+  for (const line of gitLines((await readGitDirFile(worktreePath, 'MERGE_HEAD')) ?? '')) {
+    // `git commit` refuses a MERGE_HEAD it cannot read, and so does the merge.
+    const oid = OBJECT_ID.test(line) ? await verify(line) : null;
+    if (!oid)
+      throw new Error(`MERGE_HEAD names no commit (${line.slice(0, 80)}); conclude or abort the merge`);
+    mergeHeads.push(oid);
+  }
+  return {
+    mergeHeads,
+    cherryPick: await verify('CHERRY_PICK_HEAD'),
+    revert: (await verify('REVERT_HEAD')) !== null,
+  };
+}
+
+/** Ends what the output commit concluded, as `git commit` does once it records it. */
+async function endPendingOperation(worktreePath: string, pending: PendingOperation): Promise<void> {
+  const inWorktree = { cwd: worktreePath };
+  // `--quit`: MERGE_HEAD, MERGE_MSG, MERGE_MODE and AUTO_MERGE go; index and files stay.
+  if (pending.mergeHeads.length > 0) await execGitFile(['merge', '--quit'], inWorktree);
+  if (pending.cherryPick) await execGitFile(['update-ref', '-d', 'CHERRY_PICK_HEAD'], inWorktree);
+  if (pending.revert) await execGitFile(['update-ref', '-d', 'REVERT_HEAD'], inWorktree);
+}
+
+/**
+ * The commit of a run's output on top of `head`, or null when there is nothing to commit: what
+ * `git add -A` (but RUN_OUTPUT_EXCLUDES and scratch files) and `git commit` would record, with an
+ * unconcluded merge's other parents. It is built in a copy of the worktree's index and not put on
+ * any branch, so the worktree, its index and its branch stay exactly as they were (the caller moves
+ * the branch once the merge is allowed). The copy (`<git dir>/index.emberline-output`) is made and
+ * removed in the runner, so it belongs to the user the runner's git runs as. git reads it only
+ * through GIT_INDEX_FILE, here; a copy an interrupted merge left behind is removed first, never
+ * reused.
  */
 async function buildRunOutputCommit(
   worktreePath: string,
   head: string,
   label: string,
+  pending: PendingOperation,
 ): Promise<string | null> {
   const inWorktree = { cwd: worktreePath };
   const index = (
@@ -84,25 +147,44 @@ async function buildRunOutputCommit(
   try {
     await inRunner('rm', ['-f', '--', scratchIndex]);
     // What the agent staged by hand (a file its .gitignore ignores, say) is part of the output too.
-    await inRunner('cp', ['--', index, scratchIndex]).catch(() =>
-      execGitFile(['read-tree', head], { ...inWorktree, env }),
-    );
+    // Only a worktree without an index starts from HEAD; a copy that fails fails the merge.
+    const hasIndex = (await inRunner('sh', ['-c', 'test ! -e "$1" || printf y', 'sh', index])).stdout === 'y';
+    if (hasIndex) await inRunner('cp', ['--', index, scratchIndex]);
+    else await execGitFile(['read-tree', head], { ...inWorktree, env });
     await stageRunOutput(worktreePath, env);
     const tree = (await execGitFile(['write-tree'], { ...inWorktree, env })).stdout.trim();
     const headTree = (await execGitFile(['rev-parse', `${head}^{tree}`], inWorktree)).stdout.trim();
     if (tree === headTree) return null;
+    // `git commit` during a cherry-pick keeps the picked commit's author.
+    const author = pending.cherryPick
+      ? (
+          await execGitFile(
+            ['show', '-s', '--format=%an%n%ae%n%ad', '--date=raw', pending.cherryPick],
+            inWorktree,
+          )
+        ).stdout.split('\n')
+      : null;
+    const parents = [head, ...pending.mergeHeads].flatMap((p) => ['-p', p]);
     return (
       await execGitFile(
         [
           ...FACTORY_GIT_IDENTITY,
           'commit-tree',
           tree,
-          '-p',
-          head,
+          ...parents,
           '-m',
           `feat(${label}): factory run output`,
         ],
-        inWorktree,
+        {
+          ...inWorktree,
+          env: author
+            ? {
+                GIT_AUTHOR_NAME: author[0] ?? '',
+                GIT_AUTHOR_EMAIL: author[1] ?? '',
+                GIT_AUTHOR_DATE: author[2] ?? '',
+              }
+            : undefined,
+        },
       )
     ).stdout.trim();
   } finally {
@@ -317,7 +399,8 @@ export async function syncWorktreeToMainWorkspace(params: {
     // 1. The run's output as a commit on its own branch; .gitignore keeps secrets and build output
     //    out. It goes on the branch only once the merge is allowed.
     const head = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
-    const output = await buildRunOutputCommit(worktreePath, head, label);
+    const pending = await pendingOperation(worktreePath);
+    const output = await buildRunOutputCommit(worktreePath, head, label, pending);
     const tip = output ?? head;
     const branch = (await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], inWorktree)).stdout.trim();
     const shortHead = async () =>
@@ -336,9 +419,19 @@ export async function syncWorktreeToMainWorkspace(params: {
 
     beforeMerge?.();
     if (output) {
+      // The worktree's index takes the output first (as `git add -A`), then the branch moves: a
+      // failure, or an agent's git command, in between finds the index ahead of HEAD, never behind.
+      await stageRunOutput(worktreePath);
       // Only if the branch is still where the commit was built on (an agent may commit meanwhile).
       const moved = await execGitFile(
-        ['update-ref', '-m', `commit: feat(${label}): factory run output`, 'HEAD', output, head],
+        [
+          'update-ref',
+          '-m',
+          `commit${pending.mergeHeads.length > 0 ? ' (merge)' : ''}: feat(${label}): factory run output`,
+          'HEAD',
+          output,
+          head,
+        ],
         inWorktree,
       ).then(
         () => false,
@@ -351,8 +444,7 @@ export async function syncWorktreeToMainWorkspace(params: {
           `Could not merge ${label}: its branch moved while it was being merged. Merge it again.`,
         );
       }
-      // The worktree's index matches the new commit, as after a `git commit`.
-      await stageRunOutput(worktreePath);
+      await endPendingOperation(worktreePath, pending);
     }
 
     // 2. Edits made directly in the main workspace (file explorer, blueprint) are committed first so
