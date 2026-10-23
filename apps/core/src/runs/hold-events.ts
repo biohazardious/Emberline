@@ -18,7 +18,7 @@ export const HOLD_EVENTS: readonly string[] = [
   'review_blocked',
   // The run changed nothing and did not say why: the person decides (no prompt to the agent).
   'no_changes',
-  // The first start after an upgrade could not tell whether the run's checks finished (TicketService.holdUnmarkedReviews).
+  // The first start after an upgrade could not tell whether the run's checks finished (TicketService.holdUpgradeCandidates).
   'pipeline_interrupted',
 ];
 /**

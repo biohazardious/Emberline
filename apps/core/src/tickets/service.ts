@@ -349,8 +349,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly pipelineSettleMs: number;
   /**
    * After an upgrade from a version that kept no pipeline marks: the runs whose checks the upgrade's
-   * restart may have cut off, taken when this service starts (before any run of this start finishes
-   * or a dispatch turns a chain off); resumeChains holds them. Empty otherwise.
+   * restart may have cut off, with their state time. The first start of this version takes them
+   * when this service starts (before any run of that start finishes or a dispatch turns a chain
+   * off) and stores them; a later start reads them back until one held them (resumeChains). Empty
+   * otherwise.
    */
   private readonly upgradeCandidates: UpgradeCandidate[];
 
@@ -691,11 +693,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (state === 'done') return [];
     const stored = (state as { pending?: unknown } | undefined)?.pending;
     if (Array.isArray(stored)) {
-      return stored.filter(
+      const candidates = stored.filter(
         (c): c is UpgradeCandidate =>
           typeof (c as UpgradeCandidate | null)?.id === 'string' &&
           typeof (c as UpgradeCandidate).stateChangedAt === 'string',
       );
+      // Nothing usable is left to hold: done, so no later start reads the list again.
+      if (candidates.length === 0) setSetting(this.db, UPGRADE_HOLDS_KEY, 'done');
+      return candidates;
     }
     if (getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) !== undefined) {
       setSetting(this.db, UPGRADE_HOLDS_KEY, 'done');

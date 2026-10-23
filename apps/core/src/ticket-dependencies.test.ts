@@ -2068,6 +2068,15 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
+    it('a stored list with nothing usable in it is noted as done', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      setSetting(t.db, 'factory.upgradeHolds', { pending: [{ id: 42 }, null, 'x'] });
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect(upgradeState()).toBe('done');
+      expect(await holds(run)).toHaveLength(0);
+      await settle(project.id);
+    });
+
     it('holds nothing on an install that already keeps the marks', async () => {
       const { project, a, run } = await cutOffBeforeMarks(true);
       await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
