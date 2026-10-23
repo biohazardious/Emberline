@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-23
+
+An Answer dialog for agents that wait on you: the agent's own question, its options as chips, a suggested answer on request, and file attachments.
+
 ### Added
 
 - **Answer dialog.** **Answer** in the Inbox opens a dialog with the agent's own question (its last message, its blockers, the hold's reason, or the questions of Claude's picker), the options the agent offered as one-click chips, a large answer box, file attachments and Send. Drafts are kept per run in the browser. In the Inbox, the ticket drawer and the run dock, a recovery suggestion that comes with a prompt opens the dialog with that prompt filled in. A held run that can't take a prompt any more offers no **Answer**; its hold block says why and offers Copy.
@@ -15,6 +19,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Upgrade notes
 
+- The compose file is unchanged. Only core (with the web app) has changes of its own, but updating with the published images (`docker compose pull && docker compose up -d`) also replaces the runner container, which stops running agents, so update when they are idle. From source, `make upgrade-core` updates core alone.
 - Nothing to migrate, and existing settings keep working. The nginx limit of 45 MB from 0.5.0 already covers attachments.
 - Pages for a waiting agent now quote the start of the agent's question (up to 300 characters) instead of "Claude is waiting for your input".
 - **Suggest an answer** spends Claude usage (your subscription or key) only when you press it. `EMBERLINE_SUGGEST_MODEL` (default `haiku`) chooses the model; add it to the `core` service's `environment` to change it.
@@ -471,7 +476,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/biohazardious/emberline/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/biohazardious/emberline/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/biohazardious/emberline/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/biohazardious/emberline/compare/v0.4.0...v0.5.0

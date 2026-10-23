@@ -1,7 +1,7 @@
 {
   "name": "@emberline/adapter-claude",
   "license": "AGPL-3.0-or-later",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Claude Code adapter: hook wiring, transcript and screen signal parsing.",
