@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import type { RecoverResponse, Run, RunRecovery } from '@emberline/protocol';
+import { NEEDS_PERSON_INPUT, type RecoverResponse, type Run, type RunRecovery } from '@emberline/protocol';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projects, reviewComments, tickets } from '../db/schema.js';
@@ -9,7 +9,7 @@ import { mainWorkspaceBranch } from '../factory/merge.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { Scheduler } from '../scheduler/service.js';
 import { currentHold, handoffChain } from './hold-outcome.js';
-import { buildRecovery, NEEDS_PERSON_INPUT, type RecoveryInput } from './recovery.js';
+import { buildRecovery, type RecoveryInput } from './recovery.js';
 import { isHeldRun, type RunService } from './service.js';
 
 /** The handoff reason of a held run that continues in a successor. */

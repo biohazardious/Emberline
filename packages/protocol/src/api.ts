@@ -5,6 +5,7 @@ export * from './api/auth.js';
 export * from './api/projects.js';
 export * from './api/terminals.js';
 export * from './api/runs.js';
+export * from './api/answers.js';
 export * from './api/routing.js';
 export * from './api/scheduler.js';
 export * from './api/tickets.js';

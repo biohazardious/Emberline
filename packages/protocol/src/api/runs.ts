@@ -658,6 +658,9 @@ export const RunRecovery = z.object({
 export type RunRecovery = z.infer<typeof RunRecovery>;
 
 /** `POST /api/runs/:id/recover`: the prompt to deliver. */
+/** Recovery suggestions that are a form for the person to fill in (an empty answer), never sent as they are. */
+export const NEEDS_PERSON_INPUT: ReadonlySet<string> = new Set(['answer_blockers']);
+
 export const RecoverRequest = z.object({ text: z.string().trim().min(1).max(RUN_PROMPT_MAX) });
 export type RecoverRequest = z.input<typeof RecoverRequest>;
 

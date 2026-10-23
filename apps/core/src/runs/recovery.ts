@@ -24,9 +24,6 @@ export interface RecoveryInput {
 
 type Recovery = Omit<RunRecovery, 'delivery'>;
 
-/** Prompt suggestions that are a form for the person to fill in (an empty answer), never sent as they are. */
-export const NEEDS_PERSON_INPUT: ReadonlySet<string> = new Set(['answer_blockers']);
-
 /** Files named in a why line before "and N more". */
 const WHY_FILES = 3;
 
