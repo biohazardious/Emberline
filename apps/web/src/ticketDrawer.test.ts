@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { Ticket, TicketStatus } from '@emberline/protocol';
 import { createElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
 import { apiRoutes, cleanup, click, getButton, queryButton, renderDom } from './domRender';
@@ -37,7 +37,7 @@ const ticket = (status: TicketStatus): Ticket => ({
 });
 
 const BLOCKED = '1 blocking comment is open.';
-const onAccept = vi.fn(() => Promise.reject(new DrawerMergeError(BLOCKED, 'merge_anyway')));
+let onAccept: Mock<() => Promise<void>>;
 const drawer = (status: TicketStatus) =>
   createElement(TicketDrawer, {
     ticket: ticket(status),
@@ -52,6 +52,7 @@ const drawer = (status: TicketStatus) =>
   });
 
 beforeEach(() => {
+  onAccept = vi.fn(() => Promise.reject(new DrawerMergeError(BLOCKED, 'merge_anyway')));
   vi.mocked(api).mockImplementation(apiRoutes({}));
 });
 afterEach(cleanup);
@@ -65,7 +66,7 @@ describe('TicketDrawer: a failed Mark done (L-13)', () => {
   it('offers its step while the ticket stays put', async () => {
     const view = await renderDom(drawer('review'));
     await click(getButton('Mark done ✓'));
-    expect(onAccept).toHaveBeenCalled();
+    expect(onAccept).toHaveBeenCalledTimes(1);
     expect(shown()).toEqual({ error: BLOCKED, mergeAnyway: true });
     await view.rerender(drawer('review'));
     expect(shown()).toEqual({ error: BLOCKED, mergeAnyway: true });
@@ -74,6 +75,7 @@ describe('TicketDrawer: a failed Mark done (L-13)', () => {
   it('retires the step and its sentence on a move, and they do not come back with the ticket', async () => {
     const view = await renderDom(drawer('review'));
     await click(getButton('Mark done ✓'));
+    expect(onAccept).toHaveBeenCalledTimes(1);
     expect(shown()).toEqual({ error: BLOCKED, mergeAnyway: true });
     await view.rerender(drawer('in_progress'));
     expect(shown()).toEqual({ error: null, mergeAnyway: false });

@@ -99,8 +99,6 @@ describe('useAnswerDialog: sending', () => {
       dialog.onSend();
       dialog.onSend();
     });
-    // A chip that would answer the picker waits for the send too.
-    await act(async () => dialog.onOption(0));
     expect(dialog.busy).toBe(true);
     expect(calls.filter((c) => c.startsWith('answer'))).toHaveLength(1);
     await act(async () => pending.reject(new ApiRequestError(409, 'run_busy', 'busy')));
@@ -109,6 +107,22 @@ describe('useAnswerDialog: sending', () => {
     answer = () => ({ delivery: 'picker' });
     await act(async () => dialog.onSend());
     await waitFor(() => expect(calls.filter((c) => c.startsWith('answer'))).toHaveLength(2));
+  });
+
+  it('a chip clicked while its answer goes out sends nothing more and leaves the box alone', async () => {
+    const pending = deferred<unknown>();
+    answer = () => pending.promise;
+    await open();
+    await act(async () => {
+      dialog.onOption(0);
+      dialog.onOption(1);
+      dialog.onSend();
+    });
+    expect(dialog.busy).toBe(true);
+    expect(calls).toEqual(['answer {"option":0}']);
+    expect(dialog.text).toBe('');
+    await act(async () => pending.resolve({ delivery: 'picker' }));
+    await waitFor(() => expect(calls).toEqual(['answer {"option":0}', 'onSent', 'onClose']));
   });
 
   it('a 413 with files attached says the files are too large; without files it is the server text', async () => {

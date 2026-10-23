@@ -49,6 +49,7 @@ export async function cleanup(): Promise<void> {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
   document.body.innerHTML = '';
+  window.history.replaceState(null, '', '/');
 }
 
 const text = (el: Element) => el.textContent?.replace(/\s+/g, ' ').trim() ?? '';

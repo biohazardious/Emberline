@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
-import { apiRoutes, cleanup, click, getButton, renderDom, settle, waitFor } from './domRender';
+import { apiRoutes, cleanup, click, getButton, renderDom, waitFor } from './domRender';
 import { PRUNE_PENDING_TEXT } from './gcSummary';
 import { Dashboard } from './pages/Dashboard';
 
@@ -69,10 +69,13 @@ describe('Dashboard Prune worktree (W-4)', () => {
     await waitFor(() => expect(document.body.textContent).toContain(PRUNE_PENDING_TEXT));
   });
 
-  it('says nothing more when the worktree is gone already', async () => {
-    prune = { runId: 'r1', worktreePath: run.worktreePath, removed: true };
+  it('drops the note once a later prune removes the worktree right away', async () => {
+    prune = { runId: 'r1', worktreePath: run.worktreePath, removed: false, pending: true };
     await pruneRun();
-    await settle();
-    expect(document.body.textContent).not.toContain(PRUNE_PENDING_TEXT);
+    await waitFor(() => expect(document.body.textContent).toContain(PRUNE_PENDING_TEXT));
+    prune = { runId: 'r1', worktreePath: run.worktreePath, removed: true };
+    await click(getButton('Prune worktree'));
+    await waitFor(() => expect(prunes).toBe(2));
+    await waitFor(() => expect(document.body.textContent).not.toContain(PRUNE_PENDING_TEXT));
   });
 });
