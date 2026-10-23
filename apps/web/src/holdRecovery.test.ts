@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deliveryNote,
   discardConfirm,
+  initialAnswerText,
   recoverErrorText,
   recoveryHeading,
   recoveryApplies,
@@ -135,5 +136,13 @@ describe('discardConfirm', () => {
       question: 'Discard this work?',
       confirm: 'Yes, discard this work',
     });
+  });
+});
+
+describe('initialAnswerText', () => {
+  it('leaves the box empty for the blockers question, else starts from the suggested prompt', () => {
+    expect(initialAnswerText({ ...sug('prompt', 'ignored'), id: 'answer_blockers' })).toBe('');
+    expect(initialAnswerText(sug('prompt', 'fix it'))).toBe('fix it');
+    expect(initialAnswerText(sug('prompt'))).toBe('');
   });
 });

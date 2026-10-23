@@ -63,4 +63,10 @@ describe('InboxPage', () => {
   it('shows no "Project" placeholder while the project list is not loaded', () => {
     expect(page([run('r1', 'p1')], null)).not.toContain('>Project<');
   });
+  it('offers an Answer button, not an inline reply box, for a question', () => {
+    const html = page([run('r1', 'p1')], null);
+    expect(html).toContain('>Answer</button>');
+    expect(html).not.toContain('<textarea');
+    expect(html).not.toContain('inbox-reply');
+  });
 });

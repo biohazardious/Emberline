@@ -1,10 +1,17 @@
-import type { Run, RunRecovery, RecoverySuggestion } from '@emberline/protocol';
+import { NEEDS_PERSON_INPUT, type Run, type RunRecovery, type RecoverySuggestion } from '@emberline/protocol';
 
 /** Pure helpers of the held-run recovery block (components/HoldRecovery.tsx). */
 
 /** Recovery is offered for held runs and for runs whose completion was blocked. */
 export const recoveryApplies = (run: Pick<Run, 'attention'>): boolean =>
   run.attention?.reason === 'held' || run.attention?.reason === 'blocked';
+
+/**
+ * What the Answer box starts with for a prompt suggestion: nothing for one that asks the person
+ * (the dialog shows the question), else the suggested prompt.
+ */
+export const initialAnswerText = (s: RecoverySuggestion): string =>
+  NEEDS_PERSON_INPUT.has(s.id) ? '' : (s.prompt ?? '');
 
 /** Where a recovery prompt went, as a short note. */
 export const deliveryNote = (delivery: 'session' | 'successor'): string =>

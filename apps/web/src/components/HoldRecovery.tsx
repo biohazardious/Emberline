@@ -1,13 +1,13 @@
-import type { RecoverResponse, Run, RunRecovery, RecoverySuggestion } from '@emberline/protocol';
+import type { Run, RunRecovery, RecoverySuggestion } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'wouter';
-import { api, ApiRequestError, errorMessage } from '../api';
+import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
-import { toastInfo } from '../toast';
+import { AnswerDialog } from './AnswerDialog';
 import {
-  deliveryNote,
   discardConfirm,
+  initialAnswerText,
   recoverErrorText,
   recoveryApplies,
   recoveryHeading,
@@ -16,16 +16,15 @@ import {
 
 interface Props {
   run: Run;
-  /** Inbox: the buttons fill the caller's own reply box instead of opening one here. */
-  compact?: boolean;
-  onFill?: (text: string) => void;
+  /** Inbox: the caller opens the Answer dialog itself (with this start text); the row also drops the hold's label it already shows. */
+  onAnswer?: (initialText: string) => void;
   /** Without these the suggestion is not offered; the ticket link takes their place. */
   onDiscard?: () => Promise<void> | void;
   onMerge?: () => Promise<void> | void;
 }
 
 /** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). Key it by run id. */
-export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge }: Props) {
+export function HoldRecovery({ run, onAnswer, onDiscard, onMerge }: Props) {
   const client = useQueryClient();
   const applies = recoveryApplies(run);
   const query = useQuery({
@@ -33,8 +32,8 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
     queryFn: () => api<RunRecovery | null>(`/api/runs/${run.id}/recovery`),
     enabled: applies,
   });
-  const [openId, setOpenId] = useState<string>();
-  const [text, setText] = useState('');
+  // The Answer dialog this block opens itself (undefined: closed); the Inbox opens its own through onAnswer.
+  const [answer, setAnswer] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [confirming, setConfirming] = useState(false);
@@ -48,25 +47,6 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
   const suggestions = visibleSuggestions(rec, { onDiscard, onMerge, ticket: !!ticketHref });
   const canDeliver = rec.delivery !== 'none';
   const linkOnly = !onDiscard && !onMerge && ticketHref && !suggestions.some((s) => s.onTicket);
-
-  const send = async (value: string) => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const res = await api<RecoverResponse>(`/api/runs/${run.id}/recover`, 'POST', { text: value });
-      // The run changes right after (no longer held, or handed off), so this block goes away: a toast stays.
-      toastInfo(`${deliveryNote(res.delivery)}.`);
-      setOpenId(undefined);
-      setText('');
-      refetch();
-    } catch (e) {
-      const code = e instanceof ApiRequestError ? e.code : '';
-      setError(recoverErrorText(code, errorMessage(e)));
-      if (code === 'not_held') refetch();
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const guarded = async (action: () => Promise<void> | void) => {
     setBusy(true);
@@ -105,23 +85,15 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
       <button
         type="button"
         className={btn(s)}
-        aria-expanded={compact ? undefined : openId === s.id}
         disabled={busy}
-        onClick={() => {
-          if (compact) {
-            onFill?.(prompt);
-            return;
-          }
-          setOpenId(openId === s.id ? undefined : s.id);
-          setText(prompt);
-        }}
+        onClick={() => (onAnswer ? onAnswer(initialAnswerText(s)) : setAnswer(initialAnswerText(s)))}
       >
         {s.label}
       </button>
     );
   };
 
-  const heading = recoveryHeading(rec, compact);
+  const heading = recoveryHeading(rec, !!onAnswer);
 
   return (
     <section className="hold-recovery" aria-label="Held run">
@@ -192,26 +164,6 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
               </div>
             )}
             {s.detail && <span className="muted small hold-recovery-detail">{s.detail}</span>}
-            {!compact && canDeliver && s.kind === 'prompt' && openId === s.id && (
-              <form
-                className="hold-recovery-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (text.trim()) void send(text.trim());
-                }}
-              >
-                <textarea
-                  className="input hold-recovery-text"
-                  rows={6}
-                  value={text}
-                  aria-label={`Prompt for the agent: ${s.label}`}
-                  onChange={(e) => setText(e.target.value)}
-                />
-                <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !text.trim()}>
-                  {busy ? 'Sending…' : 'Send'}
-                </button>
-              </form>
-            )}
           </li>
         ))}
       </ul>
@@ -224,6 +176,15 @@ export function HoldRecovery({ run, compact = false, onFill, onDiscard, onMerge 
         <div className="banner banner-error" role="alert">
           {error}
         </div>
+      )}
+      {answer !== undefined && (
+        <AnswerDialog
+          run={run}
+          heading={{ key: null, title: run.title ?? 'Run' }}
+          initialText={answer}
+          onClose={() => setAnswer(undefined)}
+          onSent={refetch}
+        />
       )}
     </section>
   );

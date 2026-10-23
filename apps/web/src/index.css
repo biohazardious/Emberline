@@ -4461,8 +4461,7 @@ dialog.cmd-dialog::backdrop {
 
 .inbox-item-head,
 .inbox-meta,
-.inbox-actions,
-.inbox-reply {
+.inbox-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4523,19 +4522,6 @@ dialog.cmd-dialog::backdrop {
   -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.inbox-reply {
-  align-items: flex-end;
-}
-
-.inbox-reply-input {
-  flex: 1;
-  min-width: 0;
-  min-height: 2.2rem;
-  max-height: 12rem;
-  resize: none;
-  field-sizing: content;
 }
 
 .inbox-actions {
@@ -5996,18 +5982,11 @@ dialog.cmd-dialog::backdrop {
   gap: 6px;
 }
 
-.hold-recovery-form,
 .hold-recovery-manual {
   display: grid;
   flex: 1 1 100%;
   gap: 6px;
   min-width: 0;
-}
-
-.hold-recovery-text {
-  width: 100%;
-  min-height: 7rem;
-  resize: vertical;
 }
 
 .hold-recovery-files {

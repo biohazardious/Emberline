@@ -1,13 +1,6 @@
-import {
-  type Project,
-  type RecoverResponse,
-  type Run,
-  type RunAttentionReason,
-  type Ticket,
-} from '@emberline/protocol';
+import { type Project, type Run, type RunAttentionReason, type Ticket } from '@emberline/protocol';
 import { useQueries } from '@tanstack/react-query';
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
-import { api, ApiRequestError, errorMessage } from '../api';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ATTENTION_LABELS,
   attentionDetail,
@@ -19,8 +12,9 @@ import {
   type TicketName,
 } from '../attention';
 import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
+import { AnswerDialog } from '../components/AnswerDialog';
 import { HoldRecovery } from '../components/HoldRecovery';
-import { deliveryNote, recoverErrorText, recoveryApplies } from '../holdRecovery';
+import { recoveryApplies } from '../holdRecovery';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { notificationsSupported } from '../hooks/useAttention';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
@@ -29,7 +23,6 @@ import { useApi } from '../hooks/useApi';
 import { inboxSubtitle, inScope } from '../projectScope';
 import { ticketsQuery } from '../hooks/liveData';
 import { timeAgo, useNow } from '../time';
-import { toastInfo } from '../toast';
 
 /** Ticket key and title by id, from the projects' ticket lists (stable reference: re-run only on new data). */
 const ticketNames = (lists: { data?: Ticket[] }[]): Map<string, TicketName> =>
@@ -38,13 +31,6 @@ const ticketNames = (lists: { data?: Ticket[] }[]): Map<string, TicketName> =>
 const REPLYABLE: ReadonlySet<RunAttentionReason> = new Set(['question', 'permission', 'held', 'blocked']);
 /** A long detail is clamped to this many lines until expanded (set in CSS as .inbox-detail-clamped). */
 const CLAMP_CHARS = 280;
-
-const REPLY_HINT: Partial<Record<RunAttentionReason, string>> = {
-  question: 'Answer the agent…',
-  permission: 'Reply to the permission prompt (or open the run for the terminal)…',
-  held: 'Tell the agent what to do about this hold…',
-  blocked: 'Tell the agent how to unblock…',
-};
 
 function InboxItem({
   run,
@@ -61,44 +47,22 @@ function InboxItem({
 }) {
   const attention = run.attention!;
   const [expanded, setExpanded] = useState(false);
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  // The Answer dialog (undefined: closed) and its start text.
+  const [answer, setAnswer] = useState<string>();
   useNow(30_000);
-  useEffect(() => () => clearPresenceRun(run.id, 'inbox'), [run.id]);
+  // Presence tells core the person is looking, so no push notification goes out while the dialog is open.
+  const answering = answer !== undefined;
+  useEffect(() => {
+    if (!answering) return;
+    setPresenceRun(run.id, 'inbox');
+    return () => clearPresenceRun(run.id, 'inbox');
+  }, [answering, run.id]);
 
   // Held detail is already the HOLD_LABELS label (the map covers an unexpected raw key); a failure's is its type.
   const detail = attentionDetail(attention);
   const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
 
   const recovering = recoveryApplies(run);
-
-  const send = async (e: FormEvent) => {
-    e.preventDefault();
-    const value = text.trim();
-    if (!value) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      // A held run goes through recovery: a run that cannot take a prompt continues in a successor.
-      if (recovering) {
-        const res = await api<RecoverResponse>(`/api/runs/${run.id}/recover`, 'POST', { text: value });
-        toastInfo(`${deliveryNote(res.delivery)}.`);
-      } else {
-        await api(`/api/runs/${run.id}/prompt`, 'POST', { text: value });
-        toastInfo('Reply sent.');
-      }
-      setText('');
-    } catch (err) {
-      setError(
-        recovering
-          ? recoverErrorText(err instanceof ApiRequestError ? err.code : '', errorMessage(err))
-          : errorMessage(err),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <li className="inbox-item" data-reason={attention.reason}>
@@ -128,30 +92,13 @@ function InboxItem({
           )}
         </div>
       )}
-      {recovering && <HoldRecovery key={run.id} run={run} compact onFill={setText} />}
-      {REPLYABLE.has(attention.reason) && (
-        <form className="inbox-reply" onSubmit={(e) => void send(e)}>
-          <textarea
-            className="input inbox-reply-input"
-            rows={1}
-            value={text}
-            placeholder={REPLY_HINT[attention.reason]}
-            aria-label={`Reply to ${heading.key ?? heading.title}`}
-            onChange={(e) => setText(e.target.value)}
-            onFocus={() => setPresenceRun(run.id, 'inbox')}
-            onBlur={() => clearPresenceRun(run.id, 'inbox')}
-          />
-          <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !text.trim()}>
-            {busy ? 'Sending…' : 'Send'}
-          </button>
-        </form>
-      )}
-      {error && (
-        <div className="banner banner-error" role="alert">
-          {error}
-        </div>
-      )}
+      {recovering && <HoldRecovery key={run.id} run={run} onAnswer={setAnswer} />}
       <div className="inbox-actions">
+        {REPLYABLE.has(attention.reason) && (
+          <button type="button" className="btn btn-sm btn-primary" onClick={() => setAnswer('')}>
+            Answer
+          </button>
+        )}
         <button type="button" className="btn btn-sm" onClick={onOpen}>
           Open run
         </button>
@@ -161,6 +108,9 @@ function InboxItem({
           </button>
         )}
       </div>
+      {answering && (
+        <AnswerDialog run={run} heading={heading} initialText={answer} onClose={() => setAnswer(undefined)} />
+      )}
     </li>
   );
 }
