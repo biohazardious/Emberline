@@ -28,7 +28,7 @@ import {
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
-import { and, asc, eq, inArray, max, min } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import {
@@ -75,7 +75,9 @@ import { openBlockingCount } from '../review/blocking.js';
 import {
   branchMergedBefore,
   continuesHeldWork,
+  latestDoneEventId,
   pipelineOutcome,
+  reviewHoldLiftedIsCurrent,
   reviewUnblockPending,
   stillHeld,
 } from '../runs/hold-outcome.js';
@@ -126,9 +128,11 @@ const PENDING_PIPELINES_KEY = 'factory.pendingPipelines';
 /**
  * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass
  * was cut off (it finalizes the ticket even when the project is not chaining any more).
+ * `resumed`: this pass stands in for one a restart cut off; it goes on where that one was.
  */
 interface PipelineOptions {
   finalizing?: boolean;
+  resumed?: boolean;
 }
 
 /**
@@ -266,9 +270,8 @@ const holdText = (text: string): string => text.slice(0, HOLD_PAYLOAD_MAX);
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
+  /** Runs whose build gate ran in this process (its fix request also survives a restart: askedToFix). */
   private readonly selfHealedRuns = new Set<string>();
-  private readonly slopHealedRuns = new Set<string>();
-  private readonly criticReviewedRuns = new Set<string>();
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
@@ -584,23 +587,34 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * Review tickets whose latest run finished but whose completion pipeline never got to its end
-   * (core went down mid-way, or inside the settle window): the pipeline runs again, so its gates
-   * apply instead of a merge behind them; one that merged but was cut off before Done moves there
-   * (when tickets move to Done by themselves). Once per run and process; the pipelines are not
-   * awaited, since a dispatch they start waits for the one calling this. `cutOff`: only those runs.
+   * Review tickets whose latest run finished and whose completion pipeline is still owed:
+   * - `cutOff` (runs marked in {@link PENDING_PIPELINES_KEY}): a pass that a restart cut off (core went
+   *   down mid-way, or inside the settle window). The pipeline runs again, `resumed`, so its gates
+   *   apply instead of a merge behind them; one that merged but was cut off before Done moves there
+   *   (when tickets move to Done by themselves).
+   * - with `liftedHolds`: also a run whose review hold a person lifted since its pass (a dispatch
+   *   runs its pipeline again, once per unblock).
+   * A run whose pass ended without either is never re-judged: its pass decided (e.g. no factory
+   * step, so it stays in Review for its person), whatever the board shows now. Each run at most once
+   * per process (an unblock allows one more); the pipelines are not awaited, since a dispatch they
+   * start waits for the one calling this.
    */
   private finalizeLeftoverReviews(
     projectId: string,
-    { finalizing, cutOff }: PipelineOptions & { cutOff?: Set<string> } = {},
+    {
+      finalizing,
+      cutOff,
+      liftedHolds = false,
+    }: { finalizing?: boolean; cutOff: Set<string>; liftedHolds?: boolean },
   ): void {
     const { autoMoveToDone } = getFactorySettings(this.db);
     for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
       const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
+      const wasCutOff = latestRun !== undefined && cutOff.has(latestRun.id);
       // A run whose own pipeline is still going (gates, merge) or waiting to settle is not left over.
       if (
         !latestRun ||
-        (cutOff && !cutOff.has(latestRun.id)) ||
+        !(wasCutOff || (liftedHolds && reviewHoldLiftedIsCurrent(this.db, latestRun.id))) ||
         latestRun.state !== 'done' ||
         latestRun.handedOffTo ||
         this.pipelineRuns.has(latestRun.id) ||
@@ -626,7 +640,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (this.resumedPipelines.has(latestRun.id)) continue;
       this.resumedPipelines.add(latestRun.id);
-      this.completeRun(latestRun, { finalizing });
+      this.completeRun(latestRun, { finalizing, resumed: wasCutOff });
     }
   }
 
@@ -679,8 +693,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     });
   }
 
-  /** Whether the run was already asked to fix this check (the autoFix note survives restarts). */
-  private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands'): boolean {
+  /**
+   * Whether the run was already asked to fix this check (the autoFix note survives restarts). The
+   * build gate's note names no check (nor did the worktree.yml one before it did: its text says so).
+   */
+  private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands' | 'build'): boolean {
     return this.db
       .select({ payload: runEvents.payload })
       .from(runEvents)
@@ -688,14 +705,52 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .all()
       .some(({ payload }) => {
         const p = payload as { check?: string; autoFix?: boolean; output?: string } | null;
-        return (
-          p?.autoFix === true &&
-          (p.check === check ||
-            (check === 'worktree_yml' &&
-              p.check === undefined &&
-              (p.output ?? '').startsWith('.emberline/worktree.yml is not valid:')))
-        );
+        if (p?.autoFix !== true) return false;
+        if (p.check !== undefined) return p.check === check;
+        const worktreeYml = (p.output ?? '').startsWith('.emberline/worktree.yml is not valid:');
+        return check === 'worktree_yml' ? worktreeYml : check === 'build' && !worktreeYml;
       });
+  }
+
+  /**
+   * The PO nudge noted in the run's current turn (after its latest switch to `done`), and whether a
+   * prompt reached the agent after it; null when this turn has none.
+   */
+  private nudgeOfThisTurn(runId: string): { delivered: boolean } | null {
+    const turnStart = latestDoneEventId(this.db, runId) ?? 0;
+    const events = this.db
+      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, runId),
+          gt(runEvents.id, turnStart),
+          inArray(runEvents.type, ['auto_nudged', 'prompt_sent', 'resumed', 'respawning']),
+        ),
+      )
+      .orderBy(asc(runEvents.id))
+      .all();
+    const nudged = events.find(
+      (e) =>
+        e.type === 'auto_nudged' && (e.payload as { reason?: string } | null)?.reason === 'no_ticket_drafts',
+    );
+    if (!nudged) return null;
+    return { delivered: events.some((e) => e.type !== 'auto_nudged' && e.id > nudged.id) };
+  }
+
+  /** Whether the run was already asked to clean up a secret or slop finding (the autoFix note survives restarts). */
+  private slopFixRequested(runId: string): boolean {
+    return this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, runId),
+          inArray(runEvents.type, ['secret_guard_blocked', 'slop_guard_blocked']),
+        ),
+      )
+      .all()
+      .some(({ payload }) => (payload as { autoFix?: boolean } | null)?.autoFix === true);
   }
 
   /**
@@ -874,7 +929,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // Finalize any tickets left in 'review' with a completed run (e.g. if core restarted mid-pipeline)
-    if (fSettings.autoMoveToDone && !only) this.finalizeLeftoverReviews(projectId, { finalizing: true });
+    if (fSettings.autoMoveToDone && !only) {
+      this.finalizeLeftoverReviews(projectId, {
+        finalizing: true,
+        cutOff: this.pendingPipelineRuns(),
+        liftedHolds: true,
+      });
+    }
 
     // Read after the finalization above: tickets it moved to Done may unblock others.
     // An untrusted issue import waits for a person (external.triage); no automatic path starts it.
@@ -948,7 +1009,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
   }
 
-  private async runPipeline(run: Run, { finalizing = false }: PipelineOptions): Promise<void> {
+  private async runPipeline(
+    run: Run,
+    { finalizing = false, resumed = false }: PipelineOptions,
+  ): Promise<void> {
     if (!run.projectId) return;
     let projectRow;
     try {
@@ -1117,22 +1181,27 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
     // If a Factory Orchestrator (PO) stopped to ask a clarifying question without writing
     // `.emberline/new-tickets.json`, automatically reply once so it writes the tickets immediately.
-    if (
-      isFactoryOrchestratorTicket &&
-      !ingested &&
-      !duplicate &&
-      !this.runs.hasEvent(run.id, 'auto_nudged') &&
-      (!run.endedAt || run.resumable)
-    ) {
-      this.runs.note(run.id, 'auto_nudged', { reason: 'no_ticket_drafts' });
-      await this.runs
-        .prompt(
-          run.id,
-          'Autonomous Factory Mode: Do not ask clarifying questions or wait for user confirmation. Choose the simplest self-contained local option (e.g., localStorage / existing stack in PROJECT.md), update PROJECT.md, and write .emberline/new-tickets.json now so the specialist pipeline can start.',
-          { automatic: true },
-        )
-        .catch(() => undefined);
-      return;
+    if (isFactoryOrchestratorTicket && !ingested && !duplicate && (!run.endedAt || run.resumable)) {
+      const nudge = () =>
+        this.runs
+          .prompt(
+            run.id,
+            'Autonomous Factory Mode: Do not ask clarifying questions or wait for user confirmation. Choose the simplest self-contained local option (e.g., localStorage / existing stack in PROJECT.md), update PROJECT.md, and write .emberline/new-tickets.json now so the specialist pipeline can start.',
+            { automatic: true },
+          )
+          .catch(() => undefined);
+      if (!this.runs.hasEvent(run.id, 'auto_nudged')) {
+        this.runs.note(run.id, 'auto_nudged', { reason: 'no_ticket_drafts' });
+        await nudge();
+        return;
+      }
+      // The pass a restart cut off was this turn's nudge: it goes on as that one would have. The
+      // prompt is sent if it never went out; either way the agent's next stop is the next pass.
+      const thisTurn = resumed ? this.nudgeOfThisTurn(run.id) : null;
+      if (thisTurn) {
+        if (!thisTurn.delivered) await nudge();
+        return;
+      }
     }
 
     const fSettings = effectiveFactorySettings(this.db, run.projectId);
@@ -1295,6 +1364,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (
       fSettings.selfHealingBuildGate &&
       !this.selfHealedRuns.has(run.id) &&
+      !this.askedToFix(run.id, 'build') &&
       (!run.endedAt || run.resumable) &&
       verifiable
     ) {
@@ -1351,7 +1421,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       const autoFix = Boolean(
         (hasSecretViolation || hasSlopViolation) &&
         slopReport?.autoFixPrompt &&
-        !this.slopHealedRuns.has(run.id) &&
+        !this.slopFixRequested(run.id) &&
         (!run.endedAt || run.resumable),
       );
       const secretNote = {
@@ -1364,7 +1434,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (hasSecretViolation) this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix });
 
       if (autoFix && slopReport?.autoFixPrompt) {
-        this.slopHealedRuns.add(run.id);
         // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
         if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', { autoFix: true, ...slopNote });
         await this.runs
@@ -1387,9 +1456,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       fSettings.crossProviderCritic &&
       run.worktreePath &&
       !isFactoryOrchestratorTicket &&
-      !this.criticReviewedRuns.has(run.id)
+      !this.runs.hasEvent(run.id, 'critic_reviewed')
     ) {
-      this.criticReviewedRuns.add(run.id);
+      // Once per run, also across a restart: noted before the critic runs, like a claim.
+      this.runs.note(run.id, 'critic_reviewed', {});
       const criticRes = await runCrossProviderCritic({
         run,
         ticketTitle: ticketRow?.title ?? run.title,

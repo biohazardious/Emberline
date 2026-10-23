@@ -900,6 +900,8 @@ describe('teardown before prune', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ removed: false, pending: true });
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
+    // A archived the worktree's outputs before its teardown began; B's timeline says where they are.
+    expect(await payloadOf(b.id, 'build_outputs_archived_elsewhere')).toMatchObject({ runId: a.id });
     release();
     await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
     await expect.poll(() => typesOf(a.id)).toContain('worktree_pruned');
@@ -938,6 +940,35 @@ describe('teardown before prune', () => {
     await expect.poll(() => typesOf(a.id)).toContain('worktree_pruned');
     await expect.poll(() => typesOf(b.id)).toContain('worktree_pruned');
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
+  });
+
+  it('two prunes of the same run sent together tear down once, and both answer what happened', async () => {
+    const { release, order } = holdTeardowns();
+    release();
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const run = await endedRun(project.id);
+    // Both requests get past their checks while the archive runs.
+    let archived!: () => void;
+    const archiving = new Promise<void>((resolve) => (archived = resolve));
+    const archive = t.runs.outputs.archiveBeforePrune.bind(t.runs.outputs);
+    const archiveSpy = vi
+      .spyOn(t.runs.outputs, 'archiveBeforePrune')
+      .mockImplementation(async (id, ...rest) => {
+        await archiving;
+        return archive(id, ...rest);
+      });
+    const first = api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    const second = api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    await expect.poll(() => archiveSpy.mock.calls.length).toBe(2);
+    archived();
+    for (const res of [await first, await second]) {
+      expect(res.json()).toMatchObject({ removed: true });
+      expect(res.json().pending).toBeUndefined();
+    }
+    expect(existsSync(run.worktreePath)).toBe(false);
+    expect(order).toEqual([`teardown:${run.worktreePath}`]);
+    expect((await typesOf(run.id)).filter((type) => type === 'worktree_pruned')).toHaveLength(1);
   });
 
   it('a run sharing a worktree whose teardown runs cannot start a preview in it', async () => {

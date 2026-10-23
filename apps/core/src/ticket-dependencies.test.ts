@@ -14,19 +14,24 @@ import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
 /** A critic verdict for the next pipelines to get instead of running the real critic (null: the real one). */
 const critic = vi.hoisted(() => ({
   result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null },
+  calls: 0,
 }));
 /** A build gate result for the next pipelines to get instead of building (null: the real build). */
-const build = vi.hoisted(() => ({ result: null as null | { ok: boolean; output: string } }));
+const build = vi.hoisted(() => ({ result: null as null | { ok: boolean; output: string }, calls: 0 }));
 vi.mock('./factory/service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof FactoryService>();
   return {
     ...actual,
-    runCrossProviderCritic: (async (params) =>
-      critic.result ?? actual.runCrossProviderCritic(params)) as typeof actual.runCrossProviderCritic,
-    buildWorkspaceDemo: (async (params) =>
-      build.result
+    runCrossProviderCritic: (async (params) => {
+      critic.calls += 1;
+      return critic.result ?? actual.runCrossProviderCritic(params);
+    }) as typeof actual.runCrossProviderCritic,
+    buildWorkspaceDemo: (async (params) => {
+      build.calls += 1;
+      return build.result
         ? { ...build.result, targetId: params.targetId, demoEntryRelPath: null, demoUrl: null }
-        : actual.buildWorkspaceDemo(params)) as typeof actual.buildWorkspaceDemo,
+        : actual.buildWorkspaceDemo(params);
+    }) as typeof actual.buildWorkspaceDemo,
   };
 });
 
@@ -68,7 +73,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   critic.result = null;
+  critic.calls = 0;
   build.result = null;
+  build.calls = 0;
   await ptydServer.close();
   await t.close();
 });
@@ -1506,6 +1513,165 @@ describe('factory chain robustness', () => {
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(a.id)).toBe('review');
     await settle(project.id);
+  });
+
+  it("the first dispatch after a restart does not merge a person's Review run whose pass ended without an outcome", async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const { run } = (await api('POST', `/api/tickets/${a.id}/start`, {})).json() as { run: Run };
+    await finish(run);
+    // No factory step (chain off, Ready empty): the pass ends without an outcome, the ticket stays in Review.
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await statusOf(a.id)).toBe('review');
+    // The factory is switched on later, with a ticket waiting; then core restarts.
+    t.tickets.setAutoChain(project.id, true);
+    await createTicket(project.id, { title: 'B', status: 'backlog' });
+    t.db.update(ticketRows).set({ status: 'ready' }).where(eq(ticketRows.title, 'B')).run();
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const resumed = trackPipelines(restarted);
+    await restarted.resumeChains();
+    expect(resumed).toHaveLength(0);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).toBe('review');
+    await settle(project.id);
+  });
+
+  describe('a pass resumed after a restart does not repeat what the cut-off pass did', () => {
+    /** Records the automatic prompts instead of typing them (both services share the run service). */
+    function recordPrompts(): string[] {
+      const sent: string[] = [];
+      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+        sent.push(text);
+        return t.runs.getRun(id);
+      };
+      return sent;
+    }
+
+    /** Pass 1 ran in full; the agent's next stop is cut off by a restart; a new service resumes it. */
+    async function restartAfterSecondStop(run: Run): Promise<Promise<void>[]> {
+      (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+        undefined;
+      await stopAgain(run);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const resumed = trackPipelines(restarted);
+      await restarted.resumeChains();
+      await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(resumed);
+      return resumed;
+    }
+
+    it('the secret guard asks for its clean-up once', async () => {
+      const sent = recordPrompts();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      const passes = trackPipelines();
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      commitSecret(run.worktreePath);
+      await finish(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(passes);
+      expect(sent).toHaveLength(1);
+
+      await restartAfterSecondStop(run);
+      expect(sent).toHaveLength(1);
+      const asked = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events.filter(
+        (e) => e.type === 'secret_guard_blocked' && (e.payload as { autoFix?: boolean }).autoFix === true,
+      );
+      expect(asked).toHaveLength(1);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      await settle(project.id);
+    });
+
+    it('the critic runs once', async () => {
+      await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+      critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+      const sent = recordPrompts();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      const passes = trackPipelines();
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      await finish(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(passes);
+      expect(critic.calls).toBe(1);
+
+      await restartAfterSecondStop(run);
+      expect(critic.calls).toBe(1);
+      expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
+      await settle(project.id);
+    });
+
+    it('the build gate builds and asks for a fix once', async () => {
+      build.result = { ok: false, output: 'boom' };
+      const sent = recordPrompts();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      const passes = trackPipelines();
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      writeFileSync(
+        path.join(run.worktreePath, 'package.json'),
+        JSON.stringify({ scripts: { build: 'true' } }),
+      );
+      wgit(run.worktreePath, 'add', '-A');
+      wgit(run.worktreePath, 'commit', '-q', '-m', 'build');
+      await finish(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(passes);
+      expect(build.calls).toBe(1);
+      expect(sent).toHaveLength(1);
+
+      await restartAfterSecondStop(run);
+      expect(build.calls).toBe(1);
+      expect(sent).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it("the PO's nudge that never went out is sent, and the pass stops there as the cut-off one would have", async () => {
+      const sent: string[] = [];
+      let first = true;
+      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+        sent.push(text);
+        if (first) {
+          first = false;
+          // Core goes down while the nudge is being typed: it never arrives, and the pass never ends.
+          return new Promise<Run>(() => undefined);
+        }
+        return t.runs.getRun(id);
+      };
+      const project = await createProject();
+      const po = await createTicket(project.id, {
+        title: '[Factory] Plan it',
+        status: 'ready',
+        persona: 'product_owner',
+      });
+      const passes = trackPipelines();
+      const { run } = (
+        await api('POST', `/api/tickets/${po.id}/start`, { persona: 'product_owner' })
+      ).json() as {
+        run: Run;
+      };
+      await finish(run);
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+      expect(passes).toHaveLength(1);
+      expect(await eventTypes(run)).toContain('auto_nudged');
+
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const resumed = trackPipelines(restarted);
+      await restarted.resumeChains();
+      await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(resumed);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toBe(sent[0]);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      expect(await statusOf(po.id)).not.toBe('done');
+      await settle(project.id);
+    });
   });
 
   it("after a restart, a person's run in a project without a factory is not merged by the finalization", async () => {

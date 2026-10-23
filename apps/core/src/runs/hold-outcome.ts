@@ -162,6 +162,15 @@ export function reviewUnblockPending(db: Db, runId: string): boolean {
 
 /** Whether the run's current pipeline pass (after its latest `done`) stands on a `review_blocked` hold. */
 export function reviewBlockedIsCurrent(db: Db, runId: string): boolean {
+  return newestReviewNote(db, runId) === 'review_blocked';
+}
+
+/** Whether a person lifted the `review_blocked` hold of the run's current pass (after its latest `done`). */
+export function reviewHoldLiftedIsCurrent(db: Db, runId: string): boolean {
+  return newestReviewNote(db, runId) === 'review_unblocked';
+}
+
+function newestReviewNote(db: Db, runId: string): string | undefined {
   const newest = db
     .select({ type: runEvents.type })
     .from(runEvents)
@@ -175,7 +184,7 @@ export function reviewBlockedIsCurrent(db: Db, runId: string): boolean {
     .orderBy(desc(runEvents.id))
     .limit(1)
     .get();
-  return newest?.type === 'review_blocked';
+  return newest?.type;
 }
 
 /** The run and the runs it took over from by handoff, the run first (see handoff-chain.ts). */

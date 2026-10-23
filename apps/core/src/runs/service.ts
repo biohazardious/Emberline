@@ -336,6 +336,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   'worktree_copy_skipped',
   // A respawn: the session runs a one-shot CLI (exitsAfterTurn), whose typed input would be lost.
   'respawning',
+  // The pipeline runs the critic once per run, also across a restart.
+  'critic_reviewed',
 ];
 type PreviewKind = RunPreviewStatus['kind'];
 
@@ -383,6 +385,9 @@ const BOOKKEEPING_EVENT_TYPES = new Set([
   // A person stopped or removed the run's compose project on the Docker page.
   'docker_project_stopped',
   'docker_project_removed',
+  // The pipeline's own records: the critic ran, where a shared worktree's outputs went.
+  'critic_reviewed',
+  'build_outputs_archived_elsewhere',
 ]);
 /** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
 const PRUNE_RUNS_PER_PASS = 10;
@@ -625,6 +630,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   };
   /** Background teardown-then-prune jobs by worktree path, so a project delete can wait for them. */
   private readonly teardownJobs = new Map<string, Promise<void>>();
+  /** The run each of those jobs was started for (it archived the worktree's outputs first). */
+  private readonly teardownJobRuns = new Map<string, string>();
   private log?: RunServiceLogger;
   /**
    * The Docker engine sidecar (on unless `EMBERLINE_DOCKER_ENGINE=0`); runs and worktree.yml commands use it while
@@ -2651,11 +2658,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // Its teardown runs already (an earlier prune, auto-GC): the prune follows it.
     if (this.tearingDown.has(id))
       return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
-    // The teardown of a run sharing this worktree (a handoff) runs: this prune follows it below, and
-    // the worktree's outputs were archived for that run.
-    const sharedTeardown = this.teardownJobs.has(row.worktreePath);
-    // Deliverables in git-ignored build directories exist only here: archive them first.
-    if (row.worktreePath !== project.path && !sharedTeardown) await this.outputs.archiveBeforePrune(id);
+    // The teardown of a run sharing this worktree (a handoff) runs: this prune follows it below. That
+    // run archived the worktree's outputs before its teardown began; a copy now would race the
+    // teardown and the prune, so this run's timeline says where they are instead.
+    const sharedWith = this.teardownJobRuns.get(row.worktreePath);
+    if (sharedWith && sharedWith !== id) {
+      this.note(id, 'build_outputs_archived_elsewhere', {
+        runId: sharedWith,
+        message: `This worktree's build outputs were archived for run ${sharedWith.slice(0, 8)}, which is removing it.`,
+      });
+    } else if (row.worktreePath !== project.path) {
+      // Deliverables in git-ignored build directories exist only here: archive them first.
+      await this.outputs.archiveBeforePrune(id);
+    }
     const recordPruned = (removed: boolean) => {
       if (removed) {
         this.record(id, {
@@ -2667,7 +2682,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     };
     if (
       row.worktreePath !== project.path &&
-      (sharedTeardown || this.needsTeardown(project.id, row.worktreePath))
+      (sharedWith || this.needsTeardown(project.id, row.worktreePath))
     ) {
       // Teardown commands and compose downs may take minutes: the request waits a bounded time, the rest is background.
       let removed = false;
@@ -2676,7 +2691,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         recordPruned(r);
       });
       const done = await settlesWithin(job, this.teardownBudgets.request);
-      return { runId: id, worktreePath: row.worktreePath, removed, ...(done ? {} : { pending: true }) };
+      if (!done) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+      // A second request for the same run got the first one's job back: its outcome is the directory's.
+      return { runId: id, worktreePath: row.worktreePath, removed: removed || !existsSync(row.worktreePath) };
     }
     const removed = await this.pruneRunWorktree(project.path, row.worktreePath);
     recordPruned(removed);
@@ -2720,9 +2737,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .catch(() => undefined)
       .finally(() => {
         this.tearingDown.delete(row.id);
-        if (this.teardownJobs.get(row.worktreePath) === job) this.teardownJobs.delete(row.worktreePath);
+        if (this.teardownJobs.get(row.worktreePath) === job) {
+          this.teardownJobs.delete(row.worktreePath);
+          this.teardownJobRuns.delete(row.worktreePath);
+        }
       });
     this.teardownJobs.set(row.worktreePath, job);
+    this.teardownJobRuns.set(row.worktreePath, row.id);
     return job;
   }
 

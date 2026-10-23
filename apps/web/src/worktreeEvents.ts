@@ -9,4 +9,5 @@ export const WORKTREE_EVENT_LABELS: Record<string, string> = {
   worktree_setup_skipped: 'worktree setup cut short',
   worktree_teardown_failed: 'worktree teardown failed',
   worktree_pruned: 'worktree pruned',
+  build_outputs_archived_elsewhere: 'build outputs kept with the run that removed the worktree',
 };

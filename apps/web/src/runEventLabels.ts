@@ -25,6 +25,7 @@ export const EVENT_LABEL: Record<string, string> = {
   secret_guard_blocked: 'held: secret found',
   slop_guard_blocked: 'held: slop check',
   critic_blocked: 'held: code audit',
+  critic_reviewed: 'code audit run',
   build_gate_failed: 'held: build failed',
   build_gate_error: 'held: build gate error',
   merge_failed: 'held: merge failed',
