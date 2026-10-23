@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addAnswerFiles,
+  answerCapLine,
   ANSWER_DRAFT_KEY,
   answerErrorText,
   answerOffered,
@@ -46,6 +47,9 @@ function memoryStore(): Stub {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+const MB = 1024 * 1024;
+/** A file of `bytes` without allocating them: the limits read only its size and type. */
+const sized = (name: string, bytes: number) => ({ file: { size: bytes, type: '' } as Blob, name });
 const NOW = Date.parse('2026-10-23T12:00:00.000Z');
 
 beforeEach(() => {
@@ -151,6 +155,37 @@ describe('addAnswerFiles', () => {
     const { added, problems } = addAnswerFiles([], files);
     expect(added).toHaveLength(10);
     expect(problems).toEqual(['f10.txt was not added: at most 10 files.']);
+  });
+  it('refuses a file over 10 MB; one of exactly 10 MB fits', () => {
+    const { added, problems } = addAnswerFiles(
+      [],
+      [sized('big.pdf', 10 * MB + 1), sized('max.pdf', 10 * MB)],
+    );
+    expect(added.map((m) => m.name)).toEqual(['max.pdf']);
+    expect(problems).toEqual(['big.pdf is larger than 10 MB.']);
+  });
+  it('refuses a file that would take the total over 25 MB, counting the files already attached', () => {
+    const current = addAnswerFiles([], [sized('a.pdf', 10 * MB), sized('b.pdf', 10 * MB)]).added;
+    const { added, problems } = addAnswerFiles(current, [sized('c.pdf', 5 * MB + 1), sized('d.pdf', 5 * MB)]);
+    expect(added.map((m) => m.name)).toEqual(['d.pdf']);
+    expect(problems).toEqual(['c.pdf would take the files over 25 MB.']);
+  });
+});
+
+describe('answerCapLine', () => {
+  it('counts against the answer limits, 10 files and 25 MB', () => {
+    expect(answerCapLine([])).toBe('0 of 10 files, 0.0 of 25 MB');
+    const nearly = addAnswerFiles(
+      [],
+      Array.from({ length: 10 }, (_, i) => sized(`f${i}.pdf`, i < 9 ? 2.5 * MB : 2 * MB)),
+    ).added;
+    expect(nearly).toHaveLength(10);
+    expect(answerCapLine(nearly)).toBe('10 of 10 files, 24.5 of 25 MB');
+    const full = addAnswerFiles(
+      [],
+      [sized('a.pdf', 10 * MB), sized('b.pdf', 10 * MB), sized('c.pdf', 5 * MB)],
+    ).added;
+    expect(answerCapLine(full)).toBe('3 of 10 files, 25.0 of 25 MB');
   });
 });
 

@@ -717,7 +717,7 @@ function TicketCard({
 
 const DRAWER_VIEWS = ['details', 'review', 'terminal', 'events'] as const;
 type DrawerView = (typeof DRAWER_VIEWS)[number];
-function TicketDrawer({
+export function TicketDrawer({
   ticket,
   allTickets,
   run,

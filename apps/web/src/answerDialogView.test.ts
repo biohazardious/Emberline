@@ -112,9 +112,14 @@ describe('AnswerDialogView', () => {
     const html = view({ text: 'yes', question: { ...q, kind: 'permission', options: [] } });
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
   });
-  it('while sending, chips and Attach files are off', () => {
-    const html = view({ text: 'green', busy: true });
+  it('while sending, chips, Suggest and Attach files are off', () => {
+    const suggestOn = { ...q, suggest: { available: true, reason: null } };
+    expect(view({ text: 'green', question: suggestOn })).not.toMatch(
+      /<button[^>]*disabled[^>]*>Suggest an answer/,
+    );
+    const html = view({ text: 'green', busy: true, question: suggestOn });
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Red</);
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Suggest an answer/);
     expect(html).toMatch(/<input type="file"[^>]*disabled/);
   });
   it('the Replace / Keep bar does not take focus', () => {
@@ -131,6 +136,18 @@ describe('AnswerDialogView', () => {
     };
     expect(view({ files: [file] })).toContain('shot.png');
     expect(view({ files: [file] })).toContain('1 of 10 files');
+  });
+  it('the cap line counts up to the answer limits', () => {
+    const MB = 1024 * 1024;
+    const files = Array.from({ length: 10 }, (_, i) => ({
+      id: `m${i}`,
+      file: new Blob(['x']),
+      name: `f${i}.pdf`,
+      sizeBytes: i < 9 ? 2.5 * MB : 2 * MB,
+      mimeType: 'application/pdf',
+      kind: 'pdf' as const,
+    }));
+    expect(view({ files })).toContain('10 of 10 files, 24.5 of 25 MB · or drop files here');
   });
   it('shows the error', () => {
     expect(view({ error: 'This run is not waiting for an answer any more. Your draft is kept.' })).toContain(

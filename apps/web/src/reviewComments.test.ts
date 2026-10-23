@@ -291,19 +291,10 @@ describe('the drawer merge step', () => {
     expect(drawerMergeStep({ next: null, status: 'review' }, 'review', 'Merged nothing')).toBeNull();
   });
 
-  it('retires on the first move, so moving back does not bring the step back', () => {
+  // The drawer's use of it (the step stays gone when the ticket comes back) is in ticketDrawer.test.ts.
+  it('retires once the ticket moved from where the step was offered', () => {
     expect(mergeStepRetired(step, 'review')).toBe(false);
+    expect(mergeStepRetired(step, 'in_progress')).toBe(true);
     expect(mergeStepRetired(null, 'in_progress')).toBe(false);
-    // The drawer clears the step and its sentence when this is true.
-    let pending: PendingMergeStep | null = step;
-    let error: string | undefined = '1 blocking comment is open';
-    for (const status of ['in_progress', 'review'] as const) {
-      if (mergeStepRetired(pending, status)) {
-        pending = null;
-        error = undefined;
-      }
-    }
-    expect(drawerMergeStep(pending, 'review', error)).toBeNull();
-    expect(error).toBeUndefined();
   });
 });

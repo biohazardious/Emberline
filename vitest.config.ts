@@ -16,8 +16,8 @@ export default defineConfig({
   },
   test: {
     include: ['{apps,packages}/*/src/**/*.test.ts'],
-    // apps/web only has DOM-free helper tests; components are checked in the browser.
     exclude: ['**/node_modules/**', '**/dist/**', 'workspaces/**'],
+    // Web tests run in node too; one that renders into a DOM says `// @vitest-environment happy-dom`.
     environment: 'node',
     pool: 'forks',
     testTimeout: 15_000,
