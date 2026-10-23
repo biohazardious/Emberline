@@ -400,8 +400,9 @@ export function repoNameFromUrl(url: string): string {
  * - `scheme://`: an ssh URL keeps only its user name, any other loses its user info; query and
  *   fragment (where a token may sit) go too. A password holding `/`, `?` or `#` ends what the URL
  *   parser reads as user info early (`https://u:2024/rest@host/…` reads as a port and a path): when a
- *   `:` comes before the first `/`, `?` or `#` and an `@` that a host (`[v6]` too) follows comes
- *   after it, everything up to that `@` goes (`https://***@host/…`). One the parser cannot read
+ *   `:` comes before the first `/`, `?` or `#` (for http(s) also `\`), or a `\` ends the user info
+ *   and host as the parser reads them, and an `@` that a host (`[v6]` too) follows comes after it,
+ *   everything up to that `@` goes (`https://***@host/…`). One the parser cannot read
  *   loses everything from `//` to its last `@`, and from `?` or `#` on.
  * - scp-like (`user:secret@host:path`): everything from the first `:` to the last `@` goes, so
  *   `user:secret@host:path` becomes `user:***@host:path`. `git@host:path` has no `:` before its `@`
@@ -411,8 +412,11 @@ export function repoNameFromUrl(url: string): string {
 export function stripUrlCredentials(url: string): string {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
     const schemeEnd = url.indexOf('://') + 3;
-    const authorityEnd = schemeEnd + url.slice(schemeEnd).search(/[/?#]|$/);
-    if (url.slice(schemeEnd, authorityEnd).includes(':')) {
+    // For http(s) the parser ends the user info and host at a `\` too; git sends it as part of the
+    // user info (`https://u:2024\S3CRET@host/…`).
+    const special = /^(?:https?|wss?|ftp|file):/i.test(url);
+    const authorityEnd = schemeEnd + url.slice(schemeEnd).search(special ? /[/\\?#]|$/ : /[/?#]|$/);
+    if (url.slice(schemeEnd, authorityEnd).includes(':') || url[authorityEnd] === '\\') {
       const startsHost = /[^\s@/:'"`\u2018-\u201f\u00ab\u00bb\u2039\u203a\uff02\uff07]/y;
       for (let at = url.lastIndexOf('@'); at >= authorityEnd; at = url.lastIndexOf('@', at - 1)) {
         startsHost.lastIndex = at + 1;

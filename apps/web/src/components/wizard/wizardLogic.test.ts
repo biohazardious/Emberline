@@ -700,6 +700,10 @@ describe('credentials never reach the draft', () => {
       // as another address (`https://v2.git`).
       ['https://host.example:8443/acme/shop@v2.git', 'https://***@v2.git'],
       ['gitea:team/app@v2.git', 'gitea:***@v2.git'],
+      // A `\\` ends the parser's user info and host; git sends it as part of the user info.
+      ['https://u:2024\\S3C@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
+      ['https://alice:R3T@b\\S3C@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
+      ['https://S3C\\R3T@github.com/acme/shop.git', 'https://***@github.com/acme/shop.git'],
     ] as const) {
       const stripped = stripUrlCredentials(raw);
       expect(stripped, raw).not.toMatch(SECRET);
@@ -728,7 +732,7 @@ describe('credentials never reach the draft', () => {
     const HOSTILE = [
       ...' \t\u00a0\u2003',
       ...`'"\`\u2018\u2019\u201c\u201d\u00ab\u00bb\u2039\u203a`,
-      ...':/@#?0123456789abcdefgh',
+      ...':/@#?\\0123456789abcdefgh',
     ];
     const pick = (chars: readonly string[] | string) => chars[Math.floor(next() * chars.length)]!;
     for (let n = 0; n < 3000; n++) {
@@ -745,6 +749,8 @@ describe('credentials never reach the draft', () => {
         `me@corp.com:${pw}@host.example:o/r.git`,
         `https://u:2024/${pw}@github.com/o`,
         `https://u:2024/${pw}@[::1]:8443/o`,
+        `https://u:${pw}@github.com/o/r@v2.git`,
+        `https://${pw.replace(/[:/?#@]/g, '')}@github.com/o`,
       ]) {
         const stored = stripUrlCredentials(raw);
         if (/[QXZJKVW]/.test(stored))
