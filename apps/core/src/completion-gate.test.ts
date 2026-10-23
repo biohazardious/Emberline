@@ -192,6 +192,29 @@ async function factoryTicket(title = 'A') {
   return { project, ticket, run };
 }
 
+/**
+ * The first automatic prompt never arrives (core goes down while it is typed, and its pass never
+ * ends); later ones are recorded, or fail with `fail` (the session is gone by then).
+ */
+function cutOffFirstPrompt({ fail = false } = {}): string[] {
+  const sent: string[] = [];
+  (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+    sent.push(text);
+    if (sent.length === 1) return new Promise<Run>(() => undefined);
+    if (fail) throw new Error('no live session');
+    return t.runs.getRun(id);
+  };
+  return sent;
+}
+
+/** Core restarts: a new service resumes the passes the restart cut off; resolves once they ended. */
+async function restartAndResume(expected: number): Promise<void> {
+  const restarted = new TicketService(t.db, t.runs, t.scheduler);
+  const resumed = trackPipelines(restarted);
+  await restarted.resumeChains();
+  await settled(resumed, expected);
+}
+
 const settled = async (passes: Promise<void>[], n: number) => {
   await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(n);
   await Promise.all(passes);
@@ -1749,6 +1772,44 @@ describe('the worktree config check before the merge', () => {
     expect(mainHas(project, YML)).toBe(false);
   });
 
+  it('a fix request a restart cut off before it went out is sent when the pass resumes', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const sent = cutOffFirstPrompt();
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+    expect(sent[0]).toContain(HEADER);
+
+    await restartAndResume(1);
+    expect(sent).toEqual([sent[0], sent[0]]);
+    const asked = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events
+      .filter((e) => e.type === 'build_gate_failed')
+      .map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    expect(asked).toEqual([true]);
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect(mainHas(project, YML)).toBe(false);
+  });
+
+  it('a cut-off fix request that cannot be delivered after the restart is held for a person, its session closed', async () => {
+    const { project, ticket, run } = await ymlTicket();
+    writeRunYml(run, INVALID);
+    const sent = cutOffFirstPrompt({ fail: true });
+    await begin(run);
+    await stop(run, { summary: 'added a container check' });
+    await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+
+    await restartAndResume(1);
+    expect(sent).toHaveLength(2);
+    const asked = ((await api('GET', `/api/runs/${run.id}`)).json() as RunDetail).events
+      .filter((e) => e.type === 'build_gate_failed')
+      .map((e) => (e.payload as { autoFix: boolean }).autoFix);
+    expect(asked).toEqual([true, false]);
+    await expect.poll(async () => t.runs.get(run.id).endedAt, { timeout: 5_000 }).not.toBeNull();
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect(mainHas(project, YML)).toBe(false);
+  });
+
   it('the one fix request survives a restart', async () => {
     const { run } = await ymlTicket();
     writeRunYml(run, INVALID);
@@ -1853,6 +1914,20 @@ describe('an Auto Bootstrap writes the worktree commands', () => {
       .map((e) => (e.payload as { autoFix: boolean }).autoFix);
     expect(asked).toEqual([true, false]);
     expect(promptCount(run)).toBe(0);
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).not.toBe('done');
+  });
+
+  it('a request a restart cut off before it went out is sent when the pass resumes', async () => {
+    const { ticket, run } = await bootstrapRun();
+    const sent = cutOffFirstPrompt();
+    await begin(run);
+    await stop(run, { summary: 'skeleton' });
+    await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+    expect(sent[0]).toContain(`${HEADER} ${PROMPT}`);
+
+    await restartAndResume(1);
+    expect(sent).toEqual([sent[0], sent[0]]);
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(ticket.id)).not.toBe('done');
   });

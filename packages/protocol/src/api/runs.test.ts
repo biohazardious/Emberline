@@ -22,6 +22,15 @@ describe('worktreeCheckOf', () => {
     expect(worktreeCheckOf('build_gate_failed', { output: '.emberline/worktree.yml is not valid:\nx' })).toBe(
       'worktree_yml',
     );
+    // v0.4.0's worktree-commands note.
+    expect(
+      worktreeCheckOf('build_gate_failed', {
+        autoFix: true,
+        output:
+          '.emberline/worktree.yml has no setup, services or checks: this ticket asks for the setup, build, lint and test commands and the preview service.',
+      }),
+    ).toBe('worktree_commands');
+    expect(worktreeCheckOf('build_gate_failed', { output: 'tsc failed' })).toBeNull();
     expect(worktreeCheckOf('build_gate_failed', { check: 'build', output: 'tsc failed' })).toBeNull();
     expect(worktreeCheckOf('merge_conflict', { check: 'worktree_yml' })).toBeNull();
     expect(worktreeCheckOf('build_gate_failed', null)).toBeNull();
@@ -32,5 +41,12 @@ describe('worktreeCheckOf', () => {
     expect(holdLabelOf('build_gate_failed', { check: 'worktree_commands' })).toBe(
       'Worktree commands are missing',
     );
+    // A pre-0.5.0 note named no check.
+    expect(
+      holdLabelOf('build_gate_failed', {
+        output:
+          '.emberline/worktree.yml is missing: this ticket asks for the setup, build, lint and test commands and the preview service.',
+      }),
+    ).toBe('Worktree commands are missing');
   });
 });

@@ -1,9 +1,12 @@
 import type { GarbageCollectRunsResponse } from '@emberline/protocol';
 
-/** One sentence on worktrees garbage collection kept so no work is lost; null when none were. */
+/**
+ * What garbage collection left behind, in sentences: worktrees it kept so no work is lost, and runs
+ * it left for the next clean-up because a prune of their worktree was running. Null when neither.
+ */
 export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'keptWorktrees'>): string | null {
-  const kept = res.keptWorktrees;
-  if (kept.length === 0) return null;
+  const pruning = res.keptWorktrees.filter((k) => k.reason === 'prune_running').length;
+  const kept = res.keptWorktrees.filter((k) => k.reason !== 'prune_running');
   const count = (reason: string) => kept.filter((k) => k.reason === reason).length;
   const parts = (
     [
@@ -15,10 +18,17 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
       [count('in_review'), 'a ticket still in review'],
       [count('archive_pending'), 'build outputs not archived in time (run the clean-up again)'],
       [count('teardown_running'), 'its worktree.yml teardown still running (pruned when it ends)'],
-      [count('prune_running'), 'a prune already running (run the clean-up again to remove its run)'],
     ] as const
   )
     .filter(([n]) => n)
     .map(([n, why]) => `${n} with ${why}`);
-  return `Kept ${kept.length} worktree${kept.length === 1 ? '' : 's'} so no work is lost: ${parts.join(', ')}.`;
+  const sentences = [
+    kept.length > 0
+      ? `Kept ${kept.length} worktree${kept.length === 1 ? '' : 's'} so no work is lost: ${parts.join(', ')}.`
+      : null,
+    pruning > 0
+      ? `Left ${pruning} run${pruning === 1 ? '' : 's'} for the next clean-up: ${pruning === 1 ? 'its worktree was' : 'their worktrees were'} being pruned.`
+      : null,
+  ].filter((s): s is string => s !== null);
+  return sentences.length > 0 ? sentences.join(' ') : null;
 }

@@ -597,19 +597,23 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   no_changes: 'Finished without changes',
 };
 
-/** Which worktree check a `build_gate_failed` note is about; null for an ordinary failed build and other notes. */
+/** The first line of the worktree.yml check's `build_gate_failed` note (`output`), before the errors. */
+export const WORKTREE_YML_INVALID = '.emberline/worktree.yml is not valid:';
+/** What the worktree-commands check's note (`output`) says it asks for, in every release that wrote one. */
+const WORKTREE_COMMANDS_ASK =
+  'this ticket asks for the setup, build, lint and test commands and the preview service';
+
+/**
+ * Which worktree check a `build_gate_failed` note is about; null for an ordinary failed build and
+ * other notes. Notes from before 0.5.0 named no check: those are told apart by their output.
+ */
 export function worktreeCheckOf(type: string, payload: unknown): 'worktree_yml' | 'worktree_commands' | null {
   if (type !== 'build_gate_failed') return null;
   const p = (payload ?? null) as { check?: unknown; output?: unknown } | null;
-  if (
-    p?.check === 'worktree_yml' ||
-    (p?.check === undefined &&
-      typeof p?.output === 'string' &&
-      p.output.startsWith('.emberline/worktree.yml is not valid:'))
-  ) {
-    return 'worktree_yml';
-  }
-  if (p?.check === 'worktree_commands') return 'worktree_commands';
+  if (p?.check === 'worktree_yml' || p?.check === 'worktree_commands') return p.check;
+  if (p?.check !== undefined || typeof p?.output !== 'string') return null;
+  if (p.output.startsWith(WORKTREE_YML_INVALID)) return 'worktree_yml';
+  if (p.output.includes(WORKTREE_COMMANDS_ASK)) return 'worktree_commands';
   return null;
 }
 

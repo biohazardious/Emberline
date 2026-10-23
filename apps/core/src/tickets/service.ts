@@ -27,8 +27,10 @@ import {
   type TicketStatus,
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
+  WORKTREE_YML_INVALID,
+  worktreeCheckOf,
 } from '@emberline/protocol';
-import { and, asc, eq, gt, inArray, max, min } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import {
@@ -67,7 +69,7 @@ import {
   resolveBatchDependencies,
   wouldCreateCycle,
 } from './dependencies.js';
-import { clipText } from '../text/control-chars.js';
+import { clipCodeUnits, clipText } from '../text/control-chars.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
@@ -281,8 +283,20 @@ const FIX_REQUEST_HOLDS: readonly string[] = [
   'slop_guard_blocked',
   'critic_blocked',
 ];
-/** The first line of the worktree.yml check's note (`output`), before the errors. */
-const WORKTREE_YML_INVALID = '.emberline/worktree.yml is not valid:';
+
+/** The critic's answer for a run; null when its call failed. */
+type CriticVerdict = Awaited<ReturnType<typeof runCrossProviderCritic>> | null;
+
+/** A fix request kept with its hold: at most this many characters (about 64 KB), marked when cut. */
+const FIX_REQUEST_MAX = 64 * 1024;
+const FIX_REQUEST_CUT = '\n\n[The rest of this request was cut: it was longer than 64 KB.]';
+const storedRequest = (text: string): string =>
+  text.length <= FIX_REQUEST_MAX
+    ? text
+    : `${clipCodeUnits(text, FIX_REQUEST_MAX - FIX_REQUEST_CUT.length)}${FIX_REQUEST_CUT}`;
+
+/** Events by which a prompt reached the agent (typed into its session, or a respawn with it). */
+const PROMPT_DELIVERED = ['prompt_sent', 'resumed', 'respawning'];
 
 /** A fix request a gate noted but never sent (a restart cut its pass off in between). */
 interface PendingFixRequest {
@@ -297,30 +311,20 @@ interface PendingFixRequest {
 const buildFixPrompt = (excerpt: string): string =>
   `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${excerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.`;
 
-/**
- * Which check a `build_gate_failed` note is about: its `check`, or for a note from before the
- * worktree config checks named theirs (0.5.0), its text. The build gate's own note names none.
- */
-function fixCheckOf(payload: unknown): string {
-  const p = payload as { check?: string; output?: string } | null;
-  if (p?.check !== undefined) return p.check;
-  const output = p?.output ?? '';
-  if (output.startsWith(WORKTREE_YML_INVALID)) return 'worktree_yml';
-  // The worktree-commands request's text says what it asks.
-  if (
-    output.includes('this ticket asks for the setup, build, lint and test commands and the preview service')
-  )
-    return 'worktree_commands';
-  return 'build';
-}
+/** Which check a `build_gate_failed` note is about: a worktree config check (worktreeCheckOf), else the build gate's. */
+const fixCheckOf = (payload: unknown): 'worktree_yml' | 'worktree_commands' | 'build' =>
+  worktreeCheckOf('build_gate_failed', payload) ?? 'build';
 
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
   /** Runs whose build gate ran in this process (its fix request also survives a restart: askedToFix). */
   private readonly selfHealedRuns = new Set<string>();
-  /** Runs whose critic call is in flight in this process (`critic_reviewed` is noted once it answered). */
-  private readonly criticRunning = new Set<string>();
+  /**
+   * The critic's verdict per run while its call is in flight in this process: a pass of a later stop
+   * of the run waits for it instead of asking again (`critic_reviewed` is noted once a pass took it).
+   */
+  private readonly criticCalls = new Map<string, Promise<CriticVerdict>>();
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
@@ -764,7 +768,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /**
    * Whether the run was already asked to fix this check (the autoFix note survives restarts). The
    * build gate's note names no check; neither did the worktree.yml and worktree-commands ones before
-   * they did, so those are told apart by their text (fixCheckOf).
+   * 0.5.0, so those are told apart by their text (worktreeCheckOf).
    */
   private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands' | 'build'): boolean {
     return this.db
@@ -780,35 +784,67 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * prompt reached the agent after it; null when this turn has none.
    */
   private nudgeOfThisTurn(runId: string): { delivered: boolean } | null {
-    return this.noteOfThisTurn(
-      runId,
-      'auto_nudged',
-      (payload) => (payload as { reason?: string } | null)?.reason === 'no_ticket_drafts',
+    const events = this.eventsOfThisTurn(runId, ['auto_nudged']);
+    const nudged = events.find(
+      (e) =>
+        e.type === 'auto_nudged' && (e.payload as { reason?: string } | null)?.reason === 'no_ticket_drafts',
     );
+    if (!nudged) return null;
+    return { delivered: events.some((e) => e.id > nudged.id && PROMPT_DELIVERED.includes(e.type)) };
+  }
+
+  /**
+   * The id of the run's latest state change: a pass notes it when it begins, and a newer one means
+   * the agent woke up or stopped again since (see turnIsCurrent).
+   */
+  private turnOf(runId: string): number | undefined {
+    return this.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), isNotNull(runEvents.state)))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get()?.id;
+  }
+
+  /** Whether the agent's turn a pass began on is still the run's current one (no state change since). */
+  private turnIsCurrent(runId: string, turn: number | undefined): boolean {
+    return this.turnOf(runId) === turn;
+  }
+
+  /**
+   * The run's notes of `types` in its current turn (after its latest switch to `done`), with the
+   * events by which a prompt reached the agent (PROMPT_DELIVERED), oldest first.
+   */
+  private eventsOfThisTurn(
+    runId: string,
+    types: readonly string[],
+  ): Array<{ id: number; type: string; payload: unknown }> {
+    return this.db
+      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, runId),
+          gt(runEvents.id, latestDoneEventId(this.db, runId) ?? 0),
+          inArray(runEvents.type, [...types, ...PROMPT_DELIVERED]),
+        ),
+      )
+      .orderBy(asc(runEvents.id))
+      .all();
   }
 
   /**
    * The request for the agent's fix that the run's current turn (after its latest `done`) noted but
    * never sent: its newest hold is a gate's fix request (or the completion nudge) and no prompt
    * reached the agent after it. Null otherwise. A note written before the request was stored with it
-   * gets it rebuilt from the note.
+   * gets it rebuilt from the note. A request is sent at least once: a crash between typing it and
+   * recording `prompt_sent` leaves it looking unsent, and the resumed pass types it again.
    */
   private pendingFixRequest(run: Run): PendingFixRequest | null {
-    const turnStart = latestDoneEventId(this.db, run.id) ?? 0;
-    const events = this.db
-      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
-      .from(runEvents)
-      .where(
-        and(
-          eq(runEvents.runId, run.id),
-          gt(runEvents.id, turnStart),
-          inArray(runEvents.type, [...HOLD_EVENTS, 'prompt_sent', 'resumed', 'respawning']),
-        ),
-      )
-      .orderBy(asc(runEvents.id))
-      .all();
+    const events = this.eventsOfThisTurn(run.id, HOLD_EVENTS);
     const hold = events.findLast((e) => HOLD_EVENTS.includes(e.type));
-    if (!hold || events.some((e) => e.id > hold.id && !HOLD_EVENTS.includes(e.type))) return null;
+    if (!hold || events.some((e) => e.id > hold.id && PROMPT_DELIVERED.includes(e.type))) return null;
     if (hold.type === 'completion_nudged') return { type: hold.type, note: {}, request: COMPLETION_NUDGE };
     if (!FIX_REQUEST_HOLDS.includes(hold.type) || !isAutoFixHold(hold.payload)) return null;
     const { autoFix: _autoFix, request, ...note } = hold.payload as Record<string, unknown>;
@@ -848,7 +884,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     note: Record<string, unknown>,
     request: string,
   ): Promise<boolean> {
-    this.runs.note(run.id, type, { autoFix: true, ...note, request });
+    this.runs.note(run.id, type, { autoFix: true, ...note, request: storedRequest(request) });
     return this.sendFixRequest(run, { type, note, request });
   }
 
@@ -885,33 +921,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     ) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     }
-  }
-
-  /**
-   * The newest `type` note of the run's current turn (after its latest switch to `done`) that
-   * `matches`, and whether a prompt reached the agent after it; null when this turn has none.
-   */
-  private noteOfThisTurn(
-    runId: string,
-    type: string,
-    matches: (payload: unknown) => boolean = () => true,
-  ): { payload: unknown; delivered: boolean } | null {
-    const turnStart = latestDoneEventId(this.db, runId) ?? 0;
-    const events = this.db
-      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
-      .from(runEvents)
-      .where(
-        and(
-          eq(runEvents.runId, runId),
-          gt(runEvents.id, turnStart),
-          inArray(runEvents.type, [type, 'prompt_sent', 'resumed', 'respawning']),
-        ),
-      )
-      .orderBy(asc(runEvents.id))
-      .all();
-    const note = events.findLast((e) => e.type === type && matches(e.payload));
-    if (!note) return null;
-    return { payload: note.payload, delivered: events.some((e) => e.type !== type && e.id > note.id) };
   }
 
   /** Whether the run was already asked to clean up a secret or slop finding (the autoFix note survives restarts). */
@@ -1190,6 +1199,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     { finalizing = false, resumed = false }: PipelineOptions,
   ): Promise<void> {
     if (!run.projectId) return;
+    // The agent's turn this pass is about: the run's state when it began (its stop, as a rule).
+    const turn = this.turnOf(run.id);
     let projectRow;
     try {
       projectRow = this.project(run.projectId);
@@ -1621,24 +1632,28 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       !isFactoryOrchestratorTicket &&
       !this.runs.hasEvent(run.id, 'critic_reviewed')
     ) {
-      // Another pass of this run (an earlier stop's) waits for the critic's verdict: that pass holds
-      // or merges, this one stands down instead of merging without a verdict.
-      if (this.criticRunning.has(run.id)) return;
-      // Once per run, also across a restart: noted once its verdict is in, so a pass a restart cut off
-      // while the critic ran asks it again instead of merging without one.
-      this.criticRunning.add(run.id);
-      let criticRes: Awaited<ReturnType<typeof runCrossProviderCritic>> | null;
-      try {
-        criticRes = await runCrossProviderCritic({
+      // A pass of an earlier stop of this run asked the critic already: this one waits for that verdict.
+      let call = this.criticCalls.get(run.id);
+      if (!call) {
+        const asked = runCrossProviderCritic({
           run,
           ticketTitle: ticketRow?.title ?? run.title,
           ticketBody: ticketRow?.body ?? null,
           workspacePath: run.worktreePath,
           settings: fSettings,
         }).catch(() => null);
-      } finally {
-        this.criticRunning.delete(run.id);
+        call = asked;
+        this.criticCalls.set(run.id, asked);
+        void asked.finally(() => {
+          if (this.criticCalls.get(run.id) === asked) this.criticCalls.delete(run.id);
+        });
       }
+      const criticRes = await call;
+      // The agent stopped again (or woke up) meanwhile: the pass of its newer turn decides on its own
+      // checks, with this verdict when it waits for it too, else by asking the critic itself.
+      if (!this.turnIsCurrent(run.id, turn)) return;
+      // Once per run, also across a restart: noted once a pass took its verdict, so a pass a restart cut
+      // off while the critic ran asks it again instead of merging without one.
       this.runs.note(run.id, 'critic_reviewed', { verdict: criticRes?.verdict ?? null });
 
       if (
@@ -1656,6 +1671,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         return;
       }
     }
+
+    // The agent stopped again (or woke up) while this pass ran its checks: they looked at an older
+    // tree, so the pass of its newer turn decides (one merge, after that turn's own checks).
+    if (!this.turnIsCurrent(run.id, turn)) return;
 
     // 2d. Open blocking review feedback keeps the merge gate closed: the ticket stays in Review and the
     //     person decides (resolve it, or merge anyway); the agent is not prompted. Like the secret
