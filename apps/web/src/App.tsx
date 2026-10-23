@@ -212,7 +212,11 @@ function Shell() {
 
   const [serverActiveId, setServerActiveId] = useState<string | null | undefined>(undefined);
   const [serverFailed, setServerFailed] = useState(false);
+  // Whether the person (or a project page's URL) picked a project: the server's choice arriving after
+  // the wait never replaces that pick.
+  const picked = useRef(false);
   const selectProject = useCallback((id: string | null) => {
+    picked.current = true;
     setActiveProjectId(id);
     setServerActiveId(id);
     try {
@@ -247,9 +251,22 @@ function Shell() {
       if (askedServer.current) return;
       askedServer.current = true;
       // Bounded: the pages wait for this answer, and a request that never answers must not keep them blank.
-      void withTimeout(api<ActiveProjectPreference>('/api/projects/active'), SERVER_CHOICE_WAIT_MS)
+      const request = api<ActiveProjectPreference>('/api/projects/active');
+      void withTimeout(request, SERVER_CHOICE_WAIT_MS)
         .then((pref) => setServerActiveId(pref.activeProjectId ?? null))
-        .catch(() => setServerFailed(true));
+        .catch(() => {
+          setServerFailed(true);
+          // An answer after the wait replaces the fallback's pick (never stored), unless a project
+          // was picked since.
+          request
+            .then((pref) => {
+              if (picked.current) return;
+              setActiveProjectId(null);
+              setServerActiveId(pref.activeProjectId ?? null);
+              setServerFailed(false);
+            })
+            .catch(() => undefined);
+        });
       return;
     }
     if (resolution.id && resolution.id !== activeProjectId) {

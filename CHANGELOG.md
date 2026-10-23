@@ -52,6 +52,7 @@ A clean-up release: every known bug and piece of technical debt left after 0.6.0
 - When the page could not reload the settings right after **Use container preview** was saved, the box stayed and offered the save again, which then failed. The box now goes away as soon as the save works.
 - Changing the admin password could, rarely, land you on the sign-in form although the change worked. The sign-in state is now checked again with the new key.
 - On a first visit, the Inbox, Docker, Fleet and the dashboard briefly showed every project (or the first one) before narrowing to the active project. They now wait until the active project is known.
+- When the server named the active project more than 5 seconds after a first visit began, the pages kept the first project for that visit. They now switch to it, unless you picked a project meanwhile. The Inbox, Docker, Fleet and the dashboard also no longer reload, losing what you had typed or opened on them, while the active project is worked out again (after you delete it, or when the project list loads after it could not be read).
 - **Prune worktree** on a run whose `worktree.yml` teardown took longer than the request looked as if nothing happened. It now says "Teardown is running; the worktree is removed when it ends." until the worktree is removed, and if the worktree cannot be removed when the teardown ends, it says so (the run's events too, and it keeps saying so when more happens on the run), so you can prune it again.
 
 ### Upgrade notes
