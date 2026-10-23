@@ -4911,6 +4911,67 @@ dialog.cmd-dialog::backdrop {
   gap: 8px;
 }
 
+/* --- answer dialog ---------------------------------------------------------- */
+.answer-dialog {
+  width: min(720px, 100%);
+}
+
+.answer-question-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 30vh;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.answer-options,
+.answer-suggest,
+.answer-files-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.answer-form,
+.answer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.answer-field {
+  gap: 6px;
+}
+
+.answer-text {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+}
+
+.answer-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 640px) {
+  .answer-dialog {
+    width: 100%;
+    max-width: 100%;
+    border-left: 0;
+  }
+}
+
 @media (max-width: 820px) {
   .comment-composer-controls {
     flex-direction: column;
