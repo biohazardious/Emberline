@@ -160,15 +160,15 @@ function scpCredentials(
 }
 
 /**
- * `user:pa/ss@host/path`: a `/` in the password puts its `@` after the first `/` (at `slash`). The
- * last `@` after it that a host and its `/` or `:` follow (not the end: `gitea:team/app@v2.git` is
- * a path), else -1.
+ * `user:pa/ss@host/path` or `user:pa/ss@host`: a `/` in the password puts its `@` after the first
+ * `/` (at `slash`). The last `@` after it that a host and its `/`, `:` or the end follow, else -1.
+ * A path's `@` reads the same (`gitea:team/app@v2.git`): shown masked too, as it may be a password's.
  */
 function lastAtBeforePath(r: AddressReader, slash: number): number {
   const t = r.text;
   for (let at = r.lastAt(slash, t.length); at >= 0; at = r.lastAt(slash, at)) {
     const host = r.afterHost(at + 1);
-    if (host >= 0 && (t[host] === ':' || t[host] === '/')) return at;
+    if (host >= 0 && (host === t.length || t[host] === ':' || t[host] === '/')) return at;
   }
   return -1;
 }

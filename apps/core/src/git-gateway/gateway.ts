@@ -120,8 +120,9 @@ export interface ScanMeter {
  * server quotes back). One rule, line by line, that masks too much rather than ever too little:
  * from the first credential opener on the line to the last `@` on it that a host follows, all goes.
  * - The openers: a `scheme://` (from after `://`), a quote mark of any kind (from after it), and a
- *   `:` in a word (from after the word's first `:`, so `user:` keeps its user name), but not the
- *   `:` of a git prefix that starts the line (`fatal: `, `remote: `, … see LINE_PREFIX).
+ *   `:` in a word (from after the word's first `:`, so `user:` keeps its user name). The `:` of a
+ *   git prefix that starts the line (`fatal: `, `remote: `, …) opens only when what follows is not
+ *   git's own message (see LINE_PREFIX).
  * - After a `scheme://` the whole user info goes with its `@` (`https://host/…`); otherwise `***`
  *   takes its place (`alice:***@host:path`, `'***@host:path'`).
  * So a password never shows, whatever it holds (whitespace, quote marks, `:`, `/`, `@`, `#`, `?`),
@@ -141,29 +142,58 @@ export function withoutUrlCredentials(text: string, meter?: ScanMeter): string {
 }
 
 /**
- * The prefixes git, ssh and a server put at the start of a line (`fatal: '…' does not appear …`):
- * their `:` opens nothing, so the message keeps them. An address after one is still caught by its
- * own opener (its scheme, its quote, its `user:`).
+ * The prefixes git, ssh and a server put at the start of a line (`fatal: '…' does not appear …`).
+ * The message keeps one only when it is git's: the address follows right after it, or after one of
+ * git's own phrases (PREFIX_PHRASES), and starts with a quote mark or a known scheme. Otherwise the
+ * prefix's `:` opens like any other, so an address that starts the line itself, with a user name
+ * such as `ssh` or `fatal` (`ssh: S3CRET@host: Permission denied …`), never shows its password.
  */
 const LINE_PREFIX = /^(?:fatal|error|warning|hint|remote|ssh): /;
+const PREFIX_PHRASES = new Set([
+  '',
+  'unable to access ',
+  'repository ',
+  'Authentication failed for ',
+  'could not read Username for ',
+  'could not read Password for ',
+  'failed to push some refs to ',
+  'Could not resolve hostname ',
+  'redirecting to ',
+]);
+const KNOWN_SCHEME = /^(?:https?|ssh|git|git\+ssh|ssh\+git|ftps?|file)$/i;
 
 function withoutLineCredentials(line: string, meter?: ScanMeter): string {
   if (meter) meter.steps += line.length;
   let at = line.length - 1;
   while (at >= 0 && !(line[at] === '@' && startsHost(line[at + 1]))) at--;
   if (at < 0) return line;
-  // The first opener: the mask starts after it, so nothing after it up to `at` is kept.
+  const prefixLength = LINE_PREFIX.exec(line)?.[0].length ?? 0;
+  // The first opener after the prefix: the mask starts after it, so nothing after it up to `at` is kept.
+  let opener = -1;
   let from = -1;
   let scheme = false;
-  const prefixColon = (LINE_PREFIX.exec(line)?.[0].length ?? 0) - 2;
-  for (let i = 0; i < at && from < 0; i++) {
+  for (let i = prefixLength; i < at && from < 0; i++) {
     if (QUOTES.has(line[i]!)) from = i + 1;
-    else if (line[i] === ':' && i !== prefixColon) {
+    else if (line[i] === ':') {
       scheme = line.startsWith('//', i + 1);
       from = scheme ? i + 3 : i + 1;
     }
+    if (from >= 0) opener = i;
   }
   if (meter) meter.steps += at;
+  if (prefixLength > 0) {
+    // The word the opener starts: the quote mark itself, or the scheme's name before `://`.
+    let wordStart = opener;
+    if (scheme) while (wordStart > prefixLength && !isSpace(line.charCodeAt(wordStart - 1))) wordStart--;
+    const gits =
+      opener >= 0 &&
+      PREFIX_PHRASES.has(line.slice(prefixLength, wordStart)) &&
+      (scheme ? KNOWN_SCHEME.test(line.slice(wordStart, opener)) : QUOTES.has(line[opener]!));
+    if (!gits) {
+      from = prefixLength - 1;
+      scheme = false;
+    }
+  }
   if (from < 0 || from > at) return line;
   return scheme ? line.slice(0, from) + line.slice(at + 1) : `${line.slice(0, from)}***${line.slice(at)}`;
 }
@@ -184,7 +214,7 @@ export function describeGitError(error: unknown, credential?: GitHttpCredential 
     text =
       withoutUrlCredentials(raw)
         .split('\n')
-        .map((l) => l.replace(/^(fatal|error|remote): /, '').trim())
+        .map((l) => l.replace(/^(?:fatal|error|remote):(?: |(?=\*\*\*@))/, '').trim())
         .find(Boolean) ?? 'git failed';
   }
   // A token typed into an origin (no account) is never quoted back.

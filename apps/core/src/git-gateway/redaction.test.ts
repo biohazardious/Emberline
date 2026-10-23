@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { remoteUrlForDisplay } from '../forge/hosts.js';
+import { HttpError } from '../errors.js';
 import { describeGitError, type ScanMeter, withoutUrlCredentials } from './gateway.js';
 
 /** A small seeded PRNG (mulberry32): the same cases on every run. */
@@ -52,6 +53,7 @@ function hostilePassword(next: () => number): string {
 const HOST = 'git.example.com';
 /** User names, the git prefixes among them: a line's own prefix opens nothing, an address's does. */
 const USERS = ['u', 'alice', 'fatal', 'error', 'warning', 'hint', 'remote', 'ssh'];
+const PREFIXES = ['fatal', 'error', 'warning', 'hint', 'remote', 'ssh'];
 /** The ways an origin holds a password. */
 const ADDRESSES = (pw: string, user: string) => [
   `https://${user}:${pw}@${HOST}/o/r.git`,
@@ -60,33 +62,44 @@ const ADDRESSES = (pw: string, user: string) => [
   `${user}:${pw}@${HOST}:o/r.git`,
   `me@corp.com:${pw}@${HOST}:o/r.git`,
   `${user}:${pw}@${HOST}/o/r.git`,
+  `${user}:${pw}@${HOST}`,
   `https://${user}:2024/${pw}@${HOST}/o`,
 ];
 /** git splits an scp-like address at its first `:` and quotes the rest as a path. */
 const SPLIT = (pw: string) => `${pw}@${HOST}:o/r.git`;
 /**
- * The messages that carry an address, as git, ssh and servers print them, with the text before the
- * address that must survive and the text after it (null: an `@` there may take the mask on).
+ * The messages that carry an address, as git, ssh and servers print them: the text before it (kept
+ * whole when `keeps`, else at least its git prefix) and after it (null: an `@` there may take the
+ * mask on).
  */
-const message = (before: string, after: string | null) => ({
+const message = (before: string, after: string | null, keeps: boolean) => ({
   make: (a: string) => `${before}${a}${after ?? ' by bob@example.com'}`,
   before,
   after,
+  keeps,
 });
 const QUOTED = [
-  message("fatal: '", "' does not appear to be a git repository"),
-  message("fatal: unable to access '", "/': The requested URL returned error: 403"),
-  message("fatal: repository '", "/' not found"),
-  message("Cloning into '", "'..."),
-  message("error: failed to push some refs to '", "'"),
-  message("hint: Updates were rejected; see '", "'"),
-  message("warning: redirecting to '", "'"),
+  message("fatal: '", "' does not appear to be a git repository", true),
+  message("fatal: unable to access '", "/': The requested URL returned error: 403", true),
+  message("fatal: repository '", "/' not found", true),
+  message("fatal: Authentication failed for '", "/'", true),
+  message("Cloning into '", "'...", true),
+  message("error: failed to push some refs to '", "'", true),
+  message("warning: redirecting to '", "'", true),
+  message("hint: see '", "'", false),
 ];
 const UNQUOTED = [
-  message('To ', ''),
-  message('remote: mirrored to ', null),
-  message('remote: ', ''),
-  message('ssh: Could not resolve hostname ', ': Name or service not known'),
+  // The address starts the line: bare, as ssh prints it, after From, in `git remote -v`.
+  message('', '', true),
+  message('', ': Permission denied (publickey).', true),
+  message('From ', '', true),
+  message('origin\t', ' (fetch)', true),
+  message('To ', '', true),
+  message('remote: mirrored to ', null, false),
+  message('ssh: Could not resolve hostname ', ': Name or service not known', false),
+  // After each prefix, as a server or ssh may print it.
+  ...PREFIXES.map((prefix) => message(`${prefix}: `, '', false)),
+  ...PREFIXES.map((prefix) => message(`${prefix}: `, ': Permission denied (publickey).', false)),
 ];
 
 describe('withoutUrlCredentials', () => {
@@ -103,20 +116,27 @@ describe('withoutUrlCredentials', () => {
       ];
       for (const { m, address } of texts) {
         const text = m.make(address);
-        // Line by line, also with other lines around it and as describeGitError reads it.
+        // Line by line; between other lines (LF, CRLF, a CR progress line); and every way
+        // describeGitError reads a failure.
         const alone = withoutUrlCredentials(text);
-        for (const shown of [
+        const shownAll = [
           alone,
-          withoutUrlCredentials(`Pushing...\n${text}\nDone`).replace(/^Pushing\.\.\.\n|\nDone$/g, ''),
+          withoutUrlCredentials(`Pushing...\n${text}\nDone`),
+          withoutUrlCredentials(`Pushing...\r\n${text}\r\nDone`),
+          withoutUrlCredentials(`Counting objects: 50%\r${text}\rDone`),
           describeGitError(Object.assign(new Error('git failed'), { stderr: text })),
-        ]) {
+          describeGitError(Object.assign(new Error('git failed'), { stderr: `Pushing...\r\n${text}` })),
+          describeGitError(new Error(text)),
+          describeGitError(new HttpError(409, 'push_failed', text)),
+        ];
+        for (const shown of shownAll)
           if (/[QXZJKVW]/.test(shown))
             throw new Error(`leak: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
-          if (m.after !== null && !shown.endsWith(m.after))
-            throw new Error(`message lost: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
-        }
-        // The git prefix, and the message words before the address, are kept.
-        if (!alone.startsWith(m.before))
+        if (m.after !== null && !alone.endsWith(m.after))
+          throw new Error(`message lost: ${JSON.stringify(text)} → ${JSON.stringify(alone)}`);
+        // The message before the address is kept where git wrote it; a git prefix always is.
+        const kept = m.keeps ? m.before : m.before.slice(0, m.before.indexOf(':') + 1);
+        if (!alone.startsWith(kept))
           throw new Error(`prefix lost: ${JSON.stringify(text)} → ${JSON.stringify(alone)}`);
         cases++;
       }
@@ -127,7 +147,7 @@ describe('withoutUrlCredentials', () => {
           throw new Error(`display leak: ${JSON.stringify(address)} → ${display}`);
       }
     }
-    expect(cases).toBe(1500 * (7 * 11 + 7));
+    expect(cases).toBe(1500 * (8 * (8 + 19) + 8));
   });
 
   it('keeps the address without its user info after a scheme, and masks with *** otherwise', () => {
