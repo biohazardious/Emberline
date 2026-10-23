@@ -496,7 +496,9 @@ describe('an origin set by hand with a token in it', () => {
       url: 'https://github.example/o/r.git',
     });
     expect(credentialsOnly.json()).toMatchObject({ error: 'origin_exists', credentialsOnly: true });
-    expect(credentialsOnly.json().message).toContain('with a user name or token in its URL');
+    expect(credentialsOnly.json().message).toContain(
+      "with more than the repository's address in its URL, such as a user name or token",
+    );
     expect(exists.json().credentialsOnly).toBe(false);
     for (const res of [exists, differs, refreshed]) expect(res.body).not.toContain(secret);
     expect(JSON.stringify(s)).not.toContain(secret);
@@ -507,6 +509,22 @@ describe('an origin set by hand with a token in it', () => {
     });
     expect(replaced.json()).toMatchObject({ originHasCredentials: false, connected: true });
     expect(readFileSync(path.join(projectPath, '.git', 'config'), 'utf8')).not.toContain(secret);
+  });
+});
+
+describe('an origin with a fragment and nothing else', () => {
+  it('is never said to hold a user name or token as a fact', async () => {
+    git(projectPath, 'remote', 'add', 'origin', 'https://git.example.com/o/r.git#main');
+    expect(await status()).toMatchObject({
+      originUrl: 'https://git.example.com/o/r.git',
+      originHasCredentials: true,
+      originMasked: false,
+    });
+    const res = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+      url: 'https://git.example.com/o/r.git',
+    });
+    expect(res.json()).toMatchObject({ error: 'origin_exists', credentialsOnly: true });
+    expect(res.json().message).not.toContain('with a user name or token');
   });
 });
 

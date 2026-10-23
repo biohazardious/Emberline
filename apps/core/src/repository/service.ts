@@ -477,7 +477,7 @@ export class RepositoryService {
     const shown = remoteUrlForDisplay(current);
     const credentialsOnly = next !== undefined && shown.hadCredentials && shown.url === next;
     const message = credentialsOnly
-      ? `origin already points at ${shown.display}, with a user name or token in its URL. Replace it with the clean URL?`
+      ? `origin already points at ${shown.display}, with more than the repository's address in its URL, such as a user name or token. Replace it with the clean URL?`
       : `This project already has origin ${shown.display}. Replace it?`;
     return new HttpError(409, 'origin_exists', message, { origin: shown.display, credentialsOnly });
   }

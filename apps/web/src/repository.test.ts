@@ -131,7 +131,7 @@ describe('an origin with a user name or token in it', () => {
   it('says so, and Connect offers the clean URL core returned', () => {
     const withToken = { ...base, originHasCredentials: true };
     expect(originCredentialsText(withToken)).toBe(
-      'The remote URL contains a user name or token. Connect the clean URL to use the forge account instead.',
+      "The remote URL holds more than the repository's address, such as a user name or token, which is not shown. Connect the clean URL to use the forge account instead.",
     );
     expect(originCredentialsText(base)).toBeNull();
     expect(connectPrefill(withToken)).toBe('https://git.example.com/al/app.git');

@@ -63,12 +63,15 @@ export function ownerAfterLoad(current: string, owners: readonly ForgeOwner[]): 
   return owners.some((o) => o.id === current) ? current : (owners[0]?.id ?? '');
 }
 
-/** origin as configured holds a user name or token (core returns it without them). */
+/**
+ * origin as configured holds more than an address (a user name, a token, a query or fragment; core
+ * returns it without them), or may hold a password (shown with `***`).
+ */
 export function originCredentialsText(s: RepositoryStatus): string | null {
   if (s.originMasked)
     return "The remote URL may hold a password (shown as ***), so Connect is left empty: type the repository's address there without it to use the forge account.";
   return s.originHasCredentials
-    ? 'The remote URL contains a user name or token. Connect the clean URL to use the forge account instead.'
+    ? "The remote URL holds more than the repository's address, such as a user name or token, which is not shown. Connect the clean URL to use the forge account instead."
     : null;
 }
 
