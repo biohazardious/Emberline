@@ -190,6 +190,36 @@ describe('computeAttention rules', () => {
     expect(got).toMatchObject({ reason: 'question', detail: 'Which colour?' });
   });
 
+  it('a long last message is cut to 2000 characters ending with an ellipsis', () => {
+    const got = computeAttention(
+      baseRun(),
+      facts({ enteredId: 6, waiting: [ev(6, 'Stop', { last_assistant_message: 'x'.repeat(5000) })] }),
+      NOW,
+    );
+    expect(got?.detail).toHaveLength(2000);
+    expect(got?.detail?.endsWith('…')).toBe(true);
+  });
+
+  it('a Stop does not change a permission or a stall, and a blank one falls back to the Notification text', () => {
+    const stop = (id: number) => ev(id, 'Stop', { last_assistant_message: 'Which colour?' });
+    const perm = ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' });
+    expect(computeAttention(baseRun(), facts({ enteredId: 6, waiting: [perm, stop(7)] }), NOW)?.reason).toBe(
+      'permission',
+    );
+    const stall = ev(6, 'stall_detected', { message: 'no output' });
+    expect(computeAttention(baseRun(), facts({ enteredId: 6, waiting: [stall, stop(7)] }), NOW)?.reason).toBe(
+      'stalled',
+    );
+    const blank = ev(7, 'Stop', { last_assistant_message: '  ' });
+    expect(
+      computeAttention(
+        baseRun(),
+        facts({ enteredId: 6, waiting: [ev(6, 'Notification', { message: 'Which db?' }), blank] }),
+        NOW,
+      ),
+    ).toMatchObject({ reason: 'question', detail: 'Which db?' });
+  });
+
   it('a wait entered without a Notification (StopFailure) stays one occurrence when an idle reminder follows', () => {
     const run = baseRun({ lastEvent: 'StopFailure' });
     const before = computeAttention(run, facts({ enteredId: 5 }), NOW);

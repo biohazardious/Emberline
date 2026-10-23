@@ -51,6 +51,9 @@ const FACT_STATES: ReadonlySet<string> = new Set(['waiting_input', 'rate_limited
 /** Ids per statement; far below SQLite's variable limit. */
 const CHUNK = 500;
 
+/** The agent's message travels in every attention payload, so only its start does; the dialog has the rest. */
+const DETAIL_MAX = 2000;
+
 const message = (event: AttentionEvent | undefined): string | null => {
   const value = event?.payload?.message;
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -117,7 +120,9 @@ export function computeAttention(
       const asked = notifications.find((e) => e.payload?.notification_type !== 'idle_prompt' && message(e));
       // The agent's own words come first: its last message of this wait, else a Notification's text.
       const said = stops.at(-1)?.payload?.last_assistant_message;
-      const lastMessage = typeof said === 'string' && said.trim() ? said.trim() : null;
+      const trimmed = typeof said === 'string' ? said.trim() : '';
+      const lastMessage =
+        trimmed.length > DETAIL_MAX ? `${trimmed.slice(0, DETAIL_MAX - 1)}…` : trimmed || null;
       return at(
         'question',
         lastMessage ?? message(asked ?? (entered?.type === 'Notification' ? entered : undefined)),
