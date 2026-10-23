@@ -1,4 +1,4 @@
-import type { GarbageCollectRunsResponse, Run } from '@emberline/protocol';
+import type { GarbageCollectRunsResponse, Run, RunEvent } from '@emberline/protocol';
 
 /**
  * What garbage collection left behind, in sentences: worktrees it kept so no work is lost, and runs
@@ -36,18 +36,35 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
 export const PRUNE_PENDING_TEXT = 'Teardown is running; the worktree is removed when it ends.';
 export const PRUNE_FAILED_TEXT = 'The teardown ended, but the worktree could not be removed. Prune it again.';
 
+/** A run's Prune that goes on in the background: its outcome is the first outcome event after `since`. */
+export interface PrunePending {
+  runId: string;
+  /** The run's newest event id when the prune began (null: not told, from an older core). */
+  since: number | null;
+}
+
+const PRUNE_OUTCOMES = new Set(['worktree_pruned', 'worktree_prune_failed']);
+
 /**
- * The note after a run's Prune whose worktree.yml teardown outlasted the request (`pendingRunId`):
- * shown until that run's worktree is pruned or the run is gone, and while the runs are not known yet.
- * Once the teardown ended without removing the worktree (`worktree_prune_failed`), it says so instead.
+ * The note after a run's Prune whose worktree.yml teardown outlasted the request: shown until that
+ * prune's outcome (the newest `worktree_pruned` or `worktree_prune_failed` event after `since`) is known or
+ * the run is gone, and while the runs are not known yet. A failed prune says so, whatever happens on
+ * the run after it. `events`: the run's events, when loaded; until then its latest event stands in.
  */
 export function prunePendingNote(
-  pendingRunId: string | undefined,
+  pending: PrunePending | undefined,
   runs: readonly Pick<Run, 'id' | 'lastEvent'>[] | undefined,
+  events?: readonly Pick<RunEvent, 'id' | 'type'>[],
 ): { text: string; failed: boolean } | null {
-  if (!pendingRunId) return null;
-  const run = runs?.find((r) => r.id === pendingRunId);
-  if (runs && (!run || run.lastEvent === 'worktree_pruned')) return null;
-  if (run?.lastEvent === 'worktree_prune_failed') return { text: PRUNE_FAILED_TEXT, failed: true };
+  if (!pending) return null;
+  const run = runs?.find((r) => r.id === pending.runId);
+  if (runs && !run) return null;
+  const outcome = events
+    ? events
+        .filter((e) => PRUNE_OUTCOMES.has(e.type) && (pending.since === null || e.id > pending.since))
+        .at(-1)?.type
+    : run?.lastEvent;
+  if (outcome === 'worktree_pruned') return null;
+  if (outcome === 'worktree_prune_failed') return { text: PRUNE_FAILED_TEXT, failed: true };
   return { text: PRUNE_PENDING_TEXT, failed: false };
 }

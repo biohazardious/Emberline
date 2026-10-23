@@ -1078,11 +1078,13 @@ describe('teardown before prune', () => {
       t.runs as unknown as { pruneRunWorktree(project: string, worktree: string): Promise<boolean> },
       'pruneRunWorktree',
     ).mockRejectedValue(new Error('EBUSY'));
-    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({
-      pending: true,
-    });
+    const res = (await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json();
+    expect(res).toMatchObject({ pending: true, since: expect.any(Number) });
     release();
     await expect.poll(() => typesOf(run.id), { timeout: 8_000 }).toContain('worktree_prune_failed');
+    // The outcome comes after the event the answer named.
+    const failure = (await eventsOf(run.id)).find((e) => e.type === 'worktree_prune_failed')!;
+    expect(failure.id).toBeGreaterThan(res.since);
     expect(existsSync(run.worktreePath)).toBe(true);
     expect(await typesOf(run.id)).not.toContain('worktree_pruned');
     expect(t.runs.getRun(run.id).lastEvent).toBe('worktree_prune_failed');

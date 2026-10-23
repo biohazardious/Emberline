@@ -7,15 +7,17 @@ import type {
   Project,
   PruneWorktreeResponse,
   Run,
+  RunDetail,
   SystemStatus,
   TerminalInfo,
 } from '@emberline/protocol';
 import { API_VERSION } from '@emberline/protocol';
 import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
-import { keptWorktreesSummary, prunePendingNote } from '../gcSummary';
+import { keptWorktreesSummary, type PrunePending, prunePendingNote } from '../gcSummary';
 import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
@@ -73,7 +75,7 @@ export function Dashboard({
   const [cleanupNotice, setCleanupNotice] = useState<string>();
   const [pruneBlocked, setPruneBlocked] = useState<{ id: string; message: string }>();
   // The run whose Prune goes on in the background (its teardown outlasted the request).
-  const [prunePendingRun, setPrunePendingRun] = useState<string>();
+  const [prunePending, setPrunePending] = useState<PrunePending>();
   const [runFormFor, setRunFormFor] = useState<string>();
   const [deleteConfirmFor, setDeleteConfirmFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
@@ -156,7 +158,7 @@ export function Dashboard({
           force ? { force: true } : {},
         );
         // A teardown that outlasts the request finishes in the background: say so, or it looks like nothing happened.
-        setPrunePendingRun(res.pending ? id : undefined);
+        setPrunePending(res.pending ? { runId: id, since: res.since ?? null } : undefined);
       } else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
       if (action === 'prune' && e instanceof ApiRequestError && e.code === 'worktree_has_work') {
@@ -167,7 +169,18 @@ export function Dashboard({
     }
   };
 
-  const pruneNote = prunePendingNote(prunePendingRun, runs);
+  // The pending prune's outcome is read from the run's events: a later event must not hide it.
+  const prunedRun = runs?.find((r) => r.id === prunePending?.runId);
+  const pruneEvents = useQuery({
+    queryKey: ['prune-outcome', prunePending?.runId, prunePending?.since, prunedRun?.lastEvent],
+    queryFn: () => api<RunDetail>(`/api/runs/${prunePending!.runId}`),
+    enabled: Boolean(prunePending && prunedRun),
+    select: (detail) => detail.events,
+    // Polled while the note says the teardown runs (a missed run update must not leave it there).
+    refetchInterval: (query) =>
+      prunePendingNote(prunePending, runs, query.state.data?.events)?.failed === false ? 5_000 : false,
+  });
+  const pruneNote = prunePendingNote(prunePending, runs, pruneEvents.data);
   const dockerLine = dockerEngineLine(system?.docker);
   const projectName = (id: string | null) => projects.data?.find((p) => p.id === id)?.name;
 
@@ -493,7 +506,7 @@ export function Dashboard({
                               'POST',
                             );
                             setCleanupNotice(keptWorktreesSummary(res) ?? undefined);
-                            setPrunePendingRun(undefined); // the clean-up's own result says what it left
+                            setPrunePending(undefined); // the clean-up's own result says what it left
                           } catch (e) {
                             setActionError(errorMessage(e));
                           }

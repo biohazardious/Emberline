@@ -2648,6 +2648,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async pruneWorktree(id: string, rawBody?: PruneWorktreeBody): Promise<PruneWorktreeResponse> {
     const { force } = PruneWorktreeBodySchema.parse(rawBody ?? {});
     let row = this.row(id);
+    // A prune that goes on in the background records its outcome after this event (`since`).
+    const since =
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(eq(runEvents.runId, id))
+        .orderBy(desc(runEvents.id))
+        .limit(1)
+        .get()?.id ?? 0;
     // Its agent may have exited since the last reconcile: noted here, a pass running now is not waited for.
     if (!row.endedAt) row = await this.afterSessionCheck(row);
     if (!row.endedAt && row.state !== 'done' && row.state !== 'failed') {
@@ -2724,11 +2733,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       return 'done' as const;
     });
     if (started === 'pending')
-      return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+      return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true, since };
     if (started === 'done') return { runId: id, worktreePath: row.worktreePath, removed };
     // Teardown commands and compose downs may take minutes: the request waits a bounded time, the rest is background.
     const done = await settlesWithin(started.job, this.teardownBudgets.request);
-    if (!done) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+    if (!done) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true, since };
     // A second request for the same run got the first one's job back: its outcome is the directory's.
     return { runId: id, worktreePath: row.worktreePath, removed: removed || !existsSync(row.worktreePath) };
   }
