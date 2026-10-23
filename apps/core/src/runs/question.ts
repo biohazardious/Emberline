@@ -20,6 +20,33 @@ export interface QuestionInput {
   holdWhy: string | null;
 }
 
+/** Events after which an earlier picker is no longer open: the turn ended or a new one began. */
+const PICKER_BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart']);
+
+/**
+ * The open AskUserQuestion picker among a run's events, newest first: a PreToolUse of it with no
+ * PostToolUse, turn boundary or other tool after it. Only PostToolUse is hooked for most tools, so a
+ * declined or terminal-answered picker never closes by itself.
+ */
+export function openPicker(
+  newestFirst: readonly { type: string; payload: unknown }[],
+): AskUserQuestionSummary | null {
+  for (const r of newestFirst) {
+    const p = (r.payload ?? {}) as Record<string, unknown>;
+    if (PICKER_BOUNDARIES.has(r.type)) return null;
+    if (p.tool_name !== 'AskUserQuestion') {
+      if (r.type === 'PreToolUse') return null;
+      continue;
+    }
+    if (r.type === 'PostToolUse') return null;
+    if (r.type === 'PreToolUse') {
+      const ask = p.ask_user_question as AskUserQuestionSummary | undefined;
+      return ask && Array.isArray(ask.questions) && ask.questions.length > 0 ? ask : null;
+    }
+  }
+  return null;
+}
+
 const ITEM = /^\s*(?:\d{1,2}[.)]|[A-Za-z][.)]|[-*])\s+(.+?)\s*$/;
 const clip = (s: string) => s.slice(0, QUESTION_OPTION_MAX_CHARS);
 const plain = (s: string) =>

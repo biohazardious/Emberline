@@ -300,6 +300,38 @@ describe('runs', () => {
     ]);
   });
 
+  it("an open picker's permission prompt is the agent's question in the Inbox; a real one stays a permission", async () => {
+    const project = await createProject('Picker', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+    await hook(run.id, 'PreToolUse', token, {
+      tool_name: 'AskUserQuestion',
+      tool_input: {
+        questions: [
+          { question: 'Which colour?', header: 'Colour', multiSelect: false, options: [{ label: 'Red' }] },
+        ],
+      },
+    });
+    await hook(run.id, 'Notification', token, {
+      notification_type: 'permission_prompt',
+      message: 'Claude needs your permission',
+    });
+    const asked: Run = (await api('GET', `/api/runs/${run.id}`)).json();
+    expect(asked.attention).toMatchObject({ reason: 'question', detail: 'Which colour?' });
+
+    const other: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const otherToken = await tokenFor(other.id);
+    await hook(other.id, 'UserPromptSubmit', otherToken, { prompt: 'go' });
+    await hook(other.id, 'PreToolUse', otherToken, { tool_name: 'Bash', tool_input: { command: 'ls' } });
+    await hook(other.id, 'Notification', otherToken, {
+      notification_type: 'permission_prompt',
+      message: 'Claude needs your permission to use Bash',
+    });
+    const allowed: Run = (await api('GET', `/api/runs/${other.id}`)).json();
+    expect(allowed.attention).toMatchObject({ reason: 'permission' });
+  });
+
   it('records process exit: clean exit is done, non-zero is failed', async () => {
     const project = await createProject('Exit', false);
     const ok: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();

@@ -5,7 +5,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
-import type { AgentState } from '@emberline/adapter-sdk';
+import { isPermissionNotification, type AgentState } from '@emberline/adapter-sdk';
 import {
   CONTINUE_PROMPT,
   decoratePromptWithPersona,
@@ -70,6 +70,7 @@ import {
   DOCKER_ENGINE_UNREACHABLE_HINT,
   dockerEngineOffText,
   withHint,
+  type AskUserQuestionSummary,
 } from '@emberline/protocol';
 import {
   and,
@@ -157,7 +158,7 @@ import { DemoTokens } from '../demo-token.js';
 import { agentDemoUrl } from '../factory/demo-target.js';
 import { AGENT_PREVIEW_COOLDOWN_MS, AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
 import { resolveBrowserUrl, runnerPreviewUrl } from './browser-url.js';
-import { askUserQuestionOf } from './question.js';
+import { askUserQuestionOf, openPicker } from './question.js';
 import { PreviewFramingCache } from './preview-framing.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
@@ -1296,6 +1297,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** Whether the run already has an event of this type (e.g. a one-shot nudge that was sent). */
+  /** The run's open AskUserQuestion picker, if any (see {@link openPicker}). */
+  private openPicker(id: string): AskUserQuestionSummary | null {
+    return openPicker(
+      this.db
+        .select({ type: runEvents.type, payload: runEvents.payload })
+        .from(runEvents)
+        .where(eq(runEvents.runId, id))
+        .orderBy(desc(runEvents.id))
+        .limit(200)
+        .all(),
+    );
+  }
+
   hasEvent(id: string, type: string): boolean {
     return Boolean(
       this.db
@@ -2044,11 +2058,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       patch.autoRetryCount = 0;
       patch.autoRetryAt = null;
     }
+    const summary = summarizePayload(payload);
+    // Claude's open question picker raises a permission prompt: the Notification carries the picker's
+    // questions, so attention shows it as the agent's question rather than a permission.
+    if (envelope.event === 'Notification' && isPermissionNotification(payload)) {
+      const ask = this.openPicker(row.id);
+      if (ask) summary.ask_user_question = ask;
+    }
     const run = this.record(row.id, {
       source: 'hook',
       type: envelope.event,
       state: next,
-      payload: summarizePayload(payload),
+      payload: summary,
       patch,
     });
     if (retry && transient) {

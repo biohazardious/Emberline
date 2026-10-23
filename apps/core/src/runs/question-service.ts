@@ -18,7 +18,7 @@ import { decodeMaterials } from '../factory/materials.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { answerAttachmentPaths, answerPrompt, type StoredAttachment } from './answer.js';
 import { assertSuccessorExtraFits } from './handoff.js';
-import { buildRunQuestion } from './question.js';
+import { buildRunQuestion, openPicker } from './question.js';
 import { buildSuggestPrompt, runSuggestion } from './suggest.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { RunService } from './service.js';
@@ -36,7 +36,6 @@ export interface QuestionServiceOptions {
 }
 
 const noQuestion = () => new HttpError(404, 'no_question', 'This run is not waiting for an answer.');
-const BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart']);
 const ANSWERABLE = new Set(['question', 'permission', 'held', 'blocked']);
 
 const ESC = '\x1b';
@@ -221,29 +220,15 @@ export class QuestionService {
 
   /** The newest AskUserQuestion PreToolUse when no PostToolUse of that tool came after it. */
   private pendingAsk(runId: string): AskUserQuestionSummary | null {
-    const rows = this.db
-      .select({ type: runEvents.type, payload: runEvents.payload })
-      .from(runEvents)
-      .where(eq(runEvents.runId, runId))
-      .orderBy(desc(runEvents.id))
-      .limit(200)
-      .all();
-    for (const r of rows) {
-      const p = (r.payload ?? {}) as Record<string, unknown>;
-      // Only PostToolUse is hooked, so a declined or terminal-answered picker never closes: a turn
-      // boundary or another tool starting after the picker means the agent moved on.
-      if (BOUNDARIES.has(r.type)) return null;
-      if (p.tool_name !== 'AskUserQuestion') {
-        if (r.type === 'PreToolUse') return null;
-        continue;
-      }
-      if (r.type === 'PostToolUse') return null;
-      if (r.type === 'PreToolUse') {
-        const ask = p.ask_user_question as AskUserQuestionSummary | undefined;
-        return ask && Array.isArray(ask.questions) && ask.questions.length > 0 ? ask : null;
-      }
-    }
-    return null;
+    return openPicker(
+      this.db
+        .select({ type: runEvents.type, payload: runEvents.payload })
+        .from(runEvents)
+        .where(eq(runEvents.runId, runId))
+        .orderBy(desc(runEvents.id))
+        .limit(200)
+        .all(),
+    );
   }
 
   /** The agent's last message of this wait (Stop at or after `since`). */

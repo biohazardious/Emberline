@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- With Claude's question picker open, the Inbox card said "Permission · Claude needs your permission". It now shows the run as a question with the picker's questions, as the Answer dialog does. A real permission prompt is still shown as a permission.
+
 ## [0.6.0] - 2026-10-23
 
 An Answer dialog for agents that wait on you: the agent's own question, its options as chips, a suggested answer on request, and file attachments.

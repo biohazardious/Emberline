@@ -96,6 +96,32 @@ describe('computeAttention rules', () => {
     expect(idleLater).toMatchObject({ reason: 'permission', occurrence: 'r1:permission:6' });
   });
 
+  it("an open picker's permission prompt is the agent's question, until the turn ends", () => {
+    const ask = { questions: [{ question: 'Which colour?' }, { question: 'Which size?' }] };
+    const picker = ev(6, 'Notification', {
+      notification_type: 'permission_prompt',
+      message: 'Claude needs your permission',
+      ask_user_question: ask,
+    });
+    expect(computeAttention(baseRun(), facts({ enteredId: 6, waiting: [picker] }), NOW)).toMatchObject({
+      reason: 'question',
+      detail: 'Which colour?\nWhich size?',
+      occurrence: 'r1:question:6',
+    });
+    // A real permission prompt in the same wait still wins.
+    const real = ev(7, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' });
+    expect(computeAttention(baseRun(), facts({ enteredId: 6, waiting: [picker, real] }), NOW)).toMatchObject({
+      reason: 'permission',
+      detail: 'Allow Bash?',
+    });
+    // A Stop after the picker: the agent's last message is the question.
+    const stop = ev(8, 'Stop', { last_assistant_message: 'Pick one later.' });
+    expect(computeAttention(baseRun(), facts({ enteredId: 6, waiting: [picker, stop] }), NOW)).toMatchObject({
+      reason: 'question',
+      detail: 'Pick one later.',
+    });
+  });
+
   it('one wait is one occurrence: anchored at the Notification that entered it, permission wins, idle reminders never count', () => {
     const idle = (id: number) =>
       ev(id, 'Notification', {

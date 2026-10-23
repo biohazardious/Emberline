@@ -76,6 +76,19 @@ const make = (
   occurrence: `${run.id}:${reason}:${eventId === null ? `t${Date.parse(run.stateChangedAt)}` : eventId}`,
 });
 
+const clipDetail = (text: string) => (text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX - 1)}…` : text);
+
+/** The questions of the open picker a permission Notification was raised for, one per line; else null. */
+function pickerQuestions(event: AttentionEvent): string | null {
+  const ask = event.payload?.ask_user_question as { questions?: unknown } | undefined;
+  const questions = Array.isArray(ask?.questions)
+    ? ask.questions
+        .map((q) => (q && typeof q === 'object' ? (q as { question?: unknown }).question : undefined))
+        .filter((q): q is string => typeof q === 'string' && q.length > 0)
+    : [];
+  return questions.length > 0 ? questions.join('\n') : null;
+}
+
 /** Blockers of a `completion_blocked` note, joined into one text. */
 function blockersOf(event: AttentionEvent): string | null {
   const raw = event.payload?.blockers;
@@ -112,17 +125,23 @@ export function computeAttention(
       // A stall enters its own wait (from working); a later Notification of that wait takes over.
       if (latest?.type === 'stall_detected') return at('stalled', message(latest));
       const notifications = waiting.filter((e) => e.type === 'Notification');
-      // A permission prompt anywhere in the wait makes it a permission.
-      const permission = notifications.find((e) => isPermissionNotification(e.payload ?? {}));
+      // A permission prompt anywhere in the wait makes it a permission; Claude's open question picker
+      // raises one too, and its Notification carries the picker's questions (see RunService).
+      const permission = notifications.find(
+        (e) => isPermissionNotification(e.payload ?? {}) && !pickerQuestions(e),
+      );
       if (permission) return at('permission', message(permission));
+      // The picker is the agent's question until the turn ends (a Stop after it: its last message counts).
+      const picker = notifications.findLast((e) => pickerQuestions(e) !== null);
+      if (picker && !stops.some((s) => s.id > picker.id))
+        return at('question', clipDetail(pickerQuestions(picker)!));
       // Claude's idle reminders say nothing new: the detail is the agent's own question, or the text
       // of the Notification that entered the wait.
       const asked = notifications.find((e) => e.payload?.notification_type !== 'idle_prompt' && message(e));
       // The agent's own words come first: its last message of this wait, else a Notification's text.
       const said = stops.at(-1)?.payload?.last_assistant_message;
       const trimmed = typeof said === 'string' ? said.trim() : '';
-      const lastMessage =
-        trimmed.length > DETAIL_MAX ? `${trimmed.slice(0, DETAIL_MAX - 1)}…` : trimmed || null;
+      const lastMessage = trimmed ? clipDetail(trimmed) : null;
       return at(
         'question',
         lastMessage ?? message(asked ?? (entered?.type === 'Notification' ? entered : undefined)),
