@@ -3,7 +3,7 @@
  * back to the run's page, so it is redacted and bounded like the account push's.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -99,5 +99,53 @@ describe('pushing a run branch without an account', () => {
     expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@|fr4nk|gr4ce|h3idi/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);
+  });
+});
+
+describe('pushing a run branch with submodules', () => {
+  it("never runs a command a submodule's own config sets, even with submodule.recurse in the repository", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'run-push-sub-'));
+    const run = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-c', 'protocol.file.allow=always', '-C', cwd, ...args], { encoding: 'utf8' });
+    const commitIn = (cwd: string, file: string) => {
+      writeFileSync(path.join(cwd, file), `${file}\n`);
+      run(cwd, 'add', file);
+      run(cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', file);
+    };
+    try {
+      const sub = path.join(root, 'sub');
+      const origin = path.join(root, 'origin.git');
+      const subOrigin = path.join(root, 'sub-origin.git');
+      execFileSync('git', ['init', '-q', '--bare', origin]);
+      execFileSync('git', ['init', '-q', '--bare', '-b', 'main', subOrigin]);
+      execFileSync('git', ['init', '-q', '-b', 'main', sub]);
+      commitIn(sub, 's.txt');
+      run(sub, 'push', '-q', subOrigin, 'main');
+      run(dir, 'submodule', 'add', '-q', subOrigin, 'sub');
+      run(dir, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'sub');
+      // A new commit on the submodule's own run branch that its remote does not have: a recursing
+      // push pushes it there, with the submodule's own receivepack.
+      run(path.join(dir, 'sub'), 'checkout', '-q', '-b', 'emberline/run-1');
+      commitIn(path.join(dir, 'sub'), 'more.txt');
+      run(dir, 'add', 'sub');
+      run(dir, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'sub moved');
+      git('remote', 'set-url', 'origin', origin);
+      git('config', 'submodule.recurse', 'true');
+      git('config', 'push.recurseSubmodules', 'on-demand');
+      git('config', 'protocol.file.allow', 'always');
+      const marker = path.join(root, 'ran');
+      const moduleDir = path.join(dir, '.git', 'modules', 'sub');
+      execFileSync('git', [
+        '-C',
+        moduleDir,
+        'config',
+        'remote.origin.receivepack',
+        `touch ${marker}; git-receive-pack`,
+      ]);
+      await pushWorktreeBranch(dir, 'emberline/run-1', 'main').catch(() => undefined);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmTemp(root);
+    }
   });
 });

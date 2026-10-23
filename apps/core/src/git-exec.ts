@@ -22,12 +22,30 @@ const OVERRIDES: Record<string, string> = {
   'commit.gpgSign': 'false',
   'tag.gpgSign': 'false',
   'protocol.ext.allow': 'never',
+  // git's own default, pinned: a repository's config never widens it (`always` would let a
+  // submodule be fetched or pushed over the file transport).
+  'protocol.file.allow': 'user',
 };
 
 export const HARDENED_GIT_ARGS: readonly string[] = Object.entries(OVERRIDES).flatMap(([key, value]) => [
   '-c',
   `${key}=${value}`,
 ]);
+
+/**
+ * For every git command that reaches a remote with a credential (the account's capability URL, a
+ * token in origin's address): it never recurses into a submodule, whatever the repository's config
+ * says, so no command a submodule's own config sets runs and no other remote is reached. `-c` wins
+ * over every config file, and reaches a child git too.
+ */
+export const NO_SUBMODULES: readonly string[] = [
+  '-c',
+  'submodule.recurse=false',
+  '-c',
+  'push.recurseSubmodules=no',
+  '-c',
+  'fetch.recurseSubmodules=false',
+];
 
 /** Repo config keys that run commands and have no safe generic override. */
 const BLOCKED_CONFIG_KEY =

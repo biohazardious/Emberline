@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { projects, runs } from '../db/schema.js';
+import { NO_SUBMODULES } from '../git-exec.js';
 import { basicAuthValue, type GitHttpCredential } from '../git-credentials.js';
 import { pushWorktreeBranch } from '../runs/git.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
@@ -352,9 +353,14 @@ describe('import clone', () => {
   it('without an account the clone is the plain PTY clone, with no credential and no capability', async () => {
     const res = await create(`${b.url}/alice/app.git`, 'Public App');
     expect(res.json().terminalId).toBe('clone-1');
+    // Never into a submodule, and never over the file transport there.
     expect(spawned[0]!.args).toEqual([
+      '-c',
+      'protocol.file.allow=user',
+      ...NO_SUBMODULES,
       'clone',
       '--progress',
+      '--no-recurse-submodules',
       '--',
       `${b.url}/alice/app.git`,
       path.join(t.dir, 'public-app'),
@@ -375,8 +381,12 @@ describe('import clone', () => {
     const plain = await createOn(`${b.url}/alice/app.git`, 'Public App', 'develop');
     expect(plain.statusCode, plain.body).toBe(201);
     expect(spawned[0]!.args).toEqual([
+      '-c',
+      'protocol.file.allow=user',
+      ...NO_SUBMODULES,
       'clone',
       '--progress',
+      '--no-recurse-submodules',
       '--branch',
       'develop',
       '--',

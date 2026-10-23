@@ -18,7 +18,7 @@ import type {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
-import { execGitFile } from '../git-exec.js';
+import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets, redactGitText } from '../git-gateway/gateway.js';
 import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
@@ -769,8 +769,10 @@ export async function pushWorktreeBranch(
       [
         '-C',
         worktreePath,
+        ...NO_SUBMODULES,
         'push',
         '--porcelain',
+        '--no-recurse-submodules',
         '-u',
         'origin',
         `refs/heads/${branchToPush}:refs/heads/${branchToPush}`,

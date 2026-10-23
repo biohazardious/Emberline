@@ -3,7 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runGit, UnsafeGitConfigError } from './git-exec.js';
+import { HARDENED_GIT_ARGS, NO_SUBMODULES, runGit, UnsafeGitConfigError } from './git-exec.js';
+import { gatewayGitArgs } from './git-gateway/remote-git.js';
 import { rmTemp } from './test-rm.js';
 
 let repo: string;
@@ -30,6 +31,19 @@ beforeEach(() => {
 
 afterEach(() => {
   rmTemp(path.dirname(repo));
+});
+
+describe('git commands with a credential', () => {
+  it('pin protocol.file.allow on every call, and never recurse into a submodule', () => {
+    expect(HARDENED_GIT_ARGS.join(' ')).toContain('-c protocol.file.allow=user');
+    expect(NO_SUBMODULES.join(' ')).toBe(
+      '-c submodule.recurse=false -c push.recurseSubmodules=no -c fetch.recurseSubmodules=false',
+    );
+    // The account's ls-remote, fetch, push and clone all start with these.
+    expect(gatewayGitArgs({ baseUrl: 'http://core:7420' } as never).join(' ')).toContain(
+      NO_SUBMODULES.join(' '),
+    );
+  });
 });
 
 describe('hardened git execution', () => {

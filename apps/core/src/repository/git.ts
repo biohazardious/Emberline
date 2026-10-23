@@ -2,7 +2,7 @@ import { isRunnerUnavailable } from '../command-exec.js';
 import { badRequest, HttpError } from '../errors.js';
 import { remoteUrlForDisplay, scpUserInfoBeforePath } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
-import { execGitFile } from '../git-exec.js';
+import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets } from '../git-gateway/gateway.js';
 import {
   type AccountRemote,
@@ -175,7 +175,14 @@ export async function listRemoteBranches(
     ? await accountRemoteBranches(access.account, mainPath, branch)
     : (
         await execGitFile(
-          ['ls-remote', '--heads', '--', access.url, ...(branch ? [`refs/heads/${branch}`] : [])],
+          [
+            ...NO_SUBMODULES,
+            'ls-remote',
+            '--heads',
+            '--',
+            access.url,
+            ...(branch ? [`refs/heads/${branch}`] : []),
+          ],
           { cwd: mainPath, timeout: 20_000 },
         )
       ).stdout
@@ -196,7 +203,7 @@ export async function remoteBranchHead(
 ): Promise<string | null> {
   if (access.account) return accountRemoteHead(access.account, mainPath, branch);
   const out = (
-    await execGitFile(['ls-remote', '--heads', '--', access.url, `refs/heads/${branch}`], {
+    await execGitFile([...NO_SUBMODULES, 'ls-remote', '--heads', '--', access.url, `refs/heads/${branch}`], {
       cwd: mainPath,
       timeout: 20_000,
     })
@@ -227,6 +234,7 @@ export async function fetchBranchObjects(
     // Only the real objects, as on the account path: no replace refs, grafts or commit-graph.
     await execGitFile(
       [
+        ...NO_SUBMODULES,
         '-c',
         'core.commitGraph=false',
         '-c',
@@ -300,6 +308,7 @@ export async function pushBranch(
     try {
       await execGitFile(
         [
+          ...NO_SUBMODULES,
           'push',
           '--porcelain',
           '--no-recurse-submodules',

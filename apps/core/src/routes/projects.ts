@@ -76,7 +76,7 @@ import {
 } from '@emberline/protocol';
 import { asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
-import { execGitFile } from '../git-exec.js';
+import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
@@ -573,7 +573,18 @@ export function registerProjectRoutes(
               projectPath,
               branch,
             )
-          : ['clone', '--progress', ...(branch ? ['--branch', branch] : []), '--', body.repoUrl, projectPath];
+          : [
+              '-c',
+              'protocol.file.allow=user',
+              ...NO_SUBMODULES,
+              'clone',
+              '--progress',
+              '--no-recurse-submodules',
+              ...(branch ? ['--branch', branch] : []),
+              '--',
+              body.repoUrl,
+              projectPath,
+            ];
         try {
           const session = await ptyd.get().spawn({
             file: 'git',

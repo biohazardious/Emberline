@@ -7,7 +7,7 @@
  */
 import { isRunnerUnavailable } from '../command-exec.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
-import { execGitFile } from '../git-exec.js';
+import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
 import { CAPABILITY_ROUTE_PREFIX, type GitGateway } from './gateway.js';
 import { oldValueRefusal } from './receive-pack.js';
@@ -36,6 +36,7 @@ export function gatewayGitArgs(gateway: GitGateway): string[] {
     'http.proxy=',
     '-c',
     'credential.helper=',
+    ...NO_SUBMODULES,
   ];
 }
 
