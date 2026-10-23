@@ -82,6 +82,7 @@ import {
   reviewUnblockPending,
   stillHeld,
 } from '../runs/hold-outcome.js';
+import { HOLD_EVENTS } from '../runs/hold-events.js';
 import { WORKTREE_COMMANDS_PROMPT, worktreeYmlFixPrompt } from '../runs/recovery.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
@@ -272,6 +273,46 @@ export const CONFLICT_ATTEMPT_CAP = 3;
 /** Hold payload text kept for the recovery prompts: at most this many characters. */
 const HOLD_PAYLOAD_MAX = 4_000;
 const holdText = (text: string): string => text.slice(0, HOLD_PAYLOAD_MAX);
+
+/** Holds a gate notes with an automatic request for the agent's fix (`autoFix: true`, the request in `request`). */
+const FIX_REQUEST_HOLDS: readonly string[] = [
+  'build_gate_failed',
+  'secret_guard_blocked',
+  'slop_guard_blocked',
+  'critic_blocked',
+];
+/** The first line of the worktree.yml check's note (`output`), before the errors. */
+const WORKTREE_YML_INVALID = '.emberline/worktree.yml is not valid:';
+
+/** A fix request a gate noted but never sent (a restart cut its pass off in between). */
+interface PendingFixRequest {
+  /** The hold it was noted with (`completion_nudged` for the completion nudge). */
+  type: string;
+  /** That note's payload without `autoFix` and `request`. */
+  note: Record<string, unknown>;
+  request: string;
+}
+
+/** What the build gate asks the agent when the checks failed (`excerpt`: the end of their output). */
+const buildFixPrompt = (excerpt: string): string =>
+  `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${excerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.`;
+
+/**
+ * Which check a `build_gate_failed` note is about: its `check`, or for a note from before the
+ * worktree config checks named theirs (0.5.0), its text. The build gate's own note names none.
+ */
+function fixCheckOf(payload: unknown): string {
+  const p = payload as { check?: string; output?: string } | null;
+  if (p?.check !== undefined) return p.check;
+  const output = p?.output ?? '';
+  if (output.startsWith(WORKTREE_YML_INVALID)) return 'worktree_yml';
+  // The worktree-commands request's text says what it asks.
+  if (
+    output.includes('this ticket asks for the setup, build, lint and test commands and the preview service')
+  )
+    return 'worktree_commands';
+  return 'build';
+}
 
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
@@ -649,9 +690,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       const outcome = this.pipelineOutcome(latestRun.id);
       // A gate left it here for a person (secret guard, build gate, a merge that failed): not
       // leftover work, and not a merge to retry on every dispatch. Unless the restart cut the pass off
-      // between the critic's hold and its follow-up: the resumed pass sends it.
-      if (outcome === 'held' && !(wasCutOff && this.undeliveredCriticRequest(latestRun.id) !== null))
-        continue;
+      // between a gate's hold and its request to the agent: the resumed pass sends it.
+      if (outcome === 'held' && !(wasCutOff && this.pendingFixRequest(latestRun) !== null)) continue;
       if (outcome === 'merged') {
         // Merged, but the move to Done was cut off.
         if (!autoMoveToDone) continue;
@@ -724,7 +764,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /**
    * Whether the run was already asked to fix this check (the autoFix note survives restarts). The
    * build gate's note names no check; neither did the worktree.yml and worktree-commands ones before
-   * they did, so those are told apart by their text.
+   * they did, so those are told apart by their text (fixCheckOf).
    */
   private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands' | 'build'): boolean {
     return this.db
@@ -732,20 +772,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .from(runEvents)
       .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'build_gate_failed')))
       .all()
-      .some(({ payload }) => {
-        const p = payload as { check?: string; autoFix?: boolean; output?: string } | null;
-        if (p?.autoFix !== true) return false;
-        if (p.check !== undefined) return p.check === check;
-        const output = p.output ?? '';
-        const worktreeYml = output.startsWith('.emberline/worktree.yml is not valid:');
-        // The worktree-commands request named no check before 0.5.0 either; its text says what it asks.
-        const worktreeCommands = output.includes(
-          'this ticket asks for the setup, build, lint and test commands and the preview service',
-        );
-        if (check === 'worktree_yml') return worktreeYml;
-        if (check === 'worktree_commands') return worktreeCommands;
-        return !worktreeYml && !worktreeCommands;
-      });
+      .some(({ payload }) => isAutoFixHold(payload) && fixCheckOf(payload) === check);
   }
 
   /**
@@ -761,15 +788,103 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * The critic's follow-up that the run's current turn asked for but never sent: the text of its
-   * `critic_blocked` hold noted with the request (`autoFix: true`) when no prompt reached the agent
-   * after it (a restart cut the pass off in between); null otherwise.
+   * The request for the agent's fix that the run's current turn (after its latest `done`) noted but
+   * never sent: its newest hold is a gate's fix request (or the completion nudge) and no prompt
+   * reached the agent after it. Null otherwise. A note written before the request was stored with it
+   * gets it rebuilt from the note.
    */
-  private undeliveredCriticRequest(runId: string): string | null {
-    const blocked = this.noteOfThisTurn(runId, 'critic_blocked');
-    if (!blocked || blocked.delivered || !isAutoFixHold(blocked.payload)) return null;
-    const text = (blocked.payload as { followUpPrompt?: unknown }).followUpPrompt;
-    return typeof text === 'string' && text !== '' ? text : null;
+  private pendingFixRequest(run: Run): PendingFixRequest | null {
+    const turnStart = latestDoneEventId(this.db, run.id) ?? 0;
+    const events = this.db
+      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, run.id),
+          gt(runEvents.id, turnStart),
+          inArray(runEvents.type, [...HOLD_EVENTS, 'prompt_sent', 'resumed', 'respawning']),
+        ),
+      )
+      .orderBy(asc(runEvents.id))
+      .all();
+    const hold = events.findLast((e) => HOLD_EVENTS.includes(e.type));
+    if (!hold || events.some((e) => e.id > hold.id && !HOLD_EVENTS.includes(e.type))) return null;
+    if (hold.type === 'completion_nudged') return { type: hold.type, note: {}, request: COMPLETION_NUDGE };
+    if (!FIX_REQUEST_HOLDS.includes(hold.type) || !isAutoFixHold(hold.payload)) return null;
+    const { autoFix: _autoFix, request, ...note } = hold.payload as Record<string, unknown>;
+    const text =
+      typeof request === 'string' && request !== '' ? request : this.rebuiltFixRequest(run, hold.type, note);
+    return text === null ? null : { type: hold.type, note, request: text };
+  }
+
+  /** The request of a fix-request hold noted without it (before 0.6.1), from what the note kept. */
+  private rebuiltFixRequest(run: Run, type: string, note: Record<string, unknown>): string | null {
+    const field = (key: string) => (typeof note[key] === 'string' && note[key] !== '' ? note[key] : null);
+    if (type === 'critic_blocked' || type === 'secret_guard_blocked' || type === 'slop_guard_blocked') {
+      const text = field(type === 'critic_blocked' ? 'followUpPrompt' : 'autoFixPrompt');
+      return text === null ? null : `${text}${this.completionReminder(run, '\n\n')}`;
+    }
+    if (type !== 'build_gate_failed') return null;
+    const output = field('output') ?? '';
+    const check = fixCheckOf(note);
+    const text =
+      check === 'worktree_yml'
+        ? worktreeYmlFixPrompt(output.slice(WORKTREE_YML_INVALID.length).replace(/^\n/, ''))
+        : check === 'worktree_commands'
+          ? WORKTREE_COMMANDS_PROMPT
+          : buildFixPrompt(output);
+    return `${text}${this.completionReminder(run, ' ')}`;
+  }
+
+  /**
+   * Holds the run for the agent's fix and asks for it: the hold is noted first, with the whole
+   * request (should a restart cut the pass off before it went out, the resumed pass sends it), so an
+   * undelivered request never lets a later dispatch merge. Should it not arrive, the hold is noted
+   * again for a person (`autoFix: false`). Whether it arrived.
+   */
+  private async requestFix(
+    run: Run,
+    type: string,
+    note: Record<string, unknown>,
+    request: string,
+  ): Promise<boolean> {
+    this.runs.note(run.id, type, { autoFix: true, ...note, request });
+    return this.sendFixRequest(run, { type, note, request });
+  }
+
+  /** Sends a fix request; should it not arrive, notes the hold again for a person. Whether it arrived. */
+  private sendFixRequest(run: Run, { type, note, request }: PendingFixRequest): Promise<boolean> {
+    return this.runs.prompt(run.id, request, { automatic: true }).then(
+      () => true,
+      () => {
+        if (type === 'completion_nudged') this.runs.note(run.id, 'completion_missing', {});
+        else this.runs.note(run.id, type, { autoFix: false, ...note });
+        return false;
+      },
+    );
+  }
+
+  /**
+   * The pass a restart cut off between a gate's hold and its request: everything before was done,
+   * so the request is sent now, as that pass would have. Undelivered, the hold is a person's, and a
+   * worktree config check hands it over as its own pass does.
+   */
+  private async resumeFixRequest(run: Run, pending: PendingFixRequest): Promise<void> {
+    if (await this.sendFixRequest(run, pending)) return;
+    if (pending.type === 'build_gate_failed' && fixCheckOf(pending.note) !== 'build') {
+      await this.closeAndGoOn(run);
+    }
+  }
+
+  /** A hold for a person: the run's session is closed (it stays resumable) and the chain goes on. */
+  private async closeAndGoOn(run: Run): Promise<void> {
+    if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
+    if (
+      this.autoChainProjects.has(run.projectId) &&
+      effectiveFactorySettings(this.db, run.projectId).autoPickupReady
+    ) {
+      await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
+    }
   }
 
   /**
@@ -797,18 +912,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const note = events.findLast((e) => e.type === type && matches(e.payload));
     if (!note) return null;
     return { payload: note.payload, delivered: events.some((e) => e.type !== type && e.id > note.id) };
-  }
-
-  /** Sends the critic's follow-up; should it not arrive, the hold is noted again for a person. */
-  private async askCriticFix(run: Run, followUpPrompt: string): Promise<void> {
-    await this.runs
-      .prompt(run.id, `${followUpPrompt}${this.completionReminder(run, '\n\n')}`, { automatic: true })
-      .catch(() =>
-        this.runs.note(run.id, 'critic_blocked', {
-          autoFix: false,
-          followUpPrompt: holdText(followUpPrompt),
-        }),
-      );
   }
 
   /** Whether the run was already asked to clean up a secret or slop finding (the autoFix note survives restarts). */
@@ -1113,11 +1216,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return;
     }
 
-    // The pass a restart cut off had held the run for the critic's follow-up but not sent it yet:
-    // everything before it was done, so this one only sends it, and the agent's next stop is the next pass.
-    const criticRequest = resumed ? this.undeliveredCriticRequest(run.id) : null;
-    if (criticRequest !== null) {
-      await this.askCriticFix(run, criticRequest);
+    // The pass a restart cut off had held the run for a gate's request to the agent but not sent it
+    // yet: this one only sends it, and the agent's next stop is the next pass.
+    const pendingRequest = resumed ? this.pendingFixRequest(run) : null;
+    if (pendingRequest) {
+      await this.resumeFixRequest(run, pendingRequest);
       return;
     }
 
@@ -1374,29 +1477,23 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         const errorText = problems.join('\n').slice(0, 2_400);
         const gateNote = {
           check: 'worktree_yml',
-          output: holdText(`.emberline/worktree.yml is not valid:\n${errorText}`),
+          output: holdText(`${WORKTREE_YML_INVALID}\n${errorText}`),
         };
         const autoFix =
           fSettings.selfHealingBuildGate &&
           !this.askedToFix(run.id, 'worktree_yml') &&
           (!run.endedAt || run.resumable);
-        let asked = false;
-        if (autoFix) {
-          // Held before asking: an undelivered request must not let a later dispatch merge the file.
-          this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
-          asked = await this.runs
-            .prompt(run.id, `${worktreeYmlFixPrompt(errorText)}${this.completionReminder(run, ' ')}`, {
-              automatic: true,
-            })
-            .then(() => true)
-            .catch(() => false);
-        }
+        const asked =
+          autoFix &&
+          (await this.requestFix(
+            run,
+            'build_gate_failed',
+            gateNote,
+            `${worktreeYmlFixPrompt(errorText)}${this.completionReminder(run, ' ')}`,
+          ));
         if (!asked) {
-          this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
-          if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
-          if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
-            await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
-          }
+          if (!autoFix) this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
+          await this.closeAndGoOn(run);
         }
         return;
       }
@@ -1413,22 +1510,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           fSettings.selfHealingBuildGate &&
           !this.askedToFix(run.id, 'worktree_commands') &&
           (!run.endedAt || run.resumable);
-        let asked = false;
-        if (autoFix) {
-          this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
-          asked = await this.runs
-            .prompt(run.id, `${WORKTREE_COMMANDS_PROMPT}${this.completionReminder(run, ' ')}`, {
-              automatic: true,
-            })
-            .then(() => true)
-            .catch(() => false);
-        }
+        const asked =
+          autoFix &&
+          (await this.requestFix(
+            run,
+            'build_gate_failed',
+            gateNote,
+            `${WORKTREE_COMMANDS_PROMPT}${this.completionReminder(run, ' ')}`,
+          ));
         if (!asked) {
-          this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
-          if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
-          if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
-            await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
-          }
+          if (!autoFix) this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
+          await this.closeAndGoOn(run);
         }
         return; // build gate, critic and merge wait for the next pass
       }
@@ -1469,15 +1561,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         // Held for the agent's fix: its next stop runs the pipeline again (see HOLD_EVENTS). Not
         // for a person while the agent works on it (autoFix); noted again for one if the request fails.
         const errorExcerpt = buildRes.output.slice(-2_400);
-        const gateNote = { output: holdText(errorExcerpt) };
-        this.runs.note(run.id, 'build_gate_failed', { autoFix: true, ...gateNote });
-        await this.runs
-          .prompt(
-            run.id,
-            `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${errorExcerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.${this.completionReminder(run, ' ')}`,
-            { automatic: true },
-          )
-          .catch(() => this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote }));
+        await this.requestFix(
+          run,
+          'build_gate_failed',
+          { output: holdText(errorExcerpt) },
+          `${buildFixPrompt(errorExcerpt)}${this.completionReminder(run, ' ')}`,
+        );
         return;
       }
     }
@@ -1512,24 +1601,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       const slopNote = slopReport?.autoFixPrompt ? { autoFixPrompt: holdText(slopReport.autoFixPrompt) } : {};
       // Held first, also while the agent is asked to clean up: should the request not arrive, a
       // later dispatch must not merge the leak. The agent's next stop lifts the hold.
-      if (hasSecretViolation) this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix });
-
       if (autoFix && slopReport?.autoFixPrompt) {
-        // Held before asking, like the secret guard: an undelivered request must not let a later merge through.
-        if (!hasSecretViolation) this.runs.note(run.id, 'slop_guard_blocked', { autoFix: true, ...slopNote });
-        await this.runs
-          .prompt(run.id, `${slopReport.autoFixPrompt}${this.completionReminder(run, '\n\n')}`, {
-            automatic: true,
-          })
-          .catch(() =>
-            hasSecretViolation
-              ? this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix: false })
-              : this.runs.note(run.id, 'slop_guard_blocked', { autoFix: false, ...slopNote }),
-          );
+        const request = `${slopReport.autoFixPrompt}${this.completionReminder(run, '\n\n')}`;
+        if (hasSecretViolation) await this.requestFix(run, 'secret_guard_blocked', secretNote, request);
+        else await this.requestFix(run, 'slop_guard_blocked', slopNote, request);
         return;
       }
 
-      if (hasSecretViolation) secretGuardBlockedMerge = true;
+      if (hasSecretViolation) {
+        this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix: false });
+        secretGuardBlockedMerge = true;
+      }
     }
 
     // 2c. Layer 3 — Cross-Provider AI Critic (e.g. Claude codes -> Antigravity critiques, or vice versa):
@@ -1565,11 +1647,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         criticRes.followUpPrompt &&
         (!run.endedAt || run.resumable)
       ) {
-        this.runs.note(run.id, 'critic_blocked', {
-          autoFix: true,
-          followUpPrompt: holdText(criticRes.followUpPrompt),
-        });
-        await this.askCriticFix(run, criticRes.followUpPrompt);
+        await this.requestFix(
+          run,
+          'critic_blocked',
+          { followUpPrompt: holdText(criticRes.followUpPrompt) },
+          `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`,
+        );
         return;
       }
     }
@@ -1676,12 +1759,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (!this.runs.hasEvent(run.id, 'completion_nudged') && (!run.endedAt || run.resumable)) {
       // Noted first (a hold): a dispatch must not finalize the ticket while the agent answers.
       this.runs.note(run.id, 'completion_nudged', {});
-      const sent = await this.runs.prompt(run.id, COMPLETION_NUDGE, { automatic: true }).then(
-        () => true,
-        () => false,
-      );
-      // Undelivered, no next stop will come: it waits for a person now.
-      if (!sent) this.runs.note(run.id, 'completion_missing', {});
+      // Undelivered, no next stop will come: it waits for a person now (`completion_missing`).
+      await this.sendFixRequest(run, { type: 'completion_nudged', note: {}, request: COMPLETION_NUDGE });
       return false;
     }
     this.runs.note(run.id, 'completion_missing', {});

@@ -796,6 +796,8 @@ export const GarbageCollectRunsResponse = z.object({
    * `archive_pending`: its build outputs could not be archived within the request's time budget.
    * `teardown_running`: its worktree.yml teardown outlasted the request's time budget; the worktree
    * is pruned and the run removed in the background once it ends.
+   * `prune_running`: a prune of its worktree was running; the prune removes the worktree, and the next
+   * clean-up removes the run.
    */
   keptWorktrees: z
     .array(
@@ -807,6 +809,7 @@ export const GarbageCollectRunsResponse = z.object({
           'in_review',
           'archive_pending',
           'teardown_running',
+          'prune_running',
         ]),
       }),
     )

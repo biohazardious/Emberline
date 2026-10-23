@@ -1019,7 +1019,7 @@ describe('teardown before prune', () => {
     expect(order).toEqual([`teardown:${oldest.worktreePath}`]);
   });
 
-  it('a clean-up leaves a worktree alone while a manual prune of it archives', async () => {
+  it('a clean-up leaves a worktree alone while a manual prune of it archives, and says so', async () => {
     const { release, order } = holdTeardowns();
     budgets().request = 200;
     const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
@@ -1033,6 +1033,7 @@ describe('teardown before prune', () => {
     expect(calls()).toBe(1);
     expect(order).toEqual([]);
     expect(res.removedRuns).toBe(0);
+    expect(res.keptWorktrees).toEqual([{ runId: run.id, reason: 'prune_running' }]);
     expect(t.runs.list().some((r) => r.id === run.id)).toBe(true);
 
     archived();

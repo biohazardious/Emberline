@@ -24,7 +24,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - When core restarted while a finished ticket run waited for its checks and merge, the ticket stayed in Review without them unless the project's factory chain was on. After a restart, such a ticket now gets its checks and merge in every project, as it would have without the restart.
 - **Run pipeline** (and a running factory picking up its next ticket) could merge a ticket you had started yourself and left in Review, and move it to Done, when the factory was off as that ticket finished. Such a ticket now stays in Review for you.
 - With the cross-provider critic on, an agent that stopped a second time while the critic was still reviewing its first stop could get its ticket merged without the critic's verdict. The merge now waits for the verdict, and a critic that asks for changes keeps the ticket in Review.
-- When core restarted right after the critic asked for changes, the agent could miss the critic's request, and the ticket stayed in Review with nothing sent to the agent. After a restart, the request is now sent, once.
+- When core restarted right after a check asked the agent for a fix (the build checks, the worktree config checks, the secret or quality guard, the critic, or the reminder to call `ticket_complete`), the request could be lost: the ticket stayed in Review, nothing reached the agent, and nobody was told. After a restart, the request is now sent once, in full, and one that cannot be delivered leaves the ticket for you.
+- **Clean Up Finished**, **Clean Worktrees** and the automatic clean-up could archive a run's build outputs again and start its teardown while you were pruning that run's worktree. They now leave such a run for the next clean-up, and **Clean Up Finished** and **Clean Worktrees** say so in their result.
 
 ## [0.6.0] - 2026-10-23
 

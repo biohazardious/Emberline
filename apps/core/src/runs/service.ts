@@ -4014,12 +4014,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             removedWt = await this.pruneRunWorktree(proj.path, worktreePath).catch(() => false);
             return 'remove' as const;
           });
-          // A manual prune of this worktree is archiving it or starting its teardown: left for the
-          // next clean-up, which finds it pruned or tearing down.
-          if (step === null) continue;
-          if (step === 'archive_pending') {
-            if (!reportedPaths.has(worktreePath))
-              keptWorktrees.push({ runId: row.id, reason: 'archive_pending' });
+          // `null`: a prune of this worktree is archiving it or starting its teardown; the run is left for
+          // the next clean-up, which finds the worktree pruned or tearing down.
+          if (step === null || step === 'archive_pending') {
+            const reason = step ?? 'prune_running';
+            if (!reportedPaths.has(worktreePath)) keptWorktrees.push({ runId: row.id, reason });
             reportedPaths.add(worktreePath);
             continue;
           }

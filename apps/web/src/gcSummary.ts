@@ -15,6 +15,7 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
       [count('in_review'), 'a ticket still in review'],
       [count('archive_pending'), 'build outputs not archived in time (run the clean-up again)'],
       [count('teardown_running'), 'its worktree.yml teardown still running (pruned when it ends)'],
+      [count('prune_running'), 'a prune already running (run the clean-up again to remove its run)'],
     ] as const
   )
     .filter(([n]) => n)

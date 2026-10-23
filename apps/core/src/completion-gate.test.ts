@@ -408,6 +408,33 @@ describe('completion gate', () => {
     expect(existsSync(path.join(project.path, 'A.txt'))).toBe(false);
   });
 
+  it('a nudge a restart cut off before it went out is sent once the pass resumes', async () => {
+    const { project, ticket, run } = await factoryTicket();
+    const sent: string[] = [];
+    (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+      sent.push(text);
+      // Core goes down while the nudge is being typed: it never arrives, and the pass never ends.
+      if (sent.length === 1) return new Promise<Run>(() => undefined);
+      return t.runs.getRun(id);
+    };
+    await begin(run);
+    await stop(run);
+    await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+    expect(await eventTypes(run)).toContain('completion_nudged');
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const resumed = trackPipelines(restarted);
+    await restarted.resumeChains();
+    await settled(resumed, 1);
+    expect(sent).toEqual([NUDGE, NUDGE]);
+    const types = await eventTypes(run);
+    expect(types.filter((x) => x === 'completion_nudged')).toHaveLength(1);
+    expect(types).not.toContain('completion_missing');
+    expect(types).not.toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).toBe('review');
+    expect(existsSync(path.join(project.path, 'A.txt'))).toBe(false);
+  });
+
   it('while the agent answers the nudge, a dispatch does not finalize the ticket behind it', async () => {
     const { project, ticket, run } = await factoryTicket();
     const passes = trackPipelines();

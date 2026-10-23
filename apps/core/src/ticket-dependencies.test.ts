@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setSetting } from './db/index.js';
-import { runs, settings, tickets as ticketRows } from './db/schema.js';
+import { runEvents, runs, settings, tickets as ticketRows } from './db/schema.js';
 import type * as FactoryService from './factory/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
@@ -1702,9 +1702,11 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
-    it("the critic's follow-up that never went out is sent when the pass resumes", async () => {
+    it("the critic's follow-up that never went out is sent in full when the pass resumes", async () => {
       await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
-      critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+      // Longer than a hold note keeps for the recovery prompts.
+      const followUpPrompt = `Fix the findings of the review.\n${'- a finding\n'.repeat(600)}`;
+      critic.result = { verdict: 'NEEDS_FIX', followUpPrompt };
       const sent: string[] = [];
       (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
         sent.push(text);
@@ -1725,8 +1727,10 @@ describe('factory chain robustness', () => {
       await restarted.resumeChains();
       await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
       await Promise.all(resumed);
-      expect(sent).toHaveLength(2);
-      expect(sent[1]).toBe(sent[0]);
+      expect(sent).toEqual([
+        followUpPrompt + t.tickets.completionReminder(run, '\n\n'),
+        followUpPrompt + t.tickets.completionReminder(run, '\n\n'),
+      ]);
       expect(critic.calls).toBe(1);
       expect(await eventTypes(run)).not.toContain('merged_to_main');
       expect(await statusOf(a.id)).toBe('review');
@@ -1758,6 +1762,119 @@ describe('factory chain robustness', () => {
       expect(sent).toHaveLength(1);
       expect(await eventTypes(run)).not.toContain('merged_to_main');
       expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+
+    /** The first automatic prompt hangs (core goes down while it is typed); later ones are recorded. */
+    function cutOffFirstPrompt(): string[] {
+      const sent: string[] = [];
+      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async (id, text) => {
+        sent.push(text);
+        if (sent.length === 1) return new Promise<Run>(() => undefined);
+        return t.runs.getRun(id);
+      };
+      return sent;
+    }
+
+    /** Core restarts: a new service resumes the cut-off passes; resolves once they ended. */
+    async function restartAndResume(expected: number): Promise<void> {
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const resumed = trackPipelines(restarted);
+      await restarted.resumeChains();
+      await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(expected);
+      await Promise.all(resumed);
+    }
+
+    /** A run of the project whose build fails, with its first stop done. */
+    async function failingBuildRun() {
+      build.result = { ok: false, output: 'boom' };
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      writeFileSync(
+        path.join(run.worktreePath, 'package.json'),
+        JSON.stringify({ scripts: { build: 'true' } }),
+      );
+      wgit(run.worktreePath, 'add', '-A');
+      wgit(run.worktreePath, 'commit', '-q', '-m', 'build');
+      return { project, a, run };
+    }
+
+    it("the build gate's fix request that never went out is sent once the pass resumes, and only once", async () => {
+      const sent = cutOffFirstPrompt();
+      const { project, a, run } = await failingBuildRun();
+      await finish(run);
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+      expect(sent[0]).toContain('boom');
+
+      await restartAndResume(1);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toBe(sent[0]);
+      expect(build.calls).toBe(1);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      expect(await statusOf(a.id)).toBe('review');
+
+      // Sent this time: a further restart sends nothing (the pass ended, and the request went out).
+      t.runs.note(run.id, 'prompt_sent', { length: sent[1]!.length });
+      await restartAndResume(0);
+      expect(sent).toHaveLength(2);
+      await settle(project.id);
+    });
+
+    it('a fix request noted before it was stored with its note (0.6.0) is rebuilt from the note', async () => {
+      const sent = cutOffFirstPrompt();
+      const { project, run } = await failingBuildRun();
+      await finish(run);
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+      // 0.6.0 noted the hold without the request.
+      const row = t.db
+        .select()
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, run.id), eq(runEvents.type, 'build_gate_failed')))
+        .get()!;
+      const { request: _request, ...payload } = row.payload as Record<string, unknown>;
+      t.db.update(runEvents).set({ payload }).where(eq(runEvents.id, row.id)).run();
+
+      await restartAndResume(1);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toBe(sent[0]);
+      await settle(project.id);
+    });
+
+    it("the secret guard's clean-up request that never went out is sent once the pass resumes", async () => {
+      const sent = cutOffFirstPrompt();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      commitSecret(run.worktreePath);
+      await finish(run);
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+
+      await restartAndResume(1);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toBe(sent[0]);
+      const notes = await noteOf(run, 'secret_guard_blocked');
+      expect(notes.map((n) => (n as { autoFix: boolean }).autoFix)).toEqual([true]);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      expect(existsSync(path.join(project.path, '.env'))).toBe(false);
+      await settle(project.id);
+    });
+
+    it('a request that cannot be delivered after the restart is held for a person', async () => {
+      const sent = cutOffFirstPrompt();
+      const { project, run } = await failingBuildRun();
+      await finish(run);
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1);
+      (t.runs as unknown as { prompt(id: string, text: string): Promise<Run> }).prompt = async () => {
+        throw new Error('no live session');
+      };
+
+      await restartAndResume(1);
+      const notes = await noteOf(run, 'build_gate_failed');
+      expect(notes.map((n) => (n as { autoFix: boolean }).autoFix)).toEqual([true, false]);
+      expect(notes[1]).not.toHaveProperty('request');
       await settle(project.id);
     });
 
@@ -1942,7 +2059,10 @@ describe('a hold the agent is already fixing does not need you', () => {
     await expect.poll(() => followups(run).length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(pages.sent).toEqual([]);
     expect(t.runs.getRun(run.id).attention).toBeNull();
-    expect(await noteOf(run, 'build_gate_failed')).toEqual([{ autoFix: true, output: 'error TS2322' }]);
+    // The hold keeps the whole request, for a pass a restart cuts off before it went out.
+    expect(await noteOf(run, 'build_gate_failed')).toEqual([
+      { autoFix: true, output: 'error TS2322', request: expect.stringContaining('error TS2322') },
+    ]);
     pages.stop();
     await settle(project.id);
   });
@@ -1961,7 +2081,7 @@ describe('a hold the agent is already fixing does not need you', () => {
     await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
     await Promise.all(passes);
     expect(await noteOf(run, 'build_gate_failed')).toEqual([
-      { autoFix: true, output: 'error TS2322' },
+      { autoFix: true, output: 'error TS2322', request: expect.stringContaining('error TS2322') },
       { autoFix: false, output: 'error TS2322' },
     ]);
     expect(await statusOf(a.id)).toBe('review');
@@ -2012,7 +2132,7 @@ describe('a hold the agent is already fixing does not need you', () => {
     await Promise.all(passes);
     const followUpPrompt = 'Fix the findings of the review.';
     expect(await noteOf(run, 'critic_blocked')).toEqual([
-      { autoFix: true, followUpPrompt },
+      { autoFix: true, followUpPrompt, request: followUpPrompt + t.tickets.completionReminder(run, '\n\n') },
       { autoFix: false, followUpPrompt },
     ]);
     expect(t.runs.getRun(run.id).attention).toMatchObject({ reason: 'held' });
