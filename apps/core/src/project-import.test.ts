@@ -951,6 +951,12 @@ describe('GET /api/projects/:id/import-status', () => {
       expect(res.json().message).toMatch(/^Remove the password from the address/);
       expect(res.body).not.toContain('pw0rd');
     }
+    // A local-path, file://, ext:: or git:// origin is refused before the clone: git would reach
+    // another repository over a transport that runs its hooks. The URL schema rejects these first.
+    for (const repoUrl of ['/srv/repo.git', 'file:///srv/repo.git', 'ext::sh -c id', 'git://h/o/r.git']) {
+      const res = await api('POST', '/api/projects', { name: 'Refused', source: 'import_url', repoUrl });
+      expect(res.statusCode, repoUrl).toBe(400);
+    }
     expect(spawn).not.toHaveBeenCalled();
   });
 

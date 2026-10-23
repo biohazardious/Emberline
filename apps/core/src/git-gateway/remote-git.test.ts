@@ -6,7 +6,6 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { projects, runs } from '../db/schema.js';
-import { NO_SUBMODULES } from '../git-exec.js';
 import { basicAuthValue, type GitHttpCredential } from '../git-credentials.js';
 import { pushWorktreeBranch } from '../runs/git.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
@@ -38,6 +37,19 @@ const commit = (cwd: string, file: string) => {
   gitIn(cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', file);
 };
 /** Anything an agent in the runner could see: every exec, the planted git's and askPass's dumps, b's requests. */
+/** The import clone carries core's git hardening: no global/system config, no prompt, no askpass. */
+function expectHardenedClone(session: { args: string[]; env?: Record<string, string> }) {
+  const args = session.args.join(' ');
+  expect(args).toContain('-c core.hooksPath=/dev/null');
+  expect(args).toContain('-c core.askPass=');
+  expect(args).toContain('-c core.sshCommand=ssh -F /dev/null');
+  expect(args).toContain('-c submodule.recurse=false');
+  expect(session.env?.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+  expect(session.env?.GIT_CONFIG_NOSYSTEM).toBe('1');
+  expect(session.env?.GIT_TERMINAL_PROMPT).toBe('0');
+  expect(session.env?.GIT_ASKPASS).toBe('');
+}
+
 function expectAgentsSeeNoToken(...extra: unknown[]) {
   const dumps = ['planted-git.log', 'askpass-ran']
     .map((f) => path.join(outside, f))
@@ -256,7 +268,7 @@ describe('import clone', () => {
     file: string;
     args: string[];
     cwd: string;
-    env?: unknown;
+    env?: Record<string, string>;
     meta?: Record<string, string>;
   }[] = [];
   let clone: Promise<unknown> | null = null;
@@ -333,10 +345,10 @@ describe('import clone', () => {
     const res = await create(appUrl(), 'Private App');
     expect(res.statusCode, res.body).toBe(201);
     const { project } = res.json();
+    expectHardenedClone(spawned[0]!);
     expect(spawned[0]!.args).toEqual(
       expect.arrayContaining(['clone', '--no-recurse-submodules', '-c', 'protocol.allow=never']),
     );
-    expect(spawned[0]).not.toHaveProperty('env');
     await clone;
     const status = await importStatus(project.id);
     expect(status).toMatchObject({ status: 'ready' });
@@ -353,13 +365,9 @@ describe('import clone', () => {
   it('without an account the clone is the plain PTY clone, with no credential and no capability', async () => {
     const res = await create(`${b.url}/alice/app.git`, 'Public App');
     expect(res.json().terminalId).toBe('clone-1');
-    // Never into a submodule, and never over the file transport there.
-    expect(spawned[0]!.args).toEqual([
-      '-c',
-      'protocol.file.allow=user',
-      ...NO_SUBMODULES,
-      'clone',
-      '--progress',
+    // Hardened, submodule-free, https/ssh only, with the typed URL last.
+    expectHardenedClone(spawned[0]!);
+    expect(spawned[0]!.args.slice(-4)).toEqual([
       '--no-recurse-submodules',
       '--',
       `${b.url}/alice/app.git`,
@@ -380,12 +388,8 @@ describe('import clone', () => {
     // Without an account: the plain clone.
     const plain = await createOn(`${b.url}/alice/app.git`, 'Public App', 'develop');
     expect(plain.statusCode, plain.body).toBe(201);
-    expect(spawned[0]!.args).toEqual([
-      '-c',
-      'protocol.file.allow=user',
-      ...NO_SUBMODULES,
-      'clone',
-      '--progress',
+    expectHardenedClone(spawned[0]!);
+    expect(spawned[0]!.args.slice(-6)).toEqual([
       '--no-recurse-submodules',
       '--branch',
       'develop',
@@ -455,8 +459,8 @@ describe('import clone', () => {
     gitIn(repo, 'tag', 'v1.0');
     gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main', 'v1.0');
     const missing = (await createOn('No Branch', 'nope')).json();
-    // git's messages in English whatever the runner's locale, so the missing branch is told apart.
-    expect(spawned[0]!.env).toEqual({ LC_ALL: 'C' });
+    // git's messages in English whatever the runner's locale (plus the hardened env), so the missing branch is told apart.
+    expect(spawned[0]!.env).toMatchObject({ LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null' });
     await clone;
     const noBranch = await importStatus(missing.project.id);
     expect(noBranch).toMatchObject({

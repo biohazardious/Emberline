@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -81,6 +81,30 @@ describe('ptyd', () => {
 
     await outA.waitFor(MARK);
     await outB.waitFor(MARK);
+  });
+
+  it('keeps no on-disk log for a session marked noLog, but still streams it', async () => {
+    const a = await connect();
+    const normal = await spawnShell(a);
+    const quiet = await a.spawn({
+      file: '/bin/sh',
+      args: [],
+      cwd: dir,
+      env: { PS1: '$ ' },
+      cols: 80,
+      rows: 24,
+      meta: { noLog: '1' },
+    });
+    const out = collect(a, () => quiet.id);
+    await a.attach(quiet.id);
+    await a.write(quiet.id, MARK_CMD);
+    await out.waitFor(MARK); // the live stream still works
+    await a.write(normal.id, MARK_CMD);
+    await expect
+      .poll(() => readdirSync(path.join(dir, 'logs')), { timeout: 5_000 })
+      .toContain(`${normal.id}.log`);
+    // The marked session is never written to the log directory.
+    expect(existsSync(path.join(dir, 'logs', `${quiet.id}.log`))).toBe(false);
   });
 
   it('restores the screen from a snapshot after a client reconnects', async () => {

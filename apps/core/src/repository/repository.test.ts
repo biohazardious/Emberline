@@ -297,14 +297,10 @@ describe('push main', () => {
       setCommandExecutor(localCommandExecutor);
     }
     const all = JSON.stringify(execs).toLowerCase();
+    // The hardened env empties GIT_ASKPASS (no askpass program runs); it never names a program.
+    for (const request of execs) expect(request.env?.GIT_ASKPASS ?? '').toBe('');
     // GIT_CONFIG_NOSYSTEM/GLOBAL are the hardened env of every call; config passed through the env is not.
-    const configEnv = [
-      'git_config_count',
-      'git_config_key_',
-      'git_config_value_',
-      'git_config_parameters',
-      'git_askpass',
-    ];
+    const configEnv = ['git_config_count', 'git_config_key_', 'git_config_value_', 'git_config_parameters'];
     for (const marker of [
       TOKEN,
       Buffer.from(`alice:${TOKEN}`).toString('base64'),

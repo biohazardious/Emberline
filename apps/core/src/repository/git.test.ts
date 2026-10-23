@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -17,6 +17,7 @@ import {
   shortGitError,
   validateRepositoryUrl,
 } from './git.js';
+import { startGitHttp } from '../test-git-http.js';
 import { rmTemp } from '../test-rm.js';
 
 let dir: string;
@@ -33,10 +34,12 @@ afterEach(() => {
 });
 
 describe('pushBranch without an account (the runner git straight to the URL)', () => {
-  it('pushes exactly the given commit to the branch, and never tags', async () => {
+  it('pushes exactly the given commit to the branch over http, and never tags', async () => {
     const work = path.join(dir, 'work');
     const bare = path.join(dir, 'remote.git');
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    const http = await startGitHttp(dir);
+    const url = http.url('remote.git');
     execFileSync('git', ['init', '-q', '-b', 'main', work]);
     writeFileSync(path.join(work, 'a.txt'), 'a\n');
     git(work, 'add', 'a.txt');
@@ -47,9 +50,30 @@ describe('pushBranch without an account (the runner git straight to the URL)', (
     writeFileSync(path.join(work, 'b.txt'), 'b\n');
     git(work, 'add', 'b.txt');
     git(work, 'commit', '-q', '-m', 'b'); // main moved on: only `first` is pushed
-    expect(await pushBranch(work, { url: bare, account: null }, 'main', first)).toBe('pushed');
+    try {
+      expect(await pushBranch(work, { url, account: null }, 'main', first)).toBe('pushed');
+    } finally {
+      await http.close();
+    }
     expect(git(bare, 'rev-parse', 'refs/heads/main')).toBe(first);
     expect(git(bare, 'tag', '--list')).toBe('');
+  });
+
+  it('refuses a local-path, file:// or ext:: origin as a push target, before running git', async () => {
+    const work = path.join(dir, 'work');
+    execFileSync('git', ['init', '-q', '-b', 'main', work]);
+    git(work, 'commit', '-q', '--allow-empty', '-m', 'a');
+    const oid = git(work, 'rev-parse', 'HEAD');
+    for (const url of [
+      path.join(dir, 'remote.git'),
+      'file:///tmp/x.git',
+      'ext::sh -c id',
+      'git://h/o/r.git',
+    ]) {
+      const error = await pushBranch(work, { url, account: null }, 'main', oid).catch((e: unknown) => e);
+      expect(error, url).toBeInstanceOf(HttpError);
+      expect((error as HttpError).code, url).toBe('remote_not_supported');
+    }
   });
 });
 
@@ -159,17 +183,25 @@ describe('validateRepositoryUrl', () => {
 describe('pushBranch without an account: refusals', () => {
   it("the remote's own refusal is a failed push with its reason, not a diverged main", async () => {
     const work = path.join(dir, 'work');
-    const remote = path.join(dir, 'remote');
-    execFileSync('git', ['init', '-q', '-b', 'main', remote]); // not bare, main checked out: receive-pack refuses
-    git(remote, 'commit', '-q', '--allow-empty', '-m', 'r');
-    execFileSync('git', ['clone', '-q', remote, work]);
+    const bare = path.join(dir, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    // A pre-receive hook that declines: the push fails with the server's reason, not a diverged main.
+    const hook = path.join(bare, 'hooks', 'pre-receive');
+    writeFileSync(hook, '#!/bin/sh\necho "no pushes here" >&2\nexit 1\n');
+    chmodSync(hook, 0o755);
+    execFileSync('git', ['init', '-q', '-b', 'main', work]);
     git(work, 'commit', '-q', '--allow-empty', '-m', 'w');
     const oid = git(work, 'rev-parse', 'HEAD');
-    const error = await pushBranch(work, { url: remote, account: null }, 'main', oid).catch(
-      (e: unknown) => e,
-    );
-    expect(error).toBeInstanceOf(HttpError);
-    expect((error as HttpError).code).toBe('push_failed');
+    const http = await startGitHttp(dir);
+    try {
+      const error = await pushBranch(work, { url: http.url('remote.git'), account: null }, 'main', oid).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(HttpError);
+      expect((error as HttpError).code).toBe('push_failed');
+    } finally {
+      await http.close();
+    }
   });
 });
 
@@ -476,7 +508,8 @@ describe('remoteUrlForDisplay', () => {
 });
 
 describe('reading origin without an account (the runner git straight to the URL)', () => {
-  const setup = () => {
+  let http: { url: (repo: string) => string; close: () => Promise<void> } | null = null;
+  const setup = async () => {
     const bare = path.join(dir, 'remote.git');
     const pusher = path.join(dir, 'pusher');
     const main = path.join(dir, 'main');
@@ -485,8 +518,13 @@ describe('reading origin without an account (the runner git straight to the URL)
     execFileSync('git', ['init', '-q', '-b', 'main', main]);
     git(pusher, 'commit', '-q', '--allow-empty', '-m', 'one');
     git(pusher, 'push', '-q', bare, 'main');
-    return { bare, pusher, main, access: { url: bare, account: null } };
+    http = await startGitHttp(dir);
+    return { bare, pusher, main, access: { url: http.url('remote.git'), account: null } };
   };
+  afterEach(async () => {
+    await http?.close();
+    http = null;
+  });
   /** No ref and no FETCH_HEAD: the caller sets the tracking ref under the main-workspace lock. */
   const wroteNothing = (main: string) => {
     expect(existsSync(path.join(main, '.git', 'FETCH_HEAD'))).toBe(false);
@@ -494,7 +532,7 @@ describe('reading origin without an account (the runner git straight to the URL)
   };
 
   it('remoteBranchHead names the commit; fetchBranchObjects brings it without a ref or FETCH_HEAD', async () => {
-    const { pusher, main, access } = setup();
+    const { pusher, main, access } = await setup();
     const oid = await remoteBranchHead(main, access, 'main');
     expect(oid).toBe(git(pusher, 'rev-parse', 'HEAD'));
     expect(await remoteBranchHead(main, access, 'nope')).toBeNull();
@@ -504,7 +542,7 @@ describe('reading origin without an account (the runner git straight to the URL)
   });
 
   it('a remote that moves between ls-remote and the fetch is a 409 remote_moved, and nothing is written', async () => {
-    const { bare, pusher, main, access } = setup();
+    const { bare, pusher, main, access } = await setup();
     const oid = (await remoteBranchHead(main, access, 'main'))!;
     // Main is rewritten on the remote: the commit ls-remote named is not in what the fetch gets.
     git(pusher, 'checkout', '-q', '--orphan', 'other');
