@@ -312,7 +312,6 @@ function Shell() {
   );
   // Inbox, Docker, Fleet and the dashboard wait for the active project instead of showing every project first.
   const scope = pageScope(resolution.id, !projects.data && projects.error !== undefined);
-  const projectIds = useMemo(() => projects.data?.map((p) => p.id), [projects.data]);
 
   // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
   const activeRuns = useMemo(() => {
@@ -1031,7 +1030,7 @@ function Shell() {
               </Route>
               <Route path="/inbox">
                 <Suspense fallback={<div className="inbox-page" aria-busy="true" />}>
-                  <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="inbox-page">
+                  <ScopedPage scope={scope} pendingClassName="inbox-page">
                     {(activeProjectId) => (
                       <InboxPage
                         runs={runs}
@@ -1047,7 +1046,7 @@ function Shell() {
               </Route>
               <Route path="/docker">
                 <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                  <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="board-page">
+                  <ScopedPage scope={scope} pendingClassName="board-page">
                     {(activeProjectId) => (
                       <DockerPage activeProjectId={activeProjectId} projects={projects.data} />
                     )}
@@ -1056,7 +1055,7 @@ function Shell() {
               </Route>
               <Route path="/fleet">
                 <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
-                  <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="fleet-page">
+                  <ScopedPage scope={scope} pendingClassName="fleet-page">
                     {(activeProjectId) => (
                       <FleetPage
                         activeProjectId={activeProjectId}
@@ -1069,7 +1068,7 @@ function Shell() {
               </Route>
               <Route path="/">
                 <h1 className="sr-only">Emberline dashboard</h1>
-                <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="dashboard">
+                <ScopedPage scope={scope} pendingClassName="dashboard">
                   {(activeProjectId) => (
                     <Dashboard
                       system={system.data}

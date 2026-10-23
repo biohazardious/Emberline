@@ -18,51 +18,45 @@ function Page({ projectId }: { projectId: string | null }) {
     }),
   );
 }
-const scoped = (scope: string | null | undefined, projectIds: string[] | undefined) =>
+const scoped = (scope: string | null | undefined) =>
   createElement(ScopedPage, {
     scope,
-    projectIds,
     pendingClassName: 'pending',
     children: (id: string | null) => createElement(Page, { projectId: id }),
   });
 const draft = () => document.body.querySelector<HTMLTextAreaElement>('textarea')?.value ?? null;
 const pending = () => document.body.querySelector('.pending[aria-busy="true"]') !== null;
+const type = (text: string) => typeInto(document.body.querySelector('textarea')!, text);
 
 afterEach(cleanup);
 
 describe('ScopedPage', () => {
-  it('keeps the page and its draft while the same project is resolved again', async () => {
-    const shown = await renderDom(scoped('a', ['a', 'b']));
-    await typeInto(document.body.querySelector('textarea')!, 'note');
-    await shown.rerender(scoped(undefined, ['a', 'b']));
-    expect(pending()).toBe(false);
-    expect(draft()).toBe('note');
-    await shown.rerender(scoped('a', ['a', 'b']));
+  it('keeps the page and its draft while the scope stays the same', async () => {
+    const shown = await renderDom(scoped('a'));
+    await type('note');
+    await shown.rerender(scoped('a'));
     expect(draft()).toBe('note');
   });
 
-  it('starts afresh for another project, after a transient state or straight away', async () => {
-    const shown = await renderDom(scoped('a', ['a', 'b']));
-    await typeInto(document.body.querySelector('textarea')!, 'note for a');
-    await shown.rerender(scoped('b', ['a', 'b']));
+  it('starts afresh for another scope: another project, or all projects', async () => {
+    const shown = await renderDom(scoped('a'));
+    await type('note for a');
+    await shown.rerender(scoped('b'));
     expect(document.body.textContent).toContain('page of b');
     expect(draft()).toBe('');
-    await typeInto(document.body.querySelector('textarea')!, 'note for b');
-    await shown.rerender(scoped(undefined, ['a', 'b']));
-    await shown.rerender(scoped(null, undefined));
+    await type('note for b');
+    await shown.rerender(scoped(null));
     expect(document.body.textContent).toContain('page of all projects');
     expect(draft()).toBe('');
   });
 
-  it("never keeps a deleted project's page: it waits again", async () => {
-    const shown = await renderDom(scoped('a', ['a', 'b']));
-    await shown.rerender(scoped(undefined, ['b']));
+  it('waits, without the page, while the scope is resolved (a first visit, a deleted project)', async () => {
+    const shown = await renderDom(scoped(undefined));
+    expect(pending()).toBe(true);
+    await shown.rerender(scoped('a'));
+    await type('note');
+    await shown.rerender(scoped(undefined));
     expect(pending()).toBe(true);
     expect(draft()).toBeNull();
-  });
-
-  it('waits on a first visit', async () => {
-    await renderDom(scoped(undefined, ['a']));
-    expect(pending()).toBe(true);
   });
 });

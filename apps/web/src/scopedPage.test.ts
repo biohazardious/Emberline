@@ -33,7 +33,6 @@ describe('ScopedPage (E-T12-1)', () => {
     const html = renderStatic(
       createElement(ScopedPage, {
         scope: undefined,
-        projectIds: ['p1'],
         pendingClassName: 'inbox-page',
         children: page,
       }),
@@ -48,7 +47,6 @@ describe('ScopedPage (E-T12-1)', () => {
       const html = renderStatic(
         createElement(ScopedPage, {
           scope,
-          projectIds: ['p1'],
           pendingClassName: 'inbox-page',
           children: page,
         }),

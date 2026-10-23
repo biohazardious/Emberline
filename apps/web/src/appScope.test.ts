@@ -185,7 +185,7 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     expect(draft().value).toBe('');
   });
 
-  it('a page shown for all projects after the list failed stays mounted while the list loads, then starts afresh for the project', async () => {
+  it('a page shown for all projects after the list failed waits once the list loads, then starts afresh for the project', async () => {
     vi.useFakeTimers();
     projectList = () => {
       throw new Error('core restarting');
@@ -198,10 +198,10 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     projectList = () => BOTH;
     await settle(10_500);
     await waitFor(() => expect(askedServer()).toBe(true));
-    expect(pending()).toBe(false);
-    expect(draft().value).toBe('half-written note');
+    expect(pending()).toBe(true);
     choice.resolve({ activeProjectId: 'b' });
     await waitFor(() => expect(dashboard()).toBe('dashboard of b'));
+    // Nothing typed for all projects is left on Beta's page.
     expect(draft().value).toBe('');
   });
 });
