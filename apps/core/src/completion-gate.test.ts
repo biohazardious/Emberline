@@ -402,9 +402,10 @@ describe('completion gate', () => {
     const passes = trackPipelines();
     await begin(run);
     // Not promptable: the process is gone and its session cannot be resumed.
-    const svc = t.tickets as unknown as { runPipeline(r: Run, o: object): Promise<void> };
+    const svc = t.tickets as unknown as { runPipeline(r: Run, o: object, turn?: number): Promise<void> };
     const original = svc.runPipeline.bind(t.tickets);
-    svc.runPipeline = (r, o) => original({ ...r, endedAt: new Date().toISOString(), resumable: false }, o);
+    svc.runPipeline = (r, o, turn) =>
+      original({ ...r, endedAt: new Date().toISOString(), resumable: false }, o, turn);
     await stop(run);
     await settled(passes, 1);
     const types = await eventTypes(run);
@@ -1741,9 +1742,10 @@ describe('the worktree config check before the merge', () => {
     const { ticket, run } = await ymlTicket();
     writeRunYml(run, INVALID);
     const passes = trackPipelines();
-    const svc = t.tickets as unknown as { runPipeline(r: Run, o: object): Promise<void> };
+    const svc = t.tickets as unknown as { runPipeline(r: Run, o: object, turn?: number): Promise<void> };
     const original = svc.runPipeline.bind(t.tickets);
-    svc.runPipeline = (r, o) => original({ ...r, endedAt: new Date().toISOString(), resumable: false }, o);
+    svc.runPipeline = (r, o, turn) =>
+      original({ ...r, endedAt: new Date().toISOString(), resumable: false }, o, turn);
     await begin(run);
     await stop(run, { summary: 'added a container check' });
     await settled(passes, 1);

@@ -27,6 +27,8 @@ const build = vi.hoisted(() => ({
   /** The next build answers once this settles. */
   held: null as null | Promise<void>,
 }));
+/** Runs right before a pipeline merge takes the run's committed tip (null: nothing). */
+const mergeStep = vi.hoisted(() => ({ beforeMerge: null as null | (() => void) }));
 vi.mock('./factory/service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof FactoryService>();
   return {
@@ -44,6 +46,14 @@ vi.mock('./factory/service.js', async (importOriginal) => {
       }
       return critic.result ?? actual.runCrossProviderCritic(params);
     }) as typeof actual.runCrossProviderCritic,
+    syncWorktreeToMainWorkspace: ((params) =>
+      actual.syncWorktreeToMainWorkspace({
+        ...params,
+        beforeMerge: () => {
+          mergeStep.beforeMerge?.();
+          params.beforeMerge?.();
+        },
+      })) as typeof actual.syncWorktreeToMainWorkspace,
     buildWorkspaceDemo: (async (params) => {
       build.calls += 1;
       if (build.held) {
@@ -99,6 +109,7 @@ afterEach(async () => {
   critic.calls = 0;
   critic.hang = false;
   critic.held = null;
+  mergeStep.beforeMerge = null;
   build.result = null;
   build.calls = 0;
   build.held = null;
@@ -576,13 +587,14 @@ describe('dependency-aware dispatch', () => {
         r: Run,
         main: string,
         key: string | null,
-      ): Promise<{ ok: boolean; conflicts: string[] }>;
+        stale: () => boolean,
+      ): Promise<{ ok: boolean; conflicts: string[] } | null>;
     };
     const merge = svc.mergeRunIntoMain.bind(t.tickets);
-    svc.mergeRunIntoMain = async (r, main, key) => {
+    svc.mergeRunIntoMain = async (r, main, key, stale) => {
       merges.push(r.id);
       if (merges.length === 1) await gate;
-      return merge(r, main, key);
+      return merge(r, main, key, stale);
     };
 
     await t.tickets.dispatchNextReadyTicket(project.id);
@@ -1498,7 +1510,7 @@ describe('factory chain robustness', () => {
     await settle(project.id);
   });
 
-  describe('the agent stops again while the critic works on its verdict', () => {
+  describe('the agent stops again while an older pass still checks its turn', () => {
     /** A's first stop is done and its pass waits for the critic, which answers `verdict` on `answer()`. */
     async function criticHeld(verdict: 'PASS' | 'NEEDS_FIX') {
       await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
@@ -1518,11 +1530,32 @@ describe('factory chain robustness', () => {
       await expect.poll(() => critic.calls, { timeout: 10_000 }).toBe(1);
       return { project, a, run, passes, sent, answer };
     }
+    /** A's first stop is done and its pass waits in a build of that turn, which ends on `built()`. */
+    async function buildHeld(result: { ok: boolean; output: string }) {
+      build.result = result;
+      let built!: () => void;
+      build.held = new Promise<void>((resolve) => (built = resolve));
+      const sent = recordPrompts();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      const passes = trackPipelines();
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      writeFileSync(
+        path.join(run.worktreePath, 'package.json'),
+        JSON.stringify({ scripts: { build: 'true' } }),
+      );
+      wgit(run.worktreePath, 'add', '-A');
+      wgit(run.worktreePath, 'commit', '-q', '-m', 'build');
+      await finish(run);
+      await expect.poll(() => build.calls, { timeout: 10_000 }).toBe(1);
+      return { project, a, run, passes, sent, built };
+    }
     const merges = async (run: Run) => (await eventTypes(run)).filter((x) => x === 'merged_to_main').length;
     /** Lets the passes get as far as they can before the next step. */
     const pause = () => new Promise((resolve) => setTimeout(resolve, 300));
 
-    it('NEEDS_FIX: the pass of the newer stop takes the verdict and asks once; nothing merges', async () => {
+    it('NEEDS_FIX: the newer stop is reviewed on its own and asked once; nothing merges', async () => {
       const { project, a, run, passes, sent, answer } = await criticHeld('NEEDS_FIX');
       await stopAgain(run);
       await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
@@ -1531,7 +1564,8 @@ describe('factory chain robustness', () => {
 
       answer();
       await Promise.all(passes);
-      expect(critic.calls).toBe(1);
+      // The first verdict was about the older turn: the newer one asked the critic itself.
+      expect(critic.calls).toBe(2);
       expect((await eventTypes(run)).filter((x) => x === 'critic_blocked')).toHaveLength(1);
       expect(await merges(run)).toBe(0);
       expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
@@ -1539,7 +1573,7 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
-    it('PASS: one merge, after the verdict, by the pass of the newer stop', async () => {
+    it('PASS: one merge, by the pass of the newer stop after its own review', async () => {
       const { project, a, run, passes, answer } = await criticHeld('PASS');
       await stopAgain(run);
       await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
@@ -1548,30 +1582,30 @@ describe('factory chain robustness', () => {
 
       answer();
       await Promise.all(passes);
-      expect(critic.calls).toBe(1);
+      expect(critic.calls).toBe(2);
       expect(await merges(run)).toBe(1);
       expect(await statusOf(a.id)).toBe('done');
       await settle(project.id);
     });
 
-    it("PASS while the newer stop's secret guard holds the run: nothing merges", async () => {
+    it("PASS for the older stop while the newer stop's work has a secret: nothing merges", async () => {
       const { project, a, run, passes, sent, answer } = await criticHeld('PASS');
       // The newer turn commits a secret: its pass holds the run and asks for the clean-up.
       commitSecret(run.worktreePath);
       await stopAgain(run);
       await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
-      await passes[1];
-      expect(sent).toHaveLength(1);
 
       answer();
       await Promise.all(passes);
+      expect(sent).toHaveLength(1);
+      expect(await eventTypes(run)).toContain('secret_guard_blocked');
       expect(await merges(run)).toBe(0);
       expect(existsSync(path.join(project.path, '.env'))).toBe(false);
       expect(await statusOf(a.id)).toBe('review');
       await settle(project.id);
     });
 
-    it("PASS while the newer stop's build still runs: one merge, after that build passed", async () => {
+    it("PASS for the older stop while the newer stop's build is slow: one merge, after that build passed", async () => {
       const { project, a, run, passes, answer } = await criticHeld('PASS');
       // The newer turn adds a build target; its build is slow.
       build.result = { ok: true, output: '' };
@@ -1584,21 +1618,159 @@ describe('factory chain robustness', () => {
       wgit(run.worktreePath, 'add', '-A');
       wgit(run.worktreePath, 'commit', '-q', '-m', 'build');
       await stopAgain(run);
-      await expect.poll(() => build.calls, { timeout: 10_000 }).toBe(1);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
 
       answer();
-      await passes[0];
+      await expect.poll(() => build.calls, { timeout: 10_000 }).toBe(1);
       await pause();
       expect(await merges(run)).toBe(0);
 
       built();
       await Promise.all(passes);
-      // The first verdict came before that turn's checks were done: its pass asked the critic itself.
       expect(critic.calls).toBe(2);
       expect(await merges(run)).toBe(1);
       expect(await statusOf(a.id)).toBe('done');
       await settle(project.id);
     });
+
+    it("the older stop's slow build fails after a newer stop: nothing merges, the newer turn is asked once", async () => {
+      const { project, a, run, passes, sent, built } = await buildHeld({ ok: false, output: 'boom' });
+      await stopAgain(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+      await pause();
+      expect(await merges(run)).toBe(0);
+
+      built();
+      await Promise.all(passes);
+      // The newer turn was built on its own; only its pass asked for the fix.
+      expect(build.calls).toBe(2);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain('boom');
+      const notes = await noteOf(run, 'build_gate_failed');
+      expect(notes.map((n) => (n as { autoFix: boolean }).autoFix)).toEqual([true]);
+      expect(await merges(run)).toBe(0);
+      expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+
+    it("the older stop's slow build passes after a newer stop: that pass stands down before the merge; one merge", async () => {
+      const { project, a, run, passes, built } = await buildHeld({ ok: true, output: '' });
+      await stopAgain(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+
+      built();
+      await Promise.all(passes);
+      expect(build.calls).toBe(2);
+      expect(await merges(run)).toBe(1);
+      expect(await statusOf(a.id)).toBe('done');
+      await settle(project.id);
+    });
+
+    it('Claude relaunching itself (no new work) while a pass checks does not stop that pass', async () => {
+      const { project, a, run, passes, answer } = await criticHeld('PASS');
+      const token = await waitFile(`token-${run.id}`);
+      await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}`, source: 'resume' });
+      expect(t.runs.get(run.id).state).toBe('waiting_input');
+
+      answer();
+      await Promise.all(passes);
+      expect(passes).toHaveLength(1);
+      expect(await merges(run)).toBe(1);
+      expect(await statusOf(a.id)).toBe('done');
+      await settle(project.id);
+    });
+  });
+
+  it('an agent that works again while its merge is prepared gets nothing merged; its next stop merges once', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    // Left uncommitted: the merge commits it first, then the agent wakes before that commit is merged.
+    writeFileSync(path.join(run.worktreePath, 'late.txt'), 'late\n');
+    mergeStep.beforeMerge = () => {
+      mergeStep.beforeMerge = null;
+      (t.runs as unknown as { record(id: string, e: object): Run }).record(run.id, {
+        source: 'hook',
+        type: 'UserPromptSubmit',
+        state: 'working',
+      });
+    };
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    const types = await eventTypes(run);
+    expect(types).not.toContain('merged_to_main');
+    expect(types).not.toContain('merge_failed');
+    expect(existsSync(path.join(project.path, 'late.txt'))).toBe(false);
+    expect(await statusOf(a.id)).not.toBe('done');
+
+    // That turn's stop: its pass checks it and merges.
+    const token = await waitFile(`token-${run.id}`);
+    await signal(run.id, token);
+    await hook(run.id, 'Stop', token);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await Promise.all(passes);
+    expect((await eventTypes(run)).filter((x) => x === 'merged_to_main')).toHaveLength(1);
+    expect(existsSync(path.join(project.path, 'late.txt'))).toBe(true);
+    expect(await statusOf(a.id)).toBe('done');
+    await settle(project.id);
+  });
+
+  it('a build fixed in the fix turn is built again and merged', async () => {
+    build.result = { ok: false, output: 'boom' };
+    const sent = recordPrompts();
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    writeFileSync(
+      path.join(run.worktreePath, 'package.json'),
+      JSON.stringify({ scripts: { build: 'true' } }),
+    );
+    wgit(run.worktreePath, 'add', '-A');
+    wgit(run.worktreePath, 'commit', '-q', '-m', 'build');
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(sent).toHaveLength(1);
+
+    build.result = { ok: true, output: '' };
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await Promise.all(passes);
+    expect(build.calls).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect((await eventTypes(run)).filter((x) => x === 'merged_to_main')).toHaveLength(1);
+    expect(await statusOf(a.id)).toBe('done');
+    await settle(project.id);
+  });
+
+  it('the critic reviews the fix turn; once it passes, the ticket is merged', async () => {
+    await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+    critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+    const sent = recordPrompts();
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    const run = runsFor(a.id)[0] as Run;
+    await finish(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(sent).toHaveLength(1);
+
+    critic.result = { verdict: 'PASS', followUpPrompt: null };
+    await stopAgain(run);
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(2);
+    await Promise.all(passes);
+    expect(critic.calls).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect((await eventTypes(run)).filter((x) => x === 'merged_to_main')).toHaveLength(1);
+    expect(await statusOf(a.id)).toBe('done');
+    await settle(project.id);
   });
 
   it('a Review ticket whose pipeline was cut off gets the gates on resume, not a plain merge', async () => {
@@ -1737,7 +1909,7 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
-    it('the critic runs once', async () => {
+    it('the fix turn is reviewed again; changes asked for again wait for a person', async () => {
       await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
       critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
       const sent = recordPrompts();
@@ -1752,8 +1924,11 @@ describe('factory chain robustness', () => {
       expect(critic.calls).toBe(1);
 
       await restartAfterSecondStop(run);
-      expect(critic.calls).toBe(1);
+      expect(critic.calls).toBe(2);
       expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
+      const notes = await noteOf(run, 'critic_blocked');
+      expect(notes.map((n) => (n as { autoFix: boolean }).autoFix)).toEqual([true, false]);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
       await settle(project.id);
     });
 
@@ -2011,7 +2186,7 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
-    it('the build gate builds and asks for a fix once', async () => {
+    it('the fix turn is built again; a build that still fails waits for a person', async () => {
       build.result = { ok: false, output: 'boom' };
       const sent = recordPrompts();
       const project = await createProject();
@@ -2032,8 +2207,11 @@ describe('factory chain robustness', () => {
       expect(sent).toHaveLength(1);
 
       await restartAfterSecondStop(run);
-      expect(build.calls).toBe(1);
+      expect(build.calls).toBe(2);
       expect(sent).toHaveLength(1);
+      const notes = await noteOf(run, 'build_gate_failed');
+      expect(notes.map((n) => (n as { autoFix: boolean }).autoFix)).toEqual([true, false]);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
       await settle(project.id);
     });
 

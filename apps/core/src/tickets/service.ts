@@ -30,7 +30,7 @@ import {
   WORKTREE_YML_INVALID,
   worktreeCheckOf,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gt, inArray, isNotNull, max, min } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import {
@@ -284,8 +284,8 @@ const FIX_REQUEST_HOLDS: readonly string[] = [
   'critic_blocked',
 ];
 
-/** The critic's answer for a run; null when its call failed. */
-type CriticVerdict = Awaited<ReturnType<typeof runCrossProviderCritic>> | null;
+/** Refuses a pass's merge once the agent worked again (a newer turn's pass decides). */
+class TurnMoved extends Error {}
 
 /** A fix request kept with its hold: at most this many characters (about 64 KB), marked when cut. */
 const FIX_REQUEST_MAX = 64 * 1024;
@@ -318,13 +318,11 @@ const fixCheckOf = (payload: unknown): 'worktree_yml' | 'worktree_commands' | 'b
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
   private readonly autoChainProjects: Set<string>;
-  /** Runs whose build gate ran in this process (its fix request also survives a restart: askedToFix). */
-  private readonly selfHealedRuns = new Set<string>();
   /**
-   * The critic's verdict per run while its call is in flight in this process: a pass of a later stop
-   * of the run waits for it instead of asking again (`critic_reviewed` is noted once a pass took it).
+   * One pipeline pass per run at a time: the pass going (and those queued behind it) per run; a later
+   * stop's pass waits for it. A pass with none ahead of it starts at once.
    */
-  private readonly criticCalls = new Map<string, Promise<CriticVerdict>>();
+  private readonly pipelineTails = new Map<string, Promise<void>>();
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
@@ -794,20 +792,21 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * The id of the run's latest state change: a pass notes it when it begins, and a newer one means
-   * the agent woke up or stopped again since (see turnIsCurrent).
+   * The agent's latest turn of the run: the id of its latest switch to `working` or `done`. A pass is
+   * for the turn current when it was asked for; a newer one means the agent worked again since. A
+   * switch to another state (a relaunched CLI waiting at its prompt, a quota wait) is no new work.
    */
   private turnOf(runId: string): number | undefined {
     return this.db
       .select({ id: runEvents.id })
       .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), isNotNull(runEvents.state)))
+      .where(and(eq(runEvents.runId, runId), inArray(runEvents.state, ['working', 'done'])))
       .orderBy(desc(runEvents.id))
       .limit(1)
       .get()?.id;
   }
 
-  /** Whether the agent's turn a pass began on is still the run's current one (no state change since). */
+  /** Whether `turn` (a pass's) is still the agent's latest turn of the run (see turnOf). */
   private turnIsCurrent(runId: string, turn: number | undefined): boolean {
     return this.turnOf(runId) === turn;
   }
@@ -921,6 +920,32 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     ) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     }
+  }
+
+  /**
+   * Whether the critic reviews this pass: the run has no review yet, or the agent was asked to fix
+   * what the latest one found (its fix turn is reviewed too).
+   */
+  private criticDue(runId: string): boolean {
+    const events = this.db
+      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, ['critic_reviewed', 'critic_blocked'])))
+      .orderBy(asc(runEvents.id))
+      .all();
+    const review = events.findLast((e) => e.type === 'critic_reviewed');
+    if (!review) return true;
+    return events.some((e) => e.id > review.id && e.type === 'critic_blocked' && isAutoFixHold(e.payload));
+  }
+
+  /** Whether the run was already asked to fix the critic's findings (the autoFix note survives restarts). */
+  private criticFixRequested(runId: string): boolean {
+    return this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'critic_blocked')))
+      .all()
+      .some(({ payload }) => isAutoFixHold(payload));
   }
 
   /** Whether the run was already asked to clean up a secret or slop finding (the autoFix note survives restarts). */
@@ -1183,9 +1208,28 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // Counted: an overlapping pass for the same run must not lift the guard while one is still going.
     this.pipelineRuns.set(run.id, (this.pipelineRuns.get(run.id) ?? 0) + 1);
     this.runs.pipelineBusy(run.id, true);
+    // The agent's turn this pass is for. Passes of one run go one at a time; one whose turn is no
+    // longer the latest when it gets to go (or at any later step) stands down: the pass of the newer
+    // turn decides on its own checks.
+    const turn = this.turnOf(run.id);
+    const go = async (): Promise<void> => {
+      if (!this.turnIsCurrent(run.id, turn)) return;
+      let fresh: Run;
+      try {
+        fresh = this.runs.getRun(run.id);
+      } catch {
+        return; // removed meanwhile
+      }
+      await this.runPipeline(fresh, opts, turn);
+    };
+    const ahead = this.pipelineTails.get(run.id);
+    const pass = ahead ? ahead.then(go) : go();
+    const tail = pass.catch(() => undefined);
+    this.pipelineTails.set(run.id, tail);
     try {
-      await this.runPipeline(run, opts);
+      await pass;
     } finally {
+      if (this.pipelineTails.get(run.id) === tail) this.pipelineTails.delete(run.id);
       this.runs.pipelineBusy(run.id, false);
       const left = (this.pipelineRuns.get(run.id) ?? 1) - 1;
       if (left > 0) this.pipelineRuns.set(run.id, left);
@@ -1197,10 +1241,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private async runPipeline(
     run: Run,
     { finalizing = false, resumed = false }: PipelineOptions,
+    turn: number | undefined,
   ): Promise<void> {
     if (!run.projectId) return;
-    // The agent's turn this pass is about: the run's state when it began (its stop, as a rule).
-    const turn = this.turnOf(run.id);
+    // Checked right before each step that notes, asks or merges (see handleRunCompleted).
+    const stale = () => !this.turnIsCurrent(run.id, turn);
     let projectRow;
     try {
       projectRow = this.project(run.projectId);
@@ -1231,6 +1276,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // yet: this one only sends it, and the agent's next stop is the next pass.
     const pendingRequest = resumed ? this.pendingFixRequest(run) : null;
     if (pendingRequest) {
+      if (stale()) return;
       await this.resumeFixRequest(run, pendingRequest);
       return;
     }
@@ -1385,6 +1431,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             { automatic: true },
           )
           .catch(() => undefined);
+      if (stale()) return;
       if (!this.runs.hasEvent(run.id, 'auto_nudged')) {
         this.runs.note(run.id, 'auto_nudged', { reason: 'no_ticket_drafts' });
         await nudge();
@@ -1433,6 +1480,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // 1b. The agent's completion signal: a stop is not "done" unless the agent said so. Only for a
     //     run whose agent has the tool (its `emberline-mcp` checked in): a runner image without it,
     //     or a session started before the upgrade, advances the old way instead of stalling.
+    if (stale()) return;
     if (
       fSettings.requireCompletionSignal &&
       ticketRow &&
@@ -1460,6 +1508,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       !branchMergedBefore(this.db, run.id) &&
       !(await runProducedChanges(run.worktreePath, projectRow.path))
     ) {
+      if (stale()) return;
       this.runs.note(run.id, 'no_changes', { autoFix: false });
       if (!run.endedAt) await this.runs.closeHeldSession(run.id).catch(() => undefined);
       if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
@@ -1479,12 +1528,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       try {
         problems = await runWorktreeYmlProblems(run.worktreePath, projectRow.path);
       } catch (error) {
+        if (stale()) return;
         // B17, like the build gate: a check that could not run is not a pass; left for a person.
         const message = `.emberline/worktree.yml could not be checked: ${(error as Error).message ?? ''}`;
         this.runs.note(run.id, 'build_gate_error', { message: message.slice(0, 500) });
         return;
       }
       if (problems) {
+        if (stale()) return;
         const errorText = problems.join('\n').slice(0, 2_400);
         const gateNote = {
           check: 'worktree_yml',
@@ -1516,6 +1567,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (ticketRow && roles?.bootstrapWritesWorktree && ticketRow.id === roles.bootstrap) {
       const missing = await worktreeCommandsMissing(run.worktreePath || projectRow.path).catch(() => null);
       if (missing) {
+        if (stale()) return;
         const gateNote = { check: 'worktree_commands', output: holdText(missing) };
         const autoFix =
           fSettings.selfHealingBuildGate &&
@@ -1541,18 +1593,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     //    verifiable build, lint, or test target (Node/TS, Python, Go, Rust, PlatformIO, or Makefile),
     //    verify it before syncing or moving to Done. If verification fails, resume the agent with the error log.
     //    An approved worktree.yml with `checks` replaces the detected steps (and is always verifiable).
+    //    Every pass builds its own turn's tree. The agent is asked once to fix a failure; when its
+    //    fix turn (or a later one) still fails, the hold is a person's, closed like other holds.
     const checks = approvedChecks(this.db, run.projectId);
-    // Read before the check below, so checking and claiming `selfHealedRuns` stay in one tick.
     const verifiable =
       Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
-    if (
-      fSettings.selfHealingBuildGate &&
-      !this.selfHealedRuns.has(run.id) &&
-      !this.askedToFix(run.id, 'build') &&
-      (!run.endedAt || run.resumable) &&
-      verifiable
-    ) {
-      this.selfHealedRuns.add(run.id);
+    if (fSettings.selfHealingBuildGate && (!run.endedAt || run.resumable) && verifiable) {
       const buildRes = await buildWorkspaceDemo({
         db: this.db,
         projectId: run.projectId,
@@ -1562,20 +1608,28 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         // A worktree whose own setup finished is not set up twice; a skipped or failed one is.
         setup: setupFinishedIn(this.runEventTypes(run.id)) ? [] : approvedSetup(this.db, run.projectId),
         env: await this.runs.dockerEnvFor(run),
-      }).catch((error: unknown) => {
-        this.runs.note(run.id, 'build_gate_error', { message: (error as Error).message?.slice(0, 500) });
-        return null;
-      });
+      }).catch((error: unknown) => error as Error);
       // B17: a gate that could not run is not a pass; leave the ticket for a person.
-      if (!buildRes) return;
+      if (buildRes instanceof Error) {
+        if (stale()) return;
+        this.runs.note(run.id, 'build_gate_error', { message: buildRes.message?.slice(0, 500) });
+        return;
+      }
       if (!buildRes.ok) {
+        if (stale()) return;
+        const errorExcerpt = buildRes.output.slice(-2_400);
+        const gateNote = { output: holdText(errorExcerpt) };
+        if (this.askedToFix(run.id, 'build')) {
+          this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
+          await this.closeAndGoOn(run);
+          return;
+        }
         // Held for the agent's fix: its next stop runs the pipeline again (see HOLD_EVENTS). Not
         // for a person while the agent works on it (autoFix); noted again for one if the request fails.
-        const errorExcerpt = buildRes.output.slice(-2_400);
         await this.requestFix(
           run,
           'build_gate_failed',
-          { output: holdText(errorExcerpt) },
+          gateNote,
           `${buildFixPrompt(errorExcerpt)}${this.completionReminder(run, ' ')}`,
         );
         return;
@@ -1610,6 +1664,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         ...(slopReport?.autoFixPrompt ? { autoFixPrompt: holdText(slopReport.autoFixPrompt) } : {}),
       };
       const slopNote = slopReport?.autoFixPrompt ? { autoFixPrompt: holdText(slopReport.autoFixPrompt) } : {};
+      if ((hasSecretViolation || autoFix) && stale()) return;
       // Held first, also while the agent is asked to clean up: should the request not arrive, a
       // later dispatch must not merge the leak. The agent's next stop lifts the hold.
       if (autoFix && slopReport?.autoFixPrompt) {
@@ -1626,55 +1681,47 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
 
     // 2c. Layer 3 — Cross-Provider AI Critic (e.g. Claude codes -> Antigravity critiques, or vice versa):
+    //     Once per run, and again for the turn after its request for changes: the agent's fix is
+    //     reviewed too. Asked once; changes asked for again are a person's to look at.
     if (
       fSettings.crossProviderCritic &&
       run.worktreePath &&
       !isFactoryOrchestratorTicket &&
-      !this.runs.hasEvent(run.id, 'critic_reviewed')
+      this.criticDue(run.id)
     ) {
-      // A pass of an earlier stop of this run asked the critic already: this one waits for that verdict.
-      let call = this.criticCalls.get(run.id);
-      if (!call) {
-        const asked = runCrossProviderCritic({
-          run,
-          ticketTitle: ticketRow?.title ?? run.title,
-          ticketBody: ticketRow?.body ?? null,
-          workspacePath: run.worktreePath,
-          settings: fSettings,
-        }).catch(() => null);
-        call = asked;
-        this.criticCalls.set(run.id, asked);
-        void asked.finally(() => {
-          if (this.criticCalls.get(run.id) === asked) this.criticCalls.delete(run.id);
-        });
-      }
-      const criticRes = await call;
-      // The agent stopped again (or woke up) meanwhile: the pass of its newer turn decides on its own
-      // checks, with this verdict when it waits for it too, else by asking the critic itself.
-      if (!this.turnIsCurrent(run.id, turn)) return;
-      // Once per run, also across a restart: noted once a pass took its verdict, so a pass a restart cut
-      // off while the critic ran asks it again instead of merging without one.
+      const criticRes = await runCrossProviderCritic({
+        run,
+        ticketTitle: ticketRow?.title ?? run.title,
+        ticketBody: ticketRow?.body ?? null,
+        workspacePath: run.worktreePath,
+        settings: fSettings,
+      }).catch(() => null);
+      // The agent worked again meanwhile: the pass of its newer turn asks the critic about that tree.
+      if (stale()) return;
+      // Noted once its verdict is in, so a pass a restart cut off while the critic ran asks it again
+      // instead of merging without one.
       this.runs.note(run.id, 'critic_reviewed', { verdict: criticRes?.verdict ?? null });
 
-      if (
-        criticRes &&
-        criticRes.verdict === 'NEEDS_FIX' &&
-        criticRes.followUpPrompt &&
-        (!run.endedAt || run.resumable)
-      ) {
+      if (criticRes && criticRes.verdict === 'NEEDS_FIX' && criticRes.followUpPrompt) {
+        const criticNote = { followUpPrompt: holdText(criticRes.followUpPrompt) };
+        if (this.criticFixRequested(run.id) || (run.endedAt && !run.resumable)) {
+          this.runs.note(run.id, 'critic_blocked', { autoFix: false, ...criticNote });
+          await this.closeAndGoOn(run);
+          return;
+        }
         await this.requestFix(
           run,
           'critic_blocked',
-          { followUpPrompt: holdText(criticRes.followUpPrompt) },
+          criticNote,
           `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`,
         );
         return;
       }
     }
 
-    // The agent stopped again (or woke up) while this pass ran its checks: they looked at an older
-    // tree, so the pass of its newer turn decides (one merge, after that turn's own checks).
-    if (!this.turnIsCurrent(run.id, turn)) return;
+    // The agent worked again while this pass ran its checks: they looked at an older tree, so the
+    // pass of its newer turn decides (one merge, after that turn's own checks).
+    if (stale()) return;
 
     // 2d. Open blocking review feedback keeps the merge gate closed: the ticket stays in Review and the
     //     person decides (resolve it, or merge anyway); the agent is not prompted. Like the secret
@@ -1692,7 +1739,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       run.worktreePath &&
       run.worktreePath !== projectRow.path
     ) {
-      const merged = await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null);
+      const merged = await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null, stale);
+      // The agent worked again before the merge began: nothing was merged, its newer turn's pass decides.
+      if (!merged) return;
+      // It worked again during the merge: what was merged is the commit these checks passed (the merge
+      // took that one, not later ones); the rest (Done, a conflict, the session) is for that turn's pass.
+      if (stale()) return;
       mergeBlocked = !merged.ok;
       // The agent gets one attempt to resolve the conflict itself; it is still alive and keeps the
       // ticket in Review. A later conflict (or a run that cannot take a prompt) falls through.
@@ -1705,6 +1757,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           autoFix: false,
         });
       }
+    }
+
+    // Read again after the merge: the session may have ended meanwhile.
+    try {
+      run = this.runs.getRun(run.id);
+    } catch {
+      return; // removed meanwhile
     }
 
     // 4. Auto-move completed factory ticket to Done when enabled (keep it in Review when the merge was
@@ -1795,28 +1854,40 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     run: Run,
     mainWorkspacePath: string,
     ticketKey: string | null,
+    stale: () => boolean,
   ): Promise<{
     ok: boolean;
     conflicts: string[];
     summary: string;
     autoFix: boolean;
     mainHead: string | null;
-  }> {
+  } | null> {
     const res = await syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
       mainWorkspacePath,
       ticketKey,
       runId: run.id,
       branch: run.branch,
-    }).catch((error: unknown) => ({
-      ok: false,
-      summary: (error as Error).message,
-      conflicts: [] as string[],
-      commitSha: null,
-      commitOid: null,
-      commitUnverified: false,
-      mainHead: null,
-    }));
+      // Checked once the run's output is committed and its tip read, right before that tip (not a
+      // later one) is merged: an agent that worked again since leaves it to its newer turn's pass.
+      beforeMerge: () => {
+        if (stale()) throw new TurnMoved();
+      },
+    }).catch((error: unknown) => {
+      if (error instanceof TurnMoved) return null;
+      return {
+        ok: false,
+        summary: (error as Error).message,
+        conflicts: [] as string[],
+        commitSha: null,
+        commitOid: null,
+        commitUnverified: false,
+        alreadyMerged: false,
+        mainHead: null,
+      };
+    });
+    // Refused before merging, or nothing new to merge for a pass whose turn is over: nothing to note.
+    if (res === null || (res.alreadyMerged && stale())) return null;
     // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.
     const head = res.ok ? null : res.mainHead;
     const autoFix =
