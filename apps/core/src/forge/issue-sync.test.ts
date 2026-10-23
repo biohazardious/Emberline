@@ -1004,7 +1004,11 @@ describe('details', () => {
     const stopping = sync.stop().then(() => {
       stopped = true;
     });
-    await new Promise((r) => setTimeout(r, 30));
+    // Everything else that can run runs: stop() still waits for the tick the forge holds.
+    const drain = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    };
+    await drain();
     expect(stopped).toBe(false);
     gate.resolve();
     await stopping;
@@ -1019,7 +1023,21 @@ describe('details', () => {
     repo.gate = new Promise(() => undefined);
     void hung.tick();
     await expect.poll(() => listCalls().length).toBe(2);
-    // The forge never answers: stop() returning at all is its time limit.
-    await hung.stop();
+    // The forge never answers: stop() waits exactly its time limit, on a clock the test moves.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let hungStopped = false;
+      const hungStopping = hung.stop().then(() => {
+        hungStopped = true;
+      });
+      await drain();
+      await vi.advanceTimersByTimeAsync(49);
+      expect(hungStopped).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await hungStopping;
+      expect(hungStopped).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
