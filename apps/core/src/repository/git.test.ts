@@ -155,7 +155,7 @@ describe('shortGitError: hostile URLs in what git and a server print', () => {
       '_https://h/x and 2https://h/y',
     );
     expect(text('fatal: xssh://git:SECRET@h/x')).toBe('xssh://h/x');
-    // The address ends at whitespace; one without user info is left alone.
+    // An address whose host a port or a path follows ends there; one without user info is left alone.
     expect(text('fatal: ssh://git:pw@host:22 mail me@x.y')).toBe('ssh://host:22 mail me@x.y');
     expect(text('fatal: ssh://[::1]:22/x and https://h/o/r.git')).toBe(
       'ssh://[::1]:22/x and https://h/o/r.git',
@@ -312,6 +312,18 @@ describe('remoteUrlForDisplay', () => {
       display: 'ssh://h/x',
       hadCredentials: true,
     });
+    // Not parseable (whitespace or a quote mark in the password, a space in the host): the same.
+    for (const c of ['\t', '\u00a0', '\u2003', ' ', '’', '“', '”', '«', '»'])
+      expect(remoteUrlForDisplay(`https://u:S3C${c}R3T@h o/r`), JSON.stringify(c)).toEqual({
+        url: 'https://h o/r',
+        display: 'https://h o/r',
+        hadCredentials: true,
+      });
+    // Parseable: the URL parser takes them out with the rest of the user info.
+    for (const c of ['\t', '\u00a0', '\u2003', ' ', '’', '“', '”', '«', '»'])
+      expect(remoteUrlForDisplay(`https://u:S3C${c}R3T@h/o/r`).display, JSON.stringify(c)).toBe(
+        'https://h/o/r',
+      );
   });
 
   it('leaves a clean URL exactly as it is', () => {

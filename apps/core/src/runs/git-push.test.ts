@@ -73,13 +73,12 @@ describe('pushing a run branch without an account', () => {
         'remote: glued _https://heidi:h3idi@git.example.com/o/r.git',
         `remote: mirrored to ${CAPABILITY}`,
         `remote: ${'y'.repeat(100_000)}`,
-        // Long runs that a backtracking pattern would take quadratic time over.
+        // Long runs that a backtracking pattern would take quadratic time over (the scan's steps are
+        // counted in git-gateway/redaction.test.ts).
         `remote: ${'a1'.repeat(100_000)} ${'x:'.repeat(50_000)} ${'@h'.repeat(50_000)}`,
       ].join('\n'),
     });
-    const started = performance.now();
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
-    expect(performance.now() - started).toBeLessThan(2_000);
     expect(res.output).toContain('To https://git.example.com/o/r.git');
     expect(res.output).toContain('https://git.example.com/o/r/pulls/new');
     expect(res.output).toContain(

@@ -88,8 +88,9 @@ export function remoteUrlForDisplay(raw: string): { url: string; display: string
       try {
         parsed = new URL(url);
       } catch {
-        // Not parseable: cut everything from `//` to the last `@`, and from `?` or `#` on.
-        return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)\S*@/i, '$1').replace(/[?#].*$/s, '');
+        // Not parseable: cut everything from `//` to the last `@` (whitespace in a password too),
+        // and from `?` or `#` on.
+        return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^]*@/i, '$1').replace(/[?#].*$/s, '');
       }
       const ssh = parsed.protocol === 'ssh:';
       if (!(ssh ? parsed.password : parsed.username || parsed.password || parsed.search || parsed.hash))

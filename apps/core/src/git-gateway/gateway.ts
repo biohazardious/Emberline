@@ -88,42 +88,188 @@ export function requestUrlForLog(url: string): string {
   return redacted === decoded ? url : redacted;
 }
 
+/** Whitespace as `\s` reads it. */
+const isSpace = (c: number) =>
+  c === 0x20 ||
+  (c >= 0x09 && c <= 0x0d) ||
+  c === 0xa0 ||
+  c === 0x1680 ||
+  (c >= 0x2000 && c <= 0x200a) ||
+  c === 0x2028 ||
+  c === 0x2029 ||
+  c === 0x202f ||
+  c === 0x205f ||
+  c === 0x3000 ||
+  c === 0xfeff;
+/** ASCII, typographic and fullwidth quote marks. */
+const QUOTES = new Set(`'"\`‘’‚‛“”„‟«»‹›＂＇`);
+/** A character that ends the host of an `@host:`. */
+const endsHost = (ch: string) =>
+  ch === '/' || ch === '@' || ch === ':' || QUOTES.has(ch) || isSpace(ch.charCodeAt(0));
+
+/** Counts the characters a redaction handles (the linear-time test reads it). */
+export interface ScanMeter {
+  steps: number;
+}
+
 /**
  * Text without the credentials of the addresses in it (a token typed into an origin, or one a
- * server quotes back). Better too much than a secret: an ssh user name or an `@` in a path may go too.
+ * server quotes back). Better too much than a secret: an ssh user name, an `@` in a path or the
+ * words between a password's whitespace and a later `@` on its line may go too.
+ * - An address is a run of non-whitespace. One that may still be in its credentials (a `scheme://`
+ *   without a path yet, a `user:`, an opening quote, or an `@` not followed by a path) runs on
+ *   across whitespace, on the same line, through each next run holding an `@`, until one whose last
+ *   `@` a path or a port follows. So a TAB, NBSP or other space in a password does not end it early.
  * - Any `scheme://` (https, ssh, git+ssh, ssh+git, …, even glued to a word): everything from `://`
- *   to the last `@` of the address, which ends only at whitespace (a quote, `/` or `@` in a password
- *   never ends it early).
+ *   to the last `@` of the address (a quote, `/` or `@` in a password never ends it early).
  * - scp-like `user:secret@host:path`: the secret, up to the last `@` before a host and its `:` (a
  *   user name may hold an `@`: `me@corp.com:secret@host:path`).
  * - git splits that address at its first `:` and quotes the rest as a path
- *   (`fatal: 'secret@host:path' does not appear to be a git repository`): the part before the `@`.
+ *   (`fatal: 'secret@host:path' does not appear to be a git repository`): the part before the `@`,
+ *   after any quote mark (`'`, `"`, `‘`, `“`, `«`, …).
  * - without a host and its `:` after an `@` (`user:secret@host/path`, an origin set by hand): the
  *   secret, up to the last `@` before the first `/`.
+ * Linear whatever a server prints: every character is read a fixed number of times, and no pattern
+ * backtracks.
  */
-export function withoutUrlCredentials(text: string): string {
-  // Token by token, with indexOf and one `@host:` scan each: linear, whatever a server prints.
-  return text.replace(/\S+/g, (token) => {
-    let out = token;
-    const scheme = out.indexOf('://');
-    if (scheme >= 0) {
-      const at = out.lastIndexOf('@');
-      if (at > scheme) out = out.slice(0, scheme + 3) + out.slice(at + 1);
+export function withoutUrlCredentials(text: string, meter?: ScanMeter): string {
+  interface Run {
+    start: number;
+    end: number;
+    /** It holds an `@`. */
+    at: boolean;
+    /** A path or a port follows its last `@` (`@host/…`, `@host:22`): an address that ends here. */
+    ends: boolean;
+    /** It may still be in an address's credentials. */
+    opens: boolean;
+    /** A joined address never reaches it: a line break comes before it, or it starts another `scheme://`. */
+    barrier: boolean;
+  }
+  const runs: Run[] = [];
+  let lineBreak = false;
+  for (let i = 0; i < text.length;) {
+    if (isSpace(text.charCodeAt(i))) {
+      if (text[i] === '\n') lineBreak = true;
+      i++;
+      continue;
     }
-    let hostAt = -1;
-    for (const m of out.matchAll(/@[^'"/@:]+:/g)) hostAt = m.index ?? hostAt;
-    if (hostAt < 0) {
-      const slash = out.indexOf('/');
-      hostAt = (slash < 0 ? out : out.slice(0, slash)).lastIndexOf('@');
-      if (hostAt < 0) return out;
+    const start = i;
+    while (i < text.length && !isSpace(text.charCodeAt(i))) i++;
+    const run = text.slice(start, i);
+    const at = run.lastIndexOf('@');
+    const ends = at >= 0 && (run.indexOf('/', at) >= 0 || endsInPort(run, at));
+    const scheme = run.indexOf('://');
+    runs.push({
+      start,
+      end: i,
+      at: at >= 0,
+      ends,
+      opens: !ends && opensAddress(run, at, scheme),
+      barrier: lineBreak || scheme >= 0,
+    });
+    lineBreak = false;
+    if (meter) meter.steps += run.length;
+  }
+  if (meter) meter.steps += text.length;
+  const n = runs.length;
+  // From run i on: the first run holding an `@`, and the first a joined address never reaches.
+  const nextAt = new Int32Array(n + 1).fill(n);
+  const bound = new Int32Array(n + 1).fill(n);
+  for (let i = n - 1; i >= 0; i--) {
+    nextAt[i] = runs[i]!.at ? i : nextAt[i + 1]!;
+    bound[i] = i + 1 < n && runs[i + 1]!.barrier ? i + 1 : bound[i + 1]!;
+  }
+  if (meter) meter.steps += n;
+  let out = '';
+  let copied = 0;
+  for (let i = 0; i < n;) {
+    let last = i;
+    if (runs[i]!.opens) {
+      let next = runs[i]!.at ? i : nextAt[i + 1]!;
+      while (next < bound[i]!) {
+        last = next;
+        if (runs[last]!.ends) break;
+        next = nextAt[last + 1]!;
+        if (meter) meter.steps++;
+      }
     }
-    const before = out.slice(0, hostAt);
-    const quote = before.search(/['"]/);
-    const colon = before.indexOf(':');
-    const userOk = colon >= 0 && !before.slice(0, colon).includes('/');
-    const from = Math.min(quote >= 0 ? quote + 1 : Infinity, userOk ? colon + 1 : Infinity);
-    return from === Infinity ? out : `${out.slice(0, from)}***${out.slice(hostAt)}`;
-  });
+    const { start } = runs[i]!;
+    const { end } = runs[last]!;
+    out += text.slice(copied, start) + withoutAddressCredentials(text.slice(start, end), meter);
+    copied = end;
+    i = last + 1;
+  }
+  return out + text.slice(copied);
+}
+
+/** `…@host:22`: the run ends in a port after its last `@`. */
+function endsInPort(run: string, at: number): boolean {
+  const colon = run.lastIndexOf(':');
+  if (colon < at || colon === run.length - 1) return false;
+  for (let i = colon + 1; i < run.length; i++) {
+    const c = run.charCodeAt(i);
+    if (c < 0x30 || c > 0x39) return false;
+  }
+  return true;
+}
+
+/**
+ * A run that may still be in an address's credentials (the caller knows no path or port follows its
+ * last `@`): a `scheme://` without a path yet (or with a `user:` before it that is no port), an `@`
+ * after one, an opening quote that is not closed, or a `user:` with something after it.
+ */
+function opensAddress(run: string, at: number, scheme: number): boolean {
+  if (scheme >= 0) {
+    if (at > scheme) return true;
+    const rest = run.slice(scheme + 3);
+    const slash = rest.indexOf('/');
+    if (slash < 0) return true;
+    const authority = rest.slice(0, slash);
+    const colon = authority.lastIndexOf(':');
+    if (colon < 0) return false;
+    for (let i = colon + 1; i < authority.length; i++) {
+      const c = authority.charCodeAt(i);
+      if (c < 0x30 || c > 0x39) return true;
+    }
+    return false;
+  }
+  if (run.length > 1 && QUOTES.has(run[0]!) && !QUOTES.has(run[run.length - 1]!)) return true;
+  const colon = run.indexOf(':');
+  return colon > 0 && colon < run.length - 1 && !run.slice(0, colon).includes('/');
+}
+
+/** One address (perhaps with whitespace in it) as `withoutUrlCredentials` masks it. */
+function withoutAddressCredentials(address: string, meter?: ScanMeter): string {
+  if (meter) meter.steps += address.length;
+  let out = address;
+  const scheme = out.indexOf('://');
+  if (scheme >= 0) {
+    const at = out.lastIndexOf('@');
+    if (at > scheme) out = out.slice(0, scheme + 3) + out.slice(at + 1);
+  }
+  // The last `@` that a host and its `:` follow, read from the end: `hostThenColon` says the
+  // characters from i + 1 on are a host that a `:` ends.
+  let hostAt = -1;
+  let hostThenColon = false;
+  for (let i = out.length - 2; i >= 0; i--) {
+    hostThenColon = !endsHost(out[i + 1]!) && (out[i + 2] === ':' || hostThenColon);
+    if (out[i] === '@' && hostThenColon) {
+      hostAt = i;
+      break;
+    }
+  }
+  if (hostAt < 0) {
+    const slash = out.indexOf('/');
+    hostAt = (slash < 0 ? out : out.slice(0, slash)).lastIndexOf('@');
+    if (hostAt < 0) return out;
+  }
+  const before = out.slice(0, hostAt);
+  let quote = -1;
+  for (let i = 0; i < before.length && quote < 0; i++) if (QUOTES.has(before[i]!)) quote = i;
+  const colon = before.indexOf(':');
+  const userOk = colon >= 0 && !before.slice(0, colon).includes('/');
+  const from = Math.min(quote >= 0 ? quote + 1 : Infinity, userOk ? colon + 1 : Infinity);
+  return from === Infinity ? out : `${out.slice(0, from)}***${out.slice(hostAt)}`;
 }
 
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */
