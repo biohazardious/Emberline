@@ -12,8 +12,14 @@ import { execCommand, execFileChecked } from './command-exec.js';
 const OVERRIDES: Record<string, string> = {
   'core.fsmonitor': 'false',
   'core.hooksPath': '/dev/null',
+  // A repository's own hooks never run: this neutralizes the key when git reads this repository's
+  // config (core.hooksPath on another repository git enters is handled by refusing those targets).
+  'core.alternateRefsCommand': '',
   // Ignore ~/.ssh/config (runner-writable): a ProxyCommand there would run in core on push.
   'core.sshCommand': 'ssh -F /dev/null',
+  // git asks this program for a password on a 401, even with GIT_TERMINAL_PROMPT=0; its prompt
+  // holds the URL, so a token in it would be handed to the program. The env also empties GIT_ASKPASS.
+  'core.askPass': '',
   'core.pager': 'cat',
   'core.editor': 'true',
   'sequence.editor': 'true',
@@ -23,7 +29,7 @@ const OVERRIDES: Record<string, string> = {
   'tag.gpgSign': 'false',
   'protocol.ext.allow': 'never',
   // git's own default, pinned: a repository's config never widens it (`always` would let a
-  // submodule be fetched or pushed over the file transport).
+  // submodule be fetched or pushed over the file transport). Remote commands pin it to `never`.
   'protocol.file.allow': 'user',
 };
 
@@ -31,6 +37,29 @@ export const HARDENED_GIT_ARGS: readonly string[] = Object.entries(OVERRIDES).fl
   '-c',
   `${key}=${value}`,
 ]);
+
+/**
+ * The transports a git command that reaches a remote may use: https, http and ssh, and nothing
+ * else. `protocol.allow=never` makes every scheme default to `never`, and the explicit allows name
+ * the three. So `file` (a local path), `ext` (a command), `git` (unauthenticated) and the rest are
+ * refused by git itself, whatever any config says, which closes the hole where git runs another
+ * repository's hooks or helpers when it reaches a local path. The product refuses such targets with
+ * a clear message first (see assertSupportedRemote); this is the backstop.
+ */
+export const REMOTE_PROTOCOL_ARGS: readonly string[] = [
+  '-c',
+  'protocol.allow=never',
+  '-c',
+  'protocol.file.allow=never',
+  '-c',
+  'protocol.ext.allow=never',
+  '-c',
+  'protocol.https.allow=always',
+  '-c',
+  'protocol.http.allow=always',
+  '-c',
+  'protocol.ssh.allow=always',
+];
 
 /**
  * For every git command that reaches a remote with a credential (the account's capability URL, a
@@ -47,17 +76,33 @@ export const NO_SUBMODULES: readonly string[] = [
   'fetch.recurseSubmodules=false',
 ];
 
-/** Repo config keys that run commands and have no safe generic override. */
+/**
+ * Repo config keys that run commands, route traffic or pick a target and have no safe generic
+ * override. A URL-scoped `http.<url>.proxy` wins over the `-c http.proxy=` core passes, whatever the
+ * order, so it could route the capability URL through a proxy of the agent's choosing; it is refused
+ * (the unscoped `http.proxy` is overridden by `-c`). `remote.*.proxy` likewise.
+ */
 const BLOCKED_CONFIG_KEY =
-  /^(diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|include\.path|includeif\..+\.path|remote\..+\.(uploadpack|receivepack|vcs)|url\..+\.(insteadof|pushinsteadof)|core\.(gitproxy|alternaterefscommand)|gpg\.program|gpg\..+\.program)$/i;
+  /^(diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|include\.path|includeif\..+\.path|remote\..+\.(uploadpack|receivepack|vcs|proxy)|url\..+\.(insteadof|pushinsteadof)|http\..+\.proxy|core\.(gitproxy|alternaterefscommand)|gpg\.program|gpg\..+\.program)$/i;
 
-/** Hardening variables for every git process; nothing else from core's environment is forwarded. */
+/**
+ * Hardening variables for every git process; nothing else from core's environment is forwarded.
+ * - System and global config live in images/volumes the runner can influence, so both are disabled.
+ *   This also stops git reading `$XDG_CONFIG_HOME/git/config` (git looks there only when
+ *   GIT_CONFIG_GLOBAL is unset), so `HOME`/`XDG_CONFIG_HOME` cannot choose config; `HOME` stays only
+ *   for ssh key lookup, and ssh's own config is pinned with `core.sshCommand`.
+ * - No password prompt: `GIT_TERMINAL_PROMPT=0`, and an empty `GIT_ASKPASS`/`SSH_ASKPASS` (git and
+ *   ssh treat an empty value as unset) with `core.askPass=` in the args, so neither a config key nor
+ *   an inherited env var can run an askpass program (R7-I2).
+ */
 export function hardenedGitEnv(): Record<string, string> {
   return {
-    // System and global config live in images/volumes the runner can influence.
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
+    GIT_ASKPASS: '',
+    SSH_ASKPASS: '',
+    SSH_ASKPASS_REQUIRE: 'never',
   };
 }
 
@@ -89,6 +134,16 @@ export async function assertSafeGitConfig(cwd: string): Promise<void> {
   if (blocked.length > 0) throw new UnsafeGitConfigError([...new Set(blocked)]);
 }
 
+/**
+ * The environment for a git clone run in a ptyd terminal (import): the same hardening as {@link
+ * execGitFile} (no global or system config, no prompt, no askpass), plus `LC_ALL=C` when a branch
+ * was given so import-status can read git's English "Remote branch … not found". ptyd takes string
+ * values only.
+ */
+export function cloneGitEnv(branchGiven: boolean): Record<string, string> {
+  return { ...hardenedGitEnv(), ...(branchGiven ? { LC_ALL: 'C' } : {}) };
+}
+
 export interface RunGitOptions {
   timeout?: number;
   maxBuffer?: number;
@@ -115,6 +170,12 @@ export interface ExecGitOptions {
   maxBuffer?: number;
   /** Extra `GIT_*` variables (other keys are dropped); hardening variables always win. */
   env?: Record<string, string | undefined>;
+  /**
+   * The command reaches a remote: restrict the transports to https/http/ssh ({@link
+   * REMOTE_PROTOCOL_ARGS}). The caller has already refused a local-path or file target with a clear
+   * message (assertSupportedRemote); this makes git refuse it too.
+   */
+  remote?: boolean;
 }
 
 function repoDirOf(args: string[], options: ExecGitOptions): string {
@@ -151,7 +212,7 @@ export async function execGitFile(
   await assertSafeGitConfig(repo);
   const { stdout, stderr } = await execFileChecked({
     file: 'git',
-    args: [...HARDENED_GIT_ARGS, ...args],
+    args: [...HARDENED_GIT_ARGS, ...(options.remote ? REMOTE_PROTOCOL_ARGS : []), ...args],
     cwd: options.cwd ?? '/',
     env: { ...gitVariables(options.env), ...hardenedGitEnv() },
     timeoutMs: options.timeout ?? 30_000,

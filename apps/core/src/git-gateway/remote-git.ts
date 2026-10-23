@@ -7,7 +7,7 @@
  */
 import { isRunnerUnavailable } from '../command-exec.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
-import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
+import { execGitFile, HARDENED_GIT_ARGS, NO_SUBMODULES } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
 import { CAPABILITY_ROUTE_PREFIX, type GitGateway } from './gateway.js';
 import { oldValueRefusal } from './receive-pack.js';
@@ -28,6 +28,10 @@ export function gatewayGitArgs(gateway: GitGateway): string[] {
   return [
     '-c',
     'protocol.allow=never',
+    '-c',
+    'protocol.file.allow=never',
+    '-c',
+    'protocol.ext.allow=never',
     '-c',
     `protocol.${scheme}.allow=always`,
     '-c',
@@ -252,6 +256,9 @@ export function accountCloneArgs(r: AccountRemote, target: string, branch: strin
   const { capability, url } = r.gateway.issue(grant(r, { firstUseMs: 2 * MINUTE, operationMs: 60 * MINUTE }));
   r.gateway.trackClone(r.projectId, capability);
   return [
+    // The clone runs in a ptyd terminal, not through execGitFile, so it carries the hardening args
+    // itself (hooks, askpass, ssh, fsmonitor), and {@link cloneGitEnv} carries the hardened env.
+    ...HARDENED_GIT_ARGS,
     ...gatewayGitArgs(r.gateway),
     '-c',
     `url.${url}.insteadOf=${r.url}`,

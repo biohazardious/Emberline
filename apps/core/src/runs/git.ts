@@ -21,6 +21,7 @@ import { unstageScratchFiles } from '../factory/merge.js';
 import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets, redactGitText } from '../git-gateway/gateway.js';
 import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
+import { assertSupportedRemote } from '../repository/git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
 const MAX_TEXT_BYTES = 512 * 1024;
@@ -776,6 +777,8 @@ export async function pushWorktreeBranch(
         .filter(Boolean),
     );
   const before = await originAddresses();
+  // git reaches only https/ssh; a local-path or file origin would run that repository's own hooks.
+  for (const address of before) assertSupportedRemote(address);
 
   let pushed: { stdout: string; stderr: string } | null = null;
   let failure: { error: unknown } | null = null;
@@ -792,7 +795,7 @@ export async function pushWorktreeBranch(
         'origin',
         `refs/heads/${branchToPush}:refs/heads/${branchToPush}`,
       ],
-      { timeout: 60_000 },
+      { timeout: 60_000, remote: true },
     );
   } catch (error) {
     failure = { error };

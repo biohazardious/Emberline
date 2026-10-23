@@ -1,5 +1,5 @@
 import { isRunnerUnavailable } from '../command-exec.js';
-import { badRequest, HttpError } from '../errors.js';
+import { badRequest, conflict, HttpError } from '../errors.js';
 import { remoteUrlForDisplay, scpUserInfoBeforePath } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
@@ -48,6 +48,32 @@ export function shortGitError(error: unknown, known?: KnownSecrets): string {
 }
 
 export { remoteUrlForDisplay };
+
+export const REMOTE_NOT_SUPPORTED =
+  'Emberline reaches a repository only over https, ssh or a git@host:path address. Change origin in Project settings → Repository; a local path or a file:// or git:// address is not allowed.';
+
+/**
+ * Whether git would reach `raw` over a transport Emberline allows: https, http, ssh or an scp-like
+ * `host:path`. A local path, `file://`, `git://`, `ext::` or any other transport is not, because
+ * git runs that other repository's own hooks and helpers (its `-c` overrides do not cross into
+ * another repository), and `ext::`/`git://` are unsafe outright. The credential may still be refused
+ * elsewhere; this is only about the transport.
+ */
+export function isSupportedRemoteUrl(raw: string): boolean {
+  const url = raw.trim();
+  if (/^https?:\/\//i.test(url) || /^ssh:\/\//i.test(url)) return true;
+  // Any other `scheme://`, and the remote-helper `transport::address` form (ext::, fd::).
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) || /^[a-z0-9+.-]+::/i.test(url)) return false;
+  // scp-like: a colon before the first slash (`git@host:o/r`, `host:o/r`), never a local path.
+  const slash = url.indexOf('/');
+  const colon = url.indexOf(':');
+  return colon > 0 && (slash < 0 || colon < slash);
+}
+
+/** Refuses origin whose transport Emberline does not reach (a local path, `file://`, `ext::`, …). */
+export function assertSupportedRemote(raw: string): void {
+  if (!isSupportedRemoteUrl(raw)) throw conflict(REMOTE_NOT_SUPPORTED, 'remote_not_supported');
+}
 
 /** A forge remote (https, http, ssh, scp-like) Emberline may store as origin. */
 export function validateRepositoryUrl(raw: string): {
@@ -203,6 +229,7 @@ export async function listRemoteBranches(
   access: RemoteAccess,
   branch?: string,
 ): Promise<string[]> {
+  if (!access.account) assertSupportedRemote(access.url);
   const names = access.account
     ? await accountRemoteBranches(access.account, mainPath, branch)
     : (
@@ -215,7 +242,7 @@ export async function listRemoteBranches(
             access.url,
             ...(branch ? [`refs/heads/${branch}`] : []),
           ],
-          { cwd: mainPath, timeout: 20_000 },
+          { cwd: mainPath, timeout: 20_000, remote: true },
         )
       ).stdout
         .split('\n')
@@ -234,10 +261,12 @@ export async function remoteBranchHead(
   branch: string,
 ): Promise<string | null> {
   if (access.account) return accountRemoteHead(access.account, mainPath, branch);
+  assertSupportedRemote(access.url);
   const out = (
     await execGitFile([...NO_SUBMODULES, 'ls-remote', '--heads', '--', access.url, `refs/heads/${branch}`], {
       cwd: mainPath,
       timeout: 20_000,
+      remote: true,
     })
   ).stdout;
   for (const line of out.split('\n')) {
@@ -262,7 +291,8 @@ export async function fetchBranchObjects(
 ): Promise<void> {
   if (await hasRealCommit(mainPath, oid)) return;
   if (access.account) await accountFetchBranchObjects(access.account, mainPath, branch);
-  else
+  else {
+    assertSupportedRemote(access.url);
     // Only the real objects, as on the account path: no replace refs, grafts or commit-graph.
     await execGitFile(
       [
@@ -284,8 +314,9 @@ export async function fetchBranchObjects(
         access.url,
         `refs/heads/${branch}`,
       ],
-      { cwd: mainPath, timeout: 30_000, env: REAL_OBJECTS_ENV },
+      { cwd: mainPath, timeout: 30_000, env: REAL_OBJECTS_ENV, remote: true },
     );
+  }
   // The remote moved on between ls-remote and the fetch.
   if (!(await hasRealCommit(mainPath, oid)))
     throw new HttpError(
@@ -337,6 +368,7 @@ export async function pushBranch(
       throw new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`);
     }
   } else {
+    assertSupportedRemote(access.url);
     try {
       await execGitFile(
         [
@@ -349,7 +381,7 @@ export async function pushBranch(
           access.url,
           `${oid}:${ref}`,
         ],
-        { cwd: mainPath, timeout: 60_000 },
+        { cwd: mainPath, timeout: 60_000, remote: true },
       );
       return 'pushed';
     } catch (error) {

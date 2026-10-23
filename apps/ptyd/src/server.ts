@@ -155,7 +155,10 @@ export class PtydServer {
       if (!existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
         throw new PtydError('bad_request', `cwd does not exist: ${params.cwd}`);
       }
-      const session = new PtySession(id, params, this.options);
+      // `meta.noLog`: keep no on-disk log of this session (an import clone may show a token a server
+      // echoes). The live terminal still streams; nothing is written to the log directory.
+      const config = params.meta.noLog ? { ...this.options, logDir: undefined } : this.options;
+      const session = new PtySession(id, params, config);
       this.sessions.set(id, session);
       this.options.log?.(`spawned ${id} (pid ${session.info().pid}): ${params.file}`);
       return session.info();

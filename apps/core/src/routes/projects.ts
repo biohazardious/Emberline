@@ -76,7 +76,13 @@ import {
 } from '@emberline/protocol';
 import { asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
-import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
+import {
+  cloneGitEnv,
+  execGitFile,
+  HARDENED_GIT_ARGS,
+  NO_SUBMODULES,
+  REMOTE_PROTOCOL_ARGS,
+} from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
@@ -148,7 +154,12 @@ import {
 import type { CoreDeps } from '../server.js';
 import { readDemoBuilds } from '../factory/demo-builds.js';
 import type { PostMergeJobs } from '../factory/post-merge.js';
-import { PASSWORD_GIT_WOULD_SHOW, passwordGitWouldShow, validateRepositoryUrl } from '../repository/git.js';
+import {
+  assertSupportedRemote,
+  PASSWORD_GIT_WOULD_SHOW,
+  passwordGitWouldShow,
+  validateRepositoryUrl,
+} from '../repository/git.js';
 import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
@@ -563,9 +574,13 @@ export function registerProjectRoutes(
         // With an account the URL must be one Connect accepts (no query or fragment), so both entry
         // points bind capabilities to, and store, the same URL shapes.
         if (credential) validateRepositoryUrl(body.repoUrl);
-        // Without one git uses what the URL holds; a password it would print is refused before the
-        // clone's terminal shows it.
-        else if (passwordGitWouldShow(body.repoUrl)) throw badRequest(PASSWORD_GIT_WOULD_SHOW);
+        else {
+          // git reaches only https/ssh; a local path or file:// would run that repository's hooks.
+          assertSupportedRemote(body.repoUrl);
+          // Without an account git uses what the URL holds; a password it would print in the clone's
+          // terminal is refused before it shows.
+          if (passwordGitWouldShow(body.repoUrl)) throw badRequest(PASSWORD_GIT_WOULD_SHOW);
+        }
         // A branch given is the one checked out; without one the remote's default branch is, and
         // import-status records it.
         const branch = body.defaultBranch ?? null;
@@ -577,8 +592,10 @@ export function registerProjectRoutes(
               branch,
             )
           : [
-              '-c',
-              'protocol.file.allow=user',
+              // The same hardening execGitFile applies, plus the remote-transport restriction, since
+              // the clone runs in a ptyd terminal rather than through execGitFile.
+              ...HARDENED_GIT_ARGS,
+              ...REMOTE_PROTOCOL_ARGS,
               ...NO_SUBMODULES,
               'clone',
               '--progress',
@@ -593,9 +610,12 @@ export function registerProjectRoutes(
             file: 'git',
             args,
             cwd: config.workspacesDir,
-            // English messages, so import-status can tell a missing branch from other failures.
-            ...(branch ? { env: { LC_ALL: 'C' } } : {}),
-            meta: { kind: 'clone', projectId: id, title: `git clone · ${body.name}` },
+            // The hardened env (no global/system config, no prompt, no askpass); LC_ALL=C with a
+            // branch so import-status can read git's English "Remote branch … not found".
+            env: cloneGitEnv(Boolean(branch)),
+            // `noLog`: ptyd keeps no on-disk log of the clone, so a token a server echoes into the
+            // terminal is never stored where agents can read it. The live view stays raw, unstored.
+            meta: { kind: 'clone', noLog: '1', projectId: id, title: `git clone · ${body.name}` },
           });
           terminalId = session.id;
         } catch (error) {
