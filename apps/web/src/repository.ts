@@ -65,14 +65,19 @@ export function ownerAfterLoad(current: string, owners: readonly ForgeOwner[]): 
 
 /** origin as configured holds a user name or token (core returns it without them). */
 export function originCredentialsText(s: RepositoryStatus): string | null {
+  if (s.originMasked)
+    return "The remote URL may hold a password (shown as ***), so Connect is left empty: type the repository's address there without it to use the forge account.";
   return s.originHasCredentials
     ? 'The remote URL contains a user name or token. Connect the clean URL to use the forge account instead.'
     : null;
 }
 
-/** What Connect offers: an origin set outside Emberline, or the clean URL of one holding a token. */
+/**
+ * What Connect offers: an origin set outside Emberline, or the clean URL of one holding a token.
+ * Never one shown with `***` in place of a password: it is no address, and Connect would refuse it.
+ */
 export function connectPrefill(s: RepositoryStatus): string | null {
-  if (!s.originUrl) return null;
+  if (!s.originUrl || s.originMasked) return null;
   return !s.connected || s.originHasCredentials ? s.originUrl : null;
 }
 

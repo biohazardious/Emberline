@@ -510,6 +510,51 @@ describe('an origin set by hand with a token in it', () => {
   });
 });
 
+describe('an origin that may hold a password where it shows ***', () => {
+  const masked = 'alice:SECRET@git.example.com/o/r.git';
+  const other = 'alice:OTHER@git.example.com/o/r.git';
+
+  it('is flagged as masked, so the web offers it nowhere', async () => {
+    git(projectPath, 'remote', 'add', 'origin', masked);
+    const s = await status();
+    expect(s).toMatchObject({
+      originUrl: 'alice:***@git.example.com/o/r.git',
+      originHasCredentials: true,
+      originMasked: true,
+      connected: false,
+    });
+    expect(JSON.stringify(s)).not.toContain('SECRET');
+  });
+
+  it("another origin masked alike never shows the connected one's read", async () => {
+    // Only an older Emberline could connect such an address; refresh and push read only that one.
+    t.db.update(projects).set({ repoUrl: masked }).where(eq(projects.id, projectId)).run();
+    git(projectPath, 'remote', 'add', 'origin', masked);
+    writeRepositorySettings(t.db, projectId, {
+      lastRemoteCheck: {
+        url: 'alice:***@git.example.com/o/r.git',
+        branch: 'main',
+        at: '2026-10-23T10:00:00.000Z',
+        published: false,
+        error: 'could not read origin',
+      },
+    });
+    expect(await status()).toMatchObject({
+      connected: true,
+      checkedAt: '2026-10-23T10:00:00.000Z',
+      remoteError: 'could not read origin',
+    });
+    git(projectPath, 'remote', 'set-url', 'origin', other);
+    expect(await status()).toMatchObject({
+      originUrl: 'alice:***@git.example.com/o/r.git',
+      connected: false,
+      checkedAt: null,
+      remoteError: null,
+      mainState: 'unknown',
+    });
+  });
+});
+
 describe('a token typed into the connected origin, on a host with an account', () => {
   it('is still the connected repository; the account reaches it through the gateway, the typed token is not sent', async () => {
     forge.bare('alice', 'app');

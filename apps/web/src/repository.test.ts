@@ -32,6 +32,7 @@ const base: RepositoryStatus = {
   remoteError: null,
   checkedAt: '2026-10-22T10:00:00.000Z',
   originHasCredentials: false,
+  originMasked: false,
   keepMainPushed: false,
   lastMainPushError: null,
 };
@@ -135,6 +136,21 @@ describe('an origin with a user name or token in it', () => {
     expect(originCredentialsText(base)).toBeNull();
     expect(connectPrefill(withToken)).toBe('https://git.example.com/al/app.git');
     expect(connectPrefill({ ...withToken, connected: false })).toBe('https://git.example.com/al/app.git');
+  });
+
+  it('Connect offers no address shown with *** for a password, and says to type it again', () => {
+    const masked = {
+      ...base,
+      originUrl: 'alice:***@git.example.com/al/app.git',
+      originHasCredentials: true,
+      originMasked: true,
+      connected: false,
+    };
+    expect(connectPrefill(masked)).toBeNull();
+    expect(connectPrefill({ ...masked, connected: true })).toBeNull();
+    expect(originCredentialsText(masked)).toBe(
+      "The remote URL may hold a password (shown as ***), so Connect is left empty: type the repository's address there without it to use the forge account.",
+    );
   });
 
   it('Connect offers an origin set outside Emberline, and nothing once it is connected and clean', () => {

@@ -128,6 +128,7 @@ export class RepositoryService {
       mainTip: null,
       originUrl: null,
       originHasCredentials: false,
+      originMasked: false,
       originHost: null,
       transport: null,
       account: null,
@@ -158,6 +159,7 @@ export class RepositoryService {
       ...withRepo,
       originUrl: shown.display,
       originHasCredentials: shown.hadCredentials,
+      originMasked: shown.display !== shown.url,
       originHost: parseForgeRemote(origin)?.host ?? null,
       transport,
       account: account
@@ -173,6 +175,9 @@ export class RepositoryService {
     };
     const check = settings.lastRemoteCheck;
     if (!check || check.url !== shown.display || check.branch !== main) return withOrigin; // not read since origin was set
+    // Two addresses masked alike (`user:***@host:…`) are told apart by the connected repository:
+    // refresh and push read only that one, so a read of another origin is never taken for it.
+    if (withOrigin.originMasked && !withOrigin.connected) return withOrigin;
     const checked: RepositoryStatus = { ...withOrigin, checkedAt: check.at };
     if (check.error) return { ...checked, remoteError: check.error };
     if (!check.published) return { ...checked, mainState: 'unpublished' };

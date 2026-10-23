@@ -27,6 +27,11 @@ export const RepositoryStatus = z.object({
   originUrl: z.string().nullable(),
   /** origin as configured has a user name, token, query or fragment in it (not returned). */
   originHasCredentials: z.boolean(),
+  /**
+   * originUrl shows `***` where origin may hold a password (an address git could read either way):
+   * it names no address Connect could take, so the web does not offer it there.
+   */
+  originMasked: z.boolean(),
   /** `host[:port]` for http(s) remotes, the host name for ssh. */
   originHost: z.string().nullable(),
   /** ssh remotes use the runner's own keys; only http(s) remotes get account credentials (in core). */

@@ -17,6 +17,7 @@ const status = {
   ahead: 1,
   keepMainPushed: false,
   originHasCredentials: false,
+  originMasked: false,
 } as unknown as RepositoryStatus;
 const accounts = {
   accounts: [
