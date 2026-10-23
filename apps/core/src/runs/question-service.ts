@@ -6,16 +6,18 @@ import {
   type AskUserQuestionSummary,
   type Run,
   type RunQuestion,
+  type SuggestAnswerResponse,
 } from '@emberline/protocol';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { runEvents } from '../db/schema.js';
+import { runEvents, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
 import { writeNewWorkspaceFile } from '../factory/files.js';
 import { decodeMaterials } from '../factory/materials.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { answerAttachmentPaths, answerPrompt, type StoredAttachment } from './answer.js';
 import { buildRunQuestion } from './question.js';
+import { buildSuggestPrompt, runSuggestion } from './suggest.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { RunService } from './service.js';
 
@@ -32,6 +34,9 @@ const BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionS
 const ANSWERABLE = new Set(['question', 'permission', 'held', 'blocked']);
 
 export class QuestionService {
+  /** Runs with a suggestion being written (one at a time per run). */
+  private readonly suggesting = new Set<string>();
+
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
@@ -100,6 +105,48 @@ export class QuestionService {
     }
     await this.runs.prompt(run.id, text);
     return { delivery: 'session', attachments: paths };
+  }
+
+  /** Claude drafts the person's reply, read-only in the run's worktree; the person edits and sends it. */
+  async suggest(runId: string): Promise<SuggestAnswerResponse> {
+    const question = await this.get(runId);
+    if (!question.suggest.available)
+      throw new HttpError(
+        409,
+        'suggest_unavailable',
+        question.suggest.reason ?? 'Suggestions are not available.',
+      );
+    if (this.suggesting.has(runId))
+      throw new HttpError(409, 'suggest_busy', 'A suggestion is already being written.');
+    this.suggesting.add(runId);
+    try {
+      const run = this.runs.getRun(runId);
+      const ticket = run.ticketId
+        ? this.db
+            .select({ key: tickets.key, title: tickets.title, body: tickets.body })
+            .from(tickets)
+            .where(eq(tickets.id, run.ticketId))
+            .get()
+        : undefined;
+      const prompt = buildSuggestPrompt({
+        ticketTitle: ticket ? `${ticket.key} ${ticket.title}` : (run.title ?? null),
+        ticketBody: ticket?.body ?? null,
+        question,
+        lastMessage:
+          question.kind === 'question'
+            ? this.lastMessage(run.id, run.attention?.since ?? new Date(0).toISOString())
+            : null,
+      });
+      const answer = await runSuggestion({
+        command: this.opts.claudeCommand,
+        model: this.opts.suggestModel,
+        cwd: run.worktreePath,
+        prompt,
+      });
+      return { answer };
+    } finally {
+      this.suggesting.delete(runId);
+    }
   }
 
   /** The blockers of the run's newest `completion_blocked` note. */

@@ -20,6 +20,7 @@ import {
   type RunDiffSummary,
   type RunFileDiff,
   type RunQuestion,
+  type SuggestAnswerResponse,
   type RunRecovery,
   type TicketCompleteBody,
   TicketPromptBody,
@@ -96,6 +97,12 @@ export function registerRunRoutes(
   /** What the run waits on, for the Answer dialog; 404 no_question when nothing. */
   app.get<{ Params: { id: string } }>('/api/runs/:id/question', async (request): Promise<RunQuestion> =>
     questions.get(request.params.id),
+  );
+
+  /** A drafted answer from Claude, read-only; 409 when unavailable or already being written. */
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/question/suggest',
+    async (request): Promise<SuggestAnswerResponse> => questions.suggest(request.params.id),
   );
 
   /** Stores the answer's files in the worktree and delivers the answer as a prompt. */

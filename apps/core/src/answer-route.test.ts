@@ -5,7 +5,9 @@ import type { AnswerResponse } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setCommandExecutor, localCommandExecutor } from './command-exec.js';
 import { projects, runEvents, runs, tickets } from './db/schema.js';
+import { updateFactorySettings } from './factory/settings.js';
 import * as gitExec from './git-exec.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -493,5 +495,83 @@ describe('POST /api/runs/:id/answer', () => {
     const res = await post('/api/runs/a11/answer', { text: 'Resolve the conflicts in app.js.' });
     expect(res.statusCode).toBe(200);
     expect(await resumedWith('a11')).toBe('Resolve the conflicts in app.js.');
+  });
+});
+
+describe('POST /api/runs/:id/question/suggest', () => {
+  afterEach(() => setCommandExecutor(localCommandExecutor));
+  const post = (url: string) => t.app.inject({ method: 'POST', url, headers: authHeaders(cookie) });
+  const reply = (answer: string) =>
+    ({
+      exitCode: 0,
+      signal: null,
+      stdout: JSON.stringify({ structured_output: { answer } }),
+      stderr: '',
+      timedOut: false,
+      durationMs: 1,
+    }) as never;
+  const blocked = { type: 'completion_blocked', payload: { blockers: ['no key'] } };
+  const signedIn = () => updateFactorySettings(t.db, { anthropicApiKey: 'k' });
+
+  it('200 with the drafted answer, run in the worktree', async () => {
+    signedIn();
+    seedRun({ id: 'g1', hold: blocked });
+    let seen: { cwd: string; args: string[] } | undefined;
+    setCommandExecutor(async (r) => {
+      seen = { cwd: r.cwd, args: r.args };
+      return reply('Use the test key.');
+    });
+    const res = await post('/api/runs/g1/question/suggest');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ answer: 'Use the test key.' });
+    expect(seen?.cwd).toBe(path.join(t.dir, '.worktrees', 'g1'));
+    expect(seen?.args.join(' ')).toContain('no key');
+  });
+
+  it('a second suggestion while one is running is 409 suggest_busy', async () => {
+    signedIn();
+    seedRun({ id: 'g2', hold: blocked });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const started = new Promise<void>((r) => (entered = r));
+    setCommandExecutor(async () => {
+      entered();
+      await gate;
+      return reply('first');
+    });
+    const first = post('/api/runs/g2/question/suggest');
+    await started;
+    const second = await post('/api/runs/g2/question/suggest');
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toBe('suggest_busy');
+    release();
+    expect((await first).statusCode).toBe(200);
+    setCommandExecutor(async () => reply('again'));
+    expect((await post('/api/runs/g2/question/suggest')).statusCode).toBe(200);
+  });
+
+  it('409 suggest_unavailable while Claude is not signed in', async () => {
+    seedRun({ id: 'g3', hold: blocked });
+    const res = await post('/api/runs/g3/question/suggest');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'suggest_unavailable',
+      message: 'Claude Code is not signed in.',
+    });
+  });
+
+  it('an unreachable runner passes through and frees the run', async () => {
+    signedIn();
+    seedRun({ id: 'g4', hold: blocked });
+    const { HttpError } = await import('./errors.js');
+    setCommandExecutor(async () => {
+      throw new HttpError(503, 'runner_unavailable', 'The runner is not reachable.');
+    });
+    const res = await post('/api/runs/g4/question/suggest');
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe('runner_unavailable');
+    setCommandExecutor(async () => reply('ok'));
+    expect((await post('/api/runs/g4/question/suggest')).statusCode).toBe(200);
   });
 });
