@@ -29,6 +29,19 @@ const COMMIT_MESSAGE = 'chore: edit .emberline/worktree.yml from project setting
 
 const codeOf = (error: unknown) => (error as { code?: string }).code;
 
+/** The runner's own 503 (`runner_outdated`, `ptyd_unavailable`) found along `cause`, else the plain not-reachable one. */
+function runnerError(error: unknown): HttpError {
+  for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (
+      e instanceof HttpError &&
+      e.statusCode === 503 &&
+      (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated')
+    )
+      return e;
+  }
+  return unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
+}
+
 export interface SaveWorktreeConfigOptions {
   /** The commit message (default `chore: edit .emberline/worktree.yml from project settings`). */
   message?: string;
@@ -150,7 +163,7 @@ export async function saveWorktreeConfig(
     const branch = await mainWorkspaceBranchStrict(project.path).catch((error: unknown) => {
       // The runner went away or never answered: say so, not "not on a branch".
       if (isRunnerUnavailable(error)) {
-        throw error instanceof HttpError ? error : unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
+        throw runnerError(error);
       }
       throw error;
     });

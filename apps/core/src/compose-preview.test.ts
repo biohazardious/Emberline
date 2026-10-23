@@ -27,6 +27,7 @@ import type { CoreConfig } from './config.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
 import { composeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 const ok = (stdout = ''): ExecResult => ({
   exitCode: 0,
@@ -725,7 +726,7 @@ describe('compose previews (worktree.yml v2)', () => {
       const b = await t.runs.enqueue({ projectId: p.id, prompt: 'y' });
       await startPreview(a);
       await waitStatus(a, 'running');
-      rmSync(a.worktreePath, { recursive: true, force: true });
+      rmTemp(a.worktreePath);
       const started = await startPreview(b);
       expect(started.statusCode).toBe(200);
       expect((started.json() as RunPreviewStatus).port).toBe(4325);

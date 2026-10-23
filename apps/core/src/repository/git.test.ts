@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,6 +12,7 @@ import {
   shortGitError,
   validateRepositoryUrl,
 } from './git.js';
+import { rmTemp } from '../test-rm.js';
 
 let dir: string;
 const git = (cwd: string, ...args: string[]) =>
@@ -23,7 +24,7 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'repo-git-'));
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 describe('pushBranch without an account (the runner git straight to the URL)', () => {

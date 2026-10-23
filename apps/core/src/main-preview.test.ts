@@ -28,10 +28,9 @@ import {
 } from './command-exec.js';
 import type { CoreConfig } from './config.js';
 import { readProjectSettings, writeProjectSettings } from './db/project-settings.js';
+import { DemoTokens } from './demo-token.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
 import { DockerEngine, mainComposeProjectName, mainPreviewComposeProjectName } from './docker/engine.js';
-import type { KeyedMutex } from './keyed-mutex.js';
-import { DemoTokens } from './demo-token.js';
 import { agentDemoUrl, demoWorkspacePath } from './factory/demo-target.js';
 import { RunService } from './runs/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -682,12 +681,16 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     expect((await startMain(p.id)).statusCode).toBe(200);
     engine.upGate = null;
     const restarted = restartedService();
-    const { lock } = restarted.mainPreviews as unknown as { lock: KeyedMutex };
-    const read = lock.run(p.id, () => restarted.mainPreviews.status(p.id, undefined, true));
+    const read = restarted.mainPreviews.underLock(p.id, () =>
+      restarted.mainPreviews.status(p.id, undefined, true),
+    );
+    let timer: NodeJS.Timeout | undefined;
     const outcome = await Promise.race([
       read.then((s) => s.status),
-      new Promise((resolve) => setTimeout(() => resolve('deadlock'), 3_000)),
-    ]);
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve('deadlock'), 3_000);
+      }),
+    ]).finally(() => clearTimeout(timer));
     expect(outcome).toBe('failed');
   });
 

@@ -26,8 +26,10 @@ import {
   setCommandExecutor,
 } from './command-exec.js';
 import { projectWorktreeConfig, runs } from './db/schema.js';
+import { unavailable } from './errors.js';
 import { syncWorktreeToMainWorkspace } from './factory/merge.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -324,7 +326,7 @@ describe('worktree.yml trust (Review Focus 1)', () => {
       (await api('POST', `/api/projects/${project.id}/worktree-config/approve`, { removal: true }))
         .statusCode,
     ).toBe(409);
-    rmSync(path.join(project.path, '.git'), { recursive: true, force: true });
+    rmTemp(path.join(project.path, '.git'));
     const noGit = await status(project.id);
     expect(noGit).toMatchObject({ head: null, changed: false, removed: false });
     expect(noGit.headError).toBeTruthy();
@@ -1443,6 +1445,28 @@ describe('editing worktree.yml from Project settings', () => {
     expect(res.json()).toMatchObject({
       error: 'ptyd_unavailable',
       message: 'the runner (ptyd) is not reachable',
+    });
+    expect(commitCount(project)).toBe(count);
+  });
+
+  it.each([
+    ['directly', (e: Error) => e],
+    ['wrapped in another error', (e: Error) => new Error('git failed', { cause: e })],
+  ])('503 runner_outdated keeps its code and text when the runner throws it %s', async (_how, wrap) => {
+    const project = await createProject('version: 1\n');
+    const base = (await status(project.id)).head!.sha256;
+    const count = commitCount(project);
+    setCommandExecutor(async (request) => {
+      if (request.file === 'git' && request.args.includes('--abbrev-ref')) {
+        throw wrap(unavailable('runner_outdated', 'The runner is too old. Update it with make up.'));
+      }
+      return localCommandExecutor(request);
+    });
+    const res = await save(project.id, NEXT, base);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({
+      error: 'runner_outdated',
+      message: 'The runner is too old. Update it with make up.',
     });
     expect(commitCount(project)).toBe(count);
   });

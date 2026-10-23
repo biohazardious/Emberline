@@ -2,23 +2,21 @@
  * Core entrypoint. Configuration comes from EMBERLINE_* env vars (see config.ts).
  */
 import path from 'node:path';
-import { catchAllRanges, parseCidrList } from './auth/cidr.js';
 import {
   ptydCommandCanceller,
   ptydCommandExecutor,
   setCommandCanceller,
   setCommandExecutor,
 } from './command-exec.js';
-import { invalidPreviewPortVars, loadConfig, parseAllowedHosts, previewPortRangesOverlap } from './config.js';
+import { loadConfig } from './config.js';
 import { DockerEngine } from './docker/engine.js';
 import { openDb } from './db/index.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
-import { SecretsKeyError } from './secrets/box.js';
-import { forgetLogLine, startSecrets } from './secrets/startup.js';
-import { previewFrameTooLong, previewPortList } from './security-headers.js';
+import { exitOnSecretsKeyError, forgetLogLine, startSecrets } from './secrets/startup.js';
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
+import { startupWarnings } from './startup-warnings.js';
 import { TicketService } from './tickets/service.js';
 
 const config = loadConfig();
@@ -28,12 +26,12 @@ let secrets: ReturnType<typeof startSecrets>;
 try {
   secrets = startSecrets(db, { env: process.env, dataDir: config.dataDir });
 } catch (error) {
-  if (error instanceof SecretsKeyError) {
-    process.stderr.write(`${error.message}\n${error.detail}\n`);
-    closeDb();
-    process.exit(1);
-  }
-  throw error;
+  exitOnSecretsKeyError(error, {
+    write: (text) => process.stderr.write(text),
+    closeDb,
+    exit: (code) => process.exit(code),
+  });
+  throw error; // unreachable for a key refusal (the process exited); other errors were rethrown above
 }
 const ptyd = new PtydBridge(config.ptydSocket);
 // git, builds and tests for workspaces run in the runner container, never here.
@@ -74,56 +72,9 @@ if (secrets.plaintextSnapshots.length > 0) {
 }
 const forgotten = forgetLogLine(secrets.forget);
 if (forgotten) app.log[forgotten.level](forgotten.message);
-const { ignored: ignoredHosts } = parseAllowedHosts(process.env.EMBERLINE_ALLOWED_HOSTS ?? '');
-if (ignoredHosts.length > 0) {
-  app.log.warn(
-    { ignored: ignoredHosts },
-    'EMBERLINE_ALLOWED_HOSTS: ignoring entries that are not host names',
-  );
-}
-const { invalid: invalidNetworks } = parseCidrList(process.env.EMBERLINE_CONTAINER_NETWORKS ?? '');
-if (invalidNetworks.length > 0) {
-  app.log.warn(
-    { ignored: invalidNetworks },
-    'EMBERLINE_CONTAINER_NETWORKS: ignoring entries that are not CIDR ranges (like 100.64.0.0/10)',
-  );
-}
-const catchAll = catchAllRanges(config.containerNetworks ?? []);
-if (catchAll.length > 0) {
-  app.log.warn(
-    { ranges: catchAll },
-    "EMBERLINE_CONTAINER_NETWORKS: a /0 range takes in every address, so only core's own networks limit which addresses count as Emberline's containers. List your Docker address pool instead (like 100.64.0.0/10).",
-  );
-}
-const invalidPorts = invalidPreviewPortVars(process.env);
-if (invalidPorts.length > 0) {
-  app.log.warn(
-    { variables: invalidPorts },
-    'preview ports: not a port range (like 4300-4324); using the default',
-  );
-}
-if (previewPortRangesOverlap(config.previewPorts)) {
-  app.log.warn(
-    { runner: config.previewPorts.runner, docker: config.previewPorts.docker },
-    'EMBERLINE_PREVIEW_PORTS_RUNNER and EMBERLINE_PREVIEW_PORTS_DOCKER overlap: the runner and the docker engine cannot both publish them',
-  );
-}
-if (previewPortList(config.previewPorts) === null) {
-  app.log.warn(
-    { runner: config.previewPorts.runner, docker: config.previewPorts.docker },
-    'More than 100 preview ports are configured, so the frame policy allows every port on the preview host.',
-  );
-} else if (previewFrameTooLong(undefined, config.previewPorts)) {
-  // Without EMBERLINE_PREVIEW_HOST the host is the one each page is requested on: the first page
-  // that falls back says so (security-headers.ts).
-  app.log.warn(
-    {
-      previewHost: process.env.EMBERLINE_PREVIEW_HOST,
-      runner: config.previewPorts.runner,
-      docker: config.previewPorts.docker,
-    },
-    'Listing the preview ports for EMBERLINE_PREVIEW_HOST would make the frame policy longer than 3 KB, so it allows every port on the preview host.',
-  );
+for (const warning of startupWarnings(process.env, config)) {
+  if (warning.data) app.log.warn(warning.data, warning.message);
+  else app.log.warn(warning.message);
 }
 logDocker = (status) => {
   if (status.available)

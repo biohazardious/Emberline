@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +6,7 @@ import { type OpenedDb, openDb } from './db/index.js';
 import { getFactorySettings, updateFactorySettings } from './factory/settings.js';
 import { UpdateService } from './updates/service.js';
 import { compareVersions, splitPackageSpec } from './updates/versions.js';
+import { rmTemp } from './test-rm.js';
 
 describe('compareVersions', () => {
   it('orders numerically, ignores a leading v and ranks releases above their prereleases', () => {
@@ -61,7 +62,7 @@ describe('UpdateService', () => {
   afterEach(() => {
     vi.useRealTimers();
     opened.close();
-    rmSync(dir, { recursive: true, force: true });
+    rmTemp(dir);
   });
 
   function writeJson(file: string, value: unknown): void {

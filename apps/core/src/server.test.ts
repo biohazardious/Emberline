@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
@@ -17,6 +17,7 @@ import {
   wsProtocols,
 } from './test-utils.js';
 import { appCsp, MAX_APP_CSP_BYTES, previewFrameTooLong, previewPortList } from './security-headers.js';
+import { rmTemp } from './test-rm.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -44,7 +45,7 @@ describe('core server', () => {
       expect(api.statusCode).toBe(404);
       expect(api.json()).toMatchObject({ error: 'not_found' });
     } finally {
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 });
@@ -75,7 +76,7 @@ describe('host allow-list (DNS rebinding)', () => {
       expect(setup.statusCode).toBe(421);
     } finally {
       delete process.env.EMBERLINE_METRICS_TOKEN;
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 
@@ -174,7 +175,7 @@ describe('hardening', () => {
       expect(api.headers['x-content-type-options']).toBe('nosniff');
       expect(api.headers['referrer-policy']).toBe('same-origin');
     } finally {
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 
@@ -209,7 +210,7 @@ describe('hardening', () => {
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 
@@ -245,7 +246,7 @@ describe('hardening', () => {
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 
@@ -331,7 +332,7 @@ describe('hardening', () => {
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 
@@ -352,7 +353,7 @@ describe('hardening', () => {
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
-      rmSync(webDir, { recursive: true, force: true });
+      rmTemp(webDir);
     }
   });
 

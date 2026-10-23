@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import {
   updateFactorySettings,
 } from './factory/settings.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 let t: TestApp;
 beforeEach(async () => {
@@ -375,7 +376,7 @@ describe('Gemini auth reality', () => {
         if (v === undefined) delete process.env[name];
         else process.env[name] = v;
       }
-      rmSync(home, { recursive: true, force: true });
+      rmTemp(home);
     }
   };
 

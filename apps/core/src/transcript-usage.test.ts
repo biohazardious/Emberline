@@ -1,8 +1,9 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isAcceptableTranscriptPath, readTranscriptUsage } from './runs/transcript-usage.js';
+import { rmTemp } from './test-rm.js';
 
 let dir: string;
 let root: string;
@@ -14,7 +15,7 @@ beforeEach(() => {
   root = path.join(dir, 'projects');
   mkdirSync(path.join(root, 'proj'), { recursive: true });
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmTemp(dir));
 
 describe('transcript usage', () => {
   it('only accepts .jsonl files under the transcripts root (S9)', () => {

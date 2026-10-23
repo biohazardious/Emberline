@@ -185,6 +185,22 @@ describe('GET /api/runs/:id/question', () => {
     });
   });
 
+  it('a held run: its recovery why is the text, with no options', async () => {
+    seedRun({ id: 'h1' });
+    const why = (await t.recovery.get('h1'))?.why;
+    expect(why).toBeTruthy();
+    const res = await get('/api/runs/h1/question');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ kind: 'held', text: why, options: [], picker: false });
+  });
+
+  it('a blocked run whose note has no blockers still asks, with no text', async () => {
+    seedRun({ id: 'b3', hold: { type: 'completion_blocked', payload: {} } });
+    const res = await get('/api/runs/b3/question');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ kind: 'blocked', text: '', source: 'blockers', options: [] });
+  });
+
   it('a waiting run: its last message and the options in it', async () => {
     waiting('q1');
     event('q1', 'Stop', { last_assistant_message: 'Which colour?\n1. Red\n2. Green' }, 'waiting_input');
@@ -653,6 +669,47 @@ describe('POST /api/runs/:id/answer', () => {
     expect(existsSync(path.join(t.dir, 'args-a7'))).toBe(false);
   });
 
+  it('a blocked run whose note has no blockers quotes "(no details)"', async () => {
+    const wt = worktree('a12', { 'app.js': 'x\n' });
+    seedRun({ id: 'a12', ...wt, hold: { type: 'completion_blocked', payload: {} } });
+    const res = await post('/api/runs/a12/answer', { text: 'carry on' });
+    expect(res.statusCode).toBe(200);
+    const prompt = await resumedWith('a12');
+    expect(prompt).toContain('> (no details)');
+    expect(prompt).toContain('carry on');
+  });
+
+  it.each([
+    ['held', undefined],
+    ['blocked', blocked],
+  ])('a %s run with a dangling picker gets its text through recovery and no keys', async (kind, hold) => {
+    const id = `dp-${kind}`;
+    const wt = worktree(id, { 'app.js': 'x\n' });
+    seedRun({ id, ...wt, ...(hold ? { hold } : {}) });
+    event(id, 'PreToolUse', {
+      tool_name: 'AskUserQuestion',
+      ask_user_question: {
+        questions: [
+          {
+            question: 'Colour?',
+            header: null,
+            multiSelect: false,
+            options: [{ label: 'Red', detail: null }],
+          },
+        ],
+        complete: true,
+      },
+    });
+    const keys = vi.spyOn(t.runs, 'sendKeys');
+    const question = await get(`/api/runs/${id}/question`);
+    expect(question.json()).toMatchObject({ kind, picker: false });
+    const res = await post(`/api/runs/${id}/answer`, { text: 'use green' });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as AnswerResponse).delivery).not.toBe('picker');
+    expect(await resumedWith(id)).toContain('use green');
+    expect(keys).not.toHaveBeenCalled();
+  });
+
   it('a permission prompt is never answered with text', async () => {
     const wt = worktree('a8', { 'app.js': 'x\n' });
     seedRun({ id: 'a8', ...wt, hold: null, ended: false });
@@ -884,6 +941,29 @@ describe('POST /api/runs/:id/question/suggest', () => {
       error: 'suggest_unavailable',
       message: 'The runner is not reachable.',
     });
+  });
+
+  it('a timed-out suggestion is a 504 that frees the run for a working one', async () => {
+    signedIn();
+    seedRun({ id: 'g6', hold: blocked });
+    setCommandExecutor(
+      async () =>
+        ({
+          exitCode: null,
+          signal: 'SIGTERM',
+          stdout: '',
+          stderr: '',
+          timedOut: true,
+          durationMs: 60_000,
+        }) as never,
+    );
+    const slow = await post('/api/runs/g6/question/suggest');
+    expect(slow.statusCode).toBe(504);
+    expect(slow.json().error).toBe('suggest_timeout');
+    setCommandExecutor(async () => reply('second try'));
+    const res = await post('/api/runs/g6/question/suggest');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ answer: 'second try' });
   });
 
   it('an unreachable runner passes through and frees the run', async () => {

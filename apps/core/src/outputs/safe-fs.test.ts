@@ -20,6 +20,7 @@ import {
   streamOpenedFile,
   UnsafePathError,
 } from './safe-fs.js';
+import { rmTemp } from '../test-rm.js';
 
 let dir: string;
 let outside: string;
@@ -31,8 +32,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(outside, { recursive: true, force: true });
+  rmTemp(dir);
+  rmTemp(outside);
 });
 
 const put = (rel: string, content: string) => {

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runProducedChanges, withMainWorkspaceLock } from './factory/merge.js';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
 import { commitWorktree } from './runs/git.js';
+import { rmTemp } from './test-rm.js';
 
 let dir: string;
 let main: string;
@@ -43,7 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 describe('syncWorktreeToMainWorkspace (git merge)', () => {

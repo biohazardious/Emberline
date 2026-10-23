@@ -7,6 +7,7 @@ import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './co
 import { buildWorkspaceDemo, hasVerifiableBuildTarget, planGateSteps } from './factory/demo.js';
 import { inspectWorkspaceProject } from './factory/workspace-status.js';
 import { setupFinishedIn } from './worktree-config/load.js';
+import { rmTemp } from './test-rm.js';
 
 let ws: string;
 
@@ -26,7 +27,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setCommandExecutor(localCommandExecutor);
-  rmSync(ws, { recursive: true, force: true });
+  rmTemp(ws);
 });
 
 describe('build gate planning', () => {
@@ -103,7 +104,7 @@ describe('build gate planning', () => {
       files({ 'package.json': `{"scripts":{"build":"x"},"pad":"${'x'.repeat(1024 * 1024)}"}` });
       expect(await plan()).toEqual(['.: pio run']);
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmTemp(outside);
     }
   });
 });

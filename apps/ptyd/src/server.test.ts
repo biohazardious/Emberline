@@ -63,7 +63,8 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const client of clients.splice(0)) client.close();
   await server.close();
-  rmSync(dir, { recursive: true, force: true });
+  // A session that is still exiting may add a file during removal (ENOTEMPTY): retry.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe('ptyd', () => {

@@ -562,6 +562,34 @@ describe('container addresses', () => {
     c.stop();
   });
 
+  it('a miss while a resolution is in flight waits for it instead of resolving again', async () => {
+    const answers: Record<string, string[] | Error> = { runner: ['172.18.0.3'] };
+    let lookups = 0;
+    let gate: Promise<void> = Promise.resolve();
+    const c = new ContainerAddresses(['runner'], {
+      lookup: async (host) => {
+        lookups += 1;
+        await gate;
+        return lookupFrom(answers)(host);
+      },
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+      now: () => 1_000_000, // never 5 s on: only the in-flight pass can answer the miss
+    });
+    await c.refresh();
+    expect(lookups).toBe(1);
+    answers.runner = ['172.18.0.7']; // the runner restarted with a new address
+    let release!: () => void;
+    gate = new Promise<void>((resolve) => (release = resolve));
+    const pass = c.refresh();
+    const miss = c.hasOrRefresh('172.18.0.7');
+    release();
+    await pass;
+    expect(await miss).toBe(true);
+    expect(lookups).toBe(2);
+    c.stop();
+  });
+
   it('times the miss refresh by a monotonic clock: a wall clock stepped back does not stop it', async () => {
     let wall = 1_800_000_000_000;
     let monotonic = 1_000;

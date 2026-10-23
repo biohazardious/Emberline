@@ -296,3 +296,17 @@ export function forgetLogLine(forget: {
   ];
   return { level: 'warn', message: parts.filter(Boolean).join(' ') };
 }
+
+/**
+ * A wrong or missing secrets key stops start: both lines go to `write`, the database is closed and
+ * the process exits 1. Any other error is rethrown.
+ */
+export function exitOnSecretsKeyError(
+  error: unknown,
+  io: { write: (text: string) => void; closeDb: () => void; exit: (code: number) => void },
+): void {
+  if (!(error instanceof SecretsKeyError)) throw error;
+  io.write(`${error.message}\n${error.detail}\n`);
+  io.closeDb();
+  io.exit(1);
+}

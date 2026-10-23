@@ -32,6 +32,7 @@ import { parseWorktreeYml } from './worktree-config/load.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 /** While set, `git init` waits for it: holds a wizard create in progress. */
 const gitGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
@@ -66,7 +67,7 @@ afterEach(async () => {
   setCommandExecutor(localCommandExecutor);
   vi.restoreAllMocks();
   await t.close();
-  rmSync(ws, { recursive: true, force: true });
+  rmTemp(ws);
 });
 
 /**
@@ -192,7 +193,7 @@ describe('GET /api/workspaces/folders', () => {
       { name: 'alpha', path: path.join(ws, 'alpha'), isGitRepo: true, hasRemote: true },
       { name: 'beta', path: path.join(ws, 'beta'), isGitRepo: false, hasRemote: false },
     ]);
-    rmSync(outside, { recursive: true, force: true });
+    rmTemp(outside);
   });
 
   it('runs no command to list folders', async () => {
@@ -492,7 +493,7 @@ describe('GET /api/projects/:id/detect', () => {
     const linked = (await detect((await imported('linky')).id)).detected.worktreeYml;
     expect(linked?.content).toBeNull();
     expect(linked?.errors.join(' ')).toMatch(/symbolic link/);
-    rmSync(outside, { recursive: true, force: true });
+    rmTemp(outside);
   });
 
   it('the approvable worktree.yml is the HEAD blob: a dirty working tree is flagged, not read', async () => {
@@ -543,7 +544,7 @@ describe('GET /api/projects/:id/detect', () => {
     const { detected } = await detect((await imported('trick')).id);
     expect(detected.choices.frontend).not.toBe('nextjs');
     expect(detected.commands.build).toBeUndefined();
-    rmSync(outside, { recursive: true, force: true });
+    rmTemp(outside);
   });
 });
 
@@ -589,7 +590,7 @@ describe('POST /api/projects/:id/adopt', () => {
     });
     expect(t.db.select().from(projectWorktreeConfig).all()).toEqual([]);
     expect(t.tickets.list(project.id)).toEqual([]);
-    rmSync(remote, { recursive: true, force: true });
+    rmTemp(remote);
   });
 
   it('refuses to overwrite an existing file, naming it, and writes nothing', async () => {

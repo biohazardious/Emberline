@@ -19,6 +19,7 @@ import {
   accountRemoteBranches,
   type AccountRemote,
 } from './remote-git.js';
+import { rmTemp } from '../test-rm.js';
 
 const TOKEN = 'gateway-secret-token';
 let a: FakeForge;
@@ -93,7 +94,7 @@ afterEach(async () => {
   await app.close();
   await a.close();
   await b.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 describe('the git gateway', () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ProjectStatusSummary, WorkspaceDemoTarget } from '@emberline/protocol';
@@ -16,6 +16,7 @@ import {
 import { buildWorkspaceDemo, hasVerifiableBuildTarget } from './factory/demo.js';
 import { workspaceHeadSha, worktreeHeadSha } from './runs/git.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], {
@@ -34,7 +35,7 @@ describe('workspace HEAD without spawning git', () => {
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'head-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => rmTemp(dir));
 
   it('reads a main checkout, a linked worktree, packed refs and a detached HEAD', async () => {
     const main = path.join(dir, 'main');

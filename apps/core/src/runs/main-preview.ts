@@ -135,6 +135,11 @@ export class MainPreviews {
 
   constructor(private readonly deps: MainPreviewDeps) {}
 
+  /** @internal Runs `fn` under the project's lock, as a start, stop or refresh does; for tests. */
+  underLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+    return this.lock.run(projectId, fn);
+  }
+
   /**
    * The status as the engine reports it. A start that core did not see end (it restarted) is
    * reconciled first, and a `running` whose containers vanished is released, both under the

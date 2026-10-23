@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { DiffFile } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { UnsafePathError } from '../outputs/safe-fs.js';
 import { assignHashes, blobHashNoFollow, inspectDiff, readReviewSide } from './git.js';
+import { rmTemp } from '../test-rm.js';
 
 let dir: string;
 let outside: string;
@@ -19,8 +20,8 @@ beforeEach(() => {
   git('init', '-q', '-b', 'main');
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(outside, { recursive: true, force: true });
+  rmTemp(dir);
+  rmTemp(outside);
 });
 
 const file = (

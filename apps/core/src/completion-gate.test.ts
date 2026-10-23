@@ -18,6 +18,7 @@ import {
   type FinishedDependency,
 } from './tickets/dependency-context.js';
 import { TicketService } from './tickets/service.js';
+import { rmTemp } from './test-rm.js';
 
 const NUDGE =
   'You stopped without calling `ticket_complete`. If the ticket is finished, call it now with a summary and handoff. If something blocks you, call it with `blockers`. If you need an answer from a person, ask the question plainly and stop.';
@@ -1498,7 +1499,7 @@ describe('the worktree config check before the merge', () => {
     const { run } = await ymlTicket();
     mkdirSync(path.join(run.worktreePath, 'cfg'));
     writeFileSync(path.join(run.worktreePath, 'cfg', 'worktree.yml'), VALID);
-    rmSync(path.join(run.worktreePath, '.emberline'), { recursive: true, force: true });
+    rmTemp(path.join(run.worktreePath, '.emberline'));
     symlinkSync('cfg', path.join(run.worktreePath, '.emberline'));
     wgit(run.worktreePath, 'add', '-A');
     wgit(run.worktreePath, 'commit', '-q', '-m', 'link dir');

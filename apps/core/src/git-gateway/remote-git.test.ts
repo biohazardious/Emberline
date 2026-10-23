@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -17,6 +17,7 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
+import { rmTemp } from '../test-rm.js';
 
 const TOKEN = 'remote-git-secret-token';
 let t: TestApp;
@@ -80,7 +81,7 @@ afterEach(async () => {
   await a.close();
   await b.close();
   await t.close();
-  rmSync(outside, { recursive: true, force: true });
+  rmTemp(outside);
 });
 
 describe('run push through the gateway', () => {

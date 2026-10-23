@@ -24,6 +24,7 @@ import {
   previewComposeProjectName,
 } from './docker/engine.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 const ok = (stdout: string): ExecResult => ({
   exitCode: 0,
@@ -583,7 +584,7 @@ describe('buildWorkspaceDemo with a Docker env', () => {
       expect(seen[1]!.env).toMatchObject({ ...env, CI: 'true' });
     } finally {
       setCommandExecutor(localCommandExecutor);
-      rmSync(ws, { recursive: true, force: true });
+      rmTemp(ws);
     }
   });
 });

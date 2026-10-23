@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,13 +13,14 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SECRETS_KEY_FORGET_SENTENCE, SECRETS_KEY_SENTENCE, SecretsKeyError } from './box.js';
 import { createKeyFile, type KeyFileOps, loadSecretsKey, NODE_KEY_FILE_OPS } from './key.js';
+import { rmTemp } from '../test-rm.js';
 
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'secrets-key-'));
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 const keyFile = () => path.join(dir, 'secrets.key');
 const thrown = (fn: () => unknown): unknown => {

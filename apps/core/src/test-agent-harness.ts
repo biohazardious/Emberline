@@ -42,8 +42,6 @@ type InjectResponse = Awaited<ReturnType<TestApp['app']['inject']>>;
 export interface AgentHarness {
   t: TestApp;
   cookie: string;
-  /** Aborted when the harness closes. */
-  signal: AbortSignal;
   api: (
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     url: string,
@@ -65,7 +63,6 @@ export async function startAgentHarness(opts: { standIn?: string } = {}): Promis
   t.ptyd.start();
   await t.ptyd.waitUntilConnected();
   const cookie = await setupAndLogin(t.app);
-  const abort = new AbortController();
 
   const api: AgentHarness['api'] = (method, url, payload) =>
     t.app.inject({ method, url, payload, headers: authHeaders(cookie) });
@@ -73,7 +70,6 @@ export async function startAgentHarness(opts: { standIn?: string } = {}): Promis
   return {
     t,
     cookie,
-    signal: abort.signal,
     api,
     hook: (runId, event, token, payload = {}) =>
       t.app.inject({
@@ -94,7 +90,6 @@ export async function startAgentHarness(opts: { standIn?: string } = {}): Promis
       return project as { id: string; path: string };
     },
     async close() {
-      abort.abort();
       await ptydServer.close();
       await t.close();
     },

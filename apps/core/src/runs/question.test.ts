@@ -24,6 +24,15 @@ describe('parseOptions', () => {
   it('no options when there is no list', () => {
     expect(parseOptions('Should I use green?')).toEqual([]);
   });
+  it('a leading question that ends in "?:" still offers the list', () => {
+    expect(parseOptions('Which colour should I use?:\n1. Red\n2. Blue').map((o) => o.label)).toEqual([
+      'Red',
+      'Blue',
+    ]);
+  });
+  it('a "?" in the middle of the message does not make the list an offer', () => {
+    expect(parseOptions('Is it done? Here is what changed:\n1. Added tests\n2. Fixed lint')).toEqual([]);
+  });
   it('at most six, each clipped to 200 characters', () => {
     const items = Array.from({ length: 8 }, (_, i) => `${i + 1}. ${'x'.repeat(300)}`).join('\n');
     const out = parseOptions(`Pick one?\n${items}`);
@@ -80,6 +89,11 @@ describe('askUserQuestionOf', () => {
     expect(
       askUserQuestionOf({ questions: [{ question: '' }, { question: 'Which?', options: [] }] }),
     ).toMatchObject({ questions: [{ question: 'Which?' }], complete: false });
+  });
+  it('keeps at most six options of a question', () => {
+    const options = Array.from({ length: 8 }, (_, i) => ({ label: `Option ${i + 1}` }));
+    const ask = askUserQuestionOf({ questions: [{ question: 'Which?', options }] });
+    expect(ask!.questions[0]!.options.map((o) => o.label)).toEqual(options.slice(0, 6).map((o) => o.label));
   });
   it('null for anything else', () => {
     expect(askUserQuestionOf({ questions: 'x' })).toBeNull();

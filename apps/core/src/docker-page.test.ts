@@ -4,7 +4,7 @@
  * plan's Review Focus 1-5.
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   COMPOSE_SERVICE_NAME,
@@ -34,6 +34,7 @@ import { runEvents, runs } from './db/schema.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 const ok = (stdout = ''): ExecResult => ({
   exitCode: 0,
@@ -512,7 +513,7 @@ describe('inventory and ownership (Review Focus 3, 4)', () => {
     const live = await liveRun(p.id);
     const review = await endedRun(p.id);
     const gone = await endedRun(p.id);
-    rmSync(gone.worktreePath, { recursive: true, force: true });
+    rmTemp(gone.worktreePath);
     const agent = composeProjectName(live.id, live.worktreePath);
     const reviewPreview = previewComposeProjectName(review.id);
     const main = mainComposeProjectName(p.id);

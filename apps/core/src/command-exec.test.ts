@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
@@ -22,6 +22,7 @@ import {
 import { buildWorkspaceDemo } from './factory/service.js';
 import { runGit } from './git-exec.js';
 import { PtydBridge } from './ptyd-bridge.js';
+import { rmTemp } from './test-rm.js';
 
 let dir: string;
 let server: PtydServer;
@@ -48,7 +49,7 @@ afterEach(async () => {
   setCommandCanceller(localCommandCanceller);
   bridge.stop();
   await server.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 describe('command execution through the runner', () => {

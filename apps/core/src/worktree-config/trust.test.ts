@@ -1,15 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { worktreeCommandsMissing } from './trust.js';
+import { rmTemp } from '../test-rm.js';
 
 describe('worktreeCommandsMissing', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'wt-commands-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => rmTemp(dir));
   const write = (text: string) => {
     mkdirSync(path.join(dir, '.emberline'), { recursive: true });
     writeFileSync(path.join(dir, '.emberline/worktree.yml'), text);

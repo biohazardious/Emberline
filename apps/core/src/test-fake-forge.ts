@@ -4,10 +4,11 @@
  * Authorization header so tests can prove where credentials went.
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { rmTemp } from './test-rm.js';
 
 export interface FakeForgeRequest {
   method: string;
@@ -190,7 +191,7 @@ export async function startFakeForge(
   forge.close = async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   };
   return forge;
 }

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -9,6 +9,7 @@ import { quotaWindows, runs as runsTable, tickets as ticketsTable } from './db/s
 import { computeProjectRecommendations } from './factory/workspace-status.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 vi.mock('./factory/orchestration.js', async (orig) => {
   const actual = await orig<typeof orchestration>();
@@ -608,7 +609,7 @@ describe('lanes and policy', () => {
 
     const { run: pruned } = await startTicket('Pruned');
     await hook(pruned.id, 'StopFailure', await work(pruned), AGY_QUOTA);
-    rmSync(pruned.worktreePath, { recursive: true, force: true });
+    rmTemp(pruned.worktreePath);
     const missing = await api('POST', `/api/runs/${pruned.id}/handoff`, { route });
     expect(missing.statusCode).toBe(409);
     expect(missing.json().error).toBe('worktree_missing');

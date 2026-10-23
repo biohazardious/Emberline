@@ -21,6 +21,28 @@ describe('buildSuggestPrompt', () => {
     expect(p).toContain('Never print secrets');
     expect(p.length).toBeLessThan(20_000);
   });
+  it('a blocked run quotes its blockers, not "The agent asks"', () => {
+    const p = buildSuggestPrompt({
+      ticketTitle: null,
+      ticketBody: null,
+      question: { kind: 'blocked', text: 'no API key\nno network', options: [] },
+      lastMessage: null,
+    });
+    expect(p).toContain('The agent reported these blockers:\nno API key\nno network');
+    expect(p).not.toContain('The agent asks');
+  });
+  it('adds the last message when it differs from the question, and leaves it out when it is the same', () => {
+    const input = {
+      ticketTitle: null,
+      ticketBody: null,
+      question: { kind: 'question' as const, text: 'Which?', options: [] },
+    };
+    expect(buildSuggestPrompt({ ...input, lastMessage: 'I looked at both.' })).toContain(
+      "The agent's last message:\nI looked at both.",
+    );
+    expect(buildSuggestPrompt({ ...input, lastMessage: 'Which?' })).not.toContain('last message');
+    expect(buildSuggestPrompt({ ...input, lastMessage: null })).not.toContain('last message');
+  });
   it('a cut ticket description never splits an emoji', () => {
     const p = buildSuggestPrompt({
       ticketTitle: null,
@@ -40,7 +62,44 @@ describe('runSuggestion', () => {
       'Use GitHub.',
     );
   });
-  it('passes plan mode, the model and no session persistence', async () => {
+  it('runs the CLI with exactly these arguments', async () => {
+    let seen: { file: string; args: string[]; cwd: string } | undefined;
+    setCommandExecutor(async (r) => {
+      seen = { file: r.file, args: r.args, cwd: r.cwd };
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: '{"structured_output":{"answer":"a"}}',
+        stderr: '',
+        timedOut: false,
+        durationMs: 1,
+      } as never;
+    });
+    await runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' });
+    expect(seen).toEqual({
+      file: 'claude',
+      cwd: '/w',
+      args: [
+        '-p',
+        'p',
+        '--output-format',
+        'json',
+        '--json-schema',
+        JSON.stringify({
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+          additionalProperties: false,
+        }),
+        '--permission-mode',
+        'plan',
+        '--no-session-persistence',
+        '--model',
+        expect.any(String),
+      ],
+    });
+  });
+  it('a prompt that starts with a dash is one argument after -p (no shell, nothing to quote)', async () => {
     let args: string[] = [];
     setCommandExecutor(async (r) => {
       args = r.args;
@@ -53,10 +112,10 @@ describe('runSuggestion', () => {
         durationMs: 1,
       } as never;
     });
-    await runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' });
-    expect(args).toEqual(
-      expect.arrayContaining(['-p', 'p', '--permission-mode', 'plan', '--no-session-persistence', '--model']),
-    );
+    const prompt = '--dangerously-skip-permissions; rm -rf $HOME `x`';
+    await runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt });
+    expect(args.slice(0, 2)).toEqual(['-p', prompt]);
+    expect(args.filter((a) => a === '--dangerously-skip-permissions')).toEqual([]);
   });
   it('a timeout is 504 suggest_timeout', async () => {
     setCommandExecutor(

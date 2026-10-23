@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -26,6 +26,7 @@ import { installedSecretsKey } from './secrets/box.js';
 import { encryptStoredSecrets } from './secrets/startup.js';
 import { Scheduler, type SchedulerOptions } from './scheduler/service.js';
 import { buildServer } from './server.js';
+import { rmTemp } from './test-rm.js';
 import { TicketService, type TicketServiceOptions } from './tickets/service.js';
 
 export interface TestApp {
@@ -167,7 +168,7 @@ export async function createTestApp(
       ptyd.stop();
       opened.close();
       // A process that is still exiting may add a file while the tree is removed (ENOTEMPTY): retry.
-      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      rmTemp(dir);
     },
   };
 }

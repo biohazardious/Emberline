@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from './db/index.js';
+import { rmTemp } from './test-rm.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../drizzle', import.meta.url));
 
@@ -16,7 +17,7 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'db-'));
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 const backups = () => readdirSync(dir).filter((name) => name.includes('.pre-migration-'));

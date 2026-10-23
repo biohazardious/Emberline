@@ -22,6 +22,7 @@ import {
   writeNewWorkspaceFile,
   writeWorkspaceFileContent,
 } from './factory/service.js';
+import { rmTemp } from './test-rm.js';
 
 /**
  * `before` runs once just before core opens or writes a file by path (where an agent would swap a
@@ -74,7 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   race.before = null;
   race.opened = null;
-  rmSync(base, { recursive: true, force: true });
+  rmTemp(base);
 });
 
 describe('workspace file explorer containment', () => {

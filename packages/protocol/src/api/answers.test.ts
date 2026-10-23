@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ANSWER_LIMITS, AnswerRequest, RunQuestion } from './answers.js';
+import { RUN_PROMPT_MAX } from './runs.js';
 
 describe('AnswerRequest', () => {
   it('takes text, attachments, or both', () => {
@@ -23,6 +24,18 @@ describe('AnswerRequest', () => {
   it('an option index is a small non-negative integer', () => {
     expect(AnswerRequest.safeParse({ option: 2 }).success).toBe(true);
     expect(AnswerRequest.safeParse({ option: -1 }).success).toBe(false);
+  });
+  it('refuses an option past the sixth and a fractional one', () => {
+    expect(AnswerRequest.safeParse({ option: 5 }).success).toBe(true);
+    expect(AnswerRequest.safeParse({ option: 6 }).success).toBe(false);
+    expect(AnswerRequest.safeParse({ option: 1.5 }).success).toBe(false);
+  });
+  it('an option-only body parses with empty text and no attachments', () => {
+    expect(AnswerRequest.parse({ option: 0 })).toEqual({ option: 0, text: '', attachments: [] });
+  });
+  it('refuses text longer than a prompt can be', () => {
+    expect(AnswerRequest.safeParse({ text: 'x'.repeat(RUN_PROMPT_MAX) }).success).toBe(true);
+    expect(AnswerRequest.safeParse({ text: 'x'.repeat(RUN_PROMPT_MAX + 1) }).success).toBe(false);
   });
 });
 

@@ -25,6 +25,7 @@ import { projects, runEvents, runs } from './db/schema.js';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { worktreeHeadSha } from './runs/git.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -651,6 +652,41 @@ describe('runs', () => {
       expect(res.removedRuns).toBe(1);
       expect(existsSync(run.worktreePath)).toBe(false);
     });
+
+    it('a manual GC lists the sessions again after a pass whose listing was already out of date', async () => {
+      const project = await createProject('GC after a stale pass', true);
+      const run = await exitedRun(project.id);
+      const client = t.ptyd.get();
+      const list = client.list.bind(client);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      vi.spyOn(client, 'list').mockImplementation(async (...args: Parameters<typeof list>) => {
+        calls += 1;
+        const listing = await list(...args);
+        if (calls > 1) return listing;
+        await gate;
+        // The first pass listed the sessions before the agent exited: it still saw it running.
+        return {
+          ...listing,
+          sessions: listing.sessions.map((s) =>
+            s.id === run.terminalId ? { ...s, status: 'running' as const } : s,
+          ),
+        };
+      });
+      const pass = t.runs.reconcile();
+      setTimeout(release, 100);
+      const res = await t.runs.garbageCollect({
+        projectId: project.id,
+        keepRecent: 0,
+        includeFailed: true,
+        pruneWorktrees: true,
+      });
+      await pass;
+      expect(calls).toBeGreaterThanOrEqual(2);
+      expect(res.removedRuns).toBe(1);
+      expect(existsSync(run.worktreePath)).toBe(false);
+    });
   });
 
   describe('garbage collection keeps unmerged work', () => {
@@ -1195,7 +1231,7 @@ describe('runs', () => {
     try {
       mkdirSync(path.join(outside, 'build'));
       writeFileSync(path.join(outside, 'build/x.apk'), 'core secrets');
-      rmSync(run.worktreePath, { recursive: true, force: true });
+      rmTemp(run.worktreePath);
       symlinkSync(outside, run.worktreePath);
 
       const res = (await api('GET', `/api/runs/${run.id}/build-outputs`)).json() as RunBuildOutputsResponse;
@@ -1204,7 +1240,7 @@ describe('runs', () => {
       expect(download.statusCode).toBe(404);
       expect(download.body).not.toContain('core secrets');
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmTemp(outside);
     }
   });
 

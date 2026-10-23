@@ -29,6 +29,7 @@ import {
   setupSkippedPrefix,
   unignoredSecretsNote,
 } from './lifecycle.js';
+import { rmTemp } from '../test-rm.js';
 
 let root: string;
 let main: string;
@@ -47,7 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setCommandExecutor(localCommandExecutor);
-  rmSync(root, { recursive: true, force: true });
+  rmTemp(root);
 });
 
 const dirs = () => ({ trustedBase: root, mainPath: main, worktreePath: wt });

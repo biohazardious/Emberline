@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReviewComment, Run, RunDetail, RunReviewState, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
@@ -11,6 +11,7 @@ import { reviewUnblockPending, stillHeld } from './runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { TicketService } from './tickets/service.js';
+import { rmTemp } from './test-rm.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -413,7 +414,7 @@ describe('a missing worktree on a person merge', () => {
     expect(
       (await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id })).json(),
     ).toMatchObject({ ok: true });
-    rmSync(run.worktreePath, { recursive: true, force: true });
+    rmTemp(run.worktreePath);
     const again = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
     expect(again.statusCode).toBe(200);
     expect(again.json()).toMatchObject({ ok: true, alreadyMerged: true });
@@ -423,7 +424,7 @@ describe('a missing worktree on a person merge', () => {
 
   it('answers 409 worktree_missing when its work is not in main', async () => {
     const { project, ticket, run } = await factoryTicket();
-    rmSync(run.worktreePath, { recursive: true, force: true });
+    rmTemp(run.worktreePath);
     const res = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.id });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: 'worktree_missing', ticketId: ticket.id });

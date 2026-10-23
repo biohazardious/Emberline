@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +13,7 @@ import {
   supersedingFor,
   ticketKeyFromSubject,
 } from './merge-probe.js';
+import { rmTemp } from '../test-rm.js';
 
 vi.mock('../git-exec.js', async (orig) => {
   const actual = await orig<typeof gitExec>();
@@ -36,7 +37,7 @@ beforeEach(() => {
   git(dir, 'commit', '-q', '-m', 'init');
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
   vi.mocked(gitExec.execGitFile).mockClear();
 });
 

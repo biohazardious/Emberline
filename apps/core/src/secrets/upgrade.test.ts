@@ -25,6 +25,7 @@ import {
   sealWith,
 } from './box.js';
 import { encryptStoredSecrets, forgetLogLine, startSecrets } from './startup.js';
+import { rmTemp } from '../test-rm.js';
 
 const testKey = installedSecretsKey();
 const dirs: string[] = [];
@@ -35,7 +36,7 @@ const tempDir = () => {
 };
 afterEach(() => {
   installSecretsKey(testKey);
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmTemp(dir);
 });
 
 describe('secrets at start', () => {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { FactorySettings, Run } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runCrossProviderCritic, selectRivalCriticAgent } from './factory/slop-guard.js';
+import { rmTemp } from './test-rm.js';
 
 let dir: string;
 let repo: string;
@@ -57,7 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.EMBERLINE_AGY_COMMAND;
   delete process.env.EMBERLINE_CLAUDE_COMMAND;
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 describe('cross-provider critic', () => {

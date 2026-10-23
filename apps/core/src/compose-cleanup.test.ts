@@ -5,7 +5,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Run } from '@emberline/protocol';
@@ -21,6 +21,7 @@ import {
 import { runs } from './db/schema.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { rmTemp } from './test-rm.js';
 
 const ok = (stdout = ''): ExecResult => ({
   exitCode: 0,
@@ -454,7 +455,7 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
       expect(engine.reclaims).toEqual([]);
       chmodSync(path.join(outside, 'pgdata'), 0o755);
       chmodSync(path.join(outside, 'pgdata', 'base'), 0o755);
-      rmSync(outside, { recursive: true, force: true });
+      rmTemp(outside);
     },
   );
 });
@@ -466,7 +467,7 @@ describe('GC sweep of compose projects', () => {
     const live = await t.runs.enqueue({ projectId: p.id, prompt: 'live' });
     const review = await endedRun(p.id);
     const gone = await endedRun(p.id);
-    rmSync(gone.worktreePath, { recursive: true, force: true });
+    rmTemp(gone.worktreePath);
     const keep = [
       composeProjectName(live.id, live.worktreePath),
       previewComposeProjectName(live.id),

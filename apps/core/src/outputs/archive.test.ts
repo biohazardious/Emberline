@@ -23,6 +23,7 @@ import type { Readable } from 'node:stream';
 import { buildOutputs, projects, runEvents, runs, tickets } from '../db/schema.js';
 import { updateFactorySettings } from '../factory/settings.js';
 import { ARCHIVE_DIR_NAME, BuildOutputArchive } from './archive.js';
+import { rmTemp } from '../test-rm.js';
 
 const GIB = 1024 ** 3;
 
@@ -62,7 +63,7 @@ beforeEach(() => {
 afterEach(async () => {
   await archive.idle();
   opened.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 const db = () => opened.db;
@@ -399,7 +400,7 @@ describe('BuildOutputArchive.archiveRun', () => {
       expect(await archive.archiveRun('r1')).toEqual({ archived: 0, skipped: 0, failed: 1 });
       expect(existsSync(path.join(elsewhere, 'p1'))).toBe(false);
     } finally {
-      rmSync(elsewhere, { recursive: true, force: true });
+      rmTemp(elsewhere);
     }
   });
 
@@ -415,7 +416,7 @@ describe('BuildOutputArchive.archiveRun', () => {
       expect(await archive.archiveBeforePrune('r1', 5_000, { keepOnTimeout: true })).toBe('failed');
       expect(notes.map((n) => n.type)).toEqual(['build_outputs_archive_failed']);
     } finally {
-      rmSync(elsewhere, { recursive: true, force: true });
+      rmTemp(elsewhere);
     }
   });
 
@@ -639,7 +640,7 @@ describe('BuildOutputArchive and agent-controlled files', () => {
     outside = outsideDir();
   });
   afterEach(() => {
-    rmSync(outside, { recursive: true, force: true });
+    rmTemp(outside);
   });
 
   it('never copies an output that is a symlink', async () => {
@@ -1203,7 +1204,7 @@ describe('BuildOutputArchive deletes and identical tombstones', () => {
         .run();
       expect(archive.firstFailureAt('r2')).toBeNull();
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmTemp(outside);
     }
   });
 });

@@ -3,12 +3,13 @@
  * back to the run's page, so it is redacted and bounded like the account push's.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecResult, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { pushWorktreeBranch } from './git.js';
+import { rmTemp } from '../test-rm.js';
 
 let dir: string;
 const git = (...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim();
@@ -34,7 +35,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setCommandExecutor(localCommandExecutor);
-  rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 describe('pushing a run branch without an account', () => {
