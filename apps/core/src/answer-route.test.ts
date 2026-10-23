@@ -234,6 +234,41 @@ describe('GET /api/runs/:id/question', () => {
     expect((await get('/api/runs/q5/question')).json()).toMatchObject({ kind: 'permission' });
   });
 
+  const PICKER = {
+    tool_name: 'AskUserQuestion',
+    ask_user_question: {
+      questions: [{ question: 'Colour?', header: null, options: [{ label: 'Red', detail: null }] }],
+    },
+  };
+  const PERMISSION = { notification_type: 'permission_prompt', message: 'Claude needs your permission' };
+
+  it('a picker before a Stop is closed: a later permission prompt is a permission', async () => {
+    waiting('s1');
+    event('s1', 'PreToolUse', PICKER);
+    event('s1', 'Stop', { last_assistant_message: 'ok' });
+    event('s1', 'Notification', PERMISSION, 'waiting_input');
+    expect((await get('/api/runs/s1/question')).json()).toMatchObject({ kind: 'permission', picker: false });
+  });
+
+  it('a picker before a new prompt is closed', async () => {
+    waiting('s2');
+    event('s2', 'PreToolUse', PICKER);
+    event('s2', 'UserPromptSubmit', null);
+    event('s2', 'Stop', { last_assistant_message: 'Done?' }, 'waiting_input');
+    expect((await get('/api/runs/s2/question')).json()).toMatchObject({
+      source: 'last_message',
+      picker: false,
+    });
+  });
+
+  it('a picker followed by another tool is closed', async () => {
+    waiting('s3');
+    event('s3', 'PreToolUse', PICKER);
+    event('s3', 'PreToolUse', { tool_name: 'Bash' });
+    event('s3', 'Notification', PERMISSION, 'waiting_input');
+    expect((await get('/api/runs/s3/question')).json()).toMatchObject({ kind: 'permission', picker: false });
+  });
+
   it('suggest is unavailable while Claude is not signed in, with the reason', async () => {
     seedRun({ id: 'b2', hold: { type: 'completion_blocked', payload: { blockers: ['x'] } } });
     expect((await get('/api/runs/b2/question')).json().suggest).toEqual({

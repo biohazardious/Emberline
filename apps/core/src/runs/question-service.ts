@@ -18,6 +18,7 @@ export interface QuestionServiceOptions {
 }
 
 const noQuestion = () => new HttpError(404, 'no_question', 'This run is not waiting for an answer.');
+const BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart']);
 const ANSWERABLE = new Set(['question', 'permission', 'held', 'blocked']);
 
 export class QuestionService {
@@ -72,7 +73,13 @@ export class QuestionService {
       .all();
     for (const r of rows) {
       const p = (r.payload ?? {}) as Record<string, unknown>;
-      if (p.tool_name !== 'AskUserQuestion') continue;
+      // Only PostToolUse is hooked, so a declined or terminal-answered picker never closes: a turn
+      // boundary or another tool starting after the picker means the agent moved on.
+      if (BOUNDARIES.has(r.type)) return null;
+      if (p.tool_name !== 'AskUserQuestion') {
+        if (r.type === 'PreToolUse') return null;
+        continue;
+      }
       if (r.type === 'PostToolUse') return null;
       if (r.type === 'PreToolUse') {
         const ask = p.ask_user_question as AskUserQuestionSummary | undefined;

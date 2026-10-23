@@ -89,12 +89,12 @@ export function registerRunRoutes(
     return run;
   });
 
-  /** Why a held run is held and what can be done about it; null when nothing holds it for a person. */
   /** What the run waits on, for the Answer dialog; 404 no_question when nothing. */
   app.get<{ Params: { id: string } }>('/api/runs/:id/question', async (request): Promise<RunQuestion> =>
     questions.get(request.params.id),
   );
 
+  /** Why a held run is held and what can be done about it; null when nothing holds it for a person. */
   app.get<{ Params: { id: string } }>(
     '/api/runs/:id/recovery',
     async (request): Promise<RunRecovery | null> => recovery.get(request.params.id),
