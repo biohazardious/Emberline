@@ -342,7 +342,7 @@ export function registerProjectRoutes(
       name: body.name,
       slug,
       repoUrl: null,
-      defaultBranch: body.defaultBranch,
+      defaultBranch: body.defaultBranch ?? 'main',
       path: projectPath,
       appType: plan.appType,
       description: plan.vision,
@@ -363,7 +363,7 @@ export function registerProjectRoutes(
       // Committed with the first commit, so every run worktree has them.
       await writeMaterials(projectPath, plan.materials, decoded);
       if (body.initGit ?? true) {
-        await initLocalGitRepository(projectPath, body.defaultBranch);
+        await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main');
         // initLocalGitRepository swallows errors; runs need the commit, so a missing one fails the create.
         await execGitFile(['rev-parse', '--verify', 'HEAD'], { cwd: projectPath }).catch(() => {
           throw new Error('git init failed');
@@ -490,7 +490,7 @@ export function registerProjectRoutes(
       slug,
       repoUrl: null,
       // Runs are merged into the branch the folder has checked out.
-      defaultBranch: branch ?? body.defaultBranch,
+      defaultBranch: branch ?? body.defaultBranch ?? 'main',
       path: projectPath,
       appType: body.appType,
       description: (body.vision ?? body.description).trim(),
@@ -563,12 +563,9 @@ export function registerProjectRoutes(
         // With an account the URL must be one Connect accepts (no query or fragment), so both entry
         // points bind capabilities to, and store, the same URL shapes.
         if (credential) validateRepositoryUrl(body.repoUrl);
-        // The branch the person typed is the one checked out; without one (the schema's `main` is
-        // only a default) the remote's default branch is, and import-status records it.
-        const branch =
-          (request.body as { defaultBranch?: unknown } | null)?.defaultBranch !== undefined
-            ? body.defaultBranch
-            : null;
+        // A branch given is the one checked out; without one the remote's default branch is, and
+        // import-status records it.
+        const branch = body.defaultBranch ?? null;
         // With a forge account the PTY's git clones from a one-time gateway URL: the token stays in core.
         const args = credential
           ? accountCloneArgs(
@@ -620,7 +617,7 @@ export function registerProjectRoutes(
         // unless the caller opts out.
         const shouldInitGit = body.initGit ?? true;
         if (shouldInitGit) {
-          await initLocalGitRepository(projectPath, body.defaultBranch);
+          await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main');
         }
       }
 
@@ -630,7 +627,7 @@ export function registerProjectRoutes(
         slug,
         // Without credentials: a token typed into the URL stays in origin (the clone needs it), never in the database.
         repoUrl: body.repoUrl ? remoteUrlForDisplay(body.repoUrl).url : null,
-        defaultBranch: body.defaultBranch,
+        defaultBranch: body.defaultBranch ?? 'main',
         path: projectPath,
         appType: body.appType,
         description: body.description,

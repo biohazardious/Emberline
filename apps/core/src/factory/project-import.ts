@@ -211,14 +211,46 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
   const tail = await terminalTail(ptyd, clone.id);
   const base = { exitCode: clone.exitCode, terminalId: clone.id, tail };
   if (clone.status === 'running') return { ...base, status: 'cloning' };
-  if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) return { ...base, status: 'ready' };
+  if (clone.exitCode === 0 && (await hasHeadCommit(project.path))) {
+    const tag = await checkedOutTag(project);
+    if (!tag) return { ...base, status: 'ready' };
+    return {
+      ...base,
+      status: 'failed',
+      tail: `${tail}\n${branchProblemText(`"${tag}" is a tag, not a branch.`)}`.trim(),
+    };
+  }
   if (clone.exitCode === 0)
     return {
       ...base,
       status: 'failed',
       tail: `${tail}\nThe clone has no commit (empty repository?).`.trim(),
     };
+  // git: "fatal: Remote branch <name> not found in upstream origin".
+  const missing = /Remote branch (\S+) not found in upstream/.exec(tail)?.[1];
+  if (missing)
+    return {
+      ...base,
+      status: 'failed',
+      tail: `${tail}\n${branchProblemText(`The repository has no branch "${missing}".`)}`.trim(),
+    };
   return { ...base, status: 'failed' };
+}
+
+const branchProblemText = (what: string) =>
+  `${what} Try again with a branch that exists, or leave Default branch empty to use the repository's default branch.`;
+
+/**
+ * The tag a clone checked out for the branch it was given (`git clone --branch v1.0` leaves HEAD
+ * detached at the tag); null when HEAD is on a branch, or is detached for another reason.
+ */
+async function checkedOutTag(project: Project): Promise<string | null> {
+  if (await mainWorkspaceBranch(project.path)) return null;
+  const tag = project.defaultBranch;
+  return execGitFile(['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`], { cwd: project.path }).then(
+    () => tag,
+    () => null,
+  );
 }
 
 export type AdoptInput = ReturnType<typeof AdoptProjectBody.parse>;

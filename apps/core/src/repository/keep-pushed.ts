@@ -143,9 +143,13 @@ export class KeepMainPushed {
     return { ok: false, reason: ORIGIN_CHANGED_MESSAGE };
   }
 
-  /** The Repository block says the push waits for the runner (it stays until the push is decided). */
+  /**
+   * The Repository block says the push waits for the runner (it stays until the push is decided);
+   * not once Keep main pushed was switched off during the push: then it never runs.
+   */
   private waitForRunner(projectId: string): void {
     try {
+      if (!readRepositorySettings(this.db, projectId).keepMainPushed) return;
       writeRepositorySettings(this.db, projectId, { lastMainPushError: RUNNER_WAITING_MESSAGE });
     } catch {
       // the project was deleted meanwhile

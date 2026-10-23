@@ -259,17 +259,26 @@ describe('import clone', () => {
   }[] = [];
   let clone: Promise<unknown> | null = null;
   let exitCode: number | null = null;
+  /** What the clone printed, as the terminal would show it. */
+  let output = '';
   beforeEach(async () => {
     cookie = await setupAndLogin(t.app);
     spawned.length = 0;
     exitCode = null;
+    output = '';
     // The runner's PTY: runs the command like ptyd would (same user, no extra env).
     vi.spyOn(t.ptyd, 'get').mockReturnValue({
       spawn: async (params: { file: string; args: string[]; cwd: string; meta: Record<string, string> }) => {
         spawned.push(params);
         clone = promisify(execFile)(params.file, params.args, { cwd: params.cwd }).then(
-          () => (exitCode = 0),
-          () => (exitCode = 1),
+          (r) => {
+            output = `${r.stdout}${r.stderr}`;
+            exitCode = 0;
+          },
+          (e: { stdout?: string; stderr?: string }) => {
+            output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
+            exitCode = 1;
+          },
         );
         return { id: 'clone-1' };
       },
@@ -282,7 +291,7 @@ describe('import clone', () => {
           createdAt: new Date().toISOString(),
         })),
       }),
-      snapshot: async () => ({ data: 'Cloning into …\n' }),
+      snapshot: async () => ({ data: output || 'Cloning into …\n' }),
     } as never);
   });
   const create = (repoUrl: string, name: string) =>
@@ -411,6 +420,35 @@ describe('import clone', () => {
       .all()
       .find((p) => p.id === project.id);
     expect(row?.defaultBranch).toBe('trunk');
+  });
+
+  it('a branch the repository does not have, or a tag, fails the import with what to do', async () => {
+    const createOn = (name: string, defaultBranch: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        headers: authHeaders(cookie),
+        payload: { name, source: 'import_url', repoUrl: appUrl(), defaultBranch },
+      });
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+    gitIn(repo, 'tag', 'v1.0');
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main', 'v1.0');
+    const missing = (await createOn('No Branch', 'nope')).json();
+    await clone;
+    const noBranch = await importStatus(missing.project.id);
+    expect(noBranch).toMatchObject({ status: 'failed' });
+    expect(noBranch.tail).toContain(
+      'The repository has no branch "nope". Try again with a branch that exists, or leave Default branch empty to use the repository\'s default branch.',
+    );
+    spawned.length = 0;
+    exitCode = null;
+    output = '';
+    const tagged = (await createOn('Tag App', 'v1.0')).json();
+    await clone;
+    expect(exitCode).toBe(0); // git clones a tag, detached
+    const tag = await importStatus(tagged.project.id);
+    expect(tag).toMatchObject({ status: 'failed' });
+    expect(tag.tail).toContain('"v1.0" is a tag, not a branch. Try again with a branch that exists');
   });
 
   it('the capability never reaches .git/config: origin is the real URL as soon as the clone ends', async () => {

@@ -100,7 +100,11 @@ const CreateProjectFields = z.object({
   name: z.string().trim().min(1).max(80),
   mode: z.enum(['manual', 'wizard']).default('manual'),
   repoUrl: RepoUrl.optional().or(z.literal('').transform(() => undefined)),
-  defaultBranch: GitBranchName.default('main'),
+  /**
+   * The branch runs merge into. Absent: `main` for a new project; for `import_url`, the branch the
+   * clone checks out (the repository's default). Given for `import_url`, it is the branch cloned.
+   */
+  defaultBranch: GitBranchName.optional(),
   appType: ProjectAppType.default('custom'),
   description: z.string().trim().max(4000).default(''),
   techStack: ProjectTechStack.optional(),

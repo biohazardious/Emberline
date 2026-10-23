@@ -19,7 +19,7 @@ import type {
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
-import { describeGitError, redactCapabilityUrls, withoutHttpUserInfo } from '../git-gateway/gateway.js';
+import { describeGitError, redactCapabilityUrls, withoutUrlCredentials } from '../git-gateway/gateway.js';
 import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
@@ -775,7 +775,7 @@ export async function pushWorktreeBranch(
       { timeout: 60_000 },
     );
     // `remote:` lines are the server's: as bounded and redacted as a failure's.
-    const output = redactCapabilityUrls(withoutHttpUserInfo(`${stdout}\n${stderr}`.trim())).slice(
+    const output = redactCapabilityUrls(withoutUrlCredentials(`${stdout}\n${stderr}`.trim())).slice(
       0,
       MAX_PUSH_OUTPUT,
     );

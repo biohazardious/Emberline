@@ -231,7 +231,6 @@ describe('CreateProjectBody back-compat', () => {
     expect(CreateProjectBody.parse({ name: 'x' })).toEqual({
       name: 'x',
       mode: 'manual',
-      defaultBranch: 'main',
       appType: 'custom',
       description: '',
       seedStarterTickets: false,

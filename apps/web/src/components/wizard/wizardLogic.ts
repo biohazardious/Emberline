@@ -793,6 +793,11 @@ function restoreDraft(d: WizardDraft): WizardState {
   const s: WizardState = {
     ...initialWizardState(),
     ...fields,
+    // A URL import's draft from before 0.6.1 always held `main`, which was never cloned: it means the
+    // repository's default branch, as an empty field does now.
+    ...(fields.source === 'import_url' && fields.defaultBranch.trim() === 'main'
+      ? { defaultBranch: '' }
+      : {}),
     materialsNotKept: materialNames,
     nameError: null,
     furthest: 0,

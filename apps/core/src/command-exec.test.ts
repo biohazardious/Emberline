@@ -4,12 +4,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cancelCommand,
   type ExecRequest,
   execCommand,
   execFileChecked,
+  isRunnerTimeout,
+  isRunnerUnavailable,
   localCommandCanceller,
   localCommandExecutor,
   ptydCommandCanceller,
@@ -92,6 +94,27 @@ describe('command execution through the runner', () => {
     await expect(ptydCommandExecutor(outdated)({ file: 'true', args: [], cwd: dir })).rejects.toMatchObject({
       code: 'runner_outdated',
     });
+  });
+
+  it('a runner exec that never answers is a timeout, whichever timer fires first, and still a 503', async () => {
+    vi.useFakeTimers();
+    try {
+      // Connected, but the reply never comes, and the client's own timer never fires.
+      const stuck = {
+        protocolVersion: PTYD_PROTOCOL_VERSION,
+        get: () => ({ exec: () => new Promise(() => undefined) }),
+      } as unknown as PtydBridge;
+      const failed = ptydCommandExecutor(stuck)({ file: 'git', args: [], cwd: dir, timeoutMs: 10 }).catch(
+        (e: unknown) => e,
+      );
+      await vi.advanceTimersByTimeAsync(15_010);
+      const error = await failed;
+      expect(error).toMatchObject({ statusCode: 503, code: 'ptyd_unavailable' });
+      expect(isRunnerUnavailable(error)).toBe(true);
+      expect(isRunnerTimeout(error)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects non-zero exits with the command output, like execFile', async () => {

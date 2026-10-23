@@ -71,8 +71,12 @@ export function validateRepositoryUrl(raw: string): {
     if (parsed.search || parsed.hash) throw badRequest(BAD_URL);
     transport = parsed.protocol === 'http:' ? 'http' : 'https';
   } else if (/^ssh:\/\//.test(url) || /^[^/:]+@?[^/:]*:[^/]/.test(url)) {
-    // A password in an ssh URL (`ssh://user:pw@host`, `user:pw@host:path`) is a credential too.
-    if (/^ssh:\/\/[^/@]*:[^/@]*@/.test(url) || /^[^/@]*:[^/@]*@/.test(url))
+    // A password in an ssh URL (`ssh://user:pw@host`, `user:pw@host:path`) is a credential too; an
+    // scp-like address has one exactly when the display would remove it (`host:app@v2` has none).
+    if (
+      /^ssh:\/\/[^/@]*:[^/@]*@/.test(url) ||
+      (!url.startsWith('ssh://') && remoteUrlForDisplay(url).hadCredentials)
+    )
       throw badRequest(CREDENTIALS_IN_URL);
     transport = 'ssh';
   } else {

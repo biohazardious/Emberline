@@ -502,6 +502,23 @@ describe('keep main pushed', () => {
       await next.stop();
     });
 
+    it('switched off during the push: no waiting note is written for a push that will not run', async () => {
+      const m = merged();
+      setCommandExecutor(async (request) => {
+        if (request.args.includes('push')) {
+          // The person switches Keep main pushed off while the push is under way.
+          writeRepositorySettings(t.db, projectId, { keepMainPushed: false, lastMainPushError: null });
+          throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+        }
+        return localCommandExecutor(request);
+      });
+      writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+      t.runs.note('r1', 'merged_to_main', m);
+      await t.mainPush.idle();
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+      expect(notes('r1')).toEqual([]);
+    });
+
     it('a connected runner that does not answer: the push waits, says so, and is tried again shortly', async () => {
       const m = merged();
       await t.mainPush.stop();

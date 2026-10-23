@@ -88,13 +88,16 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
         ? { execId: request.execId }
         : {}),
     });
-    // ptyd enforces the timeout; this only guards against a reply that never comes.
+    // ptyd enforces the timeout; this only guards against a reply that never comes. It is a timeout
+    // like the client's own (isRunnerTimeout), whichever of the two fires first.
     let timer: NodeJS.Timeout | undefined;
     const guard = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(unavailable('ptyd_unavailable', `runner exec of ${request.file} did not answer`)),
-        timeoutMs + 15_000,
-      );
+      timer = setTimeout(() => {
+        const message = `runner exec of ${request.file} did not answer`;
+        const error = unavailable('ptyd_unavailable', message);
+        error.cause = new PtydClientError('timeout', message);
+        reject(error);
+      }, timeoutMs + 15_000);
     });
     try {
       return await Promise.race([call, guard]);

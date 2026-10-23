@@ -42,7 +42,8 @@ describe('pushing a run branch without an account', () => {
     pushAnswers({
       exitCode: 1,
       stderr: [
-        'remote: Permission denied for https://alice:tok3n@git.example.com/o/r.git, see ' + CAPABILITY,
+        'remote: Permission denied for https://alice:p@ss@git.example.com/o/r.git or ssh://git:tok3n@git.example.com/o/r.git, see ' +
+          CAPABILITY,
         `remote: ${'x'.repeat(10_000)}`,
         "error: failed to push some refs to 'https://alice:tok3n@git.example.com/o/r.git'",
       ].join('\n'),
@@ -50,8 +51,10 @@ describe('pushing a run branch without an account', () => {
     const error = await pushWorktreeBranch(dir, 'emberline/run-1', 'main').catch((e: unknown) => e);
     expect(error).toMatchObject({ statusCode: 409 });
     const message = (error as Error).message;
-    expect(message).toMatch(/^git push failed: Permission denied for https:\/\/git\.example\.com\/o\/r\.git/);
-    expect(message).not.toContain('tok3n');
+    expect(message).toMatch(
+      /^git push failed: Permission denied for https:\/\/git\.example\.com\/o\/r\.git or ssh:\/\/git@git\.example\.com\/o\/r\.git/,
+    );
+    expect(message).not.toMatch(/tok3n|p@ss|ss@/);
     expect(message).toContain('/api/internal/git/[capability]');
     expect(message).not.toContain('xxxxxxxxxx'.repeat(31));
   });
@@ -62,6 +65,7 @@ describe('pushing a run branch without an account', () => {
         'To https://alice:tok3n@git.example.com/o/r.git\n*\trefs/heads/emberline/run-1:refs/heads/emberline/run-1\t[new branch]\nDone\n',
       stderr: [
         'remote: Create a pull request: https://bob:p4t@git.example.com/o/r/pulls/new',
+        'remote: mirror: https://carol:p@ss:w@git.example.com/o/r.git and ssh://git:s3cr3t@git.example.com:2222/o/r.git',
         `remote: mirrored to ${CAPABILITY}`,
         `remote: ${'y'.repeat(100_000)}`,
       ].join('\n'),
@@ -69,7 +73,10 @@ describe('pushing a run branch without an account', () => {
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
     expect(res.output).toContain('To https://git.example.com/o/r.git');
     expect(res.output).toContain('https://git.example.com/o/r/pulls/new');
-    expect(res.output).not.toMatch(/tok3n|p4t/);
+    expect(res.output).toContain(
+      'mirror: https://git.example.com/o/r.git and ssh://git@git.example.com:2222/o/r.git',
+    );
+    expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);
   });

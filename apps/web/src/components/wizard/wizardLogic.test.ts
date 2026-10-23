@@ -453,6 +453,33 @@ describe('body building', () => {
     expect(wizardReducer(typedBranch, { type: 'source', source: 'import_url' }).defaultBranch).toBe('trunk');
   });
 
+  it("a URL import's draft from 0.6.0 (always `main`) restores an empty branch: the repository's default", () => {
+    const raw = JSON.stringify({
+      v: 1,
+      step: 'repo',
+      source: 'import_url',
+      repoUrl: 'https://github.com/acme/shop.git',
+      name: 'shop',
+      defaultBranch: 'main',
+    });
+    const restored = wizardReducer(initialWizardState(), { type: 'restore', draft: parseDraft(raw)! });
+    expect(restored.defaultBranch).toBe('');
+    expect(buildCreateBody(restored)).not.toHaveProperty('defaultBranch');
+    const typed = JSON.stringify({
+      v: 1,
+      source: 'import_url',
+      repoUrl: 'https://github.com/acme/shop.git',
+      defaultBranch: 'develop',
+    });
+    expect(
+      wizardReducer(initialWizardState(), { type: 'restore', draft: parseDraft(typed)! }).defaultBranch,
+    ).toBe('develop');
+    const fresh = JSON.stringify({ v: 1, source: 'preset', defaultBranch: 'main' });
+    expect(
+      wizardReducer(initialWizardState(), { type: 'restore', draft: parseDraft(fresh)! }).defaultBranch,
+    ).toBe('main');
+  });
+
   it('follows the URL or folder with the name until the person types one', () => {
     const s = run([
       { type: 'source', source: 'import_url' },
