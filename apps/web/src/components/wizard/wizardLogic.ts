@@ -395,16 +395,34 @@ export function repoNameFromUrl(url: string): string {
 }
 
 /**
- * A URL without credentials: userinfo goes from https URLs, an ssh URL keeps only its user name.
- * scp-style `git@host:path` has no secret and stays as it is.
+ * A URL without credentials, for this browser's storage: better too much gone than a secret kept.
+ * - `scheme://`: an ssh URL keeps only its user name, any other loses its user info; query and
+ *   fragment (where a token may sit) go too. One the URL parser cannot read loses everything from
+ *   `//` to its last `@` (whitespace, `/` or `@` in a password included), and from `?` or `#` on.
+ * - scp-like (`user:secret@host:path`): everything from the first `:` to the last `@` goes, so
+ *   `user:secret@host:path` becomes `user@host:path`. `git@host:path` has no `:` before its `@`
+ *   and stays as it is; an address with a `:` and a later `@` that holds no secret
+ *   (`gitea:team/app@v2.git`) is cut too.
  */
 export function stripUrlCredentials(url: string): string {
-  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i.exec(url);
-  if (!m) return url;
-  const [whole, scheme, userinfo] = m as unknown as [string, string, string];
-  const rest = url.slice(whole.length);
-  if (/^ssh:/i.test(scheme)) return `${scheme}${userinfo.split(':')[0]}@${rest}`;
-  return `${scheme}${rest}`;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^]*@/i, '$1').replace(/[?#][^]*$/, '');
+    }
+    const ssh = parsed.protocol.toLowerCase() === 'ssh:';
+    if (!parsed.password && !(parsed.username && !ssh) && !parsed.search && !parsed.hash) return url;
+    parsed.password = '';
+    if (!ssh) parsed.username = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  }
+  const colon = url.indexOf(':');
+  const at = url.lastIndexOf('@');
+  return colon >= 0 && colon < at ? url.slice(0, colon) + url.slice(at) : url;
 }
 
 /** "Use a folder" is offered only when at least one folder can be imported (a git repository). */

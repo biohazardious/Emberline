@@ -664,7 +664,40 @@ describe('credentials never reach the draft', () => {
       'ssh://git@host.example/acme/shop.git',
     );
     expect(stripUrlCredentials('git@github.com:acme/shop.git')).toBe('git@github.com:acme/shop.git');
-    expect(stripUrlCredentials('https://github.com/a/b?x=a@b')).toBe('https://github.com/a/b?x=a@b');
+    // A query or fragment may hold a token: it goes.
+    expect(stripUrlCredentials('https://github.com/a/b?x=a@b')).toBe('https://github.com/a/b');
+    expect(stripUrlCredentials('https://github.com/acme/shop.git')).toBe('https://github.com/acme/shop.git');
+  });
+
+  it('keeps no part of a password, whatever it holds (hostile addresses)', () => {
+    const SECRET = /S3C|R3T|p@ss|ss@|t0k/;
+    for (const [raw, kept] of [
+      // `@`, `:`, `/`, quotes and whitespace in the password; a query token.
+      ['https://u:S3C@R3T@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ['https://u:S3C:R3T@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ['https://u:S3C/R3T@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ["https://u:S3C'R3T@github.com/acme/shop.git", 'https://github.com/acme/shop.git'],
+      ['https://github.com/acme/shop.git?private_token=t0k#t0k', 'https://github.com/acme/shop.git'],
+      ['ssh://git:S3C@R3T@host.example/acme/shop.git', 'ssh://git@host.example/acme/shop.git'],
+      ['ssh+git://u:S3C@R3T@host.example/acme/shop.git', 'ssh+git://host.example/acme/shop.git'],
+      // Not readable as a URL (a space in the host): everything up to the last `@`.
+      ['https://u:S3C R3T@host example/o/r', 'https://host example/o/r'],
+      ['https://u:S3C\tR3T@h\u00a0x/o/r?t0k', 'https://h\u00a0x/o/r'],
+      // scp-like: from the first `:` to the last `@`.
+      ['alice:S3C@R3T@host.example:acme/shop.git', 'alice@host.example:acme/shop.git'],
+      ['alice:p@ss@host.example:acme/shop.git', 'alice@host.example:acme/shop.git'],
+      ['alice:S3C/R3T@host.example:acme/shop.git', 'alice@host.example:acme/shop.git'],
+      ['alice:S3C R3T@host.example/acme/shop.git', 'alice@host.example/acme/shop.git'],
+      ['me@corp.com:S3C@R3T@host.example:o/r', 'me@corp.com@host.example:o/r'],
+      ['host.example:S3C@x.example', 'host.example@x.example'],
+    ] as const) {
+      const stripped = stripUrlCredentials(raw);
+      expect(stripped, raw).not.toMatch(SECRET);
+      expect(stripped, raw).toBe(kept);
+    }
+    // Nothing to hide: as it was.
+    for (const raw of ['git@github.com:acme/shop.git', 'https://github.com/acme/shop.git', 'ssh://git@h/o/r'])
+      expect(stripUrlCredentials(raw)).toBe(raw);
   });
 
   it('saves and restores the repository URL without its token', () => {
