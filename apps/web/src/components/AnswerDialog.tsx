@@ -31,8 +31,10 @@ export interface AnswerDialogViewProps {
   onFiles: (list: FileList | File[]) => void;
   onRemoveFile: (id: string) => void;
   onSend: () => void;
-  /** Cancel and the close button: closes; the text stays a draft. */
+  /** Cancel and the close button; the text stays a draft, attached files make it ask first. */
   onCancel: () => void;
+  /** The confirmation's Close: closes without asking again. Defaults to `onCancel`. */
+  onConfirmClose?: () => void;
   /** Escape and a click outside; asks first when something would be lost. Defaults to `onCancel`. */
   onDismiss?: () => void;
   onKeepEditing?: () => void;
@@ -47,6 +49,8 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
   const q = p.question;
   const permission = q?.kind === 'permission';
   const dismiss = p.onDismiss ?? p.onCancel;
+  // Nothing can be sent to a permission prompt; it is answered in the terminal.
+  const locked = permission || p.busy;
   return (
     <div className="drawer-backdrop" onClick={dismiss}>
       <aside
@@ -76,7 +80,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
           <div className="answer-options" role="group" aria-label="Options the agent offered">
             {q.options.map((o, i) => (
               <button
-                key={o.label}
+                key={`${i}-${o.label}`}
                 type="button"
                 className="btn btn-sm"
                 title={o.detail ?? undefined}
@@ -131,6 +135,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               rows={8}
               maxLength={20_000}
               value={p.text}
+              disabled={permission}
               onChange={(e) => p.onText(e.target.value)}
             />
           </label>
@@ -140,7 +145,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               <button type="button" className="btn btn-sm" onClick={p.onReplace}>
                 Replace
               </button>
-              <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={p.onKeepAnswer}>
+              <button type="button" className="btn btn-sm btn-primary" onClick={p.onKeepAnswer}>
                 Keep
               </button>
             </div>
@@ -150,7 +155,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
             onDragOver={(e: DragEvent) => e.preventDefault()}
             onDrop={(e: DragEvent) => {
               e.preventDefault();
-              p.onFiles(e.dataTransfer.files);
+              if (!locked) p.onFiles(e.dataTransfer.files);
             }}
           >
             <div className="answer-files-head">
@@ -160,7 +165,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
                   type="file"
                   className="wizard-file-input"
                   multiple
-                  disabled={p.busy}
+                  disabled={locked}
                   onChange={(e) => {
                     if (e.target.files) p.onFiles(e.target.files);
                     e.target.value = '';
@@ -169,7 +174,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               </label>
               <span className="muted small">{answerCapLine(p.files)} · or drop files here</span>
             </div>
-            <MaterialList materials={p.files} onRemove={p.busy ? undefined : p.onRemoveFile} />
+            <MaterialList materials={p.files} onRemove={locked ? undefined : p.onRemoveFile} />
             {p.problems.map((m) => (
               <p key={m} className="small banner banner-warn">
                 {m}
@@ -187,7 +192,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
                 Close without sending? Your answer stays as a draft
                 {p.files.length > 0 ? '; the attached files are not kept.' : '.'}
               </span>
-              <button type="button" className="btn btn-sm" onClick={p.onCancel}>
+              <button type="button" className="btn btn-sm" onClick={p.onConfirmClose ?? p.onCancel}>
                 Close
               </button>
               <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={p.onKeepEditing}>
@@ -221,8 +226,8 @@ export function AnswerDialog(props: {
   onClose: () => void;
   onSent?: () => void;
 }) {
-  const { run, heading, onClose } = props;
-  const state = useAnswerDialog(props);
+  const { run, heading } = props;
+  const { onClose, ...state } = useAnswerDialog(props);
   const [, navigate] = useLocation();
   const dialogRef = useRef<HTMLElement>(null);
   const dismissRef = useRef(state.onDismiss);
@@ -252,7 +257,6 @@ export function AnswerDialog(props: {
       {...state}
       heading={heading}
       dialogRef={dialogRef}
-      onCancel={onClose}
       onOpenTerminal={
         run.terminalId
           ? () => {

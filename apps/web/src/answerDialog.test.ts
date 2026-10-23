@@ -7,6 +7,7 @@ import {
   clearDraft,
   loadDraft,
   saveDraft,
+  suggestionAction,
 } from './answerDialog';
 
 type Stub = {
@@ -109,5 +110,16 @@ describe('answerErrorText', () => {
     expect(answerErrorText('answer_busy', 'An answer is already being sent.')).toBe(
       'An answer is already being sent.',
     );
+  });
+});
+
+describe('suggestionAction', () => {
+  it('drops a suggestion that lands after the dialog closed or the answer was sent', () => {
+    expect(suggestionAction(true, '')).toBe('ignore');
+    expect(suggestionAction(true, 'blue')).toBe('ignore');
+  });
+  it('fills an empty box and asks before replacing a typed answer', () => {
+    expect(suggestionAction(false, '  ')).toBe('fill');
+    expect(suggestionAction(false, 'blue')).toBe('ask');
   });
 });

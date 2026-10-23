@@ -61,3 +61,9 @@ export function answerErrorText(code: string, message: string): string {
       return message;
   }
 }
+
+/** What a suggestion does when it lands: nothing once the dialog closed or the answer went out, else fill or ask. */
+export function suggestionAction(closed: boolean, text: string): 'ignore' | 'fill' | 'ask' {
+  if (closed) return 'ignore';
+  return text.trim() ? 'ask' : 'fill';
+}

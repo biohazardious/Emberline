@@ -7,9 +7,16 @@ import type {
   SuggestAnswerResponse,
 } from '@emberline/protocol';
 import { useQuery } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../api';
-import { addAnswerFiles, answerErrorText, clearDraft, loadDraft, saveDraft } from '../answerDialog';
+import {
+  addAnswerFiles,
+  answerErrorText,
+  clearDraft,
+  loadDraft,
+  saveDraft,
+  suggestionAction,
+} from '../answerDialog';
 import { deliveryNote } from '../holdRecovery';
 import { escapeDraft } from '../reviewComments';
 import { toastInfo } from '../toast';
@@ -44,6 +51,22 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   const [pending, setPending] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  // Set once the dialog closes or the answer went out: late results must not write a draft for the next open.
+  const closed = useRef(false);
+  // A second click before React re-renders must not send twice.
+  const sending = useRef(false);
+  // Reset on mount too: StrictMode mounts, unmounts and mounts again in development.
+  useEffect(() => {
+    closed.current = false;
+    return () => {
+      closed.current = true;
+    };
+  }, []);
+
+  const close = () => {
+    closed.current = true;
+    onClose();
+  };
 
   const question = query.data ?? null;
   const questionError = query.error ? errorText(query.error) : null;
@@ -55,37 +78,37 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
     saveDraft(run.id, v);
   };
 
-  const post = async (body: AnswerRequest) => {
+  // Busy from the first moment, so reading large files does not leave Send and the chips clickable.
+  const post = async (body: () => Promise<AnswerRequest>) => {
+    if (sending.current) return;
+    sending.current = true;
     setBusy(true);
     setError(null);
+    let filesSent = false;
     try {
-      const res = await api<AnswerResponse>(`/api/runs/${run.id}/answer`, 'POST', body);
+      const request = await body();
+      filesSent = (request.attachments?.length ?? 0) > 0;
+      const res = await api<AnswerResponse>(`/api/runs/${run.id}/answer`, 'POST', request);
+      closed.current = true;
       clearDraft(run.id);
       toastInfo(res.delivery === 'picker' ? 'Answer sent.' : `${deliveryNote(res.delivery)}.`);
       onSent?.();
       onClose();
     } catch (e) {
-      setError(errorText(e, (body.attachments?.length ?? 0) > 0));
+      setError(errorText(e, filesSent));
       setBusy(false);
+    } finally {
+      sending.current = false;
     }
   };
 
-  const send = async () => {
-    let attachments;
-    try {
-      attachments = await encodeMaterials(files);
-    } catch (e) {
-      setError(errorText(e));
-      return;
-    }
-    await post({ text: text.trim(), attachments });
-  };
+  const send = () => post(async () => ({ text: text.trim(), attachments: await encodeMaterials(files) }));
 
   // With Claude's picker open a chip answers it; otherwise it only fills the box.
   const chooseOption = (i: number) => {
     const option = question?.options[i];
     if (!question || !option) return;
-    if (question.picker) void post({ option: i });
+    if (question.picker) void post(async () => ({ option: i }));
     else setText(option.label);
   };
 
@@ -94,16 +117,18 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
     setError(null);
     try {
       const { answer } = await api<SuggestAnswerResponse>(`/api/runs/${run.id}/question/suggest`, 'POST');
-      if (textNow.current.trim()) setPending(answer);
-      else setText(answer);
+      const action = suggestionAction(closed.current, textNow.current);
+      if (action === 'ask') setPending(answer);
+      else if (action === 'fill') setText(answer);
     } catch (e) {
-      setError(errorText(e));
+      if (!closed.current) setError(errorText(e));
     } finally {
-      setSuggesting(false);
+      if (!closed.current) setSuggesting(false);
     }
   };
 
   const addFiles = (list: FileList | File[]) => {
+    if (sending.current || question?.kind === 'permission') return;
     const { added, problems: refused } = addAnswerFiles(
       files,
       [...list].map((f) => ({ file: f, name: f.name })),
@@ -120,9 +145,15 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   // Escape or a click outside asks first while there is an answer or files; the text stays a draft either way.
   const dismiss = () => {
     const action = escapeDraft(text.trim() || files.length > 0 ? 'draft' : '', confirmClose);
-    if (action === 'close') onClose();
+    if (action === 'close') close();
     else if (action === 'confirm') setConfirmClose(true);
     else keepEditing();
+  };
+
+  // Cancel and the close button: the text is a draft already, so only attached files make it ask.
+  const cancel = () => {
+    if (files.length > 0) setConfirmClose(true);
+    else close();
   };
 
   return {
@@ -145,13 +176,20 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
       setPending(null);
       textRef.current?.focus();
     },
-    onKeepAnswer: () => setPending(null),
+    onKeepAnswer: () => {
+      setPending(null);
+      textRef.current?.focus();
+    },
     onFiles: addFiles,
     onRemoveFile: (id: string) => {
+      if (sending.current) return;
       setFiles(files.filter((f) => f.id !== id));
       setProblems([]);
     },
     onSend: () => void send(),
+    onCancel: cancel,
+    onConfirmClose: close,
+    onClose: close,
     onDismiss: dismiss,
     onKeepEditing: keepEditing,
   };

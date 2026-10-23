@@ -4949,6 +4949,12 @@ dialog.cmd-dialog::backdrop {
   gap: 6px;
 }
 
+/* The file input is disabled while sending or for a permission prompt; its label shows it. */
+.answer-files .wizard-file:has(:disabled) {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
 .answer-text {
   width: 100%;
   min-height: 160px;

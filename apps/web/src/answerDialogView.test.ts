@@ -56,6 +56,22 @@ describe('AnswerDialogView', () => {
     });
     expect(html).toContain('Open terminal');
     expect(html).not.toContain('>Red<');
+    expect(html).not.toContain('Suggest an answer');
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
+    expect(html).toMatch(/<textarea[^>]*disabled/);
+    expect(html).toMatch(/<input type="file"[^>]*disabled/);
+  });
+  it('a permission prompt keeps Send off even with text', () => {
+    const html = view({ text: 'yes', question: { ...q, kind: 'permission', options: [] } });
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
+  });
+  it('while sending, chips and Attach files are off', () => {
+    const html = view({ text: 'green', busy: true });
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Red</);
+    expect(html).toMatch(/<input type="file"[^>]*disabled/);
+  });
+  it('the Replace / Keep bar does not take focus', () => {
+    expect(view({ text: 'blue', confirmReplace: true })).not.toMatch(/autofocus[^>]*>Keep</i);
   });
   it('lists the attached files with the cap line', () => {
     const file = {
