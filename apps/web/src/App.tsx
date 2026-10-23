@@ -61,6 +61,8 @@ import {
   switchProjectPath,
 } from './projectPaths';
 import { Dashboard } from './pages/Dashboard';
+// The dashboard shows the roadmap studio, so the roadmap page is in the app's own chunk anyway.
+import { RoadmapPage } from './pages/RoadmapPage';
 import { Toasts, toastError, toastInfo } from './toast';
 
 // xterm.js and Monaco are the bulk of the bundle; only load them when opened.
@@ -77,7 +79,6 @@ const CodeExplorerPage = lazy(() =>
 const LiveBrowserPage = lazy(() =>
   import('./pages/LiveBrowserPage').then((m) => ({ default: m.LiveBrowserPage })),
 );
-const RoadmapPage = lazy(() => import('./pages/RoadmapPage').then((m) => ({ default: m.RoadmapPage })));
 const ProjectSettingsPage = lazy(() =>
   import('./pages/ProjectSettingsPage').then((m) => ({ default: m.ProjectSettingsPage })),
 );
@@ -974,11 +975,7 @@ function Shell() {
                 )}
               </Route>
               <Route path="/projects/:id/roadmap">
-                {(params) => (
-                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                    <RoadmapPage key={params.id} projectId={params.id} />
-                  </Suspense>
-                )}
+                {(params) => <RoadmapPage key={params.id} projectId={params.id} />}
               </Route>
               <Route path="/projects/:id/board">
                 {(params) => (
