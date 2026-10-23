@@ -31,6 +31,7 @@ export const EVENT_LABEL: Record<string, string> = {
   merge_failed: 'held: merge failed',
   main_push_failed: 'main push failed',
   no_changes: 'held: no changes',
+  pipeline_interrupted: 'held: checks cut off by an update',
   headless_needs_auto: 'failed: needs Autonomous mode',
   stall_detected: 'stalled',
   waiting_input_timeout: 'stopped: nobody answered',

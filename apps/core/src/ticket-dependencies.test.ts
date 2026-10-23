@@ -1918,6 +1918,85 @@ describe('factory chain robustness', () => {
     await settle(project.id);
   });
 
+  describe('the first start after an upgrade from 0.6.0 (no pipeline marks kept)', () => {
+    /** A chaining project's Review ticket whose pass was cut off, with no marks kept (or, `marked`, an empty list). */
+    async function cutOffBeforeMarks(marked: boolean) {
+      const project = await createProject();
+      t.tickets.setAutoChain(project.id, true);
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+        undefined;
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      await finish(run);
+      await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('review');
+      t.db.delete(settings).where(eq(settings.key, 'factory.pendingPipelines')).run();
+      if (marked) setSetting(t.db, 'factory.pendingPipelines', {});
+      return { project, a, run };
+    }
+    const pendingKey = () =>
+      t.db.select().from(settings).where(eq(settings.key, 'factory.pendingPipelines')).get();
+
+    it('holds such a ticket once for a person, with a way to run its checks again', async () => {
+      const { project, a, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const passes = trackPipelines(restarted);
+      await restarted.resumeChains();
+      expect(passes).toHaveLength(0);
+      expect((await eventTypes(run)).filter((x) => x === 'pipeline_interrupted')).toHaveLength(1);
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      expect(await statusOf(a.id)).toBe('review');
+      expect(t.runs.getRun(run.id).attention).toMatchObject({
+        reason: 'held',
+        detail: 'Checks cut off by an update',
+      });
+      expect((await t.recovery.get(run.id))?.suggestions[0]).toMatchObject({ id: 'run_checks_again' });
+      expect(pendingKey()).toBeDefined();
+      // The next start knows the marks: no second hold.
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect((await eventTypes(run)).filter((x) => x === 'pipeline_interrupted')).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it('holds nothing once the marks are kept', async () => {
+      const { project, a, run } = await cutOffBeforeMarks(true);
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect(await eventTypes(run)).not.toContain('pipeline_interrupted');
+      expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+  });
+
+  it('a run without a ticket gets its cut-off pipeline after a restart: its tickets file is read', async () => {
+    const project = await createProject();
+    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+      undefined;
+    const run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'plan it' })).json() as Run;
+    expect(run.ticketId).toBeNull();
+    const token = await waitFile(`token-${run.id}`);
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+      JSON.stringify({ autoDispatch: false, tickets: [{ title: 'Drafted later' }] }),
+    );
+    await hook(run.id, 'SessionStart', token, { session_id: `s-${run.id}` });
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Stop', token);
+    await expect.poll(() => t.runs.getRun(run.id).state, { timeout: 10_000 }).toBe('done');
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const passes = trackPipelines(restarted);
+    await restarted.resumeChains();
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    const titles = ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).map(
+      (x) => x.title,
+    );
+    expect(titles).toContain('Drafted later');
+    expect(await eventTypes(run)).toContain('tickets_imported');
+    await settle(project.id);
+  });
+
   it('a restart does not run again a pipeline that ended, though the board changed since', async () => {
     const project = await createProject();
     const a = await createTicket(project.id, { title: 'A', status: 'ready' });

@@ -390,6 +390,19 @@ describe('buildRecovery: the other holds', () => {
     expect(prompt).not.toContain('explain why nothing is needed and finish');
   });
 
+  it('pipeline_interrupted: Run the checks again, Open review, Discard', () => {
+    const r = buildRecovery(input('pipeline_interrupted', {}));
+    expectWellFormed('pipeline_interrupted', r);
+    expect(r.label).toBe('Checks cut off by an update');
+    expect(r.why).toBe("Emberline was updated while this ticket's checks ran, so they did not finish");
+    expect(r.suggestions.map((s) => [s.kind, s.id, s.label])).toEqual([
+      ['prompt', 'run_checks_again', 'Run the checks again'],
+      ['open_review', 'open_review', 'Open review'],
+      ['discard', 'discard', 'Discard this work'],
+    ]);
+    expect(r.suggestions[0]!.prompt).toMatch(/^Emberline was updated while the checks of your last turn ran/);
+  });
+
   it('a prompt without the completion tool ends with the prompt itself', () => {
     const r = buildRecovery(input('completion_missing', {}, { completionReminder: '' }));
     expect(r.suggestions[0]!.prompt!.endsWith('say what blocks you.')).toBe(true);

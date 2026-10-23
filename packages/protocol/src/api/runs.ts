@@ -595,6 +595,7 @@ export const HOLD_LABELS: Readonly<Record<string, string>> = {
   completion_blocked: 'Blocked',
   review_blocked: 'Blocking review comments',
   no_changes: 'Finished without changes',
+  pipeline_interrupted: 'Checks cut off by an update',
 };
 
 /** The first line of the worktree.yml check's `build_gate_failed` note (`output`), before the errors. */

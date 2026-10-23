@@ -467,6 +467,20 @@ export function buildRecovery(input: RecoveryInput): Recovery {
         ],
       });
     }
+    case 'pipeline_interrupted':
+      return done({
+        why: "Emberline was updated while this ticket's checks ran, so they did not finish",
+        suggestions: [
+          ask(
+            'run_checks_again',
+            'Run the checks again',
+            "Ask the agent to finish its turn again; the ticket's checks and merge then run as usual.",
+            "Emberline was updated while the checks of your last turn ran, so they did not finish. Run the project's checks, fix anything that fails, commit, and finish.",
+          ),
+          openReview(),
+          discard(input.ticketKey),
+        ],
+      });
     default:
       return done({ why: 'the ticket is held for a person', suggestions: [openReview()] });
   }

@@ -638,8 +638,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // Only passes that were due or going when core stopped: one that ended decided already (a run
     // that was no factory step stays in Review for its person, whatever the board shows now). Not as
     // `finalizing`: each pass decides as the cut-off one would have whether the run is a factory step.
+    // The first start of a version that marks them (an upgrade from 0.6.0 or earlier): a pass the
+    // upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a person
+    // instead of being merged without its checks or left unseen; written at once, so only this start does.
+    if (getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) === undefined) {
+      for (const projectId of known) this.holdUnmarkedReviews(projectId);
+      this.savePendingPipelines(new Map());
+    }
     const cutOff = this.pendingPipelineRuns();
     for (const projectId of known) this.finalizeLeftoverReviews(projectId, { cutOff });
+    this.resumeTicketlessPasses(cutOff);
     // A cut-off pass not taken up (its run is gone, or its ticket left Review) is dropped.
     for (const runId of cutOff.keys()) this.releasePipelinePending(runId);
     if (!getFactorySettings(this.db).autoPickupReady) return;
@@ -649,6 +657,58 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       else this.chainOff(projectId);
     }
     await Promise.all(resumed);
+  }
+
+  /**
+   * The first start after an upgrade from a version that kept no pipeline marks (see resumeChains):
+   * a Review ticket of a chaining project whose latest run finished and whose pass left no outcome
+   * may have had its checks cut off by the upgrade's restart. It gets a `pipeline_interrupted` hold,
+   * so it shows in the Inbox; the agent's next stop runs its checks again.
+   */
+  private holdUnmarkedReviews(projectId: string): void {
+    if (!this.autoChainProjects.has(projectId)) return;
+    const { autoSyncToMain, autoMoveToDone } = effectiveFactorySettings(this.db, projectId);
+    // With neither, a pass that ended leaves its ticket in Review without an outcome too.
+    if (!autoSyncToMain && !autoMoveToDone) return;
+    for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
+      const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
+      if (!latestRun || latestRun.state !== 'done' || latestRun.handedOffTo) continue;
+      if (this.pipelineOutcome(latestRun.id) !== null) continue;
+      // A run still resolving its conflict is finished by its own pipeline when it stops again.
+      if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
+      this.runs.note(latestRun.id, 'pipeline_interrupted', {});
+    }
+  }
+
+  /**
+   * Cut-off passes of runs without a ticket (a run that only reads a tickets file, or one a
+   * factory pipeline gates and merges): run again, `resumed`, like a ticket run's. One whose pass
+   * decided already (held, or merged) is left as it is; each run at most once per process.
+   */
+  private resumeTicketlessPasses(cutOff: Map<string, PendingPipeline>): void {
+    for (const [runId, mode] of cutOff) {
+      let run: Run;
+      try {
+        run = this.runs.getRun(runId);
+      } catch {
+        continue; // removed meanwhile
+      }
+      if (
+        run.ticketId ||
+        run.state !== 'done' ||
+        run.handedOffTo ||
+        this.pipelineRuns.has(run.id) ||
+        this.settlingRuns.has(run.id) ||
+        this.resumedPipelines.has(run.id)
+      )
+        continue;
+      if (!run.endedAt && this.conflictResolutionRequested(run.id)) continue;
+      const outcome = this.pipelineOutcome(run.id);
+      if (outcome === 'merged') continue;
+      if (outcome === 'held' && this.pendingFixRequest(run) === null) continue;
+      this.resumedPipelines.add(run.id);
+      this.completeRun(run, { finalizing: mode.finalizing, resumed: true });
+    }
   }
 
   /**
