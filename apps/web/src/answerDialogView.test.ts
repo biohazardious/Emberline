@@ -1,7 +1,9 @@
+// @vitest-environment happy-dom
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { answerProblems } from './answerDialog';
 import { AnswerDialogView, type AnswerDialogViewProps } from './components/AnswerDialog';
+import { cleanup, getButton, renderDom } from './domRender';
 import { renderStatic } from './staticRender';
 
 const q = {
@@ -52,6 +54,8 @@ function findElement(
   if (match(node)) return node;
   return findElement(node.props.children as ReactNode, match);
 }
+
+afterEach(cleanup);
 
 describe('AnswerDialogView', () => {
   it('shows the question, the chips and why Suggest is off', () => {
@@ -112,15 +116,23 @@ describe('AnswerDialogView', () => {
     const html = view({ text: 'yes', question: { ...q, kind: 'permission', options: [] } });
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
   });
-  it('while sending, chips, Suggest and Attach files are off', () => {
+  it('while sending, chips, Suggest and Attach files are off', async () => {
     const suggestOn = { ...q, suggest: { available: true, reason: null } };
-    expect(view({ text: 'green', question: suggestOn })).not.toMatch(
-      /<button[^>]*disabled[^>]*>Suggest an answer/,
+    const shown = await renderDom(
+      createElement(AnswerDialogView, props({ text: 'green', question: suggestOn })),
     );
-    const html = view({ text: 'green', busy: true, question: suggestOn });
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Red</);
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Suggest an answer/);
-    expect(html).toMatch(/<input type="file"[^>]*disabled/);
+    const fileInput = () => shown.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    expect(getButton('Suggest an answer').disabled).toBe(false);
+    expect(getButton('Red').disabled).toBe(false);
+    expect(fileInput().disabled).toBe(false);
+
+    await shown.rerender(
+      createElement(AnswerDialogView, props({ text: 'green', busy: true, question: suggestOn })),
+    );
+    expect(getButton('Suggest an answer').disabled).toBe(true);
+    expect(getButton('Red').disabled).toBe(true);
+    expect(getButton('Green').disabled).toBe(true);
+    expect(fileInput().disabled).toBe(true);
   });
   it('the Replace / Keep bar does not take focus', () => {
     expect(view({ text: 'blue', confirmReplace: true })).not.toMatch(/autofocus[^>]*>Keep</i);
