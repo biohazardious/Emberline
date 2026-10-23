@@ -18,6 +18,8 @@ import {
 } from './domRender';
 import type * as LiveData from './hooks/liveData';
 import { SERVER_CHOICE_WAIT_MS } from './projectPaths';
+import { toastInfo } from './toast';
+import type * as ToastModule from './toast';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof ApiModule>()),
@@ -60,6 +62,10 @@ vi.mock('./pages/Dashboard', () => ({
     );
   },
 }));
+vi.mock('./toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof ToastModule>()),
+  toastInfo: vi.fn(),
+}));
 vi.mock('./components/MonacoEditor', () => ({ MonacoEditor: () => null }));
 vi.mock('./monaco', () => ({ monacoTheme: () => 'vs' }));
 
@@ -88,9 +94,11 @@ afterEach(async () => {
   await cleanup();
   vi.useRealTimers();
   vi.mocked(api).mockReset();
+  vi.mocked(toastInfo).mockReset();
 });
 
 const dashboard = () => document.body.querySelector('.test-dashboard')?.textContent ?? null;
+const draft = () => document.body.querySelector<HTMLTextAreaElement>('textarea[aria-label="Draft"]')!;
 const pending = () => document.body.querySelector('.dashboard[aria-busy="true"]') !== null;
 const askedServer = () =>
   vi
@@ -122,7 +130,7 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     expect(dashboard()).toBe('dashboard of a');
   });
 
-  it("the server's choice arriving after the wait replaces the fallback, while no project was picked", async () => {
+  it("the server's choice arriving after the wait replaces the fallback, with a fresh page and a notice", async () => {
     vi.useFakeTimers();
     const choice = deferred<ActiveProjectPreference>();
     serverChoice = choice.promise;
@@ -130,9 +138,15 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     await waitFor(() => expect(askedServer()).toBe(true));
     await settle(SERVER_CHOICE_WAIT_MS + 200);
     expect(dashboard()).toBe('dashboard of a');
+    await typeInto(draft(), 'note for Alpha');
     choice.resolve({ activeProjectId: 'b' });
     await waitFor(() => expect(dashboard()).toBe('dashboard of b'));
     expect(localStorage.getItem('emberline.activeProjectId')).toBe('b');
+    // Nothing typed for Alpha is left on Beta's page, and the person is told why it changed.
+    expect(draft().value).toBe('');
+    expect(vi.mocked(toastInfo).mock.calls).toEqual([
+      ['Switched to Beta, the active project saved on the server.'],
+    ]);
   });
 
   it("the server's choice arriving after the wait keeps a project the person picked since", async () => {
@@ -148,9 +162,10 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     await settle(100);
     expect(dashboard()).toBe('dashboard of a');
     expect(localStorage.getItem('emberline.activeProjectId')).toBe('a');
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
-  it('a page stays mounted, with what was typed on it, while its deleted project is resolved again', async () => {
+  it('a page whose project was deleted waits again (never asking for that project), then starts afresh on the next', async () => {
     vi.useFakeTimers();
     localStorage.setItem('emberline.activeProjectId', 'a');
     const choice = deferred<ActiveProjectPreference>();
@@ -158,20 +173,19 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     await renderDom(createElement(App));
     await waitFor(() => expect(dashboard()).toBe('dashboard of a'));
     expect(askedServer()).toBe(false);
-    const draft = () => document.body.querySelector<HTMLTextAreaElement>('textarea[aria-label="Draft"]')!;
     await typeInto(draft(), 'half-written note');
     // Project a is deleted: the next list lacks it, and the server's choice is asked.
     projectList = () => [BOTH[1]];
     await settle(10_500);
     await waitFor(() => expect(askedServer()).toBe(true));
-    expect(pending()).toBe(false);
-    expect(draft().value).toBe('half-written note');
+    expect(pending()).toBe(true);
+    expect(dashboard()).toBeNull();
     choice.resolve({ activeProjectId: 'b' });
     await waitFor(() => expect(dashboard()).toBe('dashboard of b'));
-    expect(draft().value).toBe('half-written note');
+    expect(draft().value).toBe('');
   });
 
-  it('a page shown for all projects after the list failed stays mounted once the list loads', async () => {
+  it('a page shown for all projects after the list failed stays mounted while the list loads, then starts afresh for the project', async () => {
     vi.useFakeTimers();
     projectList = () => {
       throw new Error('core restarting');
@@ -180,7 +194,6 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     serverChoice = choice.promise;
     await renderDom(createElement(App));
     await waitFor(() => expect(dashboard()).toBe('dashboard of all projects'));
-    const draft = () => document.body.querySelector<HTMLTextAreaElement>('textarea[aria-label="Draft"]')!;
     await typeInto(draft(), 'half-written note');
     projectList = () => BOTH;
     await settle(10_500);
@@ -189,6 +202,6 @@ describe('App: pages scoped to the active project (ScopedPage)', () => {
     expect(draft().value).toBe('half-written note');
     choice.resolve({ activeProjectId: 'b' });
     await waitFor(() => expect(dashboard()).toBe('dashboard of b'));
-    expect(draft().value).toBe('half-written note');
+    expect(draft().value).toBe('');
   });
 });

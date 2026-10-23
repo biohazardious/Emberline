@@ -216,6 +216,10 @@ function Shell() {
   // Whether the person (or a project page's URL) picked a project: the server's choice arriving after
   // the wait never replaces that pick.
   const picked = useRef(false);
+  // The project the fallback after the wait shows (never stored), and the project list as last read.
+  const fallbackPick = useRef<string | null>(null);
+  const projectList = useRef(projects.data);
+  projectList.current = projects.data;
   const selectProject = useCallback((id: string | null) => {
     picked.current = true;
     setActiveProjectId(id);
@@ -262,6 +266,10 @@ function Shell() {
           request
             .then((pref) => {
               if (picked.current) return;
+              const saved = projectList.current?.find((p) => p.id === pref.activeProjectId);
+              // The pages start afresh for it (ScopedPage), so the person is told why.
+              if (saved && saved.id !== fallbackPick.current)
+                toastInfo(`Switched to ${saved.name}, the active project saved on the server.`);
               setActiveProjectId(null);
               setServerActiveId(pref.activeProjectId ?? null);
               setServerFailed(false);
@@ -272,7 +280,10 @@ function Shell() {
     }
     if (resolution.id && resolution.id !== activeProjectId) {
       if (resolution.remember) selectProject(resolution.id);
-      else setActiveProjectId(resolution.id);
+      else {
+        fallbackPick.current = resolution.id;
+        setActiveProjectId(resolution.id);
+      }
     }
   }, [projects.data, resolution, activeProjectId, selectProject]);
 
@@ -301,6 +312,7 @@ function Shell() {
   );
   // Inbox, Docker, Fleet and the dashboard wait for the active project instead of showing every project first.
   const scope = pageScope(resolution.id, !projects.data && projects.error !== undefined);
+  const projectIds = useMemo(() => projects.data?.map((p) => p.id), [projects.data]);
 
   // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
   const activeRuns = useMemo(() => {
@@ -1019,7 +1031,7 @@ function Shell() {
               </Route>
               <Route path="/inbox">
                 <Suspense fallback={<div className="inbox-page" aria-busy="true" />}>
-                  <ScopedPage scope={scope} pendingClassName="inbox-page">
+                  <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="inbox-page">
                     {(activeProjectId) => (
                       <InboxPage
                         runs={runs}
@@ -1035,7 +1047,7 @@ function Shell() {
               </Route>
               <Route path="/docker">
                 <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                  <ScopedPage scope={scope} pendingClassName="board-page">
+                  <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="board-page">
                     {(activeProjectId) => (
                       <DockerPage activeProjectId={activeProjectId} projects={projects.data} />
                     )}
@@ -1044,7 +1056,7 @@ function Shell() {
               </Route>
               <Route path="/fleet">
                 <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
-                  <ScopedPage scope={scope} pendingClassName="fleet-page">
+                  <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="fleet-page">
                     {(activeProjectId) => (
                       <FleetPage
                         activeProjectId={activeProjectId}
@@ -1057,7 +1069,7 @@ function Shell() {
               </Route>
               <Route path="/">
                 <h1 className="sr-only">Emberline dashboard</h1>
-                <ScopedPage scope={scope} pendingClassName="dashboard">
+                <ScopedPage scope={scope} projectIds={projectIds} pendingClassName="dashboard">
                   {(activeProjectId) => (
                     <Dashboard
                       system={system.data}

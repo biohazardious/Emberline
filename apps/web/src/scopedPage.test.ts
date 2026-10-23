@@ -31,7 +31,12 @@ describe('ScopedPage (E-T12-1)', () => {
   it('shows a pending state and does not mount the page while the scope is pending', () => {
     const page = vi.fn(() => createElement('p', null, 'page'));
     const html = renderStatic(
-      createElement(ScopedPage, { scope: undefined, pendingClassName: 'inbox-page', children: page }),
+      createElement(ScopedPage, {
+        scope: undefined,
+        projectIds: ['p1'],
+        pendingClassName: 'inbox-page',
+        children: page,
+      }),
     );
     expect(html).toBe('<div class="inbox-page" aria-busy="true"></div>');
     expect(page).not.toHaveBeenCalled();
@@ -41,7 +46,12 @@ describe('ScopedPage (E-T12-1)', () => {
     for (const scope of ['p1', null]) {
       const page = vi.fn((id: string | null) => createElement('p', null, `page ${id ?? 'all'}`));
       const html = renderStatic(
-        createElement(ScopedPage, { scope, pendingClassName: 'inbox-page', children: page }),
+        createElement(ScopedPage, {
+          scope,
+          projectIds: ['p1'],
+          pendingClassName: 'inbox-page',
+          children: page,
+        }),
       );
       expect(html).toBe(`<p>page ${scope ?? 'all'}</p>`);
       expect(page).toHaveBeenCalledWith(scope);
