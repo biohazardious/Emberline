@@ -1960,15 +1960,57 @@ describe('factory chain robustness', () => {
       await settle(project.id);
     });
 
-    it("holds it also when a dispatch before the resume turned the project's chain off", async () => {
-      const { project, run } = await cutOffBeforeMarks(false);
-      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    it("holds it also when a dispatch before the resume turned the project's chain off; its checks then run and merge", async () => {
+      const { project, a, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler, { pipelineSettleMs: 0 });
       // E.g. another ticket run lost its session in the reconcile before the resume: its failure
       // dispatches, finds the queue empty and ends the chain.
       await restarted.dispatchNextReadyTicket(project.id);
       expect(restarted.isAutoChainActive(project.id)).toBe(false);
       await restarted.resumeChains();
       expect(await holds(run)).toHaveLength(1);
+      // Run the checks again: the agent's next stop gets its checks and merge, chain or not.
+      const passes = trackPipelines(restarted);
+      await stopAgain(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(passes);
+      expect(await eventTypes(run)).toContain('merged_to_main');
+      expect(await statusOf(a.id)).toBe('done');
+      await settle(project.id);
+    });
+
+    it('a start that died after a dispatch ended the chain leaves the same holds to the next start', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      const first = new TicketService(t.db, t.runs, t.scheduler);
+      await first.dispatchNextReadyTicket(project.id);
+      expect(first.isAutoChainActive(project.id)).toBe(false);
+      // Core died before the resume.
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect(await holds(run)).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it('a chain a person turned off before a restart that came before the resume still gets its holds', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      new TicketService(t.db, t.runs, t.scheduler).setAutoChain(project.id, false);
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect(await holds(run)).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it('a candidate that worked and finished again since it was taken is left to its own pass', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler, { pipelineSettleMs: 0 });
+      (restarted as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+        undefined;
+      const before = t.runs.getRun(run.id).stateChangedAt;
+      await stopAgain(run);
+      await expect.poll(() => t.runs.getRun(run.id).stateChangedAt).not.toBe(before);
+      await expect.poll(() => t.runs.getRun(run.id).state).toBe('done');
+      // Its pass ended without an outcome, and its mark with it.
+      setSetting(t.db, 'factory.pendingPipelines', {});
+      await restarted.resumeChains();
+      expect(await holds(run)).toHaveLength(0);
       await settle(project.id);
     });
 
@@ -1986,7 +2028,9 @@ describe('factory chain robustness', () => {
       const { project, run } = await cutOffBeforeMarks(false);
       // The runner never connected, or core was stopped: resumeChains never ran.
       new TicketService(t.db, t.runs, t.scheduler);
-      expect(upgradeState()).toBe('pending');
+      expect(upgradeState()).toEqual({
+        pending: [{ id: run.id, stateChangedAt: t.runs.getRun(run.id).stateChangedAt }],
+      });
       await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
       expect(await holds(run)).toHaveLength(1);
       await new TicketService(t.db, t.runs, t.scheduler).resumeChains();

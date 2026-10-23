@@ -130,10 +130,16 @@ const ACTIVE_CHAINS_KEY = 'factory.activeChains';
 const PENDING_PIPELINES_KEY = 'factory.pendingPipelines';
 
 /**
- * Settings key of the upgrade from a version that kept no pipeline marks (0.6.0 or earlier):
- * `pending` until the start that holds its cut-off Review tickets got to them, then `done`.
+ * Settings key of the upgrade from a version that kept no pipeline marks (0.6.0 or earlier): the
+ * runs to hold, as first taken (`{ pending: UpgradeCandidate[] }`), until a start held them; then `done`.
  */
 const UPGRADE_HOLDS_KEY = 'factory.upgradeHolds';
+
+/** A run whose checks the upgrade's restart may have cut off, as it was when first taken. */
+interface UpgradeCandidate {
+  id: string;
+  stateChangedAt: string;
+}
 
 /**
  * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass
@@ -346,7 +352,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * restart may have cut off, taken when this service starts (before any run of this start finishes
    * or a dispatch turns a chain off); resumeChains holds them. Empty otherwise.
    */
-  private readonly upgradeCandidates: string[];
+  private readonly upgradeCandidates: UpgradeCandidate[];
 
   /** Event types of a run, oldest first (to tell whether its worktree setup finished). */
   private runEventTypes(runId: string): string[] {
@@ -651,7 +657,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // After an upgrade from a version that kept no pipeline marks (0.6.0 or earlier): a pass the
     // upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a person
     // instead of being merged without its checks or left unseen; noted as done only once held.
-    if (getSetting<unknown>(this.db, UPGRADE_HOLDS_KEY) === 'pending') {
+    if (this.upgradeCandidates.length > 0) {
       this.holdUpgradeCandidates();
       setSetting(this.db, UPGRADE_HOLDS_KEY, 'done');
     }
@@ -674,19 +680,28 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /**
    * The upgrade from a version that kept no pipeline marks (see UPGRADE_HOLDS_KEY): decided on the
-   * first start of this version, by the marks not existing yet. Until its holds are done, each start
-   * takes the Review tickets of chaining projects (with auto-merge or auto-Done on) whose latest run
-   * finished and whose pass left no outcome: their checks may have been cut off by the upgrade's
-   * restart. A start with none to hold notes the upgrade as done at once.
+   * first start of this version, by the marks not existing yet. That start takes the Review tickets
+   * of chaining projects (with auto-merge or auto-Done on) whose latest run finished and whose pass
+   * left no outcome: their checks may have been cut off by the upgrade's restart. They are stored, so
+   * a start that never got to hold them leaves the same ones to the next start, whatever changed in
+   * between. With none to hold, the upgrade is noted as done at once.
    */
-  private takeUpgradeCandidates(): string[] {
+  private takeUpgradeCandidates(): UpgradeCandidate[] {
     const state = getSetting<unknown>(this.db, UPGRADE_HOLDS_KEY);
     if (state === 'done') return [];
-    if (state !== 'pending' && getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) !== undefined) {
+    const stored = (state as { pending?: unknown } | undefined)?.pending;
+    if (Array.isArray(stored)) {
+      return stored.filter(
+        (c): c is UpgradeCandidate =>
+          typeof (c as UpgradeCandidate | null)?.id === 'string' &&
+          typeof (c as UpgradeCandidate).stateChangedAt === 'string',
+      );
+    }
+    if (getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) !== undefined) {
       setSetting(this.db, UPGRADE_HOLDS_KEY, 'done');
       return [];
     }
-    const candidates: string[] = [];
+    const candidates: UpgradeCandidate[] = [];
     for (const projectId of this.autoChainProjects) {
       const { autoSyncToMain, autoMoveToDone } = effectiveFactorySettings(this.db, projectId);
       // With neither, a pass that ended leaves its ticket in Review without an outcome too.
@@ -699,10 +714,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       for (const reviewTicket of reviewTickets) {
         const run = this.runs.latestRunForTicket(reviewTicket.id);
-        if (run && this.mayBeCutOff(run)) candidates.push(run.id);
+        if (run && this.mayBeCutOff(run)) candidates.push({ id: run.id, stateChangedAt: run.stateChangedAt });
       }
     }
-    setSetting(this.db, UPGRADE_HOLDS_KEY, candidates.length > 0 ? 'pending' : 'done');
+    setSetting(this.db, UPGRADE_HOLDS_KEY, candidates.length > 0 ? { pending: candidates } : 'done');
     return candidates;
   }
 
@@ -717,17 +732,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /**
    * Holds each upgrade candidate still in that state, whatever its project's chain does meanwhile: a
    * `pipeline_interrupted` hold shows it in the Inbox, and the agent's next stop runs its checks
-   * again. One that finished again since the start (its own pass going, settling or due) is not.
+   * again. One that worked or finished again since it was taken (its own pass decides) is not.
    */
   private holdUpgradeCandidates(): void {
     const marked = this.pendingPipelineRuns();
-    for (const runId of this.upgradeCandidates) {
+    for (const candidate of this.upgradeCandidates) {
       let run: Run;
       try {
-        run = this.runs.getRun(runId);
+        run = this.runs.getRun(candidate.id);
       } catch {
         continue; // removed meanwhile
       }
+      if (run.stateChangedAt !== candidate.stateChangedAt) continue;
       const ticket = run.ticketId
         ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
         : undefined;
