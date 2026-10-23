@@ -12,12 +12,13 @@ import { api, ApiRequestError, errorMessage } from '../api';
 import {
   addAnswerFiles,
   answerErrorText,
-  chipSends,
+  type AnswerProblem,
+  answerProblems,
   clearDraft,
+  optionChoice,
   saveDraft,
   startText,
   suggestionAction,
-  withOption,
 } from '../answerDialog';
 import { deliveryNote } from '../holdRecovery';
 import { escapeDraft } from '../reviewComments';
@@ -57,7 +58,7 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   // The latest text for a suggestion that arrives after the person typed on.
   const textNow = useRef(text);
   const [files, setFiles] = useState<WizardMaterial[]>([]);
-  const [problems, setProblems] = useState<string[]>([]);
+  const [problems, setProblems] = useState<AnswerProblem[]>([]);
   const [busy, setBusy] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +66,8 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   const [pending, setPending] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  // The label the last chip put in the box: the next chip replaces it rather than adding a second option.
+  const placed = useRef<string | null>(null);
   // Set once the dialog closes or the answer went out: late results must not write a draft for the next open.
   const closed = useRef(false);
   // A second click before React re-renders must not send twice.
@@ -122,17 +125,13 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
   // or attached would be dropped; otherwise it goes into the box (Send then cancels the picker and
   // types the text).
   const chooseOption = (i: number) => {
-    const option = question?.options[i];
-    if (!question || !option) return;
-    if (chipSends(question, text, files)) void post(async () => ({ option: i }));
-    else
-      setText(
-        withOption(
-          text,
-          option.label,
-          question.options.map((o) => o.label),
-        ),
-      );
+    const choice = question ? optionChoice(question, i, text, files, placed.current) : null;
+    if (!choice) return;
+    if (choice.send) void post(async () => ({ option: i }));
+    else {
+      placed.current = choice.placed;
+      setText(choice.text);
+    }
   };
 
   const suggest = async () => {
@@ -154,7 +153,7 @@ export function useAnswerDialog({ run, initialText, onClose, onSent }: AnswerDia
     if (sending.current || question?.kind === 'permission') return;
     const { added, problems: refused } = addAnswerFiles(files, candidates);
     setFiles([...files, ...added]);
-    setProblems(refused);
+    setProblems(answerProblems(refused));
   };
 
   const keepEditing = () => {

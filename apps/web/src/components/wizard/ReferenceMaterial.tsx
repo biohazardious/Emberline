@@ -4,6 +4,7 @@ import { MaterialList } from './MaterialList';
 import {
   addMaterials,
   capLine,
+  droppedFiles,
   filesToAddAgain,
   leavesDropZone,
   type MaterialCandidate,
@@ -44,14 +45,7 @@ export function ReferenceMaterial({
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragging(false);
-    const items = [...e.dataTransfer.items].filter((item) => item.kind === 'file');
-    add(
-      [...e.dataTransfer.files].map((file, i) => ({
-        file,
-        name: file.name,
-        isFolder: items[i]?.webkitGetAsEntry?.()?.isDirectory === true,
-      })),
-    );
+    add(droppedFiles(e.dataTransfer));
   };
 
   return (

@@ -1,6 +1,6 @@
 import type { Run, RunRecovery, RecoverySuggestion } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { refreshAfterAnswer } from '../answerDialog';
@@ -17,7 +17,7 @@ import {
 
 interface Props {
   run: Run;
-  /** Inbox: the caller opens the Answer dialog itself (with this start text). */
+  /** The caller opens the Answer dialog itself (with this start text): the Inbox, and the run dock through `useHoldAnswer`. */
   onAnswer?: (initialText: string) => void;
   /** Leaves out the hold's label, for a row that shows it already (the Inbox). */
   hideLabel?: boolean;
@@ -35,29 +35,42 @@ export function useRunRecovery(run: Run) {
   });
 }
 
+/**
+ * The Answer dialog a hold block opens (`open` with its start text), for whoever outlives the block:
+ * HoldRecovery itself, or a caller whose block can unmount while the dialog is open (the run dock's
+ * tab panes). `dialog` goes outside whatever can unmount, so the person's files stay until they close it.
+ */
+export function useHoldAnswer(run: Run): { open: (initialText: string) => void; dialog: ReactNode } {
+  const client = useQueryClient();
+  // The open dialog's start text; undefined: closed.
+  const [answer, setAnswer] = useState<string>();
+  return {
+    open: setAnswer,
+    dialog: answer !== undefined && (
+      <AnswerDialog
+        run={run}
+        heading={{ key: null, title: run.title ?? 'Run' }}
+        initialText={answer}
+        onClose={() => setAnswer(undefined)}
+        onSent={() => refreshAfterAnswer(client, run.id)}
+      />
+    ),
+  };
+}
+
 /** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). Key it by run id. */
 export function HoldRecovery({ onAnswer, ...props }: Props) {
   const { run } = props;
-  const client = useQueryClient();
-  // The Answer dialog this block opens itself (undefined: closed); the Inbox opens its own through onAnswer.
-  // It sits beside the block, not in it: a refetch that ends the hold (any run event) hides the
-  // block, and the dialog with the person's files stays until they close it.
-  const [answer, setAnswer] = useState<string>();
+  // Without onAnswer the block opens its own dialog. It sits beside the block, not in it: a refetch
+  // that ends the hold (any run event) hides the block, and the dialog stays.
+  const answer = useHoldAnswer(run);
   const query = useRunRecovery(run);
   const rec = recoveryApplies(run) ? query.data : null;
 
   return (
     <>
-      {rec && <HoldRecoveryBlock {...props} rec={rec} onAnswer={onAnswer ?? setAnswer} />}
-      {answer !== undefined && (
-        <AnswerDialog
-          run={run}
-          heading={{ key: null, title: run.title ?? 'Run' }}
-          initialText={answer}
-          onClose={() => setAnswer(undefined)}
-          onSent={() => refreshAfterAnswer(client, run.id)}
-        />
-      )}
+      {rec && <HoldRecoveryBlock {...props} rec={rec} onAnswer={onAnswer ?? answer.open} />}
+      {answer.dialog}
     </>
   );
 }

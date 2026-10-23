@@ -77,11 +77,11 @@ export function loadDraft(runId: string, now = Date.now()): string {
   }
 }
 
+/** Every change is saved; old drafts are pruned on load, not on each keystroke. */
 export function saveDraft(runId: string, text: string, now = Date.now()): void {
   try {
     if (text.trim()) store()?.setItem(ANSWER_DRAFT_KEY(runId), JSON.stringify({ text, savedAt: now }));
     else store()?.removeItem(ANSWER_DRAFT_KEY(runId));
-    pruneDrafts(now);
   } catch {
     // the draft is a convenience
   }
@@ -157,7 +157,9 @@ export const QUESTION_SOURCE_LINES: Record<RunQuestion['source'], string> = {
 export function pickerNote(question: Pick<RunQuestion, 'picker' | 'pickerChips'>): string | null {
   if (!question.picker) return null;
   const typed = "Typing an answer cancels Claude's question picker and sends your text instead.";
-  return question.pickerChips ? `${typed} Pick an option to answer it directly.` : typed;
+  return question.pickerChips
+    ? `${typed} With nothing typed or attached, an option answers it directly; otherwise the option is added to your answer.`
+    : typed;
 }
 
 /** A chip answers the open picker by its number only when core says the numbers match; else it fills the box. */
@@ -174,11 +176,41 @@ export const chipSends = (
   files: readonly WizardMaterial[],
 ): boolean => chipAnswers(question) && !text.trim() && files.length === 0;
 
-/** The box after a chip fills it: the option in an empty box or in place of another chip's, else after the typed answer. */
-export function withOption(text: string, label: string, labels: readonly string[]): string {
-  const typed = text.trim();
-  return !typed || labels.includes(typed) ? label : `${text.trimEnd()}\n${label}`;
+/**
+ * The box after a chip fills it: the option on its own line after the typed answer. `placed` is the
+ * label the previous chip put there; while it is still the last line, the new option replaces it,
+ * so two options never both go out.
+ */
+export function withOption(text: string, label: string, placed: string | null): string {
+  const lines = text.trimEnd().split('\n');
+  if (placed !== null && lines.at(-1)?.trim() === placed) lines.pop();
+  const rest = lines.join('\n').trimEnd();
+  return rest.trim() ? `${rest}\n${label}` : label;
 }
+
+/** What option chip `i` does: send its number (`chipSends`), or fill the box and remember the label it placed. */
+export function optionChoice(
+  question: Pick<RunQuestion, 'picker' | 'pickerChips' | 'options'>,
+  i: number,
+  text: string,
+  files: readonly WizardMaterial[],
+  placed: string | null,
+): { send: true } | { send: false; text: string; placed: string } | null {
+  const option = question.options[i];
+  if (!option) return null;
+  if (chipSends(question, text, files)) return { send: true };
+  return { send: false, text: withOption(text, option.label, placed), placed: option.label };
+}
+
+/** A problem with an attached file, shown in the dialog's live region. */
+export interface AnswerProblem {
+  id: number;
+  text: string;
+}
+let lastProblemId = 0;
+/** Each refusal gets a fresh id, so the same sentence again is a new node the live region reads out again. */
+export const answerProblems = (texts: readonly string[]): AnswerProblem[] =>
+  texts.map((text) => ({ id: ++lastProblemId, text }));
 
 /** Once an answer went out: the hold block refetches its recovery, and no copy of the answered question is kept. */
 export function refreshAfterAnswer(

@@ -1,6 +1,7 @@
-import { createElement } from 'react';
+import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
-import { AnswerDialogView } from './components/AnswerDialog';
+import { answerProblems } from './answerDialog';
+import { AnswerDialogView, type AnswerDialogViewProps } from './components/AnswerDialog';
 import { renderStatic } from './staticRender';
 
 const q = {
@@ -15,27 +16,42 @@ const q = {
   pickerChips: false,
   suggest: { available: false, reason: 'Claude Code is not signed in.' },
 };
-const view = (over: object = {}) =>
-  renderStatic(
-    createElement(AnswerDialogView, {
-      heading: { key: 'EL-1', title: 'Pick a colour' },
-      question: q,
-      text: '',
-      files: [],
-      problems: [],
-      busy: false,
-      suggesting: false,
-      error: null,
-      onText: () => {},
-      onOption: () => {},
-      onSuggest: () => {},
-      onFiles: () => {},
-      onRemoveFile: () => {},
-      onSend: () => {},
-      onCancel: () => {},
-      ...over,
-    }),
-  );
+const props = (over: object = {}): AnswerDialogViewProps => ({
+  heading: { key: 'EL-1', title: 'Pick a colour' },
+  question: q,
+  text: '',
+  files: [],
+  problems: [],
+  busy: false,
+  suggesting: false,
+  error: null,
+  onText: () => {},
+  onOption: () => {},
+  onSuggest: () => {},
+  onFiles: () => {},
+  onRemoveFile: () => {},
+  onSend: () => {},
+  onCancel: () => {},
+  ...over,
+});
+const view = (over: object = {}) => renderStatic(createElement(AnswerDialogView, props(over)));
+
+/** The first element under `node` (AnswerDialogView has no hooks, so it can be called) that `match` accepts. */
+function findElement(
+  node: ReactNode,
+  match: (el: ReactElement<Record<string, unknown>>) => boolean,
+): ReactElement<Record<string, unknown>> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findElement(child, match);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (!isValidElement<Record<string, unknown>>(node)) return null;
+  if (match(node)) return node;
+  return findElement(node.props.children as ReactNode, match);
+}
 
 describe('AnswerDialogView', () => {
   it('shows the question, the chips and why Suggest is off', () => {
@@ -62,9 +78,20 @@ describe('AnswerDialogView', () => {
   });
   it('file problems are read out as they appear: the live region is always there', () => {
     expect(view()).toMatch(/<div role="status" aria-live="polite"[^>]*><\/div>/);
-    expect(view({ problems: ['pictures is a folder. Add the files inside it instead.'] })).toMatch(
-      /<div role="status" aria-live="polite"[^>]*><p[^>]*>pictures is a folder/,
-    );
+    expect(
+      view({ problems: answerProblems(['pictures is a folder. Add the files inside it instead.']) }),
+    ).toMatch(/<div role="status" aria-live="polite"[^>]*><p[^>]*>pictures is a folder/);
+  });
+  it('the same file problem again is a new node in the live region, so it is read out again', () => {
+    const keys = (texts: string[]) => {
+      const region = findElement(
+        AnswerDialogView(props({ problems: answerProblems(texts) })),
+        (el) => el.props.role === 'status',
+      );
+      return (region!.props.children as ReactElement[]).map((c) => c.key);
+    };
+    const folder = 'pictures is a folder. Add the files inside it instead.';
+    expect(keys([folder])).not.toEqual(keys([folder]));
   });
   it('Send is off without text or files', () => {
     expect(view()).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
@@ -157,10 +184,10 @@ describe('AnswerDialogView', () => {
     const picker = { ...q, source: 'ask_user_question' as const, picker: true };
     const textOnly = view({ question: picker });
     expect(textOnly).toContain(typed);
-    expect(textOnly).not.toContain('Pick an option');
+    expect(textOnly).not.toContain('an option answers it directly');
     expect(textOnly).toContain('Claude&#x27;s question picker</p>');
     expect(view({ question: { ...picker, pickerChips: true } })).toContain(
-      `${typed} Pick an option to answer it directly.`,
+      `${typed} With nothing typed or attached, an option answers it directly; otherwise the option is added to your answer.`,
     );
     expect(view()).not.toContain('Typing an answer');
   });

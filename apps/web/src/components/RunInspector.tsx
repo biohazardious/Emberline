@@ -6,7 +6,7 @@ import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { timeAgo } from '../time';
 import { EVENT_LABEL } from '../runEventLabels';
-import { HoldRecovery } from './HoldRecovery';
+import { HoldRecovery, useHoldAnswer } from './HoldRecovery';
 import { HandoffMenu } from './QuotaLanes';
 import { BuildOutputsList, ExpandableText, FinalAnswer, LastScreen } from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
@@ -329,6 +329,9 @@ export function RunInspector({
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  // The hold block's Answer dialog lives here, not in the Events pane: the Terminal tab unmounts that
+  // pane, and the dialog with the person's files must stay until they close it.
+  const holdAnswer = useHoldAnswer(run);
 
   const live = !run.endedAt;
   const canPrompt = (live && run.state !== 'queued') || run.resumable;
@@ -438,6 +441,7 @@ export function RunInspector({
         </div>
       </header>
 
+      {holdAnswer.dialog}
       <div className={`dock-body dock-body-${tab}`}>
         {run.terminalId && (tab === 'split' || tab === 'terminal') && (
           <div className="dock-term-pane">
@@ -449,7 +453,7 @@ export function RunInspector({
         {(tab === 'split' || tab === 'timeline' || !run.terminalId) && (
           <div className="dock-events-pane">
             <RunFailureBanner run={run} />
-            <HoldRecovery key={run.id} run={run} />
+            <HoldRecovery key={run.id} run={run} onAnswer={holdAnswer.open} />
             <div className="dock-section-head">
               <span className="eyebrow">Hook & Activity Stream</span>
               <span className="muted small mono">{run.lastEvent ?? 'idle'}</span>

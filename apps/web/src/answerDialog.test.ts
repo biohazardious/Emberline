@@ -5,6 +5,7 @@ import {
   ANSWER_DRAFT_KEY,
   answerErrorText,
   answerOffered,
+  answerProblems,
   answerTarget,
   canSend,
   chipAnswers,
@@ -12,6 +13,7 @@ import {
   clearDraft,
   handleDialogKey,
   loadDraft,
+  optionChoice,
   refreshAfterAnswer,
   saveDraft,
   startText,
@@ -94,17 +96,35 @@ describe('drafts', () => {
     expect(() => saveDraft('r1', 'x')).not.toThrow();
   });
 
-  it('drops drafts older than 14 days on load and on save; other keys stay', () => {
+  it('drops drafts older than 14 days on load; other keys stay', () => {
     g.localStorage!.setItem('emberline.theme', 'dark');
     saveDraft('old', 'stale', NOW - 15 * DAY);
     saveDraft('recent', 'keep', NOW - 13 * DAY);
     expect(loadDraft('r1', NOW)).toBe('');
     expect(g.localStorage!.getItem(ANSWER_DRAFT_KEY('old'))).toBeNull();
     expect(loadDraft('recent', NOW)).toBe('keep');
-    saveDraft('r1', 'new', NOW + 2 * DAY);
+    expect(loadDraft('r1', NOW + 2 * DAY)).toBe('');
     expect(g.localStorage!.getItem(ANSWER_DRAFT_KEY('recent'))).toBeNull();
-    expect(loadDraft('r1', NOW + 2 * DAY)).toBe('new');
     expect(g.localStorage!.getItem('emberline.theme')).toBe('dark');
+  });
+
+  it('a keystroke saves its own draft only: it does not scan the others', () => {
+    saveDraft('old', 'stale', NOW - 15 * DAY);
+    let scans = 0;
+    const s = g.localStorage!;
+    g.localStorage = {
+      ...s,
+      get length() {
+        return s.length;
+      },
+      key: (i) => {
+        scans++;
+        return s.key!(i);
+      },
+    };
+    saveDraft('r1', 'typing', NOW);
+    expect(scans).toBe(0);
+    expect(s.getItem(ANSWER_DRAFT_KEY('old'))).not.toBeNull();
   });
 
   it('reads a draft kept as plain text before 0.6.1, which then expires 14 days on', () => {
@@ -250,11 +270,61 @@ describe('chipSends', () => {
 });
 
 describe('withOption', () => {
-  const labels = ['Red', 'Green'];
-  it('fills an empty box, adds to a typed answer, and swaps a label another chip put there', () => {
-    expect(withOption('', 'Red', labels)).toBe('Red');
-    expect(withOption(' Red ', 'Green', labels)).toBe('Green');
-    expect(withOption('make it bright\n', 'Red', labels)).toBe('make it bright\nRed');
+  it('fills an empty box and adds to a typed answer on a line of its own', () => {
+    expect(withOption('', 'Red', null)).toBe('Red');
+    expect(withOption('make it bright\n', 'Red', null)).toBe('make it bright\nRed');
+  });
+  it('a second chip swaps the label the first one put on the last line, so one option goes out', () => {
+    expect(withOption('Red', 'Green', 'Red')).toBe('Green');
+    expect(withOption('make it bright\nRed', 'Green', 'Red')).toBe('make it bright\nGreen');
+    expect(withOption('make it bright\nRed \n', 'Green', 'Red')).toBe('make it bright\nGreen');
+  });
+  it('keeps what the person wrote: a label they typed, or one they wrote on after', () => {
+    expect(withOption('I like Red', 'Green', 'Red')).toBe('I like Red\nGreen');
+    expect(withOption('Red', 'Green', null)).toBe('Red\nGreen');
+    expect(withOption('Red\nbut darker', 'Green', 'Red')).toBe('Red\nbut darker\nGreen');
+  });
+});
+
+describe('optionChoice', () => {
+  const options = [
+    { label: 'Red', detail: null },
+    { label: 'Green', detail: null },
+  ];
+  const chips = { picker: true, pickerChips: true, options };
+  const file = {
+    id: 'm1',
+    file: new Blob(['x']),
+    name: 'a.txt',
+    sizeBytes: 1,
+    mimeType: 'text/plain',
+    kind: 'other' as const,
+  };
+  it("sends the number to Claude's picker only with nothing typed or attached", () => {
+    expect(optionChoice(chips, 1, '', [], null)).toEqual({ send: true });
+    expect(optionChoice(chips, 1, 'and bright', [], null)).toEqual({
+      send: false,
+      text: 'and bright\nGreen',
+      placed: 'Green',
+    });
+    expect(optionChoice(chips, 1, '', [file], null)).toEqual({ send: false, text: 'Green', placed: 'Green' });
+  });
+  it('fills the box without a picker that takes numbers, swapping the last chip', () => {
+    const plain = { picker: false, pickerChips: false, options };
+    expect(optionChoice(plain, 0, '', [], null)).toEqual({ send: false, text: 'Red', placed: 'Red' });
+    expect(optionChoice(plain, 1, 'Red', [], 'Red')).toEqual({ send: false, text: 'Green', placed: 'Green' });
+  });
+  it('an option that is not there does nothing', () => {
+    expect(optionChoice(chips, 5, '', [], null)).toBeNull();
+  });
+});
+
+describe('answerProblems', () => {
+  it('the same sentence again gets a new id, so a screen reader hears it again', () => {
+    const [a] = answerProblems(['pictures is a folder.']);
+    const [b] = answerProblems(['pictures is a folder.']);
+    expect(a!.text).toBe(b!.text);
+    expect(a!.id).not.toBe(b!.id);
   });
 });
 

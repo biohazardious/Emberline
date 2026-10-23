@@ -3,7 +3,14 @@ import { Paperclip, X } from 'lucide-react';
 import { type DragEvent, type Ref, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'wouter';
-import { answerCapLine, canSend, handleDialogKey, pickerNote, QUESTION_SOURCE_LINES } from '../answerDialog';
+import {
+  answerCapLine,
+  type AnswerProblem,
+  canSend,
+  handleDialogKey,
+  pickerNote,
+  QUESTION_SOURCE_LINES,
+} from '../answerDialog';
 import { timeAgo, useNow } from '../time';
 import { useAnswerDialog } from './useAnswerDialog';
 import { MaterialList } from './wizard/MaterialList';
@@ -20,7 +27,7 @@ export interface AnswerDialogViewProps {
   loading?: boolean;
   text: string;
   files: WizardMaterial[];
-  problems: string[];
+  problems: AnswerProblem[];
   busy: boolean;
   suggesting: boolean;
   error: string | null;
@@ -216,8 +223,8 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
             {/* Always there, so a screen reader hears each problem as it appears. */}
             <div role="status" aria-live="polite" className="answer-file-problems">
               {p.problems.map((m) => (
-                <p key={m} className="small banner banner-warn">
-                  {m}
+                <p key={m.id} className="small banner banner-warn">
+                  {m.text}
                 </p>
               ))}
             </div>
