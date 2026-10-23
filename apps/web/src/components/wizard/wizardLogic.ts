@@ -397,10 +397,11 @@ export function repoNameFromUrl(url: string): string {
 /**
  * A URL without credentials, for this browser's storage: better too much gone than a secret kept.
  * - `scheme://`: an ssh URL keeps only its user name, any other loses its user info; query and
- *   fragment (where a token may sit) go too. A password that starts with digits and then `/`, `?`
- *   or `#` (read as a port) goes up to the last `@` after it that a host and its `/` or `:` follow.
- *   One the URL parser cannot read loses everything from `//` to its last `@` (whitespace, `/` or
- *   `@` in a password included), and from `?` or `#` on.
+ *   fragment (where a token may sit) go too. A password holding `/`, `?` or `#` ends what the URL
+ *   parser reads as user info early (`https://u:2024/rest@host/…` reads as a port and a path): when a
+ *   `:` comes before the first `/`, `?` or `#` and an `@` that a host (`[v6]` too) follows comes
+ *   after it, everything up to that `@` goes. One the parser cannot read loses everything from `//`
+ *   to its last `@`, and from `?` or `#` on.
  * - scp-like (`user:secret@host:path`): everything from the first `:` to the last `@` goes, so
  *   `user:secret@host:path` becomes `user@host:path`. `git@host:path` has no `:` before its `@`
  *   and stays as it is; an address with a `:` and a later `@` that holds no secret
@@ -408,24 +409,21 @@ export function repoNameFromUrl(url: string): string {
  */
 export function stripUrlCredentials(url: string): string {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    const schemeEnd = url.indexOf('://') + 3;
+    const authorityEnd = schemeEnd + url.slice(schemeEnd).search(/[/?#]|$/);
+    if (url.slice(schemeEnd, authorityEnd).includes(':')) {
+      const startsHost = /[^\s@/:'"`\u2018-\u201f\u00ab\u00bb\u2039\u203a\uff02\uff07]/y;
+      for (let at = url.lastIndexOf('@'); at >= authorityEnd; at = url.lastIndexOf('@', at - 1)) {
+        startsHost.lastIndex = at + 1;
+        if (startsHost.test(url))
+          return (url.slice(0, schemeEnd) + url.slice(at + 1)).replace(/[?#][^]*$/, '');
+      }
+    }
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
       return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^]*@/i, '$1').replace(/[?#][^]*$/, '');
-    }
-    // `https://u:2024/Secret@h/o`: a password that starts with digits and then `/`, `?` or `#`
-    // reads as a port. With no user info read, an `@` after the port that a host and its `/` or
-    // `:` follow ends such a password: everything up to it goes.
-    if (parsed.port && !parsed.username && !parsed.password) {
-      const schemeEnd = url.indexOf('://') + 3;
-      const authorityEnd = schemeEnd + url.slice(schemeEnd).search(/[/?#]|$/);
-      const hostThenPath = /[^/@:[\]?#\s]+[/:]/y;
-      for (let at = url.lastIndexOf('@'); at >= authorityEnd; at = url.lastIndexOf('@', at - 1)) {
-        hostThenPath.lastIndex = at + 1;
-        if (hostThenPath.test(url))
-          return (url.slice(0, schemeEnd) + url.slice(at + 1)).replace(/[?#][^]*$/, '');
-      }
     }
     const ssh = parsed.protocol.toLowerCase() === 'ssh:';
     if (!parsed.password && !(parsed.username && !ssh) && !parsed.search && !parsed.hash) return url;

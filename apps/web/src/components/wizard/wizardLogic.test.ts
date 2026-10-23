@@ -694,6 +694,10 @@ describe('credentials never reach the draft', () => {
       ['https://u:2024/S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
       ['https://u:123?S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
       ['https://u:9#S3C@github.com/acme/shop.git', 'https://github.com/acme/shop.git'],
+      ['https://u:2024/S3C@[::1]:8443/o', 'https://[::1]:8443/o'],
+      ['ssh://git:#S3C@host.example:2222/o/r.git', 'ssh://host.example:2222/o/r.git'],
+      // Indistinguishable from the form above (a port, an `@` in the path): stored cut too.
+      ['https://host.example:8443/acme/shop@v2.git', 'https://v2.git'],
     ] as const) {
       const stripped = stripUrlCredentials(raw);
       expect(stripped, raw).not.toMatch(SECRET);
@@ -704,9 +708,47 @@ describe('credentials never reach the draft', () => {
       'git@github.com:acme/shop.git',
       'https://github.com/acme/shop.git',
       'ssh://git@h/o/r',
-      'https://host.example:8443/acme/shop@v2.git',
+      'https://host.example/acme/shop@v2.git',
     ])
       expect(stripUrlCredentials(raw)).toBe(raw);
+  });
+
+  it('keeps no part of a generated hostile password (seeded, thousands of cases)', () => {
+    let a = 20261023;
+    const next = () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const MARKERS = 'QXZJKVW';
+    const HOSTILE = [
+      ...' \t\u00a0\u2003',
+      ...`'"\`\u2018\u2019\u201c\u201d\u00ab\u00bb\u2039\u203a`,
+      ...':/@#?0123456789abcdefgh',
+    ];
+    const pick = (chars: readonly string[] | string) => chars[Math.floor(next() * chars.length)]!;
+    for (let n = 0; n < 3000; n++) {
+      const chars = Array.from({ length: 3 + Math.floor(next() * 12) }, () => pick(HOSTILE));
+      chars[0] = pick(MARKERS);
+      chars[chars.length - 1] = pick(MARKERS);
+      chars[1 + Math.floor(next() * (chars.length - 2))] = pick(MARKERS);
+      if (next() < 0.3) chars.unshift(pick(HOSTILE));
+      const pw = chars.join('');
+      for (const raw of [
+        `https://u:${pw}@github.com/acme/shop.git`,
+        `ssh://git:${pw}@host.example:2222/o/r.git`,
+        `alice:${pw}@host.example:o/r.git`,
+        `me@corp.com:${pw}@host.example:o/r.git`,
+        `https://u:2024/${pw}@github.com/o`,
+        `https://u:2024/${pw}@[::1]:8443/o`,
+      ]) {
+        const stored = stripUrlCredentials(raw);
+        if (/[QXZJKVW]/.test(stored))
+          throw new Error(`leak: ${JSON.stringify(raw)} → ${JSON.stringify(stored)}`);
+      }
+    }
   });
 
   it('saves and restores the repository URL without its token', () => {
