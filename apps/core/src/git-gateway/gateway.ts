@@ -89,14 +89,34 @@ export function requestUrlForLog(url: string): string {
 }
 
 /**
- * Text without the credentials of the URLs in it (a token typed into an origin, or one a server
- * quotes back): for any `scheme://` (https, ssh, git+ssh, ssh+git, …) everything from `://` to the
- * last `@` of the address goes, the address ending only at whitespace. A quote, a `/` or an `@` in a
- * password never ends it early; an ssh user name or an `@` in a path may go too (better too much
- * than a secret).
+ * Text without the credentials of the addresses in it (a token typed into an origin, or one a
+ * server quotes back). Better too much than a secret: an ssh user name or an `@` in a path may go too.
+ * - Any `scheme://` (https, ssh, git+ssh, ssh+git, …, even glued to a word): everything from `://`
+ *   to the last `@` of the address, which ends only at whitespace (a quote, `/` or `@` in a password
+ *   never ends it early).
+ * - scp-like `user:secret@host:path`: the secret, up to the last `@` before a host and its `:`.
+ * - git splits that address at its first `:` and quotes the rest as a path
+ *   (`fatal: 'secret@host:path' does not appear to be a git repository`): the part before the `@`.
  */
 export function withoutUrlCredentials(text: string): string {
-  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)\S*@/gi, '$1');
+  // Token by token, with indexOf and one `@host:` scan each: linear, whatever a server prints.
+  return text.replace(/\S+/g, (token) => {
+    let out = token;
+    const scheme = out.indexOf('://');
+    if (scheme >= 0) {
+      const at = out.lastIndexOf('@');
+      if (at > scheme) out = out.slice(0, scheme + 3) + out.slice(at + 1);
+    }
+    let hostAt = -1;
+    for (const m of out.matchAll(/@[^'"/@:]+:/g)) hostAt = m.index ?? hostAt;
+    if (hostAt < 0) return out;
+    const before = out.slice(0, hostAt);
+    const quote = before.search(/['"]/);
+    const colon = before.indexOf(':');
+    const userOk = colon >= 0 && !/[@/]/.test(before.slice(0, colon));
+    const from = Math.min(quote >= 0 ? quote + 1 : Infinity, userOk ? colon + 1 : Infinity);
+    return from === Infinity ? out : `${out.slice(0, from)}***${out.slice(hostAt)}`;
+  });
 }
 
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */

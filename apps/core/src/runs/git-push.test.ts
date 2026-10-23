@@ -68,11 +68,17 @@ describe('pushing a run branch without an account', () => {
         'remote: mirror: https://carol:p@ss:w@git.example.com/o/r.git and ssh://git:s3cr3t@git.example.com:2222/o/r.git',
         "remote: also 'https://dave:q'u0te@git.example.com/o/r.git' and ssh://me@corp.com:c0rp@git.example.com/o/r.git",
         'remote: and ssh+git://erin:sl/ash@git.example.com/o/r.git',
+        "remote: scp frank:fr4nk@git.example.com:o/r.git, quoted 'gr4ce@git.example.com:o/r.git'",
+        'remote: glued _https://heidi:h3idi@git.example.com/o/r.git',
         `remote: mirrored to ${CAPABILITY}`,
         `remote: ${'y'.repeat(100_000)}`,
+        // Long runs that a backtracking pattern would take quadratic time over.
+        `remote: ${'a1'.repeat(100_000)} ${'x:'.repeat(50_000)} ${'@h'.repeat(50_000)}`,
       ].join('\n'),
     });
+    const started = performance.now();
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
+    expect(performance.now() - started).toBeLessThan(2_000);
     expect(res.output).toContain('To https://git.example.com/o/r.git');
     expect(res.output).toContain('https://git.example.com/o/r/pulls/new');
     expect(res.output).toContain(
@@ -80,7 +86,11 @@ describe('pushing a run branch without an account', () => {
     );
     expect(res.output).toContain("also 'https://git.example.com/o/r.git' and ssh://git.example.com/o/r.git");
     expect(res.output).toContain('and ssh+git://git.example.com/o/r.git');
-    expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@/);
+    expect(res.output).toContain(
+      "scp frank:***@git.example.com:o/r.git, quoted '***@git.example.com:o/r.git'",
+    );
+    expect(res.output).toContain('glued _https://git.example.com/o/r.git');
+    expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@|fr4nk|gr4ce|h3idi/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);
   });

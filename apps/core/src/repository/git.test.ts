@@ -147,10 +147,38 @@ describe('shortGitError: hostile URLs in what git and a server print', () => {
     expect(text('fatal: ssh://me@corp.com:pw@host/o/r refused')).toBe('ssh://host/o/r refused');
     expect(text('fatal: ssh+git://u:p@h/x and git+ssh://u:p@h/y')).toBe('ssh+git://h/x and git+ssh://h/y');
     expect(text('fatal: SSH://git:p@ss@host:2222/o/r.git refused')).toBe('SSH://host:2222/o/r.git refused');
+    // Glued to a word, a digit or `_`, a URL is still one.
+    expect(text('remote: _https://u:SECRET@h/x and 2https://u:SECRET@h/y')).toBe(
+      '_https://h/x and 2https://h/y',
+    );
+    expect(text('fatal: xssh://git:SECRET@h/x')).toBe('xssh://h/x');
     // The address ends at whitespace; one without user info is left alone.
     expect(text('fatal: ssh://git:pw@host:22 mail me@x.y')).toBe('ssh://host:22 mail me@x.y');
     expect(text('fatal: ssh://[::1]:22/x and https://h/o/r.git')).toBe(
       'ssh://[::1]:22/x and https://h/o/r.git',
+    );
+  });
+});
+
+describe('shortGitError: scp-like addresses with a password', () => {
+  const text = (stderr: string) => shortGitError(Object.assign(new Error('git failed'), { stderr }));
+  it('masks the secret of `user:secret@host:path`, up to its last `@` before a host', () => {
+    expect(text('fatal: alice:pw@host:o/r refused')).toBe('alice:***@host:o/r refused');
+    expect(text('fatal: alice:p@ss:w@host:o refused')).toBe('alice:***@host:o refused');
+    expect(text('fatal: alice:pw@[2001:db8::1]:o/r refused')).toBe('alice:***@[2001:db8::1]:o/r refused');
+  });
+  it('masks the path git quotes after splitting such an address at its first `:`', () => {
+    // git reads `alice:pw@host:o/r` as host `alice`, path `pw@host:o/r`; the server's answer quotes the path.
+    expect(text("fatal: 'pw@host:o/r' does not appear to be a git repository")).toBe(
+      "'***@host:o/r' does not appear to be a git repository",
+    );
+    expect(text("fatal: 'p@ss@host:o' does not appear to be a git repository")).toBe(
+      "'***@host:o' does not appear to be a git repository",
+    );
+  });
+  it('leaves addresses without a secret alone', () => {
+    expect(text('fatal: git@github.com:o/r.git and gitea:team/app@v2.git')).toBe(
+      'git@github.com:o/r.git and gitea:team/app@v2.git',
     );
   });
 });
