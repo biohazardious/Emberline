@@ -264,6 +264,25 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     expect(new Set(downs).size).toBe(downs.length);
   });
 
+  it('a project delete tries a compose project whose teardown down failed again', async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    const agent = composeProjectName(run.id, run.worktreePath);
+    engine.failDown.add(agent);
+    expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+    expect(engine.downs().filter((n) => n === agent)).toHaveLength(2);
+  });
+
+  it('a project delete whose teardown call threw leaves the downs to the run removal', async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    vi.spyOn(t.runs, 'teardownProjectWorktrees').mockRejectedValue(new Error('boom'));
+    expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+    expect(engine.downs()).toContain(composeProjectName(run.id, run.worktreePath));
+  });
+
   /** A compose preview the run started, as the record says. */
   function startedPreview(run: Run): string {
     const project = previewComposeProjectName(run.id);
@@ -303,12 +322,19 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     engine.failDown.add(startedPreview(run));
     const res = await api('POST', `/api/runs/${run.id}/preview/stop`);
     expect(res.statusCode).toBe(502);
+    // Its containers may still run: the port stays taken until a stop works.
+    const ports = () =>
+      (
+        t.runs as unknown as { activeComposePreviewPorts: (id: string | null) => Set<number> }
+      ).activeComposePreviewPorts(null);
+    expect(ports()).toContain(4301);
     expect(typesOf(run.id)).toContain('preview_failed');
     expect(typesOf(run.id)).not.toContain('preview_stopped');
     // The retry takes it down once the engine works again.
     engine.failDown.clear();
     expect((await api('POST', `/api/runs/${run.id}/preview/stop`)).statusCode).toBe(200);
     expect(typesOf(run.id)).toContain('preview_stopped');
+    expect(ports()).not.toContain(4301);
   });
 
   it('a failed down is a worktree_teardown_failed note; the prune goes ahead', async () => {

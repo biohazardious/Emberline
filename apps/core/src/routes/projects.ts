@@ -1456,13 +1456,20 @@ export function registerProjectRoutes(
       // waited for a bounded time.
       const teardown = await runs.teardownProjectWorktrees(projectId).catch((err: unknown) => {
         request.log.warn({ err, projectId }, 'worktree.yml teardown before deleting the project failed');
-        return { finished: true, settled: Promise.resolve() };
+        return {
+          finished: true,
+          settled: Promise.resolve(),
+          composeDownDone: false,
+          failedDowns: new Set<string>(),
+        };
       });
       try {
         for (const run of runs.list()) {
           if (run.projectId === projectId) {
             // Done teardown already took the compose projects down: not a second time.
-            await runs.remove(run.id, { composeDone: teardown.finished }).catch(() => {});
+            await runs
+              .remove(run.id, { composeDone: teardown.composeDownDone, failedDowns: teardown.failedDowns })
+              .catch(() => {});
           }
         }
 
