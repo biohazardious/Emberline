@@ -10,7 +10,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Run, RunBuildOutputsResponse, RunDetail, Ticket } from '@emberline/protocol';
+import type {
+  AskUserQuestionSummary,
+  Run,
+  RunBuildOutputsResponse,
+  RunDetail,
+  Ticket,
+} from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
@@ -259,6 +265,38 @@ describe('runs', () => {
       'waiting_input',
       'working',
       'done',
+    ]);
+  });
+
+  it('keeps the AskUserQuestion input compactly on its PreToolUse event', async () => {
+    const project = await createProject('Ask', true);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const token = await tokenFor(run.id);
+    await hook(run.id, 'UserPromptSubmit', token, { prompt: 'go' });
+    await hook(run.id, 'PreToolUse', token, {
+      tool_name: 'AskUserQuestion',
+      tool_input: {
+        questions: [
+          {
+            question: 'Which colour?',
+            header: 'Colour',
+            multiSelect: false,
+            options: [
+              { label: 'Red', description: 'warm' },
+              { label: 'Green', description: '' },
+            ],
+          },
+        ],
+      },
+    });
+    const detail: RunDetail = (await api('GET', `/api/runs/${run.id}`)).json();
+    const pre = detail.events.find((e) => e.type === 'PreToolUse');
+    expect(pre?.payload).toMatchObject({ tool_name: 'AskUserQuestion' });
+    expect(
+      (pre?.payload as { ask_user_question: AskUserQuestionSummary }).ask_user_question.questions[0]?.options,
+    ).toEqual([
+      { label: 'Red', detail: 'warm' },
+      { label: 'Green', detail: null },
     ]);
   });
 

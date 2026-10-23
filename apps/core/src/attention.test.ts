@@ -171,6 +171,25 @@ describe('computeAttention rules', () => {
     });
   });
 
+  it("question: the agent's last message of the wait is the detail, over a later idle reminder", () => {
+    const run = baseRun({ lastEvent: 'Notification' });
+    const got = computeAttention(
+      run,
+      facts({
+        enteredId: 6,
+        waiting: [
+          ev(6, 'Stop', { last_assistant_message: 'Which colour?' }),
+          ev(7, 'Notification', {
+            notification_type: 'idle_prompt',
+            message: 'Claude is waiting for your input',
+          }),
+        ],
+      }),
+      NOW,
+    );
+    expect(got).toMatchObject({ reason: 'question', detail: 'Which colour?' });
+  });
+
   it('a wait entered without a Notification (StopFailure) stays one occurrence when an idle reminder follows', () => {
     const run = baseRun({ lastEvent: 'StopFailure' });
     const before = computeAttention(run, facts({ enteredId: 5 }), NOW);

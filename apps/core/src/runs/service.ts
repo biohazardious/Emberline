@@ -157,6 +157,7 @@ import { DemoTokens } from '../demo-token.js';
 import { agentDemoUrl } from '../factory/demo-target.js';
 import { AGENT_PREVIEW_COOLDOWN_MS, AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
 import { resolveBrowserUrl, runnerPreviewUrl } from './browser-url.js';
+import { askUserQuestionOf } from './question.js';
 import { PreviewFramingCache } from './preview-framing.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import {
@@ -537,6 +538,10 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
     if (/(?:playwright|chromium|chrome|e2e|bot\.tmp)/i.test(cmd)) {
       summary.tool_input_summary = clip(cmd, TOOL_INPUT_SUMMARY_MAX);
     }
+  }
+  if (payload.tool_name === 'AskUserQuestion') {
+    const ask = askUserQuestionOf(payload.tool_input);
+    if (ask) summary.ask_user_question = ask;
   }
   return summary;
 }

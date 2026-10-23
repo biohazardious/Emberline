@@ -23,7 +23,7 @@ export interface AttentionEvent {
 export interface AttentionFacts {
   /** Id of the event that moved the run into its current state (the newest one carrying a state). */
   enteredId: number | null;
-  /** Notification / stall_detected events from that moment on, ascending. */
+  /** Notification / stall_detected / Stop events from that moment on, ascending. */
   waiting: AttentionEvent[];
   /** Pipeline notes (holds, merged_to_main) after the run's latest switch to `done`, ascending. */
   pipeline: AttentionEvent[];
@@ -45,7 +45,7 @@ export interface AttentionTicket {
   latest: boolean;
 }
 
-const WAITING_TYPES = ['Notification', 'stall_detected'];
+const WAITING_TYPES = ['Notification', 'stall_detected', 'Stop'];
 /** States whose attention needs the run's events. */
 const FACT_STATES: ReadonlySet<string> = new Set(['waiting_input', 'rate_limited', 'failed', 'done']);
 /** Ids per statement; far below SQLite's variable limit. */
@@ -104,7 +104,8 @@ export function computeAttention(
       const since = entered?.ts.toISOString() ?? run.stateChangedAt;
       const at = (reason: RunAttention['reason'], detail: string | null) =>
         make(run, reason, detail, since, enteredId);
-      const latest = waiting.at(-1);
+      const stops = waiting.filter((e) => e.type === 'Stop');
+      const latest = waiting.filter((e) => e.type !== 'Stop').at(-1);
       // A stall enters its own wait (from working); a later Notification of that wait takes over.
       if (latest?.type === 'stall_detected') return at('stalled', message(latest));
       const notifications = waiting.filter((e) => e.type === 'Notification');
@@ -114,7 +115,13 @@ export function computeAttention(
       // Claude's idle reminders say nothing new: the detail is the agent's own question, or the text
       // of the Notification that entered the wait.
       const asked = notifications.find((e) => e.payload?.notification_type !== 'idle_prompt' && message(e));
-      return at('question', message(asked ?? (entered?.type === 'Notification' ? entered : undefined)));
+      // The agent's own words come first: its last message of this wait, else a Notification's text.
+      const said = stops.at(-1)?.payload?.last_assistant_message;
+      const lastMessage = typeof said === 'string' && said.trim() ? said.trim() : null;
+      return at(
+        'question',
+        lastMessage ?? message(asked ?? (entered?.type === 'Notification' ? entered : undefined)),
+      );
     }
     case 'rate_limited':
       return run.autoRetry
