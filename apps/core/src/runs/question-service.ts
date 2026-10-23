@@ -86,6 +86,13 @@ export class QuestionService {
   }
 
   private async deliver(runId: string, body: AnswerRequestParsed): Promise<AnswerResponse> {
+    // An option is its number alone: text or files beside it would be dropped without a word.
+    if (body.option !== undefined && (body.text.trim() || body.attachments.length > 0))
+      throw new HttpError(
+        400,
+        'option_with_answer',
+        'An option is sent on its own. Send your text and files without picking an option.',
+      );
     const question = await this.get(runId); // 404 no_question once the run stopped waiting
     if (body.option !== undefined) return this.answerPicker(runId, question, body.option);
     // Nothing is typed into a permission prompt: Enter or text there would allow or deny it.

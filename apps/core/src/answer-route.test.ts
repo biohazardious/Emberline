@@ -605,6 +605,27 @@ describe('POST /api/runs/:id/answer', () => {
     expect(calls).toEqual([]);
   });
 
+  it('an option with text or files is a 400: nothing written, nothing sent', async () => {
+    const { wt, calls } = openPicker('a12');
+    const bodies = [
+      { option: 0, text: 'and make it bright' },
+      { option: 0, attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }] },
+    ];
+    for (const body of bodies) {
+      const res = await post('/api/runs/a12/answer', body);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({
+        error: 'option_with_answer',
+        message: 'An option is sent on its own. Send your text and files without picking an option.',
+      });
+    }
+    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
+    expect(calls).toEqual([]);
+    // Blank text is no answer: the option alone still goes through.
+    expect((await post('/api/runs/a12/answer', { option: 0, text: '  ' })).statusCode).toBe(200);
+    expect(calls).toEqual(['prompt:1']);
+  });
+
   it('text with a picker open cancels the picker first, then sends the text', async () => {
     const { wt, calls } = openPicker('a11');
     const res = await post('/api/runs/a11/answer', {
