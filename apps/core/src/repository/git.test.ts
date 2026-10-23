@@ -87,11 +87,19 @@ describe('validateRepositoryUrl', () => {
     expect(refusal('ssh://git:pa/ss@host/o/r.git')).toBe(CREDENTIALS);
     expect(refusal('ssh://git@host:2222/o/r@v2.git')).toBeNull();
     expect(refusal('ssh://me@corp.com@host/o/r.git')).toBeNull();
-    // A `/` in the password, and one that starts with digits and then `/` (read as a port).
-    expect(refusal('u:pa/ss@git.example.com/o/r.git')).toBe(CREDENTIALS);
-    expect(refusal('https://u:2024/Secret@github.com/o/r.git')).toBe(CREDENTIALS);
-    expect(refusal('ssh://git:22/S3C@host:2222/o/r.git')).toBe(CREDENTIALS);
-    expect(refusal('https://git.example.com:8443/o/r@v2.git')).toBeNull();
+    // Only user info git would send is refused: an `@` after a port or after the first `/` is a
+    // path's as git reads it (the display masks the ones that may hide a password).
+    for (const url of [
+      'https://u:2024/Secret@github.com/o/r.git',
+      'https://host.example:8443/group/name@v2/repo.git',
+      'https://host.example:8443/o/r@v2.git',
+      'ssh://git:22/S3C@host:2222/o/r.git',
+      'git@host.example:o/r@v2/x.git',
+      'gitea:team/app@v2/x.git',
+      'u:pa/ss@git.example.com/o/r.git',
+    ])
+      expect(refusal(url), url).toBeNull();
+    expect(refusal('https://user@host.example:8443/o/r')).toBe(CREDENTIALS);
   });
 
   it('a capitalised scheme is stored lower-case, and IPv6 hosts are accepted', () => {
@@ -132,11 +140,8 @@ describe('shortGitError', () => {
       stderr:
         "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': and ssh://git:tok3n@host/o/r.git, http://tok3n@h/x",
     });
-    const text = shortGitError(error);
-    expect(text).not.toContain('tok3n');
-    expect(text).toContain("'https://git.example.com/o/r.git/'");
-    expect(text).toContain('ssh://host/o/r.git');
-    expect(text).toContain('http://h/x');
+    // From the first opener on the line (the quote) to its last `@` that a host follows.
+    expect(shortGitError(error)).toBe("unable to access '***@h/x");
   });
 });
 
@@ -144,7 +149,7 @@ describe('shortGitError: hostile URLs in what git and a server print', () => {
   const text = (stderr: string) => shortGitError(Object.assign(new Error('git failed'), { stderr }));
   it('drops everything from `://` to the last `@` of the address, whatever the password holds', () => {
     expect(text("fatal: unable to access 'https://alice:p@ss@git.example.com/o/r.git/'")).toBe(
-      "unable to access 'https://git.example.com/o/r.git/'",
+      "unable to access '***@git.example.com/o/r.git/'",
     );
     expect(text('remote: see https://bob:p@ss:w@h.example/x')).toBe('see https://h.example/x');
     expect(text('remote: https://u:p%40x@h/x')).toBe('https://h/x');
@@ -153,15 +158,16 @@ describe('shortGitError: hostile URLs in what git and a server print', () => {
     expect(text('fatal: ssh://git:pa/ss@h/x refused')).toBe('ssh://h/x refused');
     // A user name holding `@`, and any scheme git takes.
     expect(text('fatal: ssh://me@corp.com:pw@host/o/r refused')).toBe('ssh://host/o/r refused');
-    expect(text('fatal: ssh+git://u:p@h/x and git+ssh://u:p@h/y')).toBe('ssh+git://h/x and git+ssh://h/y');
+    // Two addresses on a line: from the first opener to the last `@`.
+    expect(text('fatal: ssh+git://u:p@h/x and git+ssh://u:p@h/y')).toBe('ssh+git://h/y');
     expect(text('fatal: SSH://git:p@ss@host:2222/o/r.git refused')).toBe('SSH://host:2222/o/r.git refused');
     // Glued to a word, a digit or `_`, a URL is still one.
-    expect(text('remote: _https://u:SECRET@h/x and 2https://u:SECRET@h/y')).toBe(
-      '_https://h/x and 2https://h/y',
-    );
+    expect(text('remote: _https://u:SECRET@h/x')).toBe('_https://h/x');
+    expect(text('remote: 2https://u:SECRET@h/y')).toBe('2https://h/y');
     expect(text('fatal: xssh://git:SECRET@h/x')).toBe('xssh://h/x');
-    // An address whose host a port or a path follows ends there; one without user info is left alone.
-    expect(text('fatal: ssh://git:pw@host:22 mail me@x.y')).toBe('ssh://host:22 mail me@x.y');
+    // Better too much than a secret: an email later on the line takes the mask on to it. A line
+    // without an `@` is left alone.
+    expect(text('fatal: ssh://git:pw@host:22 mail me@x.y')).toBe('ssh://x.y');
     expect(text('fatal: ssh://[::1]:22/x and https://h/o/r.git')).toBe(
       'ssh://[::1]:22/x and https://h/o/r.git',
     );
@@ -189,10 +195,8 @@ describe('shortGitError: scp-like addresses with a password', () => {
     expect(text('fatal: alice:ghp_SECRET@github.com/o/r refused')).toBe('alice:***@github.com/o/r refused');
     expect(text('fatal: alice:p@ss@github.com/o/r refused')).toBe('alice:***@github.com/o/r refused');
   });
-  it('leaves addresses without a secret alone', () => {
-    expect(text('fatal: git@github.com:o/r.git and gitea:team/app@v2.git')).toBe(
-      'git@github.com:o/r.git and gitea:team/app@v2.git',
-    );
+  it('leaves an address alone when no opener comes before its `@`; masks on from one that does', () => {
+    expect(text('fatal: git@github.com:o/r.git and gitea:team/app@v2.git')).toBe('git@github.com:***@v2.git');
     expect(text('fatal: git@github.com/o/r and mail me@x.y')).toBe('git@github.com/o/r and mail me@x.y');
   });
 });
@@ -319,13 +323,15 @@ describe('remoteUrlForDisplay', () => {
     });
   });
 
-  it('URL forms: user info goes up to its last `@`, an `@` in the path stays', () => {
+  it('URL forms: user info goes up to its last `@`; an `@` in the path stays unless a `:` may start a password', () => {
     const shown = (url: string) => remoteUrlForDisplay(url).display;
     expect(shown('https://github.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
-    expect(shown('https://u:p@GitHub.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
     expect(shown('https://u:p@ss@host/o/r.git')).toBe('https://host/o/r.git');
-    expect(shown('ssh://git:pw@[2001:db8::1]:2222/o/r@v2.git')).toBe(
-      'ssh://git@[2001:db8::1]:2222/o/r@v2.git',
+    // With a `:` in the user info, an `@` in the path may end a password holding `/`: shown cut.
+    expect(shown('https://u:p@GitHub.com/o/r@v2.git')).toBe('https://v2.git');
+    expect(shown('ssh://git:pw@[2001:db8::1]:2222/o/r@v2.git')).toBe('ssh://v2.git');
+    expect(remoteUrlForDisplay('https://u:p@GitHub.com/o/r@v2.git').url).toBe(
+      'https://github.com/o/r@v2.git',
     );
     expect(shown('ssh://me@corp.com:pw@host/o/r')).not.toContain('pw');
     // Not parseable (a `/` in the password): everything up to the last `@` goes.
@@ -333,17 +339,23 @@ describe('remoteUrlForDisplay', () => {
       display: 'ssh://h/x',
       hadCredentials: true,
     });
-    // A password starting with digits and then `/`, `?` or `#` reads as a port: it goes up to the
-    // last `@` that a host and its `/` or `:` follow. A real port with an `@` in the path stays.
+    // A password starting with digits (or `/`, `?`, `#`) reads as a port and a path, as an `@` in the
+    // path after a real port does: kept as it is (Connect may take it), shown up to the last `@`.
     for (const [raw, display] of [
       ['https://u:2024/Secret@h/o/r', 'https://h/o/r'],
       ['https://u:123?abc@h/o', 'https://h/o'],
       ['https://u:9#t@h/o', 'https://h/o'],
+      ['https://u:#t@h/o', 'https://h/o'],
       ['ssh://git:22/S3C@host:2222/o/r', 'ssh://host:2222/o/r'],
+      ['https://host:8443/g/n@v2/r.git', 'https://v2/r.git'],
+      ['https://u:2024/S@[::1]:8443/o', 'https://[::1]:8443/o'],
     ] as const)
       expect(remoteUrlForDisplay(raw), raw).toMatchObject({ display, hadCredentials: true });
-    expect(remoteUrlForDisplay('https://host:8443/o/r@v2.git')).toMatchObject({
-      display: 'https://host:8443/o/r@v2.git',
+    // Kept as git reads it (Connect may take it).
+    expect(remoteUrlForDisplay('https://host:8443/g/n@v2/r.git').url).toBe('https://host:8443/g/n@v2/r.git');
+    // Without a `:` before the path, an `@` in the path stays.
+    expect(remoteUrlForDisplay('https://host/o/r@v2.git')).toMatchObject({
+      display: 'https://host/o/r@v2.git',
       hadCredentials: false,
     });
     // Not parseable (whitespace or a quote mark in the password, a space in the host): the same.

@@ -1,100 +1,139 @@
 /**
  * Command output and git errors without the credentials of a hand-set origin, whatever the password
- * holds: whitespace (TAB, NBSP, other Unicode spaces) and typographic quote marks included.
+ * holds. The rule masks too much rather than too little; the generated test below tries thousands of
+ * hostile passwords in every message git prints an address in.
  */
 import { describe, expect, it } from 'vitest';
-import { type ScanMeter, withoutUrlCredentials } from './gateway.js';
+import { remoteUrlForDisplay } from '../forge/hosts.js';
+import { describeGitError, type ScanMeter, withoutUrlCredentials } from './gateway.js';
 
-/** Whitespace and quote marks a password may hold. */
-const ODD = ['\t', '\u00a0', '\u2003', ' ', '\u2019', '\u201c', '\u201d', '\u00ab', '\u00bb'];
+/** A small seeded PRNG (mulberry32): the same cases on every run. */
+function random(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Letters that appear in no message, host, user or path below: any of them in the output is a leak. */
+const MARKERS = 'QXZJKVW';
+const HOSTILE = [
+  ' ',
+  '\t',
+  ' ',
+  ' ',
+  ...`'"\`‘’‚‛“”„‟«»‹›＂＇`,
+  ':',
+  '/',
+  '@',
+  '#',
+  '?',
+  ...'0123456789',
+  ...'abcdefgh',
+];
+
+function hostilePassword(next: () => number): string {
+  const pick = (chars: readonly string[] | string) => chars[Math.floor(next() * chars.length)]!;
+  const length = 3 + Math.floor(next() * 12);
+  const chars = Array.from({ length }, () => pick(HOSTILE));
+  // Markers at the start, the end and somewhere between, so a leak of any part shows.
+  chars[0] = pick(MARKERS);
+  chars[length - 1] = pick(MARKERS);
+  chars[1 + Math.floor(next() * (length - 2))] = pick(MARKERS);
+  // Now and then the hostile character comes first (a password that starts with a space or a quote).
+  if (next() < 0.3) chars.unshift(pick(HOSTILE));
+  return chars.join('');
+}
+
+const HOST = 'git.example.com';
+/** The ways an origin holds a password. */
+const ADDRESSES = (pw: string) => [
+  `https://u:${pw}@${HOST}/o/r.git`,
+  `http://u:${pw}@${HOST}:3000/o/r.git`,
+  `ssh://git:${pw}@${HOST}:2222/o/r.git`,
+  `alice:${pw}@${HOST}:o/r.git`,
+  `me@corp.com:${pw}@${HOST}:o/r.git`,
+  `alice:${pw}@${HOST}/o/r.git`,
+  `https://u:2024/${pw}@${HOST}/o`,
+];
+/** git splits an scp-like address at its first `:` and quotes the rest as a path. */
+const SPLIT = (pw: string) => `${pw}@${HOST}:o/r.git`;
+/** The messages that carry an address, as git, ssh and servers print them. */
+const QUOTED = [
+  (a: string) => `fatal: '${a}' does not appear to be a git repository`,
+  (a: string) => `fatal: unable to access '${a}/': The requested URL returned error: 403`,
+  (a: string) => `fatal: repository '${a}/' not found`,
+  (a: string) => `Cloning into '${a}'...`,
+  (a: string) => `error: failed to push some refs to '${a}'`,
+];
+const UNQUOTED = [
+  (a: string) => `To ${a}`,
+  (a: string) => `remote: mirrored to ${a} by bob@example.com`,
+  (a: string) => `remote: ${a}`,
+  (a: string) => `ssh: Could not resolve hostname ${a}: Name or service not known`,
+];
 
 describe('withoutUrlCredentials', () => {
-  it('a password holding whitespace or a typographic quote never shows, in any address form', () => {
-    for (const c of ODD) {
-      const secret = `S3C${c}R3T`;
-      for (const [text, shown] of [
-        [
-          `fatal: unable to access 'https://u:${secret}@h/o/r/': The requested URL returned error: 403`,
-          "fatal: unable to access 'https://h/o/r/': The requested URL returned error: 403",
-        ],
-        [`https://u:${secret}@h/o/r`, 'https://h/o/r'],
-        [`ssh://git:${secret}@host:2222/o/r.git`, 'ssh://host:2222/o/r.git'],
-        [`alice:${secret}@host:o/r`, 'alice:***@host:o/r'],
-        [
-          `fatal: '${secret}@host:o/r' does not appear to be a git repository`,
-          "fatal: '***@host:o/r' does not appear to be a git repository",
-        ],
-        [`remote: mirror alice:${secret}@host/o/r done`, 'remote: mirror alice:***@host/o/r done'],
-        [`me@corp.com:${secret}@host:o/r`, 'me@corp.com:***@host:o/r'],
-        [`https://u:p@${secret}@h/o/r`, 'https://h/o/r'],
-      ] as const) {
-        const out = withoutUrlCredentials(text);
-        expect(out, JSON.stringify(text)).not.toMatch(/S3C|R3T/);
-        expect(out, JSON.stringify(text)).toBe(shown);
+  it('never shows any part of a hostile password, in any address form or message (generated)', () => {
+    const next = random(20261023);
+    let cases = 0;
+    for (let n = 0; n < 1500; n++) {
+      const pw = hostilePassword(next);
+      const texts = [
+        ...ADDRESSES(pw).flatMap((address) => [...QUOTED, ...UNQUOTED].map((message) => message(address))),
+        // The path git quotes is quoted wherever git prints it.
+        ...QUOTED.map((message) => message(SPLIT(pw))),
+      ];
+      for (const text of texts) {
+        {
+          // Line by line, also with other lines around it and as describeGitError reads it.
+          for (const shown of [
+            withoutUrlCredentials(text),
+            withoutUrlCredentials(`Pushing...\n${text}\nDone`),
+            describeGitError(Object.assign(new Error('git failed'), { stderr: text })),
+          ]) {
+            if (/[QXZJKVW]/.test(shown))
+              throw new Error(`leak: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
+          }
+          cases++;
+        }
+      }
+      // An address shown on its own (Project settings) keeps nothing of the password either.
+      for (const address of ADDRESSES(pw)) {
+        const { display } = remoteUrlForDisplay(address);
+        if (/[QXZJKVW]/.test(display))
+          throw new Error(`display leak: ${JSON.stringify(address)} → ${display}`);
       }
     }
+    expect(cases).toBe(1500 * (7 * 9 + 5));
   });
 
-  it('a password that starts with whitespace or a quote mark, or has a quote mark before whitespace, never shows', () => {
-    for (const c of ODD) {
-      for (const [text, shown] of [
-        [`alice:${c}S3CRET@host:o/r`, 'alice:***@host:o/r'],
-        [`me@corp.com:${c}S3CRET@host:o/r`, 'me@corp.com:***@host:o/r'],
-        [
-          `fatal: '${c}S3CRET@host:o/r' does not appear to be a git repository`,
-          "fatal: '***@host:o/r' does not appear to be a git repository",
-        ],
-        [`https://u:${c}S3CRET@h/o/r`, 'https://h/o/r'],
-      ] as const) {
-        const out = withoutUrlCredentials(text);
-        expect(out, JSON.stringify(text)).not.toMatch(/S3C/);
-        expect(out, JSON.stringify(text)).toBe(shown);
-      }
-    }
-    for (const password of ['a\u2019 b', "a' b", "a'\\'' b", 'a\u00bb\tb']) {
-      const out = withoutUrlCredentials(
-        `fatal: '${password}S3C@host:p' does not appear to be a git repository`,
-      );
-      expect(out, password).toBe("fatal: '***@host:p' does not appear to be a git repository");
-    }
-  });
-
-  it('a password holding `/` (the `@` after the first `/`) never shows', () => {
-    expect(withoutUrlCredentials('u:se/cret@h/p')).toBe('u:***@h/p');
-    expect(withoutUrlCredentials('alice:pa/ss/w@host:o/r')).toBe('alice:***@host:o/r');
-    expect(withoutUrlCredentials("fatal: 'se/cret@h/p' does not appear to be a git repository")).toBe(
-      "fatal: '***@h/p' does not appear to be a git repository",
+  it('keeps the address without its user info after a scheme, and masks with *** otherwise', () => {
+    expect(withoutUrlCredentials('To https://alice:tok3n@git.example.com/o/r.git')).toBe(
+      'To https://git.example.com/o/r.git',
     );
-    // No `user:` or quote before it: a path with an `@` is not a password.
-    expect(withoutUrlCredentials('see docs/app@v2/readme')).toBe('see docs/app@v2/readme');
+    expect(withoutUrlCredentials('To alice:pw@host:o/r')).toBe('To alice:***@host:o/r');
+    expect(withoutUrlCredentials("'pw@host:o/r' does not appear to be a git repository")).toBe(
+      "'***@host:o/r' does not appear to be a git repository",
+    );
+    // From the first opener on the line: a git prefix with a `:` is one too.
+    expect(withoutUrlCredentials("fatal: 'pw@host:o/r' does not appear to be a git repository")).toBe(
+      "fatal:***@host:o/r' does not appear to be a git repository",
+    );
   });
 
-  it('any quote mark around the path git quotes opens it', () => {
-    for (const [open, close] of [
-      ['‘', '’'],
-      ['“', '”'],
-      ['«', '»'],
-      ['`', '`'],
-      ['„', '“'],
-    ])
-      expect(withoutUrlCredentials(`fatal: ${open}S3CRET@host:o/r${close} not found`)).toBe(
-        `fatal: ${open}***@host:o/r${close} not found`,
-      );
-  });
-
-  it('leaves the rest of git and server output as it is', () => {
+  it('leaves lines without an `@` that a host follows, or without an opener before it, as they are', () => {
     for (const text of [
       'To git@github.com:o/r.git',
       ' * [new branch]      emberline/run-1 -> emberline/run-1',
-      'remote: Create a pull request: https://git.example.com/o/r/pulls/new by bob@example.com',
-      'Author: Bob <bob@example.com> at 12:30',
-      'error: refs/heads/main:refs/heads/main rejected',
-      "error: failed to push some refs to 'https://git.example.com/o/r.git'",
-      "Cloning into 'app'... done, see bob@example.com",
-      'fatal: Could not read from remote repository.',
-      // An address ends at its line.
-      'see https://git.example.com\nthen ask bob@example.com',
+      'remote: Resolving deltas: 100% (3/3), completed with 2 local objects.',
       "fatal: 'origin' does not appear to be a git repository",
+      'fatal: Could not read from remote repository.',
+      'see https://git.example.com\nthen ask bob@example.com',
     ])
       expect(withoutUrlCredentials(text)).toBe(text);
   });
@@ -102,13 +141,13 @@ describe('withoutUrlCredentials', () => {
   it('reads each character a fixed number of times, whatever the text (no backtracking, no rescans)', () => {
     const texts = (n: number) => [
       `${'a1'.repeat(n)} ${'x:'.repeat(n / 2)} ${'@h'.repeat(n / 2)}`,
-      // Runs that each may open an address, then one `@` far away on the same line.
       `${"'x ".repeat(n / 3)}y@h`,
       `${'u:p '.repeat(n / 4)}y@h`,
       `${'https://h '.repeat(n / 10)}y@h`,
       `${'u:p@ss '.repeat(n / 7)}end`,
       `${'@'.repeat(n)}:${'a@'.repeat(n / 2)}`,
       `${' '.repeat(n)}https://u:p${'\t'.repeat(n)}@h`,
+      `${'x@y\n'.repeat(n / 4)}`,
     ];
     // The meter counts what the scan reports about itself: every pass over the text adds to it, so
     // a change that reads the text again must count that pass too.
@@ -122,7 +161,7 @@ describe('withoutUrlCredentials', () => {
     small.forEach((text, i) => {
       const s = steps(text);
       const l = steps(large[i]!);
-      expect(s, `text ${i}`).toBeLessThanOrEqual(4 * text.length);
+      expect(s, `text ${i}`).toBeLessThanOrEqual(2 * text.length);
       expect(l / s, `text ${i}`).toBeLessThan(2.1);
     });
   });

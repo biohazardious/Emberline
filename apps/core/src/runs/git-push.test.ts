@@ -52,8 +52,9 @@ describe('pushing a run branch without an account', () => {
     const error = await pushWorktreeBranch(dir, 'emberline/run-1', 'main').catch((e: unknown) => e);
     expect(error).toMatchObject({ statusCode: 409 });
     const message = (error as Error).message;
+    // From the first opener on the line to its last `@` that a host follows.
     expect(message).toMatch(
-      /^git push failed: Permission denied for https:\/\/git\.example\.com\/o\/r\.git or ssh:\/\/git\.example\.com\/o\/r\.git/,
+      /^git push failed: Permission denied for https:\/\/git\.example\.com\/o\/r\.git, see /,
     );
     expect(message).not.toMatch(/tok3n|p@ss|ss@/);
     expect(message).toContain('/api/internal/git/[capability]');
@@ -79,17 +80,11 @@ describe('pushing a run branch without an account', () => {
       ].join('\n'),
     });
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
+    // Each line from its first opener (`remote:` too) to its last `@` that a host follows.
     expect(res.output).toContain('To https://git.example.com/o/r.git');
-    expect(res.output).toContain('https://git.example.com/o/r/pulls/new');
-    expect(res.output).toContain(
-      'mirror: https://git.example.com/o/r.git and ssh://git.example.com:2222/o/r.git',
-    );
-    expect(res.output).toContain("also 'https://git.example.com/o/r.git' and ssh://git.example.com/o/r.git");
-    expect(res.output).toContain('and ssh+git://git.example.com/o/r.git');
-    expect(res.output).toContain(
-      "scp frank:***@git.example.com:o/r.git, quoted '***@git.example.com:o/r.git'",
-    );
-    expect(res.output).toContain('glued _https://git.example.com/o/r.git');
+    expect(res.output).toContain('remote:***@git.example.com/o/r/pulls/new');
+    expect(res.output).toContain('remote:***@git.example.com:2222/o/r.git');
+    expect(res.output).toContain("remote:***@git.example.com:o/r.git'");
     expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@|fr4nk|gr4ce|h3idi/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);

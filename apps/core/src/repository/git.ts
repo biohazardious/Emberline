@@ -1,6 +1,6 @@
 import { isRunnerUnavailable } from '../command-exec.js';
 import { badRequest, HttpError } from '../errors.js';
-import { remoteUrlForDisplay } from '../forge/hosts.js';
+import { remoteUrlForDisplay, scpUserInfoBeforePath } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { execGitFile } from '../git-exec.js';
 import { describeGitError } from '../git-gateway/gateway.js';
@@ -66,9 +66,9 @@ export function validateRepositoryUrl(raw: string): {
     } catch {
       throw badRequest(BAD_URL);
     }
-    // `https://user:2024/rest@host/…` reads as the port 2024: the display finds its password.
-    if (parsed.username || parsed.password || remoteUrlForDisplay(url).hadCredentials)
-      throw badRequest(CREDENTIALS_IN_URL);
+    // Only user info git would send: `https://u:2024/rest@host/…` reads as the port 2024 and a path,
+    // as `https://host:8443/g/n@v2/r.git` does (the display masks both).
+    if (parsed.username || parsed.password) throw badRequest(CREDENTIALS_IN_URL);
     // A query or fragment can carry a token (`?private_token=`) and is no part of a repository's address.
     if (parsed.search || parsed.hash) throw badRequest(BAD_URL);
     transport = parsed.protocol === 'http:' ? 'http' : 'https';
@@ -76,8 +76,9 @@ export function validateRepositoryUrl(raw: string): {
     // A password in an ssh URL (`ssh://user:pw@host`, `user:pw@host:path`) is a credential too. An
     // ssh URL is read as git and the display read it: its user info runs to the last `@` before the
     // path (`ssh://me@corp.com:pw@host` has the password `pw`), and one that does not parse is
-    // refused (`ssh://git:pa/ss@host` as holding credentials). An scp-like address may hold one whenever the display
-    // says so (`host:a@x/y` too, which it cannot tell from `user:token@host/path`).
+    // refused (`ssh://git:pa/ss@host` as holding credentials). An scp-like address may hold one
+    // when a `user:…@` comes before its first `/` (`host:a@x/y` too, which it cannot tell from
+    // `user:token@host/path`); an `@` after the first `/` is a path's (`gitea:team/app@v2/x.git`).
     if (url.startsWith('ssh://')) {
       let parsed: URL;
       try {
@@ -87,8 +88,8 @@ export function validateRepositoryUrl(raw: string): {
         const at = url.lastIndexOf('@');
         throw badRequest(at > 0 && url.slice(6, at).includes(':') ? CREDENTIALS_IN_URL : BAD_URL);
       }
-      if (parsed.password || remoteUrlForDisplay(url).hadCredentials) throw badRequest(CREDENTIALS_IN_URL);
-    } else if (remoteUrlForDisplay(url).hadCredentials) throw badRequest(CREDENTIALS_IN_URL);
+      if (parsed.password) throw badRequest(CREDENTIALS_IN_URL);
+    } else if (scpUserInfoBeforePath(url)) throw badRequest(CREDENTIALS_IN_URL);
     transport = 'ssh';
   } else {
     throw badRequest(BAD_URL);
