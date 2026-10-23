@@ -44,3 +44,14 @@ export function resolveActiveProject(
 export function inActiveScope(activeId: string | null | undefined, projectId: string): boolean {
   return activeId === undefined ? false : activeId === null || projectId === activeId;
 }
+
+/**
+ * The scope a project-scoped page gets: the active project's id, null for all projects (there are
+ * none, or the list could not be loaded), undefined while the active project is still being resolved.
+ */
+export function pageScope(
+  resolvedId: string | null | undefined,
+  projectsLoadFailed: boolean,
+): string | null | undefined {
+  return resolvedId === undefined && projectsLoadFailed ? null : resolvedId;
+}

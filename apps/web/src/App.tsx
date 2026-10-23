@@ -44,6 +44,7 @@ import { ProjectWizard } from './components/wizard/WizardShell';
 import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPanel';
 import { ProviderMark } from './components/ProviderMark';
 import { RunInspector } from './components/RunInspector';
+import { ScopedPage } from './components/ScopedPage';
 import { SecurityBanner } from './components/SecurityBanner';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
@@ -51,7 +52,13 @@ import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
 import { useTrackPageViews } from './hooks/navigation';
 import { setPresenceRun } from './hooks/eventHub';
 import { useAttention } from './hooks/useAttention';
-import { inActiveScope, projectIdFromPath, resolveActiveProject, switchProjectPath } from './projectPaths';
+import {
+  inActiveScope,
+  pageScope,
+  projectIdFromPath,
+  resolveActiveProject,
+  switchProjectPath,
+} from './projectPaths';
 import { Dashboard } from './pages/Dashboard';
 import { Toasts, toastError, toastInfo } from './toast';
 
@@ -272,6 +279,8 @@ function Shell() {
     () => (resolution.id ? projectById.get(resolution.id) : undefined),
     [resolution.id, projectById],
   );
+  // Inbox, Docker, Fleet and the dashboard wait for the active project instead of showing every project first.
+  const scope = pageScope(resolution.id, !projects.data && projects.error !== undefined);
 
   // Scope active fleet strictly to the active project so other projects' runs never clutter the sidebar
   const activeRuns = useMemo(() => {
@@ -994,39 +1003,55 @@ function Shell() {
               </Route>
               <Route path="/inbox">
                 <Suspense fallback={<div className="inbox-page" aria-busy="true" />}>
-                  <InboxPage
-                    runs={runs}
-                    seen={attention.seen}
-                    activeProjectId={activeProject?.id ?? null}
-                    projectName={activeProject?.name}
-                    onOpenRun={(id) => setInspectRunId(id)}
-                    onDismiss={attention.dismiss}
-                  />
+                  <ScopedPage scope={scope} pendingClassName="inbox-page">
+                    {(activeProjectId) => (
+                      <InboxPage
+                        runs={runs}
+                        seen={attention.seen}
+                        activeProjectId={activeProjectId}
+                        projectName={activeProject?.name}
+                        onOpenRun={(id) => setInspectRunId(id)}
+                        onDismiss={attention.dismiss}
+                      />
+                    )}
+                  </ScopedPage>
                 </Suspense>
               </Route>
               <Route path="/docker">
                 <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                  <DockerPage activeProjectId={activeProject?.id ?? null} projects={projects.data} />
+                  <ScopedPage scope={scope} pendingClassName="board-page">
+                    {(activeProjectId) => (
+                      <DockerPage activeProjectId={activeProjectId} projects={projects.data} />
+                    )}
+                  </ScopedPage>
                 </Suspense>
               </Route>
               <Route path="/fleet">
                 <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
-                  <FleetPage
-                    activeProjectId={activeProject?.id ?? null}
-                    seen={attention.seen}
-                    onInspectRun={(id) => setInspectRunId(id)}
-                  />
+                  <ScopedPage scope={scope} pendingClassName="fleet-page">
+                    {(activeProjectId) => (
+                      <FleetPage
+                        activeProjectId={activeProjectId}
+                        seen={attention.seen}
+                        onInspectRun={(id) => setInspectRunId(id)}
+                      />
+                    )}
+                  </ScopedPage>
                 </Suspense>
               </Route>
               <Route path="/">
                 <h1 className="sr-only">Emberline dashboard</h1>
-                <Dashboard
-                  system={system.data}
-                  activeProjectId={activeProject?.id ?? null}
-                  onSelectProject={selectProject}
-                  onOpenWizard={() => setWizardOpen(true)}
-                  onInspectRun={(id) => setInspectRunId(id)}
-                />
+                <ScopedPage scope={scope} pendingClassName="dashboard">
+                  {(activeProjectId) => (
+                    <Dashboard
+                      system={system.data}
+                      activeProjectId={activeProjectId}
+                      onSelectProject={selectProject}
+                      onOpenWizard={() => setWizardOpen(true)}
+                      onInspectRun={(id) => setInspectRunId(id)}
+                    />
+                  )}
+                </ScopedPage>
               </Route>
               <Route>
                 <div className="empty">

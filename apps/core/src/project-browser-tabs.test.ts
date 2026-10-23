@@ -109,6 +109,24 @@ const opts = (defaultUrl: string | null, follow = false, agentHere = follow, age
 });
 
 describe('ProjectBrowserTabs', () => {
+  it('a start that found no tab keeps its reason once the tab is reopened (L-18)', async () => {
+    const d = new FakeDaemon();
+    const action = d.action.bind(d);
+    d.action = async (body, q) => {
+      const snap = await action(body, q);
+      return body.action === 'start_playtest' && snap.tabMissing
+        ? { ...snap, playtestNotStarted: 'no_tab' as const }
+        : snap;
+    };
+    const tabs = new ProjectBrowserTabs(async () => d);
+    const res = await tabs.action('A', { action: 'start_playtest' }, opts('http://core:7420/demo/a'));
+    expect(d.opened).toHaveLength(1);
+    expect(res?.activeTabId).toBe(d.opened[0]);
+    expect(res?.playtestNotStarted).toBe('no_tab');
+    // A later poll does not carry it.
+    expect((await tabs.state('A', opts('http://core:7420/demo/a')))?.playtestNotStarted).toBeUndefined();
+  });
+
   it('opens a project tab once at its demo URL and reuses it', async () => {
     const d = new FakeDaemon();
     const tabs = new ProjectBrowserTabs(async () => d);

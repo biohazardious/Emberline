@@ -17,6 +17,13 @@ export function containerPreviewBoxShown(o: ContainerPreviewOptionsResponse | un
   return Boolean(o?.file);
 }
 
+/** The options once a save worked: no file to offer, so the box goes away even when the refetch fails. */
+export function optionsAfterSave(
+  o: ContainerPreviewOptionsResponse | undefined,
+): ContainerPreviewOptionsResponse | undefined {
+  return o && { ...o, file: null };
+}
+
 /** Spec defaults: the service named `web`, else the first service with a port; its first port. */
 export function defaultContainerPreviewChoice(
   services: readonly ContainerPreviewService[],

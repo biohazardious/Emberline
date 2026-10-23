@@ -8,10 +8,13 @@ import {
   commentsOffDiff,
   DrawerMergeError,
   drawerFailure,
+  drawerMergeStep,
   escapeDraft,
   glyphHoverText,
   mergeNowFailure,
   mergeNowNext,
+  mergeStepRetired,
+  type PendingMergeStep,
   requestTargets,
   reviewBlockedCount,
   worktreeMissing,
@@ -271,5 +274,36 @@ describe('the step a drawer merge failure offers', () => {
       next: 'merge_anyway',
     });
     expect(drawerFailure(new Error('offline'))).toEqual({ text: 'offline', next: null });
+  });
+});
+
+describe('the drawer merge step', () => {
+  const step: PendingMergeStep = { next: 'merge_anyway', status: 'review' };
+
+  it('shows the offered step only with its sentence and while the ticket is where it failed', () => {
+    expect(drawerMergeStep(step, 'review', '1 blocking comment is open')).toBe('merge_anyway');
+    expect(drawerMergeStep({ next: 'move_without_merge', status: 'review' }, 'review', 'gone')).toBe(
+      'move_without_merge',
+    );
+    expect(drawerMergeStep(step, 'review', undefined)).toBeNull();
+    expect(drawerMergeStep(step, 'in_progress', '1 blocking comment is open')).toBeNull();
+    expect(drawerMergeStep(null, 'review', 'offline')).toBeNull();
+    expect(drawerMergeStep({ next: null, status: 'review' }, 'review', 'Merged nothing')).toBeNull();
+  });
+
+  it('retires on the first move, so moving back does not bring the step back', () => {
+    expect(mergeStepRetired(step, 'review')).toBe(false);
+    expect(mergeStepRetired(null, 'in_progress')).toBe(false);
+    // The drawer clears the step and its sentence when this is true.
+    let pending: PendingMergeStep | null = step;
+    let error: string | undefined = '1 blocking comment is open';
+    for (const status of ['in_progress', 'review'] as const) {
+      if (mergeStepRetired(pending, status)) {
+        pending = null;
+        error = undefined;
+      }
+    }
+    expect(drawerMergeStep(pending, 'review', error)).toBeNull();
+    expect(error).toBeUndefined();
   });
 });

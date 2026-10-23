@@ -15,9 +15,11 @@ import {
   blockingMessage,
   DrawerMergeError,
   drawerFailure,
+  drawerMergeStep,
   mergeNowFailure,
   mergeNowNext,
-  type MergeNext,
+  mergeStepRetired,
+  type PendingMergeStep,
   reviewBlockedCount,
   worktreeMissing,
 } from '../reviewComments';
@@ -759,7 +761,13 @@ function TicketDrawer({
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   // The step a failed Mark done offers here, as the page's dialogs do.
-  const [mergeNext, setMergeNext] = useState<{ next: MergeNext; status: TicketStatus } | null>(null);
+  const [mergeNext, setMergeNext] = useState<PendingMergeStep | null>(null);
+  // A move retires the step and its sentence for good: they do not come back when the ticket returns.
+  useEffect(() => {
+    if (!mergeStepRetired(mergeNext, ticket.status)) return;
+    setMergeNext(null);
+    setError(undefined);
+  }, [mergeNext, ticket.status]);
   // The footer's merge failures show here, in the drawer, not in the page banners behind its backdrop.
   const markDone = async (opts?: { force?: boolean }) => {
     setBusy('done');
@@ -775,6 +783,7 @@ function TicketDrawer({
       setBusy(undefined);
     }
   };
+  const mergeStep = drawerMergeStep(mergeNext, ticket.status, error);
   const [depError, setDepError] = useState<string>();
   const [confirmStart, setConfirmStart] = useState(armStart > 0);
   useEffect(() => {
@@ -1319,9 +1328,9 @@ function TicketDrawer({
           </p>
         )}
         {/* Only while the ticket is still where the failure happened: a move elsewhere retires the step. */}
-        {error && mergeNext && mergeNext.status === ticket.status && (
+        {mergeStep && (
           <div className="actions">
-            {mergeNext.next === 'merge_anyway' ? (
+            {mergeStep === 'merge_anyway' ? (
               <button
                 type="button"
                 className="btn btn-sm btn-primary"

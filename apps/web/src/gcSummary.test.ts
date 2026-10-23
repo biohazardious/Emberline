@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keptWorktreesSummary } from './gcSummary';
+import { keptWorktreesSummary, PRUNE_PENDING_TEXT, pruneSummary } from './gcSummary';
 
 describe('keptWorktreesSummary', () => {
   it('says nothing when nothing was left behind', () => {
@@ -25,5 +25,17 @@ describe('keptWorktreesSummary', () => {
         ],
       }),
     ).toBe('Left 2 runs for the next clean-up: their worktrees were being pruned.');
+  });
+});
+
+describe('pruneSummary (W-4)', () => {
+  it('says the teardown is still running when the prune finishes in the background', () => {
+    expect(pruneSummary({ pending: true })).toBe(PRUNE_PENDING_TEXT);
+    expect(PRUNE_PENDING_TEXT).toBe('Teardown is running; the worktree is removed when it ends.');
+  });
+
+  it('says nothing for a prune that finished', () => {
+    expect(pruneSummary({})).toBeNull();
+    expect(pruneSummary({ pending: false })).toBeNull();
   });
 });

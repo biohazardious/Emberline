@@ -17,6 +17,8 @@ import {
   offersFollow,
   bannerAfterSnapshot,
   PLAYTEST_ELSEWHERE_TEXT,
+  PLAYTEST_NO_TAB_TEXT,
+  PLAYTEST_NOT_STARTED_TEXT,
   PLAYTEST_SHARED_ONLY_TEXT,
   PLAYTEST_STARTED_TEXT,
   playtestRefusalBanner,
@@ -456,13 +458,31 @@ describe('Auto-Interact start banner (B-12)', () => {
   });
 
   it("says why nothing started on an agent's own browser", () => {
-    expect(playtestStartBanner({ playtestActive: false })).toEqual({
+    expect(playtestStartBanner({ playtestActive: false, playtestNotStarted: 'agent_browser' })).toEqual({
       kind: 'info',
       text: PLAYTEST_SHARED_ONLY_TEXT,
     });
     expect(PLAYTEST_SHARED_ONLY_TEXT).toBe(
       "Auto-Interact runs only in the shared browser, not in an agent's own browser. Show this project's tab, then start it again.",
     );
+  });
+
+  it('says when the project has no tab to start it on (L-18)', () => {
+    expect(playtestStartBanner({ playtestActive: false, playtestNotStarted: 'no_tab' })).toEqual({
+      kind: 'info',
+      text: PLAYTEST_NO_TAB_TEXT,
+    });
+    expect(PLAYTEST_NO_TAB_TEXT).toBe(
+      "Auto-Interact did not start: this project's browser tab was not open yet. Start it again once the tab shows.",
+    );
+  });
+
+  it('an older daemon that gives no reason gets a text that fits either case (L-18)', () => {
+    expect(playtestStartBanner({ playtestActive: false })).toEqual({
+      kind: 'info',
+      text: PLAYTEST_NOT_STARTED_TEXT,
+    });
+    expect(PLAYTEST_NOT_STARTED_TEXT).not.toMatch(/agent's own browser/);
   });
 
   it('a refusal is recognised by its flag, not by its text', () => {

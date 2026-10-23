@@ -165,12 +165,14 @@ export class ProjectBrowserTabs {
     const snap = await first(query(projectId, this.selected.get(projectId) ?? null, opts));
     if (!snap.tabMissing) return snap;
     this.selected.delete(projectId);
+    // A start that found no tab says so in the answer, also once the tab is back.
+    const reason = snap.playtestNotStarted ? { playtestNotStarted: snap.playtestNotStarted } : {};
     const own = snap.tabs?.find((t) => t.projectId === projectId);
     if (own) {
       const again = await d.state(query(projectId, own.id, opts));
       if (!again.tabMissing) {
         this.selected.set(projectId, own.id);
-        return again;
+        return { ...again, ...reason };
       }
     }
     const opened = await d.action(
@@ -178,7 +180,7 @@ export class ProjectBrowserTabs {
       query(projectId, null, opts),
     );
     if (!opened.tabMissing && opened.activeTabId) this.selected.set(projectId, opened.activeTabId);
-    return opened;
+    return { ...opened, ...reason };
   }
 }
 

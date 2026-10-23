@@ -23,6 +23,7 @@ import {
   containerPreviewSaveEnabled,
   declaredPortsLine,
   defaultContainerPreviewChoice,
+  optionsAfterSave,
   parsePort,
   portProblem,
 } from '../containerPreviewSetup';
@@ -147,7 +148,9 @@ export function ContainerPreviewBox({ project }: { project: Project }) {
         baseSha256: diff.baseSha256,
       });
       queryClient.setQueryData(['api', statusUrl], saved);
-      await options.refresh(); // file becomes null: the box goes away
+      // The box goes away now: a refetch that fails would keep offering a save that gets a 409.
+      queryClient.setQueryData<ContainerPreviewOptionsResponse>(['api', optionsUrl], optionsAfterSave);
+      await options.refresh();
       await refreshWorktreeConfigViews(queryClient, project.id);
     } catch (err) {
       setFailure(worktreeSaveFailure(err));

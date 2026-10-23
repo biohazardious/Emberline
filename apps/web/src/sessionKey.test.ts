@@ -9,12 +9,14 @@ import { api } from './api';
 import {
   authGateState,
   clearSessionKey,
+  currentAuthState,
   getSessionKey,
   SITE_STORAGE_BLOCKED_MESSAGE,
   sessionProtocols,
   setSessionKey,
   signOut,
   siteStorageBlocked,
+  storageProbe,
 } from './sessionKey';
 
 /** A Map-backed localStorage. */
@@ -155,12 +157,12 @@ describe('blocked site storage', () => {
   });
 
   it('after a reload names the blocked storage, not the per-login key change', () => {
-    expect(authGateState({ authenticated: true }, null, true)).toEqual({
+    expect(authGateState({ authenticated: true }, null, () => true)).toEqual({
       signedIn: false,
       notice: SITE_STORAGE_BLOCKED_MESSAGE,
     });
     expect(
-      authGateState({ authenticated: false, signedOut: SESSION_KEY_MISSING_MESSAGE }, null, true),
+      authGateState({ authenticated: false, signedOut: SESSION_KEY_MISSING_MESSAGE }, null, () => true),
     ).toEqual({
       signedIn: false,
       notice: SITE_STORAGE_BLOCKED_MESSAGE,
@@ -170,10 +172,81 @@ describe('blocked site storage', () => {
       authGateState(
         { authenticated: false, signedOut: 'signed out: your network address changed' },
         null,
-        true,
+        () => true,
       ),
     ).toEqual({ signedIn: false, notice: 'signed out: your network address changed' });
-    expect(authGateState({ authenticated: true }, 'k', true)).toEqual({ signedIn: true });
+    expect(authGateState({ authenticated: true }, 'k', () => true)).toEqual({ signedIn: true });
+  });
+});
+
+describe('the storage probe', () => {
+  const countingStorage = () => {
+    const { storage } = mapStorage();
+    const setItem = vi.fn(storage.setItem);
+    vi.stubGlobal('localStorage', { ...storage, setItem });
+    return setItem;
+  };
+
+  it('is not asked while signed in, nor for a sign-out reason of core’s own', () => {
+    const probe = vi.fn(() => true);
+    expect(authGateState({ authenticated: true }, 'k', probe)).toEqual({ signedIn: true });
+    expect(authGateState({ authenticated: false, signedOut: 'signed out: expired' }, null, probe)).toEqual({
+      signedIn: false,
+      notice: 'signed out: expired',
+    });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('writes to site storage at most once, however often it is asked', () => {
+    const setItem = countingStorage();
+    const blocked = storageProbe();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(blocked()).toBe(false);
+    expect(blocked()).toBe(false);
+    expect(authGateState({ authenticated: true }, null, blocked).notice).toBe(SESSION_KEY_MISSING_MESSAGE);
+    expect(setItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('currentAuthState', () => {
+  const signedOut = { authenticated: false, signedOut: SESSION_KEY_MISSING_MESSAGE };
+
+  it('asks once more when a password change stored a new key while the old one was being checked', async () => {
+    setSessionKey('old');
+    const ask = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        setSessionKey('new');
+        return Promise.resolve(signedOut);
+      })
+      .mockResolvedValueOnce({ authenticated: true });
+    await expect(currentAuthState(ask)).resolves.toEqual({ authenticated: true });
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks once when the key did not change, or the answer is already signed in', async () => {
+    setSessionKey('k');
+    const ask = vi.fn().mockResolvedValue(signedOut);
+    await expect(currentAuthState(ask)).resolves.toEqual(signedOut);
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    const signedIn = vi.fn().mockImplementation(() => {
+      setSessionKey('k2');
+      return Promise.resolve({ authenticated: true });
+    });
+    await currentAuthState(signedIn);
+    expect(signedIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks no more than twice', async () => {
+    setSessionKey('a');
+    let n = 0;
+    const ask = vi.fn(() => {
+      setSessionKey(`k${++n}`);
+      return Promise.resolve(signedOut);
+    });
+    await expect(currentAuthState(ask)).resolves.toEqual(signedOut);
+    expect(ask).toHaveBeenCalledTimes(2);
   });
 });
 

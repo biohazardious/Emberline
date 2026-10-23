@@ -12,8 +12,8 @@ import {
   materialsErrorField,
   materialsErrorMessage,
   notKeptText,
-  summaryMaterialsNote,
   parseReferenceUrls,
+  summaryMaterialsNote,
   ThumbnailUrls,
   type WizardMaterial,
 } from './materials';

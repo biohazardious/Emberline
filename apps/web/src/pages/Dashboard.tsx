@@ -5,6 +5,7 @@ import type {
   AgentPersona,
   PermissionMode,
   Project,
+  PruneWorktreeResponse,
   Run,
   SystemStatus,
   TerminalInfo,
@@ -14,7 +15,7 @@ import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } f
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
-import { keptWorktreesSummary } from '../gcSummary';
+import { keptWorktreesSummary, pruneSummary } from '../gcSummary';
 import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
@@ -146,9 +147,15 @@ export function Dashboard({
     try {
       if (action === 'stop') await api(`/api/runs/${id}/stop`, 'POST');
       else if (action === 'resume') await api(`/api/runs/${id}/resume`, 'POST', {});
-      else if (action === 'prune')
-        await api(`/api/runs/${id}/worktree/prune`, 'POST', force ? { force: true } : {});
-      else await api(`/api/runs/${id}`, 'DELETE');
+      else if (action === 'prune') {
+        const res = await api<PruneWorktreeResponse>(
+          `/api/runs/${id}/worktree/prune`,
+          'POST',
+          force ? { force: true } : {},
+        );
+        // A teardown that outlasts the request finishes in the background: say so, or it looks like nothing happened.
+        setCleanupNotice(pruneSummary(res) ?? undefined);
+      } else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
       if (action === 'prune' && e instanceof ApiRequestError && e.code === 'worktree_has_work') {
         setPruneBlocked({ id, message: e.message });

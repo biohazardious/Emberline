@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createElement, type ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Router } from 'wouter';
 
@@ -12,10 +12,8 @@ export function renderStatic(
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   for (const [url, data] of Object.entries(cached)) client.setQueryData(['api', url], data);
   return renderToStaticMarkup(
-    createElement(
-      QueryClientProvider,
-      { client },
-      createElement(Router, { ssrPath: path, children: element }),
-    ),
+    <QueryClientProvider client={client}>
+      <Router ssrPath={path}>{element}</Router>
+    </QueryClientProvider>,
   );
 }

@@ -81,20 +81,41 @@ export function siteStorageBlocked(): boolean {
   }
 }
 
+/** siteStorageBlocked asked at most once, and only when called: each probe also fires `storage` events in the other tabs. */
+export function storageProbe(): () => boolean {
+  let blocked: boolean | undefined;
+  return () => (blocked ??= siteStorageBlocked());
+}
+
 /**
  * Signed in only with a key: a cookie whose key this browser lost gets the sign-in form and the notice,
  * never a page of 401s. With blocked site storage the key could not survive a reload: that is the notice.
+ * `storageBlocked` is asked only for that notice.
  */
 export function authGateState(
   state: { authenticated: boolean; signedOut?: string },
   key: string | null,
-  storageBlocked = false,
+  storageBlocked: () => boolean = () => false,
 ): { signedIn: boolean; notice?: string } {
   if (state.authenticated && key) return { signedIn: true };
-  const keyLost = storageBlocked ? SITE_STORAGE_BLOCKED_MESSAGE : SESSION_KEY_MISSING_MESSAGE;
+  const keyLost = () => (storageBlocked() ? SITE_STORAGE_BLOCKED_MESSAGE : SESSION_KEY_MISSING_MESSAGE);
   const notice =
     state.signedOut === SESSION_KEY_MISSING_MESSAGE
-      ? keyLost
-      : (state.signedOut ?? (state.authenticated ? keyLost : undefined));
+      ? keyLost()
+      : (state.signedOut ?? (state.authenticated ? keyLost() : undefined));
   return { signedIn: false, notice };
+}
+
+/**
+ * The auth state, asked once more when it says signed out and the key changed while it was on its
+ * way: a password change stores its new key after a check may already have gone out with the old one.
+ */
+export async function currentAuthState<T extends { authenticated: boolean; signedOut?: string }>(
+  ask: () => Promise<T>,
+): Promise<T> {
+  const sentWith = getSessionKey();
+  const state = await ask();
+  const key = getSessionKey();
+  if (key === sentWith || authGateState(state, key).signedIn) return state;
+  return ask();
 }

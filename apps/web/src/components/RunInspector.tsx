@@ -157,11 +157,20 @@ export function extractFailureDetails(
   return { reason, exitCode, needsAuth };
 }
 
+/**
+ * Whether the run shows a failure, so its events are fetched for the reason. A stop is `failed` +
+ * `cancelled`: the pill already says "cancelled", and nothing exited unexpectedly.
+ */
+export function failureFetchNeeded(run: Pick<Run, 'state' | 'cancelled'>): boolean {
+  return run.state === 'failed' && !run.cancelled;
+}
+
 export function RunFailureBanner({ run }: { run: Run }) {
   const [detail, setDetail] = useState<RunDetail>();
+  const fetchNeeded = failureFetchNeeded(run);
 
   useEffect(() => {
-    if (run.state !== 'failed' || run.cancelled) return;
+    if (!fetchNeeded) return;
     let cancelled = false;
     void api<RunDetail>(`/api/runs/${run.id}`)
       .then((res) => {
@@ -171,10 +180,9 @@ export function RunFailureBanner({ run }: { run: Run }) {
     return () => {
       cancelled = true;
     };
-  }, [run.id, run.state, run.cancelled, run.stateChangedAt]);
+  }, [run.id, fetchNeeded, run.stateChangedAt]);
 
-  // A stop is `failed` + `cancelled`: the pill already says "cancelled", and nothing exited unexpectedly.
-  if (run.state !== 'failed' || run.cancelled) return null;
+  if (!fetchNeeded) return null;
 
   const { reason, exitCode, needsAuth } = extractFailureDetails(detail?.events ?? [], run.agent);
 

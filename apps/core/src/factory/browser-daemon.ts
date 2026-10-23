@@ -14,7 +14,7 @@ import type {
 } from '@emberline/protocol';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
-export const BROWSER_DAEMON_VERSION = '1.5.2';
+export const BROWSER_DAEMON_VERSION = '1.5.3';
 
 /**
  * S17: the same rule the daemon applies before navigating (`normalizeNavigateUrl`), checked in core
@@ -813,14 +813,19 @@ async function handleAction(body, q) {
   }
 
   const { tab, ephemeral } = await resolveShown(q);
-  if (!tab) return captureState(q);
+  if (!tab) {
+    // Nothing to start Auto-Interact on: the answer says why it did not start.
+    if (action === 'start_playtest') return { ...(await captureState(q)), playtestNotStarted: 'no_tab' };
+    return captureState(q);
+  }
 
   if (action === 'start_playtest') {
     if (playtestHeldByOther(playtestTimer, playtestProjectId, q.projectId)) {
       return { ...(await captureState(q)), message: ${JSON.stringify(PLAYTEST_HELD_MESSAGE)}, playtestHeldByOther: true };
     }
     // Auto-Interact runs on shared-Chromium tabs only, not in an agent's own Playwright Chromium.
-    if (!ephemeral) await startPlaytestLoop(tab, body.url || q.defaultUrl, q.projectId);
+    if (ephemeral) return { ...(await captureState(q)), playtestNotStarted: 'agent_browser' };
+    await startPlaytestLoop(tab, body.url || q.defaultUrl, q.projectId);
     return captureState(q);
   }
 

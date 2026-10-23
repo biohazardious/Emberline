@@ -29,7 +29,14 @@ import { api, ApiRequestError, errorMessage } from './api';
 import { BrandLogo } from './components/BrandLogo';
 import { SecurityBanner } from './components/SecurityBanner';
 import { shareInFlight } from './liveAuth';
-import { authGateState, getSessionKey, setSessionKey, signOut, siteStorageBlocked } from './sessionKey';
+import {
+  authGateState,
+  currentAuthState,
+  getSessionKey,
+  setSessionKey,
+  signOut,
+  storageProbe,
+} from './sessionKey';
 
 interface AuthContextValue {
   logout: () => Promise<void>;
@@ -42,10 +49,12 @@ export const useAuth = () => useContext(AuthContext);
 export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>();
   const [error, setError] = useState<string>();
+  // Probed once per mount, and only for a sign-in notice.
+  const [storageBlocked] = useState(() => storageProbe());
 
   const refresh = useCallback(async () => {
     try {
-      setState(await api<AuthState>('/api/auth/state'));
+      setState(await currentAuthState(() => api<AuthState>('/api/auth/state')));
       setError(undefined);
     } catch (e) {
       setError(errorMessage(e));
@@ -83,7 +92,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
   if (!state) return <div className="splash" aria-busy="true" />;
   if (state.setupRequired) return <SetupForm onDone={refresh} />;
-  const gate = authGateState(state, getSessionKey(), siteStorageBlocked());
+  const gate = authGateState(state, getSessionKey(), storageBlocked);
   if (!gate.signedIn) return <LoginForm onDone={refresh} notice={gate.notice} />;
   return <AuthContext.Provider value={{ logout }}>{children}</AuthContext.Provider>;
 }

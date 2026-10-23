@@ -14,6 +14,7 @@ import {
   containerPreviewSettingsHref,
   declaredPortsLine,
   defaultContainerPreviewChoice,
+  optionsAfterSave,
   parsePort,
   portProblem,
   readHintDismissed,
@@ -30,6 +31,16 @@ describe('containerPreviewBoxShown', () => {
     expect(containerPreviewBoxShown({ ...off, available: true, reason: null, file: 'compose.yml' })).toBe(
       true,
     );
+  });
+});
+
+describe('optionsAfterSave (C-12)', () => {
+  it('a saved pick takes the box away without waiting for the refetch', () => {
+    const offered = { ...off, available: true, reason: null, file: 'compose.yaml' as const };
+    expect(containerPreviewBoxShown(offered)).toBe(true);
+    expect(optionsAfterSave(offered)).toEqual({ ...offered, file: null });
+    expect(containerPreviewBoxShown(optionsAfterSave(offered))).toBe(false);
+    expect(optionsAfterSave(undefined)).toBeUndefined();
   });
 });
 

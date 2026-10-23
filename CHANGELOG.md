@@ -36,6 +36,12 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - A run's pull request (open, merged, closed, CI status) stopped refreshing when the forge account in Settings had lost its token, even with `EMBERLINE_FORGE_TOKEN` set for the same server. It now refreshes with the token that works, and sends no request with an empty one.
 - A repository address in the `host:path` form with an `@` before any `/` (such as `server:app@v2`) was shown as `server@v2`, and two different addresses of this kind could count as the same repository. Now only the plain `user:password@host:path` form is shown without its password. Any other address of this kind that may hold a password (such as `server:app@v2` or `user:token@host/path`) is kept as it is, shown with `***` in its place, never taken for another repository, and still refused by **Connect**. A password containing `@` (`alice:p@ss@host:path`) was partly shown; it is now fully masked.
 - **Connect** accepted an ssh URL whose user name holds an `@` followed by a password (`ssh://user@domain:password@host/…`) and stored it with the password. It is now refused like any other URL with a password.
+- After **Mark done ✓** failed in the ticket drawer, moving the ticket to another column and back brought the old error and its **Merge anyway** or **Move to Done without merging** button back. The first move now clears them.
+- **Start Auto-Interact** in the Live Browser said "Auto-Interact runs only in the shared browser, not in an agent's own browser" also when it did not start because the project's browser tab was not open yet. It now says which of the two happened.
+- When the page could not reload the settings right after **Use container preview** was saved, the box stayed and offered the save again, which then failed. The box now goes away as soon as the save works.
+- Changing the admin password could, rarely, land you on the sign-in form although the change worked. The sign-in state is now checked again with the new key.
+- On a first visit, the Inbox, Docker, Fleet and the dashboard briefly showed every project (or the first one) before narrowing to the active project. They now wait until the active project is known.
+- **Prune worktree** on a run whose `worktree.yml` teardown took longer than the request looked as if nothing happened. It now says "Teardown is running; the worktree is removed when it ends."
 
 ## [0.6.0] - 2026-10-23
 

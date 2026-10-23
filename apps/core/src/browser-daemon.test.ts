@@ -130,7 +130,7 @@ describe('browser daemon tabs per project', () => {
     );
   });
   it('the daemon version moved with the script', () => {
-    expect(BROWSER_DAEMON_VERSION).toBe('1.5.2');
+    expect(BROWSER_DAEMON_VERSION).toBe('1.5.3');
   });
 });
 
@@ -576,7 +576,12 @@ function loadHandleAction(over: {
   ) as (
     body: Record<string, unknown>,
     q: ActionQuery,
-  ) => Promise<{ message?: string | null; playtestHeldByOther?: boolean; q: ActionQuery }>;
+  ) => Promise<{
+    message?: string | null;
+    playtestHeldByOther?: boolean;
+    playtestNotStarted?: string;
+    q: ActionQuery;
+  }>;
   return { handleAction, fetched, captured, stopped, saves: () => saves };
 }
 
@@ -659,6 +664,26 @@ describe('browser daemon actions keep to the project that asks (B-8, B-29)', () 
       expect(res.message, action).toBe(PLAYTEST_HELD_MESSAGE);
       expect(h.stopped, action).toEqual([]);
     }
+  });
+
+  it("a start that did not happen says why: no tab, or an agent's own browser (L-18)", async () => {
+    const none = loadHandleAction({ tabProjects: labels() });
+    expect((await none.handleAction({ action: 'start_playtest' }, qA)).playtestNotStarted).toBe('no_tab');
+
+    const own = loadHandleAction({
+      tabProjects: labels(),
+      resolveShown: async () => ({ pages: [], tab: { id: 'agent' }, following: true, ephemeral: true }),
+    });
+    expect((await own.handleAction({ action: 'start_playtest' }, qA)).playtestNotStarted).toBe(
+      'agent_browser',
+    );
+
+    const shared = loadHandleAction({
+      tabProjects: labels(),
+      resolveShown: async () => ({ pages: [], tab: { id: 'ta' }, following: false, ephemeral: false }),
+    });
+    const res = await shared.handleAction({ action: 'start_playtest' }, qA);
+    expect(res.playtestNotStarted).toBeUndefined();
   });
 
   it('a snapshot says when Auto-Interact runs for another project (B-12)', () => {

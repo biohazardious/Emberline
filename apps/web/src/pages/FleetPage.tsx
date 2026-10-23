@@ -5,7 +5,6 @@ import type {
   RunBuildOutputsResponse,
   RunDetail,
 } from '@emberline/protocol';
-import { latestCompletionBlockers } from '../completionSignal';
 import {
   Check,
   Circle,
@@ -22,6 +21,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
+import { latestCompletionBlockers } from '../completionSignal';
 import {
   FLEET_SECTION_LABELS,
   FLEET_SECTION_ORDER,

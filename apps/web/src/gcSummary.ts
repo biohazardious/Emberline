@@ -1,4 +1,4 @@
-import type { GarbageCollectRunsResponse } from '@emberline/protocol';
+import type { GarbageCollectRunsResponse, PruneWorktreeResponse } from '@emberline/protocol';
 
 /**
  * What garbage collection left behind, in sentences: worktrees it kept so no work is lost, and runs
@@ -31,4 +31,11 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
       : null,
   ].filter((s): s is string => s !== null);
   return sentences.length > 0 ? sentences.join(' ') : null;
+}
+
+export const PRUNE_PENDING_TEXT = 'Teardown is running; the worktree is removed when it ends.';
+
+/** What a run's Prune left to the background: its worktree.yml teardown outlasted the request. Null otherwise. */
+export function pruneSummary(res: Pick<PruneWorktreeResponse, 'pending'>): string | null {
+  return res.pending ? PRUNE_PENDING_TEXT : null;
 }

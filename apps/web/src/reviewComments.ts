@@ -1,4 +1,10 @@
-import type { ReviewComment, ReviewCommentPriority, Run, RunReviewState } from '@emberline/protocol';
+import type {
+  ReviewComment,
+  ReviewCommentPriority,
+  Run,
+  RunReviewState,
+  TicketStatus,
+} from '@emberline/protocol';
 import { ApiRequestError, errorMessage } from './api';
 
 export const PRIORITY_ORDER: readonly ReviewCommentPriority[] = ['blocking', 'important', 'suggestion'];
@@ -186,6 +192,24 @@ export class DrawerMergeError extends Error {
 export function drawerFailure(error: unknown): { text: string; next: MergeNext } {
   if (error instanceof DrawerMergeError) return { text: error.message, next: error.next };
   return { text: errorMessage(error), next: null };
+}
+
+/** A failed Mark done's step in the ticket drawer, with the ticket status it failed at. */
+export type PendingMergeStep = { next: MergeNext; status: TicketStatus };
+
+/** The recovery button the drawer shows: only while the failure's sentence shows and the ticket is still where it failed. */
+export function drawerMergeStep(
+  pending: PendingMergeStep | null,
+  status: TicketStatus,
+  error: string | undefined,
+): MergeNext {
+  if (!error || !pending || pending.status !== status) return null;
+  return pending.next;
+}
+
+/** True once the ticket has moved from where the step was offered: the step and its sentence go for good. */
+export function mergeStepRetired(pending: PendingMergeStep | null, status: TicketStatus): boolean {
+  return pending !== null && pending.status !== status;
 }
 
 /** Markdown characters a hover would render; escaped so a comment body shows as typed. */

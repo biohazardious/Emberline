@@ -274,18 +274,29 @@ export const PLAYTEST_STARTED_TEXT =
 
 export const PLAYTEST_SHARED_ONLY_TEXT =
   "Auto-Interact runs only in the shared browser, not in an agent's own browser. Show this project's tab, then start it again.";
+export const PLAYTEST_NO_TAB_TEXT =
+  "Auto-Interact did not start: this project's browser tab was not open yet. Start it again once the tab shows.";
+/** A daemon older than `playtestNotStarted` does not say why. */
+export const PLAYTEST_NOT_STARTED_TEXT =
+  "Auto-Interact did not start. Show this project's tab in the shared browser, then start it again.";
+
+const PLAYTEST_NOT_STARTED: Record<NonNullable<BrowserViewportSnapshot['playtestNotStarted']>, string> = {
+  agent_browser: PLAYTEST_SHARED_ONLY_TEXT,
+  no_tab: PLAYTEST_NO_TAB_TEXT,
+};
 
 /** `playtestRefusal`: the banner says another project runs Auto-Interact; it goes once that one stops. */
 export type LiveBanner = { kind: 'ok' | 'err' | 'info'; text: string; playtestRefusal?: true };
 
 /** The banner after Start Auto-Interact: started, refused (another project runs it), not started here, or none. */
 export function playtestStartBanner(
-  res: Pick<BrowserViewportSnapshot, 'playtestActive' | 'playtestElsewhere'> | null,
+  res: Pick<BrowserViewportSnapshot, 'playtestActive' | 'playtestElsewhere' | 'playtestNotStarted'> | null,
 ): LiveBanner | undefined {
   if (!res) return undefined;
   if (res.playtestElsewhere) return { kind: 'info', text: PLAYTEST_ELSEWHERE_TEXT, playtestRefusal: true };
   if (res.playtestActive) return { kind: 'ok', text: PLAYTEST_STARTED_TEXT };
-  return { kind: 'info', text: PLAYTEST_SHARED_ONLY_TEXT };
+  const text = res.playtestNotStarted ? PLAYTEST_NOT_STARTED[res.playtestNotStarted] : undefined;
+  return { kind: 'info', text: text ?? PLAYTEST_NOT_STARTED_TEXT };
 }
 
 /** The banner for a start or stop the daemon refused (flagged, never matched by its text). */

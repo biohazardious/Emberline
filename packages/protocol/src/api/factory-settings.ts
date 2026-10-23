@@ -454,6 +454,11 @@ export const BrowserViewportSnapshot = z.object({
   /** This start or stop was refused: another project's Auto-Interact runs ({@link PLAYTEST_HELD_MESSAGE}). */
   playtestHeldByOther: z.boolean().optional(),
   /**
+   * Why a Start Auto-Interact did not start: no tab of the project to run it on, or the view shows an
+   * agent's own browser. Absent from a daemon older than this field.
+   */
+  playtestNotStarted: z.enum(['agent_browser', 'no_tab']).optional(),
+  /**
    * The view shows an agent's browser tab (its own Playwright Chromium or the tab it drives), not the
    * project's tab.
    */
