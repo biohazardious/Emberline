@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { MAX_EXEC_OUTPUT_BYTES, PTYD_MIN_PROTOCOL_VERSION, type PtydResult } from '@emberline/protocol';
 import { PtydClientError } from '@emberline/ptyd/client';
 import { HttpError, unavailable } from './errors.js';
+import { redactCapabilityUrls, withoutUrlCredentials } from './git-gateway/redact-text.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 
 /**
@@ -223,22 +224,36 @@ export function isRunnerTimeout(error: unknown): boolean {
 
 /** Error shaped like `execFile`'s: carries the exit code and both output streams. */
 export class CommandFailedError extends Error {
+  declare readonly request: ExecRequest;
+  declare readonly result: ExecResult;
+  declare readonly stdout: string;
+  declare readonly stderr: string;
+
+  /**
+   * The message names the command and its first output, without an address's credentials or a
+   * capability (it may be logged or shown). The command line, its environment and its raw output
+   * stay on the error, but not enumerable: an error logged whole (pino lists an error's own
+   * enumerable fields) never carries them.
+   */
   constructor(
-    readonly request: ExecRequest,
-    readonly result: ExecResult,
+    request: ExecRequest,
+    result: ExecResult,
     readonly code: number | null,
-    readonly stdout: string,
-    readonly stderr: string,
+    stdout: string,
+    stderr: string,
   ) {
     const why = result.timedOut
       ? `timed out after ${request.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`
       : result.truncated
         ? 'output exceeded the size limit'
         : `exited with code ${result.exitCode ?? result.signal}`;
+    const shown = (text: string) => redactCapabilityUrls(withoutUrlCredentials(text));
     super(
-      `${request.file} ${request.args.slice(0, 4).join(' ')} ${why}${stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ''}`,
+      `${request.file} ${shown(request.args.slice(0, 4).join(' '))} ${why}${stderr.trim() ? `: ${shown(stderr.trim()).slice(0, 500)}` : ''}`,
     );
     this.name = 'CommandFailedError';
+    for (const [key, value] of Object.entries({ request, result, stdout, stderr }))
+      Object.defineProperty(this, key, { value, enumerable: false, writable: false, configurable: true });
   }
 }
 

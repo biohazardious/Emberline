@@ -6,6 +6,7 @@ import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CommandFailedError,
   cancelCommand,
   type ExecRequest,
   execCommand,
@@ -148,5 +149,26 @@ describe('command execution through the runner', () => {
     );
     const res = await buildWorkspaceDemo({ projectId: 'p', targetId: 'main', workspacePath: ws });
     expect(res.ok).toBe(true);
+  });
+});
+
+describe('a failed command', () => {
+  it("says what failed without an address's credentials, and keeps its command line and raw output off a log", () => {
+    const request = {
+      file: 'git',
+      args: ['ls-remote', '--', 'https://alice:tok3n@git.example.com/o/r.git', 'x'],
+      cwd: '/',
+      env: { GIT_X: 'y' },
+    };
+    const stderr = "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': nope";
+    const result = { exitCode: 128, signal: null, stdout: '', stderr, timedOut: false, truncated: false };
+    const error = new CommandFailedError(request, result, 128, '', stderr);
+    expect(error.message).toBe(
+      "git ls-remote -- https://***@git.example.com/o/r.git x exited with code 128: fatal: unable to access 'https://***@git.example.com/o/r.git/': nope",
+    );
+    // Still there for describeGitError, which redacts it; not listed when the error is logged whole.
+    expect(error.stderr).toBe(stderr);
+    expect(Object.keys(error).sort()).toEqual(['code', 'name']);
+    expect(JSON.stringify(error)).not.toContain('tok3n');
   });
 });
