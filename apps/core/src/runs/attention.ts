@@ -4,6 +4,7 @@ import { inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runs, tickets } from '../db/schema.js';
 import { openBlockingCounts } from '../review/blocking.js';
+import { clipText } from '../text/control-chars.js';
 import { currentHold, decidePipelineOutcome, PIPELINE_OUTCOME_EVENTS } from './hold-outcome.js';
 
 /** A failure stays in front of a person this long after the run ended. */
@@ -76,7 +77,7 @@ const make = (
   occurrence: `${run.id}:${reason}:${eventId === null ? `t${Date.parse(run.stateChangedAt)}` : eventId}`,
 });
 
-const clipDetail = (text: string) => (text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX - 1)}…` : text);
+const clipDetail = (text: string) => clipText(text, DETAIL_MAX);
 
 /** The questions of the open picker a permission Notification was raised for, one per line; else null. */
 function pickerQuestions(event: AttentionEvent): string | null {

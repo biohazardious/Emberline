@@ -2,22 +2,60 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import type * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteWorkspaceFileEntry,
   listWorkspaceFilesFlat,
   readWorkspaceFileContent,
   readWorkspaceFileRaw,
   uploadWorkspaceFiles,
+  writeNewWorkspaceFile,
   writeWorkspaceFileContent,
 } from './factory/service.js';
+
+/**
+ * `before` runs once just before core opens or writes a file by path (where an agent would swap a
+ * folder); `opened` once with the next handle core opens.
+ */
+const race = vi.hoisted(() => ({
+  before: null as ((file: string) => void) | null,
+  opened: null as ((handle: fsPromises.FileHandle) => void) | null,
+}));
+vi.mock('node:fs/promises', async (orig) => {
+  const actual = await orig<typeof fsPromises>();
+  const hook = (file: unknown) => {
+    const before = race.before;
+    if (before && typeof file === 'string') {
+      race.before = null;
+      before(file);
+    }
+  };
+  return {
+    ...actual,
+    open: (async (file, ...rest) => {
+      hook(file);
+      const handle = await actual.open(file, ...rest);
+      const opened = race.opened;
+      race.opened = null;
+      opened?.(handle);
+      return handle;
+    }) as typeof actual.open,
+    writeFile: ((file, ...rest) => {
+      hook(file);
+      return actual.writeFile(file, ...rest);
+    }) as typeof actual.writeFile,
+  };
+});
 
 let base: string;
 let root: string;
@@ -34,6 +72,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  race.before = null;
+  race.opened = null;
   rmSync(base, { recursive: true, force: true });
 });
 
@@ -65,6 +105,33 @@ describe('workspace file explorer containment', () => {
     expect(readFileSync(path.join(outside, 'secret.txt'), 'utf8')).toBe('top secret');
     expect(existsSync(path.join(outside, 'new.txt'))).toBe(false);
     expect(existsSync(path.join(outside, 'up.bin'))).toBe(false);
+  });
+
+  it('creates a new file once, never over an existing one', async () => {
+    await writeNewWorkspaceFile(root, 'drop/new.bin', Buffer.from('hi'));
+    expect(readFileSync(path.join(root, 'drop', 'new.bin'), 'utf8')).toBe('hi');
+    await expect(writeNewWorkspaceFile(root, 'drop/new.bin', Buffer.from('again'))).rejects.toThrow();
+    expect(readFileSync(path.join(root, 'drop', 'new.bin'), 'utf8')).toBe('hi');
+  });
+
+  it('a new file is never left outside when its folder is swapped for a link after the check', async () => {
+    const drop = path.join(root, 'drop');
+    race.before = () => {
+      renameSync(drop, path.join(root, 'drop-moved'));
+      symlinkSync(outside, drop);
+    };
+    await expect(writeNewWorkspaceFile(root, 'drop/new.bin', Buffer.from('pwned'))).rejects.toThrow(
+      /outside/i,
+    );
+    expect(readdirSync(outside)).toEqual(['secret.txt']);
+  });
+
+  it('a new file whose write fails is not left half-written', async () => {
+    race.opened = (handle) => {
+      handle.writeFile = () => Promise.reject(new Error('ENOSPC'));
+    };
+    await expect(writeNewWorkspaceFile(root, 'drop/new.bin', Buffer.from('hi'))).rejects.toThrow('ENOSPC');
+    expect(readdirSync(path.join(root, 'drop'))).toEqual([]);
   });
 
   it('deletes a symlink itself, never its target', async () => {

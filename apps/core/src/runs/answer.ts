@@ -8,8 +8,8 @@ export interface StoredAttachment {
   sizeBytes: number;
 }
 
-/** `20261023-101500`. */
-const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+/** `20261023-101500042`: to the millisecond, so a retry within the same second gets new names. */
+const stamp = (d: Date) => d.toISOString().replace(/[-:.]/g, '').replace('T', '-').slice(0, 18);
 
 export function answerAttachmentPaths(names: string[], now: Date): string[] {
   return names.map(

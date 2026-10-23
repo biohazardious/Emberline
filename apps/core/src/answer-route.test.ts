@@ -7,6 +7,8 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCommandExecutor, localCommandExecutor } from './command-exec.js';
 import { projects, runEvents, runs, tickets } from './db/schema.js';
+import { conflict } from './errors.js';
+import * as files from './factory/files.js';
 import { updateFactorySettings } from './factory/settings.js';
 import * as gitExec from './git-exec.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -20,6 +22,14 @@ vi.mock('./git-exec.js', async (orig) => {
   const actual = await orig<typeof gitExec>();
   return { ...actual, execGitFile: vi.fn(actual.execGitFile) };
 });
+/** The real attachment write, for a test that wraps it (a mock's own implementation can be reset). */
+const real = vi.hoisted(() => ({ write: null as unknown as typeof files.writeNewWorkspaceFile }));
+vi.mock('./factory/files.js', async (orig) => {
+  const actual = await orig<typeof files>();
+  real.write = actual.writeNewWorkspaceFile;
+  return { ...actual, writeNewWorkspaceFile: vi.fn(actual.writeNewWorkspaceFile) };
+});
+const writeFile = vi.mocked(files.writeNewWorkspaceFile);
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
@@ -43,6 +53,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await t.close();
   vi.mocked(gitExec.execGitFile).mockClear();
+  writeFile.mockClear();
 });
 
 function addTicket(key: string, status: string): string {
@@ -380,7 +391,7 @@ describe('POST /api/runs/:id/answer', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as AnswerResponse;
     expect(body.delivery).toBe('session');
-    expect(body.attachments[0]).toMatch(/^\.emberline\/attachments\/answers\/\d{8}-\d{6}-1-note\.txt$/);
+    expect(body.attachments[0]).toMatch(/^\.emberline\/attachments\/answers\/\d{8}-\d{9}-1-note\.txt$/);
     expect(readFileSync(path.join(wt.worktreePath, body.attachments[0]!), 'utf8')).toBe('hello');
     const prompt = await resumedWith('a1');
     expect(prompt).toContain('> no key');
@@ -488,6 +499,8 @@ describe('POST /api/runs/:id/answer', () => {
       expect((await get(`/api/runs/${id}/question`)).json(), id).toMatchObject({
         picker: true,
         pickerChips: false,
+        // Several questions: no chip, since one would not say which question it answers.
+        options: questions.length > 1 ? [] : [{ label: 'Red' }, { label: 'Green' }],
       });
       const res = await post(`/api/runs/${id}/answer`, { option: 0 });
       expect(res.statusCode, id).toBe(409);
@@ -647,6 +660,103 @@ describe('POST /api/runs/:id/answer', () => {
     expect(res.json().message).toBe(
       "Couldn't store n.txt in the run's worktree. Try again, or send the answer without it.",
     );
+  });
+
+  const twoFiles = [
+    { name: 'a.txt', mimeType: 'text/plain', dataBase64: 'aGk=' },
+    { name: 'b.txt', mimeType: 'text/plain', dataBase64: 'aGk=' },
+  ];
+  /** What is stored under the worktree's answers folder. */
+  const stored = (wt: string) => {
+    const dir = path.join(wt, '.emberline', 'attachments', 'answers');
+    return existsSync(dir) ? readdirSync(dir) : [];
+  };
+
+  it('a second file that fails takes the first one with it: nothing left, nothing sent', async () => {
+    const wt = worktree('c1', { 'app.js': 'x\n' });
+    seedRun({ id: 'c1', ...wt, hold: blocked });
+    let seen: string[] = [];
+    writeFile
+      .mockImplementationOnce(async (...args) => {
+        await real.write(...args);
+        seen = stored(wt.worktreePath);
+      })
+      .mockRejectedValueOnce(new Error('ENOSPC'));
+    const res = await post('/api/runs/c1/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('attachment_write_failed');
+    expect(seen).toHaveLength(1);
+    expect(stored(wt.worktreePath)).toEqual([]);
+    expect(existsSync(path.join(t.dir, 'args-c1'))).toBe(false);
+  });
+
+  it('a session that refuses the answer after its files were written: the files are removed', async () => {
+    const { wt, calls } = openPicker('c2');
+    let seen: string[] = [];
+    vi.spyOn(t.runs, 'prompt').mockImplementationOnce(async () => {
+      seen = stored(wt.worktreePath);
+      throw conflict('the agent session has ended; start a new run');
+    });
+    const res = await post('/api/runs/c2/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(409);
+    expect(seen).toHaveLength(2);
+    expect(stored(wt.worktreePath)).toEqual([]);
+    expect(calls).toEqual(['keys:"\\u001b"']);
+  });
+
+  it('a held run that starts working while its files are written: 409 run_busy, the files removed', async () => {
+    const wt = worktree('c3', { 'app.js': 'x\n' });
+    seedRun({ id: 'c3', ...wt, hold: blocked });
+    let seen: string[] = [];
+    writeFile
+      .mockImplementationOnce(async (...args) => {
+        t.db.update(runs).set({ state: 'working' }).where(eq(runs.id, 'c3')).run();
+        await real.write(...args);
+      })
+      .mockImplementationOnce(async (...args) => {
+        await real.write(...args);
+        seen = stored(wt.worktreePath);
+      });
+    const res = await post('/api/runs/c3/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('run_busy');
+    expect(seen).toHaveLength(2);
+    expect(stored(wt.worktreePath)).toEqual([]);
+    expect(existsSync(path.join(t.dir, 'args-c3'))).toBe(false);
+  });
+
+  it('a held run that started working before the write: 409 run_busy before any file is written', async () => {
+    const wt = worktree('c4', { 'app.js': 'x\n' });
+    seedRun({ id: 'c4', ...wt });
+    const recoveryOf = t.recovery.get.bind(t.recovery);
+    vi.spyOn(t.recovery, 'get').mockImplementationOnce(async (id) => {
+      const recovery = await recoveryOf(id);
+      t.db.update(runs).set({ state: 'working' }).where(eq(runs.id, 'c4')).run();
+      return recovery;
+    });
+    const res = await post('/api/runs/c4/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('run_busy');
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(existsSync(path.join(t.dir, 'args-c4'))).toBe(false);
+  });
+
+  it('a successor on a route that cannot start: refused before any file is written', async () => {
+    const wt = worktree('c5', { 'app.js': 'x\n' });
+    seedRun({
+      id: 'c5',
+      ...wt,
+      hold: blocked,
+      stops: [{ source: 'system', reason: 'factory_step_finished' }],
+    });
+    // Claude with an API key, and none is saved.
+    t.db.update(runs).set({ credential: 'api_key' }).where(eq(runs.id, 'c5')).run();
+    const res = await post('/api/runs/c5/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('route_unusable');
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
+    expect(t.runs.getRun('c5').handedOffTo).toBeNull();
   });
 
   it('a waiting question gets the text as written, in its session', async () => {

@@ -1,8 +1,9 @@
 import type { AskUserQuestionSummary } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { askUserQuestionOf, buildRunQuestion, parseOptions } from './question.js';
+import { askUserQuestionOf, buildRunQuestion, openPicker, parseOptions } from './question.js';
 
 const base = { blockers: [], pendingAsk: null, lastMessage: null, notification: null, holdWhy: null };
+const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 describe('parseOptions', () => {
   it('reads a numbered list after a question', () => {
@@ -28,6 +29,11 @@ describe('parseOptions', () => {
     const out = parseOptions(`Pick one?\n${items}`);
     expect(out).toHaveLength(6);
     expect(out[0]!.label.length).toBe(200);
+  });
+  it('a clip never splits an emoji', () => {
+    const [option] = parseOptions(`Pick one?\n1. ${'x'.repeat(199)}\u{1F600} and more`);
+    expect(option!.label).toBe('x'.repeat(199));
+    expect(option!.label).not.toMatch(loneSurrogate);
   });
 });
 
@@ -79,6 +85,37 @@ describe('askUserQuestionOf', () => {
     expect(askUserQuestionOf({ questions: 'x' })).toBeNull();
     expect(askUserQuestionOf(null)).toBeNull();
   });
+  it('skips entries that are not objects, and notes them as left out', () => {
+    expect(askUserQuestionOf({ questions: [null] })).toBeNull();
+    expect(
+      askUserQuestionOf({
+        questions: [null, 7, { question: 'Which?', options: [null, 'A', { label: 'B' }] }],
+      }),
+    ).toEqual({
+      questions: [
+        { question: 'Which?', header: null, multiSelect: false, options: [{ label: 'B', detail: null }] },
+      ],
+      complete: false,
+    });
+  });
+});
+
+describe('openPicker', () => {
+  const picker = {
+    type: 'PreToolUse',
+    payload: {
+      tool_name: 'AskUserQuestion',
+      ask_user_question: {
+        questions: [{ question: 'Colour?', header: null, multiSelect: false, options: [] }],
+      },
+    },
+  };
+  it('a picker with nothing after it is open', () => {
+    expect(openPicker([picker])?.questions[0]!.question).toBe('Colour?');
+  });
+  it('the end of the session closes it', () => {
+    expect(openPicker([{ type: 'SessionEnd', payload: {} }, picker])).toBeNull();
+  });
 });
 
 const ask = (
@@ -129,6 +166,24 @@ describe('buildRunQuestion', () => {
     ).toBe(false);
     expect(chips(ask([{ question: 'Colours?', multiSelect: true }]))).toBe(false);
     expect(chips(ask([{ question: 'Colour?', multiSelect: false }], false))).toBe(false);
+  });
+  it('question: a picker of several questions offers no options (a chip would not say which it answers)', () => {
+    const q = buildRunQuestion({
+      ...base,
+      reason: 'question',
+      pendingAsk: ask([
+        { question: 'Colour?', multiSelect: false },
+        { question: 'Size?', multiSelect: false },
+      ]),
+    });
+    expect(q).toMatchObject({ text: 'Colour?\nSize?', picker: true, pickerChips: false, options: [] });
+    expect(
+      buildRunQuestion({
+        ...base,
+        reason: 'question',
+        pendingAsk: ask([{ question: 'Colours?', multiSelect: true }]),
+      }).options,
+    ).toEqual([{ label: 'Red', detail: null }]);
   });
   it('question: the last message with its options, else the notification', () => {
     expect(

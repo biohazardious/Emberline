@@ -1,6 +1,6 @@
 /** Code explorer: symlink-safe listing, reading, uploading, editing and deleting workspace files. */
 import { constants as fsConstants, existsSync } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ADOPT_FILE_PATHS,
@@ -9,6 +9,7 @@ import {
   type WorkspaceFileContentResponse,
   type WorkspaceFileEntry,
 } from '@emberline/protocol';
+import { createExclusiveFile } from '../outputs/safe-fs.js';
 
 // --- F8: VS Code-like Code Explorer & File Editor ---------------------------
 
@@ -365,11 +366,12 @@ export async function writeWorkspaceFileContent(
   };
 }
 
-/** Creates a file that must not exist yet; O_EXCL also refuses a link planted at the path. */
-const CREATE_NEW_NO_FOLLOW =
-  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW;
-
-/** A new file inside the workspace (wizard reference files): contained, no link followed, never overwritten. */
+/**
+ * A new file inside the workspace (wizard reference files, answer attachments): contained, no link
+ * followed, never overwritten. O_NOFOLLOW guards only the last component, so the file is created in
+ * its folder's real path and the descriptor must name it there: a folder the agent swaps for a link
+ * after the check is refused before any data is written, and the empty file it made is removed.
+ */
 export async function writeNewWorkspaceFile(
   workspacePath: string,
   relPath: string,
@@ -377,9 +379,29 @@ export async function writeNewWorkspaceFile(
 ): Promise<void> {
   const absFile = await resolveContainedWorkspaceFile(workspacePath, relPath);
   await mkdir(path.dirname(absFile), { recursive: true });
-  // mkdir walks the folder chain: check it again before the write.
-  await resolveContainedWorkspaceFile(workspacePath, relPath);
-  await writeFile(absFile, data, { flag: CREATE_NEW_NO_FOLLOW });
+  // mkdir walks the folder chain by path: the folder it ends at must still be inside.
+  const realDir = await realpath(path.dirname(absFile));
+  if (!isInside(await realpath(path.resolve(workspacePath)), realDir)) {
+    throw new Error('Path resolves outside the workspace through a symlink');
+  }
+  const name = path.basename(absFile);
+  const handle = await createExclusiveFile(realDir, name);
+  try {
+    await handle.writeFile(data);
+  } catch (error) {
+    // A half-written file is of no use: it goes again while the entry there is still this very file.
+    const target = path.join(realDir, name);
+    const [mine, there] = await Promise.all([
+      handle.stat().catch(() => null),
+      lstat(target).catch(() => null),
+    ]);
+    if (mine && there && mine.ino === there.ino && mine.dev === there.dev) {
+      await unlink(target).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function deleteWorkspaceFileEntry(workspacePath: string, relPath: string): Promise<void> {

@@ -12,12 +12,17 @@ export function stripControlChars(text: string, keep = '\n\t'): string {
   return text.replace(CONTROLS, (ch) => (keep.includes(ch) ? ch : ''));
 }
 
+/** The first `max` UTF-16 units of `text`, one less when the cut would leave half a surrogate pair. */
+export function clipCodeUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= 0) return '';
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
 /** `text` cut to at most `max` UTF-16 units without splitting a surrogate pair, marked with an ellipsis when cut. */
 export function clipText(text: string, max: number): string {
   if (text.length <= max) return text;
   if (max <= 0) return '';
-  let end = max - 1;
-  const last = text.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${text.slice(0, Math.max(0, end))}…`;
+  return `${clipCodeUnits(text, max - 1)}…`;
 }

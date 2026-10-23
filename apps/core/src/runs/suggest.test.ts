@@ -3,6 +3,7 @@ import { localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { buildSuggestPrompt, runSuggestion } from './suggest.js';
 
 afterEach(() => setCommandExecutor(localCommandExecutor));
+const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const ok = (stdout: string) => async () =>
   ({ exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, durationMs: 1 }) as never;
 
@@ -19,6 +20,16 @@ describe('buildSuggestPrompt', () => {
     expect(p).toContain('- GitHub');
     expect(p).toContain('Never print secrets');
     expect(p.length).toBeLessThan(20_000);
+  });
+  it('a cut ticket description never splits an emoji', () => {
+    const p = buildSuggestPrompt({
+      ticketTitle: null,
+      ticketBody: `${'x'.repeat(7_999)}\u{1F600}${'y'.repeat(100)}`,
+      question: { kind: 'question', text: 'Which?', options: [] },
+      lastMessage: null,
+    });
+    expect(p).toContain(`Ticket description:\n${'x'.repeat(7_999)}…`);
+    expect(p).not.toMatch(loneSurrogate);
   });
 });
 
@@ -100,6 +111,13 @@ describe('runSuggestion', () => {
     await expect(
       runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' }),
     ).rejects.toMatchObject({ message: `Claude could not suggest an answer: ${'x'.repeat(200)}…` });
+  });
+  it('the clipped reason never splits an emoji', async () => {
+    const result = `${'x'.repeat(199)}\u{1F600}${'y'.repeat(100)}`;
+    setCommandExecutor(ok(JSON.stringify({ type: 'result', is_error: true, result })));
+    await expect(
+      runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' }),
+    ).rejects.toMatchObject({ message: `Claude could not suggest an answer: ${'x'.repeat(199)}…` });
   });
   it('an error envelope never returns an answer it carries', async () => {
     setCommandExecutor(

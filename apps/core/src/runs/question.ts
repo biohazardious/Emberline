@@ -6,6 +6,7 @@ import {
   type RunQuestion,
   type RunQuestionOption,
 } from '@emberline/protocol';
+import { clipCodeUnits } from '../text/control-chars.js';
 
 export interface QuestionInput {
   reason: 'blocked' | 'question' | 'permission' | 'held';
@@ -20,8 +21,8 @@ export interface QuestionInput {
   holdWhy: string | null;
 }
 
-/** Events after which an earlier picker is no longer open: the turn ended or a new one began. */
-const PICKER_BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart']);
+/** Events after which an earlier picker is no longer open: the turn or the session ended, or a new one began. */
+const PICKER_BOUNDARIES = new Set(['Stop', 'StopFailure', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']);
 
 /**
  * The open AskUserQuestion picker among a run's events, newest first: a PreToolUse of it with no
@@ -48,7 +49,7 @@ export function openPicker(
 }
 
 const ITEM = /^\s*(?:\d{1,2}[.)]|[A-Za-z][.)]|[-*])\s+(.+?)\s*$/;
-const clip = (s: string) => s.slice(0, QUESTION_OPTION_MAX_CHARS);
+const clip = (s: string) => clipCodeUnits(s, QUESTION_OPTION_MAX_CHARS);
 const plain = (s: string) =>
   s
     .replace(/\*\*(.+?)\*\*/g, '$1')
@@ -84,33 +85,33 @@ export function parseOptions(message: string): RunQuestionOption[] {
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+/** The fields of an entry the agent sent; anything but an object has none (it counts as left out). */
+const fields = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 
 /** The compact copy of an AskUserQuestion tool input, or null when it is not one. */
 export function askUserQuestionOf(toolInput: unknown): AskUserQuestionSummary | null {
-  const questions = (toolInput as { questions?: unknown } | null)?.questions;
+  const questions = fields(toolInput).questions;
   if (!Array.isArray(questions)) return null;
   let complete = true;
-  const out = questions.flatMap((q) => {
-    const question = str((q as { question?: unknown }).question);
+  const out = questions.flatMap((entry) => {
+    const q = fields(entry);
+    const question = str(q.question);
     if (!question) {
       complete = false;
       return [];
     }
-    const options = Array.isArray((q as { options?: unknown }).options)
-      ? (q as { options: unknown[] }).options
-      : [];
+    const options: unknown[] = Array.isArray(q.options) ? q.options : [];
     return [
       {
         question: clip(question),
-        header: str((q as { header?: unknown }).header),
-        multiSelect: (q as { multiSelect?: unknown }).multiSelect === true,
+        header: str(q.header),
+        multiSelect: q.multiSelect === true,
         options: options
           .flatMap((o) => {
-            const label = str((o as { label?: unknown }).label);
+            const label = str(fields(o).label);
             if (!label) complete = false;
-            return label
-              ? [{ label: clip(label), detail: str((o as { description?: unknown }).description) }]
-              : [];
+            return label ? [{ label: clip(label), detail: str(fields(o).description) }] : [];
           })
           .slice(0, QUESTION_OPTIONS_MAX),
       },
@@ -137,14 +138,14 @@ export function buildRunQuestion(input: QuestionInput): Omit<RunQuestion, 'sugge
     case 'permission':
       return { kind: 'permission', text: input.notification ?? '', source: 'notification', ...none };
     case 'question': {
-      const ask = input.pendingAsk?.questions[0];
-      if (ask) {
-        const text = input.pendingAsk!.questions.map((q) => q.question).join('\n');
+      const asks = input.pendingAsk?.questions ?? [];
+      if (asks.length > 0) {
         return {
           kind: 'question',
-          text,
+          text: asks.map((q) => q.question).join('\n'),
           source: 'ask_user_question',
-          options: ask.options,
+          // A chip of one of several questions would not say which one it answers: typed text does.
+          options: asks.length === 1 ? asks[0]!.options : [],
           picker: true,
           pickerChips: pickerTakesNumbers(input.pendingAsk!),
         };

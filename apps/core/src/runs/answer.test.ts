@@ -3,12 +3,12 @@ import { answerAttachmentPaths, answerPrompt } from './answer.js';
 
 const R = '\n\nWhen finished, call `ticket_complete`.';
 const png = {
-  path: '.emberline/attachments/answers/20261023-101500-1-shot.png',
+  path: '.emberline/attachments/answers/20261023-101500042-1-shot.png',
   mimeType: 'image/png',
   sizeBytes: 320 * 1024,
 };
 const block =
-  'Attached files (in your worktree):\n- .emberline/attachments/answers/20261023-101500-1-shot.png (image/png, 320 KB)';
+  'Attached files (in your worktree):\n- .emberline/attachments/answers/20261023-101500042-1-shot.png (image/png, 320 KB)';
 
 describe('answerPrompt', () => {
   it('blocked: the template around the answer', () => {
@@ -36,11 +36,16 @@ describe('answerPrompt', () => {
 });
 
 describe('answerAttachmentPaths', () => {
-  it('time, index and a safe name under the answers folder', () => {
-    const at = new Date('2026-10-23T10:15:00Z');
+  it('time to the millisecond, index and a safe name under the answers folder', () => {
+    const at = new Date('2026-10-23T10:15:00.042Z');
     expect(answerAttachmentPaths(['Screen Shot 1.PNG', '../../etc/passwd'], at)).toEqual([
-      '.emberline/attachments/answers/20261023-101500-1-Screen-Shot-1.png',
-      '.emberline/attachments/answers/20261023-101500-2-passwd',
+      '.emberline/attachments/answers/20261023-101500042-1-Screen-Shot-1.png',
+      '.emberline/attachments/answers/20261023-101500042-2-passwd',
     ]);
+  });
+  it('a retry within the same second gets other paths', () => {
+    const first = answerAttachmentPaths(['shot.png'], new Date('2026-10-23T10:15:00.100Z'));
+    const retry = answerAttachmentPaths(['shot.png'], new Date('2026-10-23T10:15:00.900Z'));
+    expect(retry[0]).not.toBe(first[0]);
   });
 });

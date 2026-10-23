@@ -1,7 +1,7 @@
 import {
   type AgentPreviewResponse,
-  type AnswerResponse,
   AnswerRequest,
+  type AnswerResponse,
   DiffScope,
   GitCommitBody,
   type GitCommitResponse,
@@ -20,18 +20,18 @@ import {
   type RunDiffSummary,
   type RunFileDiff,
   type RunQuestion,
-  type SuggestAnswerResponse,
   type RunRecovery,
+  type SuggestAnswerResponse,
   type TicketCompleteBody,
   TicketPromptBody,
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { badRequest } from '../errors.js';
-import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
 import type { QuestionService } from '../runs/question-service.js';
 import type { RecoveryService } from '../runs/recovery-service.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
+import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
 
 /** Hook payloads can carry large tool inputs; core keeps only a summary. */
 const HOOK_BODY_LIMIT = 8 * 1024 * 1024;

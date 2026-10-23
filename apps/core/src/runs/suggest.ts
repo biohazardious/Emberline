@@ -3,6 +3,7 @@ import { resolveClaudeCliModelFlag } from '@emberline/adapter-claude';
 import type { AgentModelId, RunQuestion } from '@emberline/protocol';
 import { execCommand } from '../command-exec.js';
 import { HttpError } from '../errors.js';
+import { clipCodeUnits } from '../text/control-chars.js';
 
 export const SUGGEST_TIMEOUT_MS = 60_000;
 const CLIP = 8_000;
@@ -13,7 +14,7 @@ const SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-const clip = (s: string | null) => (s && s.length > CLIP ? `${s.slice(0, CLIP)}…` : (s ?? ''));
+const clip = (s: string | null) => (s && s.length > CLIP ? `${clipCodeUnits(s, CLIP)}…` : (s ?? ''));
 
 export function buildSuggestPrompt(input: {
   ticketTitle: string | null;
@@ -81,7 +82,7 @@ export async function runSuggestion(params: {
       ? envelope.result.trim()
       : ''
     : ((result.stderr || result.stdout).trim().split('\n').at(-1) ?? '');
-  const reason = said.length > 200 ? `${said.slice(0, 200)}…` : said;
+  const reason = said.length > 200 ? `${clipCodeUnits(said, 200)}…` : said;
   throw new HttpError(
     502,
     'suggest_failed',

@@ -13,15 +13,15 @@ import { and, desc, eq, gte } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runEvents, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
-import { writeNewWorkspaceFile } from '../factory/files.js';
+import { deleteWorkspaceFileEntry, writeNewWorkspaceFile } from '../factory/files.js';
 import { decodeMaterials } from '../factory/materials.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { answerAttachmentPaths, answerPrompt, type StoredAttachment } from './answer.js';
 import { assertSuccessorExtraFits } from './handoff.js';
 import { buildRunQuestion, openPicker } from './question.js';
-import { buildSuggestPrompt, runSuggestion } from './suggest.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { RunService } from './service.js';
+import { buildSuggestPrompt, runSuggestion } from './suggest.js';
 
 export interface QuestionServiceOptions {
   completionReminder: (run: Run) => string;
@@ -93,7 +93,7 @@ export class QuestionService {
       throw new HttpError(409, 'permission_prompt', 'Answer this permission prompt in the terminal.');
     const run = this.runs.getRun(runId);
     const decoded = decodeMaterials(body.attachments, ANSWER_LIMITS);
-    // Refused before any file is written: an answer that cannot be delivered leaves nothing behind.
+    // Refused before any file is written where it can be (a refusal after is undone below).
     if (question.kind === 'blocked' || question.kind === 'held') this.recovery.assertDeliverable(run);
     if (!run.worktreePath || !existsSync(run.worktreePath))
       throw new HttpError(
@@ -123,28 +123,36 @@ export class QuestionService {
       this.recovery.deliveryFor(run) === 'successor'
     )
       assertSuccessorExtraFits(text);
-    for (const [i, d] of decoded.entries()) {
-      try {
-        await writeNewWorkspaceFile(run.worktreePath, paths[i]!, d.bytes);
-      } catch {
-        throw new HttpError(
-          500,
-          'attachment_write_failed',
-          `Couldn't store ${d.name} in the run's worktree. Try again, or send the answer without it.`,
-        );
+    const written: string[] = [];
+    try {
+      for (const [i, d] of decoded.entries()) {
+        try {
+          await writeNewWorkspaceFile(run.worktreePath, paths[i]!, d.bytes);
+        } catch {
+          throw new HttpError(
+            500,
+            'attachment_write_failed',
+            `Couldn't store ${d.name} in the run's worktree. Try again, or send the answer without it.`,
+          );
+        }
+        written.push(paths[i]!);
       }
+      if (question.kind === 'blocked' || question.kind === 'held') {
+        const res = await this.recovery.recover(run.id, text);
+        return { delivery: res.delivery, attachments: paths };
+      }
+      // Free text over an open picker: Esc closes it, then the answer is typed as an ordinary prompt.
+      if (question.picker) {
+        await this.runs.sendKeys(run.id, ESC);
+        await new Promise((resolve) => setTimeout(resolve, this.opts.cancelWaitMs));
+      }
+      await this.runs.prompt(run.id, text);
+      return { delivery: 'session', attachments: paths };
+    } catch (error) {
+      // An answer that was not delivered leaves none of its files behind (a retry writes them anew).
+      for (const p of written) await deleteWorkspaceFileEntry(run.worktreePath, p).catch(() => undefined);
+      throw error;
     }
-    if (question.kind === 'blocked' || question.kind === 'held') {
-      const res = await this.recovery.recover(run.id, text);
-      return { delivery: res.delivery, attachments: paths };
-    }
-    // Free text over an open picker: Esc closes it, then the answer is typed as an ordinary prompt.
-    if (question.picker) {
-      await this.runs.sendKeys(run.id, ESC);
-      await new Promise((resolve) => setTimeout(resolve, this.opts.cancelWaitMs));
-    }
-    await this.runs.prompt(run.id, text);
-    return { delivery: 'session', attachments: paths };
   }
 
   /** Picks option `option` (0-based) of the open picker: its number plus Enter selects it. */

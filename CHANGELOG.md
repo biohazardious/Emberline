@@ -7,6 +7,11 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Fixed
 
 - With Claude's question picker open, the Inbox card said "Permission · Claude needs your permission". It now shows the run as a question with the picker's questions, as the Answer dialog does. A real permission prompt is still shown as a permission.
+- An answer that could not be delivered after its files were stored (the agent started working meanwhile, its session ended, or a later file failed) left the stored files in the run's worktree. They are now removed again. A working agent, or a successor whose agent can't start (no API key, out of quota), is refused before anything is stored.
+- Sending an answer with the same file again within the same second failed with "Couldn't store … in the run's worktree". Stored file names now carry the time to the millisecond.
+- For Claude's picker with several questions, the Answer dialog offered the first question's options as chips, so a chip answered without saying which question it was for. Such a picker now offers no chips: type your answer.
+- When a Claude session ended with its question picker still open, the Answer dialog still treated the picker as open, and an option chip restarted the session with a bare number as the prompt. The end of the session now closes the picker.
+- A long agent message cut short for the Inbox, the Answer dialog's options or a suggestion could end in a broken character when the cut fell inside an emoji. Cuts now keep whole characters.
 
 ## [0.6.0] - 2026-10-23
 

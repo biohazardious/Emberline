@@ -226,6 +226,16 @@ describe('computeAttention rules', () => {
     expect(got?.detail?.endsWith('…')).toBe(true);
   });
 
+  it('the cut never splits an emoji', () => {
+    const said = `${'x'.repeat(1998)}\u{1F600}${'y'.repeat(100)}`;
+    const got = computeAttention(
+      baseRun(),
+      facts({ enteredId: 6, waiting: [ev(6, 'Stop', { last_assistant_message: said })] }),
+      NOW,
+    );
+    expect(got?.detail).toBe(`${'x'.repeat(1998)}…`);
+  });
+
   it('a Stop does not change a permission or a stall, and a blank one falls back to the Notification text', () => {
     const stop = (id: number) => ev(id, 'Stop', { last_assistant_message: 'Which colour?' });
     const perm = ev(6, 'Notification', { notification_type: 'permission_prompt', message: 'Allow Bash?' });

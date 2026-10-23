@@ -18,6 +18,9 @@ export const CONTINUED_AFTER_HOLD = 'continued after a hold';
 /** States in which an agent is about to work or working: a prompt now would land mid-start or mid-turn. */
 const BUSY_STATES: ReadonlySet<string> = new Set(['queued', 'starting', 'working']);
 
+const busy = (run: Run) =>
+  new HttpError(409, 'run_busy', `the agent is ${run.state}; send your prompt once it is waiting`);
+
 export interface RecoveryServiceOptions {
   /** What ends a prompt asking the run for more work (TicketService.completionReminder; injected to avoid a cycle). */
   completionReminder: (run: Run) => string;
@@ -112,12 +115,15 @@ export class RecoveryService {
   }
 
   /**
-   * Throws recover()'s refusal when a prompt could not reach the held run at all, so a caller can
+   * Throws recover()'s refusal when a prompt could not reach the held run now, so a caller can
    * refuse before doing anything else (the Answer dialog writes attachments first).
    */
   assertDeliverable(run: Run): void {
+    if (BUSY_STATES.has(run.state)) throw busy(run);
     if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
-    if (this.deliveryFor(run) === 'none') throw this.refusal(run);
+    const delivery = this.deliveryFor(run);
+    if (delivery === 'none') throw this.refusal(run);
+    if (delivery === 'successor') this.scheduler.assertRouteOpen(this.runs.currentRoute(run.id));
   }
 
   /**
@@ -127,13 +133,7 @@ export class RecoveryService {
   async recover(runId: string, text: string): Promise<RecoverResponse> {
     return this.delivering.run(runId, async () => {
       const run = this.runs.getRun(runId);
-      if (BUSY_STATES.has(run.state)) {
-        throw new HttpError(
-          409,
-          'run_busy',
-          `the agent is ${run.state}; send your prompt once it is waiting`,
-        );
-      }
+      if (BUSY_STATES.has(run.state)) throw busy(run);
       if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
       const delivery = this.deliveryFor(run);
       if (delivery === 'session')
