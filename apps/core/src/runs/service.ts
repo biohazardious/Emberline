@@ -232,8 +232,13 @@ export const DOCKER_GC_MAX_DOWNS = 10;
 const DOCKER_IMAGE_PRUNE_INTERVAL_MS = 24 * 3_600_000;
 /** A cleanup runs this many `compose down` at a time (each is capped at 2 min). */
 const COMPOSE_DOWN_CONCURRENCY = 4;
+/**
+ * The `preview_failed` error of a compose preview whose `down` failed (a person's Stop or a
+ * clean-up): its containers may still run, so its port stays taken while its worktree exists
+ * (activeComposePreviewPorts) and its status offers Stop again (`downFailed`) until a `down` works.
+ */
 const PREVIEW_DOWN_FAILED =
-  'the preview could not be taken down: its containers may still be running; try again';
+  'the preview could not be taken down: its containers may still be running; stop it again';
 interface RemoveRunOptions {
   /** The caller took the run's compose projects down already. */
   composeDone?: boolean;
@@ -245,6 +250,8 @@ interface StopPreviewOptions {
   volumes?: boolean;
   /** Told about the preview project's `down` when the stop ran one. */
   onDown?: (project: string, down: Awaited<ReturnType<typeof composeDown>>) => void;
+  /** The caller takes the preview project down itself (a project delete's teardown): no `down` here. */
+  skipDown?: boolean;
 }
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
 const setupExecId = (runId: string) => `setup-${runId}`;
@@ -3507,8 +3514,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .slice(0, lastIndex)
         .find((e) => e.type === 'preview_ready' || e.type === 'preview_failed');
       if (outcome?.type === 'preview_failed') {
-        const f = (outcome.payload ?? {}) as { error?: string; logs?: string | null };
-        return { ...base, status: 'failed', error: f.error ?? 'the preview failed', logs: f.logs ?? null };
+        const f = (outcome.payload ?? {}) as { error?: string; logs?: string | null; downOk?: boolean };
+        return {
+          ...base,
+          status: 'failed',
+          error: f.error ?? 'the preview failed',
+          logs: f.logs ?? null,
+          ...(f.downOk === false ? { downFailed: true } : {}),
+        };
       }
       if (!outcome) {
         if (this.composeJobs.has(id)) return { ...base, status: 'starting' };
@@ -3821,7 +3834,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   private async stopRunningPreview(
     row: RunRow,
-    { volumes = false, onDown }: StopPreviewOptions = {},
+    { volumes = false, onDown, skipDown = false }: StopPreviewOptions = {},
   ): Promise<RunPreviewStatus> {
     const current = await this.previewStatus(row.id);
     if (current.terminalId) {
@@ -3843,7 +3856,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
       if (!settled) job.abandoned = true;
     }
-    if (composeRunning || volumes) {
+    if ((composeRunning || volumes) && !skipDown) {
       const env = await this.dockerEnvFor(row);
       if (env.DOCKER_HOST) {
         const project = this.previewProjectOf(row.id);
@@ -3908,8 +3921,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   /**
    * Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose.
-   * `composeDone`: the caller took the run's compose projects down already (teardownProjectWorktrees),
-   * so only the names in `failedDowns` are tried again.
+   * `composeDone`: the caller took the run's compose projects down already, or its teardown still
+   * running does (teardownProjectWorktrees), so only the names in `failedDowns` are tried again.
    */
   async remove(
     id: string,
@@ -3943,11 +3956,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const hadComposePreview = this.previewEvents(id).some(
       (e) => e.type === 'preview_started' && (e.payload as PreviewPayload | null)?.kind === 'compose',
     );
+    const previewDown = !composeDone || failedDowns.has(this.previewProjectOf(id));
     await this.previewRunLock
       .run(id, () =>
-        this.stopRunningPreview(row, {
-          volumes: hadComposePreview && (!composeDone || failedDowns.has(this.previewProjectOf(id))),
-        }),
+        this.stopRunningPreview(row, { volumes: hadComposePreview && previewDown, skipDown: !previewDown }),
       )
       .catch(() => undefined);
     this.previewGenerations.delete(id);

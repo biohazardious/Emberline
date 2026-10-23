@@ -55,6 +55,8 @@ class FakeEngine {
   reclaims: ExecRequest[] = [];
   /** While set, `compose ls` waits for it. */
   lsGate: Promise<void> | null = null;
+  /** While set, the next `down` waits for it (once). */
+  downGate: Promise<void> | null = null;
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
     if (request.file !== 'docker') return localCommandExecutor(request);
@@ -72,6 +74,9 @@ class FakeEngine {
     }
     if (args[0] === 'compose' && args.includes('down')) {
       const project = args[2]!;
+      const gate = this.downGate;
+      this.downGate = null;
+      if (gate) await gate;
       if (this.watchWorktree) this.worktreeAtDown.set(project, existsSync(this.watchWorktree));
       if (this.failDown.has(project)) return failed(`Error response from daemon: ${project} is stuck`);
       this.projects.delete(project);
@@ -265,6 +270,28 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     expect(new Set(downs).size).toBe(downs.length);
   });
 
+  it('a project delete whose teardown outlasts the request leaves the downs to that teardown', async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    let release!: () => void;
+    engine.downGate = new Promise<void>((resolve) => (release = resolve));
+    (t.runs as unknown as { teardownBudgets: { projectDelete: number } }).teardownBudgets.projectDelete = 100;
+    expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+    release();
+    const all = [
+      composeProjectName(run.id, run.worktreePath),
+      previewComposeProjectName(run.id),
+      mainComposeProjectName(p.id),
+    ];
+    await expect
+      .poll(() => all.every((name) => engine.downs().includes(name)), { timeout: 8_000 })
+      .toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const downs = engine.downs();
+    expect(new Set(downs).size).toBe(downs.length);
+  });
+
   it('a project delete tries a compose project whose teardown down failed again', async () => {
     await start();
     const p = await createProject();
@@ -331,11 +358,18 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     expect(ports()).toContain(4301);
     expect(typesOf(run.id)).toContain('preview_failed');
     expect(typesOf(run.id)).not.toContain('preview_stopped');
+    // Its status says so, and that Stop is worth trying again.
+    expect((await api('GET', `/api/runs/${run.id}/preview`)).json()).toMatchObject({
+      status: 'failed',
+      downFailed: true,
+      error: 'the preview could not be taken down: its containers may still be running; stop it again',
+    });
     // The retry takes it down once the engine works again.
     engine.failDown.clear();
     expect((await api('POST', `/api/runs/${run.id}/preview/stop`)).statusCode).toBe(200);
     expect(typesOf(run.id)).toContain('preview_stopped');
     expect(ports()).not.toContain(4301);
+    expect((await api('GET', `/api/runs/${run.id}/preview`)).json().downFailed).toBeUndefined();
   });
 
   it('a failed down is a worktree_teardown_failed note; the prune goes ahead', async () => {

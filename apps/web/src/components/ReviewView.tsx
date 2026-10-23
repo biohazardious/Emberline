@@ -769,7 +769,10 @@ export function ReviewView({ run, onRunUpdated }: Props) {
                 : 'Cross-Provider Critic'}
           </button>
 
-          {previewStatus?.status === 'running' || previewStatus?.status === 'starting' ? (
+          {previewStatus?.status === 'running' ||
+          previewStatus?.status === 'starting' ||
+          // Containers that could not be taken down may still run: Stop again, not a new preview.
+          (previewStatus?.status === 'failed' && previewStatus.downFailed) ? (
             <>
               {previewStatus.status === 'starting' && (
                 <span className="badge badge-soft mono" title={previewStatus.command ?? undefined}>

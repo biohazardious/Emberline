@@ -1470,12 +1470,13 @@ export function registerProjectRoutes(
         };
       });
       try {
+        // A teardown that finished took the compose projects down already, and one still running
+        // takes them all down itself: not a second time beside it. Only a finished one's failed downs are retried.
+        const composeDone = teardown.composeDownDone || !teardown.finished;
+        const failedDowns = teardown.finished ? teardown.failedDowns : new Set<string>();
         for (const run of runs.list()) {
           if (run.projectId === projectId) {
-            // Done teardown already took the compose projects down: not a second time.
-            await runs
-              .remove(run.id, { composeDone: teardown.composeDownDone, failedDowns: teardown.failedDowns })
-              .catch(() => {});
+            await runs.remove(run.id, { composeDone, failedDowns }).catch(() => {});
           }
         }
 

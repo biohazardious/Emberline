@@ -30,6 +30,11 @@ export const RunPreviewStatus = z.object({
   note: z.string().optional(),
   /** Whether the app allows framing; present only while `status` is 'running'. */
   framing: PreviewFraming.optional(),
+  /**
+   * True on a `failed` compose preview whose containers could not be taken down: they may still
+   * run and its port stays taken, so Stop is offered again.
+   */
+  downFailed: z.boolean().optional(),
 });
 export type RunPreviewStatus = z.infer<typeof RunPreviewStatus>;
 
