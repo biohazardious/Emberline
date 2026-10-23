@@ -53,7 +53,7 @@ Building from source additionally needs `make` and `git`; nothing else is instal
 
 ```bash
 git clone https://github.com/biohazardious/Emberline.git
-cd emberline
+cd Emberline
 cp .env.example .env     # optional: bind address, port, time zone
 make up                  # build and start core, runner and the Docker engine -> http://127.0.0.1:7420
 make logs                # the first start prints a one-time setup token

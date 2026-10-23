@@ -239,6 +239,8 @@ interface StopPreviewOptions {
   onDown?: (project: string, down: Awaited<ReturnType<typeof composeDown>>) => void;
 }
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
+const PREVIEW_DOWN_FAILED =
+  'the preview could not be taken down: its containers may still be running; try again';
 const setupExecId = (runId: string) => `setup-${runId}`;
 /** A copy entry left out whole because it is over the copy caps. */
 const overCopyCap = (entry: CopyOutcome) =>
@@ -2844,15 +2846,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /**
    * `down -v --rmi local --remove-orphans` for each compose project in `names`, a few at a time, each
    * capped at 2 min. Best effort: a failure is logged, and a `worktree_teardown_failed` note on `noteRunId`.
+   * Returns the names whose `down` failed.
    */
-  private async downComposeProjects(names: Iterable<string>, noteRunId: string | null): Promise<void> {
+  private async downComposeProjects(names: Iterable<string>, noteRunId: string | null): Promise<Set<string>> {
+    const failed = new Set<string>();
     const env = this.docker.cliEnv();
-    if (!env.DOCKER_HOST) return;
+    if (!env.DOCKER_HOST) return failed;
     const queue = [...new Set(names)];
     const worker = async () => {
       for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
         const down = await composeDown(name, env, CLEANUP_DOWN);
         if (down.ok) continue;
+        failed.add(name);
         const command = `docker ${composeDownArgs(name, CLEANUP_DOWN).join(' ')}`;
         if (noteRunId)
           this.note(noteRunId, 'worktree_teardown_failed', {
@@ -2867,6 +2872,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
     };
     await Promise.all(Array.from({ length: Math.min(COMPOSE_DOWN_CONCURRENCY, queue.length) }, worker));
+    return failed;
   }
 
   /**
@@ -2884,18 +2890,23 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (this.composeJobs.has(r.id))
         await this.previewRunLock.run(r.id, () => this.stopRunningPreview(r)).catch(() => undefined);
     }
-    await this.downComposeProjects(
+    const failed = await this.downComposeProjects(
       [composeProjectName(row.id, row.worktreePath), ...sharing.map((r) => this.previewProjectOf(r.id))],
       row.id,
     );
-    this.recordPreviewsTakenDown(sharing.map((r) => r.id));
+    this.recordPreviewsTakenDown(
+      sharing.map((r) => r.id),
+      failed,
+    );
   }
 
   /**
    * After a cleanup took runs' preview projects down: a `preview_stopped` for each run whose last
-   * compose preview was still started, so its status says stopped and its port is free again.
+   * compose preview was still started, so its status says stopped and its port is free again. A
+   * preview whose project is in `failed` (its `down` failed) gets a `preview_failed` instead: it may
+   * still be running.
    */
-  private recordPreviewsTakenDown(runIds: readonly string[]): void {
+  private recordPreviewsTakenDown(runIds: readonly string[], failed: ReadonlySet<string>): void {
     for (const id of new Set(runIds)) {
       const last = this.previewEvents(id).find(
         (e) => e.type === 'preview_started' || e.type === 'preview_stopped',
@@ -2903,6 +2914,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (last?.type !== 'preview_started' || (last.payload as PreviewPayload | null)?.kind !== 'compose')
         continue;
       try {
+        if (failed.has(this.previewProjectOf(id))) {
+          this.record(id, {
+            source: 'system',
+            type: 'preview_failed',
+            payload: { error: PREVIEW_DOWN_FAILED, logs: null, downOk: false },
+          });
+          continue;
+        }
         this.record(id, {
           source: 'system',
           type: 'preview_stopped',
@@ -3290,7 +3309,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
       // Main's container preview: a start still going is cancelled, then it goes with its volumes (CLEANUP_DOWN).
       await this.mainPreviews.removeForProject(projectId).catch(() => undefined);
-      await this.downComposeProjects(
+      const failed = await this.downComposeProjects(
         [
           ...rows.flatMap((row) => [
             composeProjectName(row.id, row.worktreePath),
@@ -3300,7 +3319,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         ],
         null,
       );
-      this.recordPreviewsTakenDown(rows.map((row) => row.id));
+      this.recordPreviewsTakenDown(
+        rows.map((row) => row.id),
+        failed,
+      );
     })().catch(() => undefined);
     const settled = Promise.allSettled([own, ...inFlight]).then(() => undefined);
     return { finished: await settlesWithin(settled, budgetMs), settled };
@@ -3822,7 +3844,25 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     requestHost?: string,
     opts: StopPreviewOptions = {},
   ): Promise<RunPreviewStatus> {
-    const current = await this.stopRunningPreview(row, opts);
+    let downFailed: Awaited<ReturnType<typeof composeDown>> | undefined;
+    const current = await this.stopRunningPreview(row, {
+      ...opts,
+      onDown: (project, down) => {
+        if (!down.ok) downFailed = down;
+        opts.onDown?.(project, down);
+      },
+    });
+    if (downFailed) {
+      // The containers may still run: the preview is not stopped, and the port stays theirs.
+      this.record(row.id, {
+        source: 'system',
+        type: 'preview_failed',
+        payload: { error: PREVIEW_DOWN_FAILED, logs: null, downOk: false },
+      });
+      throw new HttpError(502, 'docker_failed', `docker compose down failed for the preview of ${row.id}`, {
+        output: downFailed.output,
+      });
+    }
     this.record(row.id, {
       source: 'user',
       type: 'preview_stopped',
@@ -3831,8 +3871,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { ...(await this.previewStatus(row.id, requestHost)), detectedCommand: current.detectedCommand };
   }
 
-  /** Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose. */
-  async remove(id: string): Promise<void> {
+  /**
+   * Forgets the run, its terminal and its preview server. The worktree and branch are kept on purpose.
+   * `composeDone`: the caller took the run's compose projects down already (teardownProjectWorktrees),
+   * so they are not taken down a second time.
+   */
+  async remove(id: string, { composeDone = false }: { composeDone?: boolean } = {}): Promise<void> {
     const row = this.row(id);
     this.agentPreviewStarts.delete(id);
     this.framing.forget(`run:${id}`);
@@ -3862,13 +3906,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       (e) => e.type === 'preview_started' && (e.payload as PreviewPayload | null)?.kind === 'compose',
     );
     await this.previewRunLock
-      .run(id, () => this.stopRunningPreview(row, { volumes: hadComposePreview }))
+      .run(id, () => this.stopRunningPreview(row, { volumes: hadComposePreview && !composeDone }))
       .catch(() => undefined);
     this.previewGenerations.delete(id);
     // The run's own containers too, when no other run works in that compose project (a kept
     // worktree is not a reason to keep them; a handoff successor in the same worktree is).
-    if (this.docker.host && existsSync(row.worktreePath)) await this.docker.ready();
-    if (this.docker.host && existsSync(row.worktreePath) && this.docker.status.available) {
+    const downAgent = !composeDone && this.docker.host && existsSync(row.worktreePath);
+    if (downAgent) await this.docker.ready();
+    if (downAgent && this.docker.status.available) {
       const agentProject = composeProjectName(row.id, row.worktreePath);
       const shared = this.db
         .select({ id: runs.id, worktreePath: runs.worktreePath })

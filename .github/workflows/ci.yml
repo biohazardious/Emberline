@@ -85,6 +85,13 @@ jobs:
           tags: emberline/runner:e2e
           cache-from: type=gha,scope=runner
           cache-to: type=gha,scope=runner,mode=max
+      - name: Show the runner's Chromium source
+        run: |
+          source=$(docker run --rm emberline/runner:e2e cat /opt/emberline/chromium-source)
+          echo "runner Chromium source: $source"
+          if [ "$source" != "ppa" ]; then
+            echo "::warning::The runner image's Chromium came from '$source', not the PPA (a cached fallback build?)"
+          fi
       - name: End-to-end smoke test
         run: make e2e E2E_PREBUILT=1
 

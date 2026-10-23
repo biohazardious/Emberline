@@ -253,6 +253,64 @@ describe('compose cleanup on every prune path (Review Focus 3)', () => {
     expect(existsSync(a.worktreePath)).toBe(false);
   });
 
+  it('a project delete takes each compose project down once', async () => {
+    await start();
+    const p = await createProject();
+    await endedRun(p.id);
+    await t.runs.enqueue({ projectId: p.id, prompt: 'live' });
+    expect((await api('DELETE', `/api/projects/${p.id}?deleteFiles=0`)).statusCode).toBeLessThan(300);
+    const downs = engine.downs();
+    expect(downs).toHaveLength(6); // 2 runs x (agent, preview) + main and its preview
+    expect(new Set(downs).size).toBe(downs.length);
+  });
+
+  /** A compose preview the run started, as the record says. */
+  function startedPreview(run: Run): string {
+    const project = previewComposeProjectName(run.id);
+    (t.runs as unknown as { record: (id: string, e: object) => unknown }).record(run.id, {
+      source: 'system',
+      type: 'preview_started',
+      payload: { kind: 'compose', command: 'compose web', port: 4301, project, service: 'web' },
+    });
+    return project;
+  }
+
+  it('a prune whose preview down failed records preview_failed, not preview_stopped', async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    engine.failDown.add(startedPreview(run));
+    const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(res.json()).toMatchObject({ removed: true });
+    expect(typesOf(run.id)).toContain('preview_failed');
+    expect(typesOf(run.id)).not.toContain('preview_stopped');
+  });
+
+  it('a prune whose preview down worked still records preview_stopped', async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    startedPreview(run);
+    await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
+    expect(typesOf(run.id)).toContain('preview_stopped');
+    expect(typesOf(run.id)).not.toContain('preview_failed');
+  });
+
+  it("a person's preview Stop whose down failed answers with the error and does not record preview_stopped", async () => {
+    await start();
+    const p = await createProject();
+    const run = await endedRun(p.id);
+    engine.failDown.add(startedPreview(run));
+    const res = await api('POST', `/api/runs/${run.id}/preview/stop`);
+    expect(res.statusCode).toBe(502);
+    expect(typesOf(run.id)).toContain('preview_failed');
+    expect(typesOf(run.id)).not.toContain('preview_stopped');
+    // The retry takes it down once the engine works again.
+    engine.failDown.clear();
+    expect((await api('POST', `/api/runs/${run.id}/preview/stop`)).statusCode).toBe(200);
+    expect(typesOf(run.id)).toContain('preview_stopped');
+  });
+
   it('a failed down is a worktree_teardown_failed note; the prune goes ahead', async () => {
     await start();
     const p = await createProject();

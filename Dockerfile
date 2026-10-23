@@ -205,7 +205,7 @@ RUN set -eu; \
     && apt-get install -y --no-install-recommends chromium \
     && real_chromium; }; \
   playwright_install() { \
-    rm -f /etc/apt/sources.list.d/xtradeb-apps.sources /etc/apt/preferences.d/xtradeb-chromium; drop_chromium; \
+    rm -f /etc/apt/sources.list.d/xtradeb-apps.sources /etc/apt/preferences.d/xtradeb-chromium /usr/share/keyrings/xtradeb-apps.asc; drop_chromium; \
     case "$(dpkg --print-architecture)" in \
       amd64) plat=linux64; sha="$PLAYWRIGHT_CHROMIUM_SHA256_AMD64" ;; \
       arm64) plat=linux-arm64; sha="$PLAYWRIGHT_CHROMIUM_SHA256_ARM64" ;; \

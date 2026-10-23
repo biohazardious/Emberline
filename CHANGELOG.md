@@ -6,6 +6,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
+- **Stop** on a Docker preview whose containers could not be taken down said it was stopped and freed its port while they kept running. It now reports the error and shows the preview as failed, so you can stop it again. A clean-up that could not take a preview down does the same.
+- Deleting a project with its files could remove the project folder, and the `.git` inside it, while a slow `worktree.yml` teardown was still running, so teardown commands that use git failed. The folder now goes once the teardown ended.
+- Deleting a project took each run's Docker containers down twice. It now does it once, which makes the delete faster.
+- The README's from-source steps said `cd emberline`, which fails on case-sensitive file systems. They now say `cd Emberline`.
 - With Claude's question picker open, the Inbox card said "Permission · Claude needs your permission". It now shows the run as a question with the picker's questions, as the Answer dialog does. A real permission prompt is still shown as a permission.
 - An answer that could not be delivered after its files were stored (the agent started working meanwhile, its session ended, or a later file failed) left the stored files in the run's worktree. They are now removed again. A working agent, or a successor whose agent can't start (no API key, out of quota), is refused before anything is stored.
 - Sending an answer with the same file again within the same second failed with "Couldn't store … in the run's worktree". Stored file names now carry the time to the millisecond.

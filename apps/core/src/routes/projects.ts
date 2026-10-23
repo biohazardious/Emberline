@@ -1461,7 +1461,8 @@ export function registerProjectRoutes(
       try {
         for (const run of runs.list()) {
           if (run.projectId === projectId) {
-            await runs.remove(run.id).catch(() => {});
+            // Done teardown already took the compose projects down: not a second time.
+            await runs.remove(run.id, { composeDone: teardown.finished }).catch(() => {});
           }
         }
 
@@ -1485,7 +1486,9 @@ export function registerProjectRoutes(
           resolvedWorkspace.startsWith(resolvedRoot + path.sep) &&
           resolvedWorkspace !== resolvedRoot
         ) {
-          await runs.removeTree(resolvedWorkspace);
+          // The worktrees point into this `.git`: a teardown still running may need it.
+          if (teardown.finished) await runs.removeTree(resolvedWorkspace);
+          else void teardown.settled.then(() => runs.removeTree(resolvedWorkspace));
         }
 
         // Archived build outputs go with the project (rows and files).

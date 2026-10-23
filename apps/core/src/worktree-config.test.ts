@@ -1175,6 +1175,20 @@ describe('teardown before prune', () => {
     await expect.poll(() => existsSync(slugDir), { timeout: 8_000 }).toBe(false);
   });
 
+  it("a project delete with the files waits for a slow teardown before removing the main workspace's .git", async () => {
+    const { release } = holdTeardowns();
+    budgets().projectDelete = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    await startRun(project.id);
+    const res = await api('DELETE', `/api/projects/${project.id}?deleteFiles=1`);
+    expect(res.statusCode).toBe(200);
+    // The worktrees point into this .git, and the teardown still runs.
+    expect(existsSync(path.join(project.path, '.git'))).toBe(true);
+    release();
+    await expect.poll(() => existsSync(project.path), { timeout: 8_000 }).toBe(false);
+  });
+
   it('logs a failed teardown too', async () => {
     const warn = vi.fn();
     t.runs.setLogger({ warn });
