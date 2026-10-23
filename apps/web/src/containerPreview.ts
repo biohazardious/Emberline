@@ -276,6 +276,8 @@ export const PLAYTEST_SHARED_ONLY_TEXT =
   "Auto-Interact runs only in the shared browser, not in an agent's own browser. Show this project's tab, then start it again.";
 export const PLAYTEST_NO_TAB_TEXT =
   "Auto-Interact did not start: this project's browser tab was not open yet. Start it again once the tab shows.";
+export const PLAYTEST_TAB_NOT_SHOWN_TEXT =
+  "Auto-Interact did not start: the view was not on this project's tab. It is now, so start it again.";
 /** A daemon older than `playtestNotStarted` does not say why. */
 export const PLAYTEST_NOT_STARTED_TEXT =
   "Auto-Interact did not start. Show this project's tab in the shared browser, then start it again.";
@@ -283,6 +285,7 @@ export const PLAYTEST_NOT_STARTED_TEXT =
 const PLAYTEST_NOT_STARTED: Record<NonNullable<BrowserViewportSnapshot['playtestNotStarted']>, string> = {
   agent_browser: PLAYTEST_SHARED_ONLY_TEXT,
   no_tab: PLAYTEST_NO_TAB_TEXT,
+  tab_not_shown: PLAYTEST_TAB_NOT_SHOWN_TEXT,
 };
 
 /** `playtestRefusal`: the banner says another project runs Auto-Interact; it goes once that one stops. */

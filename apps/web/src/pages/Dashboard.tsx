@@ -15,7 +15,7 @@ import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } f
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
-import { keptWorktreesSummary, pruneSummary } from '../gcSummary';
+import { keptWorktreesSummary, prunePendingNote } from '../gcSummary';
 import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
@@ -72,6 +72,8 @@ export function Dashboard({
   const [actionError, setActionError] = useState<string>();
   const [cleanupNotice, setCleanupNotice] = useState<string>();
   const [pruneBlocked, setPruneBlocked] = useState<{ id: string; message: string }>();
+  // The run whose Prune goes on in the background (its teardown outlasted the request).
+  const [prunePendingRun, setPrunePendingRun] = useState<string>();
   const [runFormFor, setRunFormFor] = useState<string>();
   const [deleteConfirmFor, setDeleteConfirmFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
@@ -154,7 +156,7 @@ export function Dashboard({
           force ? { force: true } : {},
         );
         // A teardown that outlasts the request finishes in the background: say so, or it looks like nothing happened.
-        setCleanupNotice(pruneSummary(res) ?? undefined);
+        setPrunePendingRun(res.pending ? id : undefined);
       } else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
       if (action === 'prune' && e instanceof ApiRequestError && e.code === 'worktree_has_work') {
@@ -165,6 +167,7 @@ export function Dashboard({
     }
   };
 
+  const pruneNote = prunePendingNote(prunePendingRun, runs);
   const dockerLine = dockerEngineLine(system?.docker);
   const projectName = (id: string | null) => projects.data?.find((p) => p.id === id)?.name;
 
@@ -201,6 +204,11 @@ export function Dashboard({
       {cleanupNotice && (
         <div className="banner banner-warn" role="status">
           {cleanupNotice}
+        </div>
+      )}
+      {pruneNote && (
+        <div className="banner banner-info" role="status">
+          {pruneNote}
         </div>
       )}
       {pruneBlocked && (
@@ -485,6 +493,7 @@ export function Dashboard({
                               'POST',
                             );
                             setCleanupNotice(keptWorktreesSummary(res) ?? undefined);
+                            setPrunePendingRun(undefined); // the clean-up's own result says what it left
                           } catch (e) {
                             setActionError(errorMessage(e));
                           }

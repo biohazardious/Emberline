@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import {
   authGateState,
+  changingKey,
   clearSessionKey,
   currentAuthState,
   getSessionKey,
@@ -236,6 +237,37 @@ describe('currentAuthState', () => {
     });
     await currentAuthState(signedIn);
     expect(signedIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a signed-out answer that comes before the password change stored its key waits for it', async () => {
+    setSessionKey('old');
+    let issue!: (key: string) => void;
+    const change = changingKey(async () => {
+      setSessionKey(await new Promise<string>((resolve) => (issue = resolve)));
+    });
+    const ask = vi.fn().mockResolvedValueOnce(signedOut).mockResolvedValueOnce({ authenticated: true });
+    const settled = vi.fn();
+    const answer = currentAuthState(ask).then((s) => {
+      settled(s);
+      return s;
+    });
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled(); // no sign-in form while the change is on its way
+    issue('new');
+    await change;
+    await expect(answer).resolves.toEqual({ authenticated: true });
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  it('a password change that failed leaves the signed-out answer as it was', async () => {
+    setSessionKey('k');
+    const change = changingKey(() => Promise.reject(new Error('wrong password')));
+    const ask = vi.fn().mockResolvedValue(signedOut);
+    const answer = currentAuthState(ask);
+    await expect(change).rejects.toThrow('wrong password');
+    await expect(answer).resolves.toEqual(signedOut);
+    expect(ask).toHaveBeenCalledTimes(1);
   });
 
   it('asks no more than twice', async () => {

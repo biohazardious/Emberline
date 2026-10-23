@@ -1,4 +1,4 @@
-import type { GarbageCollectRunsResponse, PruneWorktreeResponse } from '@emberline/protocol';
+import type { GarbageCollectRunsResponse, Run } from '@emberline/protocol';
 
 /**
  * What garbage collection left behind, in sentences: worktrees it kept so no work is lost, and runs
@@ -35,7 +35,16 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
 
 export const PRUNE_PENDING_TEXT = 'Teardown is running; the worktree is removed when it ends.';
 
-/** What a run's Prune left to the background: its worktree.yml teardown outlasted the request. Null otherwise. */
-export function pruneSummary(res: Pick<PruneWorktreeResponse, 'pending'>): string | null {
-  return res.pending ? PRUNE_PENDING_TEXT : null;
+/**
+ * The note after a run's Prune whose worktree.yml teardown outlasted the request (`pendingRunId`):
+ * shown until that run's worktree is pruned or the run is gone, and while the runs are not known yet.
+ */
+export function prunePendingNote(
+  pendingRunId: string | undefined,
+  runs: readonly Pick<Run, 'id' | 'lastEvent'>[] | undefined,
+): string | null {
+  if (!pendingRunId) return null;
+  const run = runs?.find((r) => r.id === pendingRunId);
+  if (runs && (!run || run.lastEvent === 'worktree_pruned')) return null;
+  return PRUNE_PENDING_TEXT;
 }

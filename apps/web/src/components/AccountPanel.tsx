@@ -3,7 +3,7 @@ import { KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../api';
 import { PasswordField, StrengthMeter } from '../auth';
-import { setSessionKey } from '../sessionKey';
+import { changingKey, setSessionKey } from '../sessionKey';
 
 /** Change the admin password; every other session (browser, device) is signed out. */
 export function AccountPanel() {
@@ -22,11 +22,14 @@ export function AccountPanel() {
     setError(undefined);
     setDone(false);
     try {
-      const issued = await api<SessionIssued>('/api/auth/password', 'POST', {
-        currentPassword: current,
-        newPassword: next,
+      // Auth checks that come back signed out meanwhile wait for the new key.
+      await changingKey(async () => {
+        const issued = await api<SessionIssued>('/api/auth/password', 'POST', {
+          currentPassword: current,
+          newPassword: next,
+        });
+        setSessionKey(issued.sessionKey);
       });
-      setSessionKey(issued.sessionKey);
       setCurrent('');
       setNext('');
       setConfirm('');

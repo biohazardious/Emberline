@@ -21,6 +21,7 @@ import {
   PLAYTEST_NOT_STARTED_TEXT,
   PLAYTEST_SHARED_ONLY_TEXT,
   PLAYTEST_STARTED_TEXT,
+  PLAYTEST_TAB_NOT_SHOWN_TEXT,
   playtestRefusalBanner,
   playtestStartBanner,
   previewBadge,
@@ -475,6 +476,14 @@ describe('Auto-Interact start banner (B-12)', () => {
     expect(PLAYTEST_NO_TAB_TEXT).toBe(
       "Auto-Interact did not start: this project's browser tab was not open yet. Start it again once the tab shows.",
     );
+  });
+
+  it("says when the project's tab was open but not shown (L-18)", () => {
+    expect(playtestStartBanner({ playtestActive: false, playtestNotStarted: 'tab_not_shown' })).toEqual({
+      kind: 'info',
+      text: PLAYTEST_TAB_NOT_SHOWN_TEXT,
+    });
+    expect(PLAYTEST_TAB_NOT_SHOWN_TEXT).not.toMatch(/not open/);
   });
 
   it('an older daemon that gives no reason gets a text that fits either case (L-18)', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keptWorktreesSummary, PRUNE_PENDING_TEXT, pruneSummary } from './gcSummary';
+import { keptWorktreesSummary, PRUNE_PENDING_TEXT, prunePendingNote } from './gcSummary';
 
 describe('keptWorktreesSummary', () => {
   it('says nothing when nothing was left behind', () => {
@@ -28,14 +28,24 @@ describe('keptWorktreesSummary', () => {
   });
 });
 
-describe('pruneSummary (W-4)', () => {
-  it('says the teardown is still running when the prune finishes in the background', () => {
-    expect(pruneSummary({ pending: true })).toBe(PRUNE_PENDING_TEXT);
+describe('prunePendingNote (W-4)', () => {
+  const runs = [
+    { id: 'r1', lastEvent: 'Stop' },
+    { id: 'r2', lastEvent: 'worktree_pruned' },
+  ];
+
+  it('says the teardown is still running while the pruned run keeps its worktree', () => {
+    expect(prunePendingNote('r1', runs)).toBe(PRUNE_PENDING_TEXT);
+    expect(prunePendingNote('r1', undefined)).toBe(PRUNE_PENDING_TEXT);
     expect(PRUNE_PENDING_TEXT).toBe('Teardown is running; the worktree is removed when it ends.');
   });
 
-  it('says nothing for a prune that finished', () => {
-    expect(pruneSummary({})).toBeNull();
-    expect(pruneSummary({ pending: false })).toBeNull();
+  it('goes once the teardown ended: the worktree was pruned, or the run is gone', () => {
+    expect(prunePendingNote('r2', runs)).toBeNull();
+    expect(prunePendingNote('r3', runs)).toBeNull();
+  });
+
+  it('says nothing without a pending prune', () => {
+    expect(prunePendingNote(undefined, runs)).toBeNull();
   });
 });

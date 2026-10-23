@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ScopedPage } from './components/ScopedPage';
-import { pageScope } from './projectPaths';
+import { pageScope, resolveActiveProject, SERVER_CHOICE_WAIT_MS } from './projectPaths';
 import { renderStatic } from './staticRender';
 
 describe('pageScope (E-T12-1)', () => {
@@ -9,6 +9,16 @@ describe('pageScope (E-T12-1)', () => {
     expect(pageScope(undefined, false)).toBeUndefined();
     expect(pageScope('p1', false)).toBe('p1');
     expect(pageScope(null, false)).toBeNull();
+  });
+
+  it('a server choice that did not come in time resolves like a failed one, so the pages mount', () => {
+    const c = { fromUrl: null, stored: null, server: undefined };
+    expect(
+      pageScope(resolveActiveProject(['a', 'b'], { ...c, serverFailed: false }).id, false),
+    ).toBeUndefined();
+    // App marks the read failed after SERVER_CHOICE_WAIT_MS without an answer (withTimeout).
+    expect(pageScope(resolveActiveProject(['a', 'b'], { ...c, serverFailed: true }).id, false)).toBe('a');
+    expect(SERVER_CHOICE_WAIT_MS).toBeLessThanOrEqual(10_000);
   });
 
   it('falls back to all projects when the project list could not be loaded', () => {

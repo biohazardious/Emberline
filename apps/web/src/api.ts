@@ -56,3 +56,20 @@ export async function api<T>(path: string, method: Method = 'GET', body?: unknow
 }
 
 export const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** `promise`, or a rejection once `ms` passed without an answer (the request itself is not cancelled). */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}

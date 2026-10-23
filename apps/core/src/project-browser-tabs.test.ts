@@ -127,6 +127,25 @@ describe('ProjectBrowserTabs', () => {
     expect((await tabs.state('A', opts('http://core:7420/demo/a')))?.playtestNotStarted).toBeUndefined();
   });
 
+  it('a start whose tab was open but not shown says so once core finds the tab again (L-18)', async () => {
+    const d = new FakeDaemon();
+    const tabs = new ProjectBrowserTabs(async () => d);
+    await tabs.state('A', opts('http://core:7420/demo/a'));
+    const own = d.opened[0]!;
+    const action = d.action.bind(d);
+    // The daemon does not show the tab core asks for (a stale id), though the project's tab is open.
+    d.action = async (body, q) => {
+      const snap = await action(body, body.action === 'start_playtest' ? { ...q, tabId: 'gone' } : q);
+      return body.action === 'start_playtest' && snap.tabMissing
+        ? { ...snap, playtestNotStarted: 'no_tab' as const }
+        : snap;
+    };
+    const res = await tabs.action('A', { action: 'start_playtest' }, opts('http://core:7420/demo/a'));
+    expect(d.opened).toEqual([own]);
+    expect(res?.activeTabId).toBe(own);
+    expect(res?.playtestNotStarted).toBe('tab_not_shown');
+  });
+
   it('opens a project tab once at its demo URL and reuses it', async () => {
     const d = new FakeDaemon();
     const tabs = new ProjectBrowserTabs(async () => d);

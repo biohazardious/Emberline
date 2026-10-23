@@ -23,6 +23,9 @@ export function resolveActiveProjectId(
   return known(candidates.server) ? candidates.server : projectIds[0]!;
 }
 
+/** How long pages wait for the server's stored choice before the local fallback (as when it fails). */
+export const SERVER_CHOICE_WAIT_MS = 5_000;
+
 /** The active project from the URL, this browser, and the server's choice; `remember` is false for a fallback after a failed server read. */
 export function resolveActiveProject(
   projectIds: readonly string[],

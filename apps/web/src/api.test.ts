@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiRequestError } from './api';
+import { api, ApiRequestError, withTimeout } from './api';
 
 const respond = (status: number, statusText: string, body: string) =>
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status, statusText })));
@@ -20,5 +20,27 @@ describe('api errors', () => {
       code: 'name_taken',
       message: 'Taken',
     });
+  });
+});
+
+describe('withTimeout', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('rejects once the time is up without an answer, so a caller can fall back', async () => {
+    vi.useFakeTimers();
+    const never = new Promise<string>(() => undefined);
+    const raced = withTimeout(never, 5_000);
+    const settled = vi.fn();
+    raced.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(raced).rejects.toThrow('no answer within 5000 ms');
+  });
+
+  it('passes an answer or an error that comes in time through', async () => {
+    await expect(withTimeout(Promise.resolve('p1'), 5_000)).resolves.toBe('p1');
+    const failed = new ApiRequestError(500, 'boom', 'boom');
+    await expect(withTimeout(Promise.reject(failed), 5_000)).rejects.toBe(failed);
   });
 });

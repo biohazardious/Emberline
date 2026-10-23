@@ -165,14 +165,17 @@ export class ProjectBrowserTabs {
     const snap = await first(query(projectId, this.selected.get(projectId) ?? null, opts));
     if (!snap.tabMissing) return snap;
     this.selected.delete(projectId);
-    // A start that found no tab says so in the answer, also once the tab is back.
+    // A start that found no tab says so in the answer, also once the tab is back: the project's tab
+    // was only not shown when it is found again, else it was not open.
     const reason = snap.playtestNotStarted ? { playtestNotStarted: snap.playtestNotStarted } : {};
     const own = snap.tabs?.find((t) => t.projectId === projectId);
     if (own) {
       const again = await d.state(query(projectId, own.id, opts));
       if (!again.tabMissing) {
         this.selected.set(projectId, own.id);
-        return { ...again, ...reason };
+        return snap.playtestNotStarted === 'no_tab'
+          ? { ...again, playtestNotStarted: 'tab_not_shown' }
+          : { ...again, ...reason };
       }
     }
     const opened = await d.action(

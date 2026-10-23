@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
-import { api, errorMessage } from './api';
+import { api, errorMessage, withTimeout } from './api';
 import { keptWorktreesSummary } from './gcSummary';
 import { AuthGate, useAuth } from './auth';
 import { BrandLogo } from './components/BrandLogo';
@@ -57,6 +57,7 @@ import {
   pageScope,
   projectIdFromPath,
   resolveActiveProject,
+  SERVER_CHOICE_WAIT_MS,
   switchProjectPath,
 } from './projectPaths';
 import { Dashboard } from './pages/Dashboard';
@@ -245,7 +246,8 @@ function Shell() {
     if (resolution.id === undefined) {
       if (askedServer.current) return;
       askedServer.current = true;
-      void api<ActiveProjectPreference>('/api/projects/active')
+      // Bounded: the pages wait for this answer, and a request that never answers must not keep them blank.
+      void withTimeout(api<ActiveProjectPreference>('/api/projects/active'), SERVER_CHOICE_WAIT_MS)
         .then((pref) => setServerActiveId(pref.activeProjectId ?? null))
         .catch(() => setServerFailed(true));
       return;

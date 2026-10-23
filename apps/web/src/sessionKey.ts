@@ -106,16 +106,39 @@ export function authGateState(
   return { signedIn: false, notice };
 }
 
+let keyChange: Promise<void> | null = null;
+
+/**
+ * Runs `change`, a request that issues a new key and stores it (a password change), and marks it in
+ * flight from before it is sent until the new key is stored: an auth check that comes back signed
+ * out meanwhile waits for it.
+ */
+export async function changingKey<T>(change: () => Promise<T>): Promise<T> {
+  const running = change();
+  const settled = running.then(
+    () => undefined,
+    () => undefined,
+  );
+  keyChange = settled;
+  try {
+    return await running;
+  } finally {
+    if (keyChange === settled) keyChange = null;
+  }
+}
+
 /**
  * The auth state, asked once more when it says signed out and the key changed while it was on its
  * way: a password change stores its new key after a check may already have gone out with the old one.
+ * A signed-out answer that comes while a key change is in flight waits for that change first.
  */
 export async function currentAuthState<T extends { authenticated: boolean; signedOut?: string }>(
   ask: () => Promise<T>,
 ): Promise<T> {
   const sentWith = getSessionKey();
   const state = await ask();
-  const key = getSessionKey();
-  if (key === sentWith || authGateState(state, key).signedIn) return state;
+  if (authGateState(state, getSessionKey()).signedIn) return state;
+  if (keyChange) await keyChange;
+  if (getSessionKey() === sentWith) return state;
   return ask();
 }
