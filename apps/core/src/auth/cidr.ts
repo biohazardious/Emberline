@@ -33,3 +33,8 @@ export function blockListOf(cidrs: readonly string[]): BlockList {
   }
   return list;
 }
+
+/** The ranges that take in every address of their family (prefix 0: `0.0.0.0/0`, `::/0`). */
+export function catchAllRanges(cidrs: readonly string[]): string[] {
+  return cidrs.filter((cidr) => cidrParts(cidr)?.prefix === 0);
+}

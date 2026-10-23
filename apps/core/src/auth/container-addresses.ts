@@ -23,7 +23,10 @@ export interface ContainerAddressesOptions {
    * public IPv6 Docker pool). An answer must still be on one of core's own networks.
    */
   containerNetworks?: readonly string[];
-  /** Clock for the gateway's miss refresh (tests). */
+  /**
+   * Clock for the gateway's miss refresh, in ms (tests). Monotonic by default: a wall clock stepped
+   * back (NTP) would stop the refresh.
+   */
   now?: () => number;
 }
 
@@ -101,7 +104,7 @@ export class ContainerAddresses {
     this.localNetworks = options.localNetworks ?? defaultNetworks;
     const refreshMs = options.refreshMs ?? CONTAINER_ADDRESSES_REFRESH_MS;
     this.extra = blockListOf(options.containerNetworks ?? []);
-    this.now = options.now ?? Date.now;
+    this.now = options.now ?? (() => performance.now());
     this.first = hosts.length > 0 && refreshMs > 0 ? this.refresh() : Promise.resolve();
     if (hosts.length > 0 && refreshMs > 0) {
       this.timer = setInterval(() => void this.refresh(), refreshMs);

@@ -15,6 +15,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { type CoreConfig, normalizeHostName } from '../config.js';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { conflict, HttpError } from '../errors.js';
+import type { PtydBridge } from '../ptyd-bridge.js';
 import { ContainerAddresses } from './container-addresses.js';
 import { SessionStore } from './sessions.js';
 
@@ -91,7 +92,7 @@ const presentedKey = (r: FastifyRequest): string | undefined => {
  */
 export function registerAuth(
   app: FastifyInstance,
-  { db, config }: { db: Db; config: CoreConfig },
+  { db, config, ptyd }: { db: Db; config: CoreConfig; ptyd: PtydBridge },
 ): SessionStore {
   const store = new SessionStore(db, config.sessionTtlMs);
   store.purgeExpired();
@@ -113,7 +114,16 @@ export function registerAuth(
   const containers = new ContainerAddresses(config.containerHosts ?? [], {
     containerNetworks: config.containerNetworks ?? [],
   });
-  app.addHook('onClose', async () => containers.stop());
+  // A runner that connects again has restarted, likely with a new address: learn it now, not on the
+  // next timer. Only the runner's connection triggers this; a stranger's cookie never costs a lookup.
+  const onPtydStatus = (status: string) => {
+    if (status === 'connected') void containers.refresh();
+  };
+  ptyd.on('status', onPtydStatus);
+  app.addHook('onClose', async () => {
+    ptyd.off('status', onPtydStatus);
+    containers.stop();
+  });
   const bindIp = config.sessionBindIp ?? true;
 
   /** `key`: the per-login key the request sent; `undefined` when it needs none, `null` when it needs one and sent none. */

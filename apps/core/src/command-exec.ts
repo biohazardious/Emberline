@@ -200,6 +200,17 @@ export function isRunnerUnavailable(error: unknown): boolean {
   return false;
 }
 
+/**
+ * A runner that did not answer in time (ptyd `timeout`): it may still be connected, so no reconnect
+ * need follow.
+ */
+export function isRunnerTimeout(error: unknown): boolean {
+  for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (e instanceof PtydClientError && e.code === 'timeout') return true;
+  }
+  return false;
+}
+
 /** Error shaped like `execFile`'s: carries the exit code and both output streams. */
 export class CommandFailedError extends Error {
   constructor(

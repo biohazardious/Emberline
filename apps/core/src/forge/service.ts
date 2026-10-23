@@ -16,7 +16,12 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { git } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
 import { ForgeAccountsService } from './accounts.js';
-import { type ForgeAccountRecord, accountForRemote, credentialAccountForRemote } from './account-store.js';
+import {
+  type ForgeAccountRecord,
+  accountForRemote,
+  credentialAccountForRemote,
+  usableAccountForRemote,
+} from './account-store.js';
 import { remoteUrlForDisplay, sameForgeServer } from './hosts.js';
 import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
 
@@ -284,7 +289,11 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       project?.path ?? '',
       project?.repoUrl ?? null,
     );
-    const account = remoteUrl ? accountForRemote(this.db, remoteUrl) : null;
+    // The refresh sends the token: a usable account first (a token-less one, cleared by
+    // EMBERLINE_FORGET_SECRETS, does not hide an environment account of its host).
+    const account = remoteUrl
+      ? (usableAccountForRemote(this.db, remoteUrl) ?? accountForRemote(this.db, remoteUrl))
+      : null;
     const parsed = remoteUrl
       ? account
         ? viaAccount(remoteUrl, account, baseBranch, run.branch)
@@ -292,7 +301,7 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       : null;
 
     let pullRequest = this.recordedPullRequest(runId);
-    if (pullRequest && parsed && account) {
+    if (pullRequest && parsed && account?.token.trim()) {
       const refreshed = await this.refreshPullRequest(parsed, account.token, pullRequest).catch(() => null);
       if (refreshed) pullRequest = refreshed;
     }

@@ -18,8 +18,8 @@ import type {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
-import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
-import { describeGitError } from '../git-gateway/gateway.js';
+import { execGitFile } from '../git-exec.js';
+import { describeGitError, redactCapabilityUrls, withoutHttpUserInfo } from '../git-gateway/gateway.js';
 import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
@@ -710,6 +710,9 @@ export async function commitWorktree(
   }
 }
 
+/** The most of a push's output the run's page gets. */
+const MAX_PUSH_OUTPUT = 4096;
+
 export async function pushWorktreeBranch(
   worktreePath: string,
   branch: string | null,
@@ -771,16 +774,15 @@ export async function pushWorktreeBranch(
       ],
       { timeout: 60_000 },
     );
-    return {
-      branch: branchToPush,
-      remote: 'origin',
-      output: `${stdout}\n${stderr}`.trim() || `Pushed ${branchToPush} to origin`,
-    };
+    // `remote:` lines are the server's: as bounded and redacted as a failure's.
+    const output = redactCapabilityUrls(withoutHttpUserInfo(`${stdout}\n${stderr}`.trim())).slice(
+      0,
+      MAX_PUSH_OUTPUT,
+    );
+    return { branch: branchToPush, remote: 'origin', output: output || `Pushed ${branchToPush} to origin` };
   } catch (error) {
     // A refused repository config has no stderr: its message says what to remove.
-    const stderr =
-      error instanceof UnsafeGitConfigError ? error.message : (error as { stderr?: string }).stderr?.trim();
-    throw conflict(`git push failed${stderr ? `: ${stderr}` : ''}`);
+    throw conflict(`git push failed: ${describeGitError(error)}`);
   }
 }
 

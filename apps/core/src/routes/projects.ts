@@ -563,13 +563,20 @@ export function registerProjectRoutes(
         // With an account the URL must be one Connect accepts (no query or fragment), so both entry
         // points bind capabilities to, and store, the same URL shapes.
         if (credential) validateRepositoryUrl(body.repoUrl);
+        // The branch the person typed is the one checked out; without one (the schema's `main` is
+        // only a default) the remote's default branch is, and import-status records it.
+        const branch =
+          (request.body as { defaultBranch?: unknown } | null)?.defaultBranch !== undefined
+            ? body.defaultBranch
+            : null;
         // With a forge account the PTY's git clones from a one-time gateway URL: the token stays in core.
         const args = credential
           ? accountCloneArgs(
               { gateway: runs.gitGateway, projectId: id, url: body.repoUrl, credential },
               projectPath,
+              branch,
             )
-          : ['clone', '--progress', '--', body.repoUrl, projectPath];
+          : ['clone', '--progress', ...(branch ? ['--branch', branch] : []), '--', body.repoUrl, projectPath];
         try {
           const session = await ptyd.get().spawn({
             file: 'git',

@@ -88,6 +88,14 @@ export function requestUrlForLog(url: string): string {
   return redacted === decoded ? url : redacted;
 }
 
+/**
+ * Text with each http(s) URL's user info removed (a token typed into an origin, or one a server
+ * quotes back), up to its last `@`; an ssh user name stays.
+ */
+export function withoutHttpUserInfo(text: string): string {
+  return text.replace(/\b(https?:\/\/)[^/\s'"]*@/gi, '$1');
+}
+
 /** One plain line for a gateway, core or runner-git failure: no token, no capability. */
 export function describeGitError(error: unknown, credential?: GitHttpCredential | null): string {
   let text: string;
@@ -107,8 +115,7 @@ export function describeGitError(error: unknown, credential?: GitHttpCredential 
         .find(Boolean) ?? 'git failed';
   }
   // A token typed into an http(s) origin (no account) is never quoted back; an ssh user name stays.
-  const withoutUserInfo = text.replace(/\b(https?:\/\/)[^/@\s'"]*@/gi, '$1');
-  return redactCapabilityUrls(redactCredential(withoutUserInfo, credential)).slice(0, 300);
+  return redactCapabilityUrls(redactCredential(withoutHttpUserInfo(text), credential)).slice(0, 300);
 }
 
 const sizeText = (bytes: number) =>

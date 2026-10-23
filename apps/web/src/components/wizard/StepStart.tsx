@@ -136,7 +136,7 @@ export function StepRepo({
   }
 
   const url = state.repoUrl.trim() ? urlProblem(state.repoUrl) : null;
-  const branch = branchProblem(state.defaultBranch);
+  const branch = state.defaultBranch.trim() ? branchProblem(state.defaultBranch) : null;
   return (
     <div className="wizard-step">
       <div className="field">
@@ -167,13 +167,14 @@ export function StepRepo({
           autoComplete="off"
           spellCheck={false}
           value={state.defaultBranch}
+          placeholder="The repository’s default branch"
           aria-invalid={branch ? true : undefined}
           aria-describedby="wizard-repo-branch-hint"
           onChange={(e) => dispatch({ type: 'field', field: 'defaultBranch', value: e.target.value })}
         />
         <p id="wizard-repo-branch-hint" className={branch ? 'form-error' : 'muted small'}>
           {branch ??
-            'Finished runs are merged into the branch the clone checks out (the repository’s default branch); Emberline records it once the clone is done.'}
+            'The branch to clone and merge finished runs into. Leave it empty for the repository’s default branch; Emberline records it once the clone is done.'}
         </p>
       </div>
       {runnerDown && (

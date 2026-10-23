@@ -4,7 +4,8 @@
  * meanwhile coalesce into one more push. The push that has not run yet is kept in the project's
  * settings (`pendingMainPush`), so a restart resumes it. A failure never undoes or blocks the
  * merge: it is noted on the run (`main_push_failed`, redacted reason) and kept for the Repository
- * block.
+ * block. A push the runner could not run is kept, and the Repository block says it waits for the
+ * runner.
  */
 import { randomUUID } from 'node:crypto';
 import type { Run } from '@emberline/protocol';
@@ -14,8 +15,16 @@ import { readRepositorySettings, writeRepositorySettings } from '../db/project-s
 import { projects } from '../db/schema.js';
 import { MERGE_NOTES } from '../factory/post-merge.js';
 import type { RunService } from '../runs/service.js';
-import { MERGE_UNVERIFIED_MESSAGE, ORIGIN_CHANGED_MESSAGE, remoteUrlForDisplay } from './git.js';
+import {
+  MERGE_UNVERIFIED_MESSAGE,
+  ORIGIN_CHANGED_MESSAGE,
+  remoteUrlForDisplay,
+  RUNNER_WAITING_MESSAGE,
+} from './git.js';
 import type { RepositoryService } from './service.js';
+
+/** A runner that did not answer is asked again after this long (no reconnect may come). */
+export const RUNNER_RETRY_MS = 30_000;
 
 interface Job {
   /** The stored pending push changed since it was last read: read it again. */
@@ -25,7 +34,9 @@ interface Job {
 
 export class KeepMainPushed {
   private readonly jobs = new Map<string, Job>();
+  private readonly retries = new Map<string, NodeJS.Timeout>();
   private readonly log: (message: string) => void;
+  private readonly retryMs: number;
   private started = false;
   private stopped = false;
 
@@ -33,9 +44,10 @@ export class KeepMainPushed {
     private readonly db: Db,
     private readonly runs: RunService,
     private readonly repository: Pick<RepositoryService, 'pushMainQuietly'>,
-    options: { log?: (message: string) => void } = {},
+    options: { log?: (message: string) => void; retryMs?: number } = {},
   ) {
     this.log = options.log ?? (() => undefined);
+    this.retryMs = options.retryMs ?? RUNNER_RETRY_MS;
   }
 
   start(): void {
@@ -59,6 +71,8 @@ export class KeepMainPushed {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.started) this.runs.off('note', this.onNote);
+    for (const timer of this.retries.values()) clearTimeout(timer);
+    this.retries.clear();
     await this.idle();
   }
 
@@ -129,6 +143,36 @@ export class KeepMainPushed {
     return { ok: false, reason: ORIGIN_CHANGED_MESSAGE };
   }
 
+  /** The Repository block says the push waits for the runner (it stays until the push is decided). */
+  private waitForRunner(projectId: string): void {
+    try {
+      writeRepositorySettings(this.db, projectId, { lastMainPushError: RUNNER_WAITING_MESSAGE });
+    } catch {
+      // the project was deleted meanwhile
+    }
+  }
+
+  /** The push was decided another way (pushed, superseded, switched off): the waiting note goes. */
+  private doneWaiting(projectId: string): void {
+    try {
+      if (readRepositorySettings(this.db, projectId).lastMainPushError === RUNNER_WAITING_MESSAGE)
+        writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
+    } catch {
+      // the project was deleted meanwhile
+    }
+  }
+
+  /** A runner that is connected but did not answer brings no reconnect: the push is tried again shortly. */
+  private retrySoon(projectId: string): void {
+    if (this.stopped || this.retries.has(projectId)) return;
+    const timer = setTimeout(() => {
+      this.retries.delete(projectId);
+      if (!this.stopped) this.kick(projectId);
+    }, this.retryMs);
+    timer.unref();
+    this.retries.set(projectId, timer);
+  }
+
   private kick(projectId: string): void {
     const job = this.jobs.get(projectId);
     if (job) {
@@ -151,20 +195,27 @@ export class KeepMainPushed {
         if (!pending) continue;
         if (!settings.keepMainPushed) {
           this.clear(projectId, pending.id);
+          this.doneWaiting(projectId);
           continue;
         }
+        // `origin` absent: queued by 0.5.0, which recorded none, so it is never compared. `null` (no
+        // repository connected then) is compared like a URL.
         const res = pending.unverified
           ? this.unverified(projectId)
           : pending.origin !== undefined && pending.origin !== this.connectedRepository(projectId)
             ? this.originChanged(projectId)
             : await this.repository.pushMainQuietly(projectId, pending.commitOid);
         if (!res.ok && 'runnerUnavailable' in res) {
-          // Kept as it is: the next runner connection runs it (resumePending).
+          // Kept as it is: the next runner connection runs it (resumePending), or the retry when the
+          // runner is still connected but did not answer.
+          this.waitForRunner(projectId);
+          if (res.runnerUnavailable === 'timeout') this.retrySoon(projectId);
           this.log(`keep main pushed: project ${projectId}: waiting for the runner (${res.reason})`);
           break;
         }
         // A merge noted meanwhile replaced it (and set `again`): that one runs next.
         this.clear(projectId, pending.id);
+        if (res.ok) this.doneWaiting(projectId);
         if (!res.ok) {
           this.log(`keep main pushed: project ${projectId}: ${res.reason}`);
           try {

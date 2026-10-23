@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { HealthResponse } from '@emberline/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -15,7 +16,7 @@ import {
   type TestApp,
   wsProtocols,
 } from './test-utils.js';
-import { appCsp, MAX_APP_CSP_BYTES, previewPortList } from './security-headers.js';
+import { appCsp, MAX_APP_CSP_BYTES, previewFrameTooLong, previewPortList } from './security-headers.js';
 
 let t: TestApp | undefined;
 afterEach(async () => {
@@ -266,6 +267,71 @@ describe('hardening', () => {
     } finally {
       if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
       else process.env.EMBERLINE_PREVIEW_HOST = saved;
+    }
+  });
+
+  it('says when the listed preview ports would make the policy too long: at start for EMBERLINE_PREVIEW_HOST, else once on the first such page', async () => {
+    const webDir = mkdtempSync(path.join(tmpdir(), 'web-'));
+    writeFileSync(path.join(webDir, 'index.html'), '<h1>ember</h1>');
+    const saved = process.env.EMBERLINE_PREVIEW_HOST;
+    const longHost = 'previews-of-the-emberline-instance.home.example.internal'; // 56 characters
+    const logs: string[] = [];
+    const tooLongWarnings = () =>
+      logs.filter((line) => line.includes('every port on the preview host')).map((line) => JSON.parse(line));
+    try {
+      delete process.env.EMBERLINE_PREVIEW_HOST;
+      // The start check (main.ts): the default 50 ports fit on a short host, not on a long one.
+      expect(previewFrameTooLong(undefined, DEFAULT_PREVIEW_PORTS, `http://${longHost}/`)).toBe(true);
+      expect(previewFrameTooLong(undefined, DEFAULT_PREVIEW_PORTS, 'http://previews.lan/')).toBe(false);
+      expect(previewFrameTooLong(undefined, DEFAULT_PREVIEW_PORTS, undefined)).toBe(false);
+      // Above 100 ports the policy never lists them: the start warning for that case says so.
+      const many = { runner: { first: 4300, last: 5300 }, docker: { first: 5400, last: 5400 } };
+      expect(previewFrameTooLong(undefined, many, `http://${longHost}/`)).toBe(false);
+
+      t = await createTestApp({ webDir, allowedHosts: [longHost, 'h'] }, {}, {}, undefined, {
+        logger: {
+          level: 'warn',
+          stream: new Writable({
+            write(chunk, _enc, done) {
+              logs.push(String(chunk));
+              done();
+            },
+          }),
+        },
+      });
+      const frameSrc = async (host: string) => {
+        const page = await t!.app.inject({ url: '/', headers: { host } });
+        return /frame-src ([^;]*)/.exec(String(page.headers['content-security-policy']))?.[1];
+      };
+      expect(await frameSrc('h:7420')).toBe(`'self' ${portSources('h')}`);
+      expect(tooLongWarnings()).toEqual([]);
+      expect(await frameSrc(`${longHost}:7420`)).toBe(`'self' http://${longHost}:*`);
+      expect(await frameSrc(`${longHost}:7420`)).toBe(`'self' http://${longHost}:*`);
+      expect(tooLongWarnings()).toHaveLength(1);
+      expect(tooLongWarnings()[0]).toMatchObject({ host: `${longHost}:7420` });
+      await t.close();
+      t = undefined;
+
+      // With EMBERLINE_PREVIEW_HOST, start said it already: no request repeats it.
+      logs.length = 0;
+      process.env.EMBERLINE_PREVIEW_HOST = `http://${longHost}/`;
+      t = await createTestApp({ webDir, allowedHosts: ['h'] }, {}, {}, undefined, {
+        logger: {
+          level: 'warn',
+          stream: new Writable({
+            write(chunk, _enc, done) {
+              logs.push(String(chunk));
+              done();
+            },
+          }),
+        },
+      });
+      expect(await frameSrc('h:7420')).toBe(`'self' http://${longHost}:*`);
+      expect(tooLongWarnings()).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_PREVIEW_HOST;
+      else process.env.EMBERLINE_PREVIEW_HOST = saved;
+      rmSync(webDir, { recursive: true, force: true });
     }
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockListOf, cidrParts, parseCidrList } from './cidr.js';
+import { blockListOf, catchAllRanges, cidrParts, parseCidrList } from './cidr.js';
 
 describe('EMBERLINE_CONTAINER_NETWORKS entries', () => {
   it('reads IPv4 and IPv6 CIDR ranges', () => {
@@ -40,5 +40,12 @@ describe('EMBERLINE_CONTAINER_NETWORKS entries', () => {
     expect(list.check('100.100.1.1', 'ipv4')).toBe(true);
     expect(list.check('100.128.0.1', 'ipv4')).toBe(false);
     expect(list.check('2001:db8:5::1', 'ipv6')).toBe(true);
+  });
+
+  it('names the ranges that take in every address (prefix 0), whatever address they are written with', () => {
+    expect(
+      catchAllRanges(['100.64.0.0/10', '0.0.0.0/0', '::/0', '10.1.2.3/00', '2001:DB8::/0', '0.0.0.0/1']),
+    ).toEqual(['0.0.0.0/0', '::/0', '10.1.2.3/00', '2001:DB8::/0']);
+    expect(catchAllRanges(['100.64.0.0/10', 'bogus/0'])).toEqual([]);
   });
 });

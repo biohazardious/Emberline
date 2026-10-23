@@ -5,7 +5,7 @@
  * replay it to core.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { ContainerAddresses, MISS_REFRESH_MS } from './auth/container-addresses.js';
 import { loadConfig } from './config.js';
@@ -371,6 +371,26 @@ describe("session cookies from Emberline's own containers", () => {
     expect((await get(t, '/api/projects', browser, '192.0.2.10')).statusCode).toBe(200);
   });
 
+  it("learn a restarted runner's address when the runner connects again, not on the next timer", async () => {
+    const refresh = vi.spyOn(ContainerAddresses.prototype, 'refresh');
+    try {
+      t = await createTestApp({ containerHosts: ['localhost'] });
+      const before = refresh.mock.calls.length;
+      t.ptyd.emit('status', 'disconnected');
+      expect(refresh.mock.calls.length).toBe(before);
+      t.ptyd.emit('status', 'connected');
+      expect(refresh.mock.calls.length).toBe(before + 1);
+      // A closed core no longer listens.
+      const { ptyd } = t;
+      await t.close();
+      t = undefined;
+      ptyd.emit('status', 'connected');
+      expect(refresh.mock.calls.length).toBe(before + 1);
+    } finally {
+      refresh.mockRestore();
+    }
+  });
+
   it('are refused by the socket address even when a trusted proxy header names another client', async () => {
     t = await createTestApp({ containerHosts: ['localhost'], trustProxy: true });
     const cookie = await setupFrom(t, '127.0.0.1', '203.0.113.5');
@@ -540,6 +560,30 @@ describe('container addresses', () => {
     expect(await c.hasOrRefresh('172.18.0.99')).toBe(false);
     expect(lookups).toBe(2);
     c.stop();
+  });
+
+  it('times the miss refresh by a monotonic clock: a wall clock stepped back does not stop it', async () => {
+    let wall = 1_800_000_000_000;
+    let monotonic = 1_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    const perfNow = vi.spyOn(performance, 'now').mockImplementation(() => monotonic);
+    const answers: Record<string, string[] | Error> = { runner: ['172.18.0.3'] };
+    const c = new ContainerAddresses(['runner'], {
+      lookup: lookupFrom(answers),
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+    });
+    try {
+      await c.refresh();
+      answers.runner = ['172.18.0.7']; // the runner restarted with a new address
+      wall -= 60_000; // NTP steps the wall clock back a minute
+      monotonic += MISS_REFRESH_MS;
+      expect(await c.hasOrRefresh('172.18.0.7')).toBe(true);
+    } finally {
+      c.stop();
+      dateNow.mockRestore();
+      perfNow.mockRestore();
+    }
   });
 
   it('drops a host that no longer resolves (ENOTFOUND) and keeps one on a temporary failure', async () => {

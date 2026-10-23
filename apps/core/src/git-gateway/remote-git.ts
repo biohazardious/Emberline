@@ -245,8 +245,9 @@ export async function accountPushBranch(
  * The import clone's PTY command: a capability for 60 minutes (first use within 2), tracked until
  * import-status sees the clone end. git clones the real URL, which a command-scope `insteadOf`
  * points at the capability URL: `.git/config` gets the real URL as origin, never the capability.
+ * `branch`: the one to check out; the remote's default branch without it.
  */
-export function accountCloneArgs(r: AccountRemote, target: string): string[] {
+export function accountCloneArgs(r: AccountRemote, target: string, branch: string | null = null): string[] {
   const { capability, url } = r.gateway.issue(grant(r, { firstUseMs: 2 * MINUTE, operationMs: 60 * MINUTE }));
   r.gateway.trackClone(r.projectId, capability);
   return [
@@ -256,6 +257,7 @@ export function accountCloneArgs(r: AccountRemote, target: string): string[] {
     'clone',
     '--progress',
     '--no-recurse-submodules',
+    ...(branch ? ['--branch', branch] : []),
     '--',
     r.url,
     target,

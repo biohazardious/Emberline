@@ -2,7 +2,7 @@
  * Core entrypoint. Configuration comes from EMBERLINE_* env vars (see config.ts).
  */
 import path from 'node:path';
-import { parseCidrList } from './auth/cidr.js';
+import { catchAllRanges, parseCidrList } from './auth/cidr.js';
 import {
   ptydCommandCanceller,
   ptydCommandExecutor,
@@ -16,7 +16,7 @@ import { PtydBridge } from './ptyd-bridge.js';
 import { RunService } from './runs/service.js';
 import { SecretsKeyError } from './secrets/box.js';
 import { forgetLogLine, startSecrets } from './secrets/startup.js';
-import { previewPortList } from './security-headers.js';
+import { previewFrameTooLong, previewPortList } from './security-headers.js';
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { TicketService } from './tickets/service.js';
@@ -88,6 +88,13 @@ if (invalidNetworks.length > 0) {
     'EMBERLINE_CONTAINER_NETWORKS: ignoring entries that are not CIDR ranges (like 100.64.0.0/10)',
   );
 }
+const catchAll = catchAllRanges(config.containerNetworks ?? []);
+if (catchAll.length > 0) {
+  app.log.warn(
+    { ranges: catchAll },
+    "EMBERLINE_CONTAINER_NETWORKS: a /0 range takes in every address, so only core's own networks limit which addresses count as Emberline's containers. List your Docker address pool instead (like 100.64.0.0/10).",
+  );
+}
 const invalidPorts = invalidPreviewPortVars(process.env);
 if (invalidPorts.length > 0) {
   app.log.warn(
@@ -105,6 +112,17 @@ if (previewPortList(config.previewPorts) === null) {
   app.log.warn(
     { runner: config.previewPorts.runner, docker: config.previewPorts.docker },
     'More than 100 preview ports are configured, so the frame policy allows every port on the preview host.',
+  );
+} else if (previewFrameTooLong(undefined, config.previewPorts)) {
+  // Without EMBERLINE_PREVIEW_HOST the host is the one each page is requested on: the first page
+  // that falls back says so (security-headers.ts).
+  app.log.warn(
+    {
+      previewHost: process.env.EMBERLINE_PREVIEW_HOST,
+      runner: config.previewPorts.runner,
+      docker: config.previewPorts.docker,
+    },
+    'Listing the preview ports for EMBERLINE_PREVIEW_HOST would make the frame policy longer than 3 KB, so it allows every port on the preview host.',
   );
 }
 logDocker = (status) => {

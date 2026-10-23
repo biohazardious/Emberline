@@ -18,6 +18,7 @@ export const MERGE_UNVERIFIED_MESSAGE =
   'Main changed during the merge; Emberline did not record it for pushing.';
 export const ORIGIN_CHANGED_MESSAGE =
   "This project's repository changed after the merge, so Keep main pushed did not push it. Push main from Project settings → Repository.";
+export const RUNNER_WAITING_MESSAGE = 'Waiting for the runner; main is pushed when it answers.';
 export const DIVERGED_MESSAGE =
   "The remote's main has commits this project doesn't have. Pull them in from a terminal, then push again.";
 const CREDENTIALS_IN_URL = 'Remove the user name and token from the URL; Emberline uses the forge account.';

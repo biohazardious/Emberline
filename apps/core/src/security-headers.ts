@@ -67,16 +67,38 @@ export function previewFrameSources(
   ports: CoreConfig['previewPorts'],
   override = process.env.EMBERLINE_PREVIEW_HOST,
 ): string[] {
+  return frameSources(hostHeader, ports, override).sources;
+}
+
+/**
+ * Whether the preview ports, at most {@link MAX_LISTED_PREVIEW_PORTS} of them, are not listed
+ * because listing them would take the policy past {@link MAX_APP_CSP_BYTES} (a long host name).
+ */
+export function previewFrameTooLong(
+  hostHeader: string | undefined,
+  ports: CoreConfig['previewPorts'],
+  override = process.env.EMBERLINE_PREVIEW_HOST,
+): boolean {
+  return frameSources(hostHeader, ports, override).tooLong;
+}
+
+function frameSources(
+  hostHeader: string | undefined,
+  ports: CoreConfig['previewPorts'],
+  override: string | undefined,
+): { sources: string[]; tooLong: boolean } {
   const host = previewHost(hostHeader, override);
-  if (!host) return [];
-  if (host.name.startsWith('[')) return [host.protocol];
+  if (!host) return { sources: [], tooLong: false };
+  if (host.name.startsWith('[')) return { sources: [host.protocol], tooLong: false };
   const anyPort = [`${host.protocol}//${host.name}:*`];
   const list = previewPortList(ports);
-  if (!list) return anyPort;
+  if (!list) return { sources: anyPort, tooLong: false };
   const listed = list.map((port) => `${host.protocol}//${host.name}:${port}`);
   // `frame-src 'self'` gains a space and the sources.
   const policyBytes = Buffer.byteLength(APP_CSP) + 1 + Buffer.byteLength(listed.join(' '));
-  return policyBytes > MAX_APP_CSP_BYTES ? anyPort : listed;
+  return policyBytes > MAX_APP_CSP_BYTES
+    ? { sources: anyPort, tooLong: true }
+    : { sources: listed, tooLong: false };
 }
 
 /** The scheme and host name previews open on; null when it is not a plain http(s) host. */
@@ -119,6 +141,8 @@ export const UNTRUSTED_CONTENT_CSP =
   'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock';
 
 export function installSecurityHeaders(app: FastifyInstance, ports: CoreConfig['previewPorts']): void {
+  // With EMBERLINE_PREVIEW_HOST every page gets the same policy, and core's start says so already.
+  let toldTooLong = false;
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'same-origin');
@@ -128,6 +152,17 @@ export function installSecurityHeaders(app: FastifyInstance, ports: CoreConfig['
         // request.host: allow-listed by the auth hook, and the forwarded host behind a trusted proxy.
         reply.header('content-security-policy', appCsp(request.host, ports));
         reply.header('x-frame-options', 'SAMEORIGIN');
+        if (
+          !toldTooLong &&
+          !process.env.EMBERLINE_PREVIEW_HOST?.trim() &&
+          previewFrameTooLong(request.host, ports)
+        ) {
+          toldTooLong = true;
+          request.log.warn(
+            { host: request.host },
+            'Listing the preview ports for this host name would make the frame policy longer than 3 KB, so it allows every port on the preview host.',
+          );
+        }
       }
     }
     return payload;

@@ -12,8 +12,9 @@ import type {
   ScheduledJob,
 } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeNextCronDate } from './cron/service.js';
+import { runEvents } from './db/schema.js';
 import { parseForgeRemote } from './forge/service.js';
 import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -420,6 +421,106 @@ describe('M6 review, git commit/push, and artifacts', () => {
       expect(prAuthorization).toEqual(['Bearer ghp_test_token_123']);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("refreshes a run's pull request with a usable account: a token-less one does not hide the environment's", async () => {
+    const { project } = await createGitProjectWithBareRemote('Forge Refresh');
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
+    execFileSync('git', [
+      '-C',
+      run.worktreePath,
+      'remote',
+      'set-url',
+      'origin',
+      'git@github.com:acme/widget.git',
+    ]);
+    // A stored account whose token EMBERLINE_FORGET_SECRETS cleared, and an environment token for the same host.
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: '' });
+    vi.stubEnv('EMBERLINE_FORGE_TOKEN', 'env_token_123');
+    t.db
+      .insert(runEvents)
+      .values({
+        runId: run.id,
+        ts: new Date(),
+        source: 'user',
+        type: 'pr_created',
+        payload: {
+          provider: 'github',
+          number: 7,
+          title: 'Widget',
+          url: 'https://github.com/acme/widget/pull/7',
+          state: 'open',
+          draft: false,
+          headBranch: run.branch,
+          baseBranch: 'main',
+          ciStatus: 'unknown',
+        },
+      })
+      .run();
+    const authorization: (string | null)[] = [];
+    t.forgeFetch.current = async (url, init) => {
+      const auth = new Headers(init?.headers).get('authorization');
+      authorization.push(auth);
+      if (auth !== 'Bearer env_token_123') return new Response('{}', { status: 401 });
+      if (String(url).endsWith('/repos/acme/widget/pulls/7'))
+        return Response.json({
+          title: 'Widget',
+          html_url: 'https://github.com/acme/widget/pull/7',
+          state: 'closed',
+          merged: true,
+        });
+      return new Response('{}', { status: 404 });
+    };
+    try {
+      const status: RunForgeStatus = (await api('GET', `/api/runs/${run.id}/forge`)).json();
+      expect(status.pullRequest).toMatchObject({ number: 7, state: 'merged' });
+      expect(authorization).toEqual(['Bearer env_token_123']);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('never refreshes a pull request with an empty token', async () => {
+    const { project } = await createGitProjectWithBareRemote('Forge No Token');
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'pr test' })).json();
+    execFileSync('git', [
+      '-C',
+      run.worktreePath,
+      'remote',
+      'set-url',
+      'origin',
+      'git@github.com:acme/widget.git',
+    ]);
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: '' });
+    vi.stubEnv('EMBERLINE_FORGE_TOKEN', '');
+    t.db
+      .insert(runEvents)
+      .values({
+        runId: run.id,
+        ts: new Date(),
+        source: 'user',
+        type: 'pr_created',
+        payload: {
+          provider: 'github',
+          number: 7,
+          title: 'Widget',
+          url: 'https://github.com/acme/widget/pull/7',
+        },
+      })
+      .run();
+    let calls = 0;
+    t.forgeFetch.current = async () => {
+      calls += 1;
+      return new Response('{}', { status: 401 });
+    };
+    try {
+      const status: RunForgeStatus = (await api('GET', `/api/runs/${run.id}/forge`)).json();
+      expect(status.pullRequest).toMatchObject({ number: 7, state: 'open' });
+      expect(status.repoPath).toBe('acme/widget');
+      expect(calls).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

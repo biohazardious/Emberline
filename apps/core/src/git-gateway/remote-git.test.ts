@@ -343,6 +343,76 @@ describe('import clone', () => {
     expectAgentsSeeNoToken(spawned);
   });
 
+  it('a branch given for the import is the one both clones check out, and the project keeps it', async () => {
+    const createOn = (repoUrl: string, name: string, defaultBranch: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        headers: authHeaders(cookie),
+        payload: { name, source: 'import_url', repoUrl, defaultBranch },
+      });
+    // Without an account: the plain clone.
+    const plain = await createOn(`${b.url}/alice/app.git`, 'Public App', 'develop');
+    expect(plain.statusCode, plain.body).toBe(201);
+    expect(spawned[0]!.args).toEqual([
+      'clone',
+      '--progress',
+      '--branch',
+      'develop',
+      '--',
+      `${b.url}/alice/app.git`,
+      path.join(t.dir, 'public-app'),
+    ]);
+    await clone;
+    spawned.length = 0;
+    exitCode = null;
+    // With an account: the gateway clone, run to the end.
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main', 'main:develop');
+    commit(repo, 'only-on-main.txt');
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');
+    const res = await createOn(appUrl(), 'Private App', 'develop');
+    expect(res.statusCode, res.body).toBe(201);
+    const { project } = res.json();
+    const args = spawned[0]!.args;
+    expect(args.slice(args.indexOf('--branch'))).toEqual([
+      '--branch',
+      'develop',
+      '--',
+      appUrl(),
+      project.path,
+    ]);
+    await clone;
+    expect(await importStatus(project.id)).toMatchObject({ status: 'ready' });
+    expect(gitIn(project.path, 'branch', '--show-current')).toBe('develop');
+    expect(existsSync(path.join(project.path, 'only-on-main.txt'))).toBe(false);
+    const row = t.db
+      .select()
+      .from(projects)
+      .all()
+      .find((p) => p.id === project.id);
+    expect(row?.defaultBranch).toBe('develop');
+  });
+
+  it("without a branch the clone checks out the repository's default branch and the project records it", async () => {
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
+    gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main:trunk');
+    gitIn(a.bare('alice', 'app'), 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    const res = await create(appUrl(), 'Trunk App');
+    expect(res.statusCode, res.body).toBe(201);
+    expect(spawned[0]!.args).not.toContain('--branch');
+    const { project } = res.json();
+    await clone;
+    expect(await importStatus(project.id)).toMatchObject({ status: 'ready' });
+    expect(gitIn(project.path, 'branch', '--show-current')).toBe('trunk');
+    const row = t.db
+      .select()
+      .from(projects)
+      .all()
+      .find((p) => p.id === project.id);
+    expect(row?.defaultBranch).toBe('trunk');
+  });
+
   it('the capability never reaches .git/config: origin is the real URL as soon as the clone ends', async () => {
     seedForgeAccount(t.db, { provider: 'gitea', serverUrl: a.url, token: TOKEN, username: 'alice' });
     gitIn(repo, 'push', '-q', a.bare('alice', 'app'), 'main');

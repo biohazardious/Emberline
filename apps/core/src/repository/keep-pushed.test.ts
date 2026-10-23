@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { rmSync, watch, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { PtydClientError } from '@emberline/ptyd/client';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { localCommandExecutor, ptydCommandExecutor, setCommandExecutor } from '../command-exec.js';
@@ -23,6 +24,7 @@ import {
   MAIN_MOVED_MESSAGE,
   MERGE_UNVERIFIED_MESSAGE,
   ORIGIN_CHANGED_MESSAGE,
+  RUNNER_WAITING_MESSAGE,
 } from './git.js';
 import { KeepMainPushed } from './keep-pushed.js';
 
@@ -422,9 +424,10 @@ describe('keep main pushed', () => {
           queuedAt: new Date().toISOString(),
         },
       });
-    const nothingRecorded = () => {
+    /** Kept, and the Repository block says it waits for the runner; the run gets no failure. */
+    const keptWaiting = () => {
       expect(readRepositorySettings(t.db, projectId).pendingMainPush?.id).toBe('p1');
-      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBe(RUNNER_WAITING_MESSAGE);
       expect(notes('r1')).toEqual([]);
       expect(forge.seen.some((r) => r.path.endsWith('git-receive-pack'))).toBe(false);
     };
@@ -435,7 +438,7 @@ describe('keep main pushed', () => {
       ptydServer = undefined;
     });
 
-    it('a restart before the runner connects keeps the stored push and records nothing', async () => {
+    it('a restart before the runner connects keeps the stored push and says it waits for the runner', async () => {
       stored(merged().commitOid);
       await t.mainPush.stop();
       setCommandExecutor(ptydCommandExecutor(t.ptyd)); // as in production: git runs in the runner
@@ -443,7 +446,7 @@ describe('keep main pushed', () => {
       next.start();
       next.resumePending();
       await next.idle();
-      nothingRecorded();
+      keptWaiting();
       await next.stop();
     });
 
@@ -474,13 +477,82 @@ describe('keep main pushed', () => {
       t.runs.note('r1', 'merged_to_main', m);
       await t.mainPush.idle();
       expect(readRepositorySettings(t.db, projectId).pendingMainPush?.commitOid).toBe(m.commitOid);
-      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBe(RUNNER_WAITING_MESSAGE);
       expect(notes('r1')).toEqual([]);
       setCommandExecutor(localCommandExecutor);
       t.mainPush.resumePending();
       await t.mainPush.idle();
       expect(remoteMain()).toBe(m.commitOid);
       expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+    });
+
+    it('switching Keep main pushed off drops the waiting note: the kept push will not run', async () => {
+      stored(merged().commitOid);
+      await t.mainPush.stop();
+      setCommandExecutor(ptydCommandExecutor(t.ptyd)); // the runner is not connected
+      const next = new KeepMainPushed(t.db, t.runs, t.repository);
+      next.start();
+      next.resumePending();
+      await next.idle();
+      keptWaiting();
+      setCommandExecutor(localCommandExecutor); // the status the switch answers with reads git
+      await t.repository.update(projectId, { keepMainPushed: false });
+      expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+      await next.stop();
+    });
+
+    it('a connected runner that does not answer: the push waits, says so, and is tried again shortly', async () => {
+      const m = merged();
+      await t.mainPush.stop();
+      let pushes = 0;
+      setCommandExecutor(async (request) => {
+        if (request.args.includes('push') && ++pushes === 1)
+          throw new PtydClientError('timeout', 'ptyd did not answer exec within 75000 ms');
+        return localCommandExecutor(request);
+      });
+      writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+      const next = new KeepMainPushed(t.db, t.runs, t.repository, { retryMs: 20 });
+      next.start();
+      try {
+        t.runs.note('r1', 'merged_to_main', m);
+        await next.idle();
+        expect(readRepositorySettings(t.db, projectId).pendingMainPush?.commitOid).toBe(m.commitOid);
+        expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBe(RUNNER_WAITING_MESSAGE);
+        // No reconnect comes (the runner never left): the retry timer runs it.
+        for (let i = 0; i < 200 && readRepositorySettings(t.db, projectId).pendingMainPush; i++)
+          await new Promise((r) => setTimeout(r, 20));
+        await next.idle();
+        expect(pushes).toBe(2);
+        expect(remoteMain()).toBe(m.commitOid);
+        expect(readRepositorySettings(t.db, projectId).pendingMainPush).toBeNull();
+        expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+        expect(notes('r1')).toEqual([]);
+      } finally {
+        await next.stop();
+      }
+    });
+
+    it('a retry that is still waiting when core stops never runs', async () => {
+      const m = merged();
+      await t.mainPush.stop();
+      let pushes = 0;
+      setCommandExecutor(async (request) => {
+        if (request.args.includes('push')) {
+          pushes += 1;
+          throw new PtydClientError('timeout', 'ptyd did not answer exec within 75000 ms');
+        }
+        return localCommandExecutor(request);
+      });
+      writeRepositorySettings(t.db, projectId, { keepMainPushed: true });
+      const next = new KeepMainPushed(t.db, t.runs, t.repository, { retryMs: 20 });
+      next.start();
+      t.runs.note('r1', 'merged_to_main', m);
+      await next.idle();
+      await next.stop();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(pushes).toBe(1);
+      expect(readRepositorySettings(t.db, projectId).pendingMainPush?.commitOid).toBe(m.commitOid);
     });
   });
 });

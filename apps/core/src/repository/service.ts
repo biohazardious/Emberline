@@ -8,7 +8,7 @@ import {
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { isRunnerUnavailable } from '../command-exec.js';
+import { isRunnerTimeout, isRunnerUnavailable } from '../command-exec.js';
 import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
@@ -32,6 +32,7 @@ import {
   type RemoteAccess,
   remoteBranchHead,
   remoteUrlForDisplay,
+  RUNNER_WAITING_MESSAGE,
   setOrigin,
   setRemoteTracking,
   setUpstream,
@@ -263,7 +264,7 @@ export class RepositoryService {
   async pushMainQuietly(
     projectId: string,
     mergeOid: string | null,
-  ): Promise<{ ok: true } | { ok: false; reason: string; runnerUnavailable?: true }> {
+  ): Promise<{ ok: true } | { ok: false; reason: string; runnerUnavailable?: 'timeout' | 'away' }> {
     let reason: string;
     try {
       const result = await this.push(projectId, { mergeOid });
@@ -276,7 +277,11 @@ export class RepositoryService {
     } catch (error) {
       // Nothing was decided: the push is tried again once the runner is back.
       if (isRunnerUnavailable(error))
-        return { ok: false, reason: remoteErrorText(error), runnerUnavailable: true };
+        return {
+          ok: false,
+          reason: remoteErrorText(error),
+          runnerUnavailable: isRunnerTimeout(error) ? 'timeout' : 'away',
+        };
       reason = remoteErrorText(error);
     }
     try {
@@ -290,7 +295,14 @@ export class RepositoryService {
   update(projectId: string, raw: unknown): Promise<RepositoryStatus> {
     this.project(projectId);
     const body = parse(UpdateRepositoryBody, raw);
-    writeRepositorySettings(this.db, projectId, { keepMainPushed: body.keepMainPushed });
+    // Switched off, a push kept for the runner never runs: it no longer waits.
+    const waiting =
+      !body.keepMainPushed &&
+      readRepositorySettings(this.db, projectId).lastMainPushError === RUNNER_WAITING_MESSAGE;
+    writeRepositorySettings(this.db, projectId, {
+      keepMainPushed: body.keepMainPushed,
+      ...(waiting ? { lastMainPushError: null } : {}),
+    });
     return this.status(projectId);
   }
 

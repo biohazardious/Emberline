@@ -222,6 +222,19 @@ export function accountForRemote(
   return listAccountRecords(db, env).find((a) => sameForgeServer(a.serverUrl, remoteUrl)) ?? null;
 }
 
+/**
+ * `accountForRemote` for a call that may quietly not happen (a status refresh): the first match
+ * with a token; null, never a 409, when none has one.
+ */
+export function usableAccountForRemote(
+  db: Db,
+  remoteUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ForgeAccountRecord | null {
+  if (!hostOf(remoteUrl)) return null;
+  return listUsableRecords(db, env).find((a) => sameForgeServer(a.serverUrl, remoteUrl)) ?? null;
+}
+
 /** `accountForRemote` for calls that send the token: see `pickUsable`. */
 export function credentialAccountForRemote(
   db: Db,

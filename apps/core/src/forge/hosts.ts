@@ -56,8 +56,10 @@ export function remoteUrlForDisplay(raw: string): { url: string; hadCredentials:
       }
       return parsed.toString();
     }
-    // scp-like `user:password@host:path`: keep the user, drop the password.
-    return url.replace(/^([^/@:]*):[^/@]*@/, '$1@');
+    // scp-like `user:password@host:path`: keep the user, drop the password. Only when a `host:`
+    // follows the `@`: `host:repo@x` is the path `repo@x` on `host`. The password ends at the first
+    // such `@` (one in the path stays), and an IPv6 `[host]` is never read as a user.
+    return url.replace(/^([^/@:[]*):[^/]*?@(?=[^/@:]+:)/, '$1@');
   })();
   return { url: clean, hadCredentials: clean !== url };
 }

@@ -230,7 +230,11 @@ export function stepProblem(s: WizardState, step: StepId): string | null {
     case 'repo':
       // In the order the step shows its fields.
       if (s.source === 'import_folder') return s.folder ? nameProblem(s.name) : 'Pick a folder.';
-      return urlProblem(s.repoUrl) ?? nameProblem(s.name) ?? branchProblem(s.defaultBranch);
+      return (
+        urlProblem(s.repoUrl) ??
+        nameProblem(s.name) ??
+        (s.defaultBranch.trim() ? branchProblem(s.defaultBranch) : null)
+      );
     case 'import':
       return s.detect ? null : 'Wait for the repository to be inspected.';
     case 'stack': {
@@ -440,7 +444,20 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
   switch (a.type) {
     case 'source': {
       if (s.importProjectId !== null || s.source === a.source) return s;
-      const next: WizardState = { ...s, source: a.source, furthest: 0, startFactory: !isImport(a.source) };
+      // A URL import clones the repository's default branch unless one is typed; a new project starts on main.
+      const defaultBranch =
+        a.source === 'import_url'
+          ? s.defaultBranch.trim() === 'main'
+            ? ''
+            : s.defaultBranch
+          : s.defaultBranch.trim() || 'main';
+      const next: WizardState = {
+        ...s,
+        source: a.source,
+        furthest: 0,
+        startFactory: !isImport(a.source),
+        defaultBranch,
+      };
       if (a.source === 'blank') return withPreset(next, 'custom', 'custom-blank');
       if (a.source === 'preset' && s.presetId === 'custom-blank')
         return { ...next, appType: null, presetId: null };
@@ -577,7 +594,13 @@ function cleanChoices(choices: ProjectChoices): ProjectChoices {
 export function buildCreateBody(s: WizardState): CreateProjectBody {
   const name = s.name.trim();
   if (s.source === 'import_url') {
-    return { name, source: 'import_url', repoUrl: s.repoUrl.trim(), defaultBranch: s.defaultBranch.trim() };
+    const branch = s.defaultBranch.trim();
+    return {
+      name,
+      source: 'import_url',
+      repoUrl: s.repoUrl.trim(),
+      ...(branch ? { defaultBranch: branch } : {}),
+    };
   }
   if (s.source === 'import_folder') return { name, source: 'import_folder', folder: s.folder };
   const referenceDocs = s.referenceDocs.trim();

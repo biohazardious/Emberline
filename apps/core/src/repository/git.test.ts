@@ -139,6 +139,38 @@ describe('remoteUrlForDisplay', () => {
     });
   });
 
+  it('strips a scp-like password only before a host: an `@` in the path is no user info', () => {
+    const shown = (url: string) => remoteUrlForDisplay(url).url;
+    // `host:repo@x` is the path `repo@x` on `host`, never the user `host` on the server `x`.
+    expect(remoteUrlForDisplay('host:repo@x')).toEqual({ url: 'host:repo@x', hadCredentials: false });
+    expect(shown('host:a@x')).not.toBe(shown('host:b@x'));
+    expect(shown('gitea:team/app@v2.git')).toBe('gitea:team/app@v2.git');
+    expect(shown('git@host:o/r@v2.git')).toBe('git@host:o/r@v2.git');
+    // A password before a host goes, whatever the host or path looks like.
+    expect(remoteUrlForDisplay('Alice:S3cret@GitHub.COM:o/r.git')).toEqual({
+      url: 'Alice@GitHub.COM:o/r.git',
+      hadCredentials: true,
+    });
+    expect(shown('alice:pw@host:o/r@v2')).toBe('alice@host:o/r@v2');
+    expect(shown('alice:pw@host:a@b:c')).toBe('alice@host:a@b:c');
+    expect(shown('alice:p@ss@host:o/r.git')).toBe('alice@host:o/r.git');
+    expect(shown('alice:p:w@host:o/r.git')).toBe('alice@host:o/r.git');
+    expect(shown('alice:pw@[2001:db8::1]:o/r.git')).toBe('alice@[2001:db8::1]:o/r.git');
+    // An IPv6 host is never read as a user name.
+    expect(remoteUrlForDisplay('[2001:db8::1]:o/r@x')).toEqual({
+      url: '[2001:db8::1]:o/r@x',
+      hadCredentials: false,
+    });
+    expect(shown('[2001:db8::1]:a@b:c')).toBe('[2001:db8::1]:a@b:c');
+    // URL forms: user info goes, an `@` in the path stays.
+    expect(shown('https://github.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
+    expect(shown('https://u:p@GitHub.com/o/r@v2.git')).toBe('https://github.com/o/r@v2.git');
+    expect(shown('https://u:p@ss@host/o/r.git')).toBe('https://host/o/r.git');
+    expect(shown('ssh://git:pw@[2001:db8::1]:2222/o/r@v2.git')).toBe(
+      'ssh://git@[2001:db8::1]:2222/o/r@v2.git',
+    );
+  });
+
   it('leaves a clean URL exactly as it is', () => {
     expect(remoteUrlForDisplay('https://GitHub.com/o/r.git')).toEqual({
       url: 'https://GitHub.com/o/r.git',

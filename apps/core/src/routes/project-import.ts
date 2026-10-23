@@ -49,8 +49,9 @@ export function registerProjectImportRoutes(
   });
 
   /**
-   * A clone checks out the remote's default branch, which may not be the one the person typed:
-   * runs are merged into the checked-out branch, so the project records that one (as import_folder does).
+   * Without a branch given, a clone checks out the remote's default branch, which may not be the
+   * recorded `main`: runs are merged into the checked-out branch, so the project records that one
+   * (as import_folder does).
    */
   const reconcileClonedBranch = async (project: Project): Promise<void> => {
     if (!project.repoUrl) return;

@@ -433,6 +433,26 @@ describe('body building', () => {
     expect(buildCreateBody(folder)).toEqual({ name: 'old-app', source: 'import_folder', folder: 'old-app' });
   });
 
+  it("a URL import's branch starts empty (the repository's default) and is sent only when typed", () => {
+    const s = run([
+      { type: 'source', source: 'import_url' },
+      { type: 'field', field: 'repoUrl', value: 'https://github.com/acme/shop.git' },
+    ]);
+    expect(s.defaultBranch).toBe('');
+    expect(isStepValid(s, 'repo')).toBe(true);
+    expect(buildCreateBody(s)).toEqual({
+      name: 'shop',
+      source: 'import_url',
+      repoUrl: 'https://github.com/acme/shop.git',
+    });
+    expect(buildCreateBody({ ...s, defaultBranch: '  ' })).not.toHaveProperty('defaultBranch');
+    // A new project starts on main again.
+    expect(wizardReducer(s, { type: 'source', source: 'preset' }).defaultBranch).toBe('main');
+    // A branch typed before is kept either way.
+    const typedBranch = run([{ type: 'field', field: 'defaultBranch', value: 'trunk' }]);
+    expect(wizardReducer(typedBranch, { type: 'source', source: 'import_url' }).defaultBranch).toBe('trunk');
+  });
+
   it('follows the URL or folder with the name until the person types one', () => {
     const s = run([
       { type: 'source', source: 'import_url' },
