@@ -207,8 +207,8 @@ export function Dashboard({
         </div>
       )}
       {pruneNote && (
-        <div className="banner banner-info" role="status">
-          {pruneNote}
+        <div className={`banner ${pruneNote.failed ? 'banner-error' : 'banner-info'}`} role="status">
+          {pruneNote.text}
         </div>
       )}
       {pruneBlocked && (

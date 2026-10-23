@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 import type { PruneWorktreeResponse, Run } from '@emberline/protocol';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
 import { apiRoutes, cleanup, click, getButton, renderDom, waitFor } from './domRender';
-import { PRUNE_PENDING_TEXT } from './gcSummary';
+import { PRUNE_FAILED_TEXT, PRUNE_PENDING_TEXT } from './gcSummary';
+import { liveKeys } from './hooks/liveData';
 import { Dashboard } from './pages/Dashboard';
 
 vi.mock('./api', async (importOriginal) => ({
@@ -54,12 +55,13 @@ afterEach(async () => {
 });
 
 async function pruneRun() {
-  await renderDom(createElement(Dashboard, { system: undefined, activeProjectId: 'p1' }), {
+  const rendered = await renderDom(createElement(Dashboard, { system: undefined, activeProjectId: 'p1' }), {
     path: '/?section=runs',
   });
   await waitFor(() => getButton('Prune worktree'));
   await click(getButton('Prune worktree'));
   await waitFor(() => expect(prunes).toBe(1));
+  return rendered;
 }
 
 describe('Dashboard Prune worktree (W-4)', () => {
@@ -67,6 +69,18 @@ describe('Dashboard Prune worktree (W-4)', () => {
     prune = { runId: 'r1', worktreePath: run.worktreePath, removed: false, pending: true };
     await pruneRun();
     await waitFor(() => expect(document.body.textContent).toContain(PRUNE_PENDING_TEXT));
+  });
+
+  it('says the prune failed once the teardown ended without removing the worktree (F-10)', async () => {
+    prune = { runId: 'r1', worktreePath: run.worktreePath, removed: false, pending: true };
+    const { client } = await pruneRun();
+    await waitFor(() => expect(document.body.textContent).toContain(PRUNE_PENDING_TEXT));
+    // The run's event (as the live socket delivers it): the background prune could not remove it.
+    await act(async () =>
+      client.setQueryData(liveKeys.runs, [{ ...run, lastEvent: 'worktree_prune_failed' }]),
+    );
+    await waitFor(() => expect(document.body.textContent).toContain(PRUNE_FAILED_TEXT));
+    expect(document.body.textContent).not.toContain(PRUNE_PENDING_TEXT);
   });
 
   it('drops the note once a later prune removes the worktree right away', async () => {

@@ -1046,6 +1046,48 @@ describe('teardown before prune', () => {
     await expect.poll(() => typesOf(run.id)).toContain('worktree_pruned');
   });
 
+  it("a clean-up leaves a run alone whose shared worktree another run's prune is tearing down (M-3)", async () => {
+    const { release } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    t.db.update(runs).set({ worktreePath: a.worktreePath }).where(eq(runs.id, b.id)).run();
+    expect((await api('POST', `/api/runs/${a.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    // A's teardown runs (its lock is released once the job started).
+    const archive = vi.spyOn(t.runs.outputs, 'archiveBeforePrune');
+    const res = await t.runs.garbageCollect({ projectId: project.id, keepRecent: 0 });
+    expect(archive).not.toHaveBeenCalled();
+    expect(res.removedRuns).toBe(0);
+    expect(res.keptWorktrees).toEqual([{ runId: b.id, reason: 'prune_running' }]);
+    expect(t.runs.list().some((r) => r.id === b.id)).toBe(true);
+    release();
+    await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
+  });
+
+  it('a background prune that could not remove the worktree says so on the run (F-10)', async () => {
+    const { release } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const run = await endedRun(project.id);
+    vi.spyOn(
+      t.runs as unknown as { pruneRunWorktree(project: string, worktree: string): Promise<boolean> },
+      'pruneRunWorktree',
+    ).mockRejectedValue(new Error('EBUSY'));
+    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    release();
+    await expect.poll(() => typesOf(run.id), { timeout: 8_000 }).toContain('worktree_prune_failed');
+    expect(existsSync(run.worktreePath)).toBe(true);
+    expect(await typesOf(run.id)).not.toContain('worktree_pruned');
+    expect(t.runs.getRun(run.id).lastEvent).toBe('worktree_prune_failed');
+  });
+
   it('two prunes of the same run sent together tear down once, and both answer what happened', async () => {
     const { release, order } = holdTeardowns();
     release();

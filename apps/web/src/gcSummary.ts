@@ -34,17 +34,20 @@ export function keptWorktreesSummary(res: Pick<GarbageCollectRunsResponse, 'kept
 }
 
 export const PRUNE_PENDING_TEXT = 'Teardown is running; the worktree is removed when it ends.';
+export const PRUNE_FAILED_TEXT = 'The teardown ended, but the worktree could not be removed. Prune it again.';
 
 /**
  * The note after a run's Prune whose worktree.yml teardown outlasted the request (`pendingRunId`):
  * shown until that run's worktree is pruned or the run is gone, and while the runs are not known yet.
+ * Once the teardown ended without removing the worktree (`worktree_prune_failed`), it says so instead.
  */
 export function prunePendingNote(
   pendingRunId: string | undefined,
   runs: readonly Pick<Run, 'id' | 'lastEvent'>[] | undefined,
-): string | null {
+): { text: string; failed: boolean } | null {
   if (!pendingRunId) return null;
   const run = runs?.find((r) => r.id === pendingRunId);
   if (runs && (!run || run.lastEvent === 'worktree_pruned')) return null;
-  return PRUNE_PENDING_TEXT;
+  if (run?.lastEvent === 'worktree_prune_failed') return { text: PRUNE_FAILED_TEXT, failed: true };
+  return { text: PRUNE_PENDING_TEXT, failed: false };
 }

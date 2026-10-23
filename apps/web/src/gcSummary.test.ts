@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keptWorktreesSummary, PRUNE_PENDING_TEXT, prunePendingNote } from './gcSummary';
+import { keptWorktreesSummary, PRUNE_FAILED_TEXT, PRUNE_PENDING_TEXT, prunePendingNote } from './gcSummary';
 
 describe('keptWorktreesSummary', () => {
   it('says nothing when nothing was left behind', () => {
@@ -32,12 +32,18 @@ describe('prunePendingNote (W-4)', () => {
   const runs = [
     { id: 'r1', lastEvent: 'Stop' },
     { id: 'r2', lastEvent: 'worktree_pruned' },
+    { id: 'r4', lastEvent: 'worktree_prune_failed' },
   ];
+  const pending = { text: PRUNE_PENDING_TEXT, failed: false };
 
   it('says the teardown is still running while the pruned run keeps its worktree', () => {
-    expect(prunePendingNote('r1', runs)).toBe(PRUNE_PENDING_TEXT);
-    expect(prunePendingNote('r1', undefined)).toBe(PRUNE_PENDING_TEXT);
+    expect(prunePendingNote('r1', runs)).toEqual(pending);
+    expect(prunePendingNote('r1', undefined)).toEqual(pending);
     expect(PRUNE_PENDING_TEXT).toBe('Teardown is running; the worktree is removed when it ends.');
+  });
+
+  it('says the prune failed once the teardown ended without removing the worktree', () => {
+    expect(prunePendingNote('r4', runs)).toEqual({ text: PRUNE_FAILED_TEXT, failed: true });
   });
 
   it('goes once the teardown ended: the worktree was pruned, or the run is gone', () => {

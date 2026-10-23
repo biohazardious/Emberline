@@ -2684,9 +2684,18 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
     };
     let removed = false;
+    // Once a teardown job ends (also in the background): a worktree it could not remove is noted, so
+    // the prune's "Teardown is running" note ends and says so.
     const after = (r: boolean) => {
       removed = r;
       recordPruned(r);
+      if (!r && existsSync(row.worktreePath)) {
+        this.record(id, {
+          source: 'system',
+          type: 'worktree_prune_failed',
+          payload: { worktreePath: row.worktreePath },
+        });
+      }
     };
     // One prune of a worktree at a time until its teardown job runs: a second one (the same run, or one
     // sharing the worktree after a handoff) waits, then follows that job, so no archive copy races a
@@ -4096,6 +4105,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           let removedWt = false;
           // The archive and the prune (or the start of its teardown) under the worktree's prune lock.
           const step = await this.unlessPruning(worktreePath, async () => {
+            // A prune of another run sharing it started its teardown: like a held lock, left for the
+            // next clean-up (archiving now would race that teardown).
+            if (this.teardownJobs.has(worktreePath)) return null;
             // The run row goes away with or without its worktree: archive first, or its outputs become
             // unreachable. Within one time budget per request; a run it cannot archive in time is kept.
             const budgetLeft = archiveDeadline - Date.now();
