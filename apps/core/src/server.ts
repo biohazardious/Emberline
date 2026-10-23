@@ -161,6 +161,7 @@ export async function buildServer(
     suggestModel: deps.config.suggestModel,
     cancelWaitMs: deps.config.pickerCancelWaitMs,
     claudeCommand: deps.config.claudeCommand,
+    runnerConnected: () => deps.ptyd.status === 'connected',
   });
   cron.start();
   notifications.start();

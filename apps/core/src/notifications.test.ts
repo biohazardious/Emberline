@@ -260,6 +260,16 @@ describe('NotificationService run events', () => {
     ]);
   });
 
+  it("quotes only the start of a waiting agent's long question", async () => {
+    const h = await harness();
+    h.runs.emit('run', run('waiting_input', 'Stop', att('question', 3, 'Which one? '.repeat(200))), true);
+    await h.flush();
+    const body = h.sent[0]!.body;
+    expect(body).toHaveLength(300);
+    expect(body.endsWith('…')).toBe(true);
+    expect(body).toMatch(/^Run "T" \(Stop\) is waiting for your input or permission\.\nWhich one\? /);
+  });
+
   it('keeps the opt-in finished page, once per finish, and none for a failed or cancelled run', async () => {
     const h = await harness({ onRunFinished: true });
     h.runs.emit('run', run('done', 'Stop', null), true);

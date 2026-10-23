@@ -25,13 +25,25 @@ export const RunQuestion = z.object({
   options: z.array(RunQuestionOption).max(QUESTION_OPTIONS_MAX),
   /** Claude's AskUserQuestion picker is open in the terminal. */
   picker: z.boolean(),
+  /**
+   * An option can answer the open picker by its number: one question, one choice, and every option of
+   * the picker listed in order. Otherwise the options only fill the answer box.
+   */
+  pickerChips: z.boolean(),
   suggest: z.object({ available: z.boolean(), reason: z.string().nullable() }),
 });
 export type RunQuestion = z.infer<typeof RunQuestion>;
 
 /** The compact copy of an AskUserQuestion tool input kept on the hook event (`ask_user_question`). */
 export interface AskUserQuestionSummary {
-  questions: { question: string; header: string | null; options: RunQuestionOption[] }[];
+  questions: {
+    question: string;
+    header: string | null;
+    multiSelect: boolean;
+    options: RunQuestionOption[];
+  }[];
+  /** False when a question or an option without text was left out (numbers no longer match the picker). */
+  complete: boolean;
 }
 
 /** `POST /api/runs/:id/answer`. `option` answers an open picker by its 0-based index. */

@@ -8,6 +8,7 @@ import {
   type RunQuestion,
   type SuggestAnswerResponse,
 } from '@emberline/protocol';
+import { existsSync } from 'node:fs';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runEvents, tickets } from '../db/schema.js';
@@ -29,6 +30,8 @@ export interface QuestionServiceOptions {
   claudeCommand: string;
   /** How long a cancelled picker gets to close before the typed answer follows. */
   cancelWaitMs: number;
+  /** Whether the runner (ptyd) is connected: a suggestion runs there. */
+  runnerConnected: () => boolean;
 }
 
 const noQuestion = () => new HttpError(404, 'no_question', 'This run is not waiting for an answer.');
@@ -90,6 +93,14 @@ export class QuestionService {
       throw new HttpError(409, 'permission_prompt', 'Answer this permission prompt in the terminal.');
     const run = this.runs.getRun(runId);
     const decoded = decodeMaterials(body.attachments, ANSWER_LIMITS);
+    // Refused before any file is written: an answer that cannot be delivered leaves nothing behind.
+    if (question.kind === 'blocked' || question.kind === 'held') this.recovery.assertDeliverable(run);
+    if (!run.worktreePath || !existsSync(run.worktreePath))
+      throw new HttpError(
+        409,
+        'worktree_missing',
+        "this run's worktree was removed; start a new run or discard it",
+      );
     const paths = answerAttachmentPaths(
       decoded.map((d) => d.name),
       new Date(),
@@ -130,6 +141,12 @@ export class QuestionService {
   private async answerPicker(runId: string, question: RunQuestion, option: number): Promise<AnswerResponse> {
     if (!question.picker)
       throw new HttpError(409, 'picker_closed', 'This question has no open picker any more.');
+    if (!question.pickerChips)
+      throw new HttpError(
+        409,
+        'picker_text_only',
+        "Answer this question by typing; its options can't be picked from here.",
+      );
     if (option >= question.options.length)
       throw new HttpError(400, 'invalid_option', 'That option is not offered.');
     await this.runs.prompt(runId, String(option + 1));
@@ -236,6 +253,7 @@ export class QuestionService {
       return { available: false, reason: 'A permission prompt is answered in the terminal.' };
     if (!getFactorySettings(this.db).providerAuth?.claude?.authenticated)
       return { available: false, reason: 'Claude Code is not signed in.' };
+    if (!this.opts.runnerConnected()) return { available: false, reason: 'The runner is not reachable.' };
     return { available: true, reason: null };
   }
 }

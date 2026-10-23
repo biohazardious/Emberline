@@ -1,3 +1,4 @@
+import type { AskUserQuestionSummary } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import { askUserQuestionOf, buildRunQuestion, parseOptions } from './question.js';
 
@@ -51,18 +52,41 @@ describe('askUserQuestionOf', () => {
         {
           question: 'Which colour?',
           header: 'Colour',
+          multiSelect: false,
           options: [
             { label: 'Red', detail: 'warm' },
             { label: 'Green', detail: null },
           ],
         },
       ],
+      complete: true,
     });
+  });
+  it('keeps multiSelect and notes a left-out option or question', () => {
+    expect(
+      askUserQuestionOf({
+        questions: [{ question: 'Which?', multiSelect: true, options: [{ label: 'A' }, { label: 'B' }] }],
+      }),
+    ).toMatchObject({ questions: [{ multiSelect: true }], complete: true });
+    expect(
+      askUserQuestionOf({ questions: [{ question: 'Which?', options: [{ label: '' }, { label: 'B' }] }] }),
+    ).toMatchObject({ questions: [{ options: [{ label: 'B' }] }], complete: false });
+    expect(
+      askUserQuestionOf({ questions: [{ question: '' }, { question: 'Which?', options: [] }] }),
+    ).toMatchObject({ questions: [{ question: 'Which?' }], complete: false });
   });
   it('null for anything else', () => {
     expect(askUserQuestionOf({ questions: 'x' })).toBeNull();
     expect(askUserQuestionOf(null)).toBeNull();
   });
+});
+
+const ask = (
+  questions: { question: string; multiSelect: boolean }[],
+  complete = true,
+): AskUserQuestionSummary => ({
+  questions: questions.map((q) => ({ ...q, header: null, options: [{ label: 'Red', detail: null }] })),
+  complete,
 });
 
 describe('buildRunQuestion', () => {
@@ -73,6 +97,7 @@ describe('buildRunQuestion', () => {
       source: 'blockers',
       options: [],
       picker: false,
+      pickerChips: false,
     });
   });
   it('question: an open picker wins over the last message', () => {
@@ -80,12 +105,30 @@ describe('buildRunQuestion', () => {
       ...base,
       reason: 'question',
       lastMessage: 'Which one?\n1. A\n2. B',
-      pendingAsk: {
-        questions: [{ question: 'Colour?', header: null, options: [{ label: 'Red', detail: null }] }],
-      },
+      pendingAsk: ask([{ question: 'Colour?', multiSelect: false }]),
     });
-    expect(q).toMatchObject({ source: 'ask_user_question', text: 'Colour?', picker: true });
+    expect(q).toMatchObject({
+      source: 'ask_user_question',
+      text: 'Colour?',
+      picker: true,
+      pickerChips: true,
+    });
     expect(q.options).toEqual([{ label: 'Red', detail: null }]);
+  });
+  it('question: chips pick by number only for one single-choice question with every option listed', () => {
+    const chips = (pendingAsk: AskUserQuestionSummary) =>
+      buildRunQuestion({ ...base, reason: 'question', pendingAsk }).pickerChips;
+    expect(chips(ask([{ question: 'Colour?', multiSelect: false }]))).toBe(true);
+    expect(
+      chips(
+        ask([
+          { question: 'Colour?', multiSelect: false },
+          { question: 'Size?', multiSelect: false },
+        ]),
+      ),
+    ).toBe(false);
+    expect(chips(ask([{ question: 'Colours?', multiSelect: true }]))).toBe(false);
+    expect(chips(ask([{ question: 'Colour?', multiSelect: false }], false))).toBe(false);
   });
   it('question: the last message with its options, else the notification', () => {
     expect(
@@ -114,6 +157,7 @@ describe('buildRunQuestion', () => {
       source: 'notification',
       options: [],
       picker: false,
+      pickerChips: false,
     });
   });
   it('held: the recovery why', () => {

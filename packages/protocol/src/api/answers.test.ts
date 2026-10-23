@@ -44,8 +44,21 @@ describe('RunQuestion', () => {
       source: 'blockers',
       options: [],
       picker: false,
+      pickerChips: false,
       suggest: { available: true, reason: null },
     });
     expect(q.kind).toBe('blocked');
+  });
+  it('requires pickerChips', () => {
+    expect(
+      RunQuestion.safeParse({
+        kind: 'question',
+        text: 'Colour?',
+        source: 'ask_user_question',
+        options: [],
+        picker: true,
+        suggest: { available: true, reason: null },
+      }).success,
+    ).toBe(false);
   });
 });

@@ -195,7 +195,15 @@ describe('GET /api/runs/:id/question', () => {
     event('q2', 'PreToolUse', {
       tool_name: 'AskUserQuestion',
       ask_user_question: {
-        questions: [{ question: 'Colour?', header: null, options: [{ label: 'Red', detail: null }] }],
+        questions: [
+          {
+            question: 'Colour?',
+            header: null,
+            multiSelect: false,
+            options: [{ label: 'Red', detail: null }],
+          },
+        ],
+        complete: true,
       },
     });
     expect((await get('/api/runs/q2/question')).json()).toMatchObject({
@@ -208,7 +216,10 @@ describe('GET /api/runs/:id/question', () => {
     waiting('q3');
     event('q3', 'PreToolUse', {
       tool_name: 'AskUserQuestion',
-      ask_user_question: { questions: [{ question: 'Colour?', header: null, options: [] }] },
+      ask_user_question: {
+        questions: [{ question: 'Colour?', header: null, multiSelect: false, options: [] }],
+        complete: true,
+      },
     });
     event('q3', 'PostToolUse', { tool_name: 'AskUserQuestion' });
     event('q3', 'Stop', { last_assistant_message: 'Done?' }, 'waiting_input');
@@ -223,7 +234,15 @@ describe('GET /api/runs/:id/question', () => {
     event('q4', 'PreToolUse', {
       tool_name: 'AskUserQuestion',
       ask_user_question: {
-        questions: [{ question: 'Colour?', header: null, options: [{ label: 'Red', detail: null }] }],
+        questions: [
+          {
+            question: 'Colour?',
+            header: null,
+            multiSelect: false,
+            options: [{ label: 'Red', detail: null }],
+          },
+        ],
+        complete: true,
       },
     });
     event(
@@ -412,24 +431,26 @@ describe('POST /api/runs/:id/answer', () => {
     expect(res.json().error).toBe('no_question');
   });
 
+  type PickerQuestion = { question: string; multiSelect: boolean };
+  const COLOUR: PickerQuestion = { question: 'Colour?', multiSelect: false };
+
   /** A waiting run with an open picker of two options; the session is a spy, so nothing is typed. */
-  function openPicker(id: string) {
+  function openPicker(id: string, questions: PickerQuestion[] = [COLOUR]) {
     const wt = worktree(id, { 'app.js': 'x\n' });
     seedRun({ id, ...wt, hold: null, ended: false });
     t.db.update(runs).set({ state: 'waiting_input' }).where(eq(runs.id, id)).run();
     event(id, 'PreToolUse', {
       tool_name: 'AskUserQuestion',
       ask_user_question: {
-        questions: [
-          {
-            question: 'Colour?',
-            header: null,
-            options: [
-              { label: 'Red', detail: null },
-              { label: 'Green', detail: null },
-            ],
-          },
-        ],
+        questions: questions.map((q) => ({
+          ...q,
+          header: null,
+          options: [
+            { label: 'Red', detail: null },
+            { label: 'Green', detail: null },
+          ],
+        })),
+        complete: true,
       },
     });
     event(
@@ -455,6 +476,71 @@ describe('POST /api/runs/:id/answer', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ delivery: 'picker', attachments: [] });
     expect(calls).toEqual(['prompt:2']);
+  });
+
+  it('a picker of several questions or several choices takes no option, only text', async () => {
+    const cases: [string, PickerQuestion[]][] = [
+      ['m1', [COLOUR, { question: 'Size?', multiSelect: false }]],
+      ['m2', [{ question: 'Colours?', multiSelect: true }]],
+    ];
+    for (const [id, questions] of cases) {
+      const { calls } = openPicker(id, questions);
+      expect((await get(`/api/runs/${id}/question`)).json(), id).toMatchObject({
+        picker: true,
+        pickerChips: false,
+      });
+      const res = await post(`/api/runs/${id}/answer`, { option: 0 });
+      expect(res.statusCode, id).toBe(409);
+      expect(res.json(), id).toMatchObject({
+        error: 'picker_text_only',
+        message: "Answer this question by typing; its options can't be picked from here.",
+      });
+      expect(calls, id).toEqual([]);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a single single-choice picker offers its options as chips', async () => {
+    openPicker('m3');
+    expect((await get('/api/runs/m3/question')).json()).toMatchObject({ picker: true, pickerChips: true });
+  });
+
+  it('a held run a person stopped: refused before any file is written', async () => {
+    const wt = worktree('d1', { 'app.js': 'x\n' });
+    seedRun({ id: 'd1', ...wt, hold: blocked, stops: [{ source: 'user' }] });
+    const res = await post('/api/runs/d1/answer', {
+      text: 'x',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('run_stopped_by_you');
+    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
+    expect(existsSync(path.join(t.dir, 'args-d1'))).toBe(false);
+  });
+
+  it('a run whose worktree is gone: 409 worktree_missing, nothing written or sent', async () => {
+    seedRun({ id: 'd2', hold: blocked });
+    const res = await post('/api/runs/d2/answer', {
+      text: 'x',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('worktree_missing');
+    expect(existsSync(path.join(t.dir, '.worktrees', 'd2'))).toBe(false);
+    expect(existsSync(path.join(t.dir, 'args-d2'))).toBe(false);
+  });
+
+  it('a waiting run whose worktree is gone: 409 worktree_missing, nothing written or sent', async () => {
+    waiting('d3');
+    event('d3', 'Stop', { last_assistant_message: 'Which colour?' }, 'waiting_input');
+    const res = await post('/api/runs/d3/answer', {
+      text: 'x',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('worktree_missing');
+    expect(existsSync(path.join(t.dir, '.worktrees', 'd3'))).toBe(false);
+    expect(existsSync(path.join(t.dir, 'args-d3'))).toBe(false);
   });
 
   it('a second answer while one is being sent is 409 answer_busy and types once', async () => {
@@ -566,6 +652,12 @@ describe('POST /api/runs/:id/answer', () => {
 });
 
 describe('POST /api/runs/:id/question/suggest', () => {
+  // The CLI is faked through the exec seam; the runner counts as connected unless a test says not.
+  let runner = 'connected';
+  beforeEach(() => {
+    runner = 'connected';
+    Object.defineProperty(t.ptyd, 'status', { get: () => runner, configurable: true });
+  });
   afterEach(() => setCommandExecutor(localCommandExecutor));
   const post = (url: string) => t.app.inject({ method: 'POST', url, headers: authHeaders(cookie) });
   const reply = (answer: string) =>
@@ -625,6 +717,23 @@ describe('POST /api/runs/:id/question/suggest', () => {
     expect(res.json()).toMatchObject({
       error: 'suggest_unavailable',
       message: 'Claude Code is not signed in.',
+    });
+  });
+
+  it('unavailable while the runner is not connected, with the reason', async () => {
+    signedIn();
+    seedRun({ id: 'g5', hold: blocked });
+    expect((await get('/api/runs/g5/question')).json().suggest).toEqual({ available: true, reason: null });
+    runner = 'disconnected';
+    expect((await get('/api/runs/g5/question')).json().suggest).toEqual({
+      available: false,
+      reason: 'The runner is not reachable.',
+    });
+    const res = await post('/api/runs/g5/question/suggest');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'suggest_unavailable',
+      message: 'The runner is not reachable.',
     });
   });
 

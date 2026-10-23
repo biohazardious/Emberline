@@ -83,4 +83,30 @@ describe('runSuggestion', () => {
       message: expect.stringContaining('Invalid API key'),
     });
   });
+  it('an error envelope gives its result, not the raw JSON', async () => {
+    setCommandExecutor(
+      ok(JSON.stringify({ type: 'result', is_error: true, result: 'Claude AI usage limit reached' })),
+    );
+    await expect(
+      runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' }),
+    ).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'suggest_failed',
+      message: 'Claude could not suggest an answer: Claude AI usage limit reached',
+    });
+  });
+  it('an envelope without structured_output gives its result, clipped to 200 characters', async () => {
+    setCommandExecutor(ok(JSON.stringify({ type: 'result', is_error: false, result: 'x'.repeat(500) })));
+    await expect(
+      runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' }),
+    ).rejects.toMatchObject({ message: `Claude could not suggest an answer: ${'x'.repeat(200)}…` });
+  });
+  it('an error envelope never returns an answer it carries', async () => {
+    setCommandExecutor(
+      ok(JSON.stringify({ is_error: true, result: 'failed', structured_output: { answer: 'half' } })),
+    );
+    await expect(
+      runSuggestion({ command: 'claude', model: 'haiku', cwd: '/w', prompt: 'p' }),
+    ).rejects.toMatchObject({ message: 'Claude could not suggest an answer: failed' });
+  });
 });

@@ -155,7 +155,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
     suggestModel: env.EMBERLINE_SUGGEST_MODEL?.trim() || 'haiku',
-    pickerCancelWaitMs: 1_000,
+    // Verified live: 1.5 s after Esc the picker has closed and a typed prompt arrives as a message.
+    pickerCancelWaitMs: 1_500,
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,

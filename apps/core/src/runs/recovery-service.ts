@@ -112,6 +112,15 @@ export class RecoveryService {
   }
 
   /**
+   * Throws recover()'s refusal when a prompt could not reach the held run at all, so a caller can
+   * refuse before doing anything else (the Answer dialog writes attachments first).
+   */
+  assertDeliverable(run: Run): void {
+    if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
+    if (this.deliveryFor(run) === 'none') throw this.refusal(run);
+  }
+
+  /**
    * Delivers a person's prompt to a held run (`deliveryFor`): into its own session, or as the prompt
    * of a successor on the same worktree, branch and route. Refusals are 409s with a code.
    */

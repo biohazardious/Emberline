@@ -72,13 +72,35 @@ export async function runSuggestion(params: {
       'suggest_timeout',
       'The suggestion took too long. Write the answer yourself or try again.',
     );
+  // `--output-format json` prints one result envelope; an error (a usage limit, a bad key) is its `result`.
+  const envelope = parseEnvelope(result.stdout);
+  const answer = envelope?.structured_output?.answer;
+  if (envelope && !envelope.is_error && typeof answer === 'string' && answer.trim()) return answer.trim();
+  const said = envelope
+    ? typeof envelope.result === 'string'
+      ? envelope.result.trim()
+      : ''
+    : ((result.stderr || result.stdout).trim().split('\n').at(-1) ?? '');
+  const reason = said.length > 200 ? `${said.slice(0, 200)}…` : said;
+  throw new HttpError(
+    502,
+    'suggest_failed',
+    `Claude could not suggest an answer${reason ? `: ${reason}` : '.'}`,
+  );
+}
+
+interface ResultEnvelope {
+  is_error?: unknown;
+  result?: unknown;
+  structured_output?: { answer?: unknown };
+}
+
+/** The CLI's JSON result, or null when stdout is not one. */
+function parseEnvelope(stdout: string): ResultEnvelope | null {
   try {
-    const answer = (JSON.parse(result.stdout.trim()) as { structured_output?: { answer?: unknown } })
-      .structured_output?.answer;
-    if (typeof answer === 'string' && answer.trim()) return answer.trim();
+    const parsed: unknown = JSON.parse(stdout.trim());
+    return parsed && typeof parsed === 'object' ? (parsed as ResultEnvelope) : null;
   } catch {
-    // fall through to the CLI's own words
+    return null;
   }
-  const last = (result.stderr || result.stdout).trim().split('\n').at(-1)?.slice(0, 200) ?? '';
-  throw new HttpError(502, 'suggest_failed', `Claude could not suggest an answer${last ? `: ${last}` : '.'}`);
 }

@@ -62,9 +62,13 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? 
 export function askUserQuestionOf(toolInput: unknown): AskUserQuestionSummary | null {
   const questions = (toolInput as { questions?: unknown } | null)?.questions;
   if (!Array.isArray(questions)) return null;
+  let complete = true;
   const out = questions.flatMap((q) => {
     const question = str((q as { question?: unknown }).question);
-    if (!question) return [];
+    if (!question) {
+      complete = false;
+      return [];
+    }
     const options = Array.isArray((q as { options?: unknown }).options)
       ? (q as { options: unknown[] }).options
       : [];
@@ -72,9 +76,11 @@ export function askUserQuestionOf(toolInput: unknown): AskUserQuestionSummary | 
       {
         question: clip(question),
         header: str((q as { header?: unknown }).header),
+        multiSelect: (q as { multiSelect?: unknown }).multiSelect === true,
         options: options
           .flatMap((o) => {
             const label = str((o as { label?: unknown }).label);
+            if (!label) complete = false;
             return label
               ? [{ label: clip(label), detail: str((o as { description?: unknown }).description) }]
               : [];
@@ -83,11 +89,19 @@ export function askUserQuestionOf(toolInput: unknown): AskUserQuestionSummary | 
       },
     ];
   });
-  return out.length > 0 ? { questions: out } : null;
+  return out.length > 0 ? { questions: out, complete } : null;
+}
+
+/**
+ * Whether option i of the open picker is its number i+1: verified live only for one question with a
+ * single choice. A summary from before `multiSelect`/`complete` were kept counts as not.
+ */
+export function pickerTakesNumbers(ask: AskUserQuestionSummary): boolean {
+  return ask.complete === true && ask.questions.length === 1 && ask.questions[0]!.multiSelect === false;
 }
 
 export function buildRunQuestion(input: QuestionInput): Omit<RunQuestion, 'suggest'> {
-  const none = { options: [] as RunQuestionOption[], picker: false };
+  const none = { options: [] as RunQuestionOption[], picker: false, pickerChips: false };
   switch (input.reason) {
     case 'blocked':
       return { kind: 'blocked', text: input.blockers.join('\n'), source: 'blockers', ...none };
@@ -99,7 +113,14 @@ export function buildRunQuestion(input: QuestionInput): Omit<RunQuestion, 'sugge
       const ask = input.pendingAsk?.questions[0];
       if (ask) {
         const text = input.pendingAsk!.questions.map((q) => q.question).join('\n');
-        return { kind: 'question', text, source: 'ask_user_question', options: ask.options, picker: true };
+        return {
+          kind: 'question',
+          text,
+          source: 'ask_user_question',
+          options: ask.options,
+          picker: true,
+          pickerChips: pickerTakesNumbers(input.pendingAsk!),
+        };
       }
       if (input.lastMessage)
         return {
@@ -108,6 +129,7 @@ export function buildRunQuestion(input: QuestionInput): Omit<RunQuestion, 'sugge
           source: 'last_message',
           options: parseOptions(input.lastMessage),
           picker: false,
+          pickerChips: false,
         };
       return { kind: 'question', text: input.notification ?? '', source: 'notification', ...none };
     }

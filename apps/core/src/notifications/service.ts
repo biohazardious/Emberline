@@ -37,8 +37,16 @@ export interface NotificationMessage {
   tags?: string[];
 }
 
-/** The page text for a run that needs a person, from its attention. */
+/** A page quotes the start of the agent's text; the Inbox shows all of it. */
+export const PAGE_BODY_MAX = 300;
+
+/** The page text for a run that needs a person, from its attention, at most PAGE_BODY_MAX characters. */
 function waitingBody(label: string, run: Run, attention: NonNullable<Run['attention']>): string {
+  const body = waitingText(label, run, attention);
+  return body.length > PAGE_BODY_MAX ? `${body.slice(0, PAGE_BODY_MAX - 1)}…` : body;
+}
+
+function waitingText(label: string, run: Run, attention: NonNullable<Run['attention']>): string {
   const detail = attention.detail;
   switch (attention.reason) {
     case 'stalled':
