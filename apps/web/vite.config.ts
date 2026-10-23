@@ -1,10 +1,40 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
+/** npm packages the app's own chunk loads on every page. */
+const SHARED_LIBRARIES = new Set([
+  'react',
+  'react-dom',
+  'scheduler',
+  '@tanstack/react-query',
+  '@tanstack/query-core',
+  'wouter',
+  'regexparam',
+  'use-sync-external-store',
+  'lucide-react',
+  'zod',
+]);
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
     conditions: ['@emberline/source', 'module', 'browser', 'development|production'],
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // The libraries every page loads, and the protocol schemas, in chunks of their own beside
+        // the app's: none of them grows the app's chunk. Those only lazy pages use (xterm, Monaco)
+        // stay with those pages.
+        manualChunks(id) {
+          if (id.includes('/packages/protocol/')) return 'protocol';
+          const pkg = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(
+            id.slice(id.lastIndexOf('/node_modules/')),
+          )?.[1];
+          return pkg && SHARED_LIBRARIES.has(pkg) ? 'vendor' : undefined;
+        },
+      },
+    },
   },
   server: {
     port: 5173,
