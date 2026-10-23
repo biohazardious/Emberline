@@ -518,6 +518,24 @@ describe('POST /api/runs/:id/answer', () => {
     expect(existsSync(path.join(t.dir, 'args-d1'))).toBe(false);
   });
 
+  it('a successor answer too long for the handoff context: 400 before any file is written', async () => {
+    const wt = worktree('d3', { 'app.js': 'x\n' });
+    seedRun({
+      id: 'd3',
+      ...wt,
+      hold: blocked,
+      stops: [{ source: 'system', reason: 'factory_step_finished' }],
+    });
+    const res = await post('/api/runs/d3/answer', {
+      text: 'x'.repeat(19_000),
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('prompt_too_long');
+    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
+    expect(existsSync(path.join(t.dir, 'args-d3'))).toBe(false);
+  });
+
   it('a run whose worktree is gone: 409 worktree_missing, nothing written or sent', async () => {
     seedRun({ id: 'd2', hold: blocked });
     const res = await post('/api/runs/d2/answer', {

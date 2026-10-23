@@ -12,7 +12,7 @@ import {
   type TicketName,
 } from '../attention';
 import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
-import { answerOffered } from '../answerDialog';
+import { answerOffered, answerTarget } from '../answerDialog';
 import { AnswerDialog } from '../components/AnswerDialog';
 import { HoldRecovery, useRunRecovery } from '../components/HoldRecovery';
 import { recoveryApplies } from '../holdRecovery';
@@ -38,25 +38,19 @@ function InboxItem({
   heading,
   onOpen,
   onDismiss,
+  onAnswer,
 }: {
   run: Run;
   project: Project | undefined;
   heading: { key: string | null; title: string };
   onOpen: () => void;
   onDismiss: () => void;
+  /** Opens the Answer dialog with this start text. */
+  onAnswer: (text: string) => void;
 }) {
   const attention = run.attention!;
   const [expanded, setExpanded] = useState(false);
-  // The Answer dialog (undefined: closed) and its start text.
-  const [answer, setAnswer] = useState<string>();
   useNow(30_000);
-  // Presence tells core the person is looking, so no push notification goes out while the dialog is open.
-  const answering = answer !== undefined;
-  useEffect(() => {
-    if (!answering) return;
-    setPresenceRun(run.id, 'inbox');
-    return () => clearPresenceRun(run.id, 'inbox');
-  }, [answering, run.id]);
 
   // Held detail is already the HOLD_LABELS label (the map covers an unexpected raw key); a failure's is its type.
   const detail = attentionDetail(attention);
@@ -94,10 +88,10 @@ function InboxItem({
           )}
         </div>
       )}
-      {recovering && <HoldRecovery key={run.id} run={run} onAnswer={setAnswer} />}
+      {recovering && <HoldRecovery key={run.id} run={run} onAnswer={onAnswer} />}
       <div className="inbox-actions">
         {answerOffered(run, recovery.data) && (
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => setAnswer('')}>
+          <button type="button" className="btn btn-sm btn-primary" onClick={() => onAnswer('')}>
             Answer
           </button>
         )}
@@ -110,9 +104,6 @@ function InboxItem({
           </button>
         )}
       </div>
-      {answering && (
-        <AnswerDialog run={run} heading={heading} initialText={answer} onClose={() => setAnswer(undefined)} />
-      )}
     </li>
   );
 }
@@ -160,6 +151,21 @@ export function InboxPage({
   const [permission, setPermission] = useState<NotificationPermission>(() =>
     notificationsSupported() ? Notification.permission : 'denied',
   );
+  // The open Answer dialog. Held here, not in the item: the item remounts or leaves when the run's
+  // attention changes, and the dialog (with the files the person added) must stay until they close it.
+  const [answering, setAnswering] = useState<{
+    run: Run;
+    heading: { key: string | null; title: string };
+    text: string;
+  } | null>(null);
+  const answerRun = answering ? answerTarget(runs, answering.run) : null;
+  // Presence tells core the person is looking, so no push notification goes out while the dialog is open.
+  const answerRunId = answerRun?.id;
+  useEffect(() => {
+    if (!answerRunId) return;
+    setPresenceRun(answerRunId, 'inbox');
+    return () => clearPresenceRun(answerRunId, 'inbox');
+  }, [answerRunId]);
 
   return (
     <div className="inbox-page">
@@ -199,11 +205,21 @@ export function InboxPage({
                   heading={inboxHeading(run, ticketsById)}
                   onOpen={() => onOpenRun(run.id)}
                   onDismiss={() => onDismiss(run)}
+                  onAnswer={(text) => setAnswering({ run, heading: inboxHeading(run, ticketsById), text })}
                 />
               ))}
             </ul>
           </section>
         ))
+      )}
+      {answering && answerRun && (
+        <AnswerDialog
+          key={answerRun.id}
+          run={answerRun}
+          heading={answering.heading}
+          initialText={answering.text}
+          onClose={() => setAnswering(null)}
+        />
       )}
     </div>
   );

@@ -58,6 +58,13 @@ export const answerOffered = (
   recovery: Pick<RunRecovery, 'delivery'> | null | undefined,
 ): boolean => !!run.attention && ANSWERABLE.has(run.attention.reason) && recovery?.delivery !== 'none';
 
+/**
+ * The run an open Answer dialog shows: its latest copy, or the one it opened with once the run left
+ * the list (it stopped waiting). The dialog stays open either way, so the person's files are not lost.
+ */
+export const answerTarget = <R extends Pick<Run, 'id'>>(runs: readonly R[] | undefined, opened: R): R =>
+  runs?.find((r) => r.id === opened.id) ?? opened;
+
 /** What the answer box opens with: a suggestion's prompt when there is one, else the run's draft. */
 export const startText = (initialText: string | undefined, runId: string): string =>
   initialText || loadDraft(runId);

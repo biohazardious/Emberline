@@ -104,13 +104,17 @@ const MIN_CONTEXT = 2_000;
  */
 export function successorPrompt(input: HandoffPromptInput, extra: string, max = RUN_PROMPT_MAX): string {
   if (!extra) return buildHandoffPrompt(input, max);
-  const room = max - extra.length - 2;
-  if (room < MIN_CONTEXT) {
+  assertSuccessorExtraFits(extra, max);
+  return `${buildHandoffPrompt(input, max - extra.length - 2)}\n\n${extra}`;
+}
+
+/** {@link successorPrompt}'s 400 `prompt_too_long`, for a caller that checks before acting. */
+export function assertSuccessorExtraFits(extra: string, max = RUN_PROMPT_MAX): void {
+  if (max - extra.length - 2 < MIN_CONTEXT) {
     throw new HttpError(
       400,
       'prompt_too_long',
       `The prompt is too long to send with the run's handoff context. Keep it under ${max - MIN_CONTEXT - 2} characters.`,
     );
   }
-  return `${buildHandoffPrompt(input, room)}\n\n${extra}`;
 }

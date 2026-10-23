@@ -4,6 +4,7 @@ import {
   ANSWER_DRAFT_KEY,
   answerErrorText,
   answerOffered,
+  answerTarget,
   canSend,
   chipAnswers,
   clearDraft,
@@ -148,6 +149,23 @@ describe('startText', () => {
   it("a suggestion's prompt wins over the draft", () => {
     saveDraft('r1', 'my draft');
     expect(startText('Fix the checks.', 'r1')).toBe('Fix the checks.');
+  });
+});
+
+describe('answerTarget', () => {
+  it('follows the latest copy of the run, and keeps the opened one once it leaves the list', () => {
+    const opened = { id: 'r1', v: 1 };
+    expect(
+      answerTarget(
+        [
+          { id: 'r2', v: 1 },
+          { id: 'r1', v: 2 },
+        ],
+        opened,
+      ),
+    ).toEqual({ id: 'r1', v: 2 });
+    expect(answerTarget([{ id: 'r2', v: 1 }], opened)).toBe(opened);
+    expect(answerTarget(undefined, opened)).toBe(opened);
   });
 });
 

@@ -17,6 +17,7 @@ import { writeNewWorkspaceFile } from '../factory/files.js';
 import { decodeMaterials } from '../factory/materials.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { answerAttachmentPaths, answerPrompt, type StoredAttachment } from './answer.js';
+import { assertSuccessorExtraFits } from './handoff.js';
 import { buildRunQuestion } from './question.js';
 import { buildSuggestPrompt, runSuggestion } from './suggest.js';
 import type { RecoveryService } from './recovery-service.js';
@@ -105,7 +106,24 @@ export class QuestionService {
       decoded.map((d) => d.name),
       new Date(),
     );
-    const files: StoredAttachment[] = [];
+    const files: StoredAttachment[] = decoded.map((d, i) => ({
+      path: paths[i]!,
+      mimeType: d.mimeType,
+      sizeBytes: d.sizeBytes,
+    }));
+    const text = answerPrompt(
+      question,
+      body.text,
+      files,
+      question.kind === 'blocked' ? this.opts.completionReminder(run) : '',
+    );
+    // A successor's prompt also carries the handoff context: a too-long answer is refused here, before
+    // its files are written, rather than by the handoff after.
+    if (
+      (question.kind === 'blocked' || question.kind === 'held') &&
+      this.recovery.deliveryFor(run) === 'successor'
+    )
+      assertSuccessorExtraFits(text);
     for (const [i, d] of decoded.entries()) {
       try {
         await writeNewWorkspaceFile(run.worktreePath, paths[i]!, d.bytes);
@@ -116,14 +134,7 @@ export class QuestionService {
           `Couldn't store ${d.name} in the run's worktree. Try again, or send the answer without it.`,
         );
       }
-      files.push({ path: paths[i]!, mimeType: d.mimeType, sizeBytes: d.sizeBytes });
     }
-    const text = answerPrompt(
-      question,
-      body.text,
-      files,
-      question.kind === 'blocked' ? this.opts.completionReminder(run) : '',
-    );
     if (question.kind === 'blocked' || question.kind === 'held') {
       const res = await this.recovery.recover(run.id, text);
       return { delivery: res.delivery, attachments: paths };
