@@ -169,6 +169,16 @@ await step('build gate runs workspace scripts in the runner, not in core', async
   assert.match(build.json.output, /ran-in-runner=true/);
 });
 
+await step('answer dialog: a run that needs nothing has no question', async () => {
+  const run = await api('POST', '/api/runs', { projectId: project.id, prompt: 'e2e answer dialog' });
+  assert.equal(run.status, 201, run.text);
+  const q = await api('GET', `/api/runs/${run.json.id}/question`);
+  assert.ok(q.status === 404 && q.json.error === 'no_question', `question: ${q.status} ${q.text}`);
+  const a = await api('POST', `/api/runs/${run.json.id}/answer`, { text: 'x' });
+  assert.equal(a.status, 404, `answer: ${a.status} ${a.text}`);
+  await api('POST', `/api/runs/${run.json.id}/stop`);
+});
+
 await step(
   'wizard materials: the files are in docs/reference/ in the first commit and PROJECT.md lists them',
   async () => {
