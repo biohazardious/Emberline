@@ -119,9 +119,9 @@ const INGESTED_TICKET_FILES_MAX = 50;
 const ACTIVE_CHAINS_KEY = 'factory.activeChains';
 
 /**
- * Settings key of the runs whose completion pipeline is due or going (JSON array of run ids): set
- * when a finished turn's settle wait starts, cleared when its pass ends or the wait is dropped. What
- * is left at start-up was cut off by the restart.
+ * Settings key of the runs whose completion pipeline is due or going (JSON object: run id -> the
+ * mode of its latest pass): set when a finished turn's settle wait or a pass starts, cleared when its
+ * pass ends or the wait is dropped. What is left at start-up was cut off by the restart.
  */
 const PENDING_PIPELINES_KEY = 'factory.pendingPipelines';
 
@@ -133,6 +133,11 @@ const PENDING_PIPELINES_KEY = 'factory.pendingPipelines';
 interface PipelineOptions {
   finalizing?: boolean;
   resumed?: boolean;
+}
+
+/** A pipeline marked as due in {@link PENDING_PIPELINES_KEY}, with the mode of its latest pass. */
+interface PendingPipeline {
+  finalizing: boolean;
 }
 
 /**
@@ -272,6 +277,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly autoChainProjects: Set<string>;
   /** Runs whose build gate ran in this process (its fix request also survives a restart: askedToFix). */
   private readonly selfHealedRuns = new Set<string>();
+  /** Runs whose critic call is in flight in this process (`critic_reviewed` is noted once it answered). */
+  private readonly criticRunning = new Set<string>();
   private readonly dispatchLock = new KeyedMutex();
   /** Tickets whose start() is between its active-run check and the run being recorded. */
   private readonly startingTickets = new Set<string>();
@@ -408,17 +415,31 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.releasePipelinePending(runId);
   }
 
-  /** The runs whose pipeline is due or going, as stored (see {@link PENDING_PIPELINES_KEY}). */
-  private pendingPipelineRuns(): Set<string> {
+  /**
+   * The runs whose pipeline is due or going, with the mode of their latest pass (`finalizing`: a
+   * dispatch's), as stored (see {@link PENDING_PIPELINES_KEY}).
+   */
+  private pendingPipelineRuns(): Map<string, PendingPipeline> {
     const value = getSetting<unknown>(this.db, PENDING_PIPELINES_KEY);
-    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []);
+    const pending = new Map<string, PendingPipeline>();
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [runId, mode] of Object.entries(value as Record<string, unknown>)) {
+        pending.set(runId, { finalizing: (mode as PendingPipeline | null)?.finalizing === true });
+      }
+    }
+    return pending;
   }
 
-  private markPipelinePending(runId: string): void {
+  private savePendingPipelines(pending: Map<string, PendingPipeline>): void {
+    setSetting(this.db, PENDING_PIPELINES_KEY, Object.fromEntries(pending));
+  }
+
+  /** Marks the run's pipeline as due, in the mode of the pass about to run (a resumed one keeps it). */
+  private markPipelinePending(runId: string, { finalizing = false }: PipelineOptions = {}): void {
     const pending = this.pendingPipelineRuns();
-    if (pending.has(runId)) return;
-    pending.add(runId);
-    setSetting(this.db, PENDING_PIPELINES_KEY, [...pending]);
+    if (pending.get(runId)?.finalizing === finalizing) return;
+    pending.set(runId, { finalizing });
+    this.savePendingPipelines(pending);
   }
 
   /** Clears the run's mark unless a settle wait or a pass of it still goes on. */
@@ -426,12 +447,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (this.settlingRuns.has(runId) || this.pipelineRuns.has(runId)) return;
     const pending = this.pendingPipelineRuns();
     if (!pending.delete(runId)) return;
-    setSetting(this.db, PENDING_PIPELINES_KEY, [...pending]);
+    this.savePendingPipelines(pending);
   }
 
   /** Runs the completion pipeline in the background; it is best effort per run. */
   private completeRun(run: Run, opts: PipelineOptions = {}): void {
-    this.markPipelinePending(run.id);
+    this.markPipelinePending(run.id, opts);
     this.handleRunCompleted(run, opts).catch((error: unknown) => {
       // Record why it stopped instead of crashing core.
       this.runs.note(run.id, 'pipeline_failed', { message: (error as Error).message?.slice(0, 500) });
@@ -576,7 +597,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const cutOff = this.pendingPipelineRuns();
     for (const projectId of known) this.finalizeLeftoverReviews(projectId, { cutOff });
     // A cut-off pass not taken up (its run is gone, or its ticket left Review) is dropped.
-    for (const runId of cutOff) this.releasePipelinePending(runId);
+    for (const runId of cutOff.keys()) this.releasePipelinePending(runId);
     if (!getFactorySettings(this.db).autoPickupReady) return;
     const resumed: Promise<unknown>[] = [];
     for (const projectId of [...this.autoChainProjects]) {
@@ -605,7 +626,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       finalizing,
       cutOff,
       liftedHolds = false,
-    }: { finalizing?: boolean; cutOff: Set<string>; liftedHolds?: boolean },
+    }: { finalizing?: boolean; cutOff: Map<string, PendingPipeline>; liftedHolds?: boolean },
   ): void {
     const { autoMoveToDone } = getFactorySettings(this.db);
     for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
@@ -640,7 +661,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (this.resumedPipelines.has(latestRun.id)) continue;
       this.resumedPipelines.add(latestRun.id);
-      this.completeRun(latestRun, { finalizing, resumed: wasCutOff });
+      // A resumed pass runs in the mode it was cut off in (a dispatch's rerun after an unblock is `finalizing`).
+      this.completeRun(latestRun, {
+        finalizing: finalizing || cutOff.get(latestRun.id)?.finalizing === true,
+        resumed: wasCutOff,
+      });
     }
   }
 
@@ -695,7 +720,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /**
    * Whether the run was already asked to fix this check (the autoFix note survives restarts). The
-   * build gate's note names no check (nor did the worktree.yml one before it did: its text says so).
+   * build gate's note names no check; neither did the worktree.yml and worktree-commands ones before
+   * they did, so those are told apart by their text.
    */
   private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands' | 'build'): boolean {
     return this.db
@@ -707,8 +733,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         const p = payload as { check?: string; autoFix?: boolean; output?: string } | null;
         if (p?.autoFix !== true) return false;
         if (p.check !== undefined) return p.check === check;
-        const worktreeYml = (p.output ?? '').startsWith('.emberline/worktree.yml is not valid:');
-        return check === 'worktree_yml' ? worktreeYml : check === 'build' && !worktreeYml;
+        const output = p.output ?? '';
+        const worktreeYml = output.startsWith('.emberline/worktree.yml is not valid:');
+        // The worktree-commands request named no check before 0.5.0 either; its text says what it asks.
+        const worktreeCommands = output.includes(
+          'this ticket asks for the setup, build, lint and test commands and the preview service',
+        );
+        if (check === 'worktree_yml') return worktreeYml;
+        return check === 'build' && !worktreeYml && !worktreeCommands;
       });
   }
 
@@ -1456,17 +1488,25 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       fSettings.crossProviderCritic &&
       run.worktreePath &&
       !isFactoryOrchestratorTicket &&
+      !this.criticRunning.has(run.id) &&
       !this.runs.hasEvent(run.id, 'critic_reviewed')
     ) {
-      // Once per run, also across a restart: noted before the critic runs, like a claim.
-      this.runs.note(run.id, 'critic_reviewed', {});
-      const criticRes = await runCrossProviderCritic({
-        run,
-        ticketTitle: ticketRow?.title ?? run.title,
-        ticketBody: ticketRow?.body ?? null,
-        workspacePath: run.worktreePath,
-        settings: fSettings,
-      }).catch(() => null);
+      // Once per run, also across a restart: noted once its verdict is in, so a pass a restart cut off
+      // while the critic ran asks it again instead of merging without one.
+      this.criticRunning.add(run.id);
+      let criticRes: Awaited<ReturnType<typeof runCrossProviderCritic>> | null;
+      try {
+        criticRes = await runCrossProviderCritic({
+          run,
+          ticketTitle: ticketRow?.title ?? run.title,
+          ticketBody: ticketRow?.body ?? null,
+          workspacePath: run.worktreePath,
+          settings: fSettings,
+        }).catch(() => null);
+      } finally {
+        this.criticRunning.delete(run.id);
+      }
+      this.runs.note(run.id, 'critic_reviewed', { verdict: criticRes?.verdict ?? null });
 
       if (
         criticRes &&

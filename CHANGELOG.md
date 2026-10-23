@@ -22,6 +22,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - **Prune worktree** on a run whose agent had just exited could fail with "stop the active run before pruning its worktree", and **Clean Up Finished** or **Clean Worktrees** skipped a run that had just ended. They now notice the exit first.
 - A run sharing its worktree with another run (after a handoff) could start a preview while that worktree was being torn down and removed. The preview is now refused until the removal is done.
 - When core restarted while a finished ticket run waited for its checks and merge, the ticket stayed in Review without them unless the project's factory chain was on. After a restart, such a ticket now gets its checks and merge in every project, as it would have without the restart.
+- **Run pipeline** (and a running factory picking up its next ticket) could merge a ticket you had started yourself and left in Review, and move it to Done, when the factory was off as that ticket finished. Such a ticket now stays in Review for you.
 
 ## [0.6.0] - 2026-10-23
 

@@ -901,7 +901,10 @@ describe('teardown before prune', () => {
     expect(res.json()).toMatchObject({ removed: false, pending: true });
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
     // A archived the worktree's outputs before its teardown began; B's timeline says where they are.
-    expect(await payloadOf(b.id, 'build_outputs_archived_elsewhere')).toMatchObject({ runId: a.id });
+    expect(await payloadOf(b.id, 'build_outputs_archive_shared')).toMatchObject({
+      runId: a.id,
+      archived: true,
+    });
     release();
     await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
     await expect.poll(() => typesOf(a.id)).toContain('worktree_pruned');
@@ -910,7 +913,7 @@ describe('teardown before prune', () => {
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
   });
 
-  it('two prunes of runs sharing a worktree, sent while the first archives, tear it down once', async () => {
+  it('two prunes of runs sharing a worktree, sent while the first archives, tear it down once and copy once', async () => {
     const { release, order } = holdTeardowns();
     budgets().request = 200;
     const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
@@ -930,10 +933,17 @@ describe('teardown before prune', () => {
       });
     const pruneA = api('POST', `/api/runs/${a.id}/worktree/prune`, {});
     await expect.poll(() => archiveSpy.mock.calls.length).toBe(1);
-    const resB = await api('POST', `/api/runs/${b.id}/worktree/prune`, {});
-    expect(resB.json()).toMatchObject({ pending: true });
+    // B waits for A's archive and teardown start, then follows them: it copies nothing itself.
+    const pruneB = api('POST', `/api/runs/${b.id}/worktree/prune`, {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
     archived();
     expect((await pruneA).json()).toMatchObject({ pending: true });
+    expect((await pruneB).json()).toMatchObject({ pending: true });
+    expect(archiveSpy.mock.calls.map(([id]) => id)).toEqual([a.id]);
+    expect(await payloadOf(b.id, 'build_outputs_archive_shared')).toMatchObject({
+      runId: a.id,
+      archived: true,
+    });
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
     release();
     await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
@@ -942,13 +952,36 @@ describe('teardown before prune', () => {
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
   });
 
+  it("a run following another run's teardown says so when that run's archive failed", async () => {
+    const { release } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    t.db.update(runs).set({ worktreePath: a.worktreePath }).where(eq(runs.id, b.id)).run();
+    vi.spyOn(t.runs.outputs, 'archiveBeforePrune').mockResolvedValue('failed');
+    expect((await api('POST', `/api/runs/${a.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    expect((await api('POST', `/api/runs/${b.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    expect(await payloadOf(b.id, 'build_outputs_archive_shared')).toMatchObject({
+      runId: a.id,
+      archived: false,
+    });
+    release();
+    await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
+  });
+
   it('two prunes of the same run sent together tear down once, and both answer what happened', async () => {
     const { release, order } = holdTeardowns();
     release();
     const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
     await approveHead(project.id);
     const run = await endedRun(project.id);
-    // Both requests get past their checks while the archive runs.
+    // The second request arrives while the first one archives.
     let archived!: () => void;
     const archiving = new Promise<void>((resolve) => (archived = resolve));
     const archive = t.runs.outputs.archiveBeforePrune.bind(t.runs.outputs);
@@ -960,7 +993,8 @@ describe('teardown before prune', () => {
       });
     const first = api('POST', `/api/runs/${run.id}/worktree/prune`, {});
     const second = api('POST', `/api/runs/${run.id}/worktree/prune`, {});
-    await expect.poll(() => archiveSpy.mock.calls.length).toBe(2);
+    await expect.poll(() => archiveSpy.mock.calls.length).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     archived();
     for (const res of [await first, await second]) {
       expect(res.json()).toMatchObject({ removed: true });

@@ -10,7 +10,7 @@ import { runs, tickets } from './db/schema.js';
 import { reviewUnblockPending, stillHeld } from './runs/hold-outcome.js';
 import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
-import type { TicketService } from './tickets/service.js';
+import { TicketService } from './tickets/service.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -327,6 +327,27 @@ describe('blocking review comments close the merge gate', () => {
     await t.tickets.dispatchNextReadyTicket(project.id);
     await expect.poll(() => statusOf(ticket.id), { timeout: 10_000 }).toBe('done');
     expect(await eventTypes(run)).toContain('merged_to_main');
+  });
+
+  it("a dispatch's rerun after an unblock that a restart cut off resumes as that rerun, after the chain went off", async () => {
+    const { project, ticket, run, token } = await factoryTicket();
+    const c = await comment(run, 'blocking');
+    const passes = trackPipelines();
+    await finishTurn(run, token);
+    await settled(passes, 1);
+    // The dispatch's rerun after the unblock is cut off by a restart; the chain ended meanwhile.
+    (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+      undefined;
+    await api('PATCH', `/api/runs/${run.id}/review/comments/${c.id}`, { status: 'resolved' });
+    await t.tickets.dispatchNextReadyTicket(project.id);
+    t.tickets.setAutoChain(project.id, false);
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const resumed = trackPipelines(restarted);
+    await restarted.resumeChains();
+    await settled(resumed, 1);
+    expect(await eventTypes(run)).toContain('merged_to_main');
+    expect(await statusOf(ticket.id)).toBe('done');
   });
 
   it('an unblock does not end another hold', async () => {

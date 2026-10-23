@@ -15,6 +15,8 @@ import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
 const critic = vi.hoisted(() => ({
   result: null as null | { verdict: 'PASS' | 'NEEDS_FIX'; followUpPrompt: string | null },
   calls: 0,
+  /** The next call never answers (core goes down meanwhile). */
+  hang: false,
 }));
 /** A build gate result for the next pipelines to get instead of building (null: the real build). */
 const build = vi.hoisted(() => ({ result: null as null | { ok: boolean; output: string }, calls: 0 }));
@@ -24,6 +26,10 @@ vi.mock('./factory/service.js', async (importOriginal) => {
     ...actual,
     runCrossProviderCritic: (async (params) => {
       critic.calls += 1;
+      if (critic.hang) {
+        critic.hang = false;
+        return new Promise(() => undefined);
+      }
       return critic.result ?? actual.runCrossProviderCritic(params);
     }) as typeof actual.runCrossProviderCritic,
     buildWorkspaceDemo: (async (params) => {
@@ -74,6 +80,7 @@ beforeEach(async () => {
 afterEach(async () => {
   critic.result = null;
   critic.calls = 0;
+  critic.hang = false;
   build.result = null;
   build.calls = 0;
   await ptydServer.close();
@@ -1602,6 +1609,59 @@ describe('factory chain robustness', () => {
       await restartAfterSecondStop(run);
       expect(critic.calls).toBe(1);
       expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
+      await settle(project.id);
+    });
+
+    it('a pass cut off while the critic ran asks the critic again instead of merging without its verdict', async () => {
+      await api('PATCH', '/api/factory/settings', { crossProviderCritic: true });
+      critic.result = { verdict: 'NEEDS_FIX', followUpPrompt: 'Fix the findings of the review.' };
+      critic.hang = true;
+      const sent = recordPrompts();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      await finish(run);
+      // Core goes down while the critic is still working on its verdict.
+      await expect.poll(() => critic.calls, { timeout: 10_000 }).toBe(1);
+
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      const resumed = trackPipelines(restarted);
+      await restarted.resumeChains();
+      await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(resumed);
+      expect(critic.calls).toBe(2);
+      expect(await eventTypes(run)).toContain('critic_blocked');
+      expect(await eventTypes(run)).not.toContain('merged_to_main');
+      expect(sent).toEqual(['Fix the findings of the review.' + t.tickets.completionReminder(run, '\n\n')]);
+      expect(await statusOf(a.id)).toBe('review');
+      await settle(project.id);
+    });
+
+    it('a worktree-commands fix request from before 0.5.0 does not count as a build fix request', async () => {
+      build.result = { ok: false, output: 'boom' };
+      recordPrompts();
+      const project = await createProject();
+      const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+      const passes = trackPipelines();
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const run = runsFor(a.id)[0] as Run;
+      writeFileSync(
+        path.join(run.worktreePath, 'package.json'),
+        JSON.stringify({ scripts: { build: 'true' } }),
+      );
+      wgit(run.worktreePath, 'add', '-A');
+      wgit(run.worktreePath, 'commit', '-q', '-m', 'build');
+      // Such a note named no check.
+      t.runs.note(run.id, 'build_gate_failed', {
+        autoFix: true,
+        output:
+          '.emberline/worktree.yml is missing: this ticket asks for the setup, build, lint and test commands and the preview service.',
+      });
+      await finish(run);
+      await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+      await Promise.all(passes);
+      expect(build.calls).toBe(1);
       await settle(project.id);
     });
 

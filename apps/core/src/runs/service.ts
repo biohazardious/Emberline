@@ -387,8 +387,10 @@ const BOOKKEEPING_EVENT_TYPES = new Set([
   'docker_project_removed',
   // The pipeline's own records: the critic ran, where a shared worktree's outputs went.
   'critic_reviewed',
-  'build_outputs_archived_elsewhere',
+  'build_outputs_archive_shared',
 ]);
+/** How a pre-prune archive pass went (BuildOutputArchive.archiveBeforePrune). */
+type ArchiveOutcome = 'archived' | 'timeout' | 'failed';
 /** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
 const PRUNE_RUNS_PER_PASS = 10;
 /**
@@ -630,8 +632,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   };
   /** Background teardown-then-prune jobs by worktree path, so a project delete can wait for them. */
   private readonly teardownJobs = new Map<string, Promise<void>>();
-  /** The run each of those jobs was started for (it archived the worktree's outputs first). */
-  private readonly teardownJobRuns = new Map<string, string>();
+  /** The run each of those jobs was started for, and how archiving the worktree's outputs went first. */
+  private readonly teardownJobRuns = new Map<string, { runId: string; archive?: ArchiveOutcome }>();
+  /** A manual prune's archive and the start of its teardown, one per worktree at a time. */
+  private readonly pruneLock = new KeyedMutex();
   private log?: RunServiceLogger;
   /**
    * The Docker engine sidecar (on unless `EMBERLINE_DOCKER_ENGINE=0`); runs and worktree.yml commands use it while
@@ -2655,22 +2659,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         );
       }
     }
-    // Its teardown runs already (an earlier prune, auto-GC): the prune follows it.
-    if (this.tearingDown.has(id))
-      return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
-    // The teardown of a run sharing this worktree (a handoff) runs: this prune follows it below. That
-    // run archived the worktree's outputs before its teardown began; a copy now would race the
-    // teardown and the prune, so this run's timeline says where they are instead.
-    const sharedWith = this.teardownJobRuns.get(row.worktreePath);
-    if (sharedWith && sharedWith !== id) {
-      this.note(id, 'build_outputs_archived_elsewhere', {
-        runId: sharedWith,
-        message: `This worktree's build outputs were archived for run ${sharedWith.slice(0, 8)}, which is removing it.`,
-      });
-    } else if (row.worktreePath !== project.path) {
-      // Deliverables in git-ignored build directories exist only here: archive them first.
-      await this.outputs.archiveBeforePrune(id);
-    }
     const recordPruned = (removed: boolean) => {
       if (removed) {
         this.record(id, {
@@ -2680,24 +2668,58 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
       }
     };
-    if (
-      row.worktreePath !== project.path &&
-      (sharedWith || this.needsTeardown(project.id, row.worktreePath))
-    ) {
-      // Teardown commands and compose downs may take minutes: the request waits a bounded time, the rest is background.
-      let removed = false;
-      const job = this.teardownThenPrune(row, project, (r) => {
-        removed = r;
-        recordPruned(r);
-      });
-      const done = await settlesWithin(job, this.teardownBudgets.request);
-      if (!done) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
-      // A second request for the same run got the first one's job back: its outcome is the directory's.
-      return { runId: id, worktreePath: row.worktreePath, removed: removed || !existsSync(row.worktreePath) };
-    }
-    const removed = await this.pruneRunWorktree(project.path, row.worktreePath);
-    recordPruned(removed);
-    return { runId: id, worktreePath: row.worktreePath, removed };
+    let removed = false;
+    const after = (r: boolean) => {
+      removed = r;
+      recordPruned(r);
+    };
+    // One prune of a worktree at a time until its teardown job runs: a second one (the same run, or one
+    // sharing the worktree after a handoff) waits, then follows that job, so no archive copy races a
+    // teardown or a prune.
+    const started = await this.pruneLock.run(row.worktreePath, async () => {
+      const running = this.teardownJobRuns.get(row.worktreePath);
+      // Its teardown runs already without a job to follow (a project delete).
+      if (!running && this.tearingDown.has(id)) return 'pending' as const;
+      if (running) {
+        // That run archived the worktree's outputs before its teardown began; a copy now would race
+        // the teardown, so this run's timeline says where they are instead.
+        if (running.runId !== id) this.noteSharedArchive(id, running);
+      } else if (row.worktreePath === project.path) {
+        // A run in place: nothing to archive or tear down.
+      } else {
+        // Deliverables in git-ignored build directories exist only here: archive them first.
+        const archive = await this.outputs.archiveBeforePrune(id);
+        // Wrapped: the lock is held until the job has started, not until it ends.
+        if (this.needsTeardown(project.id, row.worktreePath)) {
+          return { job: this.teardownThenPrune(row, project, after, archive) };
+        }
+      }
+      if (running) return { job: this.teardownThenPrune(row, project, after) };
+      removed = await this.pruneRunWorktree(project.path, row.worktreePath);
+      recordPruned(removed);
+      return 'done' as const;
+    });
+    if (started === 'pending')
+      return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+    if (started === 'done') return { runId: id, worktreePath: row.worktreePath, removed };
+    // Teardown commands and compose downs may take minutes: the request waits a bounded time, the rest is background.
+    const done = await settlesWithin(started.job, this.teardownBudgets.request);
+    if (!done) return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+    // A second request for the same run got the first one's job back: its outcome is the directory's.
+    return { runId: id, worktreePath: row.worktreePath, removed: removed || !existsSync(row.worktreePath) };
+  }
+
+  /** Notes on `id` that the worktree it shares is being removed for another run, and how that run's archive went. */
+  private noteSharedArchive(id: string, owner: { runId: string; archive?: ArchiveOutcome }): void {
+    const other = owner.runId.slice(0, 8);
+    const archived = owner.archive === 'archived';
+    this.note(id, 'build_outputs_archive_shared', {
+      runId: owner.runId,
+      archived,
+      message: archived
+        ? `This worktree's build outputs were archived for run ${other}, which is removing it.`
+        : `Run ${other} is removing this worktree; its build outputs could not all be archived first (that run's timeline says why).`,
+    });
   }
 
   /**
@@ -2710,6 +2732,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     row: RunRow,
     project: { id: string; path: string },
     after: (removed: boolean) => unknown,
+    /** How archiving the worktree's outputs went before this job, for a run that follows it. */
+    archive?: ArchiveOutcome,
   ): Promise<void> {
     const running = this.teardownJobs.get(row.worktreePath);
     if (running) {
@@ -2743,7 +2767,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         }
       });
     this.teardownJobs.set(row.worktreePath, job);
-    this.teardownJobRuns.set(row.worktreePath, row.id);
+    this.teardownJobRuns.set(row.worktreePath, { runId: row.id, archive });
     return job;
   }
 
