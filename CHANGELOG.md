@@ -6,6 +6,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
+- Saving `.emberline/worktree.yml` from Project settings while the runner was out of date said the runner was not reachable. It now says the runner is outdated and to update it (run `make up` again).
 - **Stop** on a Docker preview whose containers could not be taken down said it was stopped and freed its port while they kept running. It now reports the error, shows the preview as failed and keeps its port reserved until a stop works, so you can stop it again. A clean-up that could not take a preview down does the same. Deleting a project tries a Docker project that could not be taken down once more.
 - Deleting a project with its files could remove the project folder, and the `.git` inside it, while a slow `worktree.yml` teardown was still running, so teardown commands that use git failed. The folder now goes once the teardown ended.
 - Deleting a project took each run's Docker containers down twice. It now does it once, which makes the delete faster.

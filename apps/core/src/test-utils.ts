@@ -167,7 +167,6 @@ export async function createTestApp(
       scheduler.dispose();
       ptyd.stop();
       opened.close();
-      // A process that is still exiting may add a file while the tree is removed (ENOTEMPTY): retry.
       rmTemp(dir);
     },
   };

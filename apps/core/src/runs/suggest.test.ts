@@ -95,7 +95,7 @@ describe('runSuggestion', () => {
         'plan',
         '--no-session-persistence',
         '--model',
-        expect.any(String),
+        'haiku',
       ],
     });
   });

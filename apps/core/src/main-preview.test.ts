@@ -674,6 +674,27 @@ describe('after a core restart the engine is the truth (Review Focus 2)', () => 
     return restarted;
   };
 
+  it('underLock holds the project lock: a second call waits until the first is done', async () => {
+    await start();
+    const previews = t.runs.mainPreviews;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const order: string[] = [];
+    const first = previews.underLock('p', async () => {
+      order.push('first in');
+      await gate;
+      order.push('first out');
+    });
+    const second = previews.underLock('p', async () => void order.push('second'));
+    const other = previews.underLock('q', async () => void order.push('other project'));
+    await other; // another project is not held back
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(['first in', 'other project']);
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first in', 'other project', 'first out', 'second']);
+  });
+
   it('a status read under the project lock settles an interrupted start without taking the lock again', async () => {
     await start();
     const p = await createProject();

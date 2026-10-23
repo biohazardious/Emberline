@@ -28,8 +28,8 @@ import {
 import { projectWorktreeConfig, runs } from './db/schema.js';
 import { unavailable } from './errors.js';
 import { syncWorktreeToMainWorkspace } from './factory/merge.js';
-import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;

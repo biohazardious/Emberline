@@ -15,7 +15,7 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { projectWorktreeConfig } from '../db/schema.js';
-import { isRunnerUnavailable } from '../command-exec.js';
+import { runnerUnavailableCause } from '../command-exec.js';
 import { conflict, HttpError, RUNNER_NOT_REACHABLE, unavailable } from '../errors.js';
 import { readHeadWorktreeYml } from '../factory/detect.js';
 import { FACTORY_GIT_IDENTITY, mainWorkspaceBranchStrict, withMainWorkspaceLock } from '../factory/merge.js';
@@ -28,19 +28,6 @@ import { storeApproval, worktreeConfigStatus } from './trust.js';
 const COMMIT_MESSAGE = 'chore: edit .emberline/worktree.yml from project settings';
 
 const codeOf = (error: unknown) => (error as { code?: string }).code;
-
-/** The runner's own 503 (`runner_outdated`, `ptyd_unavailable`) found along `cause`, else the plain not-reachable one. */
-function runnerError(error: unknown): HttpError {
-  for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
-    if (
-      e instanceof HttpError &&
-      e.statusCode === 503 &&
-      (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated')
-    )
-      return e;
-  }
-  return unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
-}
 
 export interface SaveWorktreeConfigOptions {
   /** The commit message (default `chore: edit .emberline/worktree.yml from project settings`). */
@@ -162,8 +149,11 @@ export async function saveWorktreeConfig(
     }
     const branch = await mainWorkspaceBranchStrict(project.path).catch((error: unknown) => {
       // The runner went away or never answered: say so, not "not on a branch".
-      if (isRunnerUnavailable(error)) {
-        throw runnerError(error);
+      const unreachable = runnerUnavailableCause(error);
+      if (unreachable) {
+        throw unreachable instanceof HttpError
+          ? unreachable
+          : unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
       }
       throw error;
     });

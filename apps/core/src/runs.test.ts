@@ -24,8 +24,8 @@ import { eq } from 'drizzle-orm';
 import { projects, runEvents, runs } from './db/schema.js';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
 import { worktreeHeadSha } from './runs/git.js';
-import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 
 let t: TestApp;
 let ptydServer: PtydServer;
@@ -675,13 +675,29 @@ describe('runs', () => {
         };
       });
       const pass = t.runs.reconcile();
-      setTimeout(release, 100);
-      const res = await t.runs.garbageCollect({
+      // GC is waiting on the pass once it has entered reconcileNow (which awaits the pass first).
+      const entered = new Promise<void>((resolve) => {
+        const reconcileNow = (t.runs as unknown as { reconcileNow: () => Promise<void> }).reconcileNow.bind(
+          t.runs,
+        );
+        vi.spyOn(
+          t.runs as unknown as { reconcileNow: () => Promise<void> },
+          'reconcileNow',
+        ).mockImplementation(() => {
+          const waiting = reconcileNow();
+          resolve();
+          return waiting;
+        });
+      });
+      const collecting = t.runs.garbageCollect({
         projectId: project.id,
         keepRecent: 0,
         includeFailed: true,
         pruneWorktrees: true,
       });
+      await entered;
+      release();
+      const res = await collecting;
       await pass;
       expect(calls).toBeGreaterThanOrEqual(2);
       expect(res.removedRuns).toBe(1);

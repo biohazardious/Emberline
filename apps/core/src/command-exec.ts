@@ -191,16 +191,21 @@ export const localCommandExecutor: CommandExecutor = (request) =>
  * connection dropped or never answered), not because the command itself failed. Follows `cause`.
  */
 export function isRunnerUnavailable(error: unknown): boolean {
+  return runnerUnavailableCause(error) !== undefined;
+}
+
+/** The first error along `cause` that says the runner could not run the command (see {@link isRunnerUnavailable}). */
+export function runnerUnavailableCause(error: unknown): Error | undefined {
   for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
     if (
       e instanceof HttpError &&
       e.statusCode === 503 &&
       (e.code === 'ptyd_unavailable' || e.code === 'runner_outdated')
     )
-      return true;
-    if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) return true;
+      return e;
+    if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) return e;
   }
-  return false;
+  return undefined;
 }
 
 /**
