@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { chunkSizeGuard } from './src/build/chunkSizeGuard';
 
 /** npm packages the app's own chunk loads on every page. */
 const SHARED_LIBRARIES = new Set([
@@ -16,11 +17,14 @@ const SHARED_LIBRARIES = new Set([
 ]);
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), chunkSizeGuard()],
   resolve: {
     conditions: ['@emberline/source', 'module', 'browser', 'development|production'],
   },
   build: {
+    // Vite's own warning only above Monaco's editor chunk (about 3.3 MB, loaded lazily); every other
+    // chunk keeps the 500 kB limit through chunkSizeGuard.
+    chunkSizeWarningLimit: 4_000,
     rollupOptions: {
       output: {
         // The libraries every page loads, and the protocol schemas, in chunks of their own beside
