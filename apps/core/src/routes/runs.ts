@@ -17,6 +17,7 @@ import {
   type RunDetail,
   type RunDiffSummary,
   type RunFileDiff,
+  type RunQuestion,
   type RunRecovery,
   type TicketCompleteBody,
   TicketPromptBody,
@@ -24,6 +25,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { badRequest } from '../errors.js';
 import { contentDisposition, UNTRUSTED_CONTENT_CSP } from '../security-headers.js';
+import type { QuestionService } from '../runs/question-service.js';
 import type { RecoveryService } from '../runs/recovery-service.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -38,6 +40,7 @@ export function registerRunRoutes(
   runs: RunService,
   scheduler: Scheduler,
   recovery: RecoveryService,
+  questions: QuestionService,
 ): void {
   app.get('/api/runs', async (): Promise<Run[]> => runs.list());
 
@@ -87,6 +90,11 @@ export function registerRunRoutes(
   });
 
   /** Why a held run is held and what can be done about it; null when nothing holds it for a person. */
+  /** What the run waits on, for the Answer dialog; 404 no_question when nothing. */
+  app.get<{ Params: { id: string } }>('/api/runs/:id/question', async (request): Promise<RunQuestion> =>
+    questions.get(request.params.id),
+  );
+
   app.get<{ Params: { id: string } }>(
     '/api/runs/:id/recovery',
     async (request): Promise<RunRecovery | null> => recovery.get(request.params.id),

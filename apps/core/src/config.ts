@@ -43,6 +43,8 @@ export interface CoreConfig {
   hookCommand: string;
   /** Claude Code executable inside the runner. */
   claudeCommand: string;
+  /** --model for Suggest an answer (EMBERLINE_SUGGEST_MODEL). */
+  suggestModel: string;
   /** IANA zone for limit reset times printed without one (should match the runner's TZ). */
   timeZone: string;
   /**
@@ -150,6 +152,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     gitGatewayUrl: env.EMBERLINE_GIT_GATEWAY_URL?.trim() || undefined,
     hookCommand: env.EMBERLINE_HOOK_COMMAND ?? 'emberline-hook',
     claudeCommand: env.EMBERLINE_CLAUDE_COMMAND ?? 'claude',
+    suggestModel: env.EMBERLINE_SUGGEST_MODEL?.trim() || 'haiku',
     timeZone: env.EMBERLINE_TIMEZONE || env.TZ || 'UTC',
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,

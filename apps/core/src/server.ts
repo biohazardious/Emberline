@@ -46,6 +46,7 @@ import { registerTerminalRoutes } from './routes/terminals.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import { registerUpdateRoutes } from './routes/updates.js';
 import { ReviewService } from './review/service.js';
+import { QuestionService } from './runs/question-service.js';
 import { RecoveryService } from './runs/recovery-service.js';
 import type { RunService } from './runs/service.js';
 import type { Scheduler } from './scheduler/service.js';
@@ -155,6 +156,11 @@ export async function buildServer(
     new RecoveryService(deps.db, deps.runs, deps.scheduler, {
       completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n'),
     });
+  const questions = new QuestionService(deps.db, deps.runs, recovery, {
+    completionReminder: (run) => deps.tickets.completionReminder(run, '\n\n'),
+    suggestModel: deps.config.suggestModel,
+    claudeCommand: deps.config.claudeCommand,
+  });
   cron.start();
   notifications.start();
   review.start();
@@ -229,7 +235,7 @@ export async function buildServer(
   registerWorktreeConfigRoutes(app, deps);
   registerContainerPreviewRoutes(app, deps);
   registerTerminalRoutes(app, deps);
-  registerRunRoutes(app, deps.runs, deps.scheduler, recovery);
+  registerRunRoutes(app, deps.runs, deps.scheduler, recovery, questions);
   // The runner's git with a forge account (`/api/internal/git/<capability>/…`): core adds the credential.
   deps.runs.gitGateway.register(app);
   registerBuildOutputRoutes(app, deps.db, deps.runs.outputs);

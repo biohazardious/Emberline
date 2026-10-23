@@ -87,6 +87,7 @@ export async function createTestApp(
     runnerHosts: ['localhost'],
     hookCommand: 'emberline-hook',
     claudeCommand: 'claude',
+    suggestModel: 'haiku',
     timeZone: 'UTC',
     setupToken: TEST_SETUP_TOKEN,
     allowedHosts: [],
