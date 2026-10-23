@@ -635,16 +635,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         .all()
         .map((p) => p.id),
     );
-    // Only passes that were due or going when core stopped: one that ended decided already (a run
-    // that was no factory step stays in Review for its person, whatever the board shows now). Not as
-    // `finalizing`: each pass decides as the cut-off one would have whether the run is a factory step.
-    // The first start of a version that marks them (an upgrade from 0.6.0 or earlier): a pass the
-    // upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a person
-    // instead of being merged without its checks or left unseen; written at once, so only this start does.
+    // The first start of a version that marks pipelines (an upgrade from 0.6.0 or earlier): a pass
+    // the upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a
+    // person instead of being merged without its checks or left unseen; written at once, so only
+    // this start does.
     if (getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) === undefined) {
       for (const projectId of known) this.holdUnmarkedReviews(projectId);
       this.savePendingPipelines(new Map());
     }
+    // Only passes that were due or going when core stopped: one that ended decided already (a run
+    // that was no factory step stays in Review for its person, whatever the board shows now). Not as
+    // `finalizing`: each pass decides as the cut-off one would have whether the run is a factory step.
     const cutOff = this.pendingPipelineRuns();
     for (const projectId of known) this.finalizeLeftoverReviews(projectId, { cutOff });
     this.resumeTicketlessPasses(cutOff);
