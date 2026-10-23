@@ -16,6 +16,7 @@ import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.
 import { accountForGitRemote, accountForRemote, gitCredentialForRemote } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { remoteCompareKey } from '../forge/hosts.js';
+import { secretDigest } from '../secrets/box.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway, type KnownSecrets } from '../git-gateway/gateway.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -68,6 +69,15 @@ const remoteErrorText = (error: unknown, known?: KnownSecrets) =>
  */
 const sameRepository = (a: string | null, b: string) =>
   a !== null && remoteCompareKey(remoteUrlForDisplay(a).url) === remoteCompareKey(remoteUrlForDisplay(b).url);
+
+/** The key a read of `origin` (as configured) is kept under. */
+const originKey = (origin: string) => secretDigest('origin', origin);
+/**
+ * Whether the last read was of this origin: by its key, or for a read 0.6.0 or earlier recorded
+ * (no key), by the address it kept (remoteUrlForDisplay's `url`).
+ */
+const readOf = (check: RemoteCheck, origin: string, url: string) =>
+  check.originKey !== undefined ? check.originKey === originKey(origin) : check.url === url;
 
 /** What a refresh or push read under the main-workspace lock, for its network call outside it. */
 interface Snapshot {
@@ -174,7 +184,7 @@ export class RepositoryService {
       mainState: 'unknown',
     };
     const check = settings.lastRemoteCheck;
-    if (!check || check.url !== shown.display || check.branch !== main) return withOrigin; // not read since origin was set
+    if (!check || !readOf(check, origin, shown.url) || check.branch !== main) return withOrigin; // not read since origin was set
     // Two addresses masked alike (`user:***@host:…`) are told apart by the connected repository:
     // refresh and push read only that one, so a read of another origin is never taken for it.
     if (withOrigin.originMasked && !withOrigin.connected) return withOrigin;
@@ -377,6 +387,7 @@ export class RepositoryService {
         await setUpstream(plan.path, plan.defaultBranch);
         const check: RemoteCheck = {
           url: remoteUrlForDisplay(plan.origin).display,
+          originKey: originKey(plan.origin),
           branch: plan.defaultBranch,
           at: new Date().toISOString(),
           published: true,
@@ -436,6 +447,7 @@ export class RepositoryService {
     const branch = ws.defaultBranch;
     const at = new Date().toISOString();
     const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
+    const key = originKey(ws.origin);
     // origin as configured: a token typed into it is masked wherever git quotes it.
     const known: KnownSecrets = { credential: ws.access.account?.credential, addresses: [ws.origin] };
     let check: RemoteCheck;
@@ -443,12 +455,12 @@ export class RepositoryService {
     try {
       remoteOid = await remoteBranchHead(ws.path, ws.access, branch);
       if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
-      check = { url: checkedUrl, branch, at, published: remoteOid !== null, error: null };
+      check = { url: checkedUrl, originKey: key, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
       const reason = error instanceof HttpError ? error.message : describeGitError(error, known);
-      check = { url: checkedUrl, branch, at, published: false, error: reason };
+      check = { url: checkedUrl, originKey: key, branch, at, published: false, error: reason };
     }
     await withMainWorkspaceLock(ws.path, async () => {
       if (!(await this.originStill(projectId, ws))) return; // origin changed meanwhile: its own read counts
@@ -493,6 +505,8 @@ export class RepositoryService {
       if (current && current !== url && !replace) throw this.originExists(current, url);
       await setOrigin(mainPath, url, current);
       this.db.update(projects).set({ repoUrl: url }).where(eq(projects.id, projectId)).run();
+      // A read of the origin before is no read of this one, whatever both look like.
+      if (current !== url) writeRepositorySettings(this.db, projectId, { lastRemoteCheck: null });
     });
   }
 }

@@ -20,7 +20,7 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
-import { installedSecretsKey } from '../secrets/box.js';
+import { installedSecretsKey, secretDigest } from '../secrets/box.js';
 import { encryptStoredSecrets } from '../secrets/startup.js';
 import { DIVERGED_MESSAGE } from './git.js';
 
@@ -567,6 +567,7 @@ describe('an origin that may hold a password where it shows ***', () => {
     writeRepositorySettings(t.db, projectId, {
       lastRemoteCheck: {
         url: 'alice:***@git.example.com/o/r.git',
+        originKey: secretDigest('origin', masked),
         branch: 'main',
         at: '2026-10-23T10:00:00.000Z',
         published: false,
@@ -586,6 +587,68 @@ describe('an origin that may hold a password where it shows ***', () => {
       remoteError: null,
       mainState: 'unknown',
     });
+  });
+});
+
+describe('the last read of origin', () => {
+  const first = 'https://a.example:8443/g/n@v2/r.git';
+  const second = 'https://b.example:9443/x/y@v2/r.git';
+  const read = (url: string, extra: object = {}) => ({
+    url,
+    branch: 'main',
+    at: '2026-10-23T10:00:00.000Z',
+    published: false,
+    error: 'could not read origin',
+    ...extra,
+  });
+
+  it('a read 0.6.0 recorded (no key, the address it kept) still counts after the upgrade', async () => {
+    t.db.update(projects).set({ repoUrl: first }).where(eq(projects.id, projectId)).run();
+    git(projectPath, 'remote', 'add', 'origin', first);
+    // 0.6.0 kept remoteUrlForDisplay's `url`: for this address, the address itself.
+    writeRepositorySettings(t.db, projectId, { lastRemoteCheck: read(first) });
+    expect(await status()).toMatchObject({
+      originUrl: 'https://***@v2/r.git',
+      connected: true,
+      checkedAt: '2026-10-23T10:00:00.000Z',
+      remoteError: 'could not read origin',
+    });
+    // A read 0.6.0 kept for another address does not count.
+    writeRepositorySettings(t.db, projectId, { lastRemoteCheck: read(second) });
+    expect((await status()).checkedAt).toBeNull();
+  });
+
+  it('two addresses shown alike never share a read, also when the read after Connect failed', async () => {
+    t.db.update(projects).set({ repoUrl: first }).where(eq(projects.id, projectId)).run();
+    git(projectPath, 'remote', 'add', 'origin', first);
+    writeRepositorySettings(t.db, projectId, {
+      lastRemoteCheck: read('https://***@v2/r.git', { originKey: secretDigest('origin', first) }),
+    });
+    expect((await status()).checkedAt).toBe('2026-10-23T10:00:00.000Z');
+    let lsRemotes = 0;
+    setCommandExecutor(async (request: ExecRequest) => {
+      if (!request.args.includes('ls-remote')) return localCommandExecutor(request);
+      // Connect reads the new address (an empty repository); the refresh after it cannot run.
+      if (++lsRemotes > 1) throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+      return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
+    });
+    try {
+      const res = await send('POST', `/api/projects/${projectId}/repository/connect`, {
+        url: second,
+        replace: true,
+      });
+      expect(res.statusCode, res.body).toBe(503);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(git(projectPath, 'remote', 'get-url', 'origin')).toBe(second);
+    expect(await status()).toMatchObject({
+      originUrl: 'https://***@v2/r.git',
+      connected: true,
+      checkedAt: null,
+      remoteError: null,
+    });
+    expect(readRepositorySettings(t.db, projectId).lastRemoteCheck).toBeNull();
   });
 });
 

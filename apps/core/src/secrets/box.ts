@@ -4,7 +4,7 @@
  * (EMBERLINE_SECRETS_KEY or <data>/secrets.key, see key.ts) and is installed once at start.
  * Nothing here imports the database, so the schema can use it.
  */
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 
 export const SEALED_PREFIX = 'enc:v1:';
 export const SECRETS_KEY_SENTENCE =
@@ -43,6 +43,14 @@ export function installedSecretsKey(): Buffer {
 }
 
 export const isSealed = (v: string): boolean => v.startsWith(SEALED_PREFIX);
+
+/**
+ * A stable key for a value that may hold a secret (HMAC-SHA256 under the installed key, for one
+ * `purpose`): equal values get equal keys, and a key reveals nothing of its value.
+ */
+export function secretDigest(purpose: string, value: string): string {
+  return createHmac('sha256', installedSecretsKey()).update(`${purpose}\0${value}`).digest('base64url');
+}
 
 /**
  * No associated data: the threat is a read of the volume or a backup. Someone who can write the

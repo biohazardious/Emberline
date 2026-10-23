@@ -66,7 +66,13 @@ export function writeWizardTickets(db: Db, projectId: string, value: WizardTicke
 
 /** The last read of origin (refresh, connect, create, push): what status shows without touching the network. */
 export interface RemoteCheck {
+  /** origin as shown (never with a password). */
   url: string;
+  /**
+   * Which origin was read: secretDigest('origin', origin as configured), so two origins shown alike
+   * never share a read. Absent from 0.6.0 and earlier, whose `url` was remoteUrlForDisplay's `url`.
+   */
+  originKey?: string;
   branch: string;
   /** ISO time. */
   at: string;
@@ -98,6 +104,7 @@ export interface RepositorySettings {
 }
 const RemoteCheckSchema = z.object({
   url: z.string(),
+  originKey: z.string().optional(),
   branch: z.string(),
   at: z.string(),
   published: z.boolean(),
