@@ -78,14 +78,15 @@ const message = (before: string, after: string | null, keeps: boolean) => ({
   after,
   keeps,
 });
+// After a git prefix only the prefix and one space are kept (it may be a user name).
 const QUOTED = [
-  message("fatal: '", "' does not appear to be a git repository", true),
-  message("fatal: unable to access '", "/': The requested URL returned error: 403", true),
-  message("fatal: repository '", "/' not found", true),
-  message("fatal: Authentication failed for '", "/'", true),
+  message("fatal: '", "' does not appear to be a git repository", false),
+  message("fatal: unable to access '", "/': The requested URL returned error: 403", false),
+  message("fatal: repository '", "/' not found", false),
+  message("fatal: Authentication failed for '", "/'", false),
   message("Cloning into '", "'...", true),
-  message("error: failed to push some refs to '", "'", true),
-  message("warning: redirecting to '", "'", true),
+  message("error: failed to push some refs to '", "'", false),
+  message("warning: redirecting to '", "'", false),
   message("hint: see '", "'", false),
 ];
 const UNQUOTED = [
@@ -137,8 +138,9 @@ describe('withoutUrlCredentials', () => {
             throw new Error(`leak: ${JSON.stringify(text)} → ${JSON.stringify(shown)}`);
         if (m.after !== null && !alone.endsWith(m.after))
           throw new Error(`message lost: ${JSON.stringify(text)} → ${JSON.stringify(alone)}`);
-        // The message before the address is kept where git wrote it; a git prefix always is.
-        const kept = m.keeps ? m.before : m.before.slice(0, m.before.indexOf(':') + 1);
+        // The message before the address is kept where no git prefix starts the line; a git prefix
+        // and the one space after it always are.
+        const kept = m.keeps ? m.before : m.before.slice(0, m.before.indexOf(':') + 2).trimEnd();
         if (!alone.startsWith(kept))
           throw new Error(`prefix lost: ${JSON.stringify(text)} → ${JSON.stringify(alone)}`);
         cases++;
@@ -153,6 +155,60 @@ describe('withoutUrlCredentials', () => {
     expect(cases).toBe(PASSWORDS * (8 * (8 + 19) + 8));
   }, 60_000);
 
+  it('a password that copies the start of a git message, for a user named like a git prefix, never shows (generated)', () => {
+    const next = random(5);
+    const COPIES = [
+      " '",
+      ' https://',
+      " unable to access '",
+      " repository '",
+      " failed to push some refs to '",
+      ' Could not resolve hostname ',
+      ' redirecting to ',
+      "\t'",
+      ' ssh://',
+    ];
+    for (let n = 0; n < 400; n++) {
+      const user = PREFIXES[n % PREFIXES.length]!;
+      const pw = COPIES[n % COPIES.length]! + hostilePassword(next);
+      for (const [address, host] of [
+        [`${user}:${pw}@${HOST}:o/r.git`, `${HOST}:o/r.git`],
+        [`${user}:${pw}@${HOST}/o/r.git`, `${HOST}/o/r.git`],
+        [`${user}:${pw}@${HOST}`, HOST],
+      ] as const) {
+        for (const after of [
+          '',
+          ': Permission denied (publickey).',
+          "' does not appear to be a git repository",
+        ]) {
+          // The address starts the line: only the user name, its `:` and one space can show.
+          const kept = `${user}:${/\s/.test(pw[0]!) ? pw[0] : ''}`;
+          const masked = `***@${host}${after}`;
+          expect(withoutUrlCredentials(`${address}${after}`), address).toBe(kept + masked);
+          expect(withoutUrlCredentials(`Pushing...\r\n${address}${after}\r\n`)).toBe(
+            `Pushing...\r\n${kept}${masked}\r\n`,
+          );
+          // describeGitError drops git's own prefixes (fatal, error, remote) once masked.
+          expect(
+            describeGitError(Object.assign(new Error('git failed'), { stderr: `${address}${after}` })),
+          ).toBe(['fatal', 'error', 'remote'].includes(user) ? masked : (kept + masked).trim());
+        }
+      }
+    }
+  });
+
+  it('an address without an `@` stays as it is, in every message', () => {
+    for (const address of [
+      'https://git.example.com/o/r.git',
+      'git.example.com:o/r.git',
+      'ssh://host:2222/o/r',
+    ])
+      for (const m of [...QUOTED, ...UNQUOTED].filter((x) => x.after !== null)) {
+        const text = m.make(address);
+        expect(withoutUrlCredentials(text), text).toBe(text);
+      }
+  });
+
   it('keeps the address without its user info after a scheme, and masks with *** otherwise', () => {
     expect(withoutUrlCredentials('To https://alice:tok3n@git.example.com/o/r.git')).toBe(
       'To https://git.example.com/o/r.git',
@@ -161,9 +217,9 @@ describe('withoutUrlCredentials', () => {
     expect(withoutUrlCredentials("'pw@host:o/r' does not appear to be a git repository")).toBe(
       "'***@host:o/r' does not appear to be a git repository",
     );
-    // A git prefix that starts the line opens nothing: the quote does.
+    // A git prefix that starts the line may be a user name: only it and one space are kept.
     expect(withoutUrlCredentials("fatal: 'pw@host:o/r' does not appear to be a git repository")).toBe(
-      "fatal: '***@host:o/r' does not appear to be a git repository",
+      "fatal: ***@host:o/r' does not appear to be a git repository",
     );
   });
 

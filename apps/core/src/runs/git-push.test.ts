@@ -52,8 +52,7 @@ describe('pushing a run branch without an account', () => {
     const error = await pushWorktreeBranch(dir, 'emberline/run-1', 'main').catch((e: unknown) => e);
     expect(error).toMatchObject({ statusCode: 409 });
     const message = (error as Error).message;
-    // `remote: Permission denied for …` is no git message: its prefix opens the mask, on to the
-    // line's last `@` that a host follows.
+    // After git's `remote: ` prefix, up to the line's last `@` that a host follows.
     expect(message).toMatch(/^git push failed: \*\*\*@git\.example\.com\/o\/r\.git, see /);
     expect(message).not.toMatch(/tok3n|p@ss|ss@/);
     expect(message).toContain('/api/internal/git/[capability]');
@@ -79,12 +78,11 @@ describe('pushing a run branch without an account', () => {
       ].join('\n'),
     });
     const res = await pushWorktreeBranch(dir, 'emberline/run-1', 'main');
-    // Each line from its first opener (the `remote:` prefix when a server's own text follows) to
-    // its last `@` that a host follows.
+    // A `remote: ` line keeps its prefix and one space; the rest up to its last `@` before a host goes.
     expect(res.output).toContain('To https://git.example.com/o/r.git');
-    expect(res.output).toContain('remote:***@git.example.com/o/r/pulls/new');
-    expect(res.output).toContain('remote:***@git.example.com:2222/o/r.git');
-    expect(res.output).toContain("remote:***@git.example.com:o/r.git'");
+    expect(res.output).toContain('remote: ***@git.example.com/o/r/pulls/new');
+    expect(res.output).toContain('remote: ***@git.example.com:2222/o/r.git');
+    expect(res.output).toContain("remote: ***@git.example.com:o/r.git'");
     expect(res.output).not.toMatch(/tok3n|p4t|p@ss|ss:w|s3cr3t|u0te|c0rp|corp\.com|ash@|fr4nk|gr4ce|h3idi/);
     expect(res.output).toContain('/api/internal/git/[capability]');
     expect(res.output.length).toBeLessThanOrEqual(4096);

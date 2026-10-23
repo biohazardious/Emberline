@@ -143,52 +143,39 @@ describe('shortGitError', () => {
       stderr:
         "fatal: unable to access 'https://alice:tok3n@git.example.com/o/r.git/': and ssh://git:tok3n@host/o/r.git, http://tok3n@h/x",
     });
-    // From the first opener after git's prefix (the quote) to the line's last `@` that a host follows.
-    expect(shortGitError(error)).toBe("unable to access '***@h/x");
+    // After git's prefix (which may be a user name), up to the line's last `@` that a host follows.
+    expect(shortGitError(error)).toBe('***@h/x');
   });
 });
 
 /** Each line masks from its first opener to its last `@` that a host follows; examples (generated cases: redaction.test.ts). */
 describe('shortGitError: addresses with a password in what git and a server print', () => {
   const text = (stderr: string) => shortGitError(Object.assign(new Error('git failed'), { stderr }));
-  it("after git's prefix and its own message, a quoted address or a known scheme keeps the message", () => {
+  it("after git's prefix, everything up to the line's last `@` before a host goes; the rest of the line stays", () => {
     for (const [stderr, shown] of [
       [
         "fatal: unable to access 'https://alice:p@ss@git.example.com/o/r.git/'",
-        "unable to access '***@git.example.com/o/r.git/'",
+        "***@git.example.com/o/r.git/'",
       ],
       [
         "fatal: 'pw@host:o/r' does not appear to be a git repository",
-        "'***@host:o/r' does not appear to be a git repository",
+        "***@host:o/r' does not appear to be a git repository",
       ],
-      [
-        "fatal: 'p@ss@host:o' does not appear to be a git repository",
-        "'***@host:o' does not appear to be a git repository",
-      ],
-      ['remote: https://u:p%40x@h/x', 'https://h/x'],
-      ["remote: https://u:p'w@h/x", 'https://h/x'],
-      ['fatal: ssh://git:pa/ss@h/x refused', 'ssh://h/x refused'],
-      ['fatal: ssh://me@corp.com:pw@host/o/r refused', 'ssh://host/o/r refused'],
-      ['fatal: SSH://git:p@ss@host:2222/o/r.git refused', 'SSH://host:2222/o/r.git refused'],
-      // Two addresses, or an email after one: up to the line's last `@`.
-      ['fatal: ssh+git://u:p@h/x and git+ssh://u:p@h/y', 'ssh+git://h/y'],
-      ['fatal: ssh://git:pw@host:22 mail me@x.y', 'ssh://x.y'],
+      ['remote: https://u:p%40x@h/x', '***@h/x'],
+      ['fatal: ssh://git:pa/ss@h/x refused', '***@h/x refused'],
+      ['fatal: alice:pw@[2001:db8::1]:o/r refused', '***@[2001:db8::1]:o/r refused'],
+      ['fatal: me@corp.com:SECRET@host:o/r refused', '***@host:o/r refused'],
+      ['fatal: ssh://git:pw@host:22 mail me@x.y', '***@x.y'],
+      // An address may start the line with such a user name: only it and one space can show.
+      ['ssh: S3CRET@host: Permission denied (publickey).', 'ssh: ***@host: Permission denied (publickey).'],
     ] as const)
       expect(text(stderr), stderr).toBe(shown);
   });
-  it("otherwise git's prefix opens the mask: an address may start the line with such a user name", () => {
+  it('without a git prefix, from the first opener: a scheme keeps the address without its user info', () => {
     for (const [stderr, shown] of [
-      ['remote: see https://bob:p@ss:w@h.example/x', '***@h.example/x'],
-      ['remote: _https://u:SECRET@h/x', '***@h/x'],
-      ['fatal: xssh://git:SECRET@h/x', '***@h/x'],
-      ['fatal: alice:pw@host:o/r refused', '***@host:o/r refused'],
-      ['fatal: alice:p@ss:w@host:o refused', '***@host:o refused'],
-      ['fatal: alice:pw@[2001:db8::1]:o/r refused', '***@[2001:db8::1]:o/r refused'],
-      ['fatal: me@corp.com:SECRET@host:o/r refused', '***@host:o/r refused'],
-      ['fatal: alice:ghp_SECRET@github.com/o/r refused', '***@github.com/o/r refused'],
-      ['fatal: alice:p@ss@github.com/o/r refused', '***@github.com/o/r refused'],
-      ['fatal: git@github.com:o/r.git and gitea:team/app@v2.git', '***@v2.git'],
-      ['ssh: S3CRET@host: Permission denied (publickey).', 'ssh:***@host: Permission denied (publickey).'],
+      ['https://u:p@ss@git.example.com/o/r.git refused', 'https://git.example.com/o/r.git refused'],
+      ["Cloning into 'pw@host:o/r'...", "Cloning into '***@host:o/r'..."],
+      ['To alice:pw@host:o/r', 'To alice:***@host:o/r'],
     ] as const)
       expect(text(stderr), stderr).toBe(shown);
   });
