@@ -3,9 +3,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RepositoryStatus, Run } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
-import { forgeAccounts } from '../db/schema.js';
+import { forgeAccounts, projects } from '../db/schema.js';
 import { unavailable } from '../errors.js';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
@@ -448,6 +449,21 @@ describe('push main', () => {
       git(projectPath, 'rev-parse', 'HEAD'),
     );
     expect(git(forge.bare('alice', 'app'), 'tag', '--list')).toBe('');
+  });
+});
+
+describe('the connected repository', () => {
+  it('is the same with its host in another case, never with its path in another case', async () => {
+    const connect = (repoUrl: string) =>
+      t.db.update(projects).set({ repoUrl }).where(eq(projects.id, projectId)).run();
+    git(projectPath, 'remote', 'add', 'origin', 'git@github.com:alice/app.git');
+    connect('git@GitHub.com:alice/app.git');
+    expect((await status()).connected).toBe(true);
+    git(projectPath, 'remote', 'set-url', 'origin', 'https://GitHub.COM/alice/app.git');
+    connect('https://github.com/alice/app.git');
+    expect((await status()).connected).toBe(true);
+    git(projectPath, 'remote', 'set-url', 'origin', 'https://github.com/Alice/app.git');
+    expect((await status()).connected).toBe(false);
   });
 });
 

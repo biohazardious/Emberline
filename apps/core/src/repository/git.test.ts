@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
+import { hostOf, remoteCompareKey } from '../forge/hosts.js';
 import {
   fetchBranchObjects,
   pushBranch,
@@ -77,6 +78,7 @@ describe('validateRepositoryUrl', () => {
     expect(refusal('alice:pw@git.example.com:o/r.git')).toBe(CREDENTIALS);
     expect(refusal('alice:p@ss:w@git.example.com:o/r.git')).toBe(CREDENTIALS);
     expect(refusal('alice:token@github.com/o/r.git')).toBe(CREDENTIALS);
+    expect(refusal('me@corp.com:pw@git.example.com:o/r.git')).toBe(CREDENTIALS);
     expect(refusal('git.example.com:app@v2')).toBe(CREDENTIALS);
     expect(refusal('git@git.example.com:o/r@v2.git')).toBeNull();
     expect(refusal('git.example.com:team/app@v2.git')).not.toBe(CREDENTIALS);
@@ -177,10 +179,34 @@ describe('shortGitError: scp-like addresses with a password', () => {
       "'***@host:o' does not appear to be a git repository",
     );
   });
+  it('masks a user name holding an `@`, and a secret before a host and its `/` (hand-set origins)', () => {
+    expect(text('fatal: me@corp.com:SECRET@host:o/r refused')).toBe('me@corp.com:***@host:o/r refused');
+    expect(text('fatal: alice:ghp_SECRET@github.com/o/r refused')).toBe('alice:***@github.com/o/r refused');
+    expect(text('fatal: alice:p@ss@github.com/o/r refused')).toBe('alice:***@github.com/o/r refused');
+  });
   it('leaves addresses without a secret alone', () => {
     expect(text('fatal: git@github.com:o/r.git and gitea:team/app@v2.git')).toBe(
       'git@github.com:o/r.git and gitea:team/app@v2.git',
     );
+    expect(text('fatal: git@github.com/o/r and mail me@x.y')).toBe('git@github.com/o/r and mail me@x.y');
+  });
+});
+
+describe('hostOf and remoteCompareKey', () => {
+  it('hostOf reads the host after the last `@` that a host and its `:` follow', () => {
+    expect(hostOf('user:p@ss@Host.example:o/r.git')).toBe('host.example');
+    expect(hostOf('git@host.example:o/r@v2.git')).toBe('host.example');
+    expect(hostOf('host.example:a@x/y')).toBe('host.example');
+    expect(hostOf('alice:pw@host.example:o/r.git')).toBe('host.example');
+  });
+
+  it('remoteCompareKey lower-cases the scheme and host only', () => {
+    expect(remoteCompareKey('git@GitHub.com:Alice/App.git')).toBe('git@github.com:Alice/App.git');
+    expect(remoteCompareKey('HTTPS://GitHub.COM/Alice/App.git')).toBe('https://github.com/Alice/App.git');
+    expect(remoteCompareKey('ssh://Git@Host.Example:2222/o/R.git')).toBe(
+      'ssh://Git@host.example:2222/o/R.git',
+    );
+    expect(remoteCompareKey('me@corp.com@Host:o/r')).toBe('me@corp.com@host:o/r');
   });
 });
 
@@ -232,6 +258,8 @@ describe('remoteUrlForDisplay', () => {
     // (the same shape as the path `a@x/y` on `host`), a pathless `host:repo@x`. Kept as they are
     // (never two remotes made equal), shown with `***` (no part of a password), and flagged.
     for (const [raw, display] of [
+      ['me@corp.com:SECRET@host:o/r', 'me@corp.com:***@host:o/r'],
+      ['me@corp.com:p@ss@host:o/r', 'me@corp.com:***@host:o/r'],
       ['alice:p@ss@host:o/r.git', 'alice:***@host:o/r.git'],
       ['alice:p@ss:w@host:o', 'alice:***@host:o'],
       ['alice:pw@host:a@b:c', 'alice:***@b:c'],

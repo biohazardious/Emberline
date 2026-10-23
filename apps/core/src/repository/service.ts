@@ -15,6 +15,7 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.js';
 import { accountForGitRemote, accountForRemote, gitCredentialForRemote } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
+import { remoteCompareKey } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway } from '../git-gateway/gateway.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -61,9 +62,12 @@ const parse = <T>(
 const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const remoteErrorText = (error: unknown) =>
   error instanceof HttpError ? error.message : shortGitError(error);
-/** One repository: a user name or token typed into a URL is never part of which repository it names. */
+/**
+ * One repository: a user name or token typed into a URL is never part of which repository it names,
+ * and neither is the case of its host.
+ */
 const sameRepository = (a: string | null, b: string) =>
-  a !== null && remoteUrlForDisplay(a).url === remoteUrlForDisplay(b).url;
+  a !== null && remoteCompareKey(remoteUrlForDisplay(a).url) === remoteCompareKey(remoteUrlForDisplay(b).url);
 
 /** What a refresh or push read under the main-workspace lock, for its network call outside it. */
 interface Snapshot {

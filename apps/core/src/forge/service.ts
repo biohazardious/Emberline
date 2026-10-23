@@ -314,7 +314,8 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
       branch: run.branch,
       baseBranch,
       compareUrl: parsed?.compareUrl ?? null,
-      tokenConfigured: Boolean(account),
+      // A token-less account (cleared by EMBERLINE_FORGET_SECRETS) configures no token.
+      tokenConfigured: Boolean(account?.token.trim()),
       pullRequest,
     };
   }

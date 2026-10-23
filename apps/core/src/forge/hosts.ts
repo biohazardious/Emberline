@@ -10,8 +10,28 @@ export function hostOf(url: string | null | undefined): string | null {
   } catch {
     return null;
   }
-  // SCP-style SSH: git@host:owner/repo.git
-  return /^(?:[^@/]+@)?([^:/]+):/.exec(trimmed)?.[1]?.toLowerCase() ?? null;
+  // SCP-style SSH: git@host:owner/repo.git. The user info runs to the last `@` before the first `/`
+  // that a host and its `:` follow (`user:p@ss@host:path` is on `host`), as remoteUrlForDisplay reads it.
+  return /^(?:[^/]*@)?([^:/@]+):/.exec(trimmed)?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * A remote as two of the same repository compare: its scheme and host in lower case (DNS and git
+ * read them so), everything else as it is. For remotes already without credentials
+ * (remoteUrlForDisplay's `url`).
+ */
+export function remoteCompareKey(url: string): string {
+  const lower = (host: string) => host.toLowerCase();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url))
+    return url.replace(
+      /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?([^/?#@]*)/i,
+      (_m, scheme: string, user: string | undefined, host: string) =>
+        lower(scheme) + (user ?? '') + lower(host),
+    );
+  return url.replace(
+    /^([^/]*@)?([^:/@]+)(?=:)/,
+    (_m, user: string | undefined, host: string) => (user ?? '') + lower(host),
+  );
 }
 
 /**
@@ -39,6 +59,12 @@ const SCP_CREDENTIALS = /^([^/@:[]*):[^/]*@/;
  * `@` before the first `/` and a host (or `[v6]`) and its `:` right after it.
  */
 const SCP_PLAIN_CREDENTIALS = /^([^/@:[]*):[^/@]*@(?=(?:[^/@:[\]]+|\[[^\]/@]*\]):[^/@]*(?:\/|$))/;
+/**
+ * `user:secret@host:path` whose user name holds an `@` (`me@corp.com:secret@host:o/r`): up to the
+ * last `@` before the first `/` that a host and its `:` follow. Git itself reads it as the host
+ * `corp.com`, so it is never rewritten, only masked.
+ */
+const SCP_AT_USER_CREDENTIALS = /^([^/:[]*@[^/:[]*):[^/]*@(?=(?:[^/@:[\]]+|\[[^\]/@]*\]):)/;
 
 /**
  * A remote URL as core may store, compare and quote it.
@@ -82,5 +108,7 @@ export function remoteUrlForDisplay(raw: string): { url: string; display: string
   }
   if (SCP_CREDENTIALS.test(url))
     return { url, display: url.replace(SCP_CREDENTIALS, '$1:***@'), hadCredentials: true };
+  if (SCP_AT_USER_CREDENTIALS.test(url))
+    return { url, display: url.replace(SCP_AT_USER_CREDENTIALS, '$1:***@'), hadCredentials: true };
   return { url, display: url, hadCredentials: false };
 }

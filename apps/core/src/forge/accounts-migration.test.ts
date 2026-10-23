@@ -365,5 +365,8 @@ describe('pull requests and status use the account of the remote', () => {
     expect((await t.forge.getRunForgeStatus('r1')).tokenConfigured).toBe(true);
     t.db.delete(forgeAccounts).run();
     expect((await t.forge.getRunForgeStatus('r1')).tokenConfigured).toBe(false);
+    // An account without its token (cleared by EMBERLINE_FORGET_SECRETS) configures none.
+    seedForgeAccount(t.db, { provider: 'gitea', serverUrl: 'https://gitea.example.com', token: '' });
+    expect((await t.forge.getRunForgeStatus('r1')).tokenConfigured).toBe(false);
   });
 });

@@ -94,9 +94,12 @@ export function requestUrlForLog(url: string): string {
  * - Any `scheme://` (https, ssh, git+ssh, ssh+git, …, even glued to a word): everything from `://`
  *   to the last `@` of the address, which ends only at whitespace (a quote, `/` or `@` in a password
  *   never ends it early).
- * - scp-like `user:secret@host:path`: the secret, up to the last `@` before a host and its `:`.
+ * - scp-like `user:secret@host:path`: the secret, up to the last `@` before a host and its `:` (a
+ *   user name may hold an `@`: `me@corp.com:secret@host:path`).
  * - git splits that address at its first `:` and quotes the rest as a path
  *   (`fatal: 'secret@host:path' does not appear to be a git repository`): the part before the `@`.
+ * - without a host and its `:` after an `@` (`user:secret@host/path`, an origin set by hand): the
+ *   secret, up to the last `@` before the first `/`.
  */
 export function withoutUrlCredentials(text: string): string {
   // Token by token, with indexOf and one `@host:` scan each: linear, whatever a server prints.
@@ -109,11 +112,15 @@ export function withoutUrlCredentials(text: string): string {
     }
     let hostAt = -1;
     for (const m of out.matchAll(/@[^'"/@:]+:/g)) hostAt = m.index ?? hostAt;
-    if (hostAt < 0) return out;
+    if (hostAt < 0) {
+      const slash = out.indexOf('/');
+      hostAt = (slash < 0 ? out : out.slice(0, slash)).lastIndexOf('@');
+      if (hostAt < 0) return out;
+    }
     const before = out.slice(0, hostAt);
     const quote = before.search(/['"]/);
     const colon = before.indexOf(':');
-    const userOk = colon >= 0 && !/[@/]/.test(before.slice(0, colon));
+    const userOk = colon >= 0 && !before.slice(0, colon).includes('/');
     const from = Math.min(quote >= 0 ? quote + 1 : Infinity, userOk ? colon + 1 : Infinity);
     return from === Infinity ? out : `${out.slice(0, from)}***${out.slice(hostAt)}`;
   });
