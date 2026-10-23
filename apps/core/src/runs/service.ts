@@ -1323,9 +1323,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return reason?.type === 'Notification' || reason?.type === 'stall_detected' ? reason.type : undefined;
   }
 
-  /** Whether the run already has an event of this type (e.g. a one-shot nudge that was sent). */
-  /** The run's open AskUserQuestion picker, if any (see {@link openPicker}). */
-  private openPicker(id: string): AskUserQuestionSummary | null {
+  /** The run's open AskUserQuestion picker, if any (see {@link openPicker}), among its newest 200 events. */
+  openPicker(id: string): AskUserQuestionSummary | null {
     return openPicker(
       this.db
         .select({ type: runEvents.type, payload: runEvents.payload })
@@ -1337,6 +1336,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     );
   }
 
+  /** Whether the run already has an event of this type (e.g. a one-shot nudge that was sent). */
   hasEvent(id: string, type: string): boolean {
     return Boolean(
       this.db

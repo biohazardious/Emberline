@@ -121,8 +121,9 @@ describe('workspace file explorer containment', () => {
       renameSync(drop, path.join(root, 'drop-moved'));
       symlinkSync(outside, drop);
     };
+    // The descriptor's check, not the earlier path check (which says "resolves outside").
     await expect(writeNewWorkspaceFile(root, 'drop/new.bin', Buffer.from('pwned'))).rejects.toThrow(
-      /outside/i,
+      /new\.bin was created outside its directory$/,
     );
     expect(readdirSync(outside)).toEqual(['secret.txt']);
   });

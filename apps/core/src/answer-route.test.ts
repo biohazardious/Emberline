@@ -27,9 +27,14 @@ const real = vi.hoisted(() => ({ write: null as unknown as typeof files.writeNew
 vi.mock('./factory/files.js', async (orig) => {
   const actual = await orig<typeof files>();
   real.write = actual.writeNewWorkspaceFile;
-  return { ...actual, writeNewWorkspaceFile: vi.fn(actual.writeNewWorkspaceFile) };
+  return {
+    ...actual,
+    writeNewWorkspaceFile: vi.fn(actual.writeNewWorkspaceFile),
+    deleteWorkspaceFileEntry: vi.fn(actual.deleteWorkspaceFileEntry),
+  };
 });
 const writeFile = vi.mocked(files.writeNewWorkspaceFile);
+const deleteFile = vi.mocked(files.deleteWorkspaceFileEntry);
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
@@ -53,7 +58,9 @@ beforeEach(async () => {
 afterEach(async () => {
   await t.close();
   vi.mocked(gitExec.execGitFile).mockClear();
-  writeFile.mockClear();
+  // Reset, not cleared: a queued Once implementation must not leak into the next test.
+  writeFile.mockReset();
+  deleteFile.mockReset();
 });
 
 function addTicket(key: string, status: string): string {
@@ -780,6 +787,62 @@ describe('POST /api/runs/:id/answer', () => {
     expect(seen).toHaveLength(2);
     expect(stored(wt.worktreePath)).toEqual([]);
     expect(calls).toEqual(['keys:"\\u001b"']);
+  });
+
+  it('a removal that fails is logged with the file it left', async () => {
+    const { wt } = openPicker('c7');
+    vi.spyOn(t.runs, 'prompt').mockRejectedValueOnce(
+      conflict('the agent session has ended; start a new run'),
+    );
+    deleteFile.mockRejectedValueOnce(new Error('EACCES'));
+    const warn = vi.spyOn(t.app.log, 'warn');
+    const res = await post('/api/runs/c7/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(409);
+    const left = stored(wt.worktreePath);
+    expect(left).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      { err: expect.objectContaining({ message: 'EACCES' }) },
+      expect.stringContaining(`.emberline/attachments/answers/${left[0]}`),
+    );
+  });
+
+  it('an answer typed into the session keeps its files when a later step fails', async () => {
+    const { wt } = openPicker('c8');
+    vi.spyOn(t.runs, 'prompt').mockImplementationOnce(async (id) => {
+      (t.runs as unknown as { record(id: string, e: object): unknown }).record(id, {
+        source: 'user',
+        type: 'prompt_sent',
+        payload: { length: 1 },
+      });
+      throw new Error('recording the prompt failed');
+    });
+    const res = await post('/api/runs/c8/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(500);
+    expect(stored(wt.worktreePath)).toHaveLength(2);
+  });
+
+  it('an answer a successor took over keeps its files when starting the successor fails', async () => {
+    const wt = worktree('c9', { 'app.js': 'x\n' });
+    seedRun({
+      id: 'c9',
+      ...wt,
+      hold: blocked,
+      stops: [{ source: 'system', reason: 'factory_step_finished' }],
+    });
+    vi.spyOn(t.scheduler, 'tick').mockRejectedValueOnce(new Error('dispatch failed'));
+    const res = await post('/api/runs/c9/answer', { text: 'x', attachments: twoFiles });
+    expect(res.statusCode).toBe(500);
+    const successor = t.runs.getRun('c9').handedOffTo;
+    expect(successor).not.toBeNull();
+    const files = stored(wt.worktreePath);
+    expect(files).toHaveLength(2);
+    // The successor's prompt names them.
+    const prompt = t.db
+      .select({ prompt: runs.prompt })
+      .from(runs)
+      .where(eq(runs.id, successor!))
+      .get()?.prompt;
+    for (const f of files) expect(prompt).toContain(f);
   });
 
   it('a held run that starts working while its files are written: 409 run_busy, the files removed', async () => {

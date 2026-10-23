@@ -9,16 +9,16 @@ import {
   type SuggestAnswerResponse,
 } from '@emberline/protocol';
 import { existsSync } from 'node:fs';
-import { and, desc, eq, gte } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { runEvents, tickets } from '../db/schema.js';
+import { runEvents, runs, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
 import { deleteWorkspaceFileEntry, writeNewWorkspaceFile } from '../factory/files.js';
 import { decodeMaterials } from '../factory/materials.js';
 import { getFactorySettings } from '../factory/settings.js';
 import { answerAttachmentPaths, answerPrompt, type StoredAttachment } from './answer.js';
 import { assertSuccessorExtraFits } from './handoff.js';
-import { buildRunQuestion, openPicker } from './question.js';
+import { buildRunQuestion } from './question.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { RunService } from './service.js';
 import { buildSuggestPrompt, runSuggestion } from './suggest.js';
@@ -33,6 +33,8 @@ export interface QuestionServiceOptions {
   cancelWaitMs: number;
   /** Whether the runner (ptyd) is connected: a suggestion runs there. */
   runnerConnected: () => boolean;
+  /** Warnings (an attachment that could not be removed again). */
+  log?: (message: string, err?: unknown) => void;
 }
 
 const noQuestion = () => new HttpError(404, 'no_question', 'This run is not waiting for an answer.');
@@ -131,6 +133,7 @@ export class QuestionService {
     )
       assertSuccessorExtraFits(text);
     const written: string[] = [];
+    const mark = this.deliveryMark(run.id);
     try {
       for (const [i, d] of decoded.entries()) {
         try {
@@ -157,9 +160,59 @@ export class QuestionService {
       return { delivery: 'session', attachments: paths };
     } catch (error) {
       // An answer that was not delivered leaves none of its files behind (a retry writes them anew).
-      for (const p of written) await deleteWorkspaceFileEntry(run.worktreePath, p).catch(() => undefined);
+      // One that reached the agent keeps them, whatever failed after: its prompt names them.
+      if (!this.reachedAgent(run.id, mark)) {
+        for (const p of written) {
+          await deleteWorkspaceFileEntry(run.worktreePath, p).catch((err: unknown) =>
+            this.log(`could not remove the attachment ${p} of an answer that was not delivered`, err),
+          );
+        }
+      }
       throw error;
     }
+  }
+
+  private log(message: string, err?: unknown): void {
+    if (this.opts.log) this.opts.log(message, err);
+    else console.warn(message, err);
+  }
+
+  /** The run's newest event and its successors, before an answer goes out (see reachedAgent). */
+  private deliveryMark(runId: string): { lastEventId: number; successors: number } {
+    const last = this.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(eq(runEvents.runId, runId))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get();
+    return { lastEventId: last?.id ?? 0, successors: this.successorCount(runId) };
+  }
+
+  /**
+   * Whether an answer reached the agent since `mark`: typed into its session (`prompt_sent`), its
+   * session started again with it (`resumed`), or a successor started with it as its prompt.
+   */
+  private reachedAgent(runId: string, mark: { lastEventId: number; successors: number }): boolean {
+    if (this.successorCount(runId) > mark.successors) return true;
+    return Boolean(
+      this.db
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(
+          and(
+            eq(runEvents.runId, runId),
+            gt(runEvents.id, mark.lastEventId),
+            inArray(runEvents.type, ['prompt_sent', 'resumed']),
+          ),
+        )
+        .limit(1)
+        .get(),
+    );
+  }
+
+  private successorCount(runId: string): number {
+    return this.db.select({ id: runs.id }).from(runs).where(eq(runs.predecessorRunId, runId)).all().length;
   }
 
   /** Picks option `option` (0-based) of the open picker: its number plus Enter selects it. */
@@ -235,15 +288,7 @@ export class QuestionService {
 
   /** The newest AskUserQuestion PreToolUse when no PostToolUse of that tool came after it. */
   private pendingAsk(runId: string): AskUserQuestionSummary | null {
-    return openPicker(
-      this.db
-        .select({ type: runEvents.type, payload: runEvents.payload })
-        .from(runEvents)
-        .where(eq(runEvents.runId, runId))
-        .orderBy(desc(runEvents.id))
-        .limit(200)
-        .all(),
-    );
+    return this.runs.openPicker(runId);
   }
 
   /** The agent's last message of this wait (Stop at or after `since`). */

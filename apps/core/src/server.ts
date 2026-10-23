@@ -162,6 +162,7 @@ export async function buildServer(
     cancelWaitMs: deps.config.pickerCancelWaitMs,
     claudeCommand: deps.config.claudeCommand,
     runnerConnected: () => deps.ptyd.status === 'connected',
+    log: (message, err) => app.log.warn({ err }, message),
   });
   cron.start();
   notifications.start();
