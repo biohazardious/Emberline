@@ -51,9 +51,8 @@ describe('assignHashes', () => {
     symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'out-link'));
     symlinkSync('/dev/zero', path.join(dir, 'zero-link'));
     const files = [file('fifo-link'), file('out-link'), file('zero-link')];
-    const started = Date.now();
+    // Following the FIFO (no writer) or /dev/zero would never end: returning at all shows it did not.
     await assignHashes(dir, files, '');
-    expect(Date.now() - started).toBeLessThan(5_000);
     expect(files.map((f) => f.hash)).toEqual([
       `link:${sha1(fifo)}`,
       `link:${sha1(path.join(outside, 'secret.txt'))}`,

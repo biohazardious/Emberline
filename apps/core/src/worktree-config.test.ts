@@ -645,11 +645,11 @@ describe('run worktree lifecycle', () => {
 
     it('a stop during setup kills the running setup command', async () => {
       const pidFile = path.join(t.dir, 'setup.pid');
-      const project = await createProject(setupYml(`sleep 30 & echo $! > ${pidFile}; wait`));
+      // Never ends on its own: once it is gone, the stop killed it.
+      const project = await createProject(setupYml(`sleep 3600 & echo $! > ${pidFile}; wait`));
       await approveHead(project.id);
       const run: Run = (await api('POST', '/api/runs', { projectId: project.id, prompt: 'x' })).json();
       const pid = Number((await waitFile(pidFile)).trim());
-      const stoppedAt = Date.now();
       await api('POST', `/api/runs/${run.id}/stop`, {});
       const alive = () => {
         try {
@@ -659,8 +659,7 @@ describe('run worktree lifecycle', () => {
           return false;
         }
       };
-      await expect.poll(alive, { timeout: 5_000 }).toBe(false);
-      expect(Date.now() - stoppedAt).toBeLessThan(5_000);
+      await expect.poll(alive, { timeout: 10_000 }).toBe(false);
       await new Promise((r) => setTimeout(r, 200));
       const types = await typesOf(run.id);
       expect(types).not.toContain('worktree_setup_failed');
@@ -839,9 +838,8 @@ describe('teardown before prune', () => {
     const a = await endedRun(project.id);
     const b = await endedRun(project.id);
     (t.runs as unknown as { tearingDown: Set<string> }).tearingDown.add(a.id);
-    const startedAt = Date.now();
+    // The teardown it started is held until release(): returning now means it did not wait for it.
     await t.runs.teardownProjectWorktrees(project.id, 300);
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(started).toEqual([b.worktreePath]);
     release();
   });
@@ -871,9 +869,8 @@ describe('teardown before prune', () => {
     const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
     await approveHead(project.id);
     const run = await endedRun(project.id);
-    const startedAt = Date.now();
+    // The teardown is held until release(): an answer now is one that did not wait for it.
     const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
-    expect(Date.now() - startedAt).toBeLessThan(3_000);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ removed: false, pending: true });
     expect(existsSync(run.worktreePath)).toBe(true);
@@ -1176,14 +1173,13 @@ describe('teardown before prune', () => {
     await approveHead(project.id);
     const a = await endedRun(project.id);
     const b = await endedRun(project.id);
-    const startedAt = Date.now();
+    // The teardowns are held until release(): an answer now is one that did not wait for them.
     const res = await api('POST', '/api/runs/gc', {
       projectId: project.id,
       keepRecent: 0,
       includeFailed: true,
       pruneWorktrees: true,
     });
-    expect(Date.now() - startedAt).toBeLessThan(3_000);
     expect(res.statusCode).toBe(200);
     expect(res.json().keptWorktrees).toEqual(
       expect.arrayContaining([expect.objectContaining({ runId: a.id, reason: 'teardown_running' })]),
@@ -1500,6 +1496,11 @@ describe('editing worktree.yml from Project settings', () => {
       'under a dropped connection',
       (e: Error) =>
         Object.assign(new PtydClientError('disconnected', 'ptyd connection closed'), { cause: e }),
+    ],
+    [
+      'under a 503 that the runner is not reachable',
+      (e: Error) =>
+        Object.assign(unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable'), { cause: e }),
     ],
   ])('503 runner_outdated keeps its code and text when the runner throws it %s', async (_how, wrap) => {
     const project = await createProject('version: 1\n');

@@ -57,7 +57,13 @@ export function composeConfigArgs(project: string, projectDir: string): string[]
   ];
 }
 
-function addPorts(into: Set<number>, value: unknown): void {
+/** Counts the port entries a parse examines and the ports it walks (the budget test reads it). */
+export interface ComposeParseMeter {
+  entries: number;
+  ports: number;
+}
+
+function addPorts(into: Set<number>, value: unknown, meter?: ComposeParseMeter): void {
   const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value : '';
   // A short-syntax item `[ip:]host:container[/proto]`: the container side is last.
   const m = /^(\d{1,5})(?:-(\d{1,5}))?(?:\/\w+)?$/.exec(text.trim().split(':').pop() ?? '');
@@ -66,11 +72,17 @@ function addPorts(into: Set<number>, value: unknown): void {
   const start = Math.max(Number(m[1]), 1);
   if (start > MAX_PORT) return;
   const end = Math.min(m[2] ? Number(m[2]) : start, MAX_PORT);
-  for (let port = start; port <= end && into.size < MAX_PORTS_PER_SERVICE; port++) into.add(port);
+  for (let port = start; port <= end && into.size < MAX_PORTS_PER_SERVICE; port++) {
+    if (meter) meter.ports++;
+    into.add(port);
+  }
 }
 
 /** Services (compose's order) with their published targets, then `expose`; null when the output is not a config. */
-export function parseComposeConfig(stdout: string): ContainerPreviewService[] | null {
+export function parseComposeConfig(
+  stdout: string,
+  meter?: ComposeParseMeter,
+): ContainerPreviewService[] | null {
   let doc: unknown;
   try {
     doc = JSON.parse(stdout);
@@ -97,9 +109,11 @@ export function parseComposeConfig(stdout: string): ContainerPreviewService[] | 
     for (let i = 0; i < published.length + exposed.length; i++) {
       if (ports.size >= MAX_PORTS_PER_SERVICE || ++portEntries > MAX_PORT_ENTRIES) break;
       const p = i < published.length ? published[i] : exposed[i - published.length];
+      if (meter) meter.entries++;
       addPorts(
         ports,
         i < published.length && p && typeof p === 'object' ? (p as { target?: unknown }).target : p,
+        meter,
       );
     }
     out.push({ name, ports: [...ports] });

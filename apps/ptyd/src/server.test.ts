@@ -270,10 +270,10 @@ describe('ptyd', () => {
   it('cancels a running exec by its id, with the whole process group (execCancel)', async () => {
     const client = await connect();
     const pidFile = path.join(dir, 'cancel.pid');
-    const startedAt = Date.now();
+    // Never ends on its own: a result at all is the cancel's.
     const running = client.exec({
       file: 'sh',
-      args: ['-c', `sleep 30 & echo $! > "${pidFile}"; wait`],
+      args: ['-c', `sleep 3600 & echo $! > "${pidFile}"; wait`],
       cwd: dir,
       timeoutMs: 60_000,
       execId: 'setup-1',
@@ -290,7 +290,6 @@ describe('ptyd', () => {
     expect(await client.execCancel('setup-1')).toEqual({ cancelled: true });
     const result = await running;
     expect(result).toMatchObject({ cancelled: true, timedOut: false, exitCode: null });
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       try {

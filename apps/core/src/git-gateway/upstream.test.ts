@@ -133,9 +133,8 @@ describe('openUpstream', () => {
         idleTimeoutMs: 200,
       }),
     );
-    const started = Date.now();
+    // The server never ends the response: only the idle limit ends the read.
     await expect(drain(res)).rejects.toMatchObject({ code: 'timeout' });
-    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   it('a GET follows no redirect to another server, and a POST follows none at all', async () => {

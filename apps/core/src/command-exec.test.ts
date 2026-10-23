@@ -71,10 +71,10 @@ describe('command execution through the runner', () => {
 
   it('cancels a running command in the runner by its execId (ptyd protocol 3)', async () => {
     setCommandCanceller(ptydCommandCanceller(bridge));
-    const startedAt = Date.now();
+    // Never ends on its own: a result at all is the cancel's.
     const running = execCommand({
       file: 'sleep',
-      args: ['30'],
+      args: ['3600'],
       cwd: dir,
       timeoutMs: 60_000,
       execId: 'setup-x',
@@ -82,7 +82,6 @@ describe('command execution through the runner', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(await cancelCommand('setup-x')).toBe(true);
     expect(await running).toMatchObject({ cancelled: true, exitCode: null });
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
     // An older runner cannot cancel: false, never a throw.
     const outdated = { get: () => bridge.get(), protocolVersion: 2 } as unknown as PtydBridge;
     setCommandCanceller(ptydCommandCanceller(outdated));

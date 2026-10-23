@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ComposeParseMeter,
   composeConfigArgs,
   composeConfigFailure,
   firstErrorLine,
@@ -53,11 +54,16 @@ describe('parseComposeConfig', () => {
     // The reviewer's case: 100 services sharing 440 distinct out-of-range ranges (compose prints them as is).
     const ranges = Array.from({ length: 440 }, (_, i) => `65536-${99999 - i}`);
     const services = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`s${i}`, { expose: ranges }]));
-    const started = performance.now();
-    expect(parseComposeConfig(JSON.stringify({ services }))).toEqual(
+    const meter: ComposeParseMeter = { entries: 0, ports: 0 };
+    expect(parseComposeConfig(JSON.stringify({ services }), meter)).toEqual(
       Array.from({ length: 100 }, (_, i) => ({ name: `s${i}`, ports: [] })),
     );
-    expect(performance.now() - started).toBeLessThan(500);
+    // 2000 entries examined (the total budget) of 44 000, and not one port walked.
+    expect(meter).toEqual({ entries: 2000, ports: 0 });
+    // A range across the limit is walked only up to 65535.
+    const clamped: ComposeParseMeter = { entries: 0, ports: 0 };
+    parseComposeConfig(JSON.stringify({ services: { web: { expose: ['65530-99999'] } } }), clamped);
+    expect(clamped).toEqual({ entries: 1, ports: 6 });
   });
   it('stops examining entries after the total budget, and services after theirs', () => {
     const junk = Array.from({ length: 5000 }, () => 'x');
