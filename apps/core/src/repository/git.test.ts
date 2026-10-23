@@ -260,6 +260,8 @@ describe('remoteUrlForDisplay', () => {
     for (const [raw, display] of [
       ['me@corp.com:SECRET@host:o/r', 'me@corp.com:***@host:o/r'],
       ['me@corp.com:p@ss@host:o/r', 'me@corp.com:***@host:o/r'],
+      ['me@corp.com:SECRET@host/o/r', 'me@corp.com:***@host/o/r'],
+      ['me@corp.com:SECRET@host', 'me@corp.com:***@host'],
       ['alice:p@ss@host:o/r.git', 'alice:***@host:o/r.git'],
       ['alice:p@ss:w@host:o', 'alice:***@host:o'],
       ['alice:pw@host:a@b:c', 'alice:***@b:c'],
@@ -280,6 +282,20 @@ describe('remoteUrlForDisplay', () => {
       '[2001:db8::1]:a@b:c',
     ])
       expect(read(raw), raw).toEqual({ url: raw, display: raw, hadCredentials: false });
+  });
+
+  it('reads a long hand-set address in linear time', () => {
+    const long = 60_000;
+    const started = performance.now();
+    for (const raw of [
+      `me@${'a@'.repeat(long / 2)}:x`,
+      `me@corp.com:${'s@'.repeat(long / 2)}`,
+      `${'a@'.repeat(long / 2)}:${'b@'.repeat(long / 2)}/x`,
+      `u@x:${'@h'.repeat(long / 2)}:`,
+      `${'@'.repeat(long)}`,
+    ])
+      remoteUrlForDisplay(raw);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it('URL forms: user info goes up to its last `@`, an `@` in the path stays', () => {

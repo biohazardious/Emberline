@@ -60,11 +60,13 @@ const SCP_CREDENTIALS = /^([^/@:[]*):[^/]*@/;
  */
 const SCP_PLAIN_CREDENTIALS = /^([^/@:[]*):[^/@]*@(?=(?:[^/@:[\]]+|\[[^\]/@]*\]):[^/@]*(?:\/|$))/;
 /**
- * `user:secret@host:path` whose user name holds an `@` (`me@corp.com:secret@host:o/r`): up to the
- * last `@` before the first `/` that a host and its `:` follow. Git itself reads it as the host
- * `corp.com`, so it is never rewritten, only masked.
+ * `user:secret@host:path` or `user:secret@host/path` whose user name holds an `@`
+ * (`me@corp.com:secret@host:o/r`): up to the last `@` before the first `/` that a host and its `:`
+ * or `/` (or the end) follow. Git itself reads such an address as the host `corp.com`, so it is never
+ * rewritten, only masked. The user name runs to the first `:` (one split, no backtracking over its
+ * `@`s), so a long address is read in linear time.
  */
-const SCP_AT_USER_CREDENTIALS = /^([^/:[]*@[^/:[]*):[^/]*@(?=(?:[^/@:[\]]+|\[[^\]/@]*\]):)/;
+const SCP_AT_USER_CREDENTIALS = /^(?=[^/:[]*@)([^/:[]*):[^/]*@(?=(?:[^/@:[\]]+|\[[^\]/@]*\])(?:[:/]|$))/;
 
 /**
  * A remote URL as core may store, compare and quote it.
