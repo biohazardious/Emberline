@@ -51,6 +51,8 @@ export const AnswerRequest = z
       ctx.addIssue({ code: 'custom', path: ['text'], message: 'Write an answer or attach a file.' });
   });
 export type AnswerRequest = z.input<typeof AnswerRequest>;
+/** The body after parsing: defaults applied. */
+export type AnswerRequestParsed = z.output<typeof AnswerRequest>;
 
 export const AnswerResponse = z.object({
   delivery: z.enum(['session', 'successor', 'picker']),

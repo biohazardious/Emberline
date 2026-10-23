@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { AnswerResponse } from '@emberline/protocol';
+import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, runEvents, runs, tickets } from './db/schema.js';
@@ -59,6 +61,16 @@ function addTicket(key: string, status: string): string {
     })
     .run();
   return id;
+}
+
+function worktree(id: string, files: Record<string, string>): { worktreePath: string; branch: string } {
+  const worktreePath = path.join(t.dir, '.worktrees', id);
+  const branch = `emberline/${id}`;
+  git(main, 'worktree', 'add', '-q', '-b', branch, worktreePath, 'main');
+  for (const [name, body] of Object.entries(files)) write(worktreePath, name, body);
+  git(worktreePath, 'add', '-A');
+  git(worktreePath, 'commit', '-q', '-m', `feat(${id}): work`);
+  return { worktreePath, branch };
 }
 
 interface RunSeed {
@@ -282,5 +294,145 @@ describe('GET /api/runs/:id/question', () => {
     const res = await get('/api/runs/n1/question');
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('no_question');
+  });
+});
+
+describe('POST /api/runs/:id/answer', () => {
+  let ptydServer: PtydServer;
+
+  beforeEach(async () => {
+    const file = path.join(t.dir, 'fake-claude.sh');
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        // Written whole, then appended in one go: a reader never sees a half-written start.
+        `printf '%s\\n' "$@" > "${t.dir}/.args-$EMBERLINE_RUN_ID.$$"`,
+        `cat "${t.dir}/.args-$EMBERLINE_RUN_ID.$$" >> "${t.dir}/args-$EMBERLINE_RUN_ID"`,
+        `rm -f "${t.dir}/.args-$EMBERLINE_RUN_ID.$$"`,
+        `printf %s "$EMBERLINE_HOOK_TOKEN" > "${t.dir}/.token-$EMBERLINE_RUN_ID"`,
+        `mv "${t.dir}/.token-$EMBERLINE_RUN_ID" "${t.dir}/token-$EMBERLINE_RUN_ID"`,
+        'read line',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    t.config.claudeCommand = file;
+    ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
+    await ptydServer.listen();
+    t.ptyd.start();
+    await t.ptyd.waitUntilConnected();
+  });
+  afterEach(async () => {
+    t.scheduler.dispose();
+    for (const run of t.runs.list()) {
+      if (!run.endedAt) await t.runs.stop(run.id).catch(() => undefined);
+    }
+    await ptydServer.close();
+  });
+
+  const post = (url: string, payload?: object) =>
+    t.app.inject({ method: 'POST', url, payload, headers: authHeaders(cookie) });
+  /** The arguments the fake CLI was started with for `runId` (every start appends). */
+  async function argsOf(runId: string): Promise<string> {
+    const file = path.join(t.dir, `args-${runId}`);
+    await expect
+      .poll(() => existsSync(file) && readFileSync(file, 'utf8').length > 0, { timeout: 5_000 })
+      .toBe(true);
+    return readFileSync(file, 'utf8');
+  }
+  /** The prompt of the run's latest `--resume <session>` start. */
+  const resumedWith = async (runId: string) =>
+    (await argsOf(runId)).split('--resume\nsess\n--\n').at(-1)!.replace(/\n$/, '');
+  const blocked = { type: 'completion_blocked', payload: { blockers: ['no key'] } };
+
+  it('a blocked run gets the template with the answer and the stored file', async () => {
+    const wt = worktree('a1', { 'app.js': 'x\n' });
+    seedRun({ id: 'a1', ...wt, hold: blocked });
+    const res = await post('/api/runs/a1/answer', {
+      text: 'use the test key',
+      attachments: [
+        { name: 'note.txt', mimeType: 'text/plain', dataBase64: Buffer.from('hello').toString('base64') },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AnswerResponse;
+    expect(body.delivery).toBe('session');
+    expect(body.attachments[0]).toMatch(/^\.emberline\/attachments\/answers\/\d{8}-\d{6}-1-note\.txt$/);
+    expect(readFileSync(path.join(wt.worktreePath, body.attachments[0]!), 'utf8')).toBe('hello');
+    const prompt = await resumedWith('a1');
+    expect(prompt).toContain('> no key');
+    expect(prompt).toContain('My answer:\n\nuse the test key');
+    expect(prompt).toContain(`- ${body.attachments[0]} (text/plain, 5 bytes)`);
+  });
+
+  it('files only: the answer section holds just the attachments block', async () => {
+    const wt = worktree('a5', { 'app.js': 'x\n' });
+    seedRun({ id: 'a5', ...wt, hold: blocked });
+    const res = await post('/api/runs/a5/answer', {
+      attachments: [{ name: 'note.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(200);
+    const prompt = await resumedWith('a5');
+    expect(prompt).toMatch(
+      /My answer:\n\nAttached files \(in your worktree\):\n- \S+ \(text\/plain, 2 bytes\)\n\nContinue the work/,
+    );
+  });
+
+  it('a planted symlink keeps the file inside the worktree: nothing written outside, nothing sent', async () => {
+    const wt = worktree('a2', { 'app.js': 'x\n' });
+    seedRun({ id: 'a2', ...wt, hold: blocked });
+    const outside = path.join(t.dir, 'outside');
+    mkdirSync(outside);
+    mkdirSync(path.join(wt.worktreePath, '.emberline'), { recursive: true });
+    symlinkSync(outside, path.join(wt.worktreePath, '.emberline', 'attachments'));
+    const res = await post('/api/runs/a2/answer', {
+      text: 'x',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('attachment_write_failed');
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(path.join(t.dir, 'args-a2'))).toBe(false);
+  });
+
+  it('nothing at all is a 400', async () => {
+    const wt = worktree('a3', { 'app.js': 'x\n' });
+    seedRun({ id: 'a3', ...wt, hold: blocked });
+    expect((await post('/api/runs/a3/answer', { text: ' ' })).statusCode).toBe(400);
+  });
+
+  it('a run that no longer waits: 404 no_question', async () => {
+    seedRun({ id: 'a4', hold: null });
+    const res = await post('/api/runs/a4/answer', { text: 'x' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('no_question');
+  });
+
+  it('an open picker refuses an answer and writes nothing', async () => {
+    const wt = worktree('a6', { 'app.js': 'x\n' });
+    seedRun({ id: 'a6', ...wt, hold: null, ended: false });
+    t.db.update(runs).set({ state: 'waiting_input' }).where(eq(runs.id, 'a6')).run();
+    event('a6', 'PreToolUse', {
+      tool_name: 'AskUserQuestion',
+      ask_user_question: {
+        questions: [{ question: 'Colour?', header: null, options: [{ label: 'Red', detail: null }] }],
+      },
+    });
+    event(
+      'a6',
+      'Notification',
+      { notification_type: 'permission_prompt', message: 'Claude needs your permission' },
+      'waiting_input',
+    );
+    const res = await post('/api/runs/a6/answer', {
+      text: 'x',
+      attachments: [{ name: 'n.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('picker_open');
+    expect(existsSync(path.join(wt.worktreePath, '.emberline'))).toBe(false);
+    expect(existsSync(path.join(t.dir, 'args-a6'))).toBe(false);
   });
 });

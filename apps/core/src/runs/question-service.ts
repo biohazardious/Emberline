@@ -1,10 +1,20 @@
 /** The Answer dialog's server side: what a run asks, a drafted answer, and delivering the person's answer. */
-import type { AskUserQuestionSummary, Run, RunQuestion } from '@emberline/protocol';
+import {
+  ANSWER_LIMITS,
+  type AnswerRequestParsed,
+  type AnswerResponse,
+  type AskUserQuestionSummary,
+  type Run,
+  type RunQuestion,
+} from '@emberline/protocol';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runEvents } from '../db/schema.js';
 import { HttpError } from '../errors.js';
+import { writeNewWorkspaceFile } from '../factory/files.js';
+import { decodeMaterials } from '../factory/materials.js';
 import { getFactorySettings } from '../factory/settings.js';
+import { answerAttachmentPaths, answerPrompt, type StoredAttachment } from './answer.js';
 import { buildRunQuestion } from './question.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { RunService } from './service.js';
@@ -47,6 +57,44 @@ export class QuestionService {
       holdWhy: reason === 'held' ? ((await this.recovery.get(run.id))?.why ?? attention.detail) : null,
     });
     return { ...base, suggest: this.suggestAvailability(reason) };
+  }
+
+  /** Stores the answer's files in the run's worktree, then delivers the prompt the answer becomes. */
+  async answer(runId: string, body: AnswerRequestParsed): Promise<AnswerResponse> {
+    const question = await this.get(runId); // 404 no_question once the run stopped waiting
+    // Never type an answer into an open picker; the terminal answers it (picker delivery comes later).
+    if (question.picker) throw new HttpError(409, 'picker_open', 'Answer this question in the terminal.');
+    const run = this.runs.getRun(runId);
+    const decoded = decodeMaterials(body.attachments, ANSWER_LIMITS);
+    const paths = answerAttachmentPaths(
+      decoded.map((d) => d.name),
+      new Date(),
+    );
+    const files: StoredAttachment[] = [];
+    for (const [i, d] of decoded.entries()) {
+      try {
+        await writeNewWorkspaceFile(run.worktreePath, paths[i]!, d.bytes);
+      } catch (error) {
+        throw new HttpError(
+          500,
+          'attachment_write_failed',
+          `Couldn't store ${d.name}: ${(error as Error).message}`,
+        );
+      }
+      files.push({ path: paths[i]!, mimeType: d.mimeType, sizeBytes: d.sizeBytes });
+    }
+    const text = answerPrompt(
+      question,
+      body.text,
+      files,
+      question.kind === 'blocked' ? this.opts.completionReminder(run) : '',
+    );
+    if (question.kind === 'blocked' || question.kind === 'held') {
+      const res = await this.recovery.recover(run.id, text);
+      return { delivery: res.delivery, attachments: paths };
+    }
+    await this.runs.prompt(run.id, text);
+    return { delivery: 'session', attachments: paths };
   }
 
   /** The blockers of the run's newest `completion_blocked` note. */

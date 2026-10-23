@@ -1,5 +1,7 @@
 import {
   type AgentPreviewResponse,
+  type AnswerResponse,
+  AnswerRequest,
   DiffScope,
   GitCommitBody,
   type GitCommitResponse,
@@ -32,6 +34,8 @@ import type { Scheduler } from '../scheduler/service.js';
 
 /** Hook payloads can carry large tool inputs; core keeps only a summary. */
 const HOOK_BODY_LIMIT = 8 * 1024 * 1024;
+/** 25 MB of files as base64 (x4/3) plus the text and JSON overhead. */
+const ANSWER_BODY_LIMIT = 36 * 1024 * 1024;
 /** The `preview` tool sends `{}` or `{"restart":true}`. */
 const PREVIEW_TOOL_BODY_LIMIT = 1024;
 
@@ -92,6 +96,14 @@ export function registerRunRoutes(
   /** What the run waits on, for the Answer dialog; 404 no_question when nothing. */
   app.get<{ Params: { id: string } }>('/api/runs/:id/question', async (request): Promise<RunQuestion> =>
     questions.get(request.params.id),
+  );
+
+  /** Stores the answer's files in the worktree and delivers the answer as a prompt. */
+  app.post<{ Params: { id: string } }>(
+    '/api/runs/:id/answer',
+    { bodyLimit: ANSWER_BODY_LIMIT },
+    async (request): Promise<AnswerResponse> =>
+      questions.answer(request.params.id, AnswerRequest.parse(request.body ?? {})),
   );
 
   /** Why a held run is held and what can be done about it; null when nothing holds it for a person. */
