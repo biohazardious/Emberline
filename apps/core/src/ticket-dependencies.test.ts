@@ -1551,7 +1551,7 @@ describe('factory chain robustness', () => {
     }
 
     /** Pass 1 ran in full; the agent's next stop is cut off by a restart; a new service resumes it. */
-    async function restartAfterSecondStop(run: Run): Promise<Promise<void>[]> {
+    async function restartAfterSecondStop(run: Run): Promise<void> {
       (t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
         undefined;
       await stopAgain(run);
@@ -1560,7 +1560,6 @@ describe('factory chain robustness', () => {
       await restarted.resumeChains();
       await expect.poll(() => resumed.length, { timeout: 10_000 }).toBe(1);
       await Promise.all(resumed);
-      return resumed;
     }
 
     it('the secret guard asks for its clean-up once', async () => {
