@@ -56,7 +56,34 @@ beforeEach(async () => {
   cookie = await setupAndLogin(t.app);
 });
 
+/**
+ * Every pipeline pass of every TicketService in this file (restarted ones too): a test may end as
+ * soon as its ticket reached Done, while its pass still closes the session and dispatches.
+ */
+const passesInFlight: Promise<unknown>[] = [];
+{
+  const proto = TicketService.prototype as unknown as {
+    handleRunCompleted(this: TicketService, run: Run, opts?: object): Promise<void>;
+  };
+  const original = proto.handleRunCompleted;
+  proto.handleRunCompleted = function (run, opts) {
+    const pass = original.call(this, run, opts);
+    passesInFlight.push(pass);
+    return pass;
+  };
+}
+
 afterEach(async () => {
+  // No pass outlives the temp dir it works in (ENOTEMPTY): wait for every pass, and the ones they start.
+  for (let seen = -1; seen !== passesInFlight.length;) {
+    seen = passesInFlight.length;
+    await Promise.race([
+      Promise.allSettled(passesInFlight),
+      // A pass that never ends (a held critic) does not hold up the hook.
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+  }
+  passesInFlight.length = 0;
   // ptyd first: a fake agent still writing into the temp dir makes t.close fail to remove it (ENOTEMPTY).
   await ptydServer.close();
   await t.close();
